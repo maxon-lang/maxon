@@ -1321,6 +1321,24 @@ enum TypeArgInstantiationKind
 	uncopyableElement
 end 'TypeArgInstantiationKind'
 
+// ⭐ **WHICH OF THE THREE GATES MAY NOT READ A SPECULATIVELY MINTED INSTANCE (A4q)** — the direction test
+// `anyInstanceTypeArgHasKind` applies, stated here beside the kinds it splits so the reason travels with
+// them. A speculative row (`ProgramSignatures.internAggregateElementInstances`) records that a
+// `[<identifier>…]` literal's element COULD be this type, never that it IS.
+//
+// The two emission kinds answer *"must this shared body carry a drop?"*, where a phantom buys a
+// descriptor-gated drop for a shape that never occurs — a no-op at run time — and ignoring one would omit a
+// drop that is owed. They therefore keep reading every row. The copy kind answers *"must this program be
+// REFUSED?"*, where a phantom is not a conservative margin but a wrong answer about a program that contains
+// no such array; it reads only rows the source named.
+function kindIgnoresSpeculativeInstances(kind TypeArgInstantiationKind) returns bool
+	match kind 'kind'
+		consumeMoved then return false
+		coOwnedTrivial then return false
+		uncopyableElement then return true
+	end 'kind'
+end 'kindIgnoresSpeculativeInstances'
+
 // The `StdType` a global whose `.data` bytes ARE ITS VALUE occupies its slot as — which is to say WHICH
 // TAGS MAY BE A FOLDED GLOBAL AT ALL, because the width itself is not this function's to know.
 //
@@ -4647,9 +4665,15 @@ export type GenericInstanceRegistry
 	// Base id ⇒ its instances, in intern order. The SECOND payload⇒id index (see
 	// `GenericInstancesByBaseMap`), written only by `intern` alongside the columns it indexes.
 	var byBase as GenericInstancesByBaseMap
+	// ⭐⭐ **WAS THIS ROW MINTED BY A GUESS RATHER THAN BY THE SOURCE (A4q)?** True only of a row
+	// `ProgramSignatures.internAggregateElementInstances` materialized for a `[<identifier>…]` literal whose
+	// element type the token sweep could not name — a candidate, not a fact. Read by
+	// `anyInstanceTypeArgHasKind`, whose copy gate refuses on what it finds and so may not count a guess; see
+	// `kindIgnoresSpeculativeInstances` for why the other two gates still do.
+	var speculative as BoolArray
 
 	export static function create() returns GenericInstanceRegistry
-		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create()}
+		return Self{baseIds: TypeNameIdArray.create(), argLists: MaxonTypeArrayArray.create(), fixedSizes: FixedSizeArray.create(), index: GenericInstanceIndexMap.create(), byBase: GenericInstancesByBaseMap.create(), speculative: BoolArray.create()}
 	end 'create'
 
 	// The cheap composite key that makes interning O(1): the base id, the fixed size, and each arg's
@@ -4673,19 +4697,39 @@ export type GenericInstanceRegistry
 	// caller exists: `fileScopedInstance`.** Rebuilding a key from an existing instance means carrying every
 	// component of that instance, and the one that can be lost by silence is this one. See that function's
 	// ⛔ paragraph for the wrong answer it shipped.
-	export function intern(baseId TypeNameId, args MaxonTypeArray, fixedSize FixedElementCount = NoFixedSize) returns GenericInstanceId
+	// ⭐ **`asSpeculative` MARKS A ROW NOTHING IN THE SOURCE NAMED** — see the `speculative` column. It defaults
+	// to false because that is what every ordinary caller means: an instance interned because a declaration,
+	// a type reference or a resolved literal element ASKED for it. Only the `[<identifier>…]` candidate walk
+	// passes true, through `ProgramSignatures.internAggregateElementInstances`.
+	//
+	// A repeat NAMED intern of a row that was minted speculatively CLEARS the mark: the guess has since been
+	// confirmed by the source, and from that moment it is evidence like any other. Marking is therefore
+	// mint-only in the other direction — a speculative intern that HITS an existing row leaves it named,
+	// which is what keeps a spelling the sweep already folded (`typealias Bag = Array with (Array with
+	// String)`, interned before this walk runs) from being demoted to a guess by it.
+	export function intern(baseId TypeNameId, args MaxonTypeArray, fixedSize FixedElementCount = NoFixedSize, asSpeculative bool = false) returns GenericInstanceId
 		let key = self.instanceKey(baseId, args: args, fixedSize: fixedSize)
 		if let existing = try self.index.get(key) 'hit'
+			if not asSpeculative 'theSourceNamesIt'
+				try self.speculative.set(existing, value: false) otherwise panic("GenericInstanceRegistry.intern: speculative desync at GenericInstanceId {existing} — the column is pushed by this function beside `baseIds`, so every interned id indexes it")
+			end 'theSourceNamesIt'
 			return existing
 		end 'hit'
 		let id = self.baseIds.count()
 		self.baseIds.push(baseId)
 		self.argLists.push(args)
 		self.fixedSizes.push(fixedSize)
+		self.speculative.push(asSpeculative)
 		self.index.upsert(key, value: id)
 		self.recordBase(baseId, id: id)
 		return id
 	end 'intern'
+
+	// Was `id` minted by the `[<identifier>…]` candidate walk and never named by the source since? See the
+	// `speculative` column, and `kindIgnoresSpeculativeInstances` for the one gate that asks.
+	export function instanceIsSpeculative(id GenericInstanceId) returns bool
+		return try self.speculative.get(id) otherwise panic("GenericInstanceRegistry.instanceIsSpeculative: speculative desync at GenericInstanceId {id}")
+	end 'instanceIsSpeculative'
 
 	// The fixed element COUNT of a sized instance — `NoFixedSize` for every unsized one.
 	export function instanceFixedSize(id GenericInstanceId) returns FixedElementCount
@@ -12001,7 +12045,7 @@ export type ProgramSignatures
 	// naming the type parameter. Two different answers to one question, so the question is asked twice.
 	//
 	// ⚠ **IT IS MUTUALLY RECURSIVE and terminates on ELEMENT-NESTING DEPTH**: `containerElementConformerName`
-	// -> `conformerNameOfType` -> `instanceReducesToArrayConformer` -> `arrayElementCarriesConformance` ->
+	// -> `conformerNameOfType` -> `instanceConformerReduction` -> `arrayElementCarriesConformance` ->
 	// here, which is how an `Array with (Array with E)` gets the inner array's own conditional conformance
 	// decided before the outer's. Each hop strictly descends into an ELEMENT, and a type cannot contain
 	// itself (a self-naming typealias is E2012 before any of this runs — MEASURED), so there is no cycle to
@@ -14162,10 +14206,15 @@ export type ProgramSignatures
 	// for a String, `named(<id>)` for a struct, a canonicalized `structRef` for a tuple. Going back through a
 	// NAME would re-derive the `structRef`-vs-`named` choice `builtinInstanceForNamedElement` carries a
 	// measured E3006 about, from an answer that already has it right.
-	export function builtinInstanceForElement(baseName ByteArray, element MaxonType) returns GenericInstanceId
+	//
+	// ⭐ **`asSpeculative` RIDES THROUGH TO THE REGISTRY'S MARK** (A4q, see `GenericInstanceRegistry.intern`).
+	// It defaults to false — what every ordinary caller means, and the safe direction for one that forgets it,
+	// since a genuine row is only ever mistaken for a guess by saying so explicitly. The sole `true` is
+	// `internAggregateElementInstances`, whose whole output is guesses.
+	export function builtinInstanceForElement(baseName ByteArray, element MaxonType, asSpeculative bool = false) returns GenericInstanceId
 		var args = MaxonTypeArray.create()
 		args.push(element)
-		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args)
+		return self.genericInstances.intern(self.typeNames.intern(baseName), args: args, asSpeculative: asSpeculative)
 	end 'builtinInstanceForElement'
 
 	// ⭐ **THE TWO-TYPE-ARGUMENT CONTAINER INSTANCE — the `Map` twin of `builtinInstanceForElement`.** A
@@ -14193,8 +14242,8 @@ export type ProgramSignatures
 	// `typealias` through `tupleAliasTarget`), so `named` here would be a SECOND spelling of one type with
 	// nothing to make the two agree. MEASURED: `typealias PairArray = Array with Pair` plus any
 	// `[<identifier>…]` literal in the program was rejected with that spurious E3006 (P1.10 review).
-	export function builtinInstanceForNamedElement(baseName ByteArray, element ByteArray) returns GenericInstanceId
-		return self.builtinInstanceForElement(baseName, element: self.namedElementType(element))
+	export function builtinInstanceForNamedElement(baseName ByteArray, element ByteArray, asSpeculative bool = false) returns GenericInstanceId
+		return self.builtinInstanceForElement(baseName, element: self.namedElementType(element), asSpeculative: asSpeculative)
 	end 'builtinInstanceForNamedElement'
 
 	// The rule above, as the `MaxonType` itself — split out because a container ARGUMENT is not the only thing
@@ -14279,6 +14328,9 @@ export type ProgramSignatures
 	//     at all. One final walk sees the whole program. The extra rows are registry entries and nothing more —
 	//     a descriptor and a destructor are both synthesized on USAGE, and an over-interned instance nobody
 	//     names has none — so the growth is bounded bookkeeping and reaches no emitted byte.
+	//     ⛔ **"REACHES NO EMITTED BYTE" IS NOT "HARMLESS", AND THE DIFFERENCE WAS A WRONG REFUSAL (A4q).** A
+	//     row here is also read by `anyInstanceTypeArgHasKind`, whose copy gate REFUSES on it — which is why
+	//     each row now carries whether anything NAMED it. See `internAggregateElementInstances`.
 	//   • **THE GIDS MOVE.** A gid is intern ORDER, and these interns now all happen after the last file folds
 	//     instead of interleaved with it, so every over-interned instance's gid shifts. Nothing DERIVES from a
 	//     gid's numeric value — `mangleGenericInstance` is structural (base name + arg manglings) precisely so
@@ -14304,13 +14356,33 @@ export type ProgramSignatures
 		end 'listFromConstruction'
 	end 'internLiteralContainerInstances'
 
+	// ⛔⛔ **EVERY ROW THIS WALK MINTS IS A GUESS, AND ONE READER TOOK THEM FOR FACTS (A4q).** The header above
+	// argues the rows are harmless because "a descriptor and a destructor are both synthesized on USAGE, and
+	// an over-interned instance nobody names has none — so the growth is bounded bookkeeping and reaches no
+	// emitted byte". That is true of EMISSION and beside the point for DIAGNOSIS:
+	// `anyInstanceTypeArgHasKind` walks this same registry, and the copy gate it serves
+	// (`genericTypeFieldHasUncopyableInstantiation` ⇒ `Parser.requireOpaqueArrayCopyable`) reads a row as
+	// evidence that the program CONTAINS an array of that element — then REFUSES on it.
+	//
+	// ⇒ MEASURED once `stdlib/Array.maxon`, `File.maxon` and `Directory.maxon` are listed. This walk minted
+	// `Array with FileWriter`, `Array with FileReader`, `Array with Directory`, `Array with ArrayIterator` and
+	// `Array with __CharacterSet` — five uncopyable elements, none of them named by any program — and any ONE
+	// of them refused `Array.clone`'s own `managed.slice` (`stdlib/Array.maxon:145`) for the WHOLE program.
+	// `map.md`'s `literal.user-type-key` and `literal.user-type-key-escapes-its-builder` were rejected with a
+	// sentence about `Box with String` on programs mentioning no `Box`, no file and no `CharacterSet`; a map
+	// literal whose keys are a user struct is what puts the IDENTIFIER after the `[` that triggers the walk.
+	//
+	// The rows still have to exist — that is what this walk is for, and narrowing WHICH types it guesses at
+	// would only move the line. So they are minted as before and MARKED instead: the registry records that
+	// nothing named them (`GenericInstanceRegistry.speculative`), a later named intern clears the mark, and
+	// the one gate that refuses skips what is still only a candidate.
 	function internAggregateElementInstances(baseName ByteArray)
-		_ = self.builtinInstanceForElement(baseName, element: MaxonType.string)
+		_ = self.builtinInstanceForElement(baseName, element: MaxonType.string, asSpeculative: true)
 		for (name, _) in self.structTypes 'eachStruct'
-			_ = self.builtinInstanceForNamedElement(baseName, element: name)
+			_ = self.builtinInstanceForNamedElement(baseName, element: name, asSpeculative: true)
 		end 'eachStruct'
 		for (name, _) in self.enumTypes 'eachUnion'
-			_ = self.builtinInstanceForNamedElement(baseName, element: name)
+			_ = self.builtinInstanceForNamedElement(baseName, element: name, asSpeculative: true)
 		end 'eachUnion'
 	end 'internAggregateElementInstances'
 
@@ -14588,8 +14660,8 @@ export type ProgramSignatures
 	// ⭐⭐ **THE CONFORMER NAME OF A GENERIC INSTANCE — the ONE answer, for the two doors that arrive with
 	// different things in hand (W41).** `conformerNameOfType` holds a resolved `genericInstance`;
 	// `conformerNameOfDeclaredName` holds the NAME of a generic-instance typealias. That split is exactly the
-	// one `instanceReducesToArrayConformer` already exists for, and the reduction below has to live on both
-	// sides of it for the same measured reason — see the note there.
+	// one `instanceConformerReduction`'s array arm already exists for, and the reduction below has to live on
+	// both sides of it for the same measured reason — see the note there.
 	//
 	// ⭐ **A DECLARED GENERIC REDUCES TO ITS BASE, because under dictionary-passing its conformance is a
 	// property of the DECLARATION and its impls are ONE shared body.** `type MapIterator uses Key, Value
@@ -14625,9 +14697,36 @@ export type ProgramSignatures
 	// *"but 'OpaqueArr' does not implement 'Hashable'"* — the compiler's mangling shown to someone who wrote
 	// a typealias. So the miss is a CASE the caller must handle, not a default this may pick.
 	function instanceConformerReduction(id GenericInstanceId) returns GenericInstanceConformer
-		if self.instanceReducesToArrayConformer(id) 'conformingArray'
-			return GenericInstanceConformer.arrayBuiltin
-		end 'conformingArray'
+		// ⛔⛔ **AN ARRAY IS DECIDED BY ITS `where` CLAUSE AND MAY NEVER FALL THROUGH TO `declaredBase` (A4q).**
+		// The paragraph above rests on `Array` having no `StructLayout` — *"a BUILTIN base has no StructLayout
+		// to declare anything, so it keeps the mangled name it always had"* — and listing `stdlib/Array.maxon`
+		// ENDED that. `structOf("Array")` now answers `declared`, so a NON-conforming `Array with Opaque`
+		// stopped falling through to `unreduced` and collapsed to the conformer `Array` instead — which
+		// `stdlib/Array.maxon:637`'s `extension Array implements Hashable, Equatable where Element is Hashable
+		// and Equatable` registers as a plain declared conformance, because `typeDeclaresInterface` works in
+		// NAMES and a name cannot carry a `where` clause. The conditional half was therefore discharged by
+		// nothing at all.
+		//
+		// ⇒ MEASURED, three cases of `array-conditional-conformance-withheld` at once: `Set with (Array with
+		// Opaque)` and `Map with (Array with Opaque, Val)` stopped being refused, and
+		// `Array with (Array with Opaque)` started SERVING `hash()`. A conformance that had been withheld since
+		// the array-hashable rung was granted to every element in the language by a whitelist line.
+		//
+		// The distinction the `declaredBase` arm draws is between a base whose `where` clause constrains its
+		// INSTANTIATION — `MapIterator`'s `where Key is Hashable`, which `checkOneInstantiation` rejects at the
+		// site, so every instance that exists satisfies it and the conformance may be read off the declaration
+		// — and a base whose conformance is itself CONDITIONAL. `Array with Opaque` is a perfectly legal
+		// instantiation that simply is not `Hashable`, so no instantiation check speaks for it and the
+		// reduction remains the only thing that can. Until the reduction is per-INTERFACE, `Array` is the one
+		// base with such an extension and its own arm stays authoritative for it — including the FALLBACK,
+		// which is the half that moved.
+		if self.isArrayInstance(id) 'theConditionalConformanceIsAuthoritative'
+			if self.arrayElementCarriesConformance(id) 'conformingArray'
+				return GenericInstanceConformer.arrayBuiltin
+			end 'conformingArray'
+
+			return GenericInstanceConformer.unreduced
+		end 'theConditionalConformanceIsAuthoritative'
 
 		let baseName = self.genericInstanceBaseName(id)
 		return match self.structOf(baseName) 'base'
@@ -14635,16 +14734,6 @@ export type ProgramSignatures
 			undeclared gives GenericInstanceConformer.unreduced
 		end 'base'
 	end 'instanceConformerReduction'
-
-	// ⭐ **DOES INSTANCE `id` REDUCE TO THE `Array` CONFORMER?** — an `Array with E` whose `E` satisfies the
-	// conditional conformance. TWO doors reduce to it and each arrives with a different thing in hand: this
-	// one with a resolved instance (`conformerNameOfType`), `conformerNameOfDeclaredName` with the NAME of a
-	// generic-instance typealias. The reduction they share is stated once, here — the arrangement
-	// `canonicalizeRangedAlias` and `conformerNameOfDeclaredName` already have for a ranged alias, which is
-	// split across exactly the same two doors for exactly the same reason.
-	function instanceReducesToArrayConformer(id GenericInstanceId) returns bool
-		return self.isArrayInstance(id) and self.arrayElementCarriesConformance(id)
-	end 'instanceReducesToArrayConformer'
 
 	// The conformer a declared NAME reduces to: a ranged int/float alias collapses to its underlying
 	// primitive's name (`Integer` -> `int`), which is what its intrinsic conformance and its `__witness_int.*`
@@ -16030,12 +16119,39 @@ export type ProgramSignatures
 	// A token whose owner is not in the ledger, or whose declaring type has no interned instance, answers
 	// `false` for the reason a base with no bucket does: nothing instantiates it, so no instantiation
 	// classifies anything as `kind`.
+	//
+	// ⛔⛔ **NOT EVERY ROW IN THIS REGISTRY IS A FACT ABOUT THE PROGRAM, AND READING ONE AS EVIDENCE REFUSED
+	// VALID PROGRAMS WHOLESALE (A4q).** `internAggregateElementInstances` MINTS a `<base> with T` for every
+	// declared struct and union in the program whenever any file holds a `[<identifier>…]` literal — the token
+	// sweep cannot name such a literal's element type, so it materializes every candidate. Those rows are a
+	// materialization convenience; they are not the source saying that an array of that element exists. That
+	// distinction did not matter while the walk's only readers chose an EMISSION (see
+	// `internLiteralContainerInstances`, which argues the rows "reach no emitted byte" — true, and beside the
+	// point), and it became load-bearing the moment a REFUSAL read the same rows.
+	//
+	// ⇒ MEASURED once `stdlib/Array.maxon`, `File.maxon` and `Directory.maxon` are listed: `Array.clone`'s own
+	// `managed.slice` (`stdlib/Array.maxon:145`) is gated by `genericTypeFieldHasUncopyableInstantiation`, and
+	// the speculative walk minted `Array with FileWriter`, `Array with FileReader`, `Array with Directory`,
+	// `Array with ArrayIterator` and `Array with __CharacterSet` — each uncopyable, none named by any program.
+	// One of them was enough to refuse **every** `clone`/`slice`/`append` in **every** program holding a
+	// `[<identifier>…]`-shaped literal, with a sentence about `Box with String`. A `Map` literal whose keys are
+	// a user struct is exactly that shape, which is how `map.md`'s two `literal.user-type-key` cases were
+	// rejected on programs mentioning no `Box`, no file and no `CharacterSet`.
+	//
+	// ⚠ **ONLY THE REFUSAL IGNORES THEM — the two EMISSION gates deliberately still read every row**
+	// (`kindIgnoresSpeculativeInstances`). Over-approximating there costs a descriptor-gated drop on a shape
+	// that never occurs, which is a no-op at run time; under-approximating there would drop nothing where a
+	// drop is owed. A refusal is the one direction where a phantom's cost is a wrong ANSWER.
 	function anyInstanceTypeArgHasKind(param TypeParamId, kind TypeArgInstantiationKind) returns bool
 		let owner = try self.typeParamOwnerOf(param) otherwise return false
 		let position = owner.position
 		if let baseId = try self.typeNames.idOf(owner.declaringTypeName) 'namedType'
 			if let siblings = try self.genericInstances.instancesOfBase(baseId) 'instantiated'
 				for id in siblings 'eachInstance'
+					if kindIgnoresSpeculativeInstances(kind) and self.genericInstances.instanceIsSpeculative(id) 'nothingNamedIt'
+						continue
+					end 'nothingNamedIt'
+
 					let args = self.genericInstances.instanceArgs(id)
 					if position < args.count() and self.typeArgHasKind(try args.get(position) otherwise panic("ProgramSignatures.anyInstanceTypeArgHasKind: instanceArgs.get OOB at {position} despite the range guard"), kind: kind) 'match'
 						return true
