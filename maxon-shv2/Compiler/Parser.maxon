@@ -26826,12 +26826,12 @@ export type Parser
 	//
 	//     for <name> in <lo> to   <hi> 'label'    — a counted range, INCLUSIVE of `hi`
 	//     for <name> in <lo> upto <hi> 'label'    — the same, EXCLUSIVE of `hi`
-	//     for <name> in <arraySource>  'label'    — an INDEX COUNTER over the array record
+	//     for <name> in <collection>   'label'    — walked by whichever of the four collection forks fits it
 	//
 	// FOUR blocks, and the fourth is the one `while` does not have:
 	//
 	//     preheader → evaluate the source ONCE → br header(idx0, …carried)
-	//     header    → idx <= hi ? body : exit          (`<` for `upto`; for an array, `idx < count`)
+	//     header    → idx <= hi ? body : exit          (`<` for `upto`; for a counted record, `idx < count`)
 	//     body      → bind the loop variable; <user statements>; br step
 	//     step      → br header(idx + 1, …carried)     ← `continue` targets THIS, not the header
 	//     exit
@@ -26843,13 +26843,26 @@ export type Parser
 	// `Parser.maxon:10137-10139`, bootstrap `2-Parser.cs:13150-13153`), and so did shv2's own
 	// `LoopContext` before this rung existed.
 	//
-	// ⭐ **THE ARRAY FORM IS AN INDEX COUNTER, NOT AN ITERATOR OBJECT** — the reference bootstrap's fast
-	// path (`2-Parser.cs:13143-13244`), taken over v1's heap cursor (`Parser.maxon:10205-10373`) for
-	// three measured reasons: v1's cursor snapshots `source.buffer` and dangles when the source is freed
-	// at its last use (`LowerMaxonToStd.maxon:9750-9760`), it double-retains and leaked the backing of
-	// every scope-local collection (`:9789-9800`), and it costs two heap allocations per loop. shv2
-	// could not use v1's shape anyway: its `Array` is a hand-synthesized builtin with no
-	// `createIterator`, and there is no `Iterable`/associated-type machinery for one to conform to.
+	// ⭐ **THE COUNTER FORM IS WHAT A SOURCE WITH NO `createIterator` GETS — AND THE CORPUS `Array` HAS
+	// ONE, SO IT IS NOT AN ARRAY FORM ANY MORE.** `stdlib/Array.maxon` is listed
+	// (`StdlibLoader.whitelistedStdlibModules`), so `materializeIterableIterationSource` rewrites an
+	// array source to the `ArrayIterator` its `createIterator()` returns BEFORE the fork below is
+	// reached, and `for x in [10, 20, 30]` emits `Array.createIterator` / `ArrayIterator.current` /
+	// `ArrayIterator.advance` — MEASURED in the emitted IR, not inferred. What still arrives here as a
+	// counter is every source that supplies no cursor of its own: a `Vector`, whose record IS an
+	// array's and which is compiler-served with no `createIterator`, and a program's OWN
+	// `type Array … implements BuiltinArrayLiteral` that declares none (see `requireIterableSource`'s
+	// array arm, which is the door that admits exactly those). The counted ranges share the shape.
+	//
+	// ⭐ **WHAT THE COUNTER IS STILL THE RIGHT SHAPE FOR, AND WHY THE COMPILER NEVER SYNTHESIZES A
+	// CURSOR.** The bootstrap's fast path (`2-Parser.cs:13143-13244`) was taken over v1's
+	// compiler-BUILT heap cursor (`Parser.maxon:10205-10373`) for three measured reasons: v1's cursor
+	// snapshots `source.buffer` and dangles when the source is freed at its last use
+	// (`LowerMaxonToStd.maxon:9750-9760`), it double-retains and leaked the backing of every
+	// scope-local collection (`:9789-9800`), and it costs two heap allocations per loop. None of that
+	// is an argument against the cursor a source DECLARES: that one is an ordinary struct whose
+	// lifetime and refcounting are its own declaration's business and the ordinary call machinery's,
+	// which is precisely why the rewrite above is a rewrite and not a sixth loop form.
 	//
 	// ⭐ **THE LENGTH IS RE-READ LIVE IN THE HEADER**, never snapshotted into the preheader. The header
 	// comparison against the real length IS the bounds check, which is what lets the element read below
@@ -27736,12 +27749,13 @@ export type Parser
 		return IterableIterationSource.cursor(cursor, entrySeed: flag)
 	end 'materializeIterableIterationSource'
 
-	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance — the only container whose element read is a
-	// random-access index, which is what the counter lowering requires — plus the `Vector` whose record IS an
-	// array's, a `String`'s grapheme clusters, a `List`'s node chain, a `Map`, which arrives here already
-	// rewritten to the `Array with (Key, Value)` of its entries (`materializeMapIterationSource`), and any
-	// source supplying the cursor protocol, whether by DECLARING it or by REQUIRING it of what the value
-	// dispatches through. Everything else is a clean E2015 naming the gap rather than a silent acceptance.
+	// ⭐ **WHAT A `for … in` MAY ITERATE.** An `Array` instance whose element read is a random-access index,
+	// which is what the counter lowering requires — plus the `Vector` whose record IS an array's, a
+	// `String`'s grapheme clusters, a `List`'s node chain, and any source supplying the cursor protocol,
+	// whether by DECLARING it or by REQUIRING it of what the value dispatches through. A corpus `Array` and
+	// a corpus `Map` both reach here as the CURSOR their own `createIterator()` returned, so they are
+	// admitted by the cursor arm and not by a container arm at all. Everything else is a clean E2015 naming
+	// the gap rather than a silent acceptance.
 	//
 	// ⚠ **`cursorSurface` ARRIVES RESOLVED, and is the same one `parseForStatement` will emit through.** This
 	// door and that fork must not resolve it twice: an existential's resolution is a walk of the interface's
@@ -27751,6 +27765,15 @@ export type Parser
 	// enumerates what shv2 iterates and ends "any type declaring the cursor protocol", which misdescribes a
 	// witness-dispatched receiver; that one refuses in its own words.
 	function requireIterableSource(source ValueId, cursorSurface MethodSurface, forTok Token) throws ParseError
+		// ⚠ **THIS ARM IS NOT THE CORPUS `Array`'S, AND SAYING SO WOULD BE THE STALEST STATEMENT IN THIS
+		// FILE.** `stdlib/Array.maxon` declares `createIterator()`, so a corpus array was already rewritten
+		// to its `ArrayIterator` by `materializeIterableIterationSource` and is admitted below by the cursor
+		// arm. What still arrives here as an `Array` INSTANCE is a program's own
+		// `type Array … implements BuiltinArrayLiteral` that declares NO cursor and no factory: the name is
+		// still served by the compiler (`isArrayBaseName` — an `Array`'s record IS its buffer), so the
+		// counter lowering can read `count`/`get` off it, and this is the only door that admits it.
+		// MEASURED: such a program emits `__arr_count` / `__arr_get_unchecked`, where the corpus array emits
+		// `Array.createIterator` / `ArrayIterator.current`.
 		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
 		end 'array'

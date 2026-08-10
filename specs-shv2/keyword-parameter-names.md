@@ -22,6 +22,13 @@ These tests lock in the fix — using `type`/`enum`/`union`/`interface`
 as a parameter name must not shadow a real exported type declared in a
 different file.
 
+`array` and `of` are a different claim, and the last case below is its
+home: they are not keywords at all. Both lexers reserved them for an
+`array of int` type syntax that no parser ever implemented, so the words
+cost every program two identifiers and bought nothing. They are ordinary
+identifiers, usable as a parameter name, an argument label and a local
+binding like any other word.
+
 ## Tests
 
 <!-- disabled-test: type-as-parameter-name-crossfile -->
@@ -102,4 +109,26 @@ end 'main'
 ```
 ```exitcode
 5
+```
+
+<!-- test: array-and-of-are-ordinary-identifiers -->
+Neither word is reserved: `array` and `of` each name a parameter AND a
+local binding here, and `of` is an argument label besides. The exit code is
+the product of all four bindings, so a program that merely PARSED could not
+produce it.
+```maxon
+typealias StdType = int(i64.min to i64.max)
+
+function repeated(array StdType, of StdType) returns StdType
+	return array * of
+end 'repeated'
+
+function main() returns ExitCode
+	let array = 6
+	let of = 7
+	return repeated(array, of: of)
+end 'main'
+```
+```exitcode
+42
 ```

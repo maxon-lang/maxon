@@ -47,7 +47,7 @@ thesis, `A3m`, and `G9`/`G10`.)*
 
 ## The count
 
-**50 `.maxon` files under `stdlib/`, 18,337 lines.** ⚠ **The listed count in this file is a DATED SNAPSHOT and the authority is `StdlibLoader.whitelistedStdlibModules` itself** — count it there, never here. It read **16** when this table was measured (2026-08-05) and **18** as of 2026-08-06 (`Log` via `S2g`, `Ascii` via `S2k`), with `Interfaces` in flight. A prose count of a list is the second copy this project keeps being bitten by; the sentence stays only to date the rest of the table.
+**50 `.maxon` files under `stdlib/`, 18,431 lines.** ⚠ **The listed count in this file is a DATED SNAPSHOT and the authority is `StdlibLoader.whitelistedStdlibModules` itself** — it is ONE `listWhitelistedModule` call per listed module, so count the calls in that function and never trust a number written anywhere else. It read **16** when this table was measured (2026-08-05), **18** as of 2026-08-06 (`Log` via `S2g`, `Ascii` via `S2k`), and **36** as of 2026-08-10, the whole `stdlib/Array.maxon` + `helpers/sort/` cone having landed with `3c9f6a1d91`. A prose count of a list is the second copy this project keeps being bitten by; the sentence stays only to date the rest of the table.
 
 ⚠ Several places in the tree still say **48 / 49 files** and **"3 whitelisted"**: `PLAN.md:88`, `:2092`,
 `:3605`, `:3694`; `StdlibLoader.maxon`'s header; `Testing/ladders/genwhitelist.sh`'s header. The most

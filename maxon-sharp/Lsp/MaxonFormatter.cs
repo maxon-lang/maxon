@@ -755,10 +755,9 @@ private record SourceComment(string Text, bool WholeLine);
     // 'default' is used as a function name: `static function default()` / `ValueInfo.default()`.
     // (The match-arm `default` appears alone, never followed by '(' in current code.)
     TokenType.Default,
-    // 'of' is used as a function NAME: `static function of(...)` / `EffectivePools.of(...)`. As a
-    // keyword it only ever appears in `array of int`, where a TYPE NAME follows — never '(' — so it
-    // is unconditionally callable here.
-    TokenType.Of,
+    // NOTE: 'of' needs no entry of its own. It was reserved for an `array of int` type syntax no
+    // parser ever implemented, so it lexes as an ordinary identifier and `EffectivePools.of(...)`
+    // is covered by TokenType.Identifier above.
     // NOTE: 'mod' is deliberately NOT in this set. It is context-dependent and is handled in
     // NeedsSpaceBefore — see ModStartsLine there.
   ];
