@@ -58,6 +58,8 @@ die()  { printf '\n\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 ok()   { printf '\033[32m✓\033[0m %s\n' "$*"; }
 step() { printf '\n\033[1m── %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m⚠\033[0m %s\n' "$*"; }
+# Neutral context, not a finding — a warn() here would read as a defect in the port.
+note() { printf '\033[2m·\033[0m %s\n' "$*"; }
 
 SPEC=""; NO_BUILD=0; REVERT=0; LIST=0
 
@@ -185,6 +187,13 @@ FAILED="$(echo "$SUMMARY" | sed 's/.*passed, //; s/ failed.*//')"
 TOTAL=$((PASSED + FAILED))
 ok "$SUMMARY"
 
+# The filter is a SUBSTRING of the `<spec>/<test>` label, so `--filter=<spec>/` also selects any OTHER
+# spec whose name ENDS with ours — `regalloc/` drags in `generic-hash-table-regalloc/`. The §2 count is
+# a claim about ONE spec, so it must be read off the per-test lines, never off the summary total.
+# Measured 2026-08-10: `regalloc` read 6 markers against a total of 8 and looked like a surplus.
+OURS="$(grep -cE "^(PASS|FAIL) $SPEC/" "$RUNLOG")"
+COLLIDERS="$(grep -oE "^(PASS|FAIL) [a-z0-9-]+/" "$RUNLOG" | sed 's/^[A-Z]* //; s|/$||' | sort -u | grep -vx "$SPEC" || true)"
+
 # ── §2: THE COUNT CHECKS. The colour is not the gate; the count is. ──────────────────────────────
 #
 # A spec can pass by running NOTHING — `status: draft` returns zero tests, and a stray `## ` heading
@@ -195,11 +204,16 @@ DISABLED="$(grep -c '<!-- disabled-test:' "specs-shv2/$SPEC.md")"
 DUPES="$(grep -o '<!-- \(disabled-\)\?test: [^ ]*' "specs-shv2/$SPEC.md" | sed 's/.*test: //' | sort | uniq -d)"
 COUNTS_OK=1
 
-if [ "$MARKERS" -eq "$TOTAL" ]; then
+if [ -n "$COLLIDERS" ]; then
+  note "the filter is a SUBSTRING match, so it also selected: $(echo "$COLLIDERS" | tr '\n' ' ')"
+  note "counting only the $OURS line(s) labelled '$SPEC/' — the summary total ($TOTAL) is NOT this spec's count"
+fi
+
+if [ "$MARKERS" -eq "$OURS" ]; then
   ok "markers == ran ($MARKERS)"
 else
   COUNTS_OK=0
-  warn "MARKER SHORTFALL: $MARKERS '<!-- test:' markers but $TOTAL ran"
+  warn "MARKER MISMATCH: $MARKERS '<!-- test:' markers but $OURS ran under '$SPEC/'"
   grep -n '^## ' "specs-shv2/$SPEC.md" | sed 's/^/      heading: /'
   warn "a '## ' heading after '## Tests' ends the active-test region — move it BELOW the cases (§2)"
   grep -q '^status:[[:space:]]*draft' "specs-shv2/$SPEC.md" && warn "frontmatter says 'status: draft' — that returns ZERO tests for the whole file"
