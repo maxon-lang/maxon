@@ -17232,10 +17232,20 @@ export type ProgramSignatures
 	// a DIRECT-CALL source dispatches statically, so the loop emits `<typeName>.current` /
 	// `<typeName>.advance` and the declarations ARE what makes the loop expressible.
 	//
-	// ⚠ **IT ANSWERS FOR ONE OF THE TWO RECEIVER KINDS, and the other is `Parser.surfaceDeclaresCursorProtocol`'s
-	// existential arm.** An interface value's protocol is a REQUIREMENT, which no callee registry holds, so
-	// that arm reads the transitive slot list instead. The RULE is the same on both sides and is written once
-	// where it can be: `throwsClauseIsIterationError` below.
+	// ⚠ **IT ANSWERS FOR THE DIRECT-CALL RECEIVER ONLY; the witness-dispatched one is
+	// `Parser.surfaceDeclaresCursorProtocol`'s other arm.** A dispatched receiver's protocol is a REQUIREMENT,
+	// which no callee registry holds, so that arm reads the transitive slot list instead. The ONE part of the
+	// rule shared between them is the error type, written once as `throwsClauseIsIterationError`.
+	//
+	// ⛔ **AND THE REST OF THE RULE IS NOT SHARED — THIS SIDE TESTS EXISTENCE AND THE CLAUSE, AND NOTHING
+	// ELSE.** The dispatched arm additionally requires the requirement to take a receiver and to declare no
+	// parameters (`witnessProtocolTarget`); this one cannot, because `declaresCallee` is a NAME lookup and no
+	// per-callee arity is stored to ask. So a `current(at Index)` beside a throwing `advance()` is admitted
+	// here and then reported downstream by `emitCall` as **`E3036: 'Weird.current' expects 2 argument(s) but 1
+	// were provided`** (MEASURED) — an argument count against a call the author never wrote, where this door
+	// exists to give a clean E2015. That is a REAL gap on this side and it predates the dispatched arm; it is
+	// recorded here rather than papered over, because the shape of the fix is a per-callee arity the index
+	// does not carry.
 	//
 	// ⭐⭐ **STRUCTURAL, NOT A CONFORMANCE — and that is a DEPARTURE FROM v1, taken against the runnable
 	// oracle.** v1 requires the source to conform to an interface that itself declares `current` + `advance`

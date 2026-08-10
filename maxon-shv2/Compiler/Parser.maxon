@@ -2015,46 +2015,67 @@ end 'CursorEntrySeed'
 
 // ⭐⭐ **HOW A VALUE'S METHODS ARE REACHED — the one fact the `for … in` ADMISSION tests, its two EMITS and
 // the generic-result promotion all need, and they must not answer it separately.** A value either declares
-// its methods on a type whose bodies exist (a direct call), or carries a witness table it dispatches through
-// (an existential), or has no method surface at all.
+// its methods on a type whose bodies exist (a direct call), or carries a witness table it dispatches through,
+// or names an interface INSTANCE that shv2 cannot hold at all, or has no method surface.
 //
-// ⛔ **IT REPLACES A TYPE NAME THAT WAS EMPTY-MEANS-NONE, AND THE EXISTENTIAL IS WHY.** The old
+// ⛔ **IT REPLACES A TYPE NAME THAT WAS EMPTY-MEANS-NONE, AND THE WITNESS RECEIVERS ARE WHY.** The old
 // `methodDeclaringTypeNameOf` answered one `ByteArray` for every value, so the whole traversal protocol was
-// keyed on a struct name — and an existential HAS a name (its interface) whose methods live in a store that
-// name cannot reach: an interface's requirements are in no callee registry, and its conformers' bodies are
-// not what a dispatch binds against. Answering `EmptySourceText` for it (which is what the old door did) is
-// what made `for x in source` over an interface value an E2015 whose sentence enumerated a protocol the
+// keyed on a struct name — and a dispatched receiver HAS a name (its interface, or its type parameter) whose
+// methods live in a store that name cannot reach: an interface's requirements are in no callee registry, and
+// its conformers' bodies are not what a dispatch binds against. Answering `EmptySourceText` for them (which
+// is what the old door did) is what made `for x in source` an E2015 whose sentence enumerated a protocol the
 // value's own interface required.
+//
+// ⭐ **THE RECEIVER TRAVELS ON THE ARM, so no reader takes both a surface and the value it came from.** Two
+// such parameters must agree and nothing could enforce it; carrying the value makes a disagreement
+// unrepresentable, which is the same reason `InterfaceConformance` keeps its interface name beside its
+// `withArgs`.
 union MethodSurface
 	// Methods DECLARED on a struct or a generic base — the loop emits `<typeName>.current` /
 	// `<typeName>.advance` as direct calls, and `ProgramSignatures.declaresCallee` is what says they exist.
-	declared(typeName ByteArray)
-	// An EXISTENTIAL. It carries no type name the loop can call through: the value's own witness half is the
-	// table, and the REQUIREMENTS of the interface it is held at are the declarations. Nothing is stored on
-	// the arm because everything is derivable from the receiver — `findWitnessDispatchCandidates` reads the
-	// interface off the value's name id and the table off its witness pairing.
-	existential
-	// No traversal surface at all: an int, a float, a closure.
+	declared(typeName ByteArray, receiver ValueId)
+	// ⭐⭐ **A RECEIVER THAT DISPATCHES THROUGH A WITNESS TABLE — BOTH of the kinds the language has**, an
+	// EXISTENTIAL (the fat pointer's own witness half) and a CONSTRAINED TYPE PARAMETER (the enclosing body's
+	// hidden witness parameter). They share an arm because everything under it is shared:
+	// `findWitnessDispatchCandidates` serves both from the receiver alone, and `witnessDispatchProviderPhrase`
+	// already words a refusal for both. Splitting them would be a second place for one dispatch rule to live.
+	witnessDispatched(receiver ValueId)
+	// ⛔ **AN INSTANCE OF AN INTERFACE, which shv2 does not hold as a value at all.** `interfaceRef` carries an
+	// interface NAME and a witness table and has nowhere to record `with` arguments, so
+	// `Iterable with (Element, ElementIterator)` resolves to a `genericInstance` over a base no file declares
+	// as a `type`. It is its OWN answer rather than a `declared` whose lookups happen to miss, because the
+	// refusal has to name the mechanism and a reader that re-asked "is that base an interface?" would be the
+	// same question written in two places.
+	parameterizedInterface(interfaceName ByteArray)
+	// No method surface at all: an int, a float, a closure.
 	none
 end 'MethodSurface'
 
-// Whether a resolved surface has any methods to ask about — the emptiness test the `for` fork used to make
-// on `cursorIterationTypeName`'s returned name, written once because five sites in `parseForStatement` make
-// it and a fifth spelling of `match … none` at each is what a named predicate is for.
+// Whether a resolved surface has methods that can be REACHED — the emptiness test the `for` fork used to
+// make on `cursorIterationTypeName`'s returned name, written once because the six sites in
+// `parseForStatement` that ask it would otherwise each spell their own `match … none`. A parameterized
+// interface answers FALSE: it names methods, and nothing can call them.
 function methodSurfaceExists(surface MethodSurface) returns bool
 	return match surface 'k'
 		declared gives true
-		existential gives true
+		witnessDispatched gives true
+		parameterizedInterface gives false
 		none gives false
 	end 'k'
 end 'methodSurfaceExists'
 
-// The zero-argument, receiver-taking requirement an existential's interface supplies under a protocol name —
-// or `notRequired`. See `Parser.existentialProtocolTarget`.
-union ExistentialProtocolTarget
+// ⭐ **THE ARITY OF EVERY TRAVERSAL-PROTOCOL METHOD.** `current()`, `advance()` and `createIterator()` each
+// take a receiver and nothing else, so the loop calls with no arguments and the requirement it binds must
+// declare none. It is named because it is read TWICE about one call — once to filter the candidates and once
+// to word the ambiguity — and two literal `0`s about one fact is how they come to disagree.
+let ProtocolMethodArity = 0 as ParamCount
+
+// The zero-argument, receiver-taking requirement a witness-dispatched receiver supplies under a protocol
+// name — or `notRequired`. See `Parser.witnessProtocolTarget`.
+union WitnessProtocolTarget
 	required(target WitnessDispatchTarget)
 	notRequired
-end 'ExistentialProtocolTarget'
+end 'WitnessProtocolTarget'
 
 // Whether this `for` statement grew the second entry edge a throwing `createIterator()` needs (W3) — and, if
 // so, the block that edge lands in, which is the one the statement's continuation has to merge with. See
@@ -18645,12 +18666,15 @@ export type Parser
 		match self.methodSurfaceOf(receiver) 'receiverSurface'
 			// No method surface at all — nothing was dispatched, so there is no callee scope to read in.
 			none then return
-			// ⚠ **AN EXISTENTIAL HAS NO CALLEE SCOPE, AND THAT IS NOT THE SAME AS HAVING NONE.** Its result was
-			// typed off the INTERFACE REQUIREMENT (`mintWitnessDispatchResult`), which is already concrete —
-			// there is no shared generic body whose parameters this could bind, and the interface's name is not
-			// a struct any type-parameter registry answers for.
-			existential then return
-			declared(typeName) then declaringType = typeName
+			// ⚠ **A DISPATCHED RECEIVER HAS NO CALLEE SCOPE, AND THAT IS NOT THE SAME AS HAVING NONE.** Its
+			// result was typed off the INTERFACE REQUIREMENT (`mintWitnessDispatchResult`), which is already
+			// concrete — there is no shared generic body whose parameters this could bind, and an interface's
+			// name is not a struct any type-parameter registry answers for.
+			witnessDispatched then return
+			// An INSTANCE of an interface dispatched nothing: every door refuses it, so no result was minted
+			// whose type this could reopen.
+			parameterizedInterface then return
+			declared(typeName, _) then declaringType = typeName
 		end 'receiverSurface'
 
 		// ⚠ **THE COST GATE, and it is the same one `ProgramSignatures.fieldTypeOf` spells for its own door**:
@@ -26306,10 +26330,15 @@ export type Parser
 				cursor(_, seed) gives CursorEntrySeed.fromFactory(seed)
 			end 'walkedSeed'
 
-			// ⭐ **RESOLVED ONCE, HERE, AND HANDED TO THE ADMISSION TEST.** It used to be asked twice — the
-			// admission test resolved it to decide whether to refuse, and the fork resolved it again to decide
-			// what to emit — which for an EXISTENTIAL is two searches of the interface's slot list per protocol
-			// name, and for either receiver kind is two chances to answer one question differently.
+			// ⭐ **RESOLVED HERE AND HANDED TO THE ADMISSION TEST, so the door that REFUSES and the fork that
+			// EMITS read one answer.** They used to resolve it separately, which is two chances to admit on one
+			// reading and emit on another.
+			//
+			// ⚠ It is NOT the only resolution in this statement, and saying so would be false:
+			// `materializeIterableIterationSource` above resolves a surface of its own, necessarily — it runs on
+			// the source BEFORE the rewrite and this one describes the cursor AFTER it, so they are surfaces of
+			// two different values. What is shared is the FUNCTION, so they cannot disagree; what is not shared
+			// is the cost, and for a witness-dispatched source each ask walks the slot list per protocol name.
 			cursorSurface = try self.cursorIterationSurface(source, forTok: forTok)
 			try self.requireIterableSource(source, cursorSurface: cursorSurface, forTok: forTok)
 			isString = tagIsText(self.tagOf(source))
@@ -26567,7 +26596,7 @@ export type Parser
 		// silent no-op on the scalar case, which is why the call is unconditional rather than gated on a
 		// managed-return test that would be a second opinion about what the call minted.
 		if methodSurfaceExists(cursorSurface) 'readCursorElement'
-			loopValue = try self.emitReceiverProtocolCall(cursorSurface, methodName: CurrentMethodName, source: source, anchor: patternTok, resultUsed: true)
+			loopValue = try self.emitReceiverProtocolCall(cursorSurface, methodName: CurrentMethodName, anchor: patternTok, resultUsed: true)
 			self.giveTemporaryScopeLifetime(loopValue, name: IterationElementBindingName)
 		end 'readCursorElement'
 
@@ -26653,7 +26682,7 @@ export type Parser
 		// `throws` to iterate — the contract `stdlib/Interfaces.maxon` states and both references implement.
 		var nextIndex = graphemeEnd
 		if methodSurfaceExists(cursorSurface) 'cursorAdvanceStep'
-			nextIndex = try self.emitCursorAdvance(func, cursorSurface: cursorSurface, source: source, anchor: forTok)
+			nextIndex = try self.emitCursorAdvance(func, cursorSurface: cursorSurface, anchor: forTok)
 		end 'cursorAdvanceStep' else 'builtinSourceStep'
 			if isList 'listNodeStep'
 				nextIndex = self.emitRuntimeCall(ListNodeNextName, args: singletonArgs(indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
@@ -26831,14 +26860,19 @@ export type Parser
 	// written `s.current()` on that value emits. Everything the loop then does to the result is shared:
 	// `rewriteLastCallToTryCall` already routes a `witnessDispatch` to `commitWitnessTryDispatchRewrite`, so
 	// `emitCursorAdvance` needs no arm of its own for the throwing half.
-	function emitReceiverProtocolCall(surface MethodSurface, methodName ByteArray, source ValueId, anchor Token, resultUsed bool) returns ValueId throws ParseError
-		var typeName = EmptySourceText
+	function emitReceiverProtocolCall(surface MethodSurface, methodName ByteArray, anchor Token, resultUsed bool) returns ValueId throws ParseError
 		match surface 'how'
-			none then panic("emitReceiverProtocolCall: a `{String.from(methodName)}` protocol call on a source with no traversal surface — every caller emits only after `surfaceDeclaresCursorProtocol` or `surfaceIterableFactory` answered off this same surface")
-			existential then return try self.emitExistentialProtocolDispatch(source, methodName: methodName, anchor: anchor, resultUsed: resultUsed)
-			declared(declaringType) then typeName = declaringType
+			none then panic("emitReceiverProtocolCall: a `{String.from(methodName)}` protocol call on a value with no method surface — every caller emits only after `surfaceDeclaresCursorProtocol` or `surfaceIterableFactory` answered off this same surface")
+			parameterizedInterface(interfaceName) then panic("emitReceiverProtocolCall: a `{String.from(methodName)}` protocol call on an instance of interface '{String.from(interfaceName)}' — `methodSurfaceExists` answers FALSE for that surface, so `requireIterableSource` refuses it before any emit")
+			witnessDispatched(receiver) then return try self.emitWitnessProtocolCall(receiver, methodName: methodName, anchor: anchor, resultUsed: resultUsed)
+			declared(declaringType, receiver) then return try self.emitDeclaredProtocolCall(declaringType, methodName: methodName, source: receiver, anchor: anchor, resultUsed: resultUsed)
 		end 'how'
+	end 'emitReceiverProtocolCall'
 
+	// The DIRECT-CALL fork of the router above — the body this function had before the second receiver kind
+	// arrived, unchanged, and a fork of its own so the `declared` arm binds both of its payloads in the one
+	// statement a `match` arm is.
+	function emitDeclaredProtocolCall(typeName ByteArray, methodName ByteArray, source ValueId, anchor Token, resultUsed bool) returns ValueId throws ParseError
 		// `var` on all three: `emitCall` supplies omitted defaults by PUSHING onto the argument columns
 		// (`fillOmittedArgDefaults`), so they are its output as well as its input. No protocol method declares
 		// a parameter, so nothing is ever appended — but the mutability is the signature's, not the callee's,
@@ -26849,7 +26883,7 @@ export type Parser
 		let result = try self.emitCall(qualifiedMethodName(typeName, methodName: methodName), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: resultUsed, constructorInstance: self.receiverConstructorInstance(source), mint: CalleeMint.notMinted)
 		self.retypeInstanceMethodResult(result, receiver: source)
 		return result
-	end 'emitReceiverProtocolCall'
+	end 'emitDeclaredProtocolCall'
 
 	// ⭐⭐ **THE EXISTENTIAL FORK OF THE CALL ABOVE: one zero-argument requirement, dispatched through the
 	// table the receiver carries.** Every step is the one `dispatchWitnessMethod` takes for a written
@@ -26861,19 +26895,19 @@ export type Parser
 	// return type is already concrete, and the one that is not — `Self` — is answered by the receiver inside
 	// `mintWitnessDispatchResult` rather than substituted afterwards. `mintWitnessDispatchResult`'s own header
 	// states the same thing for the written form.
-	function emitExistentialProtocolDispatch(source ValueId, methodName ByteArray, anchor Token, resultUsed bool) returns ValueId throws ParseError
-		match try self.existentialProtocolTarget(source, methodName: methodName, anchor: anchor) 'resolved'
-			notRequired then panic("emitExistentialProtocolDispatch: the interface this existential is held at requires no zero-argument `{String.from(methodName)}` — the admission test and this emit both go through `existentialProtocolTarget`, so a miss here means one of them was not asked")
-			required(requirement) then return try self.emitProtocolWitnessDispatch(requirement, source: source, anchor: anchor, resultUsed: resultUsed)
+	function emitWitnessProtocolCall(receiver ValueId, methodName ByteArray, anchor Token, resultUsed bool) returns ValueId throws ParseError
+		match try self.witnessProtocolTarget(receiver, methodName: methodName, anchor: anchor) 'resolved'
+			notRequired then panic("emitWitnessProtocolCall: what this receiver dispatches through requires no zero-argument `{String.from(methodName)}` — the admission test and this emit both go through `witnessProtocolTarget`, so a miss here means one of them was not asked")
+			required(requirement) then return try self.emitProtocolWitnessDispatch(requirement, receiver: receiver, anchor: anchor, resultUsed: resultUsed)
 		end 'resolved'
-	end 'emitExistentialProtocolDispatch'
+	end 'emitWitnessProtocolCall'
 
 	// The emit half of the fork above, taking the already-resolved requirement. `singletonArgs` is
 	// `withWitnessReceiver`'s answer for a call with no user arguments — the receiver alone at `args[0]`,
 	// which is the convention `emitWitnessDispatch` and every reader below it index by.
-	function emitProtocolWitnessDispatch(requirement WitnessDispatchTarget, source ValueId, anchor Token, resultUsed bool) returns ValueId throws ParseError
-		let result = try self.mintWitnessDispatchResult(requirement, receiver: source, methodTok: anchor, resultUsed: resultUsed)
-		self.emitWitnessDispatch(result, args: singletonArgs(source), target: requirement, isVoid: requirement.returnTypeName.equals(InterfaceVoidTypeName), range: SourceRange.ofToken(anchor), siteTok: anchor)
+	function emitProtocolWitnessDispatch(requirement WitnessDispatchTarget, receiver ValueId, anchor Token, resultUsed bool) returns ValueId throws ParseError
+		let result = try self.mintWitnessDispatchResult(requirement, receiver: receiver, methodTok: anchor, resultUsed: resultUsed)
+		self.emitWitnessDispatch(result, args: singletonArgs(receiver), target: requirement, range: SourceRange.ofToken(anchor), siteTok: anchor)
 		return result
 	end 'emitProtocolWitnessDispatch'
 
@@ -26897,7 +26931,7 @@ export type Parser
 	// `witnessDispatch` in the last opRef slot to `commitWitnessTryDispatchRewrite`, so the existential's
 	// `advance()` becomes a dual-register `witnessTryDispatch` by exactly the route a struct's becomes a
 	// `tryCall` — the reason this function needed no arm of its own for the second receiver kind.
-	function emitCursorAdvance(func IrFunction, cursorSurface MethodSurface, source ValueId, anchor Token) returns ValueId throws ParseError
+	function emitCursorAdvance(func IrFunction, cursorSurface MethodSurface, anchor Token) returns ValueId throws ParseError
 		// The floor `rewriteLastCallToTryCall` measures "the target's own op" against — see `parseTry`, which
 		// captures it at the same point and for the same reason.
 		let targetOpFloor = self.artifact.module.ops.count()
@@ -26911,7 +26945,7 @@ export type Parser
 		// then meet a `tryCall` it must reject. Suppressed here, that cannot happen.
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
 		self.tryBlockRoutingSuppressed = true
-		_ = try self.emitReceiverProtocolCall(cursorSurface, methodName: AdvanceMethodName, source: source, anchor: anchor, resultUsed: false)
+		_ = try self.emitReceiverProtocolCall(cursorSurface, methodName: AdvanceMethodName, anchor: anchor, resultUsed: false)
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		_ = try self.rewriteLastCallToTryCall(func, flag: flag, tryTok: anchor, targetOpFloor: targetOpFloor)
@@ -26966,16 +27000,16 @@ export type Parser
 		// The surface gate is `methodSurfaceOf`'s and is there for its reason: a source with no
 		// method surface has no `createIterator` to find, and no store to ask for one.
 		let surface = self.methodSurfaceOf(source)
-		let alreadyACursor = try self.surfaceDeclaresCursorProtocol(surface, source: source, anchor: forTok)
+		let alreadyACursor = try self.surfaceDeclaresCursorProtocol(surface, anchor: forTok)
 		if alreadyACursor 'walksItself'
 			return IterableIterationSource.notIterable
 		end 'walksItself'
 
-		match try self.surfaceIterableFactory(surface, source: source, anchor: forTok) 'factory'
+		match try self.surfaceIterableFactory(surface, anchor: forTok) 'factory'
 			notDeclared then return IterableIterationSource.notIterable
-			infallible then return IterableIterationSource.cursor(try self.emitReceiverProtocolCall(surface, methodName: CreateIteratorMethodName, source: source, anchor: forTok, resultUsed: true), entrySeed: self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
+			infallible then return IterableIterationSource.cursor(try self.emitReceiverProtocolCall(surface, methodName: CreateIteratorMethodName, anchor: forTok, resultUsed: true), entrySeed: self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok)))
 			throwsIterationError then break 'factory'
-			throwsSomethingElse(errorName) then throw ParseError.unsupported("`for … in` over a `{String.from(self.methodSurfaceTypeName(surface, source: source))}`, whose `{String.from(CreateIteratorMethodName)}()` throws `{errorName}` — the loop absorbs what the traversal protocol throws without binding it, which is sound only for the payload-free `{String.from(IterationErrorTypeName)}`; a factory throwing anything else must be called with an explicit `try` and its result iterated", line: forTok.line, column: forTok.column)
+			throwsSomethingElse(errorName) then throw ParseError.unsupported("`for … in` over a `{String.from(self.methodSurfaceTypeName(surface))}`, whose `{String.from(CreateIteratorMethodName)}()` throws `{errorName}` — the loop absorbs what the traversal protocol throws without binding it, which is sound only for the payload-free `{String.from(IterationErrorTypeName)}`; a factory throwing anything else must be called with an explicit `try` and its result iterated", line: forTok.line, column: forTok.column)
 		end 'factory'
 
 		// The THROWING factory. `rewriteLastCallToTryCall` is the same rewrite `emitCursorAdvance` uses on
@@ -26988,7 +27022,7 @@ export type Parser
 		// `for x in someIterable` inside a `try 'l' … end` body is the reaching program.
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
 		self.tryBlockRoutingSuppressed = true
-		let cursor = try self.emitReceiverProtocolCall(surface, methodName: CreateIteratorMethodName, source: source, anchor: forTok, resultUsed: true)
+		let cursor = try self.emitReceiverProtocolCall(surface, methodName: CreateIteratorMethodName, anchor: forTok, resultUsed: true)
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
 
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
@@ -27000,8 +27034,16 @@ export type Parser
 	// random-access index, which is what the counter lowering requires — plus the `Vector` whose record IS an
 	// array's, a `String`'s grapheme clusters, a `List`'s node chain, a `Map`, which arrives here already
 	// rewritten to the `Array with (Key, Value)` of its entries (`materializeMapIterationSource`), and any
-	// USER type supplying the cursor protocol (`declaresCursorProtocol`). Everything else is a clean E2015
-	// naming the gap rather than a silent acceptance.
+	// source supplying the cursor protocol, whether by DECLARING it or by REQUIRING it of what the value
+	// dispatches through. Everything else is a clean E2015 naming the gap rather than a silent acceptance.
+	//
+	// ⚠ **`cursorSurface` ARRIVES RESOLVED, and is the same one `parseForStatement` will emit through.** This
+	// door and that fork must not resolve it twice: an existential's resolution is a walk of the interface's
+	// slot list per protocol name, and two walks are two chances to admit on one answer and emit on another.
+	//
+	// THREE sentences come out of here, and the split is which one is TRUE of the source. The shared one
+	// enumerates what shv2 iterates and ends "any type declaring the cursor protocol", which misdescribes a
+	// witness-dispatched receiver and misnames an interface INSTANCE; each of those refuses in its own words.
 	function requireIterableSource(source ValueId, cursorSurface MethodSurface, forTok Token) throws ParseError
 		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
@@ -27030,32 +27072,48 @@ export type Parser
 			return
 		end 'cursor'
 
-		// ⭐⭐ **AN EXISTENTIAL IS REFUSED IN ITS OWN WORDS, BECAUSE THE SHARED SENTENCE POINTS AT THE WRONG
-		// THING FOR IT.** That sentence ends *"any type DECLARING the cursor protocol"*, which is true of a
-		// struct source and false here: a conformer may declare both methods and still be unwalkable through
-		// this value, because the table the dispatch jumps through has a slot only for what the INTERFACE
-		// requires. Naming the interface is what turns "shv2 cannot iterate this" into "add the requirement".
-		if self.tagOf(source) == ValueTypeTag.interfaceRef 'existentialWithoutTraversal'
-			throw ParseError.unsupported("`for … in` over a value held at interface '{String.from(self.internedName(self.valueNameId(source)))}', which requires neither the cursor protocol `{String.from(CurrentMethodName)}()` + `{String.from(AdvanceMethodName)}() throws {String.from(IterationErrorTypeName)}` nor a `{String.from(CreateIteratorMethodName)}()` factory — an existential is walked through the witness table the value carries, so the traversal has to be one the INTERFACE requires; a conformer declaring it supplies no slot to dispatch through", line: forTok.line, column: forTok.column)
-		end 'existentialWithoutTraversal'
-
-		// ⭐⭐ **AN INSTANCE OF AN INTERFACE IS NOT A `struct`, AND THE SHARED SENTENCE CALLED IT ONE.**
-		// `typeTagName(genericInstance)` is the word "struct" — right for `Box with Integer`, and actively
-		// misleading for `Iterable with (Element, ElementIterator)`, whose base is an interface no file declares
-		// as a `type`. That is the noun `stdlib/Array.maxon:132` was refused by, and it pointed the reader at a
-		// missing struct rather than at the mechanism that is actually absent: shv2 holds an existential as
-		// `MaxonType.interfaceRef`, which carries an interface NAME and no associated-type bindings, so a
-		// parameterized interface has nowhere to keep them and never becomes an existential at all.
+		// ⭐⭐ **THE TWO SURFACES THE SHARED SENTENCE IS WRONG ABOUT REFUSE IN THEIR OWN WORDS**, read off the
+		// source's OWN surface rather than off a tag — "is that base an interface?" is a question
+		// `methodSurfaceOf` answers, and asking it a second way here is exactly the duplication this rung's
+		// union exists to remove.
 		//
-		// ⚠ **NEITHER REFERENCE COMPILER SOLVES THIS EITHER, so the sentence claims no workaround.** v1's
-		// `InterfaceTypeRegistry` (`Project.maxon:2124-2151`) is a bare name table with no argument vector, and
-		// `Array.from`'s body never reaches its lowering — dead-function elimination removes it, and reaching it
-		// would land on `lowerInterfaceMethodCallStub`'s `mrt_panic`. The C# bootstrap monomorphizes per
-		// concrete argument instead and dies the same way when one is supplied
-		// (`E9001 … Function 'CounterSeq.createIterator$CounterSeq' not found in module`, MEASURED).
-		if self.tagOf(source) == ValueTypeTag.genericInstance and self.signatures.interfaceMap().contains(self.signatures.genericInstanceBaseName(self.valueNameId(source))) 'parameterizedInterface'
-			throw ParseError.unsupported("`for … in` over an INSTANCE of the interface '{String.from(self.signatures.genericInstanceBaseName(self.valueNameId(source)))}' — shv2 holds an existential as an interface NAME plus a witness table (`interfaceRef`) and has nowhere to record the `with` arguments, so a parameterized interface never becomes one: the cursor `{String.from(CreateIteratorMethodName)}()` would return is typed by an associated type with no binding here, and carries no table to walk through. Iterate a concrete conformer, or hold the source at an interface that requires the traversal directly", line: forTok.line, column: forTok.column)
-		end 'parameterizedInterface'
+		// ⚠ **IT MAY NOT READ `cursorSurface`, and the first cut did — measured, both refusals silently reverted
+		// to the shared sentence.** That parameter is the CURSOR surface: `cursorIterationSurface` collapses it
+		// to `none` for any source that does not supply the protocol, which is precisely every source that
+		// reaches this refusal. The two are different questions — "how are this value's methods reached" against
+		// "does it walk its own cursor" — and only the first can say what is wrong.
+		//
+		// Re-deriving it here is one tag test plus, for a generic instance, one registry lookup, on the THROW
+		// path only. It cannot disagree with the admission test's reading because it is the same function on the
+		// same value; the expensive half — walking the slot list per protocol name — is not repeated.
+		match self.methodSurfaceOf(source) 'sharedSentenceIsWrong'
+			declared then break 'sharedSentenceIsWrong'
+			none then break 'sharedSentenceIsWrong'
+			// ⭐ **A DISPATCHED RECEIVER: the shared sentence ends *"any type DECLARING the cursor protocol"*,
+			// which is true of a struct source and false here.** A conformer may declare both methods and still
+			// be unwalkable through this value, because the table the dispatch jumps through has a slot only for
+			// what the INTERFACE requires. Naming the provider is what turns "shv2 cannot iterate this" into "add
+			// the requirement", and `witnessDispatchProviderPhrase` words it for an existential and for a
+			// constrained type parameter alike.
+			//
+			// ⚠ It says the requirements are not the protocol rather than that they are ABSENT, because the two
+			// near misses reach here too: an `{String.from(AdvanceMethodName)}()` naming the wrong error type, and
+			// one half of the pair supplied without the other.
+			witnessDispatched(receiver) then throw ParseError.unsupported("`for … in` over a value dispatched through {self.witnessDispatchProviderPhrase(receiver)}, which supplies neither the cursor protocol `{String.from(CurrentMethodName)}()` + `{String.from(AdvanceMethodName)}() throws {String.from(IterationErrorTypeName)}` nor a `{String.from(CreateIteratorMethodName)}()` factory as a zero-argument REQUIREMENT — the traversal is a jump through the witness table the value carries, so it has to be something the interface requires; a conformer declaring it supplies no slot to dispatch through", line: forTok.line, column: forTok.column)
+			// ⭐⭐ **AN INSTANCE OF AN INTERFACE IS NOT A `struct`, AND THE SHARED SENTENCE CALLED IT ONE.**
+			// `typeTagName(genericInstance)` is the word "struct" — right for `Box with Integer`, and actively
+			// misleading for `Iterable with (Element, ElementIterator)`. That is the noun `stdlib/Array.maxon:132`
+			// was refused by, and it pointed the reader at a missing struct rather than at the mechanism that is
+			// actually absent.
+			//
+			// ⚠ **NEITHER REFERENCE COMPILER SOLVES THIS EITHER, so the sentence claims no workaround.** v1's
+			// `InterfaceTypeRegistry` (`Project.maxon:2124-2151`) is a bare name table with no argument vector,
+			// and `Array.from`'s body never reaches its lowering — dead-function elimination removes it, and
+			// reaching it would land on `lowerInterfaceMethodCallStub`'s `mrt_panic`. The C# bootstrap
+			// monomorphizes per concrete argument instead and dies the same way once one is supplied
+			// (`E9001 … Function 'CounterSeq.createIterator$CounterSeq' not found in module`, MEASURED).
+			parameterizedInterface(interfaceName) then throw ParseError.unsupported("`for … in` over an INSTANCE of the interface '{String.from(interfaceName)}' — shv2 holds an existential as an interface NAME plus a witness table (`interfaceRef`) and has nowhere to record the `with` arguments, so a parameterized interface never becomes one: the cursor `{String.from(CreateIteratorMethodName)}()` would return is typed by an associated type with no binding here, and carries no table to walk through. Iterate a concrete conformer, or hold the source at an interface that requires the traversal directly", line: forTok.line, column: forTok.column)
+		end 'sharedSentenceIsWrong'
 
 		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `{String.from(VectorBuiltinBaseName)}`, a `List`, a `{String.from(MapBuiltinBaseName)}`'s `(key, value)` entries, a `String`'s grapheme clusters, the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`, and any type declaring the cursor protocol `{String.from(CurrentMethodName)}()` + `{String.from(AdvanceMethodName)}() throws {String.from(IterationErrorTypeName)}`", line: forTok.line, column: forTok.column)
 	end 'requireIterableSource'
@@ -27067,7 +27125,7 @@ export type Parser
 	// from the admission test.
 	function cursorIterationSurface(source ValueId, forTok Token) returns MethodSurface throws ParseError
 		let surface = self.methodSurfaceOf(source)
-		let suppliesTheProtocol = try self.surfaceDeclaresCursorProtocol(surface, source: source, anchor: forTok)
+		let suppliesTheProtocol = try self.surfaceDeclaresCursorProtocol(surface, anchor: forTok)
 		if not suppliesTheProtocol 'noProtocol'
 			return MethodSurface.none
 		end 'noProtocol'
@@ -27098,14 +27156,24 @@ export type Parser
 	// requires. The kind had to become part of the answer before the answer could be right.
 	function methodSurfaceOf(value ValueId) returns MethodSurface
 		if self.tagOf(value) == ValueTypeTag.structRef 'plainStruct'
-			return MethodSurface.declared(self.valueTypeName(value))
+			return MethodSurface.declared(self.valueTypeName(value), receiver: value)
 		end 'plainStruct'
 		if self.tagOf(value) == ValueTypeTag.genericInstance 'instance'
-			return MethodSurface.declared(self.signatures.genericInstanceBaseName(self.valueNameId(value)))
+			let base = self.signatures.genericInstanceBaseName(self.valueNameId(value))
+			// ⚠ **`isInterfaceName`, NOT `interfaceMap().contains`** — the one door, which answers for the
+			// SYNTHESIZED protocols (`Stringable`, `Hashable`, `Equatable`, `Comparable`, `FormattedStringable`)
+			// as well as for the user registry. The raw `contains` misses all five, so an instance over one of
+			// them would be read as a struct base whose callee lookups merely happen to miss.
+			if isInterfaceName(self.signatures.interfaceMap(), name: base) 'interfaceBase'
+				return MethodSurface.parameterizedInterface(base)
+			end 'interfaceBase'
+
+			return MethodSurface.declared(base, receiver: value)
 		end 'instance'
-		if self.tagOf(value) == ValueTypeTag.interfaceRef 'existential'
-			return MethodSurface.existential
-		end 'existential'
+		// Both witness receiver kinds, one arm — see `MethodSurface.witnessDispatched`.
+		if self.tagOf(value) == ValueTypeTag.interfaceRef or self.tagOf(value) == ValueTypeTag.typeParameter 'dispatched'
+			return MethodSurface.witnessDispatched(value)
+		end 'dispatched'
 
 		return MethodSurface.none
 	end 'methodSurfaceOf'
@@ -27116,19 +27184,21 @@ export type Parser
 	// want `current()` beside an `advance()` whose clause names `IterationError`, which is why the clause test
 	// is `throwsClauseIsIterationError` on both sides rather than a callee lookup on one and a slot walk on
 	// the other.
-	function surfaceDeclaresCursorProtocol(surface MethodSurface, source ValueId, anchor Token) returns bool throws ParseError
+	function surfaceDeclaresCursorProtocol(surface MethodSurface, anchor Token) returns bool throws ParseError
+		var receiver = 0 as ValueId
 		match surface 'k'
 			none then return false
-			declared(typeName) then return self.signatures.declaresCursorProtocol(typeName)
-			existential then break 'k'
+			parameterizedInterface then return false
+			declared(typeName, _) then return self.signatures.declaresCursorProtocol(typeName)
+			witnessDispatched(dispatchedOn) then receiver = dispatchedOn
 		end 'k'
 
-		match try self.existentialProtocolTarget(source, methodName: CurrentMethodName, anchor: anchor) 'current'
+		match try self.witnessProtocolTarget(receiver, methodName: CurrentMethodName, anchor: anchor) 'current'
 			notRequired then return false
 			required then break 'current'
 		end 'current'
 
-		return match try self.existentialProtocolTarget(source, methodName: AdvanceMethodName, anchor: anchor) 'advance'
+		return match try self.witnessProtocolTarget(receiver, methodName: AdvanceMethodName, anchor: anchor) 'advance'
 			notRequired gives false
 			required(advance) gives throwsClauseIsIterationError(advance.throwsClause)
 		end 'advance'
@@ -27137,14 +27207,16 @@ export type Parser
 	// `ProgramSignatures.iterableFactory`'s question, asked of whichever store holds the declaration —
 	// `surfaceDeclaresCursorProtocol`'s twin, split the same way and for the same reason. The EXISTENCE half
 	// differs per store; `iterableFactoryFromClause` classifies what was found, once, for both.
-	function surfaceIterableFactory(surface MethodSurface, source ValueId, anchor Token) returns IterableFactory throws ParseError
+	function surfaceIterableFactory(surface MethodSurface, anchor Token) returns IterableFactory throws ParseError
+		var receiver = 0 as ValueId
 		match surface 'k'
 			none then return IterableFactory.notDeclared
-			declared(typeName) then return self.signatures.iterableFactory(typeName)
-			existential then break 'k'
+			parameterizedInterface then return IterableFactory.notDeclared
+			declared(typeName, _) then return self.signatures.iterableFactory(typeName)
+			witnessDispatched(dispatchedOn) then receiver = dispatchedOn
 		end 'k'
 
-		return match try self.existentialProtocolTarget(source, methodName: CreateIteratorMethodName, anchor: anchor) 'factory'
+		return match try self.witnessProtocolTarget(receiver, methodName: CreateIteratorMethodName, anchor: anchor) 'factory'
 			notRequired gives IterableFactory.notDeclared
 			required(create) gives iterableFactoryFromClause(create.throwsClause)
 		end 'factory'
@@ -27153,11 +27225,12 @@ export type Parser
 	// What a diagnostic calls the traversal surface: the DECLARING TYPE for a direct-call source, and for an
 	// existential the INTERFACE the value is held at — which is the name that answers "why can this not be
 	// walked?", because the requirement list is what the loop was refused by.
-	function methodSurfaceTypeName(surface MethodSurface, source ValueId) returns ByteArray
+	function methodSurfaceTypeName(surface MethodSurface) returns ByteArray
 		match surface 'k'
-			declared(typeName) then return typeName
-			existential then return self.internedName(self.valueNameId(source))
-			none then panic("methodSurfaceTypeName: a value with no method surface has no declaration to name — every caller asks after the surface answered `declared` or `existential`")
+			declared(typeName, _) then return typeName
+			parameterizedInterface(interfaceName) then return interfaceName
+			witnessDispatched(receiver) then return self.internedName(self.valueNameId(receiver))
+			none then panic("methodSurfaceTypeName: a value with no method surface has no declaration to name — every caller asks after the surface answered something else")
 		end 'k'
 	end 'methodSurfaceTypeName'
 
@@ -27185,24 +27258,25 @@ export type Parser
 	// printed 10, silently binding whichever slot the transitive walk emitted first. That is a wrong function
 	// pointer rather than a diagnostic, and it broke the rule `dispatchMethodOnBase` states in full — the door
 	// a receiver came through may not change what the answer IS.
-	function existentialProtocolTarget(source ValueId, methodName ByteArray, anchor Token) returns ExistentialProtocolTarget throws ParseError
-		let candidates = try self.findWitnessDispatchCandidates(source, methodName: methodName, errorTok: anchor)
+	function witnessProtocolTarget(receiver ValueId, methodName ByteArray, anchor Token) returns WitnessProtocolTarget throws ParseError
+		let candidates = try self.findWitnessDispatchCandidates(receiver, methodName: methodName, errorTok: anchor)
 		var protocolShaped = WitnessDispatchTargetArray.create()
 		for i in 0 upto candidates.count() 'eachCandidate'
-			let candidate = try candidates.get(i) otherwise panic("existentialProtocolTarget: candidates.get OOB at {i} below count {candidates.count()}")
-			if witnessRequirementTakesReceiver(candidate) and candidate.paramTypeNames.count() == 0 'theProtocolShape'
+			let candidate = try candidates.get(i) otherwise panic("witnessProtocolTarget: candidates.get OOB at {i} below count {candidates.count()}")
+			if witnessRequirementTakesReceiver(candidate) and candidate.paramTypeNames.count() == ProtocolMethodArity 'theProtocolShape'
 				protocolShaped.push(candidate)
 			end 'theProtocolShape'
 		end 'eachCandidate'
 
 		match pickSoleWitnessCandidate(protocolShaped) 'pick'
-			none then return ExistentialProtocolTarget.notRequired
-			one(target) then return ExistentialProtocolTarget.required(target)
-			// The SAME sentence the written call gets, from the same door: `argCount` is 0 because that is the
-			// arity this filter selected on and the arity the loop calls with.
-			ambiguous(first, second) then throw ParseError.ambiguousWitnessDispatch(String.from(methodName), provider: self.witnessDispatchProviderPhrase(source), argCount: 0, first: renderWitnessRequirement(first), second: renderWitnessRequirement(second), line: anchor.line, column: anchor.column)
+			none then return WitnessProtocolTarget.notRequired
+			one(target) then return WitnessProtocolTarget.required(target)
+			// The SAME sentence the written call gets, from the same door, at the one arity this filter selected
+			// on — which is also the arity the loop calls with, so the two are `ProtocolMethodArity` and not two
+			// literals that could drift apart.
+			ambiguous(first, second) then throw ParseError.ambiguousWitnessDispatch(String.from(methodName), provider: self.witnessDispatchProviderPhrase(receiver), argCount: ProtocolMethodArity, first: renderWitnessRequirement(first), second: renderWitnessRequirement(second), line: anchor.line, column: anchor.column)
 		end 'pick'
-	end 'existentialProtocolTarget'
+	end 'witnessProtocolTarget'
 
 	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableSource`, and
 	// the rung shipped without it.** A counted range is an INDEX PHI stepped by `emitMachineWordAdd`, a
@@ -34519,7 +34593,7 @@ export type Parser
 		// `Self` arms cannot fire for an operator: `Equatable`/`Comparable` each declare one value-returning
 		// method, and `resultUsed` is true because a comparison is only ever parsed for its verdict.
 		let dispatchResult = try self.mintWitnessDispatchResult(target, receiver: receiver, methodTok: opTok, resultUsed: true)
-		self.emitWitnessDispatch(dispatchResult, args: args, target: target, isVoid: false, range: SourceRange.ofToken(opTok), siteTok: opTok)
+		self.emitWitnessDispatch(dispatchResult, args: args, target: target, range: SourceRange.ofToken(opTok), siteTok: opTok)
 
 		// The verdict. `==` is the dispatch's own bool and `!=` negates that SAME dispatch, so the two can never
 		// disagree about what equality means (the `emitByteRecordCompare` shape); the four ordering operators read
@@ -43489,7 +43563,7 @@ export type Parser
 
 		let range = SourceRange.between(methodTok, last: rparenTok)
 		let result = try self.mintWitnessDispatchResult(target, receiver: receiver, methodTok: methodTok, resultUsed: resultUsed)
-		self.emitWitnessDispatch(result, args: args, target: target, isVoid: target.returnTypeName.equals(InterfaceVoidTypeName), range: range, siteTok: methodTok)
+		self.emitWitnessDispatch(result, args: args, target: target, range: range, siteTok: methodTok)
 		return result
 	end 'dispatchWitnessMethod'
 
@@ -43540,7 +43614,14 @@ export type Parser
 	// `lastWitnessDispatch*` record are written for BOTH by construction rather than remembered at each. A
 	// dispatch whose record was missed would leave a `try` on it typing its `(e)` binding off a stale clause;
 	// keeping the emit and the record in one place is what makes that unrepresentable.
-	function emitWitnessDispatch(result ValueId, args ValueIdArray, target WitnessDispatchTarget, isVoid bool, range SourceRange, siteTok Token)
+	// ⚠ **`isVoid` IS DERIVED HERE AND WAS A PARAMETER, WHICH MADE IT A RULE WITH THREE HOMES.** It is a pure
+	// function of the `target` this already holds, and the three callers each spelled their own answer — two
+	// copies of `returnTypeName.equals(InterfaceVoidTypeName)` and one hard-coded `false` on the comparison
+	// path (correct only because `Comparable.compare` returns `Ordering`, which the derivation also reads as
+	// non-void). Nothing made the three agree, and the op's void-ness decides which register the lowering
+	// reads a result from.
+	function emitWitnessDispatch(result ValueId, args ValueIdArray, target WitnessDispatchTarget, range SourceRange, siteTok Token)
+		let isVoid = target.returnTypeName.equals(InterfaceVoidTypeName)
 		let placed = self.floatWidenedWitnessArgs(target, args: args, siteTok: siteTok)
 
 		self.lastWitnessDispatchIndex = self.artifact.module.ops.count()

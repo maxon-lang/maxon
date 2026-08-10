@@ -16,6 +16,11 @@ other source gets; only the two protocol calls change shape. A struct source emi
 existential has no one conformer to name, so it dispatches each of them through the table the value carries,
 exactly as a written `s.current()` on that value already does.
 
+⭐ **AND THE SAME IS TRUE OF A CONSTRAINED TYPE PARAMETER**, which is the language's OTHER witness-dispatched
+receiver: `for v in self.item` inside `type W uses T where T is Seq` jumps through the enclosing body's hidden
+witness parameter instead of through a fat pointer's second half. Everything else about it is identical, so
+the two share one arm of `MethodSurface` and one refusal.
+
 **So the traversal must be something the INTERFACE REQUIRES, and a conformer supplying it is not enough.**
 That is the one rule that differs from the struct source's structural test, and it is forced rather than
 chosen: under dictionary-passing the shared body has no concrete callee to look up, so a requirement is the
@@ -482,7 +487,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:30:2: Unsupported: `for … in` over a value held at interface 'Labelled', which requires neither the cursor protocol `current()` + `advance() throws IterationError` nor a `createIterator()` factory — an existential is walked through the witness table the value carries, so the traversal has to be one the INTERFACE requires; a conformer declaring it supplies no slot to dispatch through
+error E2015: <fragment>:30:2: Unsupported: `for … in` over a value dispatched through interface 'Labelled', which supplies neither the cursor protocol `current()` + `advance() throws IterationError` nor a `createIterator()` factory as a zero-argument REQUIREMENT — the traversal is a jump through the witness table the value carries, so it has to be something the interface requires; a conformer declaring it supplies no slot to dispatch through
 ```
 
 <!-- test: error.parameterized-interface-is-not-an-existential -->
@@ -677,4 +682,142 @@ end 'main'
 ```stdout
 10
 6
+```
+
+<!-- test: existential.constrained-type-parameter -->
+The OTHER witness-dispatched receiver. `self.item` is a `T` under `where T is Seq`, so the concrete conformer
+is unknown in the shared body and the two protocol calls jump through the constraint's hidden witness
+parameter. MEASURED before this rung: `E2015 … over a 'type parameter' value — … any type declaring the cursor
+protocol`, the same wrong sentence the existential got.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Seq
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Seq'
+
+type Upto implements Seq
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Upto'
+
+type Wrap uses T where T is Seq
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function total() returns Integer
+		var sum = 0 as Integer
+		for v in self.item 'walk'
+			sum = sum + v
+		end 'walk'
+		return sum
+	end 'total'
+end 'Wrap'
+
+typealias UptoWrap = Wrap with Upto
+
+function main() returns ExitCode
+	var w = UptoWrap.create(Upto.create(4))
+	print("{w.total()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+```
+
+<!-- test: existential.managed-element-early-exits -->
+⚠ **THE PER-TRIP RELEASE ON THE EXITS THE FALL-THROUGH CASE CANNOT REACH.** `giveTemporaryScopeLifetime`
+enumerates three ways a promoted per-trip temporary leaves — a `return`/`throw` out of the body, a `break`,
+and the loop's own `end` — and only the last is exercised by the plain managed case. Each walk here mints
+heap `String`s the loop owns for one trip; a missed release on either early exit is exit 101, and a double
+release is a fault.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Lines
+	function current() returns String
+	function advance() throws IterationError
+end 'Lines'
+
+type Numbered implements Lines
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns String
+		return "a managed line long enough to live on the heap, number {self.pos}"
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Numbered'
+
+function returnsOutOfTheBody(source Lines) returns Integer
+	for text in source 'walk'
+		if text.byteLength() > 0 'theFirst'
+			return text.byteLength()
+		end 'theFirst'
+	end 'walk'
+	return 0
+end 'returnsOutOfTheBody'
+
+function breaksOutOfTheBody(source Lines) returns Integer
+	var total = 0 as Integer
+	for text in source 'walk'
+		total = total + text.byteLength()
+		if total > 100 'enough'
+			break
+		end 'enough'
+	end 'walk'
+	return total
+end 'breaksOutOfTheBody'
+
+function main() returns ExitCode
+	var i = 0 as Integer
+	var returned = 0 as Integer
+	var broke = 0 as Integer
+	while i < 200 'many'
+		returned = returnsOutOfTheBody(Numbered.create(30))
+		broke = breaksOutOfTheBody(Numbered.create(30))
+		i = i + 1
+	end 'many'
+	print("{returned} {broke}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+56 112
 ```
