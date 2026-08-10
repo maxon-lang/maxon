@@ -893,11 +893,9 @@ end 'valueWidensToInterface'
 // declares `implements`. The E3017 check's `Point declares Digest?` lookup, built once per constrained program.
 function buildDeclaredConformanceMap(project Project) returns DeclaredConformanceMap
 	var declared = DeclaredConformanceMap.create()
-	// One `type X implements A, B` clause is ONE ConformanceDecl, so a fresh set per decl needs no
-	// accumulate-into-existing (which would borrow the map across its own `upsert`). A duplicate `implements`
-	// on one type is E3006, reported before this runs.
 	for conformance in project.conformances 'eachDecl'
 		var interfaces = InterfaceNameSet.create()
+		copyDeclaredInterfaces(declared, typeName: conformance.typeName, into: interfaces)
 		for i in 0 upto conformance.interfaces.count() 'eachIface'
 			interfaces.insert((try conformance.interfaces.get(i) otherwise panic("buildDeclaredConformanceMap: interfaces.get OOB at {i}")).interfaceName)
 		end 'eachIface'
@@ -905,6 +903,34 @@ function buildDeclaredConformanceMap(project Project) returns DeclaredConformanc
 	end 'eachDecl'
 	return declared
 end 'buildDeclaredConformanceMap'
+
+// ⭐⭐ **A CONFORMER'S ENTRY IS THE UNION OF ITS DECLARATIONS, AND THE REPLACE THIS REPAIRS LET DECLARATION
+// ORDER DECIDE WHICH CONFORMANCES A PROGRAM HAD.** The header this replaces argued that a fresh set per decl
+// was enough because *"one `type X implements A, B` clause is ONE ConformanceDecl"* and a second `implements`
+// on one type is E3006 — true of the `type` clause alone, and FALSE the moment an `extension` could add one:
+// `Parser.recordExtensionConformance` records a SECOND `ConformanceDecl` under the same conformer name, which
+// is not a redeclaration and is not E3006. MEASURED on the merge base, one file, two declarations:
+// `type Thing implements Shower` plus `extension Thing implements Sizer` compiles the `Sizer` call and refuses
+// the `Shower` one with *"E3005 … type 'Thing' does not implement interface 'Shower'"* — and swapping which
+// is written first swaps which of the two is refused. The last decl won; every earlier one was dropped.
+//
+// ⚠ It is also load-bearing for the reachability walk that reads this map to credit a conformer's witness
+// impls (`StdlibSource.markWitnessImplsOfConformer`): `stdlib/Array.maxon` declares `Iterable`/`Cloneable` on
+// the type and `Hashable`/`Equatable` on an extension, so under the replace one of those pairs was invisible
+// to the credit and its impls would be filed unreachable behind a witness slot that names them.
+//
+// ⚠ **THE SET IS COPIED RATHER THAN ADDED TO, for `recordDispatchedSlot`'s reason stated in full there** — a
+// value fetched out of a `Map` BORROWS the map, so an `insert` on it is E3019 and an `upsert` while that
+// borrow is live is E3070. The copy is paid once per DECLARATION and copies only what an earlier declaration
+// of the SAME conformer already put there, which is nothing for every type in the corpus but the handful
+// carrying both a `type` clause and an `extension` one.
+function copyDeclaredInterfaces(declared DeclaredConformanceMap, typeName ByteArray, into InterfaceNameSet)
+	if let already = try declared.get(typeName) 'declaredEarlierToo'
+		for interfaceName in already 'eachEarlier'
+			into.insert(interfaceName)
+		end 'eachEarlier'
+	end 'declaredEarlierToo'
+end 'copyDeclaredInterfaces'
 
 // Does `typeName` declare `implements interfaceName`, DIRECTLY OR THROUGH `extends` (P1.7a slice 2a; made
 // transitive by P1.7a-existentials slice 1)? A type with no conformance declaration answers false — the E3017

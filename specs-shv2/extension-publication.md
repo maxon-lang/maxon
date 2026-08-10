@@ -64,6 +64,18 @@ extensions publishing one `<Conformer>.<method>` are a genuine duplicate definit
 whichever of them folds first, because neither of them is the conformer's own declaration. The doors
 above ask about EXISTENCE and must not inherit that exclusion.
 
+### An extension publishes a CONFORMANCE too, and it JOINS the conformer's own
+
+`extension X implements I` publishes a conformance onto `X` exactly as an extension method publishes a
+method: from that moment `X` implements `I` **as well as** everything its own `implements` clause named.
+The two declarations are a union, never a replacement, and which of them the author wrote first decides
+nothing.
+
+That is worth a pair of cases because the two are recorded as two separate declarations under one
+conformer name — a `type` clause's and an extension's — and a reader that files the second over the first
+answers *"type 'X' does not implement interface 'I'"* about a program that plainly declares it, for
+whichever of the two happens to be written earlier.
+
 ## Tests
 
 <!-- test: a-bare-call-inside-a-type-extension-reaches-the-conformers-own-method -->
@@ -355,4 +367,110 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:4:11: Unsupported: `String` member 'reticulate' — shv2 provides hash/equals; that list IS the surface, so nothing else is served here
+```
+
+### A conformance an extension adds
+
+<!-- test: an-extension-conformance-joins-the-conformers-own-rather-than-replacing-it -->
+⛔ **THE UNION WAS A REPLACE, AND THE LAST DECLARATION WON.** `Thing` declares `Shower` on its own body
+and `Sizer` on an extension; the declared-conformance index filed a fresh set per declaration, so the
+extension's entry overwrote the type's and `display(t)` was refused with
+**`E3005 … type 'Thing' does not implement interface 'Shower'`** — about the clause written three lines
+above it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shower
+	function show() returns Integer
+end 'Shower'
+
+interface Sizer
+	function size() returns Integer
+end 'Sizer'
+
+type Thing implements Shower
+	let value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+
+	function show() returns Integer
+		return value * 10
+	end 'show'
+end 'Thing'
+
+extension Thing implements Sizer
+	function size() returns Integer
+		return value
+	end 'size'
+end 'Thing'
+
+function display(s Shower) returns Integer
+	return s.show()
+end 'display'
+
+function measure(s Sizer) returns Integer
+	return s.size()
+end 'measure'
+
+function main() returns ExitCode
+	let t = Thing.create(3)
+	return (display(t) + measure(t)) as ExitCode
+end 'main'
+```
+```exitcode
+33
+```
+
+<!-- test: an-extension-conformance-written-before-the-type-joins-it-too -->
+⚠ **THE ORDER CONTROL, AND IT IS THE HALF THAT PROVES THE CAUSE.** The same program with the extension
+written FIRST refused the other interface — `E3005 … does not implement interface 'Sizer'` — so the
+verdict was decided by declaration order rather than by what the program declares. A case pinning only
+one order would pass on a reader that kept the FIRST declaration instead of the last, which is the same
+bug facing the other way.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Shower
+	function show() returns Integer
+end 'Shower'
+
+interface Sizer
+	function size() returns Integer
+end 'Sizer'
+
+extension Thing implements Sizer
+	function size() returns Integer
+		return value
+	end 'size'
+end 'Thing'
+
+type Thing implements Shower
+	let value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+
+	function show() returns Integer
+		return value * 10
+	end 'show'
+end 'Thing'
+
+function display(s Shower) returns Integer
+	return s.show()
+end 'display'
+
+function measure(s Sizer) returns Integer
+	return s.size()
+end 'measure'
+
+function main() returns ExitCode
+	let t = Thing.create(4)
+	return (display(t) + measure(t)) as ExitCode
+end 'main'
+```
+```exitcode
+44
 ```

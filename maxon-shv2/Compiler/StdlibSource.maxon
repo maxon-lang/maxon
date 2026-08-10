@@ -355,18 +355,19 @@ end 'stdlibFunctionNames'
 //     An `Error` enum DOES widen, and `Error` has zero requirements, so there is no slot to credit.
 //     ⇒ P1 holds today because the conformers that can reach a table are exactly the ones E3076 governs.
 //
-//   • **P2 — a BUILTIN conformer's requirement impls are never stdlib SOURCE.** This one is load-bearing
-//     and easy to miss, because the conformer key structurally CANNOT credit a builtin: no `String.<method>`
-//     or `int.<method>` module function is ever reached, since those calls lower to `__str_*`/inline ops.
-//     MEASURED that builtin conformers really do reach tables, and not only through the container route
-//     `markConformerWitnessImpls`'s last paragraph covers: `type Keyed uses T where T is Hashable`
-//     instantiated at `String` and at `int` compiles and runs (exit 14 = `9 + 5`), building
-//     `__witness_String.Hashable` and `__witness_int.Hashable`. It is harmless ONLY because
-//     `BuiltinConformanceRuntime` SYNTHESIZES those impls, so nothing behind those tables is stdlib source.
-//     ⇒ **The day a LISTED module declares `extension <builtin> implements <Iface>` with a corpus body,
-//     this key misses it.** That is not hypothetical: `stdlib/Array.maxon:637` already declares
-//     `extension Array implements Hashable, Equatable where Element is Hashable and Equatable`, and is
-//     saved only by not being on the whitelist. Listing it is the change that would need this revisited.
+//   • **P2 — a BUILTIN conformer's requirement impls are never stdlib SOURCE. IT HAS EXPIRED TWICE AND IS NO
+//     LONGER A PREMISE AT ALL; the seed below is what stands in its place.** The conformer key structurally
+//     CANNOT credit a builtin: no `String.<method>` or `int.<method>` module function is ever reached, since
+//     those calls lower to `__str_*`/inline ops. MEASURED that builtin conformers really do reach tables, and
+//     not only through the container route `markConformerWitnessImpls`'s last paragraph covers:
+//     `type Keyed uses T where T is Hashable` instantiated at `String` and at `int` compiles and runs
+//     (exit 14 = `9 + 5`), building `__witness_String.Hashable` and `__witness_int.Hashable`. That was
+//     harmless only while `BuiltinConformanceRuntime` SYNTHESIZED every such impl. ⇒ **The day a LISTED
+//     module declares `extension <builtin> implements <Iface>` with a corpus body, this key misses it** —
+//     W17 was that day for `String`/`Character`, and the `stdlib/Array.maxon:637` case this paragraph named
+//     in advance (`extension Array implements Hashable, Equatable where Element is Hashable and Equatable`)
+//     is the second. Both are carried by `conformersMintedWithoutTheirOwnMethods`, whose membership rule and
+//     loudness argument live at that function.
 //
 // ⭐⭐ **AND THIS IS WHY A RESIDUAL HERE IS TOLERABLE: AN UNDER-APPROXIMATION IS LOUD, ALWAYS.** The same
 // walk decides both what is BUILT (`growStdlibBodyDemand`) and what is filed `unreachable`, so the two can
@@ -456,13 +457,52 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// seed happens at most once there is no third round to reach.
 	let demandsWitnessTable = drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 	if demandsWitnessTable 'aTableCanNameACorpusImpl'
-		markWitnessImplsOfConformer(StringConformerName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		markWitnessImplsOfConformer(CharacterConformerName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		for conformerName in conformersMintedWithoutTheirOwnMethods() 'eachSeededConformer'
+			markWitnessImplsOfConformer(conformerName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		end 'eachSeededConformer'
 		_ = drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'aTableCanNameACorpusImpl'
 
 	return names
 end 'reachableMaxonFunctionNames'
+
+// ⭐⭐⭐ **THE CONFORMERS THE CONFORMER KEY STRUCTURALLY CANNOT REACH — the seed's membership rule, in one
+// place, because the omission of a name from it is the whole defect this list exists to repair.**
+// `markConformerWitnessImpls` credits a type's requirement impls once the walk reaches ANY function OF that
+// type, which is exact for a type E3076 governs (P1). It is EMPTY for a type the COMPILER MINTS VALUES OF: a
+// `String` and a `Character` are born from literals and every operation on one lowers to `__str_*`, and an
+// `Array` is born from an array literal or `Array.create()` and every operation on one lowers to `__arr_*` —
+// MEASURED, on `Key.create()` + `k.push(1)` + `k.count()` with `stdlib/Array.maxon` listed, the emitted module
+// holds `@main` and `@print` and NO `Array.<method>` at all. So no reached function is ever qualified by one
+// of these names and the key has nothing to fire on.
+//
+// ⚠ **MEMBERSHIP IS TWO CLAUSES AND BOTH ARE NARROWING, so "it is a builtin" is neither of them.**
+//
+//   • **The compiler mints its values without a call of its own** — as above. `Map` is a builtin container
+//     and is deliberately ABSENT on this clause: a dictionary literal lowers to `Map.create` + `Map.upsert`
+//     (`Parser.emitMapLiteralCreate`), ordinary reached calls, so the conformer key fires for it. MEASURED —
+//     a `where T is Iterable` program instantiated at `Map with (Num, Num)` emits `@Map.createIterator` and
+//     compiles clean with `Map` on no seed.
+//   • **A LISTED module declares its conformance**, so a witness slot can name a CORPUS body. This is what
+//     keeps `int`/`float`/`bool`/`Set` off the list although they satisfy the first clause: their impls are
+//     `BuiltinConformanceRuntime`'s synthesized ones, and a synthesized body is not stdlib source, so there
+//     is nothing `unreachable` could hold and nothing to seed. The day one of them acquires a listed
+//     declaring module is the day it joins — by the same route `Array` did, below.
+//
+// ⭐ **AN OMISSION HERE IS LOUD, ALWAYS, WHICH IS WHY A ROSTER IS TOLERABLE WHERE A PREDICTION WOULD NOT BE.**
+// This walk decides both what is BUILT and what is filed `unreachable`, so a conformer missing from this list
+// is a function `DeadFunctionElimination.requireUnreachableStdlibStayedDead` PANICS on BY NAME the moment a
+// witness slot reaches it. That is how `Array` was found: `markConformerWitnessImpls`' header had predicted it
+// in so many words — *"the day a LISTED module declares `extension <builtin> implements <Iface>` with a corpus
+// body, this key misses it … `stdlib/Array.maxon:637` … listing it is the change that would need this
+// revisited"* — and listing the module produced exactly that panic on `Array.hash`.
+function conformersMintedWithoutTheirOwnMethods() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(StringConformerName)
+	names.push(CharacterConformerName)
+	names.push(ArrayBuiltinBaseName)
+	return names
+end 'conformersMintedWithoutTheirOwnMethods'
 
 // Drain the worklist to a fixpoint, answering whether anything it reached DEMANDS a witness table. Split out
 // of `reachableMaxonFunctionNames` because the walk runs twice — once to find the demand, once for the
@@ -900,13 +940,13 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 		return true
 	end 'rootedInStdlib'
 
-	// ⭐⭐ **AND A WITNESS TABLE IS THE OTHER SUCH CROSSING: its slots reach `String.hash`/`Character.hash`
-	// through an `.rdata` RELOCATION, which is an op nowhere.** So this asks the pair of demand predicates the
-	// drain asks of reached code, over USER code — exact for the same reason the stdlib-callee scan below is:
-	// with no user edge into stdlib, the reached set IS a subset of user code. Gated on the corpus actually
-	// DECLARING those conformances, so an unlisted `String.maxon`/`Character.maxon` leaves this scan — and
-	// every program's answer — exactly as it was.
-	if corpusDeclaresAByteRecordConformance(project) and userCodeDemandsAWitnessTable(module, signatures: signatures, stdlib: stdlib) 'widensOrThreadsOne'
+	// ⭐⭐ **AND A WITNESS TABLE IS THE OTHER SUCH CROSSING: its slots reach `String.hash`/`Character.hash`/
+	// `Array.hash` through an `.rdata` RELOCATION, which is an op nowhere.** So this asks the pair of demand
+	// predicates the drain asks of reached code, over USER code — exact for the same reason the stdlib-callee
+	// scan below is: with no user edge into stdlib, the reached set IS a subset of user code. Gated on the
+	// corpus actually DECLARING one of the seed's conformances, so an unlisted declaring module leaves this
+	// scan — and every program's answer — exactly as it was.
+	if corpusDeclaresASeededConformance(project) and userCodeDemandsAWitnessTable(module, signatures: signatures, stdlib: stdlib) 'widensOrThreadsOne'
 		return true
 	end 'widensOrThreadsOne'
 
@@ -973,17 +1013,34 @@ function userCodeDemandsAWitnessTable(module MaxonModule, signatures ProgramSign
 	return false
 end 'userCodeDemandsAWitnessTable'
 
-// Does the CORPUS declare a conformance on either byte record — i.e. is there a corpus body a witness slot
-// could name at all? Without the cone listed, `String` and `Character` conform only INTRINSICALLY
-// (`isIntrinsicBuiltinConformance`) and `BuiltinConformanceRuntime` synthesizes every impl, so no witness
-// table can reach stdlib source and the demand question above must not disturb a single program's answer.
-// Read off `declaredConformanceIndex` — the memo `markWitnessImplsOfConformer` marks through — rather than
-// off a second reading of `project.conformances`, so the gate and the marking cannot disagree about whether
-// there is anything to credit.
-function corpusDeclaresAByteRecordConformance(project Project) returns bool
+// Does the CORPUS declare a conformance on a conformer the seed exists for — i.e. is there a corpus body a
+// witness slot could name at all? Without a declaring module listed, these conformers conform only
+// INTRINSICALLY (`isIntrinsicBuiltinConformance`) and `BuiltinConformanceRuntime` synthesizes every impl, so
+// no witness table can reach stdlib source and the demand question above must not disturb a single program's
+// answer. Read off `declaredConformanceIndex` — the memo `markWitnessImplsOfConformer` marks through — rather
+// than off a second reading of `project.conformances`, so the gate and the marking cannot disagree about
+// whether there is anything to credit.
+//
+// ⚠⚠ **IT ASKS THE SEED'S OWN LIST, AND IT SPELLED `String`/`Character` ITSELF UNTIL THIS RUNG — WHICH IS THE
+// SHORT-CIRCUIT HALF OF EXACTLY THE DEFECT THE SEED REPAIRS.** `userCodeReachesStdlib`'s header records the
+// obligation in so many words: a root kind added to the precise walk alone lets a program whose user code
+// names no stdlib callee take the short-circuit and file the impl `unreachable` while its witness table still
+// names it. A conformer added to the seed and not here would be that omission wearing a gate's clothes.
+//
+// ⚠ **NO PROGRAM'S ANSWER MOVES TODAY, and saying so is the point rather than a caveat.** `stdlib/String.maxon`
+// and `stdlib/Character.maxon` are listed UNCONDITIONALLY and each declares a conformance, so this gate is
+// already TRUE in every compile and adding `Array` to the list it reads cannot change one. What the shared
+// list buys is that the gate stays right for the reason it is written — the seed and its gate are ONE roster —
+// rather than staying right by accident of which two modules happen to be unconditionally listed.
+function corpusDeclaresASeededConformance(project Project) returns bool
 	let index = declaredConformanceIndex(project)
-	return index.contains(StringConformerName) or index.contains(CharacterConformerName)
-end 'corpusDeclaresAByteRecordConformance'
+	for conformerName in conformersMintedWithoutTheirOwnMethods() 'eachSeededConformer'
+		if index.contains(conformerName) 'declaresOne'
+			return true
+		end 'declaresOne'
+	end 'eachSeededConformer'
+	return false
+end 'corpusDeclaresASeededConformance'
 
 // Does any name on the precise walk's initializer root LIST belong to stdlib? Kept a named function rather
 // than inlined: a second root LIST would be one call, and cannot then arrive with a subtly different test.
