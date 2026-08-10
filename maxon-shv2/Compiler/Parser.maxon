@@ -38836,6 +38836,13 @@ export type Parser
 		if self.signatures.isGenericAlias(aliasName) 'writtenAlias'
 			self.recordValueInstanceAlias(result, aliasName: aliasName)
 		end 'writtenAlias'
+
+		// ⭐ **AND THE ALIAS'S OWN ARGUMENT SPELLING** — `emitOwnedContainerCreate`'s line for the builtin
+		// `Array`, at the door a DECLARED generic's factory leaves through. `BufCell.make(…)` mints the only
+		// kind of value that has no declared type to read its surface from, and `gid` cannot answer for it:
+		// `Cell with __ManagedMemory` and `Cell with ByteArray` are one instance. Only the written spelling can,
+		// and it is the same spelling `recordValueInstanceAlias` is here for.
+		self.markDeclaredSurface(result, declared: surfaceOfRootBits(self.signatures.aliasSpellingSurfaceBits(aliasName, readerFilePath: self.filePath)))
 	end 'retypeGenericAliasConstructorResult'
 
 	// ⭐ **THE STRUCT A QUALIFIED CALL'S METHOD IS DECLARED ON (P1.6-A).** A generic-instance alias
@@ -48934,6 +48941,13 @@ export type Parser
 		// enumeration that misses the tenth.
 		self.markDeclaredSurface(result, declared: self.signatures.fieldSurfaceOf(layout, index: index))
 
+		// ⭐ **AND THE SPELLING THE RECEIVER'S INSTANCE ARGUMENT CARRIES, WHICH THE FIELD'S OWN DECLARATION
+		// CANNOT.** A field declared `var slot as U` names no buffer anywhere — the spelling belongs to the
+		// `Cell with __ManagedMemory` being read THROUGH, not to the shared body's declaration. Asked here
+		// because this is where the same crossing already happens for the TYPE (`slotTypeThroughReceiver`, ten
+		// lines up), and the two halves must not be able to come apart.
+		self.markDeclaredSurface(result, declared: self.slotSurfaceThroughReceiver(box, declared: declared))
+
 		// ⭐ **AND THE PER-VALUE SLOT MASK, WHICH THE LAYOUT CANNOT CARRY (A2m).** When `box` is a TUPLE, its
 		// layout is SHARED with every other tuple of the same canonical element types — `(__ManagedMemory, Int)`
 		// and `(ByteArray, Int)` are one registration — so the buffer-ness of slot `index` is a fact about THIS
@@ -49032,6 +49046,40 @@ export type Parser
 		// argument is a struct substitutes to, and that one still needs resolving.
 		return substituted if tagIsStructRef(maxonTypeTag(declared)) else self.resolvedSlotType(substituted)
 	end 'slotTypeThroughReceiver'
+
+	// ⭐⭐ **WHAT SURFACE A SLOT DECLARED IN A SHARED GENERIC BODY WEARS WHEN IT IS READ THROUGH A CONCRETE
+	// INSTANCE — the twin of the door above, and it must be asked WHEREVER THAT ONE IS.** The type and the
+	// surface are two halves of one crossing: the receiver's instance fixes what a `returns Element` IS, and the
+	// receiver's ARGUMENT SPELLING fixes which member roster the value that comes back may reach. The door above
+	// can never carry the second half — `Array with __ManagedMemory` and `Array with ByteArray` are one
+	// `GenericInstanceId` by design — so a caller that retypes and does not also re-surface hands back a value
+	// whose roster is the wrong one.
+	//
+	// ⛔ **MEASURED, which is what says the two halves are not merely symmetric but both required:** inside
+	// `function peek(c BufCell)` over `typealias BufCell = Cell with __ManagedMemory`, `c.get().length()` was
+	// **E2015 … `Array` member 'length'** — the buffer roster's first member refused on a value whose argument
+	// the author spelled `__ManagedMemory`, while `c.get().count()` on the `Cell with ByteArray` spelling
+	// answered. The roster, exactly inverted, at the one declared position A2j / A2m / BATCH22 had not reached.
+	//
+	// ⚠ **IT IS THE RECEIVER'S MARK THAT CARRIES THE SPELLING, AND NOTHING ELSE CAN.** `bufferSurfaceElements`
+	// says *argument `BufferSurfaceArgPosition` of this value's instance was spelled the buffer*; it is written
+	// from a declared position (`markDeclaredSurface`), from a builtin `Array` factory
+	// (`emitOwnedContainerCreate`) and from a declared generic's factory
+	// (`retypeGenericAliasConstructorResult`) — the three ways a value of such an instance is minted.
+	//
+	// A receiver with no mark returns the shared empty tree before anything is asked of the index, which is
+	// every receiver in a program that never writes `__ManagedMemory`.
+	function slotSurfaceThroughReceiver(box ValueId, declared MaxonType) returns DeclaredSurface
+		if self.tagOf(box) != ValueTypeTag.genericInstance 'notAConcreteInstance'
+			return sharedEmptyDeclaredSurface
+		end 'notAConcreteInstance'
+
+		if not self.valueElementIsBufferSurface(box) 'itsArgumentNamesNoBuffer'
+			return sharedEmptyDeclaredSurface
+		end 'itsArgumentNamesNoBuffer'
+
+		return surfaceOfRootBits(self.signatures.surfaceBitsThroughInstanceArg(declared, id: self.valueNameId(box), interner: self.artifact.typeNames, readerFilePath: self.filePath))
+	end 'slotSurfaceThroughReceiver'
 
 	// ⭐ **THE ONE `loadIndirect` EMIT** — and it now IS the one, which it was not when it first claimed
 	// to be. A field read (`p.x`), a union tag load, a union payload read, a capturing closure's
@@ -49636,8 +49684,9 @@ export type Parser
 	//     the one producer that reads a DIFFERENT column (`bufferSurfaceElements`) to decide;
 	//   • `arr.managed` in VALUE position (`bufferSurfaceOf`, BATCH2 slice 6), which is TWO call sites in
 	//     one function because its two ownership arms mark two different values;
-	// — plus `markDeclaredSurface` below, which A2j reaches from the three sites that bind a value whose
-	// DECLARED type spelled the alias.
+	// — plus `markDeclaredSurface` below, whose own header carries ITS list (eight call sites in six
+	// functions, and NOT all of them a declared type any more: three of them read the receiver's INSTANCE
+	// ARGUMENT, which no declaration in the callee's file spells at all).
 	// ⚠⚠ **THIS SENTENCE HAS NOW BEEN WRONG FIVE TIMES, AND THE FIFTH WAS THE FIRST WHERE THE *NUMBER* WAS
 	// RIGHT AND THE *LIST* WAS NOT** — TWO while there were three, THREE while there were four, FIVE while
 	// there were six (`markElementReadSurface` had never been counted), SIX while there were eight, and then
@@ -49808,14 +49857,7 @@ export type Parser
 	// buffer nowhere. It always reads the alias registry — see `declaredSurfaceAt`'s ⚠⚠ block for why the ROOT
 	// may and a SLOT may not.
 	function rootLeafSurfaceAt(index TokenIndex) returns DeclaredSurface
-		let node = self.leafSurfaceNodeAt(index, elementFromAliases: true)
-		if node == 0 'namesTheBufferNowhere'
-			return sharedEmptyDeclaredSurface
-		end 'namesTheBufferNowhere'
-
-		var surface = DeclaredSurface.create()
-		surface.push(node)
-		return surface
+		return surfaceOfRootBits(self.leafSurfaceNodeAt(index, elementFromAliases: true))
 	end 'rootLeafSurfaceAt'
 
 	// Does the TUPLE type written at `open` name the buffer anywhere inside it? The cheap gate that keeps a
@@ -49956,13 +49998,28 @@ export type Parser
 		return self.declaredSurfaceAt(self.returnTypeTokenIndex(), slotElementsFromAliases: false)
 	end 'returnDeclaredSurface'
 
-	// ⭐ **THE ONE BRIDGE FROM A DECLARED SPELLING TO THE VALUE MARKS.** Three declaration sites carry the
-	// surface (a parameter, a return type, a struct field) and three separate sites bind the value it
-	// describes, so three storage COLUMNS are inherent — parameters, returns and fields have three separate
-	// registries. Three copies of the *decision* are not, and this is what keeps them at one.
+	// ⭐ **THE ONE BRIDGE FROM A PRE-ERASURE SPELLING TO THE VALUE MARKS.** Several separate registries carry
+	// the surface — a parameter's, a return's, a field's, a payload's — so several storage COLUMNS are
+	// inherent. Several copies of the *decision* are not, and this is what keeps them at one.
 	//
 	// A2m made the surface a WORD, and this is where the word is unpacked onto the three carriers — so a door
 	// that gains a depth gains it here, once, rather than at each binder.
+	//
+	// Its EIGHT call sites in SIX functions, DERIVED by grepping `self.markDeclaredSurface(` and not
+	// remembered — `markBufferSurface`'s header records what copying such a sentence has cost five times:
+	//   • a PARAMETER (`bindParameters`);
+	//   • a union PAYLOAD binding (BATCH22);
+	//   • a declared generic's FACTORY, from the alias name the call site wrote
+	//     (`retypeGenericAliasConstructorResult`);
+	//   • a FIELD READ (`emitFieldLoad`), which is THREE of them in one function — the field's own declared
+	//     surface, the receiver's instance-argument spelling, and the per-value tuple-slot mask;
+	//   • a CALL RESULT's declared return (`emitCall`);
+	//   • a CALL RESULT's receiver instance-argument spelling (`retypeOpaqueReturnValue`).
+	//
+	// ⚠ **THE LAST TWO OF THOSE ARE NOT A DECLARED SPELLING AT ALL**, which is why this header no longer says
+	// "declared": `Cell with __ManagedMemory` and `Cell with ByteArray` are one `GenericInstanceId`, so a
+	// `returns U` read through either has NO declaration in the callee's file that could carry the answer.
+	// See `slotSurfaceThroughReceiver`.
 	function markDeclaredSurface(value ValueId, declared DeclaredSurface)
 		if surfaceIsBuffer(declared) 'declaredTheAlias'
 			self.markBufferSurface(value)
@@ -53545,6 +53602,14 @@ export type Parser
 	// So this door reports the case and `emitCall` reinterprets, exactly as `emitContainerElementAccessor`
 	// does at the element boundary: the same sentence, the other kind of slot.
 	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType) returns bool
+		// ⭐ **THE SURFACE CROSSES THE INSTANCE WITH THE TYPE** — `emitFieldLoad`'s pairing at the method-RESULT
+		// position, and it sits ABOVE the "fixes nothing" return deliberately: which roster the result serves is
+		// a fact about the receiver's ARGUMENT SPELLING, and the substitution below can leave a type untouched
+		// while that spelling still decides what the value may be asked for. `inner` is the CALLEE'S DECLARED
+		// return — the declaration view, before anything has retyped the result — which is exactly the view
+		// `surfaceBitsThroughInstanceArg` reads.
+		self.markDeclaredSurface(result, declared: self.slotSurfaceThroughReceiver(receiver, declared: inner))
+
 		let fixedByTheInstance = self.slotTypeThroughReceiver(receiver, declared: inner)
 		if maxonTypesDenoteSame(fixedByTheInstance, b: inner) 'theInstanceFixesNothingHere'
 			return false

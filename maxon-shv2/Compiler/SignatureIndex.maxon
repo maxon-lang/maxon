@@ -3402,6 +3402,21 @@ export let SurfaceBitIsBuffer = 1 as DeclaredSurfaceNode
 // Bit 1: the position named a generic alias whose ELEMENT was spelled `__ManagedMemory`.
 export let SurfaceBitElementIsBuffer = 2 as DeclaredSurfaceNode
 
+// ⭐⭐ **THE ONE GENERIC-ARGUMENT POSITION EITHER BIT EVER SPEAKS FOR, AND IT IS THE WHOLE REACH OF THE FACT
+// RATHER THAN A FIRST CASE.** `SurfaceBitElementIsBuffer` says *argument 0 was spelled the buffer*, and
+// argument 0 is the only argument any declaration RECORDS one for (`GenericAliasEntry.elementIsBuffer`, read
+// off the first argument's token in `Parser.readGenericInstanceAlias`). So a reader that walked to argument 1
+// would be asking about a fact nothing writes. Named here, once, so the recorder and the two readers below
+// cannot come to hold different opinions about which argument the bit is about.
+//
+// ⚠ **THE BIT IS ABOUT AN ARGUMENT POSITION AND ITS NAME IS ABOUT AN ELEMENT, AND THE TWO COINCIDE ONLY
+// BECAUSE OF WHO READS IT.** `Map with (__ManagedMemory, Int)` sets it for a KEY, since the recorder reads
+// argument 0 whatever the base is. That is harmless and must stay so: every reader of the mark today is
+// `Parser.emitContainerElementAccessor`, whose callers are `Array`, `List`, `Vector` and the array cursor —
+// containers whose argument 0 IS their element. A derivation that narrowed itself to `Array` would make the
+// derived answer disagree with the RECORDED one for the same declaration, which is worse than the overreach.
+export let BufferSurfaceArgPosition = 0 as TypeParamPosition
+
 // Everything above the two flag bits is the node's SLOT COUNT. THE one speller of the shift, shared by the
 // builder (`Parser.declaredSurfaceAt`) and the readers below, so the two cannot come to disagree about where
 // a count ends and a flag begins.
@@ -3479,6 +3494,20 @@ export function surfaceWithRootBits(surface DeclaredSurface, bits DeclaredSurfac
 	end 'eachRemainingNode'
 	return out
 end 'surfaceWithRootBits'
+
+// ⭐ **A WHOLE SURFACE FROM ROOT BITS ALONE — and the shared EMPTY tree when there are none, so a position
+// that names the buffer nowhere allocates nothing.** THE one home for "bits ⇒ surface", shared by the token
+// builder (`Parser.rootLeafSurfaceAt`) and by the two doors that DERIVE a root's bits rather than reading a
+// stored tree: the instance-argument crossing (`Parser.slotSurfaceThroughReceiver`) and the alias-spelling
+// stamp on a factory result. Written out, the emptiness test is the half a fourth site would forget — and it
+// is not cosmetic, since it is what keeps every generic constructor call in the program allocation-free.
+export function surfaceOfRootBits(bits DeclaredSurfaceNode) returns DeclaredSurface
+	if bits == 0 'namesTheBufferNowhere'
+		return sharedEmptyDeclaredSurface
+	end 'namesTheBufferNowhere'
+
+	return surfaceWithRootBits(sharedEmptyDeclaredSurface, bits: bits)
+end 'surfaceOfRootBits'
 
 // Node `at` of the tree. A precondition, not a case: every index handed here came from a walk that started
 // at node 0 and advanced by whole subtrees.
@@ -7130,18 +7159,136 @@ export type ProgramSignatures
 			return 0 as DeclaredSurfaceNode
 		end 'notANamedAlias'
 
-		let name = self.nameOfId(typeNameIdOf(declared))
+		return self.bufferAliasSurfaceBits(self.nameOfId(typeNameIdOf(declared)))
+	end 'derivedAliasSurfaceBits'
+
+	// ⭐ **WHICH SPELLING BITS AN ALIAS NAME THE SOURCE WROTE CARRIES — `derivedAliasSurfaceBits`' twin for a
+	// spelling that is still a TOKEN rather than a recorded type.** A factory called through the alias
+	// (`BufCell.make(…)`) is the position that needs it: the value it mints has no declared type to read, only
+	// the name the call site wrote. It is READER-SCOPED where the twin is not, and that difference is its
+	// input's: the twin reads a name the sweep already rewrote to a per-instance mint, this one reads what a
+	// particular file's tokens say, and two files may declare one alias name (`readerScopedAliasName`).
+	export function aliasSpellingSurfaceBits(name ByteArray, readerFilePath FilePath) returns DeclaredSurfaceNode
+		return self.bufferAliasSurfaceBits(self.readerScopedAliasName(name, readerFilePath: readerFilePath))
+	end 'aliasSpellingSurfaceBits'
+
+	// THE one decoder of an already-scoped alias name's two spelling bits, so the two doors above cannot come
+	// to disagree about which set carries which bit — the pairing W49 states once at `derivedAliasSurfaceBits`.
+	// It takes the name SCOPED, because scoping is exactly what the two callers differ on.
+	function bufferAliasSurfaceBits(aliasName ByteArray) returns DeclaredSurfaceNode
 		var bits = 0 as DeclaredSurfaceNode
-		if self.bufferSurfaceAliases.contains(name) 'aliasIsItselfTheBuffer'
+		if self.bufferSurfaceAliases.contains(aliasName) 'aliasIsItselfTheBuffer'
 			bits = bits or SurfaceBitIsBuffer
 		end 'aliasIsItselfTheBuffer'
 
-		if self.bufferElementAliases.contains(name) 'aliasHoldsBuffers'
+		if self.bufferElementAliases.contains(aliasName) 'aliasHoldsBuffers'
 			bits = bits or SurfaceBitElementIsBuffer
 		end 'aliasHoldsBuffers'
 
 		return bits
-	end 'derivedAliasSurfaceBits'
+	end 'bufferAliasSurfaceBits'
+
+	// ⭐⭐ **THE SPELLING BITS A DECLARATION-VIEW POSITION INHERITS FROM THE INSTANCE ARGUMENT IT IS WRITTEN IN
+	// TERMS OF — THE FOURTH DECLARED POSITION, and the only one that never had a word.** `ReturnShapeSurface`,
+	// `FieldShapeSurface` and `PayloadShapeSurface` each carry a pre-erasure spelling because
+	// `__ManagedMemory` and `ByteArray` resolve to the SAME `genericInstance`; a generic type ARGUMENT is the
+	// fourth position where that is true, and `substitutedInstanceArg` — the reader every substituted slot goes
+	// through — hands back the resolved argument with the spelling already gone.
+	//
+	// ⚠ **THE SPELLING CANNOT LIVE ON THE INSTANCE, WHICH IS WHY THIS TAKES `id` AND ANSWERS ONLY BITS.**
+	// `Array with __ManagedMemory` and `Array with ByteArray` intern to ONE `GenericInstanceId` deliberately —
+	// that identity is what lets one `Array` body serve both, and A2j's whole design rests on the two being one
+	// TYPE with two SURFACES. So the argument's spelling is carried by the VALUE (`Parser.bufferSurfaceElements`,
+	// which says *argument `BufferSurfaceArgPosition` of this value's instance was spelled the buffer*), and
+	// what this door answers is the other half: WHERE in a declaration-view type that argument lands.
+	//
+	// Two shapes, which are exactly the two bits a `DeclaredSurfaceNode` has:
+	//   • `returns Element` — the position IS the argument ⇒ the value is a buffer;
+	//   • `returns ArrayIterator with Element` — the position HOLDS it at its own argument 0 ⇒ the value's
+	//     elements are buffers, and a `current()` on THAT value reaches the first arm one hop later.
+	// The two compose, which is what carries the surface across `for m in bufs` under a corpus `Array`:
+	// `createIterator()` takes the second, `current()` the first.
+	//
+	// ⚠ **THE OWNER IS CHECKED, NOT ONLY THE POSITION** — `substituteThroughInstance`'s guard, for its reason:
+	// since W14 a parameter token identifies `(declaring type, parameter name)`, so another declaration's
+	// parameter that happens to sit at position 0 must not be read as this instance's argument.
+	//
+	// ⚠ **IT TAKES AN INTERNER, AND THAT IS `substituteThroughInstanceInterned`'S REASON EXACTLY.** The two
+	// arms above key on whole-program payloads — a `typeParameter` carries W14's digest, a `genericInstance` a
+	// registry id — but the SECOND arm's input may arrive as a bare `named`, whose payload is an id in the
+	// caller's own table. A caller therefore hands the table its type was minted from; reading such an id here
+	// against `self.typeNames` is OPEN #56 verbatim, right exactly while two insertion orders coincide.
+	export function surfaceBitsThroughInstanceArg(declared MaxonType, id GenericInstanceId, interner TypeNameInterner, readerFilePath FilePath) returns DeclaredSurfaceNode
+		if self.namesBufferArgOf(declared, id: id) 'thePositionISTheArgument'
+			return SurfaceBitIsBuffer
+		end 'thePositionISTheArgument'
+
+		match self.declarationViewInstanceOf(declared, scopeOwner: self.genericInstanceBaseName(id), interner: interner, readerFilePath: readerFilePath) 'holder'
+			notInScope then return 0 as DeclaredSurfaceNode
+			instance(nested) then return self.elementBitOfInstanceArg(nested, id: id)
+		end 'holder'
+	end 'surfaceBitsThroughInstanceArg'
+
+	// ⭐ **THE INSTANCE A DECLARATION-VIEW POSITION DENOTES — three spellings of one thing.** A position
+	// written OUT (`Cell with T` as a generic argument) already carries the instance; the other two arrive as
+	// a bare `named`, and each has its own resolver, which is why this composes rather than picking:
+	//   • the body's own inner `typealias` (`returns TCell`) — `parseTypeReference` records it BASE-QUALIFIED
+	//     (`Holder.TCell`), which is the generic-alias registry's key for it;
+	//   • a bare generic BASE in a type-parameter scope (`returns Inner` inside `type Outer uses T`) — the
+	//     shape `Parser.promoteBareGenericResultToCalleeScope` exists for, minted by `scopedGenericInstanceOf`.
+	//
+	// The scope that binds the second is the CALLEE'S DECLARING TYPE, which here is the receiver instance's
+	// base: `Parser.retypeOpaqueMethodResult` has already refused any callee not qualified under it, so the
+	// two cannot disagree.
+	//
+	// Both resolvers are the ONE door for their spelling — `genericAliasInstanceFrom` is what the parser
+	// itself resolves an alias through, reader-scoped so two files' same-named alias stay two, and
+	// `scopedGenericInstanceOf` is the single mint v1 has three copies of.
+	function declarationViewInstanceOf(declared MaxonType, scopeOwner ByteArray, interner TypeNameInterner, readerFilePath FilePath) returns ScopedGenericInstance
+		if maxonTypeTag(declared) == ValueTypeTag.genericInstance 'writtenOut'
+			return ScopedGenericInstance.instance(typeNameIdOf(declared))
+		end 'writtenOut'
+
+		if maxonTypeTag(declared) != ValueTypeTag.named 'spellsNoInstance'
+			return ScopedGenericInstance.notInScope
+		end 'spellsNoInstance'
+
+		let name = try interner.nameOf(typeNameIdOf(declared)) otherwise panic("ProgramSignatures.declarationViewInstanceOf: `named` id {typeNameIdOf(declared)} is not in the interner it was read with — a caller must hand the table its own type was minted from")
+		if self.isGenericAlias(name) 'spellsAnAlias'
+			return ScopedGenericInstance.instance(self.genericAliasInstanceFrom(name, readerFilePath: readerFilePath))
+		end 'spellsAnAlias'
+
+		return self.scopedGenericInstanceOf(name, declaringTypeName: scopeOwner, scopeParamNames: self.structTypeParamsOf(scopeOwner))
+	end 'declarationViewInstanceOf'
+
+	// Does instance `nested` hold instance `id`'s buffer-spelled argument at its OWN
+	// `BufferSurfaceArgPosition`? The second arm of the door above, split out because a `match` arm may not
+	// open one.
+	function elementBitOfInstanceArg(nested GenericInstanceId, id GenericInstanceId) returns DeclaredSurfaceNode
+		if self.genericInstanceArgCount(nested) <= BufferSurfaceArgPosition 'noArgumentToHoldIt'
+			return 0 as DeclaredSurfaceNode
+		end 'noArgumentToHoldIt'
+
+		if not self.namesBufferArgOf(self.substitutedInstanceArg(nested, position: BufferSurfaceArgPosition), id: id) 'itHoldsSomethingElse'
+			return 0 as DeclaredSurfaceNode
+		end 'itHoldsSomethingElse'
+
+		return SurfaceBitElementIsBuffer
+	end 'elementBitOfInstanceArg'
+
+	// Is `t` the type parameter instance `id` binds at `BufferSurfaceArgPosition`? The predicate both arms
+	// above ask, of the two positions a declaration view can put that parameter in.
+	//
+	// A token with no owner is the same invariant break `substituteThroughInstance` panics on, and it is the
+	// same population of tokens: every one reaching here was minted inside a declaration the sweep folded.
+	function namesBufferArgOf(t MaxonType, id GenericInstanceId) returns bool
+		if maxonTypeTag(t) != ValueTypeTag.typeParameter 'notAFormalParameter'
+			return false
+		end 'notAFormalParameter'
+
+		let owner = try self.typeParamOwnerOf(typeNameIdOf(t)) otherwise panic("ProgramSignatures.namesBufferArgOf: type-parameter token {typeNameIdOf(t)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
+		return owner.position == BufferSurfaceArgPosition and owner.declaringTypeName.equals(self.genericInstanceBaseName(id))
+	end 'namesBufferArgOf'
 
 	// Does the generic-instance alias `name` hold BUFFERS — was it declared `Array with __ManagedMemory`
 	// (A2m)? The read side of `bufferElementAliases`; `Set.contains` on the shared empty set returns before it
@@ -11778,7 +11925,9 @@ export type ProgramSignatures
 	//   • the CALLEE's declaring type — `Parser.promoteBareGenericResultToCalleeScope`, because a call is typed
 	//     from the token SWEEP's `returnTypeOf`, which records every bare generic name as a plain `named`;
 	//   • the FIELD's declaring struct — `fieldTypeOf`, for the same reason one layer down: the layout this
-	//     index holds is the SWEPT one.
+	//     index holds is the SWEPT one;
+	//   • the callee's declaring type AGAIN, from the SURFACE side — `declarationViewInstanceOf`, which needs
+	//     the same instance the second asker mints and reads it a pass earlier, off the receiver's own base.
 	// v1 writes that algorithm out three times over (`TypeResolution.maxon:4358`, `LowerMaxonToStd.maxon:16198`
 	// and `:7065`, the last two its own comments call mirrors); one door with the scope as an argument is that
 	// trio with the mirrors removed.
@@ -15916,6 +16065,11 @@ export type ProgramSignatures
 		return true
 	end 'genericInstanceArgsAreACallerParameterRun'
 
+	// ⚠ **IT ANSWERS THE ARGUMENT'S TYPE AND NOT ITS SPELLING, AND THAT IS A LOSS A CALLER MAY HAVE TO REPAIR.**
+	// `Array with __ManagedMemory` and `Array with ByteArray` are ONE instance, so the argument comes back
+	// identical for both while the member ROSTER a value of it reaches differs. A caller that goes on to ask for
+	// a roster wants `surfaceBitsThroughInstanceArg` beside this — see its header for why the fact rides the
+	// VALUE and can never ride `id`.
 	export function substitutedInstanceArg(id GenericInstanceId, position TypeParamPosition) returns MaxonType
 		let args = self.genericInstances.instanceArgs(id)
 		return try args.get(position) otherwise panic("ProgramSignatures.substitutedInstanceArg: type-parameter position {position} out of range for instance {id}'s {args.count()} argument(s) — arity was checked at instantiation (E2056)")

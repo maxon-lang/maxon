@@ -4016,6 +4016,301 @@ end 'main'
 6
 ```
 
+### A GENERIC TYPE ARGUMENT — the fourth declared position, and the only one that never had a word
+
+⭐⭐ A return type, a struct field and a union payload each carry their pre-erasure spelling because
+`__ManagedMemory` and `ByteArray` resolve to the SAME `genericInstance`. A generic type ARGUMENT is the
+fourth position where that is true, and it is the one nothing recorded: `Cell with __ManagedMemory` and
+`Cell with ByteArray` are one `GenericInstanceId`, so a `returns U` read through either receiver came back
+identical — and `substitutedInstanceArg`, the reader every substituted slot goes through, has no spelling
+left to hand on.
+
+⇒ The spelling rides the VALUE (`Parser.bufferSurfaceElements`, *argument 0 of this value's instance was
+spelled the buffer*) and crosses the instance wherever the TYPE does. Each pair below is the same program
+in the two spellings, because a rule about a roster is only pinned by BOTH directions: the buffer spelling
+must reach `length`, and the `ByteArray` spelling must still be refused it and still answer `count`.
+
+<!-- test: a-generic-arguments-buffer-spelling-reaches-a-substituted-return -->
+
+The base case, and it needs two things at once: the FACTORY has to stamp the spelling the call site wrote
+(`gid` cannot answer, and `BufCell.make(…)` mints a value with no declared type to read), and the
+`returns U` has to inherit it from the argument the receiver's instance binds.
+```maxon
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+typealias BufCell = Cell with __ManagedMemory
+
+function main() returns ExitCode
+	let c = BufCell.make("hello".toByteArray())
+	return c.get().length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.a-generic-arguments-array-spelling-keeps-the-array-surface -->
+
+⭐⭐ **THE OVER-ACCEPTANCE CONTROL, and the whole reason the fact may not live on the instance.** This is
+the identical program at the identical `GenericInstanceId`; only the ARGUMENT's spelling differs, and it
+alone decides the roster.
+```maxon
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BytesCell = Cell with ByteArray
+
+function main() returns ExitCode
+	let c = BytesCell.make("hello".toByteArray())
+	return c.get().length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:20:17: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: a-byte-array-generic-argument-still-serves-count -->
+
+The refusal's positive half — the `Array` roster is not merely withheld from the other spelling, it is
+served to this one.
+```maxon
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BytesCell = Cell with ByteArray
+
+function main() returns ExitCode
+	let c = BytesCell.make("hello".toByteArray())
+	return c.get().count() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-declared-parameter-carries-the-argument-spelling-into-a-substituted-return -->
+
+The receiver's mark reaching the call from a DECLARED position rather than from the factory — a parameter
+typed with the alias, in a function that never sees where the value was built.
+```maxon
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+typealias BufCell = Cell with __ManagedMemory
+
+function peek(c BufCell) returns ExitCode
+	return c.get().length() as ExitCode
+end 'peek'
+
+function main() returns ExitCode
+	let c = BufCell.make("hello".toByteArray())
+	return peek(c)
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: a-generic-field-read-carries-the-argument-spelling -->
+
+The FIELD door, which is the same crossing one op earlier: `var slot as U` names the buffer nowhere, so a
+declaration-side surface can never answer for it, and the read has to take the receiver's argument spelling.
+```maxon
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+typealias BufCell = Cell with __ManagedMemory
+
+function main() returns ExitCode
+	let c = BufCell.make("hello".toByteArray())
+	return c.slot.length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: an-inner-alias-return-carries-the-argument-spelling-one-hop-further -->
+
+⭐⭐ **TWO HOPS, WHICH IS THE SHAPE A `for m in bufs` OVER A CORPUS `Array` IS.** `inner()` returns the
+body's own `typealias TCell = Cell with T`, so the argument lands at the RESULT's own argument 0 rather than
+being the result — the value's ELEMENTS are buffers — and `get()` on THAT value takes the first rule one hop
+later. `createIterator()` / `current()` is this program with the names changed.
+```maxon
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	typealias TCell = Cell with T
+	export var cell as TCell
+
+	export static function make(cell TCell) returns Self
+		return Self{cell: cell}
+	end 'make'
+
+	export function inner() returns TCell
+		return cell
+	end 'inner'
+end 'Holder'
+
+typealias BufCell = Cell with __ManagedMemory
+typealias BufHolder = Holder with __ManagedMemory
+
+function main() returns ExitCode
+	let h = BufHolder.make(BufCell.make("hello".toByteArray()))
+	return h.inner().get().length() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.an-inner-alias-return-over-a-byte-array-keeps-the-array-surface -->
+
+The two-hop over-acceptance control. Both hops are the same one `GenericInstanceId` pair as the one-hop
+case, so a rule that leaked at either of them would serve the buffer's roster here.
+```maxon
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	typealias TCell = Cell with T
+	export var cell as TCell
+
+	export static function make(cell TCell) returns Self
+		return Self{cell: cell}
+	end 'make'
+
+	export function inner() returns TCell
+		return cell
+	end 'inner'
+end 'Holder'
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufCell = Cell with ByteArray
+typealias BufHolder = Holder with ByteArray
+
+function main() returns ExitCode
+	let h = BufHolder.make(BufCell.make("hello".toByteArray()))
+	return h.inner().get().length() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:34:25: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: a-two-hop-byte-array-argument-still-serves-count -->
+
+And its positive half, so the two-hop refusal is a roster boundary rather than a lost value.
+```maxon
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+type Holder uses T
+	typealias TCell = Cell with T
+	export var cell as TCell
+
+	export static function make(cell TCell) returns Self
+		return Self{cell: cell}
+	end 'make'
+
+	export function inner() returns TCell
+		return cell
+	end 'inner'
+end 'Holder'
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BufCell = Cell with ByteArray
+typealias BufHolder = Holder with ByteArray
+
+function main() returns ExitCode
+	let h = BufHolder.make(BufCell.make("hello".toByteArray()))
+	return h.inner().get().count() as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
 ## The two buffer members the corpus keeps to itself
 
 <!-- test: error.buffer-toCString-is-stdlib-only -->
