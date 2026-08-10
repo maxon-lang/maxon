@@ -5194,6 +5194,17 @@ export typealias ConditionalExtensionSkipMap = Map with (ByteArray, ConditionalE
 // no.
 export typealias AssociatedTypeHoldingMap = Map with (ByteArray, ByteArrayArray)
 
+// ⭐⭐ **WHAT A `with` ARGUMENT THAT DENOTES AN INTERFACE ACTUALLY IS — an INSTANTIATION of one, or the bare
+// name of one (W57).** `ProgramSignatures.heldArgOf` is the single reading, and the split exists because its
+// two askers want two different halves: the holding record and E3125 want the interface NAME, which both
+// arms have; a DISPATCH through the held value wants that interface's own `with` arguments, which only the
+// instantiated arm carries. An argument denoting no interface at all is neither — it is `MapError.keyNotFound`
+// at that door, exactly as it was before the split.
+export union HeldAssociatedArg
+	instantiated(gid GenericInstanceId)
+	bare(interfaceName ByteArray)
+end 'HeldAssociatedArg'
+
 // The witness constraints of an extension method that are NOT its enclosing type's own — see
 // `ExtensionTarget`'s type arm. Keyed by the qualified method name, which is the key both the reservation
 // side (`Parser.witnessParamCountFor`, through the constraints the extension body is parsed under) and the
@@ -10346,28 +10357,56 @@ export type ProgramSignatures
 	// and E3125, which refuses a second site claiming a different one. Asking two different ways would let a
 	// site declare a holding under one reading and be checked against another.
 	export function instanceArgHeldInterfaceName(gid GenericInstanceId, position TypeParamPosition) returns ByteArray throws MapError
-		return try self.heldInterfaceNameOfArg(self.substitutedInstanceArg(gid, position: position))
+		return match try self.heldArgOf(self.substitutedInstanceArg(gid, position: position)) 'denoted'
+			instantiated(held) gives self.nameOfId(typeNameIdOf(self.instanceDenotedType(held, into: self.typeNames)))
+			bare(name) gives name
+		end 'denoted'
 	end 'instanceArgHeldInterfaceName'
 
-	function heldInterfaceNameOfArg(arg MaxonType) returns ByteArray throws MapError
+	// ⭐⭐ **THE SAME ARGUMENT, READ FOR ITS `with` ARGUMENTS RATHER THAN FOR ITS NAME (W57).** A holding is a
+	// fact about the interface NAME and that is all E3125 and the settle need; a DISPATCH through the held
+	// value needs more, because a requirement returning the held interface's own associated type has to be
+	// typed against whatever THIS site bound that position to. `Cursor` alone cannot say what `Element` is;
+	// `Cursor with Element` can. `MapError.keyNotFound` for a bare interface name, which genuinely binds
+	// nothing — see `Parser.associatedReturnThroughReceiverInstance`, the one reader.
+	export function instanceArgHeldInstance(gid GenericInstanceId, position TypeParamPosition) returns GenericInstanceId throws MapError
+		match try self.heldArgOf(self.substitutedInstanceArg(gid, position: position)) 'denoted'
+			instantiated(held) then return held
+			bare then throw MapError.keyNotFound
+		end 'denoted'
+	end 'instanceArgHeldInstance'
+
+	// The ONE reading of a recorded type argument that denotes an interface, in every spelling the sweep can
+	// leave it in (see the header above) — split from its two askers because they want two different halves of
+	// it and a second walk of those three spellings is exactly the declaration-order dependence that header
+	// warns about.
+	function heldArgOf(arg MaxonType) returns HeldAssociatedArg throws MapError
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'anInstanceOverSomeBase'
-			let denoted = self.instanceDenotedType(typeNameIdOf(arg), into: self.typeNames)
-			if maxonTypeTag(denoted) != ValueTypeTag.interfaceRef 'aStructInstance'
+			let held = typeNameIdOf(arg)
+			if maxonTypeTag(self.instanceDenotedType(held, into: self.typeNames)) != ValueTypeTag.interfaceRef 'aStructInstance'
 				throw MapError.keyNotFound
 			end 'aStructInstance'
 
-			return self.nameOfId(typeNameIdOf(denoted))
+			return HeldAssociatedArg.instantiated(held)
 		end 'anInstanceOverSomeBase'
 
 		if maxonTypeTag(arg) == ValueTypeTag.interfaceRef 'alreadyAnExistential'
-			return self.nameOfId(typeNameIdOf(arg))
+			return HeldAssociatedArg.bare(self.nameOfId(typeNameIdOf(arg)))
 		end 'alreadyAnExistential'
 
 		// The `named` half is `sweptInterfaceTypeOf`'s exactly — a bare interface name, or an alias whose base
 		// is one — and is asked rather than re-written, so a spelling admitted for a struct FIELD and a
-		// spelling admitted here cannot come to differ.
-		return self.nameOfId(typeNameIdOf(try self.sweptInterfaceTypeOf(arg)))
-	end 'heldInterfaceNameOfArg'
+		// spelling admitted here cannot come to differ. It runs FIRST so a `named` that denotes no interface at
+		// all still leaves by that door's throw; only past it is the written name asked whether it was an
+		// ALIAS, which is the half that carries arguments where a bare interface name carries none.
+		let denotedInterface = try self.sweptInterfaceTypeOf(arg)
+		let written = self.nameOfId(typeNameIdOf(arg))
+		if self.isGenericAlias(written) 'anAliasCarriesArguments'
+			return HeldAssociatedArg.instantiated(self.bareGenericAliasInstance(written))
+		end 'anAliasCarriesArguments'
+
+		return HeldAssociatedArg.bare(self.nameOfId(typeNameIdOf(denotedInterface)))
+	end 'heldArgOf'
 
 	// Does this program hold ANY of `interfaceName`'s associated positions at an interface? The gate on the
 	// witness table's associated slot BLOCK, so a program that does not use the feature mints exactly the
@@ -10421,11 +10460,32 @@ export type ProgramSignatures
 	// It DELEGATES rather than re-spelling `mangleTypeArg(arg)`, which costs a second `substitutedInstanceArg`
 	// — a bounds-checked array read of an already-built type, on a path that only a REJECTED program reaches.
 	// A second copy of the compiled rule for that is the trade this codebase does not make.
+	//
+	// ⛔⛔ **THE OPAQUE ARM IS THE SECOND HALF OF THAT SAME BUG, AND IT WAS STILL OPEN (W57).** `mangleTypeArg`
+	// spells a type-parameter argument as its W14 DIGEST — `T5a05ccf53759d5f6` — and its own header says why
+	// that is right THERE: it is a lookup key, injective and build-order stable. It is not a type name, and no
+	// source line holds it. MEASURED, on a generic body writing `Cursor with Element`: *"this use of 'Cursor'
+	// binds its associated type 'Element' to 'T5a05ccf53759d5f6', but 'Walk' binds it to 'Element'"* — one
+	// sentence naming ONE parameter twice, once as the author wrote it and once as a hash, and reporting them
+	// as a disagreement.
+	//
+	// ⚠ **SO IT IS NOT ONLY THE PRINTING: E3125 *COMPARES* THIS ANSWER**, against a conformance's `withArgs`,
+	// which is the source spelling. `requireWrittenBindingMatchesConformers` says in as many words that both
+	// sides are the source spelling and that comparing a compiled name against one *"would report a difference
+	// in RENDERING as a difference in type"* — which is exactly what a digest did, refusing every shared
+	// generic body that instantiates an interface over its own parameter. The parameter's own NAME is what
+	// both sides then hold, and it is the same currency `associatedAbiBindingOf` already compares two
+	// CONFORMERS in.
 	export function instanceArgDisplayName(gid GenericInstanceId, position TypeParamPosition) returns ByteArray
 		let arg = self.substitutedInstanceArg(gid, position: position)
 		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'nestedInstance'
 			return self.instanceDisplayName(typeNameIdOf(arg))
 		end 'nestedInstance'
+
+		if maxonTypeTag(arg) == ValueTypeTag.typeParameter 'opaqueParam'
+			let owner = try self.typeParamOwnerOf(typeNameIdOf(arg)) otherwise panic("ProgramSignatures.instanceArgDisplayName: type-parameter token {typeNameIdOf(arg)} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")
+			return owner.paramName
+		end 'opaqueParam'
 
 		return self.instanceArgCompiledName(gid, position: position)
 	end 'instanceArgDisplayName'

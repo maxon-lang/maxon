@@ -1,0 +1,52 @@
+// Test: error.a-use-site-binding-a-type-parameter-names-it
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor uses Element
+	function current() returns Element
+	function tag() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+type UpCursor implements Cursor with Integer
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self throws IterationError
+		if limit < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function tag() returns Integer
+		return self.limit
+	end 'tag'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'UpCursor'
+
+type Counter uses Element
+	typealias ElementCursor = Cursor with Element
+	export var seen as Integer
+
+	export static function of (source ElementCursor) returns Self
+		return Self{seen: source.tag()}
+	end 'of'
+end 'Counter'
+
+function main() returns ExitCode
+	print("ok\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3125: <fragment>:38:12: this use of 'Cursor' binds its associated type 'Element' to 'Element', but 'UpCursor' binds it to 'Integer' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces

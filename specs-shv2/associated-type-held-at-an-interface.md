@@ -597,3 +597,128 @@ end 'main'
 ```maxoncstderr
 error E3120: <fragment>:24:6: 'WeirdBag' binds 'Bag's associated type 'Iter' to the interface type 'Cursor', and this program holds 'Iter' at the interface type 'Cursor' — a value held at an interface type is a two-word fat pointer `(value, witness)`, so the impl would have to hand BOTH words back out of a witness call that returns one. A holding supplies the second word for a CONCRETE binding, from a slot naming that conformer's own nested table; there is nothing left to supply when the binding is already an interface. Bind the associated type to a concrete conformer
 ```
+
+<!-- test: held.the-element-is-the-enclosing-types-own-parameter -->
+⭐⭐ **THE PROGRAM `stdlib/Array.maxon:133` STANDS AT, AND THE ONE `Array.from` IS.** A generic type walking a
+value held at a parameterized interface over its OWN parameter — `Bag with (Element, Cursor with Element)`
+inside `type Collector uses Element` — and storing each element into its `Array with Element`.
+
+The element is `current()`'s result, and typing it is the whole of this case. An interface's requirement
+returns the interface's own associated-type NAME, so the shared body reads `Element`; the receiver's
+instantiation is what says WHICH type that is, and for a shared generic body the answer is the enclosing
+type's own parameter. Read as a concrete `named("Element")` instead, the store was refused as
+*"storing a borrowed value of a CONCRETE type into an `Array with <type parameter>`"* — a refusal whose own
+sentence lists *"a `for` element"* among the things it permits.
+
+⚠ **THE CHAIN IS TWO DISPATCHES, AND BOTH ENDS ARE NEEDED.** `createIterator()` hands back a `Cursor`
+existential whose own `Element` nothing in the cursor's type can state — it is bound by the SOURCE's
+instantiation, at the position the holding was read at — so the instantiation travels onto the cursor and
+`current()` resolves through it there.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor uses Element
+	function current() returns Element
+	function advance() throws IterationError
+end 'Cursor'
+
+interface Bag uses Element, Iter
+	function createIterator() returns Iter throws IterationError
+end 'Bag'
+
+type Collector uses Element
+	typealias ElementArray = Array with Element
+	typealias ElementCursor = Cursor with Element
+	typealias ElementBag = Bag with (Element, ElementCursor)
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{items: ElementArray.create()}
+	end 'create'
+
+	export static function from (source ElementBag) returns Self
+		var result = ElementArray.create()
+		for item in source 'collect'
+			result.push(item)
+		end 'collect'
+		return Self{items: result}
+	end 'from'
+end 'Collector'
+
+typealias IntCollector = Collector with Integer
+
+function main() returns ExitCode
+	var c = IntCollector.create()
+	c.items.push(7)
+	print("{c.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+<!-- test: error.a-use-site-binding-a-type-parameter-names-it -->
+⭐ **A DIAGNOSTIC NAMES A TYPE THE WAY THE AUTHOR WROTE IT, AND AN OPAQUE ARGUMENT IS A TYPE.** E3125 compares
+what a use site binds an associated type to against what the conformers bind it to, and BOTH sides are meant
+to be the source spelling — its own comment says comparing a compiled name against a source string *"would
+report a difference in RENDERING as a difference in type"*. A TYPE-PARAMETER argument was rendered by
+`mangleTypeArg`, whose answer is a W14 digest: the sentence read *"binds its associated type 'Element' to
+'Td0c4d4635e31e169', but 'UpCursor' binds it to 'Integer'"* — one parameter named twice, once by the author
+and once by a hash, and the refusal below rested on the two not matching rather than on the types differing.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Cursor uses Element
+	function current() returns Element
+	function tag() returns Integer
+	function advance() throws IterationError
+end 'Cursor'
+
+type UpCursor implements Cursor with Integer
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self throws IterationError
+		if limit < 1 'empty'
+			throw IterationError.exhausted
+		end 'empty'
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function tag() returns Integer
+		return self.limit
+	end 'tag'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'UpCursor'
+
+type Counter uses Element
+	typealias ElementCursor = Cursor with Element
+	export var seen as Integer
+
+	export static function of (source ElementCursor) returns Self
+		return Self{seen: source.tag()}
+	end 'of'
+end 'Counter'
+
+function main() returns ExitCode
+	print("ok\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3125: <fragment>:38:12: this use of 'Cursor' binds its associated type 'Element' to 'Element', but 'UpCursor' binds it to 'Integer' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces
+```

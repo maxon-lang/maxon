@@ -1503,6 +1503,11 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
+// The same COW anchor for the EXISTENTIAL-instance column (W57, `ValueExistentialInstanceMap`), with the same
+// invariant: `recordValueExistentialInstance` copy-on-writes on first use, so a program that never declares a
+// parameterized-interface value shares this one allocation and never mutates it.
+let sharedEmptyExistentialInstanceMap = ValueExistentialInstanceMap.create()
+
 // The same anchor for the two ASSOCIATED-TYPE columns an interface-extension body is parsed under
 // (conditional extensions) — see `Parser.extensionAssociatedTypeNames`. Never mutated: an extension pass
 // REPLACES both columns wholesale and the reset points them back here, so one allocation serves every parser
@@ -6499,6 +6504,24 @@ typealias InnerAliasNameSet = Set with ByteArray
 // `Idx` results and arguments DECAY to plain (no per-instance identity) — which matches the oracle.
 typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 
+// ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE HELD AT AN INTERFACE TO THE `Base with Args` INSTANCE ITS
+// DECLARED TYPE NAMED (W57)** — the `with` arguments `ProgramSignatures.instanceDenotedType` drops on the way
+// to `interfaceRef(Base)`, kept BESIDE the type rather than on it.
+//
+// ⭐ **WHY BESIDE AND NOT ON IT.** That door's header states the design and it still holds: an interface this
+// program DISPATCHES through has ONE binding per associated position, the conformances state it, and a copy
+// riding on the type would be one fact written twice. What that argument does not cover is a SHARED GENERIC
+// BODY, where the binding is the enclosing type's own PARAMETER — `stdlib/Array.maxon`'s
+// `Iterable with (Element, ElementIterator)` inside `type Array uses Element` — which no conformance states
+// and which differs per instantiation while the body compiles once. There the site IS the only authority, so
+// the site's answer is carried per VALUE (never per interface name, which would collide with every other
+// site's) and read only where a dispatch on THAT value needs it.
+//
+// A value with NO entry — a bare `interface`-typed parameter, a field load, a merge phi — resolves an
+// associated-type return exactly as it did before this column existed. That is a narrower answer, not a wrong
+// one: a bare `Bag` genuinely binds nothing.
+typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanceId)
+
 // ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE TO THE RANGED TYPEALIAS ITS DECLARED TYPE NAMES — for the two
 // values whose OWN type columns cannot carry it.** E3010 ("unneeded cast") is a question about DECLARED
 // types on both sides, and shv2's `(tag, nameId)` columns answer it for a parameter, a field and an
@@ -7264,16 +7287,18 @@ union GenericArgSlot
 end 'GenericArgSlot'
 
 // ⭐ **WHAT A DISPATCH NEEDS TO KNOW TO BUILD THE FAT POINTER ITS RESULT IS** — the interface the associated
-// type is held at (which TYPES the value) and the witness-table byte offset its nested table's distance sits
-// at (which finds the second word). The two are derived from ONE lookup of the associated position, so they
+// type is held at (which TYPES the value), the witness-table byte offset its nested table's distance sits at
+// (which finds the second word), and the associated POSITION both were read at (which is what the receiver's
+// own instantiation is indexed by, W57). All three are derived from ONE lookup of that position, so they
 // travel together rather than being asked for separately by a caller that could pair position `p`'s offset
 // with position `q`'s interface. See `Parser.heldAssociatedReturnOf`.
 type HeldAssociatedReturn
 	export let heldAt as ByteArray
 	export let slotOffset as ByteOffset
+	export let position as TypeParamPosition
 
-	export static function create(heldAt ByteArray, slotOffset ByteOffset) returns HeldAssociatedReturn
-		return Self{heldAt: heldAt, slotOffset: slotOffset}
+	export static function create(heldAt ByteArray, slotOffset ByteOffset, position TypeParamPosition) returns HeldAssociatedReturn
+		return Self{heldAt: heldAt, slotOffset: slotOffset, position: position}
 	end 'create'
 end 'HeldAssociatedReturn'
 
@@ -8187,6 +8212,10 @@ export type Parser
 	// fresh SSA space), exactly like the sibling value columns. A Map rather than a dense column because only
 	// the few generic-instance values a program constructs ever get an entry.
 	var valueInstanceAlias as ValueInstanceAliasMap
+	// ⭐⭐ **THE `with` ARGUMENTS EACH EXISTENTIAL VALUE'S DECLARED TYPE NAMED (W57)** — see
+	// `ValueExistentialInstanceMap`. Reset per function and SWAPPED across a closure body, exactly like the
+	// sibling value columns, and for their reason: its keys are ids in THIS function's SSA space.
+	var valueExistentialInstance as ValueExistentialInstanceMap
 	// ⭐⭐ **THE RANGED TYPEALIAS EACH VALUE'S DECLARED TYPE NAMES, where the value's own type columns cannot
 	// say so (E3010)** — see `ValueDeclaredAliasMap` for the two cases and for why the cast writer is gated.
 	// Reset per function and SWAPPED across a closure body, exactly like the sibling value columns.
@@ -8981,6 +9010,7 @@ export type Parser
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
 			valueInstanceAlias: sharedEmptyInstanceAliasMap,
+			valueExistentialInstance: sharedEmptyExistentialInstanceMap,
 			valueDeclaredAlias: sharedEmptyDeclaredAliasMap,
 			charLiteralOps: sharedEmptyCharLiteralOps,
 			stringBytesViewOps: sharedEmptyStringBytesViewOps,
@@ -15774,12 +15804,13 @@ export type Parser
 		var paramTypes = MaxonTypeArray.create()
 		var paramRanges = SourceRangeArray.create()
 		// An interface REQUIREMENT binds no value — it declares a signature and has no body — so the
-		// declared-buffer-alias column (A2j) is filled and dropped here. It is not omitted from the call,
-		// because `parseFunctionParameters` fills every column in lockstep and a caller that could opt out
-		// would be a second way for the columns to come apart.
+		// declared-buffer-alias column (A2j) and the declared-type-position column (W57) are filled and
+		// dropped here. Neither is omitted from the call, because `parseFunctionParameters` fills every column
+		// in lockstep and a caller that could opt out would be a second way for the columns to come apart.
 		var paramSurfaces = DeclaredSurfaceArray.create()
+		var paramTypeStarts = TokenIndexColumn.create()
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.interfaceRequirement, paramTypeHint: ClosureParamTypeHint.none)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.interfaceRequirement, paramTypeHint: ClosureParamTypeHint.none)
 		try self.consume(TokenKind.rightParen)
 		// NOTED, not thrown — see `requireNoUnstorableRequirementType` for why this reader may not refuse.
 		if let existential = try firstExistentialParam(paramTypes, paramRanges: paramRanges) 'existentialParam'
@@ -16623,6 +16654,10 @@ export type Parser
 		// Parallel to `paramNames` too: whether the parameter's DECLARED TYPE spelled `__ManagedMemory`
 		// (A2j) — the fact `parseTypeReference` is about to erase, read by `bindParameters` below.
 		var paramSurfaces = DeclaredSurfaceArray.create()
+		// And parallel again: the INDEX of each parameter's declared-type first token (W57) — the position the
+		// `with` arguments of a parameterized-interface type are still readable at, erased by the same call and
+		// read by the same `bindParameters`.
+		var paramTypeStarts = TokenIndexColumn.create()
 
 		// ⭐ **THE RECEIVER IS AN ORDINARY PARAMETER, PUSHED FIRST.** That is the entire mechanism:
 		// it occupies position 0, so it is ValueId 0 by the same Std-ABI seeding every parameter
@@ -16648,10 +16683,18 @@ export type Parser
 			// The receiver is typed by `enclosingSelfType`, never by a source spelling, so it can never be
 			// the buffer alias — but it occupies position 0 and every column here is indexed by position.
 			paramSurfaces.push(sharedEmptyDeclaredSurface)
+			// Nor is it declared at a type any token spells (W57), and its slot must therefore hold an index that
+			// names no type BY TOKEN KIND rather than by a claim about what some name means. The cursor has not
+			// moved past the signature's `(` yet, so `self.pos` is that `(` — and `declaredExistentialInstanceAt`
+			// declines anything but an identifier. (The method NAME would have been the natural choice, matching
+			// this parameter's `paramRanges` span, and it is the wrong one: a method named the same as a generic
+			// alias would resolve, and an `extension <interface>` receiver IS existential-tagged, so the slot is
+			// not unreachable.)
+			paramTypeStarts.push(self.pos)
 		end 'receiverParam'
 
 		try self.consume(TokenKind.leftParen)
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.declaredFunction(sourceName), paramTypeHint: ClosureParamTypeHint.none)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sourceName), paramTypeHint: ClosureParamTypeHint.none)
 		try self.consume(TokenKind.rightParen)
 
 		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
@@ -16820,6 +16863,7 @@ export type Parser
 		// in THIS function's SSA space (P1.6-C). Points at the SHARED empty until the function constructs an
 		// instance (`recordValueInstanceAlias` copy-on-writes), so a generics-free function allocates nothing.
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
 		// Per-function for the identical reason: a value's declared ranged alias names an id in THIS
 		// function's SSA space (see `ValueDeclaredAliasMap`), and shares the same copy-on-write anchor.
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
@@ -16958,7 +17002,7 @@ export type Parser
 		// overload's mangled registration name. `overloadRegistrationNameFor` refuses an overload set whose
 		// name has consume facts at all, precisely so that this per-name answer cannot be one sibling's read
 		// as another's.
-		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces)
+		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
 
 		self.skipNewlines()
 		// ⭐⭐ **A STDLIB BODY NO PATH FROM `main` REACHES IS SKIPPED WHOLE — the ops, and with them every
@@ -17012,6 +17056,17 @@ export type Parser
 	//     `type` body and never for an EXTENSION's. On `cad4cf30d` this **compiles and exits 0**, so this guard
 	//     does turn one previously-compiling program red. It is a refusal rather than a wrong answer, and the gap
 	//     under it (extension-scope descriptor needs) is filed rather than closed here.
+	//   • a CURSOR `for` element in a shared generic body (W57) — `for item in source` over a value held at a
+	//     parameterized interface. Its element is `current()`'s result, which is the enclosing type's own
+	//     parameter and is OWNED (the impl retains before returning), so the trip owes a drop; the pre-scan
+	//     reserves for the STORE, so a loop that stores into an `Array with <type parameter>` is served and one
+	//     that merely reads is refused here.
+	//
+	// ⚠⚠ **THE REFUSAL IS LOAD-BEARING FOR THAT THIRD SHAPE AND MUST NOT BE "FIXED" BY TEACHING THE PRE-SCAN.**
+	// Reserving a descriptor would let the body compile, and the dispatch it then emits — `current()` through a
+	// witness table into a GENERIC conformer's impl — passes no layout descriptor at all, because the witness
+	// ABI has no slot for one. MEASURED on this tip and on its merge base, byte-identical: **0xC0000005**. The
+	// refusal is what keeps that program from being built; lifting it belongs with the ABI slot, not before it.
 	//
 	// So the message states the FACT it is certain of — a drop with no descriptor to drop through — and offers the
 	// causes as causes.
@@ -17020,7 +17075,7 @@ export type Parser
 		if not self.functionDroppedOpaqueWithoutDescriptor 'nothingOwed'
 			return
 		end 'nothingOwed'
-		throw ParseError.unsupported("'{String.from(nameTok.value)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`)", line: nameTok.line, column: nameTok.column)
+		throw ParseError.unsupported("'{String.from(nameTok.value)}' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Three shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`); a `for … in` over a value held at a PARAMETERIZED interface, whose element is the enclosing type's own parameter and is owned per trip (store it into an `Array with <type parameter>`, which reserves the descriptor, or iterate in a method of a concrete instantiation)", line: nameTok.line, column: nameTok.column)
 	end 'requireDescriptorForOpaqueDrops'
 
 	// ⛔ **A BODY THAT STORES A BORROWED OPAQUE `T` MUST CARRY THE DESCRIPTOR THAT REFERENCE IS TAKEN THROUGH
@@ -17454,7 +17509,7 @@ export type Parser
 	// declaration holds and `parseTypeReference` is about to destroy, captured at the last moment it is
 	// readable and carried alongside the columns it describes. It needs no signature-index entry, because the
 	// only reader is `bindParameters` — and both live inside one `parseFunction`.
-	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, owner ParamDefaultOwner, paramTypeHint ClosureParamTypeHint) throws ParseError
+	function parseFunctionParameters(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, paramTypeStarts TokenIndexColumn, owner ParamDefaultOwner, paramTypeHint ClosureParamTypeHint) throws ParseError
 		if self.at(TokenKind.rightParen) 'noParams'
 			return
 		end 'noParams'
@@ -17476,6 +17531,12 @@ export type Parser
 			// is the REAL parse's alone, the whole-program alias registry is complete, and the answer is
 			// consumed by `bindParameters` in this same pass rather than stored for another one.
 			let declaredSurface = self.declaredSurfaceAt(self.pos, slotElementsFromAliases: true)
+			// ⭐ **AND THE TYPE'S OWN FIRST TOKEN, FOR THE SAME REASON ONE LINE UP (W57).** A parameter declared at a
+			// PARAMETERIZED interface type is resolved to the bare `interfaceRef(Base)` by `instanceDenotedType`,
+			// which is where its `with` arguments stop existing — so the position that still spells them is captured
+			// here and read by `bindParameters`, exactly as `paramSurfaces` is. An index rather than the resolved
+			// instance because an OMITTED type resolves nothing at all and there is no absent-instance to invent.
+			let paramTypeStart = self.pos
 			let paramType = try self.parameterTypeOrHinted(offeredType, nameTok: nameTok)
 
 			// ⭐ **SPEND THE CALL POSITION'S OFFER — one offer, one parameter** (see `ClosureParamTypeHint`).
@@ -17542,6 +17603,7 @@ export type Parser
 			paramTypes.push(paramType)
 			paramRanges.push(SourceRange.ofToken(nameTok))
 			paramSurfaces.push(declaredSurface)
+			paramTypeStarts.push(paramTypeStart)
 
 			// ⚠ NO COUNT CHECK HERE. There used to be one, testing `paramNames.count()` against the old
 			// register cap — a SECOND, and WEAKER, spelling of the ceiling: it counted only the parameters the
@@ -17556,6 +17618,44 @@ export type Parser
 			try self.consume(TokenKind.comma)
 		end 'paramLoop'
 	end 'parseFunctionParameters'
+
+	// ⭐⭐ **THE `Base with Args` INSTANCE THE DECLARED TYPE AT `index` NAMES (W57)** — the fact
+	// `ProgramSignatures.instanceDenotedType` destroys when it collapses an interface instance to the bare
+	// `interfaceRef(Base)` the value is typed with, recovered from the one thing that survives: the tokens.
+	// `MapError.keyNotFound` for a type that names no generic alias, which is every ordinary declaration.
+	//
+	// ⚠ **THE TWO NAME SHAPES ARE `parseTypeReference`'s TWO ALIAS ARMS, IN ITS ORDER, AND THEY MUST STAY
+	// THAT ORDER.** An INNER alias resolves under its base-qualified name (`Array.ElementIterable`) and a
+	// file-scope one under its bare name, and the inner one wins — a nested `typealias` shadows a top-level
+	// one of the same spelling. Asking bare-first would silently type a shared generic body's iteration
+	// against some other file's instantiation. This is the only restatement of that rule; the JOIN it reaches
+	// (`genericAliasDenotedType`'s two calls) is shared rather than spelled again.
+	//
+	// ⚠ It declines a non-identifier by TOKEN KIND, which is what lets the receiver's slot hold the
+	// signature's `(` rather than an index whose meaning depends on what a name happens to denote.
+	function declaredExistentialInstanceAt(index TokenIndex) returns GenericInstanceId throws MapError
+		if self.kindAt(index) != TokenKind.identifier 'namesNoTypeAtAll'
+			throw MapError.keyNotFound
+		end 'namesNoTypeAtAll'
+
+		let name = self.tokenAt(index).value
+		if self.namesInnerAliasHere(name) 'innerAliasOfTheEnclosingType'
+			return try self.declaredGenericAliasInstance(joinQualifiedName(self.enclosingType, member: name))
+		end 'innerAliasOfTheEnclosingType'
+
+		return try self.declaredGenericAliasInstance(name)
+	end 'declaredExistentialInstanceAt'
+
+	// The instance a `typealias` bound `name` to; `MapError.keyNotFound` for a name no generic alias declares.
+	// The throwing half of `genericAliasDenotedType`'s join, for the one caller that wants the INSTANCE rather
+	// than what it denotes — see that function for why the two are not one door.
+	function declaredGenericAliasInstance(name ByteArray) returns GenericInstanceId throws MapError
+		if not self.signatures.isGenericAlias(name) 'namesNoInstance'
+			throw MapError.keyNotFound
+		end 'namesNoInstance'
+
+		return self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath)
+	end 'declaredGenericAliasInstance'
 
 	// ⭐ **THE DECLARED TYPE, OR THE ONE THE CALL POSITION SUPPLIED (`function(p) gives …`).** An OMITTED type
 	// is recognized by the parameter list's own punctuation standing where a type would begin — the `,` before
@@ -17830,6 +17930,7 @@ export type Parser
 		self.currentWitnessParamBase = 0
 		self.currentWitnessParamCount = 0
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
@@ -17927,7 +18028,7 @@ export type Parser
 	// is where that refusal becomes E3006, anchored on the PARAMETER's own name token, which is
 	// the declaration that has to change. The bootstrap reports the identical program at the
 	// identical token.
-	function bindParameters(funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray) throws ParseError
+	function bindParameters(funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, paramTypeStarts TokenIndexColumn) throws ParseError
 		for i in 0 upto paramNames.count() 'eachParam'
 			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
@@ -17973,6 +18074,17 @@ export type Parser
 			// named, so this is where the fact becomes the marks `dispatchArrayMethod` and `emitFieldLoad` read.
 			// Parameter `i` owns ValueId `i`, which is what makes the column's index the value's.
 			self.markDeclaredSurface(i as ValueId, declared: try paramSurfaces.get(i) otherwise panic("bindParameters: paramSurfaces.get OOB at {i} — a parameter's columns are built in lockstep"))
+			// ⭐ **AND THE OTHER FACT THE DECLARATION HELD AND THE TYPE COLUMNS CANNOT (W57)** — a parameter
+			// declared at a PARAMETERIZED interface type carries `interfaceRef(Base)` and nothing about what
+			// `Base`'s associated positions were bound to, which is what a dispatch on it needs to type an
+			// associated-type result. Gated on the tag so no other parameter pays a lookup: only an existential
+			// can have `with` arguments to have lost.
+			if maxonTypeTag(paramType) == ValueTypeTag.interfaceRef 'declaredAtAnInterface'
+				let paramTypeStart = try paramTypeStarts.get(i) otherwise panic("bindParameters: paramTypeStarts.get OOB at {i} — a parameter's columns are built in lockstep")
+				if let instance = try self.declaredExistentialInstanceAt(paramTypeStart) 'namesAnInstantiation'
+					self.recordValueExistentialInstance(i, instance: instance)
+				end 'namesAnInstantiation'
+			end 'declaredAtAnInterface'
 			// Parameter `i` owns ValueId `i`; record its declaration span so the register-pressure
 			// diagnostic can resolve the parameter to source (it is minted by no op — see
 			// ParamOriginTable — so it has no `emitOp` origin).
@@ -18463,7 +18575,7 @@ export type Parser
 			if self.namesInnerAliasHere(name) 'innerAlias'
 				let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
 				if self.signatures.allFilesFolded and self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
-					return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(qualifiedInner, readerFilePath: self.filePath), into: self.artifact.typeNames)
+					return self.genericAliasDenotedType(qualifiedInner)
 				end 'genericInnerAlias'
 				// A TUPLE inner alias (W43) — `Entry` inside `type Map uses Key, Value`. It resolves STRAIGHT
 				// THROUGH to the interned tuple's own `structRef`, exactly as the file-scope tuple-alias arm far
@@ -18554,7 +18666,7 @@ export type Parser
 				// or, over an `interface` base, to the EXISTENTIAL that instance denotes. `instanceDenotedType`
 				// is the one place that split is made; the arm ABOVE is the bare-name half of the same fact.
 				if self.signatures.isGenericAlias(name) 'genericAlias'
-					return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath), into: self.artifact.typeNames)
+					return self.genericAliasDenotedType(name)
 				end 'genericAlias'
 
 				// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
@@ -19041,7 +19153,7 @@ export type Parser
 			return MaxonType.function(id)
 		end 'fa'
 		if self.signatures.isGenericAlias(name) 'genericAlias'
-			return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath), into: self.artifact.typeNames)
+			return self.genericAliasDenotedType(name)
 		end 'genericAlias'
 		// ⭐ A TUPLE-ALIAS return (`returns Pair`) — the `named` the sweep recorded resolved to the tuple's own
 		// CANONICAL `structRef`, so `let t = make()` binds a struct the caller adopts and `t.0` resolves.
@@ -19052,6 +19164,21 @@ export type Parser
 		end 'tupleAlias'
 		return t
 	end 'resolveNamedAlias'
+
+	// ⭐ **WHAT A GENERIC-ALIAS NAME DENOTES IN A TYPE POSITION** — the instance it was bound to, resolved
+	// through the one door that decides whether that instance is a BOX or an EXISTENTIAL
+	// (`instanceDenotedType`). Three type-resolution arms spelled this same two-call join — the inner-alias
+	// arm, the file-scope alias arm and the sweep repair — which is three chances for one of them to keep
+	// reading a `genericInstance` after the split moved.
+	//
+	// ⚠ **THE `isGenericAlias` GATE STAYS AT EACH ARM RATHER THAN MOVING IN HERE, AND THAT IS A MEASURED
+	// CHOICE.** This runs on the path `parseTypeReference` takes for every type annotation in the program; a
+	// door answering "or nothing" would return a union, and a union return is heap-boxed even for its miss
+	// case — the same +24,396 allocations at rung 5 that `isInterfaceName` is spelled the narrow way for, one
+	// arm above. The gate is a bool and costs nothing; only the JOIN is shared.
+	function genericAliasDenotedType(name ByteArray) returns MaxonType
+		return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath), into: self.artifact.typeNames)
+	end 'genericAliasDenotedType'
 
 	// `resolveNamedStruct` folded over a parameter-type list — the whole struct-`named` → `structRef`
 	// rewrite for one function's parameters, done ONCE after they are parsed so every downstream reader
@@ -20875,6 +21002,21 @@ export type Parser
 		end 'stillShared'
 		self.valueInstanceAlias.upsert(value, value: self.artifact.typeNames.intern(aliasName))
 	end 'recordValueInstanceAlias'
+
+	// ⭐⭐ **RECORD THE `with` ARGUMENTS AN EXISTENTIAL VALUE'S DECLARED TYPE NAMED (W57)** — see
+	// `ValueExistentialInstanceMap` for what the column is for and why the fact cannot ride on the type. Two
+	// producers write it and they are the two ends of one chain: the PARAMETER whose declared type is a
+	// generic alias over an interface base, and a dispatch RESULT whose associated position that parameter's
+	// instance holds at another interface (`mintHeldAssociatedWitnessResult`) — so `for item in source` reaches
+	// `current()` with the source's own binding still in hand.
+	function recordValueExistentialInstance(value ValueId, instance GenericInstanceId)
+		// COPY-ON-WRITE off the shared empty map, exactly as `recordValueInstanceAlias` does and for its
+		// reason: a function with no parameterized-interface value never allocates one.
+		if self.valueExistentialInstance is sharedEmptyExistentialInstanceMap 'stillShared'
+			self.valueExistentialInstance = ValueExistentialInstanceMap.create()
+		end 'stillShared'
+		self.valueExistentialInstance.upsert(value, value: instance)
+	end 'recordValueExistentialInstance'
 
 	// ⭐ **RECORD THE RANGED TYPEALIAS A VALUE'S DECLARED TYPE NAMES** (see `ValueDeclaredAliasMap` for what
 	// this map is for and why it exists beside the two type columns). An `undeclared` alias records nothing:
@@ -44290,11 +44432,67 @@ export type Parser
 		end 'selfReturn'
 
 		if let held = try self.heldAssociatedReturnOf(target) 'heldAtAnInterface'
-			return try self.mintHeldAssociatedWitnessResult(target, held: held, methodTok: methodTok)
+			return try self.mintHeldAssociatedWitnessResult(target, held: held, receiver: receiver, methodTok: methodTok)
 		end 'heldAtAnInterface'
+
+		// ⭐⭐ **AN ASSOCIATED-TYPE RETURN THE RECEIVER'S OWN INSTANTIATION BINDS (W57)** — asked BELOW the held
+		// arm, which must keep its nested witness, and ABOVE the fallback, which reads the associated type's
+		// NAME as though it were a concrete type's.
+		if let bound = try self.associatedReturnThroughReceiverInstance(target, receiver: receiver) 'theReceiversInstanceBindsIt'
+			return self.mintOwnedCallResult(bound)
+		end 'theReceiversInstanceBindsIt'
 
 		return self.mintOwnedCallResult(self.interfaceReturnMaxonType(target.returnTypeName))
 	end 'witnessDispatchValueResult'
+
+	// ⭐⭐ **WHAT THE RECEIVER'S `with` ARGUMENTS SAY THIS ASSOCIATED-TYPE RETURN IS (W57).** `current()` on a
+	// `Cursor with Element` hands back an `Element`, and the fallback below this arm hands back
+	// `named("Element")` — the interface's own PLACEHOLDER read as if it were a type the program declares.
+	// Where the receiver still knows its instantiation, this is the answer instead: the argument that
+	// instantiation bound at the requirement's own associated POSITION.
+	//
+	// ⛔⛔ **THE POSITION IS DERIVED FROM THE INTERFACE'S `uses` LIST, NOT ASSUMED TO BE ZERO** — and v1's one
+	// attempt at this rule (`TypeResolution.maxon:5082-5118`, `elementTypeForIterable`, dead code the parser
+	// never reaches) took `args[0]` flat, with its own comment conceding *"Array's `Iter` arg is at index 1"*.
+	// For `Iterable uses Element, Iter` that is right by luck and for a requirement returning `Iter` it is the
+	// wrong argument silently. `associatedTypePositionOf` is the same numbering the held arm above uses.
+	//
+	// ⚠ **AND IT IS A PER-VALUE ANSWER, NEVER A WHOLE-PROGRAM ONE, WHICH THE HOLDINGS RECORD ONE ARM UP IS.**
+	// A holding is unique because E3125 refuses a second site claiming another; an ARGUMENT is not — a shared
+	// generic body's `Iterator with Element` and a user's `Iterator with Integer` are both legal, in one
+	// program, and keying either by `(interface, position)` would give one of the two loops the other's element
+	// type. That is why this reads the receiver and `associatedTypeHeldAt` reads the program.
+	//
+	// The two guards are `heldAssociatedReturnOf`'s, for its reasons: a requirement projected from a PARENT is
+	// numbered against a list that is not this interface's, and a site binding fewer arguments than the
+	// interface declares is E3016's to report and claims nothing here.
+	function associatedReturnThroughReceiverInstance(target WitnessDispatchTarget, receiver ValueId) returns MaxonType throws MapError
+		let instance = try self.valueExistentialInstance.get(receiver)
+		let dispatched = self.signatures.interfaceNameAtDeclIndex(target.interfaceDeclIndex)
+		if not target.declaringInterfaceName.equals(dispatched) 'aProjectedParentRequirement'
+			throw MapError.keyNotFound
+		end 'aProjectedParentRequirement'
+
+		match lookupInterface(self.signatures.interfaceMap(), name: dispatched) 'base'
+			notFound then throw MapError.keyNotFound
+			found(iface) then return try self.instanceBoundAssociatedType(instance, iface: iface, returnTypeName: target.returnTypeName)
+		end 'base'
+	end 'associatedReturnThroughReceiverInstance'
+
+	// The two lookups the answer above is, over a resolved interface — split out for `heldAssociatedReturnIn`'s
+	// reason: the `found` arm of a `lookupInterface` match is a call in every reader of this file, never a body.
+	//
+	// ⚠ The argument crosses out of the INDEX's interner through `resolvedSlotType`, exactly as
+	// `slotTypeThroughReceiver` crosses a substituted field type — an `adoptType` alone would leave a
+	// sweep-recorded `named` leaf that reads as an integer (see that door, and T1).
+	function instanceBoundAssociatedType(instance GenericInstanceId, iface IrInterface, returnTypeName ByteArray) returns MaxonType throws MapError
+		let position = try associatedTypePositionOf(iface.associatedTypeNames, name: returnTypeName)
+		if position >= self.signatures.genericInstanceArgCount(instance) 'boundNothingHere'
+			throw MapError.keyNotFound
+		end 'boundNothingHere'
+
+		return self.resolvedSlotType(self.signatures.substitutedInstanceArg(instance, position: position))
+	end 'instanceBoundAssociatedType'
 
 	// ⭐⭐ **IS THIS DISPATCH'S RESULT AN ASSOCIATED TYPE THE PROGRAM HOLDS AT AN INTERFACE?** — the position
 	// within the DISPATCHED interface's own `uses` names, plus the interface it is held at, or
@@ -44325,7 +44523,7 @@ export type Parser
 	// `lookupInterface` match is a call in every reader of this file, never a body.
 	function heldAssociatedReturnIn(iface IrInterface, returnTypeName ByteArray) returns HeldAssociatedReturn throws MapError
 		let position = try associatedTypePositionOf(iface.associatedTypeNames, name: returnTypeName)
-		return HeldAssociatedReturn.create(try self.signatures.associatedTypeHeldAt(iface.name, position: position), slotOffset: witnessAssociatedSlotOffset(self.witnessSlotsOf(iface).count(), position: position))
+		return HeldAssociatedReturn.create(try self.signatures.associatedTypeHeldAt(iface.name, position: position), slotOffset: witnessAssociatedSlotOffset(self.witnessSlotsOf(iface).count(), position: position), position: position)
 	end 'heldAssociatedReturnIn'
 
 	// ⭐⭐ **THE VALUE HALF COMES FROM THE CALL AND THE WITNESS HALF FROM THE TABLE THE CALL WAS DISPATCHED
@@ -44342,12 +44540,24 @@ export type Parser
 	// either an existential or a value of a CONSTRAINED TYPE PARAMETER, and only the first has a paired
 	// witness half. The table address is what this needs and `witnessValue` is it for both, which is the whole
 	// reason `WitnessDispatchTarget` names a value rather than a constraint.
-	function mintHeldAssociatedWitnessResult(target WitnessDispatchTarget, held HeldAssociatedReturn, methodTok Token) returns ValueId throws ParseError
+	function mintHeldAssociatedWitnessResult(target WitnessDispatchTarget, held HeldAssociatedReturn, receiver ValueId, methodTok Token) returns ValueId throws ParseError
 		let range = SourceRange.ofToken(methodTok)
 		let distance = self.emitIndirectLoad(MaxonType.integer, box: target.witnessValue, offset: held.slotOffset, storageType: MaxonType.integer, range: range)
 		let nested = self.emitMachineWordAdd(target.witnessValue, rhs: distance, range: range)
 		let result = self.mintOwnedCallResult(MaxonType.interfaceRef(self.artifact.typeNames.intern(held.heldAt)))
 		self.pairInterfaceWitness(result, witness: nested)
+		// ⭐⭐ **THE HELD VALUE INHERITS THE `with` ARGUMENTS THE RECEIVER BOUND AT THIS POSITION (W57)** — the
+		// second half of the chain `for item in <an Iterable>` walks, and without it the first half buys
+		// nothing. `createIterator()` hands back a `Cursor` existential whose own `Element` is bound by the
+		// SOURCE's instantiation (`Bag with (Element, Cursor with Element)`), not by anything the cursor's type
+		// can say; carried here, `current()` on it resolves through the arm one function up. A receiver with no
+		// instantiation to inherit from — a bare `Bag` parameter — passes nothing on, which is correct: it
+		// bound nothing.
+		if let receiverInstance = try self.valueExistentialInstance.get(receiver) 'theReceiverKnowsItsArguments'
+			if let heldInstance = try self.signatures.instanceArgHeldInstance(receiverInstance, position: held.position) 'thatArgumentIsItselfInstantiated'
+				self.recordValueExistentialInstance(result, instance: heldInstance)
+			end 'thatArgumentIsItselfInstantiated'
+		end 'theReceiverKnowsItsArguments'
 		return result
 	end 'mintHeldAssociatedWitnessResult'
 
@@ -49570,10 +49780,12 @@ export type Parser
 		var paramNames = ByteArrayArray.create()
 		var paramTypes = MaxonTypeArray.create()
 		var paramRanges = SourceRangeArray.create()
-		// A closure parameter may spell `__ManagedMemory` exactly as a function's may (A2j) — it reaches the
-		// same `parseFunctionParameters` and the same `bindParameters`, so it needs no separate treatment.
+		// A closure parameter may spell `__ManagedMemory` exactly as a function's may (A2j), and may be declared
+		// at a parameterized-interface type exactly as a function's may (W57) — it reaches the same
+		// `parseFunctionParameters` and the same `bindParameters`, so neither needs separate treatment.
 		var paramSurfaces = DeclaredSurfaceArray.create()
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, owner: ParamDefaultOwner.closureLiteral, paramTypeHint: paramTypeHint)
+		var paramTypeStarts = TokenIndexColumn.create()
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.closureLiteral, paramTypeHint: paramTypeHint)
 		try self.consume(TokenKind.rightParen)
 		// A struct parameter is re-tagged `structRef` here, exactly as `parseFunction` does — the whole-program
 		// struct registry is complete in the real parse (see `resolveNamedStruct`).
@@ -49674,6 +49886,7 @@ export type Parser
 		let savedValueClosureEnv = self.valueClosureEnv
 		let savedValueWitnessIds = self.valueWitnessIds
 		let savedValueInstanceAlias = self.valueInstanceAlias
+		let savedValueExistentialInstance = self.valueExistentialInstance
 		let savedValueDeclaredAlias = self.valueDeclaredAlias
 		// ⛔⛔ **THE CHARACTER-LITERAL OP MAP SWAPS WITH ITS SIBLINGS, AND IT WAS RESET WITHOUT BEING SAVED
 		// (BATCH23 review).** It was added to the RESET below and to `parseFunction`'s two resets, but not to
@@ -49810,6 +50023,7 @@ export type Parser
 		self.currentWitnessParamBase = 0
 		self.currentWitnessParamCount = 0
 		self.valueInstanceAlias = sharedEmptyInstanceAliasMap
+		self.valueExistentialInstance = sharedEmptyExistentialInstanceMap
 		self.valueDeclaredAlias = sharedEmptyDeclaredAliasMap
 		self.charLiteralOps = sharedEmptyCharLiteralOps
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
@@ -49872,7 +50086,7 @@ export type Parser
 		let entry = self.artifact.module.addBlockAt(lifted, label: b"entry", filePath: self.filePath.toString(), firstLine: givesTok.line)
 		self.currentBlock = entry
 
-		try self.bindParameters(closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces)
+		try self.bindParameters(closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the body
 		// IS the closure's returned value, so `emitOwnedValueReturn` promotes a borrowed String to owned and
@@ -49981,6 +50195,7 @@ export type Parser
 		self.valueClosureEnv = savedValueClosureEnv
 		self.valueWitnessIds = savedValueWitnessIds
 		self.valueInstanceAlias = savedValueInstanceAlias
+		self.valueExistentialInstance = savedValueExistentialInstance
 		self.valueDeclaredAlias = savedValueDeclaredAlias
 		self.charLiteralOps = savedCharLiteralOps
 		self.stringBytesViewOps = savedStringBytesViewOps
