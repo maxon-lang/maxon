@@ -1511,6 +1511,125 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// `Sleep.maxon`'s defect exactly, and this file's own rule names it. `ProgramSignatures.isMapBaseName`
 	// now answers FALSE once a `Map` is declared, so this line is what makes the corpus type the real one.
 	try listWhitelistedModule(stdlibDir, relative: "Map.maxon", into: listed)
+	// ⭐⭐⭐ **`stdlib/Array.maxon` AND ITS SIX SORT HELPERS — THE ENTRY THIS WHOLE LIST WAS BUILT TOWARD, AND
+	// THE LARGEST ONE IT WILL EVER TAKE.** Every entry above adds a capability or replaces an authority for
+	// something peripheral. This one replaces the authority for the container the COMPILER ITSELF is built
+	// out of: `Array` stops being a set of hand-built `StdOp` graphs and becomes 664 lines of compiled Maxon,
+	// against which every one of the suite's 5,100+ cases is now compiled. `String`/`Character` (W17) moved
+	// the byte record; this moves the element buffer, the growth policy, the iterator and the copy semantics
+	// at once.
+	//
+	// ⚠ **IT IS ONE CONE IN SEVEN LINES, and the six helpers are not optional extras.** `Array.sort()` and
+	// `Array.sort(cmp)` are declared in `stdlib/Array.maxon:601` and `:621` and immediately hand off to
+	// `driftsort`/`pdqsort`, which call `smallSort`, `insertionSort`, `mergeSort` and `driftQuicksort`, and
+	// every one of those files is an `export extension Array` — so listing `Array.maxon` alone would load a
+	// `sort` whose body is undefined. Order-independent like every other entry, since `queryProgramSignatures`
+	// folds every file's declarations before any file parses. All six also call `Log.trace`
+	// (`driftsort.maxon:154`), which is why this entry DEPENDS on `Log.maxon` being listed above it — the
+	// second entry to consume another listed module's declarations, after `Build.maxon`'s twelve `print`s.
+	//
+	// **THE COLLISION RULE, CLEARED ACROSS ALL SEVEN FILES, each CHECKED rather than assumed:**
+	//   • FREE FUNCTIONS (E3006): **TWO**, and both are `stdlib/Array.maxon`'s — `grownCapacity` (`:65`) and
+	//     `atLeastMinimum` (`:97`), the growth-policy arithmetic. Both are file-PRIVATE. ⚠ The six sort
+	//     helpers declare NONE AT ALL: every function in them is a member of an `export extension Array`,
+	//     which is why the substantial-looking 1,507 lines of sorting add nothing to the free-function space.
+	//     Checked against `Parser.parseCallNamed`'s bare-name `if` chain AT THE CHAIN, as that rule's last
+	//     bullet insists: it claims `runProcess`, `spawnReadLine`, the seven `subp*`, and the math roster
+	//     reached through `calleeTakesPositionalArgsOnly` (`trunc floor ceil round sqrt abs min max`) —
+	//     neither name is among them. Against the other listed modules there is no overlap either, checked
+	//     AT THE SOURCE across all 50 stdlib files: `grownCapacity` occurs in exactly one other place in
+	//     `stdlib/`, `stdlib/String.maxon:782`, and it is a COMMENT pointing here — a reference, not a
+	//     declaration, and the distinction is the whole bullet.
+	//   • ⚠ These files also CONSUME nothing the chain claims: every call in them is receiver-dot,
+	//     `Type.`-qualified (`Log.trace`), or one of their own siblings.
+	//   • ⚠⚠ **TYPE NAMES — AND `Array` IS COMPILER-OWNED, which makes this the third entry ever to declare
+	//     such a name and the first to do it for a GENERIC base.** `String` and `Character` (W17) are the
+	//     precedent and the mechanism is theirs unchanged: `ProgramSignatures.recordStruct`'s provenance bit
+	//     (W16) admits the declaration from the CORPUS and drops it from a user file, so a user
+	//     `type Array` is still E2015 and `array-slots.error.declare-array-error-enum` still passes.
+	//     `ArrayIterator` (`:490`) and `driftsort.maxon`'s `SortRun` (`:57`) are ordinary nominal
+	//     declarations — checked AT THE SOURCE across all 50 files, nothing else declares either — so a user
+	//     program spelling one wins and this module's moves into the reserved space (A1s wave 2).
+	//   • ⚠ **RANGED typealiases: FOUR, and the clause that moved `File.maxon`'s golden is VACUOUS for all
+	//     of them, which is a spelling check rather than a hope.** `ElementCount` and `ElementIndex` (`:11`,
+	//     `:12`) and `driftsort.maxon`'s `SortRunIndex` (`:39`) are all `int(0 to u64.max)`; `SortRunPower`
+	//     (`:40`) is `int(0 to 64)`. What decides whether a ranged alias MOVES anything is whether the
+	//     compiler mints instances over that element, and the name that does is `Byte`: none of the four is
+	//     spelled `Byte`, so no `b"…"` literal's element can reach them. The three sharing
+	//     `int(0 to u64.max)` carry the same same-form-different-name shape `Clock`'s four aliases have had
+	//     since that entry. `Array.maxon` declares one further alias INSIDE the type (`ArrayIter`, `:471`),
+	//     which is type-scoped and therefore excluded from the display index exactly as `Character`'s
+	//     `ByteMemory` is.
+	//   • ⭐ **TOP-LEVEL BINDINGS: `GrowthThreshold` (`:56`) and `MinimumCapacity` (`:60`)** — the third
+	//     module after `Log.maxon` and `Sha256.maxon` to exercise `S2h`'s reachability term. Both are
+	//     IMMUTABLE, file-PRIVATE and SCALAR, so each is filed under a key carrying its declaring path
+	//     (`topLevelStorageKey`) and a user program may still declare its own; an EXPORTED one would owe the
+	//     E3006 argument `Log.maxon`'s entry sets out, and these do not.
+	//   • The E3112 MEMBER-name rule is a whole-program CHECK that fires only when a user program actually
+	//     contests a spelling. What it protects is at its most real here — this is the most ordinary-English
+	//     surface the listed set has ever taken on (`get`, `set`, `first`, `last`, `pop`, `remove`, `slice`,
+	//     `count`, `push`, `clear`, `insert`, `append`, `map`, `contains`, `sort`) — but there is nothing to
+	//     clear ahead of time, and the overwhelming majority were already contested by the SYNTHESIZED
+	//     surface these declarations replace.
+	//   • None of the seven IMPORTS anything.
+	//
+	// ⚠⚠ **THE READINESS PROBE IS THE ONE THIS FILE PRESCRIBES AND IT IS ALSO THE ONE `STDLIB-BRINGUP.md`
+	// PROVED VACUOUS, SO IT IS NOT THE EVIDENCE HERE.** `maxon-shv2 build stdlib/Array.maxon` and
+	// `… helpers/sort/driftsort.maxon` each exit 1 with `E3001: No 'main' function found` AND NOTHING ELSE —
+	// but every one of the six helpers is a conditional `extension`, the exact shape whose bodies the
+	// compiler declines to specialize and therefore never analyzes, so that green is worth little. What
+	// replaces it is far stronger than the injection control that criterion usually needs: **`array-sort.md`
+	// drives these bodies 41 times and passes 41/41** (0/41 against the tree without this entry), and
+	// `arr.sort()` on `5,1,4,2,3` prints `12345` and exits 0. A body that runs correctly 41 times was
+	// compiled.
+	//
+	// ⭐⭐ **THE DEBT THIS ENTRY CAME DUE ON, AND PAID: `ArrayError`'s SEED.** `Project.maxon` had recorded,
+	// in advance and by name, that *"`ArrayError` moves the day `stdlib/Array.maxon` is listed"* — and the
+	// reason is not tidiness. `SignatureIndex.ArrayErrorTypeName` is the BARE `b"ArrayError"`, so the parsed
+	// declaration and the compiler's seed land on ONE registry key, `upsertDeclaredEnum` is last-wins, and
+	// the program runs on the CORPUS layout while `verifyArrayRuntimeOrdinals` went on checking a rebuilt
+	// copy of the seed against itself. MEASURED RED: swapping the two cases in `stdlib/Array.maxon:7-8` made
+	// `array-slots.raw-open-slot-reports-empty-slot` answer **99 for an expected 42** and its twin **42 for
+	// an expected 99** — the handler arms trading places — with the drift guard emitting NOTHING. The seed is
+	// retired and the guard reads the declaration (`overDeclared`). ⚠ **The same sentence had already come
+	// due UNNOTICED for `StringError` and `MapError`** — W17 and W41 listed their declaring modules and left
+	// both seeds standing — so all three are retired together. ⇒ **listing a module that declares a builtin
+	// error enum is not complete until that family's seed is retired and its guard re-pointed.**
+	//
+	// ⚠ **THE THIRD QUESTION `S2g` ESTABLISHED — what does the entry cost a program that does NOT use it?**
+	// MEASURED, same worktree, two binaries differing only by the seven lines below, on
+	// `function main() returns ExitCode / return 7`: **1,592 code bytes both ways — Δ0**, and the two
+	// executables are **byte-for-byte identical** (5,567 bytes). The two top-level `let`s cost nothing,
+	// which is `S2h`'s term working on its third module.
+	//
+	// ⚠⚠ **WHAT IT DOES MOVE IS GOLDENS, AND THAT IS THE POINT OF THE ENTRY RATHER THAN A SIDE EFFECT.**
+	// MEASURED by NAMED LISTS against a base built from source in this same worktree — not by `git status`,
+	// which cannot answer the question: **65 committed fragments newly drift and 1 stops** (1,449 ⇒ 1,513 on
+	// the runner's count, the base's 1,449 being inherited from the merge base). They are exactly the
+	// families that would notice `Array`'s emitted code changing: `for-in`/iteration (`for-in-iteration`,
+	// `for-in-nested`, `iterate`, `used-for-in-variable`, `rc-for-in-elem-decrefed`), array literals and
+	// defaults, float-element arrays, the nine `witness-closure-inheritance` cases, the ten
+	// `associated-types` ones, and `sha256.empty-length` — every one of them a program whose `Array` code
+	// now comes from a compiled body instead of a hand-built `StdOp` graph. The one that STOPS drifting is
+	// `error.array-roster-names-managed-and-not-create`, whose probe this rung re-pointed.
+	//
+	// ⚠ **THE CORPUS PAID FOR IT IN EXPECTATIONS, ALL SIX MEASURED AND REWRITTEN RATHER THAN SUPPRESSED.**
+	// Four `borrow-liveness` cases refused a `for … in` element write that is now SAFE — the loop element is
+	// a `+1` copy through `ArrayIterator.current()` and `coOwnBorrowedOpaque`, not a borrow — and are runtime
+	// cases pinning 53/53/44/53 with their exit codes. Two `generic-types` cases said *"shv2 reads no
+	// stdlib"* and now get `E3018 type 'Array' has no field named 'value'`, which points at the field token
+	// and agrees with the oracle's `E4006`. ⛔ One is SHELVED and says why at length
+	// (`array-conditional-conformance-withheld.error.a-map-key-array-is-refused-for-its-element`): the opaque
+	// COPY GATE fires inside `Array.clone`'s own body and its message carries the ABSOLUTE checkout path,
+	// which no portable expectation can pin. That gate is NOT redundant and must not be removed —
+	// `Cloneable` existential dispatch reaches the body with no concretely-gated call site anywhere, measured.
+	try listWhitelistedModule(stdlibDir, relative: "helpers/sort/insertionSort.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/sort/smallSort.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/sort/mergeSort.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/sort/driftQuicksort.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/sort/pdqsort.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "helpers/sort/driftsort.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "Array.maxon", into: listed)
 	return listed
 end 'whitelistedStdlibModules'
 

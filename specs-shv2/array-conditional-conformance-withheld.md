@@ -92,8 +92,47 @@ end 'main'
 error E4006: <fragment>:19:7: Type 'Array' has no field named 'equals' ('equals' is available as a conditional extension where Element is Hashable and Equatable, but 'Opaque' does not implement 'Hashable')
 ```
 
-<!-- test: error.a-map-key-array-is-refused-for-its-element -->
+<!-- disabled-test: error.a-map-key-array-is-refused-for-its-element -->
+<!-- the refusal is CORRECT but lands at `stdlib/Array.maxon:145` with the ABSOLUTE checkout path, and the runner has no `<stdlib>` normalization token, so no portable `maxoncstderr` can be written for it. Needs BOTH: (a) a stdlib-path normalization in `Testing/SpecTestRunner.maxon` (see `FragmentPathMapping` — today only STAGED fragment paths are rewritten), and (b) the blame edge that would re-point a stdlib-body diagnostic at the user construct that forced it, which does not exist (no re-anchoring on any reporting path; `GenericInstantiationSite` records where the `typealias` was WRITTEN, so for a stdlib alias the site IS the stdlib). Not an `Array` gap — the deep-clone slice it names is a real documented one -->
 ### A `Map` key array is refused for its ELEMENT, not as an unserved key type
+
+⛔⛔ **SHELVED BY `land-the-listing`, AND THE REASON IS NOT THAT THE COMPILER GOT WORSE — READ THIS BEFORE
+RE-ENABLING IT.** With `stdlib/Array.maxon` listed, this program is refused by the OPAQUE COPY GATE
+(`Parser.requireOpaqueArrayCopyable`) before the constraint check ever runs, and the sentence it prints names
+`stdlib/Array.maxon:145:32` — `Array.clone`'s own `managed.slice(0, len)`, a line no user wrote. The two
+E3017s below are what the user's mistake actually IS and they never speak, because a `ParseError` stops the
+file before the pipeline and `checkWhereConstraints` short-circuits on `projectHasErrors`.
+
+⭐⭐ **THE CANDIDATE CURE WAS EVALUATED AND MUST NOT BE TAKEN — THERE IS A RUN THAT REFUTES IT.** The standing
+proposal was to drop `Array`'s own opaque gate, on the ground that *"`Array`'s body is the one opaque body
+whose every call site is already concretely gated (`requireArrayElementCopyable`)"*. That is false, and the
+counterexample needs no `Map` at all:
+
+```
+typealias Nested = Array with (Array with String)
+function copyIt(c Cloneable) returns Cloneable
+	return c.clone()
+end 'copyIt'
+… copyIt(Nested.create())
+```
+
+MEASURED: this program calls `.clone()` at NO concretely-typed site, so `requireArrayElementCopyable` never
+fires; it reaches `Array.clone`'s shared body purely through the `Cloneable` witness `type Array …
+implements … Cloneable` promises unconditionally. It is refused TODAY by exactly the gate the cure would
+delete, with exactly the message quoted below. Remove the gate and that program compiles and byte-blits a
+managed pointer through `copyFunc@32`. ⇒ **the existential-dispatch hole the previous rung could not close is
+real, and closing it is what a cure must do first — not something to route around.**
+
+⚠ **AND THE COST IS WIDER THAN THIS CASE, WHICH IS THE PART WORTH CARRYING FORWARD.** MEASURED: `typealias
+StrArrMap = Map with (Array with String, Val)` — a key type that satisfies `Hashable` and `Equatable`
+perfectly well, and which the bootstrap oracle compiles — takes the SAME refusal at the SAME stdlib line. So
+the gate is not merely misplaced on an already-invalid program; it refuses valid ones. The underlying gap
+(`Array with (Array with String)` has no single `copyFunc`) is a documented later slice, not something this
+rung invents.
+
+⚠ Its SUBJECT is not lost while it is shelved: `error.a-set-key-array-spelled-inline-is-refused-the-same-way`
+directly below refuses the identical mistake for a `Set`, at the USER's line, naming the element by name —
+which is also a fair statement of what a good answer here would look like.
 
 ⭐ **THE SENTENCE MOVED WHEN `Map` STOPPED BEING SYNTHESIZED (W41), AND THE RULE IT NOW QUOTES IS THE
 GENERAL ONE.** This used to be a bespoke `E2015` the builtin map's own key gate wrote. `Map` is

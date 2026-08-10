@@ -1465,18 +1465,33 @@ error E2012: <fragment>:14:24: Circular typealias dependency: A
 ```
 
 <!-- test: error.field-access-on-builtin-array-base -->
-`Array` and `Set` are BUILTIN generic bases: shv2 synthesizes their runtime records
-rather than compiling `stdlib/Array.maxon`, so no `type` declaration carries a field
-table and no field of an instance is reachable. The field is missing from the
-COMPILER, not from the language — so this reports a not-implemented-yet construct,
-never an unknown field. It used to be a `panic` with no diagnostic at all.
+⭐⭐ **THIS CASE'S SUBJECT SURVIVED THE LISTING; ITS REASON DID NOT, AND THE NEW ANSWER IS
+STRICTLY BETTER.** It used to read: *"`Array` and `Set` are BUILTIN generic bases: shv2
+synthesizes their runtime records rather than compiling `stdlib/Array.maxon`, so no
+`type` declaration carries a field table and no field of an instance is reachable. The
+field is missing from the COMPILER, not from the language — so this reports a
+not-implemented-yet construct, never an unknown field."* Every clause of that is now
+false for `Array`: `stdlib/Array.maxon` is LISTED, it IS compiled, and its `type Array`
+declaration carries a field table with exactly one entry in it — `managed`.
 
-⚠ The field named here is deliberately NOT `managed`. That one spelling — the only
-field `stdlib/Array.maxon` actually declares — is now SERVED, in both the chained
-(`arr.managed.setLength(2)`) and the value (`f(arr.managed)`) forms, because it is
-routed to the array dispatcher ahead of the field machinery (`arrayManagedFieldAt`,
-BATCH2 slice 6). Every OTHER field of the synthesized record still lands here, which
-is what this case pins.
+⇒ The answer is no longer `E2015 Unsupported` but `E3018 type 'Array' has no field named
+'value'`, which is what the program's mistake actually is. Three things improve at once:
+the diagnostic stops apologising for the compiler, it points at the FIELD token (`:8:13`)
+rather than at the receiver (`:8:9`), and it is the same sentence any user `type` gets for
+the same mistake instead of a container-specific copy of one. The oracle's own answer to
+this program is `E4006 Type 'IntArray' has no field named 'value'` — the same fact under
+that compiler's numbering.
+
+⚠ **`Set` IS STILL SYNTHESIZED AND STILL TAKES THE OLD DOOR**, so the sentence above is
+about `Array` alone; the E2015 arm is live and is not dead code. Its own coverage moves the
+day `stdlib/Set.maxon` is listed.
+
+⚠ The field named here is still deliberately NOT `managed`: that spelling is served —
+in both the chained (`arr.managed.setLength(2)`) and the value (`f(arr.managed)`) forms —
+because it is routed to the array dispatcher ahead of the field machinery
+(`arrayManagedFieldAt`, BATCH2 slice 6). It is now ALSO the one field the corpus
+declaration genuinely has, so the two doors agree on the roster for the first time; `value`
+is refused by both.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -1488,7 +1503,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:9: Unsupported: a field access on 'arr': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+error E3018: <fragment>:8:13: type 'Array' has no field named 'value'
 ```
 
 <!-- test: error.field-access-on-undeclared-generic-base -->
@@ -2628,9 +2643,23 @@ is declared" is NOT the same fact as "this instance's fields live at that layout
 runtime record is a synthesized struct unrelated to any user `type` of the same name.
 
 So teaching the HOP door about `genericInstance` and forgetting the gate would reintroduce that miscompile
-one door over. This case is what says it did not. The oracle refuses the same program its own way
-(`E4006 Type 'IntArray' has no field named 'value'`); shv2's answer is the one it can honestly give — it
-reads no stdlib, so the field is missing from this compiler rather than from the language.
+one door over. This case is what says it did not.
+
+⭐⭐ **THE GATE IS UNCHANGED BY THE `stdlib/Array.maxon` LISTING, AND THAT IS THE POINT WORTH PINNING —
+BECAUSE THE LISTING IS EXACTLY THE CHANGE THAT COULD HAVE DISSOLVED IT.** The old closing sentence read
+*"shv2's answer is the one it can honestly give — it reads no stdlib, so the field is missing from this
+compiler rather than from the language"*, and that premise is gone: there IS a `type Array` declaration now,
+it DOES carry a `StructLayout`, and so `structOf` finally answers YES for this name. That is precisely the
+condition `genericInstanceHasBaseLayout` exists to distinguish from — *"a type of this name is declared"* is
+still NOT the fact *"this instance's fields live at that layout"*, because the buffer an `Array with Integer`
+carries is the synthesized runtime record and not the corpus struct. The measurement in the paragraph above
+(`a.value` reading the element buffer POINTER as **7077984**, `a.value = 4242` overwriting it and taking a
+0xC0000005) is what the gate prevents, and it is now prevented against a REAL declaration rather than
+against a missing one.
+
+⇒ The refusal survives with the same force and a better sentence: `E3018 type 'Array' has no field named
+'value'`, which is also what the oracle says (`E4006 Type 'IntArray' has no field named 'value'`) — the two
+compilers now give one answer to this program where they used to give two.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -2647,7 +2676,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:12: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+error E3018: <fragment>:12:14: type 'Array' has no field named 'value'
 ```
 
 <!-- test: generic-managed-return-round-trips -->

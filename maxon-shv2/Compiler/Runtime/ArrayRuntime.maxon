@@ -1054,21 +1054,38 @@ let ManagedMemoryOrdinalInstaller = b"the Array runtime (__ManagedMemoryError)"
 // is asserted against its OWN layout. Drift is otherwise silent: every handler arm would name the wrong case
 // with no crash and no wrong exit code.
 //
-// ⚠⚠ **THE TWO NOW COME FROM DIFFERENT PLACES, AND THAT ASYMMETRY IS THE RUNG'S RULING RATHER THAN AN
-// OVERSIGHT.** `__ManagedMemoryError` is DECLARED in `stdlib/Builtins.maxon:152` and is read from there;
-// `ArrayError` is declared in `stdlib/Array.maxon:6`, which the stdlib loader does not LIST, so the compiler
-// still SYNTHESIZES it and a disagreement there remains a compiler bug that PANICS. See
-// `Project.BuiltinErrorDeclarationSource` for why the severities differ.
+// ⚠⚠ **THE ASYMMETRY THIS BLOCK RECORDED IS GONE, AND ITS DISAPPEARANCE IS THE POINT.** It read:
+// *"`__ManagedMemoryError` is DECLARED in `stdlib/Builtins.maxon:152` and is read from there; `ArrayError` is
+// declared in `stdlib/Array.maxon:6`, which the stdlib loader does not LIST, so the compiler still
+// SYNTHESIZES it and a disagreement there remains a compiler bug that PANICS."* `land-the-listing` lists that
+// module, so BOTH families are read from their declarations and both take `overDeclared` — a disagreement is
+// now an edit to this checkout's `stdlib/`, which is `E4016` and not a panic
+// (`Project.BuiltinErrorDeclarationSource`).
+//
+// ⛔ **KEEPING THE SYNTHESIZED CHECK WOULD HAVE BEEN WORSE THAN DROPPING IT, WHICH IS NOT OBVIOUS.**
+// `ArrayErrorTypeName` is the BARE `b"ArrayError"`, so the parsed declaration displaces the seed on one
+// registry key and the program runs on the CORPUS layout — while `overSynthesized(builtinArrayErrorEnum())`
+// rebuilt the seed and compared it against itself, agreeing unconditionally. MEASURED: swapping the two cases
+// in `stdlib/Array.maxon:7-8` traded this file's two handler answers (42↔99 across
+// `array-slots.raw-open-slot-reports-empty-slot` and `past-the-end-reports-index-out-of-bounds`) with the
+// guard SILENT. Reading the declaration is what makes the guard watch the layout the program actually uses.
 export function verifyArrayRuntimeOrdinals(project Project)
-	var arrayErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinArrayErrorEnum(), installer: ArrayErrorOrdinalInstaller)
-	arrayErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: ArrIndexOutOfBoundsOrdinal)
-	arrayErrors.claim(ManagedMemoryEmptySlotCaseName, ordinal: ArrEmptySlotOrdinal)
+	match declaredBuiltinErrorEnum(project, typeName: ArrayErrorTypeName, installer: ArrayErrorOrdinalInstaller) 'arrayDeclaration'
+		notDeclared then break 'arrayDeclaration'
+		found(declaration) then claimArrayErrorOrdinals(project, declaration: declaration)
+	end 'arrayDeclaration'
 
 	match declaredBuiltinErrorEnum(project, typeName: ManagedMemoryErrorTypeName, installer: ManagedMemoryOrdinalInstaller) 'declaration'
 		notDeclared then return
 		found(declaration) then claimManagedMemoryOrdinals(project, declaration: declaration)
 	end 'declaration'
 end 'verifyArrayRuntimeOrdinals'
+
+function claimArrayErrorOrdinals(project Project, declaration EnumLayout)
+	var arrayErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ArrayErrorOrdinalInstaller)
+	arrayErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: ArrIndexOutOfBoundsOrdinal)
+	arrayErrors.claim(ManagedMemoryEmptySlotCaseName, ordinal: ArrEmptySlotOrdinal)
+end 'claimArrayErrorOrdinals'
 
 function claimManagedMemoryOrdinals(project Project, declaration EnumLayout)
 	var memoryErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedMemoryOrdinalInstaller)

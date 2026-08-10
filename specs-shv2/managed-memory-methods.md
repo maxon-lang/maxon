@@ -2135,6 +2135,18 @@ serve. It is now joined from the very constants the arms match on — so it name
 `create` among the members, and says separately where `create` actually lives — and the fall-through past the
 arms is a compiler PANIC naming the list, verified red by pushing a name onto the roster with no arm behind
 it.
+
+⭐⭐ **THE PROBE MOVED FROM `create` TO AN UNKNOWN MEMBER WHEN `stdlib/Array.maxon` WAS LISTED, AND THE
+ASSERTION DID NOT.** `create` used to reach this roster because nothing else claimed it; the corpus declares
+`export static function create() returns Self` (`stdlib/Array.maxon:125`), so `memberBelongsToTheCorpus` now
+answers first and the name never reaches `requireSurfaceMember` at all. What this case exists to pin — that
+the sentence is JOINED from the roster constants, names `managed`, and omits `create` — is unchanged and is
+still read straight off the message below. An unknown member is in fact the BETTER vehicle for it: `create`
+could only ever probe the roster while no declaration claimed it, so the old case was one listing away from
+silently testing a different door, which is exactly what happened.
+
+⚠ **`create`'s own answer is pinned by the case directly below**, so nothing was lost by moving this probe —
+the roster claim and the static-through-instance claim are two facts and now have one case each.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -2142,11 +2154,63 @@ typealias IntArray = Array with Int
 function main() returns ExitCode
 	var arr = IntArray.create()
 	arr.push(1)
-	return arr.create() as ExitCode
+	return arr.frobnicate() as ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:13: Unsupported: `Array` member 'create' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:13: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/last/pop/remove/slice/count/capacity/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/map/contains/hash/equals; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: error.a-static-through-an-instance-answers-the-same-for-array-and-for-a-user-type -->
+
+⭐⭐ **`Array` AND A USER `type` GIVE THE IDENTICAL ANSWER TO A STATIC REACHED THROUGH AN INSTANCE, AND THIS
+CASE EXISTS BECAUSE THEY WERE BELIEVED NOT TO.** Once `stdlib/Array.maxon` is listed, `arr.create()` is an
+ordinary call to a corpus `static` and takes the ordinary door: the receiver is prepended like any other
+member call's and the arity check refuses it. MEASURED, both spellings, side by side:
+
+| program | answer |
+|---|---|
+| `arr.create()` on an `Array with Int` | `E3036 'Array.create' expects 0 argument(s) but 1 were provided` |
+| `p.make()` on a user `type P` with a 0-arg static | `E3036 'P.make' expects 0 argument(s) but 1 were provided` |
+| `p.make(9)` on a 1-arg static | `E3036 'P.make' expects 1 argument(s) but 2 were provided` |
+
+⛔⛔ **THE APPARENT DISAGREEMENT THAT MOTIVATED THIS CASE WAS TWO DIFFERENT PROGRAMS, AND IT IS WORTH KEEPING
+BECAUSE THE TRAP IS GENERAL.** `Array` was reported as *resolving* `arr.create()` and failing later at
+`E3009`, against a user type's `E3036` — one wrong, make them agree. They already agreed: the `E3009` comes
+from the `as ExitCode` in the ARRAY probe, which the user-type probe did not have. `return p.make() as
+ExitCode` is `E3009: Cannot cast from struct to int` too, on the nose. A cast error is a `ParseError`, which
+stops the file before the pipeline and discards its artifact diagnostics, so it PRE-EMPTS the semantic arity
+check — the comparison was measuring the cast, not the dispatch.
+
+⚠ **NEITHER ANSWER IS IDEAL AND THAT IS A SEPARATE, DOCUMENTED RULING.** E3036 blames an argument COUNT for
+what is really "a `static` has no receiver"; `ErrorCodeRegistry.maxon`'s `E3116` entry reasons about exactly
+this and deliberately scopes the honest refusal to the type-parameter case, naming E3036 as what a CONCRETE
+receiver gets. This case pins the AGREEMENT, not the wording — so a rung that improves the wording moves one
+expectation here and is told immediately if it moves only one of the two.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+type P
+	export var x as Int
+
+	static function make() returns Self
+		return Self{x: 1}
+	end 'make'
+end 'P'
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	_ = arr.create()
+	var p = P.make()
+	_ = p.make()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3036: <fragment>:16:10: 'Array.create' expects 0 argument(s) but 1 were provided
+error E3036: <fragment>:18:8: 'P.make' expects 0 argument(s) but 1 were provided
 ```
 
 ### A2m — the buffer surface rides a SLOT, so a tuple element and an array element carry it

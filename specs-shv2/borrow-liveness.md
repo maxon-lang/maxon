@@ -21,6 +21,25 @@ that is so, the only two sound answers are retain-on-get or refuse, and P1.8 Sli
 the element a borrow — so shv2 refuses. Each such case says so, with the measurement the refusal
 replaces.
 
+⭐⭐ **AND THE `for … in` ELEMENT IS NO LONGER ONE OF THEM — IT TOOK THE FIRST OF THOSE TWO ANSWERS
+INSTEAD OF THE SECOND.** The sentence above says the choice is retain-on-get *or* refuse; with
+`stdlib/Array.maxon` LISTED, `for x in a` no longer takes the counter form over
+`Parser.emitArrayElementAccessor(owned: false)`. It takes the CURSOR form, over the corpus's own
+`ArrayIterator.current()` — `export function current() returns Element`, a bare type-parameter
+return of a value the cursor merely points at. `emitOwnedValueReturn`'s `borrowedOpaqueReturn` arm
+(`Parser.maxon:21924`) therefore runs `coOwnBorrowedOpaque` on it, so the callee discharges a real
+`+1` and the loop binds an OWNED element. Four cases in this file refused a program that is now
+simply safe; they are runtime cases below, each naming the answer and pinning the exit code.
+
+⚠ **`arr.get(i)` IS UNCHANGED AND STILL A BORROW** — the two doors are different, which is why only
+the four `for … in` cases moved and every `get`-based refusal here still stands. What replaced the
+refusals is not an argument: a **runtime-built** 40-byte String (a literal would be a false
+negative — an immortal `.rdata` record survives a free it never had), pushed into an array a callee
+then `clear()`s, refills with a shorter string so the freed slot is REUSED, and `clear()`s again,
+read back through the loop element as **40** with exit 0 (no fault, no 101). Under a borrow that
+read is the free-poison byte, which is exactly the `4557430888798830399` = `0x3F3F3F3F3F3F3F3F` two
+of those cases were opened on.
+
 **Why one of them diverges in the ACCEPTING direction.** shv2 keys a borrow on the BINDING
 (`Scope`-resolved, object identity), not on the variable's NAME, so a block that shadows a
 borrowed array's name is correctly writable. The oracle is name-keyed and rejects it.
@@ -368,12 +387,33 @@ end 'main'
 7
 ```
 
-<!-- test: forin-element-borrow-via-callee -->
-### A `for … in` element is a borrow, and a callee can free it
-P1.8 Slice A's lock refuses every write that NAMES the iterated array; it structurally cannot
-refuse one that hands the array to a callee. shv2 read the free-poison byte here (0x3F) before
-this rule. The oracle accepts the program — it retains the element — so this is a deliberate,
-user-ruled divergence in the refusing direction.
+<!-- test: forin-element-survives-a-callee-that-clears -->
+### A `for … in` element is OWNED, so a callee that clears the array cannot free it
+⭐⭐ **THIS CASE ASSERTED THE OPPOSITE UNTIL `stdlib/Array.maxon` WAS LISTED, AND THE REFUSAL IT
+CARRIED IS OBSOLETE RATHER THAN LOST.** It read: *"A `for … in` element is a borrow, and a callee
+can free it"* — P1.8 Slice A's lock refuses every write that NAMES the iterated array and
+structurally cannot refuse one that hands the array to a callee, so E3070 stood in for the lock
+here. The premise was the counter form's borrowed element; the cursor form's is a `+1`
+(`ArrayIterator.current()` through `coOwnBorrowedOpaque`, `Parser.maxon:21924`), so the program is
+safe and the refusal would be a false one. The file's own Documentation section names retain-on-get
+as the other sound answer, and this is it.
+
+⚠ **THE NAME MOVED WITH THE VERDICT.** It was `forin-element-borrow-via-callee`; a case pinning
+that the element is NOT a borrow may not keep a name asserting it is — the noun becomes the
+authority the next reader trusts.
+
+⚠ **THE ORACLE CANNOT ARBITRATE THIS PROGRAM IN EITHER SPELLING, AND THE NUMBER IS NOT TAKEN FROM
+IT.** With `let b` it is `E3019 … cannot pass immutable 'let' variable to function that mutates
+parameter 'dest'` — the container-through-a-`let`-field divergence `Parser.paramMaskOfValue`'s
+header states as a RULING and `forin-mutation-after-loop` below already pins — and with `var b` it
+is `E3077 … variable 'b' is never reassigned; use 'let' instead`. Both spellings refused, so there
+is no oracle answer to compare. What arbitrates instead is `receiver-method-inside-a-for-loop` and
+`forin-over-module-storage` below, which drive the SAME `clear()`-mid-loop mechanism in shapes the
+oracle does compile, and where both compilers answer identically (44 and 53).
+
+The array holds one 53-byte element, so the loop makes one trip whether or not `wipe` ran first.
+The exit code is pinned because a use-after-free lands AFTER the last `print`: under a borrow this
+read is the free poison, measured at `4557430888798830399` (`0x3F3F3F3F3F3F3F3F`).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -401,15 +441,29 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/forin-element-borrow-via-callee.test:21:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)
+```exitcode
+0
+```
+```stdout
+53
 ```
 
-<!-- test: forin-element-borrow-is-lexical -->
-### The loop element's borrow runs to the loop's `end`, NOT to the variable's last use
-`it` is never read again after the write, so ordinary last-use liveness would call the borrow dead
-and let this through — but the ITERATION keeps reading the record on every later trip. The loop
-element's liveness is the body's extent, which is the same lexical liveness the Slice A lock models.
+<!-- test: forin-element-outlives-a-clear-later-in-the-body -->
+### … and it outlives one placed AFTER the read, where last-use liveness would have called it dead
+⭐ **THE ORDERING TWIN, AND IT WAS THE SHARPER OF THE TWO REFUSALS.** It read: *"The loop element's
+borrow runs to the loop's `end`, NOT to the variable's last use"* — `it` is never read again after
+the write, so ordinary last-use liveness would have called the borrow dead and let it through,
+while the ITERATION keeps reading the record on every later trip. That reasoning was correct FOR A
+BORROW and is simply not about this program: the element is a `+1` copy the loop owns outright, so
+neither the iteration's later trips nor `it`'s last use can be harmed by clearing the source.
+
+⚠ Kept as a SEPARATE case from the one above rather than folded into it: the two differ only in
+where `wipe` sits, and that difference is the whole content of the liveness question the old pair
+asked. Collapsing them would retire the ordering axis at the moment it stopped mattering, which is
+exactly when a regression in it would go unnoticed.
+
+⚠ Renamed from `forin-element-borrow-is-lexical` for the reason the case above records, and the
+oracle cannot arbitrate it either — same two spellings, same two refusals.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -437,8 +491,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/forin-element-borrow-is-lexical.test:22:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 20)
+```exitcode
+0
+```
+```stdout
+53
 ```
 
 <!-- test: forin-mutation-after-loop -->
@@ -904,8 +961,19 @@ error E3070: specs/fragments/borrow-liveness/receiver-method-rebinding-its-own-f
 ```
 
 <!-- test: receiver-method-inside-a-for-loop -->
-### … and inside a `for … in` over the field it clears
-The loop element's borrow is lexical, so the call is refused wherever in the body it sits.
+### … but inside a `for … in` over the field it clears, the element is owned and the call is fine
+⭐⭐ **THE ONE OF THE FOUR THE ORACLE CAN ARBITRATE, WHICH IS WHY IT CARRIES THE OTHERS.** It read:
+*"The loop element's borrow is lexical, so the call is refused wherever in the body it sits."* The
+element is not a borrow under the cursor form, so what is left is a method clearing a container
+while a loop holds a `+1` copy of its one element — safe, and MEASURED identical on both
+compilers: the bootstrap compiles this exact program and prints **44**, shv2 prints **44**.
+
+⚠ **THE NAME IS UNCHANGED BECAUSE IT NAMES A SHAPE AND NOT A VERDICT** — unlike the two above,
+which asserted "borrow" in their own ids and could not keep them.
+
+⚠ The sibling directly above (`receiver-method-rebinding-its-own-field`) still expects E3070 and
+still passes: that one borrows through `arr.get(0)`, which is a different door and is unchanged.
+The pair is now the clearest statement in this file of which door moved.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias StringArray = Array with String
@@ -934,8 +1002,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-inside-a-for-loop.test:22:3: cannot mutate 'b' via 'wipe' while it is borrowed by 'it' (borrowed at line 21)
+```exitcode
+0
+```
+```stdout
+44
 ```
 
 <!-- test: receiver-method-writes-transitively -->
@@ -1279,9 +1350,21 @@ error E3070: specs/fragments/borrow-liveness/module-storage-to-a-mutating-callee
 ```
 
 <!-- test: forin-over-module-storage -->
-### … and a `for … in` over one borrows its element lexically
-The loop element's borrow reaches module storage too. Measured before this: the body read the
-free-poison byte and printed `4557430888798830399`.
+### … but a `for … in` over one OWNS its element, so clearing the global mid-loop is fine
+⭐⭐ **THE SECOND CASE THE ORACLE ARBITRATES, AND THE ONE THAT CARRIES THE POISON MEASUREMENT.** It
+read: *"The loop element's borrow reaches module storage too. Measured before this: the body read
+the free-poison byte and printed `4557430888798830399`."* That number is `0x3F3F3F3F3F3F3F3F` —
+`__mm_free`'s always-on poison — and it is kept here because it is what makes this case EVIDENCE
+rather than an assertion: the element's record is genuinely freed by the `clear()`, the poison is
+genuinely readable at that address, and reading **53** instead is the copy proving itself. MEASURED
+on both compilers: the bootstrap prints **53** and shv2 prints **53**.
+
+⚠ **THE STORAGE CLASS IS WHY THIS SPELLING COMPILES AND A LOCAL'S DOES NOT.** `g.clear()` inside
+`for it in g` is accepted here, while the same two lines over a LOCAL array are still
+`E3019 … cannot pass 'arr' to function that mutates parameter 'self'` — P1.8 Slice A's lock, which
+refuses a write NAMING the iterated array and does not reach module storage. That asymmetry is the
+lock's and predates this conversion; it is not the E3070 rule this case used to carry, and the two
+must not be read as one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1297,8 +1380,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/forin-over-module-storage.test:9:5: cannot mutate 'g' via 'clear' while it is borrowed by 'it' (borrowed at line 8)
+```exitcode
+0
+```
+```stdout
+53
 ```
 
 <!-- test: module-storage-borrow-expires -->

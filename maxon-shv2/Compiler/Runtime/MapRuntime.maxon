@@ -163,10 +163,16 @@ let MapErrorOrdinalInstaller = b"the Map runtime (MapError)"
 
 // ⭐ **THE ORDINAL DRIFT GUARD FOR `MapError`** — the sixth family on `Project.BuiltinErrorOrdinalCheck`, and
 // it exists for that mechanism's stated reason: this file transcribes `keyNotFound`'s ordinal as a literal
-// and `Project.builtinMapErrorEnum` declares it by POSITION, so a case inserted before it would silently
-// retarget every `otherwise (e)` arm in the program — no crash, no wrong exit code, just a handler naming the
-// wrong case. `MapError` is a compiler-SYNTHESIZED declaration (shv2 does not load `stdlib/Map.maxon`), so it
-// takes `overSynthesized`, as `ArrayError` and `StringError` do.
+// and `stdlib/Map.maxon:6` declares it by POSITION, so a case inserted before it would silently retarget
+// every `otherwise (e)` arm in the program — no crash, no wrong exit code, just a handler naming the wrong
+// case.
+//
+// ⚠⚠ **IT WAS CHECKING A LAYOUT THE PROGRAM DID NOT USE, AND THE LINE ABOVE SAID WHY WITHOUT NOTICING.** This
+// read *"`MapError` is a compiler-SYNTHESIZED declaration (shv2 does not load `stdlib/Map.maxon`), so it takes
+// `overSynthesized`, as `ArrayError` and `StringError` do."* W41 listed that module — the very rung that made
+// `Map` the corpus's — so the parsed declaration has been displacing the seed on the same bare registry key
+// ever since, while this guard went on rebuilding the seed and comparing it with itself. Retired here with
+// `ArrayError`'s and `StringError`'s; see the ⛔⛔ block in `Project.maxon` for the measurement that caught it.
 //
 // ⚠ **BOTH CASES ARE CLAIMED NOW, and only one was.** The note here read *"`keyAlreadyExists` is declared but
 // nothing emits it yet, and claiming an ordinal no runtime writes would be a dead claim"* — true while
@@ -175,10 +181,17 @@ let MapErrorOrdinalInstaller = b"the Map runtime (MapError)"
 // `otherwise (e)` arm that matches `keyAlreadyExists` (`map.md:insert.duplicate-error-binding` is exactly
 // that program) — no crash, no wrong exit code, just a handler naming the wrong case.
 export function verifyMapErrorOrdinals(project Project)
-	var mapErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinMapErrorEnum(), installer: MapErrorOrdinalInstaller)
+	match declaredBuiltinErrorEnum(project, typeName: MapErrorTypeName, installer: MapErrorOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimMapErrorOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyMapErrorOrdinals'
+
+function claimMapErrorOrdinals(project Project, declaration EnumLayout)
+	var mapErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: MapErrorOrdinalInstaller)
 	mapErrors.claim(MapErrorKeyNotFoundCaseName, ordinal: MapKeyNotFoundOrdinal)
 	mapErrors.claim(MapErrorKeyAlreadyExistsCaseName, ordinal: MapKeyAlreadyExistsOrdinal)
-end 'verifyMapErrorOrdinals'
+end 'claimMapErrorOrdinals'
 
 // Install the map runtime into the lowered Std module — ALL of it, when the program touches any map
 // (`usesMap`). Golden-neutral: `__`-prefixed functions are excluded from the spec goldens

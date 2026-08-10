@@ -3624,64 +3624,33 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // (`declaredBuiltinErrorEnum`). The three constructors are gone; the case-NAME constants stay in
 // `SignatureIndex.maxon`, because the runtime still has to name the case it throws.
 //
-// ⚠ **TWO FAMILIES DO NOT MOVE, AND THE ASYMMETRY IS THEIR PROVENANCE RATHER THAN AN OVERSIGHT.**
-// `ArrayError` is declared in `stdlib/Array.maxon:6`, which the stdlib loader does not LIST, and
-// `__DivisionByZeroError` is declared in NO stdlib file at all — so neither has a loaded declaration to be
-// read from, and both keep their constructor and their unconditional seed below. `ArrayError` moves the day
-// `stdlib/Array.maxon` is listed; `__DivisionByZeroError` moves only if the language grows a declaration for
-// it, which would be a change to the reference `stdlib/` all three compilers share.
-
-// ⭐ **THE COMPILER-OWNED `ArrayError` (R4.4)** — what every throwing `Array` accessor throws, and the type
-// `specs-shv2/array-slots.md`'s four cases discriminate. Registered under the RESERVED name
-// `SignatureIndex.ArrayErrorTypeName` (`__ArrayError`); that constant carries the argument for the prefix and
-// for why its two case names are shared with `__ManagedMemoryError`'s first two.
+// ⚠⚠ **`ArrayError`, `StringError` AND `MapError` HAVE NOW MOVED TOO, AND THE ENTRY THAT PREDICTED IT IS THE
+// ONE THAT PAID IT.** This paragraph used to read *"TWO FAMILIES DO NOT MOVE … `ArrayError` is declared in
+// `stdlib/Array.maxon:6`, which the stdlib loader does not LIST … `ArrayError` moves the day
+// `stdlib/Array.maxon` is listed"*. That day is `land-the-listing`, and the same sentence had already come
+// due UNNOTICED for the other two — `stdlib/String.maxon` and `stdlib/Map.maxon` were listed by W17 and W41,
+// and each left its seed standing. All three constructors are gone; only `__DivisionByZeroError` keeps one,
+// because it is declared in NO stdlib file at all and would move only if the reference `stdlib/` all three
+// compilers share grew a declaration for it.
 //
-// Seeded UNCONDITIONALLY beside the other two builtin error enums for their stated reason: `createEnumRegistry`
-// is the one door that reaches BOTH registries, and a handler resolves its `match` through `Project.enumTypes`.
-export function builtinArrayErrorEnum() returns EnumLayout
-	var layout = EnumLayout.createCompilerOwned(ArrayErrorTypeName, conformsTo: builtinErrorConformance())
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryIndexOutOfBoundsCaseName)
-	addBuiltinEnumCase(layout, caseName: ManagedMemoryEmptySlotCaseName)
-	return layout
-end 'builtinArrayErrorEnum'
-
-// ⭐ **THE COMPILER-OWNED `StringError`** — what the two throwing `String` searches throw
-// (`StringIndexRuntime`'s `__strix_first`/`__strix_last`) and what `String.indexAfter` throws on an index at
-// the end of the string. Registered under the BARE name `SignatureIndex.StringErrorTypeName`; that constant
-// carries the argument for the bare spelling and for its two case names.
+// ⛔⛔ **A SEED THAT SURVIVES ITS DECLARATION IS NOT INERT — IT DISARMS THE DRIFT GUARD, MEASURED.** The three
+// constants are BARE names (`SignatureIndex.ArrayErrorTypeName` is `b"ArrayError"`, not `__ArrayError` — the
+// old header here said otherwise and was wrong), so the parsed declaration and the seed land on ONE registry
+// key and `upsertDeclaredEnum`'s last-wins upsert hands the program the CORPUS layout. Meanwhile
+// `verifyArrayRuntimeOrdinals` went on checking `builtinArrayErrorEnum()`'s freshly-rebuilt copy — a layout
+// nothing uses — so it agreed with itself whatever the corpus said. This is the `Builtins.maxon` defect
+// verbatim, one paragraph up: *"the guard was checking a layout the program did not use."*
 //
-// Its provenance is `ArrayError`'s exactly — `stdlib/String.maxon:6-9` declares it and the loader cannot list
-// that module — so it takes the same UNCONDITIONAL seed for the same stated reason.
+// ⚠ **MEASURED RED BEFORE THE FIX**, by the same experiment that caught it for `__ManagedDirectoryError`:
+// swapping `indexOutOfBounds` and `emptySlot` in `stdlib/Array.maxon:7-8` made
+// `array-slots.raw-open-slot-reports-empty-slot` answer **99 for an expected 42** and
+// `past-the-end-reports-index-out-of-bounds` answer **42 for an expected 99** — the two handler arms trading
+// places — with the ordinal guard emitting **nothing at all**. With the seeds retired and the guards reading
+// `declaredBuiltinErrorEnum`, the same perturbation is reported as `E4016` naming both cases.
 //
-// ⚠ `implements Error`, and NOT the shared empty: `stdlib/String.maxon:6` writes
-// `export enum StringError implements Error`, and `builtinErrorConformance`'s header records what an empty
-// list measured as one enum over.
-export function builtinStringErrorEnum() returns EnumLayout
-	var layout = EnumLayout.createCompilerOwned(StringErrorTypeName, conformsTo: builtinErrorConformance())
-	addBuiltinEnumCase(layout, caseName: StringErrorNotFoundCaseName)
-	addBuiltinEnumCase(layout, caseName: StringErrorInvalidIndexCaseName)
-	return layout
-end 'builtinStringErrorEnum'
-
-// ⭐ **THE COMPILER-OWNED `MapError`** — what a missing-key `Map.get` and a duplicate-key `Map.insert`
-// throw. Registered under the BARE name `SignatureIndex.MapErrorTypeName`; that constant carries the
-// argument for the bare spelling.
-//
-// Its provenance is `ArrayError`'s and `StringError`'s exactly — `stdlib/Map.maxon:6-9` declares it and shv2
-// synthesizes `Map` rather than loading that module (see `ProgramSignatures.isMapBaseName` for the measured
-// reason) — so it takes the same UNCONDITIONAL seed for the same stated reason.
-//
-// ⚠ **BOTH of that declaration's cases were registered while only `keyNotFound` was throwable**, for
-// `ManagedMemoryErrorTypeName`'s reason: the ordinals are POSITIONAL, so declaring `keyAlreadyExists` only
-// when an `insert` arrived would have silently renumbered every handler already written against a case
-// after it. `Map.insert` has since arrived and throws it, and the ordinals did not have to move — which is
-// that rule paying out.
-export function builtinMapErrorEnum() returns EnumLayout
-	var layout = EnumLayout.createCompilerOwned(MapErrorTypeName, conformsTo: builtinErrorConformance())
-	addBuiltinEnumCase(layout, caseName: MapErrorKeyNotFoundCaseName)
-	addBuiltinEnumCase(layout, caseName: MapErrorKeyAlreadyExistsCaseName)
-	return layout
-end 'builtinMapErrorEnum'
+// ⇒ The rule this leaves behind, which is the reusable part: **listing a module that declares a builtin error
+// enum is not complete until that family's seed is retired and its guard re-pointed.** The seed is not
+// belt-and-braces; it is a second copy that silences the instrument watching the first.
 
 // ⭐ **`IterationError` IS DECLARED, NOT SYNTHESIZED (W3)** — what a cursor's `advance()` throws, and the ONE
 // builtin error enum the compiler never throws itself: `for … in` over a cursor absorbs the flag without
@@ -3839,7 +3808,14 @@ export type BuiltinErrorOrdinalCheck
 	function refuse(reason String)
 		match self.source 'origin'
 			synthesized then panic("BuiltinErrorOrdinalCheck: {reason}")
-			declared then reportDiagnostic(self.project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "stdlib/Builtins.maxon's `{self.declaration.kindWord()} {String.from(self.declaration.name)}` disagrees with this compiler's runtime: {reason}"))
+			// ⚠ **THE DECLARING MODULE IS NOT NAMED, AND IT USED TO BE.** This read
+			// "stdlib/Builtins.maxon's `enum …`", which was true while that module declared every family
+			// this arm could reach. `land-the-listing` moved three more onto their own modules
+			// (`stdlib/Array.maxon`, `stdlib/String.maxon`, `stdlib/Map.maxon`), and the literal became a
+			// diagnostic that names the wrong file — MEASURED, on the very drift this rung provoked to
+			// prove the guard works. The enum's NAME already locates it and the loader is the one place
+			// that knows which module declares what, so the sentence states the fact it actually holds.
+			declared then reportDiagnostic(self.project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "the corpus's `{self.declaration.kindWord()} {String.from(self.declaration.name)}` disagrees with this compiler's runtime: {reason}"))
 		end 'origin'
 	end 'refuse'
 end 'BuiltinErrorOrdinalCheck'
@@ -3863,7 +3839,9 @@ end 'DeclaredBuiltinErrorEnum'
 // produce a compiler that throws ordinals no handler arm can name.
 export function declaredBuiltinErrorEnum(project Project, typeName ByteArray, installer ByteArray) returns DeclaredBuiltinErrorEnum
 	let layout = try project.enumTypes.get(typeName) otherwise 'notDeclared'
-		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "'{String.from(typeName)}' is the error enum {String.from(installer)} throws, and this compile declares no enum of that name — it is declared in stdlib/Builtins.maxon, which the stdlib loader must list for the runtime's error ordinals to name anything"))
+		// ⚠ Names no module either, for `BuiltinErrorOrdinalCheck.refuse`'s reason directly above: six
+		// families reach this and they are declared across four different files now.
+		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "'{String.from(typeName)}' is the error enum {String.from(installer)} throws, and this compile declares no enum of that name — it is declared by a stdlib module, which `StdlibLoader.whitelistedStdlibModules` must list for the runtime's error ordinals to name anything"))
 		return DeclaredBuiltinErrorEnum.notDeclared
 	end 'notDeclared'
 
@@ -3911,23 +3889,23 @@ end 'requireCorpusDeclaredEnum'
 // `Ordering` and `IterationError` were transcribed here from `stdlib/Interfaces.maxon:28-38`; that module is
 // now LISTED, so both arrive through the ordinary declaration path (`upsertDeclaredEnum`) exactly as the
 // three `__Managed*Error` families do, and the compiler READS the case order it used to restate
-// (`requireCorpusDeclaredEnum`). What remains below is the set with no corpus declaration to read: `Array`,
-// `String` and `Map` are SYNTHESIZED rather than loaded, so their error enums have no listed declaring file,
-// and `__DivisionByZeroError` is declared in no stdlib file at all.
+// (`requireCorpusDeclaredEnum`). What remains below is the set with no corpus declaration to read.
+//
+// ⚠⚠ **AND `land-the-listing` MOVED THREE MORE, LEAVING A SET OF ONE.** This paragraph read *"`Array`,
+// `String` and `Map` are SYNTHESIZED rather than loaded, so their error enums have no listed declaring
+// file"* — every clause of which is now stale: all three modules are LISTED and all three declare their
+// enum (`stdlib/Array.maxon:6`, `stdlib/String.maxon:6`, `stdlib/Map.maxon:6`). Their seeds are retired,
+// and the ⛔⛔ block above `declaredBuiltinErrorEnum`'s neighbours records what a seed that outlives its
+// declaration actually costs: not a harmless duplicate, but a disarmed drift guard, measured.
 export function createEnumRegistry() returns EnumLayoutMap
 	var registry = EnumLayoutMap.create()
-	// ⚠ **THE THREE `__Managed*Error` FAMILIES ARE NOT SEEDED HERE (A1s)** — they are DECLARED in
-	// `stdlib/Builtins.maxon` and arrive through the ordinary declaration path (`upsertDeclaredEnum`), which
-	// is what makes the declaration the one authority instead of the loser of a last-wins upsert against a
-	// seed. See the header above `builtinArrayErrorEnum` for the whole argument, and
-	// `declaredBuiltinErrorEnum` for what happens when the module is not loaded.
-	// R4.4: what every throwing `Array` accessor throws. See `builtinArrayErrorEnum`.
-	registry.upsert(ArrayErrorTypeName, value: builtinArrayErrorEnum())
-	// What the throwing `String` searches and `indexAfter` throw. See `builtinStringErrorEnum`.
-	registry.upsert(StringErrorTypeName, value: builtinStringErrorEnum())
-	// What a missing-key `Map.get` throws. See `builtinMapErrorEnum`.
-	registry.upsert(MapErrorTypeName, value: builtinMapErrorEnum())
-	// A1: what a possibly-zero `/` or `mod` throws. See `builtinDivisionByZeroErrorEnum`.
+	// ⚠ **THE SIX DECLARED FAMILIES ARE NOT SEEDED HERE** — the three `__Managed*Error` ones (A1s) are
+	// declared in `stdlib/Builtins.maxon`, and `ArrayError` / `StringError` / `MapError` in their own
+	// listed modules. All six arrive through the ordinary declaration path (`upsertDeclaredEnum`), which
+	// is what makes the declaration the one authority instead of the winner of a last-wins upsert against
+	// a seed nothing checks. See `declaredBuiltinErrorEnum` for what happens when a module is not loaded.
+	// A1: what a possibly-zero `/` or `mod` throws — declared in no stdlib file, so it is seeded and its
+	// guard stays `overSynthesized`. See `builtinDivisionByZeroErrorEnum`.
 	registry.upsert(DivisionByZeroErrorTypeName, value: builtinDivisionByZeroErrorEnum())
 	return registry
 end 'createEnumRegistry'
