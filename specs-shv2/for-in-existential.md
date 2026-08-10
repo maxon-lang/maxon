@@ -536,3 +536,59 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:33:2: Unsupported: `for … in` over an INSTANCE of the interface 'Seq' — shv2 holds an existential as an interface NAME plus a witness table (`interfaceRef`) and has nowhere to record the `with` arguments, so a parameterized interface never becomes one: the cursor `createIterator()` would return is typed by an associated type with no binding here, and carries no table to walk through. Iterate a concrete conformer, or hold the source at an interface that requires the traversal directly
 ```
+
+<!-- test: error.ambiguous-protocol-requirement -->
+⚠ **THE LOOP MAY NOT SILENTLY PICK A SLOT THE WRITTEN CALL REFUSES TO PICK.** `Derived extends Base` and both
+declare a zero-argument `current()`, so the dispatch has TWO table slots and nothing to choose by — which is
+E3114 for `source.current()`. The loop resolves through the same door and gets the same answer; a first-hit
+search here would bind one of two witness slots with no diagnostic, which is a wrong function pointer rather
+than a refusal.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Base
+	function current() returns Integer
+	function advance() throws IterationError
+end 'Base'
+
+interface Derived extends Base
+	function current() returns Integer
+end 'Derived'
+
+type Upto implements Derived
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Upto'
+
+function looped(source Derived) returns Integer
+	var sum = 0 as Integer
+	for item in source 'walk'
+		sum = sum + item
+	end 'walk'
+	return sum
+end 'looped'
+
+function main() returns ExitCode
+	let u = Upto.create(4)
+	print("{looped(u)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3114: <fragment>:35:2: 'current' taking 0 argument(s) is provided by both Derived.current() returns Integer and Base.current() returns Integer through interface 'Derived' — a witness dispatch binds ONE table slot, and these are two, so there is nothing to choose by. Rename one requirement, or drop one of the constraints
+```

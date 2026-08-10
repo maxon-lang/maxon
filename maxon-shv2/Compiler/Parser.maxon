@@ -27173,17 +27173,35 @@ export type Parser
 	// front of a callee with no parameter for it — `requireWitnessDispatchCandidates` documents the wasm
 	// `indirect call type mismatch` that produced. And the loop supplies no arguments at all, so a
 	// `current(at Index)` requirement is not the protocol however plausibly it is named; taking it would slot
-	// an actual the loop never had.
+	// an actual the loop never had. Those two ARE the filter `dispatchWitnessMethod` applies — the receiver
+	// test verbatim, and `pickWitnessDispatchByArity`'s at the arity the loop always calls with.
+	//
+	// ⛔⛔ **AND THE SURVIVORS GO THROUGH `pickSoleWitnessCandidate`, BECAUSE THE FIRST CUT RETURNED ON THE
+	// FIRST HIT AND THAT IS THE EXACT BUG `WitnessCandidatePick` EXISTS FOR.** `interface Derived extends Base`
+	// with a zero-argument `current()` on EACH supplies two DISTINCT slots of that name — the shape
+	// `pickWitnessDispatchByArity`'s header calls the ordinary spelling — and `witnessCandidateAlreadyCollected`
+	// does not merge them, because they are two requirements and not two routes to one. MEASURED on this
+	// rung's own tree before the fix: `source.current()` was **E3114** while `for item in source` COMPILED and
+	// printed 10, silently binding whichever slot the transitive walk emitted first. That is a wrong function
+	// pointer rather than a diagnostic, and it broke the rule `dispatchMethodOnBase` states in full — the door
+	// a receiver came through may not change what the answer IS.
 	function existentialProtocolTarget(source ValueId, methodName ByteArray, anchor Token) returns ExistentialProtocolTarget throws ParseError
 		let candidates = try self.findWitnessDispatchCandidates(source, methodName: methodName, errorTok: anchor)
+		var protocolShaped = WitnessDispatchTargetArray.create()
 		for i in 0 upto candidates.count() 'eachCandidate'
 			let candidate = try candidates.get(i) otherwise panic("existentialProtocolTarget: candidates.get OOB at {i} below count {candidates.count()}")
 			if witnessRequirementTakesReceiver(candidate) and candidate.paramTypeNames.count() == 0 'theProtocolShape'
-				return ExistentialProtocolTarget.required(candidate)
+				protocolShaped.push(candidate)
 			end 'theProtocolShape'
 		end 'eachCandidate'
 
-		return ExistentialProtocolTarget.notRequired
+		match pickSoleWitnessCandidate(protocolShaped) 'pick'
+			none then return ExistentialProtocolTarget.notRequired
+			one(target) then return ExistentialProtocolTarget.required(target)
+			// The SAME sentence the written call gets, from the same door: `argCount` is 0 because that is the
+			// arity this filter selected on and the arity the loop calls with.
+			ambiguous(first, second) then throw ParseError.ambiguousWitnessDispatch(String.from(methodName), provider: self.witnessDispatchProviderPhrase(source), argCount: 0, first: renderWitnessRequirement(first), second: renderWitnessRequirement(second), line: anchor.line, column: anchor.column)
+		end 'pick'
 	end 'existentialProtocolTarget'
 
 	// ⭐⭐ **WHAT A COUNTED RANGE'S BOUNDS MAY BE — the RANGE form's twin of `requireIterableSource`, and
