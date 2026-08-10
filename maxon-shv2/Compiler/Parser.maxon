@@ -5500,12 +5500,20 @@ end 'comparisonOpSpelling'
 // The corpus declares that type (`stdlib/String.maxon:917`), so the ordinary declaration fold registers it
 // in every program and there is nothing per-file left to answer. The remaining three name types the
 // compiler still owns outright.
-typealias ProducerMask = int(0 to 7)
+typealias ProducerMask = int(0 to 15)
 
 let CharacterSetProducerBit = 1 as ProducerMask
 let ManagedFileProducerBit = 2 as ProducerMask
 let ManagedDirectoryProducerBit = 4 as ProducerMask
-let AllProducerBits = 7 as ProducerMask
+// ⭐ **A `<Enum>.allCaseNames` — the fourth question this walk answers, and the only one that names no
+// compiler-owned LAYOUT.** What it registers is the `Array with String` INSTANCE the member materializes,
+// which — like a bare `[…]` literal's — has no typealias in the file to be interned from. It rides this
+// walk rather than the declaration sweep's loop for that loop's own stated reason: `recordScannedType` and
+// `recordScannedEnum` consume a declaration WHOLE, so a `Color.allCaseNames` inside a method body is
+// invisible to an arm written there, and the instance would go uninterned in exactly the programs that
+// declare their enums and their uses together.
+let AllCaseNamesProducerBit = 8 as ProducerMask
+let AllProducerBits = 15 as ProducerMask
 
 // --- Character literals ---
 //
@@ -6943,6 +6951,14 @@ end 'EnumTagCounter'
 function tokenIsLiteralKind(kind TokenKind) returns bool
 	return kind == TokenKind.intLiteral or kind == TokenKind.floatLiteral or kind == TokenKind.stringLiteral or kind == TokenKind.charLiteral or kind == TokenKind.byteStringLiteral
 end 'tokenIsLiteralKind'
+
+// Does `kind` spell an enum/union case's raw value DIRECTLY — a string or a character literal? THE one
+// list, because three doors must agree on it: the case-NAME reader (which admits such a literal where a
+// name goes), the implicit-backing arm that recognizes it there, and the explicit `= <literal>` arm. Taught
+// to two of the three, a spelling would be accepted as a name and then read as a malformed raw value.
+function tokenKindIsEnumLiteralBacking(kind TokenKind) returns bool
+	return kind == TokenKind.stringLiteral or kind == TokenKind.charLiteral
+end 'tokenKindIsEnumLiteralBacking'
 
 // ⭐ **THE TOKEN KINDS MAXON'S BLOCK STRUCTURE IS SPELLED WITH** — exactly the kinds
 // `opensBlockAt`/`closesBlockAt` can ever answer `true` for, and therefore exactly the kinds whose meaning
@@ -9410,6 +9426,7 @@ export type Parser
 		let hasCharacterSetProducer = (producers and CharacterSetProducerBit) != 0
 		let hasManagedFileProducer = (producers and ManagedFileProducerBit) != 0
 		let hasManagedDirectoryProducer = (producers and ManagedDirectoryProducerBit) != 0
+		let hasAllCaseNamesAccess = (producers and AllCaseNamesProducerBit) != 0
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -9539,7 +9556,9 @@ export type Parser
 		// Intern the managed-element literal instances — `Array with String` for a `["…"]`, plus every declared
 		// struct/union for a `[<identifier>…]` (whose element type the sweep cannot see). After `foldFile` so the
 		// aggregate loop reads the folded structs/unions and so the giids follow the file's named instances (P1.7 slice 3).
-		if hasStringArrayLiteral 'internStringArrayLiteral'
+		// `<Enum>.allCaseNames` materializes that same `Array with String` and has no typealias of its own to
+		// intern it from either, so it joins the arm rather than opening a second one.
+		if hasStringArrayLiteral or hasAllCaseNamesAccess 'internStringArrayLiteral'
 			_ = index.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
 		end 'internStringArrayLiteral'
 		// Only NOTED here, never performed: the over-interning is over every declared struct/union in the
@@ -9803,6 +9822,9 @@ export type Parser
 			if (mask and ManagedDirectoryProducerBit) == 0 and self.atManagedDirectoryProducer() 'md'
 				mask = (mask or ManagedDirectoryProducerBit) as ProducerMask
 			end 'md'
+			if (mask and AllCaseNamesProducerBit) == 0 and self.atAllCaseNamesAccess() 'acn'
+				mask = (mask or AllCaseNamesProducerBit) as ProducerMask
+			end 'acn'
 			if mask == AllProducerBits 'allFound'
 				break
 			end 'allFound'
@@ -9821,6 +9843,22 @@ export type Parser
 		// that only writes `CharSet from ['x']` must trigger it too or the alias would not exist.
 		return self.at(TokenKind.identifier) and (self.current().value.equals(CharacterSetBuiltinName) or self.current().value.equals(CharacterMemberSetAliasName))
 	end 'atCharacterSetProducer'
+
+	// ⭐ **IS THE CURSOR ON THE `allCaseNames` MEMBER NAME?** — asked by BOTH halves of that member and
+	// deliberately once: the SWEEP asks it to decide whether the file needs an `Array with String` interned
+	// (`AllCaseNamesProducerBit`), and `parseEnumLiteral` asks it to decide whether to read that instance
+	// back. A shape one accepted and the other declined would be a parse-time lookup for an instance nobody
+	// interned, so the two cannot be allowed to spell it separately — and they briefly did, one testing the
+	// token KIND as well as the name and the other only the name. They agreed solely because that word cannot
+	// lex as anything but an identifier, which is a property of the lexer rather than of either line.
+	//
+	// Asked of the MEMBER name alone and not of the `<base> .` in front of it, which is the same tolerance
+	// every sweep probe has: it sees tokens, not types, so a local variable spelled `allCaseNames`
+	// over-interns one registry entry and nothing more (an instance nobody names gets no descriptor and no
+	// destructor — both gate on usage). Missing one, by contrast, costs the member its array at parse time.
+	function atAllCaseNamesAccess() returns bool
+		return self.at(TokenKind.identifier) and self.current().value.equals(EnumAllCaseNamesMemberName)
+	end 'atAllCaseNamesAccess'
 
 	// The `__ManagedFile` type name (R4.1). Deliberately TOLERANT like every sweep probe: it sees the
 	// identifier, not a type, so a file merely MENTIONING the name over-registers the layout rather than
@@ -13205,9 +13243,13 @@ export type Parser
 			depth = self.blockDepthAfter(depth)
 			self.advance()
 
-			// ⚠ **A METHOD'S CLOSING `end` CARRIES ITS BLOCK LABEL, AND THIS WALK MUST EAT IT** — because the
-			// token right after it is read as a MEMBER, and `readEnumCaseInto` reports a charLiteral as a
-			// string-backed case and aborts the whole scan (the D1 review measured what that costs: with
+			// ⚠⚠ **A METHOD'S CLOSING `end` CARRIES ITS BLOCK LABEL, AND THIS WALK MUST EAT IT** — because the
+			// token right after it is read as a MEMBER, and a label is a `charLiteral`. ⛔ **THE COST OF
+			// MISSING IT ROSE WHEN CHAR BACKING LANDED**: `readEnumCaseInto` used to REFUSE a charLiteral
+			// member outright, so any missed label aborted the scan loudly; a ONE-character label (`end 'a'`)
+			// is now a legal implicitly-backed case, so missing it would silently declare a case `a` and fix
+			// the enum's backing to `character`. (A longer label still aborts, now as an invalid character
+			// literal rather than as a refused backing. The D1 review measured what the loud version cost: with
 			// `end 'bump'` the sweep stopped at the label, so a SECOND method's signature never reached the
 			// whole-program index — `e.second()` typed `unresolved` and PANICKED in lowering — and every case
 			// declared after a method was silently dropped from the layout). `recordScannedType` needs no such
@@ -13455,7 +13497,7 @@ export type Parser
 		// A `__`-prefixed field is reserved. This reader is shared with the tolerant sweep
 		// (`recordScannedType`), which swallows the throw (`otherwise break`) and leaves the positioned
 		// diagnostic to the real parse — the sweep is not a validator.
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 
 		if not self.at(TokenKind.as) 'typeFromLiteral'
 			// Shape 2. There is no annotation to read the type off, so the literal's TOKEN KIND is
@@ -14012,7 +14054,7 @@ export type Parser
 		let mutable = self.at(TokenKind.var)
 		try self.consume(TokenKind.var if mutable else TokenKind.let)
 		let nameTok = try self.consume(TokenKind.identifier)
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.consume(TokenKind.equals)
 
 		let initStart = self.pos
@@ -14105,7 +14147,7 @@ export type Parser
 	function readTypeAliasDeclaration(rangedOut RangedTypeAliasArray, functionOut FunctionTypeAliasArray, genericOut GenericAliasEntryArray, tupleOwner TupleAliasOwner, recordFunctionSignature bool, visibility Visibility) returns TypeDeclKind throws ParseError
 		try self.consume(TokenKind.typealias)
 		let nameTok = try self.consume(TokenKind.identifier)
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.consume(TokenKind.equals)
 
 		// A FUNCTION typealias — `function(paramTypes) [returns T]` (P1.5-A1). The literal `function(…)`
@@ -15469,7 +15511,7 @@ export type Parser
 		// The real parse alone rejects a reserved `type __T` or a compiler-owned `type Ordering` —
 		// `readTypeHeader` stays a pure reader shared with the tolerant sweep, which is not a validator
 		// (see `recordScannedType`).
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.requireTypeNameNotCompilerOwned(nameTok)
 		self.enterTypeScope(nameTok.value, isEnum: false)
 
@@ -15777,7 +15819,7 @@ export type Parser
 	function readInterfaceDeclaration() returns IrInterface throws ParseError
 		try self.consume(TokenKind.interface)
 		let nameTok = try self.consume(TokenKind.identifier)
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		// An interface is neither a struct nor an enum, and `isEnum: false` is the right answer for the one
 		// thing the kind decides: a `Self` in an interface method's signature is a `structRef`, which is what
 		// `checkConformance` substitutes the CONFORMING type into (and only a `type` may conform at this rung).
@@ -16371,8 +16413,10 @@ export type Parser
 	// SET out of. `union` and `enum` share this routine entirely: only the diagnostic wording later
 	// differs, carried by `layout.isUnion`.
 	//
-	// A CASE MAY CARRY A PAYLOAD (`value(n Integer)`, P1.3 slice 1 — see `readEnumCaseInto`); a
-	// string/char/struct/function BACKING is what still names a later rung.
+	// A CASE MAY CARRY A PAYLOAD (`value(n Integer)`, P1.3 slice 1 — see `readEnumCaseInto`), and its raw
+	// value may be an int, a float, a string or a character, in the explicit (`North = 'n'`) and the implicit
+	// (`"North"` standing where the name goes) spellings alike. A STRUCT or FUNCTION backing is what still
+	// names a later rung.
 	//
 	// ⭐ **A MEMBER MAY BE AN INSTANCE METHOD (D1)**, and it is built by the very same `parseFunction` a
 	// struct's method is: the receiver is `__self` at parameter 0, the method is declared under
@@ -16383,7 +16427,7 @@ export type Parser
 	function parseEnumDeclaration(isUnion bool, visibility Visibility) throws ParseError
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum)
 		let nameTok = try self.consume(TokenKind.identifier)
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.requireTypeNameNotCompilerOwned(nameTok)
 		let conformsTo = (try self.readOptionalImplementsClause()).names
 		self.enterTypeScope(nameTok.value, isEnum: true)
@@ -16510,12 +16554,16 @@ export type Parser
 	// layout is what the parser reads both from at a use site).
 	function readEnumCaseInto(layout EnumLayout, counter EnumTagCounter) throws ParseError
 		let nameTok = try self.readEnumCaseNameToken()
-		let caseName = nameTok.value
+		let caseName = try self.enumCaseNameOf(nameTok)
 
 		// A `__`-prefixed case is reserved. Checked before the duplicate/backing rules so the
 		// reservation is reported at the name, and — as with the field reader — the tolerant sweep
 		// (`recordScannedEnum`) swallows the throw and leaves the diagnostic to the real parse.
-		try self.requireUnreservedName(nameTok)
+		//
+		// ⚠ It is asked about `caseName` — the DECODED name, the one this case is actually declared under
+		// everywhere else in this function — and not about the token's text. This is THE site that makes those
+		// two different things (`"\x5f\x5fx"` declares `__x`); see `requireUnreservedName`.
+		try self.requireUnreservedName(nameTok, declaredName: caseName)
 
 		// E3030 — checked at the second declaration, as the bootstrap positions it.
 		if layout.hasCase(caseName) 'duplicateCase'
@@ -16531,19 +16579,22 @@ export type Parser
 		// refused at its USE site (`requireStructBase`) rather than at declaration.
 		if self.at(TokenKind.leftParen) 'payload'
 			let payloads = try self.readPayloadFieldsInto()
-			try self.requireIntBacking(layout, caseTok: nameTok)
-			let tag = counter.nextTag
-			counter.nextTag = counter.nextTag + 1
-			try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawDisplay: "{tag}", caseTok: nameTok, payloads: payloads)
+			try self.appendAutoTaggedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok, payloads: payloads)
 			return
 		end 'payload'
 
+		// ⭐ **AN IMPLICITLY BACKED CASE — the literal stood where the NAME goes, so it is both.** `"North"`
+		// declares the case `North` with the raw value `"North"`, and `'N'` declares `N` with the raw value
+		// `'N'`. Asked before the `=` test because such a case never writes one: its raw value is already in
+		// hand, and an `=` after it would be a second raw value for one case.
+		if tokenKindIsEnumLiteralBacking(nameTok.kind) 'implicitBacking'
+			try self.appendLiteralBackedEnumCase(layout, caseName: caseName, literalTok: nameTok, counter: counter, caseTok: nameTok)
+			return
+		end 'implicitBacking'
+
 		if not self.at(TokenKind.equals) 'bareName'
 			// A bare case takes the auto-increment tag and requires integer backing.
-			try self.requireIntBacking(layout, caseTok: nameTok)
-			let tag = counter.nextTag
-			counter.nextTag = counter.nextTag + 1
-			try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawDisplay: "{tag}", caseTok: nameTok, payloads: PayloadFieldArray.create())
+			try self.appendAutoTaggedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
 		end 'bareName'
 
@@ -16564,18 +16615,90 @@ export type Parser
 			let magnitude = try self.floatLiteralBits(floatTok)
 			let bits = negatedFloatBits(magnitude) if floatNegated else magnitude
 			let rawDisplay = "-{String.from(floatTok.value)}" if floatNegated else String.from(floatTok.value)
-			try self.requireFloatBacking(layout, caseTok: nameTok)
-			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawDisplay: rawDisplay, caseTok: nameTok, payloads: PayloadFieldArray.create())
+			try self.requireEnumBacking(layout, kind: EnumBacking.float, caseTok: nameTok)
+			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawValue: rawDisplay, caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
 		end 'floatValue'
+
+		// An EXPLICIT string or character raw value (`json = "application/json"`, `North = 'n'`) — the same
+		// two backings the implicit form above fixes, and the same body reads them.
+		if tokenKindIsEnumLiteralBacking(self.current().kind) 'literalRawValue'
+			let literalTok = self.current()
+			self.advance()
+			try self.appendLiteralBackedEnumCase(layout, caseName: caseName, literalTok: literalTok, counter: counter, caseTok: nameTok)
+			return
+		end 'literalRawValue'
 
 		// An INTEGER raw value (possibly negated). It resets the auto-increment counter to value + 1,
 		// which is what makes `enum E { a = 5  b }` give `b` the tag 6.
 		let intValue = try self.readEnumIntRawValue()
-		try self.requireIntBacking(layout, caseTok: nameTok)
+		try self.requireEnumBacking(layout, kind: EnumBacking.integer, caseTok: nameTok)
 		counter.nextTag = intValue + 1
-		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawDisplay: "{intValue}", caseTok: nameTok, payloads: PayloadFieldArray.create())
+		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawValue: "{intValue}", caseTok: nameTok, payloads: PayloadFieldArray.create())
 	end 'readEnumCaseInto'
+
+	// The auto-increment half of a case that writes no raw value of its own — a bare case (`green`) and a
+	// payload case (`circle(r Real)`), which differ only in the payload list they carry. ONE body, because
+	// the two arms had one between them: the tag rule and the backing it fixes written twice is a tag rule
+	// free to drift, and a case's tag is the fact every `Color.red` and every `match` arm reads back.
+	function appendAutoTaggedEnumCase(layout EnumLayout, caseName ByteArray, counter EnumTagCounter, caseTok Token, payloads PayloadFieldArray) throws ParseError
+		try self.requireEnumBacking(layout, kind: EnumBacking.integer, caseTok: caseTok)
+		let tag = self.nextAutoEnumTag(counter)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: "{tag}", caseTok: caseTok, payloads: payloads)
+	end 'appendAutoTaggedEnumCase'
+
+	// Take the counter's next tag and step it — the tag every case gets that does not write a NUMBER of its
+	// own: a bare case, a payload case, and a STRING-backed one, whose raw value is not a number and so
+	// cannot be its tag.
+	function nextAutoEnumTag(counter EnumTagCounter) returns ParsedInt
+		let tag = counter.nextTag
+		counter.nextTag = counter.nextTag + 1
+		return tag
+	end 'nextAutoEnumTag'
+
+	// ⭐⭐ **A STRING- OR CHARACTER-BACKED CASE, IN EITHER OF THE TWO SPELLINGS THAT REACH IT** — the literal
+	// standing in the NAME position (`"North"`, `'N'`) or written after an `=` (`json = "application/json"`,
+	// `North = 'n'`). One body, because the two differ only in WHERE the literal was written: the backing it
+	// fixes, the tag it takes and the raw value it records are identical, and `/specs/enum-full.md` declares
+	// both spellings of both backings.
+	//
+	// ⭐ **THE TWO BACKINGS TAG DIFFERENTLY, AND THAT IS THE WHOLE OF WHAT SEPARATES THEM.** A character raw
+	// value IS a number — its Unicode codepoint — so the codepoint IS the tag, and every tag-keyed rule
+	// (E3031, `.ordinal`, a `match`'s i64 compare) reads it unchanged. A STRING raw value is not a number, so
+	// the case takes the ordinary auto-increment tag and its bytes ride `EnumLayout.caseRawValues`, which is
+	// what E3031 compares for that backing.
+	//
+	// ⚠ **THE CHARACTER ARM DELIBERATELY DOES NOT TOUCH `counter`, UNLIKE THE INT RAW-VALUE ARM.** An int
+	// raw value resets it because a BARE case may legally follow one (`a = 5  b` gives `b` the tag 6); no
+	// case of any kind may follow a character one without agreeing on the backing, and every kind that could
+	// continue the count — bare, payload, int — fixes `integer` and so raises E3032 at
+	// `requireEnumBacking` first. A reset here would therefore be a store nothing can read, and the bootstrap
+	// does not write one either (its char arms are a plain `ordinal++`, `2-Parser.cs:4324`, `:4418`).
+	function appendLiteralBackedEnumCase(layout EnumLayout, caseName ByteArray, literalTok Token, counter EnumTagCounter, caseTok Token) throws ParseError
+		if literalTok.kind == TokenKind.charLiteral 'characterBacking'
+			let codepoint = try self.enumCharacterRawValue(literalTok)
+			try self.requireEnumBacking(layout, kind: EnumBacking.character, caseTok: caseTok)
+			try self.appendEnumCase(layout, caseName: caseName, tag: codepoint, rawValue: String.from(try self.charLiteralBytes(literalTok)), caseTok: caseTok, payloads: PayloadFieldArray.create())
+			return
+		end 'characterBacking'
+
+		let bytes = try self.decodedStringLiteralBytes(literalTok)
+		try self.requireEnumBacking(layout, kind: EnumBacking.string, caseTok: caseTok)
+		let tag = self.nextAutoEnumTag(counter)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(bytes), caseTok: caseTok, payloads: PayloadFieldArray.create())
+	end 'appendLiteralBackedEnumCase'
+
+	// The codepoint a CHARACTER raw value denotes.
+	//
+	// ⛔ A multi-codepoint grapheme cluster (a ZWJ family emoji, a flag) is a `Character` and nothing else —
+	// it has no integer reading (`CharLiteralCodepoint.cluster`) — so it cannot be an enum tag. Refused here
+	// rather than silently stored as its first codepoint, which would make two different clusters one case.
+	function enumCharacterRawValue(literalTok Token) returns ParsedInt throws ParseError
+		match try self.charLiteralCodepoint(literalTok) 'decoded'
+			codepoint(value) then return value
+			cluster then throw ParseError.unsupported("a character raw value that is a multi-codepoint grapheme cluster ('{String.from(literalTok.value)}') — an enum case's tag is one integer, and a cluster has no integer reading", line: literalTok.line, column: literalTok.column)
+		end 'decoded'
+	end 'enumCharacterRawValue'
 
 	// Parse a payload field list `(name Type, name2 Type2)` for a `union`/`enum` case, into a
 	// `PayloadField` array in slot order. Shared by the real parse and the tolerant sweep, so it
@@ -16591,7 +16714,7 @@ export type Parser
 			// A `__`-prefixed field is reserved, at the name, exactly as a struct field's is
 			// (`readStructFieldInto`). The tolerant sweep swallows the throw and leaves the diagnostic
 			// to the real parse.
-			try self.requireUnreservedName(nameTok)
+			try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 			let typeTok = self.current()
 			// ⭐ **THE PAYLOAD's PRE-ERASURE SPELLING (BATCH22)** — asked at the cursor, which sits on the
 			// type's first token, for the reason a struct field asks it there: `parseTypeReference` on the
@@ -16619,22 +16742,40 @@ export type Parser
 		return fields
 	end 'readPayloadFieldsInto'
 
-	// Read the token that NAMES a case — an identifier, or a keyword used as one. A string/char
-	// literal here is a string/char BACKING (a later rung), reported as such rather than as a bad
-	// name; anything else is malformed.
+	// Read the token that NAMES a case — an identifier, a keyword used as one, or the string/char
+	// LITERAL of an implicitly-backed case (`"North"`, `'N'`), which names the case through the value it
+	// carries. The literal is returned as it stands and the name derived from it by `enumCaseNameOf`,
+	// because the caller needs BOTH halves of it: the name it declares and the raw value it fixes.
 	function readEnumCaseNameToken() returns Token throws ParseError
-		let tok = self.current()
-
-		if self.at(TokenKind.stringLiteral) or self.at(TokenKind.charLiteral) 'stringCharBacking'
-			throw ParseError.unsupported("a string- or char-backed enum/union case ({String.from(tok.value)}) — string/char backing, and the `.rawValue`/`.name` accessors that read it, arrive with String (P1.2)", line: tok.line, column: tok.column)
-		end 'stringCharBacking'
+		if tokenKindIsEnumLiteralBacking(self.current().kind) 'implicitlyBacked'
+			let tok = self.current()
+			self.advance()
+			return tok
+		end 'implicitlyBacked'
 
 		return try self.consumeNameToken(NamePosition.enumCase)
 	end 'readEnumCaseNameToken'
 
+	// ⭐ **THE NAME A CASE'S HEAD TOKEN DECLARES.** An identifier (or a keyword used as one) declares
+	// itself; a string/char literal in that position declares the case named by its DECODED CONTENT, so
+	// `"North"` is the case `StringBacked.North` and `'N'` is `CharBacked.N`. The decode is the same one
+	// the value paths use, so an escape means here exactly what it means in an expression.
+	function enumCaseNameOf(nameTok Token) returns ByteArray throws ParseError
+		if nameTok.kind == TokenKind.stringLiteral 'stringBacked'
+			return try self.decodedStringLiteralBytes(nameTok)
+		end 'stringBacked'
+
+		if nameTok.kind == TokenKind.charLiteral 'charBacked'
+			return try self.charLiteralBytes(nameTok)
+		end 'charBacked'
+
+		return nameTok.value
+	end 'enumCaseNameOf'
+
 	// Parse an INTEGER raw value (`= 200`, `= -1`) — the same literal reading `parseRangeBound` does,
-	// minus the type-qualified bounds a raw value cannot be. A string/identifier/struct raw value is
-	// a backing this rung does not have, named rather than silently mapped onto the int path.
+	// minus the type-qualified bounds a raw value cannot be. The string and char raw values are read by
+	// `appendLiteralBackedEnumCase` before this is reached; a struct/function/identifier raw value is a
+	// backing shv2 does not have, named rather than silently mapped onto the int path.
 	function readEnumIntRawValue() returns ParsedInt throws ParseError
 		if self.at(TokenKind.minus) 'negative'
 			try self.consume(TokenKind.minus)
@@ -16648,37 +16789,36 @@ export type Parser
 		end 'literal'
 
 		let tok = self.current()
-		throw ParseError.unsupported("a raw value of kind '{tok.kind.rawValue}' (only integer and float raw values are parsed; string, char, struct and function backings arrive with later rungs)", line: tok.line, column: tok.column)
+		throw ParseError.unsupported("a raw value of kind '{tok.kind.rawValue}' (an integer, float, string or character raw value is parsed; struct and function backings arrive with later rungs)", line: tok.line, column: tok.column)
 	end 'readEnumIntRawValue'
 
-	// Fix the layout's backing to INTEGER, or raise E3032 if a FLOAT backing was already fixed. `caseTok`
-	// positions the diagnostic — the bootstrap anchors a mismatch at the offending case.
-	function requireIntBacking(layout EnumLayout, caseTok Token) throws ParseError
-		if layout.backing == EnumBacking.float 'mismatch'
-			throw ParseError.enumRawValueTypeMismatch("expected float, got int", line: caseTok.line, column: caseTok.column)
+	// ⭐ **FIX THE LAYOUT'S BACKING TO `kind`, OR RAISE E3032 IF A DIFFERENT ONE WAS ALREADY FIXED.** The
+	// backing is settled by the FIRST case and every later one must agree with it, so the rule is one
+	// comparison and the message is `expected <established>, got <incoming>` — the bootstrap's phrasing
+	// (`2-Parser.cs:4365-4412`), rendered from `enumBackingNoun` so the four backings cannot be worded
+	// differently at different doors. `caseTok` positions the diagnostic: the bootstrap anchors a mismatch
+	// at the offending case, not at its raw value.
+	//
+	// ⚠ It replaced a `requireIntBacking`/`requireFloatBacking` PAIR whose two hard-coded sentences were the
+	// same fact written twice — which at four backings would have been twelve.
+	function requireEnumBacking(layout EnumLayout, kind EnumBacking, caseTok Token) throws ParseError
+		if layout.backing != EnumBacking.unresolved and layout.backing != kind 'mismatch'
+			throw ParseError.enumRawValueTypeMismatch("expected {enumBackingNoun(layout.backing)}, got {enumBackingNoun(kind)}", line: caseTok.line, column: caseTok.column)
 		end 'mismatch'
-		layout.backing = EnumBacking.integer
-	end 'requireIntBacking'
+		layout.backing = kind
+	end 'requireEnumBacking'
 
-	// Fix the layout's backing to FLOAT, or raise E3032 if an INTEGER backing was already fixed. The exact
-	// `expected int, got float` phrasing is the bootstrap's, gated by `error.raw-value-type-mismatch`.
-	function requireFloatBacking(layout EnumLayout, caseTok Token) throws ParseError
-		if layout.backing == EnumBacking.integer 'mismatch'
-			throw ParseError.enumRawValueTypeMismatch("expected int, got float", line: caseTok.line, column: caseTok.column)
-		end 'mismatch'
-		layout.backing = EnumBacking.float
-	end 'requireFloatBacking'
-
-	// Append a case after checking E3031 (duplicate raw value) — a linear scan of the tags recorded
-	// so far, positioned at the offending case. `rawDisplay` is how the value is written (the int, or
-	// the float's source text), which is what the message prints.
-	function appendEnumCase(layout EnumLayout, caseName ByteArray, tag ParsedInt, rawDisplay String, caseTok Token, payloads PayloadFieldArray) throws ParseError
+	// Append a case after checking E3031 (duplicate raw value) — a linear scan of the cases recorded so
+	// far, positioned at the offending case. `rawValue` is how the value is written (the int, the float's
+	// source text, the string's or character's decoded content), which is what the message prints and what
+	// the layout records for a string backing (see `EnumLayout.rawValueCollidesAt`, which owns the compare).
+	function appendEnumCase(layout EnumLayout, caseName ByteArray, tag ParsedInt, rawValue String, caseTok Token, payloads PayloadFieldArray) throws ParseError
 		for i in 0 upto layout.caseCount() 'eachExisting'
-			if layout.tagOfIndex(i) == tag 'duplicateRawValue'
-				throw ParseError.enumDuplicateRawValue(rawDisplay, line: caseTok.line, column: caseTok.column)
+			if layout.rawValueCollidesAt(i, tag: tag, rawValue: rawValue) 'duplicateRawValue'
+				throw ParseError.enumDuplicateRawValue(rawValue, line: caseTok.line, column: caseTok.column)
 			end 'duplicateRawValue'
 		end 'eachExisting'
-		layout.addCase(caseName, tag: tag, payloads: payloads)
+		layout.addCase(caseName, tag: tag, rawValue: rawValue, payloads: payloads)
 	end 'appendEnumCase'
 
 	// One member of a type body that is not a field: `[export] [static] function …`.
@@ -16759,7 +16899,7 @@ export type Parser
 		// The BARE name only — a method's `Type.` qualification is applied below by
 		// `declaredMethodName`, so `Point.create` is checked as `create` and the reserved test never
 		// sees the type prefix (`Self` is fine; a `__method` name is not).
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		// `Point.create` inside `type Point`, the bare token at file scope. The SAME derivation the
 		// declaration sweep records the signature under, so the key an `IrFunction` carries and the
 		// key `mintCallResult` types a call from are one name — for the FIRST declaration of it. A later
@@ -17655,7 +17795,7 @@ export type Parser
 			// this position, so the keyword is a name; `keywordIsAName` learns the same fact for the token
 			// scans, or a `function f(end Integer)` would read as a block CLOSE that never opened.
 			let nameTok = try self.consumeNameToken(NamePosition.declaration)
-			try self.requireUnreservedName(nameTok)
+			try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 			// Asked at the cursor, which sits on the type's first token — the last instant the spelling
 			// `__ManagedMemory` still exists, at any depth (`declaredSurfaceAt`). `slotElementsFromAliases:
 			// true`: the tolerant sweep skips a parameter list wholesale (`skipBalancedParens`), so this door
@@ -19771,7 +19911,7 @@ export type Parser
 		end 'destructure'
 
 		let nameTok = try self.consume(TokenKind.identifier)
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.consume(TokenKind.equals)
 		let rhsStart = self.pos
 		let value = try self.parseExpression(func, block: block)
@@ -20052,7 +20192,7 @@ export type Parser
 		var nameToks = TokenArray.create()
 		while not self.at(TokenKind.rightParen) 'collectNames'
 			let nameTok = try self.consume(TokenKind.identifier)
-			try self.requireUnreservedName(nameTok)
+			try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 			nameToks.push(nameTok)
 			if not self.at(TokenKind.comma) 'lastName'
 				break
@@ -20789,13 +20929,22 @@ export type Parser
 	// held at seven sites and lapsed at the eighth would be a SILENT hole (a user `__`-name accepted
 	// there), not a compile error — exactly the class of defect this rung exists to close.
 	//
+	// ⛔⛔ **`declaredName` IS PASSED AND IS *NOT* `nameTok.value`, AND THAT SPLIT IS A HOLE THIS DOOR ONCE
+	// HAD.** For every site but one the two are the same bytes, which is exactly why reading the token's own
+	// text looked safe. An IMPLICITLY BACKED enum case breaks it: `enum E { "\x5f\x5fx" }` DECLARES the case
+	// `__x` (the decoded content — what `EnumLayout.addCase` stores and every `indexOfCase` matches) while the
+	// token's text is `\x5f\x5fx`, which does not start with the prefix. Reading the token would have waved a
+	// reserved declaration through. The rule is about the name being DECLARED, so the declared name is what
+	// the caller states; the token is here for the POSITION only, and the message names what was declared
+	// rather than how it was spelled.
+	//
 	// ⭐ It sees only USER SOURCE TOKENS, which is why it does not — and structurally CANNOT — reject
 	// the compiler's own `__` functions: `__mm_alloc`, `__print_string`, `__destruct_*` are built by
 	// `IrFunction.createFromStd` and never pass through the parser. That is what keeps the compiler's own
 	// names out of `funcSignatures`, which is the fact `MmRuntime.isSignaturelessCompilerCallee` reads to
 	// license the "skip the user-function checks" shortcut — a registry answer, not a naming convention,
 	// because the exemption below means the prefix alone no longer decides it.
-	function requireUnreservedName(nameTok Token) throws ParseError
+	function requireUnreservedName(nameTok Token, declaredName ByteArray) throws ParseError
 		// ⭐ **THE ONE FILE THAT DECLARES THE RESERVED SPACE IS EXEMPT (D6)** — `stdlib/Builtins.maxon`,
 		// whose whole content is the type-system bridge to compiler intrinsics: the error enums a builtin
 		// throws (`__ManagedFileError`) and the parse helpers `int.fromString` rewrites to
@@ -20832,7 +20981,7 @@ export type Parser
 		// drift. A name that fails THIS test is one this door was never going to refuse, so there is nothing
 		// for an exemption to rescue: whatever the mint is spelled as, an unreserved name leaves here
 		// accepted either way. The exemption can therefore only ever matter on the reserved side of it.
-		if not bytesStartWith(nameTok.value, prefix: ReservedNamePrefix) 'notReserved'
+		if not bytesStartWith(declaredName, prefix: ReservedNamePrefix) 'notReserved'
 			return
 		end 'notReserved'
 
@@ -20856,11 +21005,11 @@ export type Parser
 		// collision, reported inside a file the author never opened. The mint is now disjoint from a user's
 		// `__` declarations too (`ProgramSignatures.shadowRenameIsTaken`), so with both halves in place that
 		// program gets exactly the one diagnostic it is owed.
-		if self.isStdlibSource and self.signatures.isMintedStdlibShadowName(nameTok.value) 'theCompilersOwnMint'
+		if self.isStdlibSource and self.signatures.isMintedStdlibShadowName(declaredName) 'theCompilersOwnMint'
 			return
 		end 'theCompilersOwnMint'
 
-		throw ParseError.reservedIdentifier(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		throw ParseError.reservedIdentifier(String.from(declaredName), line: nameTok.line, column: nameTok.column)
 	end 'requireUnreservedName'
 
 	// ⭐ **A DECLARATION MAY NOT GIVE A COMPILER-OWNED TYPE NAME A *NOMINAL* IDENTITY (P1.7a slice 2b-ii).**
@@ -26098,7 +26247,7 @@ export type Parser
 		try self.consume(keywordTok.kind)
 		let nameIndex = self.pos
 		let nameTok = try self.consume(TokenKind.identifier)
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.consume(TokenKind.equals)
 		return IfBinder.binding(nameIndex, mutable: keywordTok.kind == TokenKind.var)
 	end 'parseIfBinder'
@@ -27330,7 +27479,7 @@ export type Parser
 		end 'destructuringPattern'
 
 		let nameTok = try self.consume(TokenKind.identifier)
-		try self.requireUnreservedName(nameTok)
+		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		var names = TokenArray.create()
 		names.push(nameTok)
 		return names
@@ -31417,7 +31566,7 @@ export type Parser
 			if nameTok.value.equals(DiscardBindingName) 'discard'
 				bindings.push(PayloadBinding.discard(nameTok, field: field, slot: bindings.count()))
 			end 'discard' else 'realBinding'
-				try self.requireUnreservedName(nameTok)
+				try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 				bindings.push(PayloadBinding.bound(nameTok, field: field, slot: bindings.count()))
 				allDiscard = false
 			end 'realBinding'
@@ -37989,6 +38138,29 @@ export type Parser
 		let typeTok = try self.consumeTypeBaseToken()
 		try self.consume(TokenKind.dot)
 
+		// ⭐ **`<Enum>.allCaseNames` IS A STATIC MEMBER, NOT A CASE** — it is claimed here, ahead of the case
+		// lookup, because that lookup's answer for it is E3034 and there is nothing further along this path
+		// that could reconsider. The member exists on EVERY enum and union (see `EnumAllCaseNamesMemberName`).
+		//
+		// ⚠ **THE TWO REFERENCES DISAGREE ABOUT AN ENUM THAT DECLARES A CASE *NAMED* `allCaseNames`, AND NO
+		// SPEC COVERS THE COLLISION.** v1 decides it in this order — member name first
+		// (`maxon-selfhosted/Compiler/Parser.maxon:14856`), so the member wins — while the BOOTSTRAP does the
+		// opposite: `GetCase(memberName)` runs first and returns the case when it finds one
+		// (`maxon-sharp/Compiler/2-Parser.cs:19051`), with its `allCaseNames` arm only at `:19099`. shv2
+		// follows v1. Nothing in `/specs` states which is right, no corpus or spec enum declares such a case,
+		// and reserving the name outright would be a refusal with corpus-wide blast radius that nothing is
+		// asking for — so this is a recorded divergence, not a settled rule.
+		//
+		// The cursor test is `atAllCaseNamesAccess`, the SAME predicate the sweep interns the member's
+		// `Array with String` off. The two must agree exactly: the sweep decides whether the instance exists
+		// and this decides whether it is read, so a shape one accepts and the other declines is a parse-time
+		// lookup for an instance nobody interned.
+		if self.atAllCaseNamesAccess() 'allCaseNames'
+			let memberTok = self.current()
+			self.advance()
+			return try self.emitEnumAllCaseNames(layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
+		end 'allCaseNames'
+
 		let caseTok = try self.consumeNameToken(NamePosition.enumCase)
 
 		let index = try self.enumCaseIndexOrThrow(layout, nameTok: caseTok, posTok: typeTok)
@@ -38011,6 +38183,40 @@ export type Parser
 
 		return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: range)
 	end 'parseEnumLiteral'
+
+	// ⭐⭐ **MATERIALIZE `<Enum>.allCaseNames` — an OWNED `Array with String` of the case names, in
+	// declaration order.** It builds exactly what the source literal `["red", "green", "blue"]` builds, op
+	// for op: one `__arr_create` over the `Array with String` instance, then one promoted String per case
+	// pushed into it. That is the whole design decision — the member is a VALUE of a type the language
+	// already has, so it needs no representation, no accessor protocol and no runtime helper of its own, and
+	// `.count()` / `.get(0)` / `for name in …` reach it through the postfix loop like any other array.
+	//
+	// ⭐ **A UNION IS THE SAME QUESTION.** `caseNames` is one column whatever the declaration's keyword or a
+	// case's payload arity, so `Container.value(n Integer)` contributes `"value"` and nothing else — which is
+	// exactly what `/specs/enum-allcasenames.md` requires of a union with associated values.
+	//
+	// ⚠ **THE INSTANCE IS READ BACK, NEVER FIRST INTERNED HERE.** The sweep interns `Array with String` for
+	// any file naming the member (`AllCaseNamesProducerBit`), so a parse-time intern would be the first write
+	// to a shared registry mid-parse and the gid would depend on parse order — `atSetFromConstruction`'s
+	// stated discipline, and the reason the probe walks whole files rather than the declaration loop.
+	//
+	// ⚠ Each name is emitted as an IMMORTAL rdata String and then PROMOTED to an owned record by the shared
+	// move-in door, because the array's `element_destroy@40` stamp releases every live slot: a borrowed
+	// literal handed straight in would be released by an owner it never gave a reference to. `argBareLocal`
+	// is `false` and cannot be otherwise — the value was minted two lines up and names no binding to poison.
+	function emitEnumAllCaseNames(layout EnumLayout, memberTok Token, range SourceRange) returns ValueId throws ParseError
+		let giid = self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
+		let arr = try self.emitArrayCreateOp(giid, range: range)
+
+		for i in 0 upto layout.caseCount() 'eachCase'
+			let literal = self.emitStringLiteral(layout.caseNameAt(i), range: range)
+			let owned = try self.moveManagedValueInto(literal, argBareLocal: false, isString: true, anchor: memberTok, range: range)
+			self.emitArrayPush(arr, element: owned, range: range)
+		end 'eachCase'
+
+		self.trackOwnedTemp(arr)
+		return arr
+	end 'emitEnumAllCaseNames'
 
 	// ⭐ **CONSTRUCT A BOXED UNION VALUE** — `Move.walk(Direction.east)`, `LexErr.pair(7, column: 13)`,
 	// or a payload-free case of a boxed union (`Container.empty`). Parses the payload argument list into
@@ -42111,9 +42317,20 @@ export type Parser
 	// Push one already-parsed array-literal element, moving a managed element in (the array owns it; a trivial
 	// element passes through) — `moveElementIntoContainer` off the value's start position so a bare local is poisoned.
 	function pushArrayLiteralElement(arr ValueId, elem ValueId, giid GenericInstanceId, valueStart TokenIndex, range SourceRange) throws ParseError
-		let stored = try self.moveElementIntoContainer(elem, giid: giid, valueStart: valueStart)
-		_ = self.emitRuntimeCall(ArrPushName, args: pairArgs(arr, second: stored), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		self.emitArrayPush(arr, element: try self.moveElementIntoContainer(elem, giid: giid, valueStart: valueStart), range: range)
 	end 'pushArrayLiteralElement'
+
+	// THE `__arr_push` of an array being BUILT, over an element whose ownership has already been settled.
+	// Its two callers settle that in different ways and so cannot share the step before it: a literal's
+	// element is decided from the SOURCE TOKENS it was written at (`moveElementIntoContainer`), while a
+	// synthesized case-name element (`emitEnumAllCaseNames`) was written at no tokens at all. The store
+	// itself is one fact, so it is written once.
+	//
+	// ⚠ Distinct from the user's own `arr.push(x)`, which is `emitArrayVoidCall` — that form hands the
+	// RECEIVER back as "what the statement still denotes", where a build step's result is nobody's.
+	function emitArrayPush(arr ValueId, element ValueId, range SourceRange)
+		_ = self.emitRuntimeCall(ArrPushName, args: pairArgs(arr, second: element), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'emitArrayPush'
 
 	// The `Array with T` instance a literal's FIRST element fixes (P1.7 slice 3) — an integer element → the
 	// int instance, a String → `Array with String`, a struct/boxed-union → `Array with <name>`. All are

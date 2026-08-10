@@ -3362,10 +3362,20 @@ end 'builtinErrorConformance'
 // inlined at `Parser.enumOrdinalFieldAt` so the member's spelling and the rule that decides it cannot
 // come apart.
 //
-// ⚠ Its two siblings `.name` and `.rawValue` are NOT here and are not implemented: both need the
-// BACKING VALUE (a case's string/char/float), which is a different mechanism and the one
-// `specs-shv2/enum-full.md`'s two shelved cases are waiting on. `.ordinal` needs no backing at all.
+// ⚠ Its two INSTANCE siblings `.name` and `.rawValue` are NOT here and are not implemented: both READ a
+// case's raw value off a VALUE at run time, which needs a tag→case mapping `.ordinal` avoids by being the
+// tag itself. The DECLARATION-side half they were once blocked behind is built — the four backings are
+// parsed and `EnumLayout.caseRawValues` records what each case was written as — so what is left for them is
+// the runtime read, not the declaration.
 export let EnumOrdinalMemberName = b"ordinal"
+
+// ⭐ **`<Enum>.allCaseNames` — THE CASE NAMES, IN DECLARATION ORDER, AS AN `Array with String`.** A STATIC
+// member of every enum AND every union, payload-bearing ones included: only the NAMES are returned, so a
+// case's backing and its payload list are equally irrelevant to it (`/specs/enum-allcasenames.md`).
+//
+// Spelled beside `EnumOrdinalMemberName` because `EnumLayout.caseNames` is what answers both, and the member
+// is materialized from that column alone — see `Parser.emitEnumAllCaseNames`.
+export let EnumAllCaseNamesMemberName = b"allCaseNames"
 
 // ⭐⭐ **WHICH KIND OF NUMBER AN ENUM'S i64 TAG *IS*** — the fact `caseTags` structurally cannot carry,
 // because both backings store a `ParsedInt` and one bit pattern says nothing about how to read it.
@@ -3375,11 +3385,48 @@ export let EnumOrdinalMemberName = b"ordinal"
 //
 // ⚠ `unresolved` is a real state and not a filler: the backing is fixed by the FIRST case, so an enum
 // with no cases yet has none, and that is exactly what E3032 (raw-value type mismatch) tests against.
+//
+// ⭐ **`string` IS THE ONE BACKING WHOSE TAG IS NOT ITS RAW VALUE.** A character raw value IS a number —
+// its Unicode codepoint — so `character` tags like `integer` does and every tag-keyed rule (the
+// duplicate-raw-value scan, `.ordinal`, a `match`'s i64 compare) reads it unchanged. A STRING raw value is
+// not a number at all, so a string-backed case takes the auto-increment DECLARATION INDEX as its tag and
+// its raw value rides `caseRawValues` instead.
+//
+// ⚠ **THE ORDER IS LOAD-BEARING: the three tag-carrying backings are ADJACENT** so
+// `EnumLayout.tagCarriesRawValue` can classify them with one range arm rather than two arms giving one
+// answer. A backing added later belongs beside the group it joins, and it must be added to BOTH exhaustive
+// matches over this enum (here via that predicate, and `enumBackingDiscriminator`).
+//
+// ⛔ **APPEND IT, OR PUT IT BEFORE `integer` — DO NOT INSERT ONE INSIDE THE `integer to character` RUN.**
+// `enumBackingDiscriminator` names every arm and so cannot build without the new one; `tagCarriesRawValue`
+// spells the group as a RANGE, and a range is the one arm shape that can absorb a member silently. At
+// either END of this enum it stops building, which is what is wanted. Inserted mid-run it compiles and
+// answers `true` — i.e. *"the tag is the raw value"* — for a backing nobody classified, which is a wrong
+// answer (a duplicate-raw-value scan comparing declaration indices) rather than the compile error the
+// `match` is here to force.
 export enum EnumBacking
 	unresolved
 	integer
 	float
+	character
+	string
 end 'EnumBacking'
+
+// The word a diagnostic calls each backing — the bootstrap's spelling, which `E3032`'s
+// `expected <established>, got <incoming>` is pinned to by `specs-shv2/enum-full.md`'s two
+// `error.raw-value-type-mismatch` / `error.mixed-backing-types` cases.
+//
+// `unresolved` names no backing and can reach no message: the mismatch is raised only where an
+// ESTABLISHED backing disagrees with an incoming one, and `unresolved` is by definition neither.
+export function enumBackingNoun(backing EnumBacking) returns String
+	match backing 'backing'
+		integer then return "int"
+		float then return "float"
+		character then return "char"
+		string then return "String"
+		unresolved then panic("enumBackingNoun: `unresolved` names no backing — it is the state an enum with no cases yet is in, and `Parser.requireEnumBacking` never reports it as either side of a mismatch")
+	end 'backing'
+end 'enumBackingNoun'
 
 export type EnumLayout
 	export var name as ByteArray
@@ -3392,6 +3439,11 @@ export type EnumLayout
 	// NEVER appended to directly — `addCase` is the one writer (see the header).
 	export var caseNames as ByteArrayArray
 	export var caseTags as ParsedIntArray
+	// ⭐ **HOW EACH CASE's RAW VALUE WAS WRITTEN** — `"200"`, `"1.1"`, `"application/json"`, `"n"` — the
+	// fact `caseTags` structurally cannot carry for a STRING backing, where the tag is only a declaration
+	// index. Read by the E3031 duplicate-raw-value scan, which compares tags for the three NUMERIC backings
+	// (`1.1` and `1.10` are one float whatever the source text) and these bytes for a string backing.
+	export var caseRawValues as StringArray
 	// Per-case payload fields (P1.3 slice 1). `casePayloads[i][j]` is case `i`'s slot-`j` field; its
 	// byte offset in the box is `UnionTagBytes + j * FieldSlotBytes`. Empty for `red`/`stay`; the
 	// box is allocated iff SOME case carries a payload (`isBoxed`), and all cases of a boxed union —
@@ -3421,7 +3473,7 @@ export type EnumLayout
 	export var backing as EnumBacking
 
 	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray, visibility Visibility, declFilePath FilePath, backing EnumBacking) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing}
+		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
@@ -3435,12 +3487,13 @@ export type EnumLayout
 		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'createCompilerOwned'
 
-	// Append one declared case. THE one writer of all THREE columns, so they cannot drift — a caller
+	// Append one declared case. THE one writer of all FOUR columns, so they cannot drift — a caller
 	// that pushed a name and forgot the payloads would shift every later case's payloads onto the
 	// wrong case. A payload-free case passes an empty array.
-	export function addCase(caseName ByteArray, tag ParsedInt, payloads PayloadFieldArray)
+	export function addCase(caseName ByteArray, tag ParsedInt, rawValue String, payloads PayloadFieldArray)
 		self.caseNames.push(caseName)
 		self.caseTags.push(tag)
+		self.caseRawValues.push(rawValue)
 		self.casePayloads.push(payloads)
 	end 'addCase'
 
@@ -3506,10 +3559,52 @@ export type EnumLayout
 		return try self.caseNames.get(index) otherwise panic("EnumLayout.caseNameAt: caseNames.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'caseNameAt'
 
-	// The tag of case `index` — its raw value (int backing) or IEEE-754 bit pattern (float backing).
+	// The tag of case `index` — its raw value (int/char backing) or IEEE-754 bit pattern (float backing),
+	// and its declaration index for a STRING backing, whose raw value is not a number (see `caseRawValues`).
 	export function tagOfIndex(index CaseIndex) returns ParsedInt
 		return try self.caseTags.get(index) otherwise panic("EnumLayout.tagOfIndex: caseTags.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
 	end 'tagOfIndex'
+
+	// ⭐⭐ **DOES THIS DECLARATION'S TAG COLUMN CARRY THE RAW VALUES, OR ONLY DECLARATION INDICES?** — ONE
+	// fact, needed by two readers with nothing else in common: E3031's collision test
+	// (`rawValueCollidesAt` below) and the decl-shape content hash (`ProgramSignatures.mixEnumCase`).
+	//
+	// An `integer`, `float` or `character` raw value IS a number — a raw int, an IEEE-754 bit pattern, a
+	// Unicode codepoint — so for those the tag is the value and both readers need nothing else. A `string`
+	// raw value is not a number, so its case takes the auto-increment declaration index and the value itself
+	// rides `caseRawValues`.
+	//
+	// ⛔ **EXHAUSTIVE ON PURPOSE, exactly as `enumBackingDiscriminator` is and for the identical reason.** It
+	// replaced an `if backing == string` written out at BOTH readers, each falling through silently to the
+	// tag path — and `Parser.readEnumIntRawValue`'s own message still promises struct and function backings
+	// "arrive with later rungs". Either of those added to an `if` takes the tag compare at both sites and
+	// produces a WRONG ANSWER, not a compile error: two distinct struct raw values reading as a duplicate,
+	// and two distinct enums folding to one hash. Written as a `match`, such a backing cannot be declared
+	// without being classified here.
+	export function tagCarriesRawValue() returns bool
+		match self.backing 'backing'
+			integer to character then return true
+			string then return false
+			unresolved then panic("EnumLayout.tagCarriesRawValue: `{self.kindWord()} {String.from(self.name)}` has no backing yet — both readers ask this about a case already read, and reading a case is what fixes the backing (`Parser.requireEnumBacking`)")
+		end 'backing'
+	end 'tagCarriesRawValue'
+
+	// ⭐ **DO CASE `index` AND AN INCOMING CASE CARRY THE SAME RAW VALUE?** — the E3031 question. A tag
+	// compare where the tag is the value (`1.1` and `1.10` are one float, whatever the source text wrote),
+	// and a byte compare where it is not — because a string backing's tags are declaration indices, never
+	// equal between two cases, which would make a tag compare a silent acceptance of `a = "x"  b = "x"`.
+	export function rawValueCollidesAt(index CaseIndex, tag ParsedInt, rawValue String) returns bool
+		if self.tagCarriesRawValue() 'theTagIsTheValue'
+			return self.tagOfIndex(index) == tag
+		end 'theTagIsTheValue'
+
+		return self.rawValueAt(index).equals(rawValue)
+	end 'rawValueCollidesAt'
+
+	// How case `index`'s raw value was written — see `caseRawValues`.
+	export function rawValueAt(index CaseIndex) returns String
+		return try self.caseRawValues.get(index) otherwise panic("EnumLayout.rawValueAt: caseRawValues.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
+	end 'rawValueAt'
 
 	// ⭐ **IS EVERY CASE'S TAG ITS OWN DECLARATION INDEX?** — the question `.ordinal` turns on, and the
 	// only shape of enum for which the ordinal is READABLE OFF THE VALUE.
@@ -3686,7 +3781,8 @@ end 'builtinDivisionByZeroErrorEnum'
 // declaration position must never be the same stored field, and writing `0`/`1`/`2` here would smuggle the
 // conflation back in through the builder.
 function addBuiltinEnumCase(layout EnumLayout, caseName ByteArray)
-	layout.addCase(caseName, tag: layout.caseCount(), payloads: PayloadFieldArray.create())
+	let tag = layout.caseCount()
+	layout.addCase(caseName, tag: tag, rawValue: "{tag}", payloads: PayloadFieldArray.create())
 end 'addBuiltinEnumCase'
 
 // ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, FIVE FAMILIES (7b, +A1, +A1s).**

@@ -1077,8 +1077,7 @@ end 'main'
 error E3081: specs/fragments/enum-full/error.match-discarded-bindings.test:14:3: use 'value' instead of 'value(_)' to ignore associated values
 ```
 
-<!-- disabled-test: implicit-string-backed -->
-<!-- STRING-backed enum cases (`"North"` as a case), and the `.rawValue`/`.name` accessors that read them. `E2015`. -->
+<!-- test: implicit-string-backed -->
 ```maxon
 enum StringBacked
 	"North"
@@ -1100,8 +1099,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: implicit-char-backed -->
-<!-- CHAR-backed enum cases (`'N'` as a case), and the `.rawValue`/`.name` accessors that read them. `E2015`. -->
+<!-- test: implicit-char-backed -->
 ```maxon
 enum CharBacked
 	'N'
@@ -1123,8 +1121,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: explicit-char-backed -->
-<!-- CHARACTER-LITERAL raw values (`north = 'N'`) — only integer and float raw values are parsed. `E2015`. -->
+<!-- test: explicit-char-backed -->
 ```maxon
 enum Direction
 	North = 'n'
@@ -1183,8 +1180,7 @@ end 'main'
 error E3031: specs/fragments/enum-full/error.duplicate-raw-value.test:4:2: duplicate raw value: '200'
 ```
 
-<!-- disabled-test: error.raw-value-type-mismatch -->
-<!-- STRING-BACKED enum cases. shv2 refuses the whole backing (`E2015` "a raw value of kind 'string literal'"), so it never reaches the mixed-backing comparison `E3032` reports. Blocked on string/char raw-value backing — the same mechanism `implicit-string-backed` below is disabled for. -->
+<!-- test: error.raw-value-type-mismatch -->
 ```maxon
 enum Status
 	ok = 100
@@ -1199,8 +1195,7 @@ end 'main'
 error E3032: specs/fragments/enum-full/error.raw-value-type-mismatch.test:4:2: raw value type mismatch: 'expected int, got String'
 ```
 
-<!-- disabled-test: error.mixed-backing-types -->
-<!-- STRING-BACKED enum cases, for `error.raw-value-type-mismatch`'s exact reason: shv2 refuses the `= "two"` backing itself (`E2015`) before any two backings can be compared. Blocked on string/char raw-value backing. -->
+<!-- test: error.mixed-backing-types -->
 ```maxon
 enum Mixed
 	first = 1

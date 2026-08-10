@@ -99,14 +99,18 @@ let EnumKindUnion = 22 as ContentHash
 let EnumBackingUnresolved = 67 as ContentHash
 let EnumBackingInteger = 68 as ContentHash
 let EnumBackingFloat = 69 as ContentHash
+let EnumBackingString = 79 as ContentHash
+let EnumBackingCharacter = 80 as ContentHash
 
-// The discriminator for one backing. A `match` rather than a chained `if`, so a fourth backing (a String
-// one is a named later rung) cannot be added without being given a hash constant here.
+// The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
+// without being given a hash constant here — which is exactly how the string and character ones arrived.
 function enumBackingDiscriminator(backing EnumBacking) returns ContentHash
 	return match backing 'b'
 		unresolved gives EnumBackingUnresolved
 		integer gives EnumBackingInteger
 		float gives EnumBackingFloat
+		string gives EnumBackingString
+		character gives EnumBackingCharacter
 	end 'b'
 end 'enumBackingDiscriminator'
 
@@ -7999,6 +8003,15 @@ export type ProgramSignatures
 		let named = mixBytes(state, bytes: layout.caseNameAt(index))
 		let tagBits = layout.tagOfIndex(index) as ContentHash
 		var folded = mix(named, value: tagBits)
+
+		// ⚠ **A RAW VALUE THE TAG DOES NOT CARRY MUST RIDE SEPARATELY** — `a = "x"` and `a = "y"` fold to the
+		// identical name + tag + backing, which is the same blind spot the backing discriminator above exists
+		// for, one column further in. Where the tag IS the raw value it is already mixed on the line above, so
+		// nothing more is owed. WHICH backings those are is `EnumLayout.tagCarriesRawValue`'s single answer,
+		// not a second `== EnumBacking.string` test that a later backing could silently fall past.
+		if not layout.tagCarriesRawValue() 'theTagIsOnlyAnIndex'
+			folded = mixBytes(folded, bytes: layout.rawValueAt(index).toByteArray())
+		end 'theTagIsOnlyAnIndex'
 
 		for field in layout.payloadsAt(index) 'eachSlot'
 			folded = self.mixPayloadField(folded, field: field)
