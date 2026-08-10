@@ -2040,26 +2040,17 @@ union MethodSurface
 	// `findWitnessDispatchCandidates` serves both from the receiver alone, and `witnessDispatchProviderPhrase`
 	// already words a refusal for both. Splitting them would be a second place for one dispatch rule to live.
 	witnessDispatched(receiver ValueId)
-	// ⛔ **AN INSTANCE OF AN INTERFACE, which shv2 does not hold as a value at all.** `interfaceRef` carries an
-	// interface NAME and a witness table and has nowhere to record `with` arguments, so
-	// `Iterable with (Element, ElementIterator)` resolves to a `genericInstance` over a base no file declares
-	// as a `type`. It is its OWN answer rather than a `declared` whose lookups happen to miss, because the
-	// refusal has to name the mechanism and a reader that re-asked "is that base an interface?" would be the
-	// same question written in two places.
-	parameterizedInterface(interfaceName ByteArray)
 	// No method surface at all: an int, a float, a closure.
 	none
 end 'MethodSurface'
 
 // Whether a resolved surface has methods that can be REACHED — the emptiness test the `for` fork used to
 // make on `cursorIterationTypeName`'s returned name, written once because the six sites in
-// `parseForStatement` that ask it would otherwise each spell their own `match … none`. A parameterized
-// interface answers FALSE: it names methods, and nothing can call them.
+// `parseForStatement` that ask it would otherwise each spell their own `match … none`.
 function methodSurfaceExists(surface MethodSurface) returns bool
 	return match surface 'k'
 		declared gives true
 		witnessDispatched gives true
-		parameterizedInterface gives false
 		none gives false
 	end 'k'
 end 'methodSurfaceExists'
@@ -7218,6 +7209,16 @@ enum DeclaredStoragePosition
 	// takes a value of whatever `make` returns. Same ABI, same reason, so it shares both clauses; a separate
 	// position only because the subject sentence has to be honest about there being no declaration.
 	functionValueReturnType
+	// ⭐⭐ **AN INTERFACE INSTANCE'S ASSOCIATED-TYPE BINDING** — the second argument of
+	// `Bag with (Integer, IntegerCursor)`. It reaches the SAME reader a container's element does
+	// (`parseGenericArgNode`, which sees only an argument), and it is a different absence with a different
+	// remedy: the binding is not a SLOT that is one word too narrow, it is a requirement whose result would
+	// arrive with no table to dispatch through. Sent the `containerElement` sentence, the author is told a
+	// parameterized interface has "an element slot", which names a container the program does not have.
+	// Appended at the END, past `functionValueReturnType`, per the band-append rule the `containerElement`
+	// arm's own note relies on — and past the `functionTypeReturnType to functionValueReturnType` range,
+	// which would otherwise have swallowed it.
+	associatedTypeBinding
 end 'DeclaredStoragePosition'
 
 // ⭐⭐ **THE ONE SENTENCE EVERY INTERFACE-TYPED-POSITION REFUSAL IS BUILT FROM.** Each of the places
@@ -7253,6 +7254,10 @@ function storagePositionRemedy(position DeclaredStoragePosition) returns String
 		// `throws`.
 		throwingReturnType then return "Declare the function without `throws` — a non-throwing function returns the witness half in that same second register — or return a concrete type and report the error some other way"
 		functionTypeReturnType to functionValueReturnType then return indirectReturnAbiRemedy()
+		// It does NOT offer "take the interface as a PARAMETER", which every other storage position can: the
+		// binding already IS on an existential parameter, and the value that cannot travel is the one a
+		// REQUIREMENT hands back. Moving the outer type changes nothing about that.
+		associatedTypeBinding then return "Bind the associated type to a concrete conformer, and hold values of it at that type"
 	end 'which'
 end 'storagePositionRemedy'
 
@@ -7285,6 +7290,7 @@ function storagePositionSubject(position DeclaredStoragePosition) returns String
 		functionTypeReturnType then return "a function type's return type"
 		interfaceRequirementReturnType then return "an interface requirement's return type"
 		functionValueReturnType then return "a function value's return type"
+		associatedTypeBinding then return "an interface instance's associated-type binding"
 	end 'which'
 end 'storagePositionSubject'
 
@@ -7331,6 +7337,11 @@ function storagePositionRoom(position DeclaredStoragePosition) returns String
 		functionTypeReturnType then return functionValueReturnAbiRoom()
 		interfaceRequirementReturnType then return "a requirement is dispatched through a witness-table slot whose signature is rebuilt from the requirement's rendered return-type NAME, a spelling no interface has — so the second register is never read and the witness half is dropped"
 		functionValueReturnType then return functionValueReturnAbiRoom()
+		// ⭐⭐ **THE ONE POSITION IN THIS FAMILY WHOSE ABSENCE IS A SECOND TABLE RATHER THAN A NARROW SLOT.**
+		// The binding types what a REQUIREMENT hands back, and the conformers bind it to their own concrete
+		// cursors — so the table to walk the result through differs per conformer and can only travel with the
+		// existential the call was dispatched on. shv2's fat pointer carries exactly one.
+		associatedTypeBinding then return "a witness call carries one machine word per result, so the value a requirement returned would arrive with no table to dispatch through — and the table differs per conformer, so it would have to travel beside the one the existential already carries"
 	end 'which'
 end 'storagePositionRoom'
 
@@ -14356,7 +14367,7 @@ export type Parser
 		let baseName = canonicalGenericBaseName(baseTok.value)
 		var args = GenericArgNodeArray.create()
 		let argsStart = self.pos
-		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true)
+		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, position: self.genericArgStoragePosition(baseName))
 		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
 		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column))
 		self.checkGenericInstance(baseTok, argCount: argCount)
@@ -14487,9 +14498,9 @@ export type Parser
 	// the BASE, so it is passed down from the base that was read rather than re-derived per argument, and a
 	// NESTED instance recomputes it from its own base (a `Vector with 2 (Box with Real)` puts `Real` in a
 	// declared generic's slot, not in a buffer).
-	function parseGenericArgNodes(nodes GenericArgNodeArray, inlineElement bool, bareCommaList bool) returns FieldIndex throws ParseError
+	function parseGenericArgNodes(nodes GenericArgNodeArray, inlineElement bool, bareCommaList bool, position DeclaredStoragePosition) returns FieldIndex throws ParseError
 		if not self.at(TokenKind.leftParen) 'unparenthesized'
-			try self.parseGenericArgNode(nodes, inlineElement: inlineElement)
+			try self.parseGenericArgNode(nodes, inlineElement: inlineElement, position: position)
 
 			// ⭐⭐ **`Map with String, UnaryOp` IS THE SAME LIST `Map with (String, UnaryOp)` SPELLS, AND
 			// `/specs/map.md:function-valued.dispatch` WRITES IT WITHOUT THE PARENS.** The parenthesized form
@@ -14511,7 +14522,7 @@ export type Parser
 			var bareCount = 1 as FieldIndex
 			while self.at(TokenKind.comma) 'moreBareArgs'
 				try self.consume(TokenKind.comma)
-				try self.parseGenericArgNode(nodes, inlineElement: inlineElement)
+				try self.parseGenericArgNode(nodes, inlineElement: inlineElement, position: position)
 				bareCount = bareCount + 1
 			end 'moreBareArgs'
 			return bareCount
@@ -14519,7 +14530,7 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		var count = 0 as FieldIndex
 		while true 'argLoop'
-			try self.parseGenericArgNode(nodes, inlineElement: inlineElement)
+			try self.parseGenericArgNode(nodes, inlineElement: inlineElement, position: position)
 			count = count + 1
 			if not self.at(TokenKind.comma) 'doneArgs'
 				break
@@ -14530,6 +14541,25 @@ export type Parser
 		return count
 	end 'parseGenericArgNodes'
 
+	// ⭐⭐ **WHICH STORAGE POSITION A `Base with Args` ARGUMENT OCCUPIES — decided from the BASE, once, and
+	// passed down.** A `type` base's arguments are its container's element slots; an `interface` base's are the
+	// associated-type BINDINGS of an existential (`ProgramSignatures.instanceDenotedType`). Only the base can
+	// tell them apart, and `parseGenericArgNode` sees an argument, so the answer travels with the walk exactly
+	// as `inlineElement` does — and for the same reason: it is a fact about the base, and re-deriving it per
+	// argument would be the same lookup done N times.
+	//
+	// ⚠ **THE `allFilesFolded` GATE IS THE ONE `parseTypeReference`'s interface arm carries**, and it costs
+	// this door nothing: during the declaration SWEEP the interface registry is EMPTY, so the sweep answers
+	// `containerElement` — and it cannot refuse on that answer either, because an interface-typed argument
+	// resolves to a bare `named` in the sweep and never reaches the existential test at all.
+	function genericArgStoragePosition(baseName ByteArray) returns DeclaredStoragePosition
+		if self.signatures.allFilesFolded and isInterfaceName(self.signatures.interfaceMap(), name: baseName) 'anInterfaceInstance'
+			return DeclaredStoragePosition.associatedTypeBinding
+		end 'anInterfaceInstance'
+
+		return DeclaredStoragePosition.containerElement
+	end 'genericArgStoragePosition'
+
 	// ⭐ **ONE generic-instance argument (P1.6-A/B2)** — a LEAF type reference (`Integer`, `Point`,
 	// `String`), or a NESTED instance `Inner with (…)` now that managed instances are owned and dropped. A
 	// nested instance's gid is not known at parse time (interning lives in `recordGenericAlias`), so it is
@@ -14538,7 +14568,7 @@ export type Parser
 	// diagnosed with the tolerant sweep's index-complete answer, exactly as the outer instance is
 	// (`checkGenericInstance` records, never throws). The header is pushed BEFORE its sub-args (parsed into a
 	// temp so the header's count is known), preserving pre-order.
-	function parseGenericArgNode(nodes GenericArgNodeArray, inlineElement bool) throws ParseError
+	function parseGenericArgNode(nodes GenericArgNodeArray, inlineElement bool, position DeclaredStoragePosition) throws ParseError
 		if self.at(TokenKind.identifier) and self.kindAt(self.pos + 1) == TokenKind.with 'nested'
 			let baseTok = try self.consume(TokenKind.identifier)
 			try self.consume(TokenKind.with)
@@ -14553,7 +14583,7 @@ export type Parser
 			// intern to the same instance a nested `Array with T` does, or one record has two ids.
 			let subBaseName = canonicalGenericBaseName(baseTok.value)
 			var subNodes = GenericArgNodeArray.create()
-			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false)
+			let subCount = try self.parseGenericArgNodes(subNodes, inlineElement: self.baseStoresArgumentsInline(subBaseName), bareCommaList: false, position: self.genericArgStoragePosition(subBaseName))
 			self.checkGenericInstance(baseTok, argCount: subCount)
 			nodes.push(GenericArgNode.instanceHeader(subBaseName, argCount: subCount, fixedSize: subSize))
 			nodes.append(subNodes)
@@ -14562,7 +14592,7 @@ export type Parser
 
 		let argTok = self.current()
 		let argType = try self.parseTypeReference()
-		try self.requireStorableDeclaredType(argType, position: DeclaredStoragePosition.containerElement, line: argTok.line, column: argTok.column)
+		try self.requireStorableDeclaredType(argType, position: position, line: argTok.line, column: argTok.column)
 		self.checkGenericArgType(argType, argTok: argTok, inlineElement: inlineElement)
 		nodes.push(GenericArgNode.leaf(argType))
 	end 'parseGenericArgNode'
@@ -18320,7 +18350,7 @@ export type Parser
 			if self.namesInnerAliasHere(name) 'innerAlias'
 				let qualifiedInner = joinQualifiedName(self.enclosingType, member: name)
 				if self.signatures.allFilesFolded and self.signatures.isGenericAlias(qualifiedInner) 'genericInnerAlias'
-					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(qualifiedInner, readerFilePath: self.filePath))
+					return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(qualifiedInner, readerFilePath: self.filePath), into: self.artifact.typeNames)
 				end 'genericInnerAlias'
 				// A TUPLE inner alias (W43) — `Entry` inside `type Map uses Key, Value`. It resolves STRAIGHT
 				// THROUGH to the interned tuple's own `structRef`, exactly as the file-scope tuple-alias arm far
@@ -18407,9 +18437,11 @@ export type Parser
 
 			if self.signatures.allFilesFolded 'wholeProgramAliasRegistries'
 				// A GENERIC-INSTANCE ALIAS (P1.6-A) — `IntBox` where `typealias IntBox = Box with Integer`.
-				// It resolves to `genericInstance(giid)`, the read-side twin of the function-alias arm below.
+				// It resolves to `genericInstance(giid)`, the read-side twin of the function-alias arm below —
+				// or, over an `interface` base, to the EXISTENTIAL that instance denotes. `instanceDenotedType`
+				// is the one place that split is made; the arm ABOVE is the bare-name half of the same fact.
 				if self.signatures.isGenericAlias(name) 'genericAlias'
-					return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
+					return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath), into: self.artifact.typeNames)
 				end 'genericAlias'
 
 				// A FUNCTION typealias name resolves to a `function` type, NEVER a `named` one (P1.5-A1) — so
@@ -18671,9 +18703,6 @@ export type Parser
 			// concrete — there is no shared generic body whose parameters this could bind, and an interface's
 			// name is not a struct any type-parameter registry answers for.
 			witnessDispatched then return
-			// An INSTANCE of an interface dispatched nothing: every door refuses it, so no result was minted
-			// whose type this could reopen.
-			parameterizedInterface then return
 			declared(typeName, _) then declaringType = typeName
 		end 'receiverSurface'
 
@@ -18899,7 +18928,7 @@ export type Parser
 			return MaxonType.function(id)
 		end 'fa'
 		if self.signatures.isGenericAlias(name) 'genericAlias'
-			return MaxonType.genericInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
+			return self.signatures.instanceDenotedType(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath), into: self.artifact.typeNames)
 		end 'genericAlias'
 		// ⭐ A TUPLE-ALIAS return (`returns Pair`) — the `named` the sweep recorded resolved to the tuple's own
 		// CANONICAL `structRef`, so `let t = make()` binds a struct the caller adopts and `t.0` resolves.
@@ -26863,7 +26892,6 @@ export type Parser
 	function emitReceiverProtocolCall(surface MethodSurface, methodName ByteArray, anchor Token, resultUsed bool) returns ValueId throws ParseError
 		match surface 'how'
 			none then panic("emitReceiverProtocolCall: a `{String.from(methodName)}` protocol call on a value with no method surface — every caller emits only after `surfaceDeclaresCursorProtocol` or `surfaceIterableFactory` answered off this same surface")
-			parameterizedInterface(interfaceName) then panic("emitReceiverProtocolCall: a `{String.from(methodName)}` protocol call on an instance of interface '{String.from(interfaceName)}' — `methodSurfaceExists` answers FALSE for that surface, so `requireIterableSource` refuses it before any emit")
 			witnessDispatched(receiver) then return try self.emitWitnessProtocolCall(receiver, methodName: methodName, anchor: anchor, resultUsed: resultUsed)
 			declared(declaringType, receiver) then return try self.emitDeclaredProtocolCall(declaringType, methodName: methodName, source: receiver, anchor: anchor, resultUsed: resultUsed)
 		end 'how'
@@ -27041,9 +27069,9 @@ export type Parser
 	// door and that fork must not resolve it twice: an existential's resolution is a walk of the interface's
 	// slot list per protocol name, and two walks are two chances to admit on one answer and emit on another.
 	//
-	// THREE sentences come out of here, and the split is which one is TRUE of the source. The shared one
+	// TWO sentences come out of here, and the split is which one is TRUE of the source. The shared one
 	// enumerates what shv2 iterates and ends "any type declaring the cursor protocol", which misdescribes a
-	// witness-dispatched receiver and misnames an interface INSTANCE; each of those refuses in its own words.
+	// witness-dispatched receiver; that one refuses in its own words.
 	function requireIterableSource(source ValueId, cursorSurface MethodSurface, forTok Token) throws ParseError
 		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
@@ -27072,10 +27100,12 @@ export type Parser
 			return
 		end 'cursor'
 
-		// ⭐⭐ **THE TWO SURFACES THE SHARED SENTENCE IS WRONG ABOUT REFUSE IN THEIR OWN WORDS**, read off the
-		// source's OWN surface rather than off a tag — "is that base an interface?" is a question
-		// `methodSurfaceOf` answers, and asking it a second way here is exactly the duplication this rung's
-		// union exists to remove.
+		// ⭐⭐ **THE ONE SURFACE THE SHARED SENTENCE IS WRONG ABOUT REFUSES IN ITS OWN WORDS**, read off the
+		// source's OWN surface rather than off a tag — "how are this value's methods reached?" is a question
+		// `methodSurfaceOf` answers, and asking it a second way here is exactly the duplication the
+		// `MethodSurface` union exists to remove. (It was TWO until a parameterized interface became an
+		// existential: an instance over an interface base is now the SAME `witnessDispatched` receiver a bare
+		// one is, and it reaches this refusal by the same route and in the same words.)
 		//
 		// ⚠ **IT MAY NOT READ `cursorSurface`, and the first cut did — measured, both refusals silently reverted
 		// to the shared sentence.** That parameter is the CURSOR surface: `cursorIterationSurface` collapses it
@@ -27100,19 +27130,6 @@ export type Parser
 			// near misses reach here too: an `{String.from(AdvanceMethodName)}()` naming the wrong error type, and
 			// one half of the pair supplied without the other.
 			witnessDispatched(receiver) then throw ParseError.unsupported("`for … in` over a value dispatched through {self.witnessDispatchProviderPhrase(receiver)}, which supplies neither the cursor protocol `{String.from(CurrentMethodName)}()` + `{String.from(AdvanceMethodName)}() throws {String.from(IterationErrorTypeName)}` nor a `{String.from(CreateIteratorMethodName)}()` factory as a zero-argument REQUIREMENT — the traversal is a jump through the witness table the value carries, so it has to be something the interface requires; a conformer declaring it supplies no slot to dispatch through", line: forTok.line, column: forTok.column)
-			// ⭐⭐ **AN INSTANCE OF AN INTERFACE IS NOT A `struct`, AND THE SHARED SENTENCE CALLED IT ONE.**
-			// `typeTagName(genericInstance)` is the word "struct" — right for `Box with Integer`, and actively
-			// misleading for `Iterable with (Element, ElementIterator)`. That is the noun `stdlib/Array.maxon:132`
-			// was refused by, and it pointed the reader at a missing struct rather than at the mechanism that is
-			// actually absent.
-			//
-			// ⚠ **NEITHER REFERENCE COMPILER SOLVES THIS EITHER, so the sentence claims no workaround.** v1's
-			// `InterfaceTypeRegistry` (`Project.maxon:2124-2151`) is a bare name table with no argument vector,
-			// and `Array.from`'s body never reaches its lowering — dead-function elimination removes it, and
-			// reaching it would land on `lowerInterfaceMethodCallStub`'s `mrt_panic`. The C# bootstrap
-			// monomorphizes per concrete argument instead and dies the same way once one is supplied
-			// (`E9001 … Function 'CounterSeq.createIterator$CounterSeq' not found in module`, MEASURED).
-			parameterizedInterface(interfaceName) then throw ParseError.unsupported("`for … in` over an INSTANCE of the interface '{String.from(interfaceName)}' — shv2 holds an existential as an interface NAME plus a witness table (`interfaceRef`) and has nowhere to record the `with` arguments, so a parameterized interface never becomes one: the cursor `{String.from(CreateIteratorMethodName)}()` would return is typed by an associated type with no binding here, and carries no table to walk through. Iterate a concrete conformer, or hold the source at an interface that requires the traversal directly", line: forTok.line, column: forTok.column)
 		end 'sharedSentenceIsWrong'
 
 		throw ParseError.unsupported("`for … in` over a `{typeTagName(self.tagOf(source))}` value — shv2 iterates an `Array`, a `{String.from(VectorBuiltinBaseName)}`, a `List`, a `{String.from(MapBuiltinBaseName)}`'s `(key, value)` entries, a `String`'s grapheme clusters, the counted ranges `<lo> to <hi>` / `<lo> upto <hi>`, and any type declaring the cursor protocol `{String.from(CurrentMethodName)}()` + `{String.from(AdvanceMethodName)}() throws {String.from(IterationErrorTypeName)}`", line: forTok.line, column: forTok.column)
@@ -27160,12 +27177,20 @@ export type Parser
 		end 'plainStruct'
 		if self.tagOf(value) == ValueTypeTag.genericInstance 'instance'
 			let base = self.signatures.genericInstanceBaseName(self.valueNameId(value))
-			// ⚠ **`isInterfaceName`, NOT `interfaceMap().contains`** — the one door, which answers for the
-			// SYNTHESIZED protocols (`Stringable`, `Hashable`, `Equatable`, `Comparable`, `FormattedStringable`)
-			// as well as for the user registry. The raw `contains` misses all five, so an instance over one of
-			// them would be read as a struct base whose callee lookups merely happen to miss.
+			// ⭐⭐ **AN INSTANCE OVER AN `interface` BASE IS NOT A VALUE SHAPE AT ALL — IT IS AN EXISTENTIAL THAT
+			// SOMETHING FAILED TO RESOLVE.** `ProgramSignatures.instanceDenotedType` makes `Seq with Integer` the
+			// fat pointer `Seq` at every door that turns a written type into a `MaxonType`, so a VALUE carrying
+			// this shape means a type reached the parser from a store none of those doors repaired. It used to be
+			// its own `MethodSurface` arm carrying a refusal — five arms and a sentence claiming shv2 "has nowhere
+			// to record the `with` arguments", which stopped being true the moment the arguments turned out not to
+			// need recording (they are the conformances', folded by `associatedAbiBindingOf`, and E3125 verifies
+			// what a use site claims they are).
+			//
+			// ⚠ **IT ASKS THE SAME PREDICATE `instanceDenotedType` ASKS, ON THE SAME MAP**, which is exactly what
+			// makes this a compiler invariant rather than a program error: if that door saw this type it answered
+			// `interfaceRef`, so the only way here is a type that never crossed it.
 			if isInterfaceName(self.signatures.interfaceMap(), name: base) 'interfaceBase'
-				return MethodSurface.parameterizedInterface(base)
+				panic("methodSurfaceOf: a value is typed `{String.from(base)} with …`, an instance over an INTERFACE base — `ProgramSignatures.instanceDenotedType` resolves every such instance to the existential `interfaceRef({String.from(base)})`, so this value's type reached the parser without crossing a type-resolution door. Whichever store handed it over needs the same repair `normalizeSweptInterfaceTypes` gives a swept field")
 			end 'interfaceBase'
 
 			return MethodSurface.declared(base, receiver: value)
@@ -27188,7 +27213,6 @@ export type Parser
 		var receiver = 0 as ValueId
 		match surface 'k'
 			none then return false
-			parameterizedInterface then return false
 			declared(typeName, _) then return self.signatures.declaresCursorProtocol(typeName)
 			witnessDispatched(dispatchedOn) then receiver = dispatchedOn
 		end 'k'
@@ -27211,7 +27235,6 @@ export type Parser
 		var receiver = 0 as ValueId
 		match surface 'k'
 			none then return IterableFactory.notDeclared
-			parameterizedInterface then return IterableFactory.notDeclared
 			declared(typeName, _) then return self.signatures.iterableFactory(typeName)
 			witnessDispatched(dispatchedOn) then receiver = dispatchedOn
 		end 'k'
@@ -27228,7 +27251,6 @@ export type Parser
 	function methodSurfaceTypeName(surface MethodSurface) returns ByteArray
 		match surface 'k'
 			declared(typeName, _) then return typeName
-			parameterizedInterface(interfaceName) then return interfaceName
 			witnessDispatched(receiver) then return self.internedName(self.valueNameId(receiver))
 			none then panic("methodSurfaceTypeName: a value with no method surface has no declaration to name — every caller asks after the surface answered something else")
 		end 'k'

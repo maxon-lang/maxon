@@ -363,9 +363,69 @@ end 'checkLiteralInitConformance'
 // (the whole non-generic-witness corpus) iterates zero times.
 function checkOneInstantiation(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite)
 	let baseName = signatures.genericInstanceBaseName(site.gid)
+	// ⭐⭐ **AN `interface` BASE IS AN EXISTENTIAL, NOT A CONTAINER, AND ITS ARGUMENTS ARE A DIFFERENT
+	// OBLIGATION.** `Seq with Integer` binds an associated type; `Box with Integer` fills a type parameter with
+	// a `where` clause to satisfy. Both are `Base with Args` and both are recorded as the same instantiation
+	// site, so the split is made here, at the one walk over those sites, rather than by a second list.
+	match lookupInterface(project.interfaces, name: baseName) 'base'
+		found(iface) then checkInterfaceInstantiationBindings(project, signatures: signatures, site: site, iface: iface)
+		notFound then checkStructInstantiationConstraints(project, signatures: signatures, declared: declared, site: site, baseName: baseName)
+	end 'base'
+end 'checkOneInstantiation'
+
+// ⭐⭐ **A WRITTEN `with` ARGUMENT ON AN EXISTENTIAL IS A CLAIM, AND E3125 IS WHAT MAKES IT ONE.**
+// `ProgramSignatures.instanceDenotedType` does not carry the arguments onto the type — the conformances
+// already record them once, and E3119 is what makes that record UNIQUE for any interface the program
+// dispatches through. So a use site restates a settled fact, and a restatement that contradicts it must be
+// refused: unchecked it would have no effect whatever, while reading as though it chose the binding.
+//
+// ⚠ **THE COMPARISON IS RAW, EXACTLY AS `associatedAbiBindingOf`'s IS BETWEEN TWO CONFORMERS.** Collapsing a
+// ranged alias to its primitive first (`canonicalTypeName`) would make `Integer` and a `Score = int(0 to 100)`
+// one binding here while E3119 holds them apart one function away — and E3119 holds them apart for a measured
+// reason: the actual 5000 answered 5000 through one and RANGE-PANICKED through the other.
+function checkInterfaceInstantiationBindings(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface)
+	let bound = signatures.genericInstanceArgCount(site.gid)
+	for position in 0 upto iface.associatedTypeNames.count() 'eachAssociatedType'
+		// An instantiation that binds FEWER arguments than the interface declares is `checkGenericInstance`'s
+		// arity report; it claims nothing at this position and is passed over rather than read out of bounds.
+		if position >= bound 'claimsNothingHere'
+			continue
+		end 'claimsNothingHere'
+
+		checkOneAssociatedBinding(project, signatures: signatures, site: site, iface: iface, position: position)
+	end 'eachAssociatedType'
+end 'checkInterfaceInstantiationBindings'
+
+// One position's verdict, split out so the walk above reads as the arity gate it is. The two arms that are
+// NOT the claim check are silent on purpose: `unconformed` means no value can ever be widened into this
+// existential, so nothing constrains the spelling; `disagreed` is E3119's, reported against both conformers
+// with their own positions, and a second sentence here would blame the use site for the conformers' quarrel.
+function checkOneAssociatedBinding(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementCount)
+	match associatedAbiBindingOf(project.conformances, interfaceName: iface.name, position: position) 'binding'
+		unconformed then break 'binding'
+		disagreed then break 'binding'
+		agreed(conformer, binding, _) then requireWrittenBindingMatchesConformers(project, signatures: signatures, site: site, iface: iface, position: position, conformer: conformer, binding: binding)
+	end 'binding'
+end 'checkOneAssociatedBinding'
+
+function requireWrittenBindingMatchesConformers(project Project, signatures ProgramSignatures, site GenericInstantiationSite, iface IrInterface, position ElementCount, conformer ConformanceDecl, binding ByteArray)
+	// The SOURCE spelling, which is the side a conformance's `withArgs` is also recorded in — comparing the
+	// compiled name against a source string would report a difference in RENDERING as a difference in type.
+	let written = signatures.instanceArgDisplayName(site.gid, position: position)
+	if written.equals(binding) 'restatesTheSettledBinding'
+		return
+	end 'restatesTheSettledBinding'
+
+	let name = try iface.associatedTypeNames.get(position) otherwise panic("requireWrittenBindingMatchesConformers: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop bounds this position by that same list")
+	reportPositioned(project, code: ErrorCode.interfaceInstantiationBindingDisagreement, message: "this use of '{String.from(iface.name)}' binds its associated type '{String.from(name)}' to '{String.from(written)}', but '{String.from(conformer.typeName)}' binds it to '{String.from(binding)}' — an interface this program DISPATCHES through has exactly one binding per associated type (E3119's rule), so a use site does not choose one, it states the one the conformances already settled. Write the binding the conformers declare, or give the two readings different interfaces", line: site.nameLine, column: site.nameColumn, filePath: site.filePath)
+end 'requireWrittenBindingMatchesConformers'
+
+// Validate one STRUCT instantiation's every `where` constraint (P1.7a slice 2a). A base with no constraints
+// (the whole non-generic-witness corpus) iterates zero times.
+function checkStructInstantiationConstraints(project Project, signatures ProgramSignatures, declared DeclaredConformanceMap, site GenericInstantiationSite, baseName ByteArray)
 	let constraints = signatures.structWhereConstraints(baseName)
 	for i in 0 upto constraints.count() 'eachConstraint'
-		let constraint = try constraints.get(i) otherwise panic("checkOneInstantiation: whereConstraints.get OOB at {i}")
+		let constraint = try constraints.get(i) otherwise panic("checkStructInstantiationConstraints: whereConstraints.get OOB at {i}")
 		// The CANONICAL conformer name (`Integer` -> `int`) is what the conformance test compares by — the same
 		// name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling. This is
 		// `signatureMatches`/`canonicalTypeName`'s split, applied to a `where`-constraint argument.
@@ -393,7 +453,7 @@ function checkOneInstantiation(project Project, signatures ProgramSignatures, de
 			reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 		end 'violates'
 	end 'eachConstraint'
-end 'checkOneInstantiation'
+end 'checkStructInstantiationConstraints'
 
 // The ONE E3017 sentence, for the two arms that reach it — a CONCRETE argument whose type declares no
 // conformance, and an OPAQUE one whose owner declaration promises nothing (W41). Split out when the second

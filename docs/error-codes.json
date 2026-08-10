@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "e5283950ae38966c",
+  "sourceHash": "26e33e55be6223ce",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -1408,6 +1408,15 @@
       "doc": "`if try f()` was written on a call that PRODUCES a value. The bare form is a THROW test, not a\nvalue test -- the then branch runs whenever the call did not throw -- so the result it produces is\nsilently dropped and the form reads as though it were being tested. `if try json.getBool(node,\nkey: \"enabled\")` reads as \"if enabled\" and means \"if the key exists and is a bool\", which is true\nwhen the value is `false`. MEASURED before this check existed: a throwing `answer(succeed bool)\nreturns bool` whose SUCCESS path returns `false` still took the branch.\nONE law, not a type-keyed one: if the call produces a value you must say what happens to it, so\n`if try` is legal only when the callee returns nothing -- \"run this, branch on whether it worked\".\nAn IMPURE callee's result may be discarded explicitly, `if let _ = try f()`. A PURE one's may not:\n`_` is E3064 there as everywhere, because a pure call whose result nobody wants is the wrong call.\nNOT E3055, which refuses a `try` whose callee cannot throw at all -- a different fault with a\ndifferent cure, and this one fires only once that question has already been answered.",
       "emittedBy": {"csharp": "SemanticIfTryDiscardsResult", "shv2": "ifTryDiscardsResult"},
       "notEmittedBy": ["selfhosted"]
+    },
+    {
+      "code": 3125,
+      "tag": "E3125",
+      "name": "SemanticInterfaceInstantiationBindingDisagreement",
+      "stage": "semantic",
+      "doc": "A use site wrote `I with <Args>` -- the existential `I`, held with its associated types bound --\nand one of those arguments is not what the program's conformers bind that associated type to.\nAn interface this program DISPATCHES through has exactly ONE binding per associated type, which\nis E3119's rule and is forced by dictionary-passing: the shared body is compiled once, against\none type, and every other conformer reinterprets those bits. Producing an existential IS such a\ndispatch. So the binding is a function of the interface NAME and the conformances are where the\nprogram states it -- a use site does not CHOOSE one, it restates the one already settled.\nRefused rather than ignored: shv2 does not carry the arguments on the existential (there is one\nanswer, in the conformances, and a copy on the type would be a second), so an unchecked claim\nwould have no effect at all and would read as though it did.",
+      "emittedBy": {"shv2": "interfaceInstantiationBindingDisagreement"},
+      "notEmittedBy": ["csharp", "selfhosted"]
     },
     {
       "code": 4001,

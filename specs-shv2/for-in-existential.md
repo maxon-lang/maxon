@@ -45,16 +45,14 @@ silent no-op would be the worst outcome available — the loop would compile, ru
 nothing — and the generic "over a `interface` value" sentence the other sources share does not say what is
 actually missing.
 
-⛔ **A PARAMETERIZED interface is NOT an existential in shv2, and is refused in its own words.**
-`MaxonType.interfaceRef` carries an interface NAME and a witness table and has nowhere to record `with`
-arguments, so `Iterable with (Element, ElementIterator)` resolves to a `genericInstance` whose base is an
-interface no file declares as a `type`. Every door refuses it — a field read, a method call, and this loop —
-so it is inert rather than wrong; but the shared sentence called it a `struct` (that is `typeTagName` of a
-`genericInstance`), which pointed at a missing struct instead of at the absent mechanism. NEITHER reference
-compiler solves it either: v1's interface registry is a bare name table with no argument vector and drops
-`Array.from`'s body in dead-function elimination before its lowering could reach `mrt_panic`, and the C#
-bootstrap monomorphizes per concrete argument and dies as `E9001 … Function
-'CounterSeq.createIterator$CounterSeq' not found in module` the moment one is supplied.
+⭐ **A PARAMETERIZED interface IS an existential too, and `for … in` reaches it by the same route.**
+`Seq with Integer` resolves to the existential `Seq` (`ProgramSignatures.instanceDenotedType`), so everything
+this page says of a bare interface holds of an instance of one word for word — the loop asks the same
+requirement list and emits the same two dispatches. See `specs-shv2/parameterized-existential.md`, which owns
+that spelling and the E3125 that verifies what a use site claims its `with` arguments are. What remains out of
+reach is narrower and is refused where the binding is WRITTEN: an associated type bound to another INTERFACE
+needs a second witness table travelling with the first, which is the wall `stdlib/Array.maxon`'s
+`Iterable with (Element, ElementIterator)` stands at.
 
 ## Tests
 
@@ -488,58 +486,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:30:2: Unsupported: `for … in` over a value dispatched through interface 'Labelled', which supplies neither the cursor protocol `current()` + `advance() throws IterationError` nor a `createIterator()` factory as a zero-argument REQUIREMENT — the traversal is a jump through the witness table the value carries, so it has to be something the interface requires; a conformer declaring it supplies no slot to dispatch through
-```
-
-<!-- test: error.parameterized-interface-is-not-an-existential -->
-An INSTANCE of an interface is refused by a sentence that names the interface and the missing mechanism —
-not by the shared one, whose `typeTagName` calls a `genericInstance` a `struct`. This is the wall
-`stdlib/Array.maxon:132` stands at, pinned here so the rung that lifts it has to move this case.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-interface Seq uses Element
-	function current() returns Element
-	function advance() throws IterationError
-end 'Seq'
-
-type Upto implements Seq with Integer
-	var pos as Integer
-	let limit as Integer
-
-	export static function create(limit Integer) returns Self
-		return Self{pos: 1, limit: limit}
-	end 'create'
-
-	export function current() returns Integer
-		return self.pos
-	end 'current'
-
-	export function advance() throws IterationError
-		if self.pos >= self.limit 'atTheLast'
-			throw IterationError.exhausted
-		end 'atTheLast'
-		self.pos = self.pos + 1
-	end 'advance'
-end 'Upto'
-
-typealias IntegerSeq = Seq with Integer
-
-function total(source IntegerSeq) returns Integer
-	var sum = 0 as Integer
-	for item in source 'walk'
-		sum = sum + item
-	end 'walk'
-	return sum
-end 'total'
-
-function main() returns ExitCode
-	let u = Upto.create(4)
-	print("{total(u)}\n")
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2015: <fragment>:33:2: Unsupported: `for … in` over an INSTANCE of the interface 'Seq' — shv2 holds an existential as an interface NAME plus a witness table (`interfaceRef`) and has nowhere to record the `with` arguments, so a parameterized interface never becomes one: the cursor `createIterator()` would return is typed by an associated type with no binding here, and carries no table to walk through. Iterate a concrete conformer, or hold the source at an interface that requires the traversal directly
 ```
 
 <!-- test: error.ambiguous-protocol-requirement -->

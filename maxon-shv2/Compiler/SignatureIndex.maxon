@@ -11273,6 +11273,37 @@ export type ProgramSignatures
 		return self.nameOfId(self.genericInstances.instanceBaseId(id))
 	end 'genericInstanceBaseName'
 
+	// ⭐⭐ **WHAT AN INSTANCE DENOTES IN A TYPE POSITION — AND OVER AN `interface` BASE THAT IS AN
+	// EXISTENTIAL, NOT A BOX.** `Seq with Integer` names the fat pointer `Seq`, held with `Element` bound;
+	// `Box with Integer` names `Box`'s box. Both are written `Base with Args`, and only the base's FORM tells
+	// them apart, so the split lives here rather than at each of the three type-resolution doors that mint an
+	// instance (`Parser.parseTypeReference`'s alias arm and its inner-alias arm, `Parser.resolveNamedAlias`).
+	//
+	// ⭐⭐ **THE `with` ARGUMENTS ARE NOT CARRIED ON THE EXISTENTIAL, AND THAT IS THE MECHANISM RATHER THAN A
+	// GAP.** An interface this program DISPATCHES through has exactly ONE binding per associated type across
+	// the whole program — that is E3119, and it is forced by dictionary-passing: the shared body is compiled
+	// once, against one type, and every other conformer reinterprets those bits. Producing an existential IS
+	// such a dispatch. So the binding is a function of the interface NAME, the conformances are where the
+	// program states it (`StructLayout.conformanceBindings`, folded by `associatedAbiBindingOf`), and a copy
+	// riding on the type would be one fact written twice with nothing keeping the two honest. What a use site
+	// writes is therefore a CLAIM, verified whole-program by
+	// `ConformanceCheck.checkInterfaceInstantiationBindings` (E3125) — never a second source of truth. The one
+	// argument shape that is REFUSED outright rather than checked is one naming another interface: see
+	// `Parser.DeclaredStoragePosition.associatedTypeBinding`, which is a second witness table and not a claim.
+	//
+	// ⚠ **`into` IS THE READER'S OWN INTERNER**, exactly as `interfaceNameOfType`'s is: the parser holds its
+	// file's, this index holds its own, and an id minted in one is meaningless in the other.
+	export function instanceDenotedType(gid GenericInstanceId, into TypeNameInterner) returns MaxonType
+		let base = self.genericInstanceBaseName(gid)
+		// `isInterfaceName`, NOT a bare `interfaces.contains`: it is the ONE door, and it answers for the
+		// SYNTHESIZED protocols (`Stringable`, `Hashable`, …) as well as for the user registry.
+		if isInterfaceName(self.interfaces, name: base) 'anInterfaceInstance'
+			return MaxonType.interfaceRef(into.intern(base))
+		end 'anInterfaceInstance'
+
+		return MaxonType.genericInstance(gid)
+	end 'instanceDenotedType'
+
 	// ⭐⭐ **THE INSTANCE A BARE GENERIC TYPE NAME DENOTES INSIDE A TYPE-PARAMETER SCOPE** — `Inner`
 	// written in `type Outer uses T`'s body IS `Inner with Outer.T`. shv2 compiles ONE body per generic type,
 	// so a member of `Outer` that names another generic type without arguments names it at the parameters the
@@ -13411,11 +13442,31 @@ export type ProgramSignatures
 		// `isInterfaceName` for `Parser.parseTypeReference`'s reason: this walks every field of every declared
 		// struct and every return type, and only needs the answer.
 		let id = typeNameIdOf(declared)
-		if not isInterfaceName(self.interfaces, name: self.nameOfId(id)) 'namesNoInterface'
+		let name = self.nameOfId(id)
+		if isInterfaceName(self.interfaces, name: name) 'aBareInterfaceName'
+			return MaxonType.interfaceRef(id)
+		end 'aBareInterfaceName'
+
+		// ⭐⭐ **AN INSTANCE OF AN INTERFACE IS AN EXISTENTIAL TOO, AND THE FIELD COLUMN IS WHERE MISSING IT
+		// CORRUPTS RATHER THAN REFUSES.** `var seq as IntegerSeq` over `typealias IntegerSeq = Seq with Integer`
+		// is a swept `named("IntegerSeq")` exactly as a bare `Seq` is a swept `named("Seq")`, and the real parse
+		// mints `interfaceRef` for BOTH (`instanceDenotedType`). Left to `declaredSlotType`'s `genericAlias` arm
+		// the field would be re-tagged `genericInstance` and budgeted ONE slot, while every reader of the type
+		// loaded a witness at `+8` — the next field. So the instance half is repaired HERE, where the re-tag goes
+		// through `retypeField` and rebuilds the two-slot prefix sum with it.
+		if not self.isGenericAlias(name) 'namesNoInterface'
 			throw MapError.keyNotFound
 		end 'namesNoInterface'
 
-		return MaxonType.interfaceRef(id)
+		// The alias's own declaring file cannot be known from a type alone, and a CONTESTED alias is the only
+		// name for which that matters; the base is what decides this question, and a contest is over the
+		// ARGUMENTS of one base name (`settleGenericAliasContest`), never over the base.
+		let asInstance = self.instanceDenotedType(self.bareGenericAliasInstance(name), into: self.typeNames)
+		if maxonTypeTag(asInstance) != ValueTypeTag.interfaceRef 'aStructInstance'
+			throw MapError.keyNotFound
+		end 'aStructInstance'
+
+		return asInstance
 	end 'sweptInterfaceTypeOf'
 
 	// ⭐⭐ **RE-TAG EVERY SWEPT `named` FIELD THAT IS A BARE GENERIC NAME AS THE INSTANCE ITS DECLARING SCOPE
@@ -16254,8 +16305,9 @@ export type ProgramSignatures
 			// `offset + InterfaceWitnessHalfOffset` would read the NEXT field, and every later field's offset
 			// would be one slot short — a wrong answer at run time with no compile error anywhere.
 			//
-			// Its `functionAlias`/`genericAlias` siblings below DO re-tag, and are safe for the one reason
-			// this arm is not: neither changes a field's slot count.
+			// Its `functionAlias` sibling below DOES re-tag, and is safe for the one reason this arm is not: it
+			// does not change a field's slot count. ⚠ Its `genericAlias` sibling is only CONDITIONALLY safe —
+			// an instance over an `interface` base denotes an existential too, and that arm now says so.
 			interfaceType then throw MapError.keyNotFound
 			// ⭐ A RANGED alias splits, and it is the ONLY arm that does: the FORM is one declaration
 			// (`typealias X = <primitive>(range)`, which is why `TypeDeclKind` holds one case for both,
@@ -16273,7 +16325,14 @@ export type ProgramSignatures
 			// (P1.7). One place, so every reader (a field READ, a `Self{ops: ops}` construction check, the
 			// array method dispatch, the drop cascade) sees the instance and not an `int`. The gid is this
 			// index's own, needing no interner remap.
-			genericAlias then return MaxonType.genericInstance(self.genericAliasInstanceFrom(name, readerFilePath: slotScopeFilePath))
+			//
+			// ⛔⛔ **UNLESS THE BASE IS AN `interface`, IN WHICH CASE IT IS THE ARM ABOVE.**
+			// `instanceDenotedType` makes `Seq with Integer` the EXISTENTIAL `Seq`, so a field declared with such
+			// an alias is a two-slot fat pointer that `normalizeSweptInterfaceTypes` re-tags through
+			// `retypeField` — the same one place, for the same reason. Re-tagging it `genericInstance` here would
+			// be the exact wrong answer the `interfaceType` arm's header describes, arriving through the alias
+			// spelling instead of the bare one: one slot budgeted, a witness loaded from the next field.
+			genericAlias then return try self.slotTypeOfGenericAlias(name, slotScopeFilePath: slotScopeFilePath)
 			// ⭐ A TUPLE-ALIAS-typed slot (`export var p as Pair`, `typealias Pair = (Int, Int)`) is
 			// re-tagged to the tuple's own `structRef` — the read-side twin of `parseTypeReference`'s
 			// tuple-alias arm. A tuple alias mints NO identity of its own, so the tag carries the CANONICAL
@@ -16290,6 +16349,19 @@ export type ProgramSignatures
 			tupleAlias then return MaxonType.structRef(into.intern(self.tupleAliasTarget(name)))
 		end 'form'
 	end 'denotedSlotType'
+
+	// What a slot declared with the GENERIC alias `name` denotes — its instance, or `MapError.keyNotFound`
+	// when that instance is an EXISTENTIAL, which this door may not re-tag (see the `interfaceType` arm).
+	// It asks `instanceDenotedType`, the one place the `type`/`interface` base split is made, rather than
+	// re-testing the base here: a second reading of that split is a field sized one way and read the other.
+	function slotTypeOfGenericAlias(name ByteArray, slotScopeFilePath FilePath) returns MaxonType throws MapError
+		let denoted = self.instanceDenotedType(self.genericAliasInstanceFrom(name, readerFilePath: slotScopeFilePath), into: self.typeNames)
+		if maxonTypeTag(denoted) == ValueTypeTag.interfaceRef 'anExistentialSlot'
+			throw MapError.keyNotFound
+		end 'anExistentialSlot'
+
+		return denoted
+	end 'slotTypeOfGenericAlias'
 
 	// ⭐ What a slot declared with the RANGED alias `name` denotes — the one form whose declaration and whose
 	// meaning part company.
@@ -16838,6 +16910,13 @@ export type ProgramSignatures
 		match try self.declaredFormOf(name) otherwise return false 'form'
 			interfaceType then return true
 			structType to unionType then return false
+			// ⚠ **`genericAlias` STAYS `false` EVEN THOUGH `IntegerSeq = Seq with Integer` DENOTES AN
+			// EXISTENTIAL, and the reason is that this door never meets that spelling.** Both callers pass a
+			// conformance's recorded `withArgs`, and `Parser.readConformanceWithArg` RENDERS what it read — an
+			// existential alias renders to its interface name, `Seq` — so the alias reaches the `interfaceType`
+			// arm above under the bare name. Answering it here as well would be a second reading of one fact,
+			// reachable by nothing; `parameterized-existential.error.associated-type-bound-to-an-existential-alias`
+			// is what pins the rendering this rests on.
 			rangedAlias to tupleAlias then return false
 		end 'form'
 	end 'declaredNameIsFatPointer'
