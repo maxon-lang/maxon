@@ -1552,17 +1552,23 @@ end 'main'
 0
 ```
 
-### Pushing a BORROWED opaque element is rejected
+### Pushing a BORROWED opaque element back into the SAME array
 
-The shared generic body cannot COPY an opaque `T`, so an element moved into an opaque array must be a value this
-frame OWNS. `self.items.get(0)` yields a BORROW the array keeps, so pushing it back would give the array a
-second reference to a record it destroys once per slot — a double free with no diagnostic anywhere. The array
-move-in door makes the same demand `emitOpaqueFieldReassign` already makes at a field store: the two opaque
-sinks agree, and what the feed recognizer cannot transfer is refused rather than miscompiled.
+⛔⛔ **THIS CASE WAS A REFUSAL UNTIL W60, AND THE SENTENCE IT PINNED WAS TOO WIDE BY ONE WORD.** It read
+*"an element moved into an opaque array must be a value this frame OWNS"*, and the half that is true is that
+the CONTAINER must end up owning one: `self.items.get(0)` is a BORROW, so the store cannot give a reference
+up and TAKES one instead, through the enclosing instance's `retainFunc@64`
+(`referenceBorrowedOpaqueElement`). See `specs-shv2/generic-opaque-borrowed-element-store.md`, which owns
+that rule.
 
-<!-- test: push-borrowed-opaque-element-rejected -->
+The source array and the destination array are the SAME array here, which is the sharpest arithmetic the
+shape offers: it ends holding two slots over one record with a refcount of two, and its own element walk
+releases both. A missing retain frees it twice; an unpaired one leaks it.
+
+<!-- test: push-borrowed-opaque-element-takes-a-reference -->
 ```maxon
 typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
 
 type Container uses Element
 	typealias ElementArray = Array with Element
@@ -1573,6 +1579,10 @@ type Container uses Element
 		return Self{ items: ElementArray.create() }
 	end 'create'
 
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
 	export function push(item Element)
 		self.items.push(item)
 	end 'push'
@@ -1580,6 +1590,10 @@ type Container uses Element
 	export function duplicateFirst()
 		self.items.push(try self.items.get(0) otherwise panic("empty container"))
 	end 'duplicateFirst'
+
+	export function at(i Count) returns Element throws ArrayError
+		return try self.items.get(i)
+	end 'at'
 end 'Container'
 
 typealias StringContainer = Container with String
@@ -1588,11 +1602,16 @@ function main() returns ExitCode
 	var sc = StringContainer.create()
 	sc.push("a string long enough to force a heap allocation")
 	sc.duplicateFirst()
-	return 0
+	let copy = try sc.at(1) otherwise return 1
+	print("{copy}\n")
+	return sc.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:18:19: Unsupported: moving a value that is not owned into an `Array with <type parameter>` in a shared generic body — the body cannot copy an opaque `T`, so the element must come from a parameter the method consumes or from a `pop`/`remove` that moved one out; a borrowed element (`get`/`first`/`last`, a `for` element, an opaque field read) would give the array a second reference to a record it destroys once
+```exitcode
+2
+```
+```stdout
+a string long enough to force a heap allocation
 ```
 
 ### A CONDITIONAL implicit-self feed is dropped on the un-pushed path, not leaked
@@ -1694,18 +1713,27 @@ end 'main'
 0
 ```
 
-### Pushing a `for` element of one opaque array into another is rejected
+### Pushing a `for` element of one opaque array into another
 
-A `for … in self.items` element is a BORROW the source array keeps and destroys. Moving it into a second opaque
-array would make two arrays each destroy it once, so the array move-in door refuses it for the same reason it
-refuses a `get`: the shared body has no way to copy an opaque `T`, and this is the copy the program is asking
-for.
+A `for … in self.items` element is a BORROW the source array keeps and destroys. Stored into a SECOND opaque
+array it takes a reference of its own, so the two arrays hold two references to one record and each releases
+the one it holds — the third spelling of the borrow (`get`, an opaque field read, a `for` element), served by
+the same `retainFunc@64`.
 
-⚠ **THIS IS ONE OF THE TWO NEW REFUSALS IN THIS RUNG THAT TURN A COMPILING PROGRAM RED, AND THE COORDINATOR MEASURED IT RATHER THAN TAKING THE CLAIM.** *(It read as the only one until review measured the second: `requireDescriptorForOpaqueDrops` also turns red a conditional `items.push(item)` inside an `extension` on a generic type, which on `cad4cf30d` compiles and exits 0 — see that guard's own header. The claim it carried, "everything it rejects used to abort the compiler", was false; the guard is kept and the claim is not.)* On the merge base (`cad4cf30d`) this exact program **compiles and exits 0** — not because it is sound, but because `main` never calls `copyInto`, so the unsound body is never reached. Its two siblings in this rung are strict improvements by comparison: `feed-into-borrowing-user-push-rejected` **panicked the compiler** on the base (`appendDropTypeParamDescriptor`), and `push-borrowed-opaque-element-rejected` **compiled and segfaulted** (exit 139). ⭐ **The body is refused rather than the CALL, and that is deliberate and consistent**: `emitOpaqueFieldReassign` already refuses the identical borrow at a FIELD store, and shv2 refuses an unsound opaque body at the statement (the owned-opaque `return`) rather than compiling it and hoping nothing reaches it. ⚠ Measured blast radius INSIDE the corpus: **zero** — the full suite is green, which builds the whitelisted stdlib for every case. Outside it, what this newly refuses is a body that could not be called anyway: the base answers `E3005 expected 'Container.ElementArray', got 'StringArray'` at any external call site (board row `W25`), and emits that diagnostic twice (`W24`).
+⛔⛔ **THIS CASE WAS A REFUSAL, AND ITS OWN HEADER RECORDED THAT THE REFUSAL TURNED A COMPILING PROGRAM RED.**
+*(On the merge base of the rung that added it (`cad4cf30d`) the program compiled and exited 0 — not because
+it was sound, but because `main` never called `copyInto`, so the unsound body was never reached.)* W60 makes
+the body sound rather than unreachable, so `main` now CALLS it: without a per-element retain the two element
+walks free one record twice, and with an unpaired one the copy leaks.
 
-<!-- test: push-for-element-into-second-opaque-array-rejected -->
+⭐ The destination is a second container's own `items`, because the parameter is declared
+`Container.ElementArray` and an external `StringArray` is `E3005` at the call site (board row `W25`) — the
+gap that made the old case uncallable, and it is a TYPE gap rather than an ownership one.
+
+<!-- test: push-for-element-into-second-opaque-array -->
 ```maxon
 typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
 
 type Container uses Element
 	typealias ElementArray = Array with Element
@@ -1716,6 +1744,10 @@ type Container uses Element
 		return Self{ items: ElementArray.create() }
 	end 'create'
 
+	export function count() returns Count
+		return self.items.count()
+	end 'count'
+
 	export function push(item Element)
 		self.items.push(item)
 	end 'push'
@@ -1725,6 +1757,10 @@ type Container uses Element
 			dst.push(e)
 		end 'each'
 	end 'copyInto'
+
+	export function at(i Count) returns Element throws ArrayError
+		return try self.items.get(i)
+	end 'at'
 end 'Container'
 
 typealias StringContainer = Container with String
@@ -1732,11 +1768,22 @@ typealias StringContainer = Container with String
 function main() returns ExitCode
 	var sc = StringContainer.create()
 	sc.push("a string long enough to force a heap allocation")
-	return 0
+	sc.push("a second string, also long enough to force a heap allocation")
+	var dst = StringContainer.create()
+	sc.copyInto(dst.items)
+	let copied = try dst.at(1) otherwise return 1
+	let original = try sc.at(1) otherwise return 1
+	print("{copied}\n")
+	print("{original}\n")
+	return dst.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:19:13: Unsupported: moving a value that is not owned into an `Array with <type parameter>` in a shared generic body — the body cannot copy an opaque `T`, so the element must come from a parameter the method consumes or from a `pop`/`remove` that moved one out; a borrowed element (`get`/`first`/`last`, a `for` element, an opaque field read) would give the array a second reference to a record it destroys once
+```exitcode
+2
+```
+```stdout
+a second string, also long enough to force a heap allocation
+a second string, also long enough to force a heap allocation
 ```
 
 ### A feed handed to a BORROWING `push` that is not an array's releases what it took
@@ -1755,7 +1802,7 @@ body's cannot. Its receiver `Sink.push(x S) returns S` is a bare type-parameter 
 `add` a descriptor. The adopted `kept` and the enrolled `item` are then released once each at the method's
 exit, through the same descriptor.
 
-⛔ **THE PREDICTION THIS CONTRADICTS IS RECORDED IN `requireOwnedOpaqueElement`'s HEADER, AND IT WAS TRUE WHEN
+⛔ **THE PREDICTION THIS CONTRADICTS IS RECORDED IN `referenceBorrowedOpaqueElement`'s HEADER, AND IT WAS TRUE WHEN
 IT WAS WRITTEN.** *"Reserving the descriptor such a co-own needs turns `feed-into-borrowing-user-push-rejected`
 from a clean REFUSAL into a compiling program that LEAKS (exit 101) — the descriptor it gains has a ZERO
 `destroyFunc@40`."* That zero was the `destroyFunc@40`/`retainFunc@64` asymmetry, and it has since been closed

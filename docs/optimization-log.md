@@ -1195,7 +1195,7 @@ the doubling table's expected slack and not a growth term.
 
 ### ⛔⛔ Measured debt found by this pass — PRE-EXISTING, both confirmed against `69e655d38`
 
-- **A BORROWED OPAQUE `T` HANDED TO A SELF-SIBLING'S PARAMETER ESCAPES `requireOwnedOpaqueElement`
+- **A BORROWED OPAQUE `T` HANDED TO A SELF-SIBLING'S PARAMETER ESCAPES THE ARRAY MOVE-IN DOOR
   ENTIRELY, AND `stdlib/Map.maxon` DOES EXACTLY THAT.** The refusal is intra-procedural: it demands the
   value at the store be owned, a parameter answers `valueIsOwnedHeap` true, and nothing checks the
   caller. `Map.grow()` → `insertAtSlot()` is one such hop, so **a `Map` with any managed column double
@@ -1206,7 +1206,9 @@ the doubling table's expected slack and not a growth term.
   reachable set**. Suite 4769/0 over it: no spec case builds a managed-column map past the load factor.
   Full diagnosis, the reproducer and the cure W41 itself already built (`retainFunc@64` +
   `coOwnBorrowedOpaqueForConsume`, which the field-store door takes and this door does not) are in
-  `Parser.requireOwnedOpaqueElement`'s header. **This is a live miscompile, not a perf note.**
+  `Parser.referenceBorrowedOpaqueElement`'s header (that door was `requireOwnedOpaqueElement` when this row
+  was written; W60 renamed it when the borrowed store stopped being a refusal). **This is a live miscompile,
+  not a perf note.**
 - **AN INSTANCE ARGUMENT TREE THAT IS A SHARED DAG MAKES `phase:signatures` EXPONENTIAL IN LINES OF
   SOURCE** (`genshareddag.sh`). `typealias P<k> = Pair with (P<k-1>, P<k-1>)` gives the deepest alias a
   structural mangled name of 2^k characters. `phase:signatures` bytes at depth 18 / 20 / 22:

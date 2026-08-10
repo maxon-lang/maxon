@@ -31,9 +31,11 @@ and a loop that never runs then leaks the caller's reference with nothing left t
 N slots, and each slot destroyed exactly once by the array's own `__arr_decref` walk through
 `destroyFunc@40`.
 
-**The element must still be one the frame OWNS.** A BORROW handed to an opaque sink is a different
-question and is answered at the CALLER, which takes a reference before passing it
-(`handleEscapingBorrowFeed`); this door's refusal for a borrowed element is unchanged.
+**A BORROWED element reaches the same `__retain_type_param` by the shorter road**, because it has no
+reference to give up in the first place — see `generic-opaque-borrowed-element-store`, which owns that
+half. What distinguishes the two arms is what happens to the SOURCE: an owned binding keeps its own
+reference and releases it at scope exit, and a borrow never had one. A borrow crossing a CALL is a
+third question again, answered at the caller (`handleEscapingBorrowFeed`).
 
 **A trivial instantiation pays nothing.** `retainFunc@64` is the zero word for a type argument that
 owns no record, so `__retain_type_param` loads it, skips the indirect call and hands back exactly the
@@ -313,16 +315,18 @@ end 'main'
 a re-read string long enough to force a heap allocation
 ```
 
-### A borrowed element is still refused
+### A borrowed element in the loop takes a reference per slot
 
-The refusal this door already made is unmoved: `other`'s element is a BORROW, and handing it to an
-array that destroys each slot once would give the array a reference nobody transferred. Taking one
-here instead would be the caller's job (`handleEscapingBorrowFeed`), and there is no caller to ask —
-the borrow is produced inside this body.
+The `set` spelling of the borrowed store, and the case that used to pin this door's refusal of one.
+`other`'s element is a BORROW — `other` still owns it and still releases it — so each slot takes its
+own reference through `retainFunc@64` and the bag's element walk releases exactly as many. Both
+containers are destroyed at the end of `main`, so a missing retain is a double free and a missing
+release is exit 101.
 
-<!-- test: error.a-borrowed-element-stored-in-a-loop-is-refused -->
+<!-- test: a-borrowed-element-stored-in-a-loop-takes-a-reference-per-slot -->
 ```maxon
 typealias Idx = int(0 to u64.max)
+typealias Strs = Array with String
 
 type Bag uses Element
 	typealias Items = Array with Element
@@ -346,18 +350,31 @@ type Bag uses Element
 			n = n + 1
 		end 'copy'
 	end 'copyFrom'
+
+	export function at(i Idx) returns Element throws ArrayError
+		return try items.get(i)
+	end 'at'
 end 'Bag'
 
 typealias StrBag = Bag with String
 
 function main() returns ExitCode
 	var b = StrBag.create()
-	var source = Array with String.create()
+	var source = Strs.create()
 	source.push("a source string long enough to force a heap allocation")
-	b.copyFrom(source, upTo: 1)
+	source.push("a second source string, also long enough to force a heap allocation")
+	b.copyFrom(source, upTo: 2)
+	let copied = try b.at(1) otherwise return 1
+	let original = try source.get(1) otherwise return 1
+	print("{copied}\n")
+	print("{original}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:20:28: Unsupported: moving a value that is not owned into an `Array with <type parameter>` in a shared generic body — the body cannot copy an opaque `T`, so the element must come from a parameter the method consumes or from a `pop`/`remove` that moved one out; a borrowed element (`get`/`first`/`last`, a `for` element, an opaque field read) would give the array a second reference to a record it destroys once
+```exitcode
+0
+```
+```stdout
+a second source string, also long enough to force a heap allocation
+a second source string, also long enough to force a heap allocation
 ```
