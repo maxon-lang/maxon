@@ -1101,6 +1101,10 @@ end 'buildsBodiesFor'
 function resetMergeTargets(project Project)
 	project.funcReturnTypes = FuncReturnTypeMap.create()
 	project.funcSignatures = FuncSignatureMap.create()
+	// ⭐ Must reset since X-contains made it a UNION across files: `commitOverloadSets` now ACCUMULATES
+	// members, so a set carried over a warm rebuild would keep a member the edited sources no longer
+	// declare. Its own header carries the full argument, including the one this line replaced.
+	project.overloadSets = OverloadSetMap.create()
 	project.pendingFnMergeChecks = PendingFnMergeCheckArray.create()
 	project.pendingFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 	project.pendingTransformArities = PendingTransformArityArray.create()

@@ -115,9 +115,11 @@ end 'semanticCheck'
 //      coercion, and INCOMPATIBLE (dropped) for anything `checkDeclaredType` refuses. Summed over the
 //      arguments; the unique highest total wins. Same shape and same numbers as the oracle.
 //   4. **a tie is E3007**, anchored at the call, listing the tied candidates in declaration order.
-//   5. **no compatible candidate leaves the op ALONE** — the bare name is the first member's registration
-//      name, so `checkCalls` then reports its own per-argument mismatch, which names the offending argument.
-//      "Ambiguous" would be the wrong sentence for a call that matches nothing.
+//   5. **no compatible candidate leaves the op ON THE FIRST MEMBER**, so `checkCalls` then reports its own
+//      per-argument mismatch, which names the offending argument. "Ambiguous" would be the wrong sentence
+//      for a call that matches nothing. For an ordinary set that is the op left ALONE — the bare name IS
+//      the first member's registration name — and for a CONTESTED extension method, where no member holds
+//      the bare name, it takes a rewrite: see `leaveUnmatchedCallOnFirstCandidate`.
 //
 // The two heuristics the bootstrap has after scoring — a first-argument token-shape test and an
 // enclosing-type tie-break — are deliberately absent. The first exists to recover the type information its
@@ -164,10 +166,42 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFu
 	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
 		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, callee: callee, member: member)
 		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied)
-		// Nothing the call could mean. Left alone deliberately — see this pass's header, step 5.
-		noMatch then break 'pick'
+		// Nothing the call could mean. Left on a DECLARED member deliberately — see this pass's header,
+		// step 5, and `leaveUnmatchedCallOnFirstCandidate` for the one set where "left alone" is not that.
+		noMatch then leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, op: op, callee: callee, candidates: candidates)
 	end 'pick'
 end 'resolveOneOverloadedCall'
+
+// ⭐⭐ **STEP 5's PREMISE, MADE TRUE RATHER THAN ASSUMED (X-contains).** A call that fits no member is meant
+// to reach `checkCalls` still naming a DECLARED function, so the diagnostic the author gets is the
+// per-argument mismatch that names the offending argument. This pass got that for free while the bare name
+// was always the first member's registration name — "leave the op alone" and "leave it on the first member"
+// were the same act.
+//
+// ⛔ **THEY ARE NOT THE SAME ACT FOR A CONTESTED EXTENSION METHOD, WHERE NO MEMBER HOLDS THE BARE NAME.**
+// Every declaration of a `<Conformer>.<method>` two files' extensions declare is registered under its
+// parameter-type suffix (`Parser.overloadRegistrationNameFor`), so the bare callee names nothing in
+// `funcSignatures` and the untouched op reached `validateCall` instead. MEASURED: `f.pick("nope")` against
+// `pick(n Integer)` and `pick(flag bool)` split across two files reported
+// **`E3004: call to undefined function 'Five.pick'`** — about a method declared twice over — where the
+// identical program with both extensions in ONE file reports
+// `E3005: argument type mismatch for 'n': expected 'Integer', got 'String'`.
+//
+// So the op is pointed at the first candidate, which is exactly where the same-file case already leaves it.
+// ONLY the callee is rewritten: no result-type reconcile and no range-site retarget, because neither
+// happens on the same-file path either and this is a program that is being rejected — the sole job left is
+// to let `checkCalls` say which argument.
+//
+// A set with NO live candidate is left alone, and there the bare name is the honest answer: nothing the
+// call could name survived to the registry.
+function leaveUnmatchedCallOnFirstCandidate(project Project, module MaxonModule, opIndex OpIndex, op MaxonOp, callee ByteArray, candidates ByteArrayArray)
+	if project.funcSignatures.contains(callee) 'theBareNameIsItselfAMember'
+		return
+	end 'theBareNameIsItselfAMember'
+
+	let first = try candidates.get(0) otherwise return
+	try module.ops.set(opIndex, value: withRewrittenCallee(op, callee: first)) otherwise panic("leaveUnmatchedCallOnFirstCandidate: ops.set({opIndex}) OOB — the index came from liveOpIndices")
+end 'leaveUnmatchedCallOnFirstCandidate'
 
 // ⭐⭐ **AN OPAQUE ARGUMENT CANNOT DISCRIMINATE, AND "CANNOT DISCRIMINATE" IS NOT "IS A SCALAR".**
 //

@@ -407,6 +407,14 @@ let DefaultBitClear = 65 as ContentHash
 // qualified spelling can carry the directory.
 let DeclShapeNamespaceQualifiedFunction = 66 as ContentHash
 
+// ⭐ A `<Conformer>.<method>` PUBLISHED BY EXTENSIONS IN MORE THAN ONE FILE (X-contains) — the entry above's
+// property one declaration kind over, and load-bearing for the same reason. The contest decides the
+// REGISTRATION NAME every one of those declarations takes (`Parser.overloadRegistrationNameFor`), and it is
+// a fact about WHICH FILES declare the name rather than about any one file's bytes: moving an `extension`
+// from one file to another can start or end a contest without changing what either declaration SAYS. The
+// bare name rides through `record`; only this can carry the contest.
+let DeclShapeContestedExtensionMethod = 78 as ContentHash
+
 // A `throws` clause's PRESENCE discriminators (R8) — the two arms of `ThrowsClause`, so `none` and
 // `throwing(E)` cannot hash alike in a position where both are possible. `mixThrowsClause` is the one place a
 // throws clause enters a content hash; before it existed the only mixer recorded THROWING clauses alone, where
@@ -4452,9 +4460,16 @@ typealias DeclaredReturnSurfaceMap = Map with (ByteArray, DeclaredSurface)
 // `Array with ByteArray` intern to the SAME instance, which is the whole reason the question survives.
 typealias BufferElementAliasNameSet = Set with ByteArray
 
-// The `<Conformer>.<method>` keys of the two extension-publication columns (W43) — see
+// The `<Conformer>.<method>` keys of the extension-publication columns (W43, X-contains) — see
 // `ProgramSignatures.extensionPublishedMethods` for what each set means and why one cannot serve for both.
 typealias ExtensionMethodNameSet = Set with ByteArray
+
+// `<Conformer>.<method>` ⇒ the file whose `extension` published it FIRST (X-contains). It exists to answer
+// exactly one question — *"has a SECOND FILE published this name?"* — which is why it holds a path and not a
+// count: two `extension` declarations in ONE file are the per-file overload registry's business
+// (`Parser.overloadRegistrationNameFor` sees both), and counting would read that legal, already-working case
+// as a contest. See `ProgramSignatures.contestedExtensionMethods`.
+typealias ExtensionMethodDeclFileMap = Map with (ByteArray, FilePath)
 
 // The `<declaring file>|<type name>` keys of every type name a top-level initializer NAMES — a cast's
 // target (P1.9) or a container factory's alias (spec-port `ownership`). Scoped rather than bare because
@@ -6098,6 +6113,21 @@ export type ProgramSignatures
 	//     One recorded fact, read by both, is the only shape in which they cannot come apart.
 	var extensionPublishedMethods as ExtensionMethodNameSet
 	var extensionShadowedMethods as ExtensionMethodNameSet
+	// ⭐⭐ **AND THE `<Conformer>.<method>` NAMES PUBLISHED BY EXTENSIONS IN TWO DIFFERENT FILES (X-contains)**
+	// — the third column, and the one that makes those declarations an OVERLOAD SET instead of a duplicate.
+	//
+	// A registration name is minted where a declaration is PARSED, and a parser is a pure function of its own
+	// file: a later overload of a name the same file already claimed becomes `pick#bool`, while a later
+	// overload of a name ANOTHER file claimed had no way to know it was later at all. Both took the bare name
+	// and collided at the merge. This fold is the only walk that sees every `extension` in the program, so it
+	// is the only place that can say so — the W43 arrangement one fact over: the DECISION is taken here and
+	// READ BACK by the parse, never re-derived.
+	//
+	// ⚠ **A CONTEST NEEDS TWO FILES, NOT TWO DECLARATIONS.** `stdlib/Array.maxon` declares `sort()` and
+	// `sort(cmp)` in two extensions of its own, and that pair already works — the file's own registry sees
+	// both. Marking it contested would re-mint two symbols to fix nothing.
+	var extensionMethodDeclFiles as ExtensionMethodDeclFileMap
+	var contestedExtensionMethods as ExtensionMethodNameSet
 	// The content hash OF THE DECLARATIONS — not of the source they were read from. This is the
 	// second half of a parse memo's key (`QueryEngine.parseMemoKey`), and hashing the folded
 	// ENTRIES rather than the FILES is the whole point of it:
@@ -6299,7 +6329,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameSet.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -6941,10 +6971,42 @@ export type ProgramSignatures
 		return self.funcDeclSites.contains(qualified) and not self.extensionPublishedMethods.contains(qualified)
 	end 'conformerDeclaresOwnMethod'
 
-	// Note that an `extension` published `qualified` onto a conformer — the write side of the test above.
-	export function noteExtensionPublishedMethod(qualified ByteArray)
+	// Note that the `extension` declared in `declFilePath` published `qualified` onto a conformer — the write
+	// side of the test above, AND the write that discovers a cross-file contest (X-contains).
+	//
+	// ⚠ **THE CONTEST RIDES THE HASH, unlike the two publication sets beside it, and the difference is real
+	// rather than an inconsistency.** Those two are DERIVED from declarations the hash already carries, so a
+	// source edit that changes them moves it anyway. This one is not: it turns on WHICH FILE each declaration
+	// sits in, and moving an `extension` between two files can start or end a contest while every `record`
+	// call this index makes stays byte-identical. It decides a SYMBOL NAME, so a reader's parse memo has to
+	// move with it — `recordNamespaceQualifiedFunction`'s argument, one declaration kind over.
+	export function noteExtensionPublishedMethod(qualified ByteArray, declFilePath FilePath)
 		self.extensionPublishedMethods.insert(qualified)
+
+		if let firstDeclFile = try self.extensionMethodDeclFiles.get(qualified) 'anExtensionAlreadyPublishedIt'
+			if not firstDeclFile.equals(declFilePath) 'andItWasAnotherFile'
+				self.contestedExtensionMethods.insert(qualified)
+				self.hash = mixBytes(mix(self.hash, value: DeclShapeContestedExtensionMethod), bytes: qualified)
+			end 'andItWasAnotherFile'
+			return
+		end 'anExtensionAlreadyPublishedIt'
+
+		self.extensionMethodDeclFiles.upsert(qualified, value: declFilePath)
 	end 'noteExtensionPublishedMethod'
+
+	// ⭐⭐ **IS `qualified` DECLARED BY AN `extension` IN MORE THAN ONE FILE (X-contains)?** The one flag
+	// `Parser.overloadRegistrationNameFor` asks before it hands a declaration the bare name: a contested name
+	// is registered under its parameter-type suffix by EVERY claimant, so two whose parameters differ are two
+	// live overloads and two whose parameters agree claim one name and collide (E3006). See that function's
+	// escalation ladder for why "nobody keeps the bare spelling" is what makes the refusal fall out of the
+	// mint instead of out of a second check.
+	//
+	// ⚠ Asked once per FUNCTION DECLARATION in the program, so it is on a hot path — and it costs nothing on
+	// it: `Set.contains` returns at its `capacity == 0` test before it hashes, and the set stays empty for
+	// every program that declares no such contest, which today is every program the corpus compiles.
+	export function isContestedExtensionMethod(qualified ByteArray) returns bool
+		return self.contestedExtensionMethods.contains(qualified)
+	end 'isContestedExtensionMethod'
 
 	// Note that an `extension`'s method was WITHHELD from a conformer because the conformer declares its own
 	// (W43). The recorded DECISION, read back by the real parse so the body it emits and the signature the

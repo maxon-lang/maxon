@@ -2644,18 +2644,31 @@ function overloadLabelSuffix(paramNames ByteArrayArray, takesReceiver bool) retu
 	return rendered.toByteArray()
 end 'overloadLabelSuffix'
 
-// Is a member with BOTH of these suffixes already registered — i.e. is the declaration being read a genuine
-// REDECLARATION rather than an overload? Both halves, because either alone is a legitimate difference: same
-// types with different labels is the label-escalated overload, and same labels with different types is the
-// type-keyed one.
-function overloadMembersHoldSignature(members OverloadMemberArray, typeSuffix ByteArray, labelSuffix ByteArray) returns bool
+// Is the declaration being read a genuine REDECLARATION of a member already registered, rather than an
+// overload? A union and not a bool, because the answer the one caller needs is WHICH member — see below.
+union OverloadRedeclaration
+	redeclares(registered ByteArray)
+	newSignature
+end 'OverloadRedeclaration'
+
+// The member already registered with BOTH of these suffixes, if any. Both halves, because either alone is a
+// legitimate difference: same types with different labels is the label-escalated overload, and same labels
+// with different types is the type-keyed one.
+//
+// ⚠ **IT ANSWERS THE MEMBER'S REGISTRATION NAME, AND THAT IS WHAT MAKES THE REDECLARATION COLLIDE.** A
+// redeclaration is not refused here — it is registered under the name the incumbent already holds, so the
+// two land on one key and `commitFuncSignatures` reports E3006 with a position. This used to answer a bool
+// and the caller returned the BARE name, which was the same thing only while the incumbent's own name was
+// bare; it stopped being once a CONTESTED name (X-contains) put the first member under a suffix too, and a
+// redeclaration would then have claimed the unused bare spelling and been accepted.
+function overloadMemberHoldingSignature(members OverloadMemberArray, typeSuffix ByteArray, labelSuffix ByteArray) returns OverloadRedeclaration
 	for member in members 'each'
 		if member.typeSuffix.equals(typeSuffix) and member.labelSuffix.equals(labelSuffix) 'same'
-			return true
+			return OverloadRedeclaration.redeclares(member.registered)
 		end 'same'
 	end 'each'
-	return false
-end 'overloadMembersHoldSignature'
+	return OverloadRedeclaration.newSignature
+end 'overloadMemberHoldingSignature'
 
 // Does any member of the set declare an ownership-transferable parameter? See
 // `Parser.requireOverloadableName`, which is the only asker and states why the answer decides a refusal.
@@ -3097,18 +3110,6 @@ function floatBoundInFloatAlias(bits ParsedInt, isFloat bool, typeTok Token, fie
 	end 'notFloatAlias'
 	return bits
 end 'floatBoundInFloatAlias'
-
-// True iff `names` already holds `name`. A linear scan — parameter lists are tiny (the
-// only caller is parameter-name duplicate detection), so no membership set is worth its
-// heap object (the same reasoning `Project.indexOfParamIn` documents).
-function byteArrayContains(names ByteArrayArray, name ByteArray) returns bool
-	for existing in names 'each'
-		if existing.equals(name) 'match'
-			return true
-		end 'match'
-	end 'each'
-	return false
-end 'byteArrayContains'
 
 // --- Pratt expression parser: precedence table + operator classifiers ---
 //
@@ -4905,16 +4906,6 @@ enum MemberSurface
 	// may be done to the storage it points into (`get`/`setLength`/`grow`) are disjoint sets on two receivers.
 	cursor
 end 'MemberSurface'
-
-// The read side of a roster — asked ONCE per array-method call, ahead of every arm.
-function rosterHasMember(name ByteArray, roster ByteArrayArray) returns bool
-	for member in roster 'eachMember'
-		if name.equals(member) 'isMember'
-			return true
-		end 'isMember'
-	end 'eachMember'
-	return false
-end 'rosterHasMember'
 
 // A roster as a refusal prints it — `length/capacity/get/…`, joined from the list the dispatch consults
 // rather than transcribed beside it. `IrInterface.builtinConformerDispatchMethodNames` renders a
@@ -11585,11 +11576,38 @@ export type Parser
 	// simply asks whether the file has already registered the name and counts up until it has not. The
 	// ordinal is unreachable for any program a human writes and costs one `Set.contains` when it is.
 	//
-	// ⚠ **THE CONTEST IS SEEN WITHIN ONE FILE ONLY.** Two FILES declaring one name still collide at the
-	// merge (E3006), because the parser is a pure function of its own file and the whole-program declaration
-	// sweep publishes no parameter types to contest against. That is a boundary, not a silent one.
+	// ⚠ **THE CONTEST IS SEEN WITHIN ONE FILE ONLY — WITH ONE EXCEPTION THE WHOLE-PROGRAM FOLD SUPPLIES.**
+	// Two FILES declaring one name still collide at the merge (E3006), because the parser is a pure function
+	// of its own file and the whole-program declaration sweep publishes no parameter types to contest
+	// against. That is a boundary, not a silent one.
+	//
+	// ⭐⭐ **THE EXCEPTION IS AN `extension` METHOD (X-contains), AND IT IS AN EXCEPTION BECAUSE SOMETHING
+	// ELSE ALREADY DOES THE WHOLE-PROGRAM WALK.** `Parser.foldExtensionDeclarationInto` visits every
+	// `extension` in the program before any file is parsed, so it can say — and does say, in
+	// `ProgramSignatures.contestedExtensionMethods` — that a given `<Conformer>.<method>` is declared by
+	// extensions in more than one file. That is exactly the fact this function is otherwise missing, and it
+	// is READ BACK here rather than re-derived, which is the same shape the W43 shadow decision takes.
+	//
+	// ⚠⚠ **WHEN THE NAME IS CONTESTED, NOBODY KEEPS THE BARE SPELLING — INCLUDING THE FIRST DECLARATION.**
+	// That is the whole of why the refusal below still works. Two declarations whose parameters differ mint
+	// DIFFERENT suffixes and are two live overloads; two whose parameters agree mint the SAME suffix, claim
+	// one registration name and collide in `commitFuncSignatures` — the E3006 a genuine redeclaration has
+	// always earned, established by CONSTRUCTION rather than by a second cross-file check written beside this
+	// one and free to disagree with it. Letting the first claimant keep the bare name would leave that pair
+	// as two live functions under two names, and the only thing left to notice it would be an E3007 at a call
+	// site — silent for a method nobody calls.
+	//
+	// It is the construction `freeFunctionRegistrationName` already takes for a free function contested
+	// across DIRECTORIES, where neither claimant keeps the bare name either, and it costs the same thing:
+	// the quoted name in a duplicate diagnostic is one no declaration wrote, which `duplicateFunctionMessage`
+	// answers for.
+	//
+	// ⚠ The bare name remains the overload set's KEY (`OverloadSetMap`) and the callee a call op carries, so
+	// nothing at a call site changes — `SemanticCheck.resolveOverloadedCalls` rebinds it to a member exactly
+	// as it does for a same-file set.
 	function overloadRegistrationNameFor(base ByteArray, paramTypes MaxonTypeArray, paramNames ByteArrayArray, takesReceiver bool, nameTok Token) returns ByteArray throws ParseError
-		if not self.declaredFuncNames.contains(base) 'firstOfThisName'
+		let contested = self.signatures.isContestedExtensionMethod(base)
+		if not contested and not self.declaredFuncNames.contains(base) 'firstOfThisName'
 			self.claimFuncName(base)
 			return base
 		end 'firstOfThisName'
@@ -11599,8 +11617,9 @@ export type Parser
 		try self.requireOverloadableName(base, nameTok: nameTok, members: members, newcomerTransfers: hasTransferableParam)
 		let typeSuffix = self.overloadTypeSuffix(paramTypes, takesReceiver: takesReceiver)
 		let labelSuffix = overloadLabelSuffix(paramNames, takesReceiver: takesReceiver)
-		if overloadMembersHoldSignature(members, typeSuffix: typeSuffix, labelSuffix: labelSuffix) 'redeclaration'
-			return base
+		match overloadMemberHoldingSignature(members, typeSuffix: typeSuffix, labelSuffix: labelSuffix) 'redeclaration'
+			redeclares(registered) then return registered
+			newSignature then break 'redeclaration'
 		end 'redeclaration'
 
 		let suffix = labelSuffix if overloadMembersHoldTypeSuffix(members, typeSuffix: typeSuffix) else typeSuffix
@@ -11702,6 +11721,12 @@ export type Parser
 	// The incumbent's suffixes were never computed — a first declaration renders none, which is what keeps a
 	// non-overloading program from building two strings per function — so they are recomputed here from the
 	// signature it recorded, on the contest path alone.
+	//
+	// ⚠ **THERE IS NO INCUMBENT WHEN THE CONTEST IS CROSS-FILE (X-contains).** A name contested by an
+	// `extension` in ANOTHER file is contested from this file's very first declaration of it, and the
+	// incumbent lives in a file this parser cannot see — so the set starts EMPTY and this file's own first
+	// declaration takes a suffix like every later one. `declaredFuncNames` is the exact test, because that is
+	// what `recordedSignatureOf` needs to be able to find something.
 	function overloadMembersOf(base ByteArray) returns OverloadMemberArray
 		if let existing = try self.overloadMembers.get(base) 'alreadyContested'
 			return existing
@@ -11714,8 +11739,11 @@ export type Parser
 		end 'firstOverloadInThisFile'
 
 		var members = OverloadMemberArray.create()
-		let incumbent = self.recordedSignatureOf(base)
-		members.push(OverloadMember.create(base, typeSuffix: self.overloadTypeSuffix(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver()), labelSuffix: overloadLabelSuffix(incumbent.paramNames, takesReceiver: incumbent.takesReceiver()), hasTransferableParam: self.declaresTransferableParam(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver())))
+		if self.declaredFuncNames.contains(base) 'thisFileHoldsTheIncumbent'
+			let incumbent = self.recordedSignatureOf(base)
+			members.push(OverloadMember.create(base, typeSuffix: self.overloadTypeSuffix(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver()), labelSuffix: overloadLabelSuffix(incumbent.paramNames, takesReceiver: incumbent.takesReceiver()), hasTransferableParam: self.declaresTransferableParam(incumbent.paramTypes, takesReceiver: incumbent.takesReceiver())))
+		end 'thisFileHoldsTheIncumbent'
+
 		self.overloadMembers.upsert(base, value: members)
 		return members
 	end 'overloadMembersOf'
@@ -11725,9 +11753,9 @@ export type Parser
 	// A map keyed by name would be a second copy of `funcSignatures` paid for by every function in every
 	// program to serve the few that overload.
 	//
-	// It cannot miss: `overloadRegistrationNameFor` only asks after `declaredFuncNames` says this file has
-	// already registered the name, and every registration is followed by a `recordFuncSignature` under it in
-	// the same `parseFunction`.
+	// It cannot miss: `overloadMembersOf` only asks after `declaredFuncNames` says this file has already
+	// registered the name, and every registration is followed by a `recordFuncSignature` under it in the same
+	// `parseFunction`.
 	function recordedSignatureOf(name ByteArray) returns FuncSignature
 		var i = self.artifact.funcSignatures.count()
 		while i > 0 'eachEntry'
@@ -12687,7 +12715,9 @@ export type Parser
 		end 'theConformerDeclaresItsOwn'
 
 		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
-		index.noteExtensionPublishedMethod(qualifiedMethodName)
+		// The DECLARING FILE rides along because a SECOND file publishing this same name is what makes the two
+		// an overload set rather than a duplicate (X-contains) — see `ProgramSignatures.contestedExtensionMethods`.
+		index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath)
 	end 'publishOrShadowExtensionMethod'
 
 	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
@@ -17138,7 +17168,7 @@ export type Parser
 			// (`ArgSlotResult.duplicateArg`) — and the oracle reports that same program at that same point
 			// (`E3005 … parameter '_' already has a value (passed positionally)`), never at the declaration.
 			// So the declaration-time check was never what protected the slotting; see `argSlotPosition`.
-			if not nameTok.value.equals(DiscardBindingName) and byteArrayContains(paramNames, name: nameTok.value) 'duplicate'
+			if not nameTok.value.equals(DiscardBindingName) and namesInclude(paramNames, name: nameTok.value) 'duplicate'
 				throw ParseError.duplicateParameter(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 			end 'duplicate'
 
@@ -43620,7 +43650,7 @@ export type Parser
 	// question every other refusal about the call presupposes — see `dispatchArrayMethod` for the two measured
 	// spellings that made the ORDER matter as much as the test.
 	//
-	// ⚠ It was written out four times: fetch, `rosterHasMember`, `throw ParseError.unsupported(…)` with the
+	// ⚠ It was written out four times: fetch, membership test, `throw ParseError.unsupported(…)` with the
 	// surface's sentence inline. Four copies of one rule, differing only in the enum value — and one of them
 	// (`dispatchArrayMethod`'s) was already routing through `surfaceRosterRefusal` while the other three were
 	// not, which is exactly the asymmetry a fifth surface would copy from whichever neighbour it happened to
@@ -43632,7 +43662,7 @@ export type Parser
 	// that door: a surface leaving is a deleted arm, not a reshaped gate.
 	function requireSurfaceMember(surface MemberSurface, methodTok Token) returns ByteArrayArray throws ParseError
 		let roster = self.surfaceMemberNames(surface)
-		if not rosterHasMember(methodTok.value, roster: roster) 'notASurfaceMember'
+		if not namesInclude(roster, name: methodTok.value) 'notASurfaceMember'
 			throw ParseError.unsupported(surfaceRosterRefusal(surface, member: methodTok.value, roster: roster), line: methodTok.line, column: methodTok.column)
 		end 'notASurfaceMember'
 
@@ -43692,7 +43722,7 @@ export type Parser
 		if not tokenCanBeAName(memberTok) 'notAMemberName'
 			return false
 		end 'notAMemberName'
-		if rosterHasMember(memberTok.value, roster: self.surfaceMemberNames(surface)) 'theSynthesizedSurfaceServesIt'
+		if namesInclude(self.surfaceMemberNames(surface), name: memberTok.value) 'theSynthesizedSurfaceServesIt'
 			return false
 		end 'theSynthesizedSurfaceServesIt'
 
@@ -50145,7 +50175,7 @@ export type Parser
 		if not (self.scope.contains(SelfParamName) or self.captureBinds(SelfParamName)) 'noReceiver'
 			return false
 		end 'noReceiver'
-		return rosterHasMember(calleeTok.value, roster: self.surfaceMemberNames(byteRecordSurface(enclosing)))
+		return namesInclude(self.surfaceMemberNames(byteRecordSurface(enclosing)), name: calleeTok.value)
 	end 'implicitSelfTakesTheByteRecordRoster'
 
 	// `self`, shaped as the receiver the roster dispatchers take. It carries no immutable name and no borrow

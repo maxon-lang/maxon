@@ -1142,29 +1142,53 @@ end 'commitFuncSignatures'
 // other. The fix is a rename on either side, and it has to be said, because it is not inferable from the
 // name.
 //
+// ⭐⭐ **THE SECOND SYNTHESIZED-NAME KIND IS A CONTESTED `extension` METHOD (X-contains)**, and it earns its
+// own sentence for the identical reason one kind up. A `<Conformer>.<method>` declared by extensions in more
+// than one FILE is registered by every one of them under its parameter-type spelling — nobody keeps the bare
+// name — so two declarations of one signature claim `Array.contains#Element` and collide there. That is the
+// refusal working exactly as designed (`Parser.overloadRegistrationNameFor`), but the name it names is one
+// no declaration wrote, and the fix — change the PARAMETERS, or the name — is not inferable from it.
+//
 // ⚠ The index is taken through the memo `compileToCodeResult` fills before the pipeline runs — merge is
 // downstream of it, so this can only ever be the hit, exactly as `SemanticCheck.programSignaturesIn` argues
 // for its own three askers.
 function duplicateFunctionMessage(project Project, name ByteArray) returns String
 	let signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage: queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
-	if not signatures.isContestedRegistrationName(name) 'anOrdinaryDuplicate'
-		return "duplicate definition of function '{String.from(name)}'"
-	end 'anOrdinaryDuplicate'
+	if signatures.isContestedRegistrationName(name) 'aFreeFunctionContestedAcrossDirectories'
+		return "duplicate definition of function '{String.from(name)}' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function"
+	end 'aFreeFunctionContestedAcrossDirectories'
 
-	return "duplicate definition of function '{String.from(name)}' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function"
+	let base = overloadRegistrationBaseName(name)
+	if signatures.isContestedExtensionMethod(base) 'anExtensionMethodContestedAcrossFiles'
+		return "duplicate definition of function '{String.from(name)}' — '{String.from(base)}' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names"
+	end 'anExtensionMethodContestedAcrossFiles'
+
+	return "duplicate definition of function '{String.from(name)}'"
 end 'duplicateFunctionMessage'
 
-// Commit this file's overload sets (D7). One independent upsert per overloaded bare name, so — unlike every
-// other commit here — it needs no reset to survive a warm rebuild and the KEY iteration order decides
-// nothing; see `OverloadSetMap` for both arguments. A file that overloads nothing carries the shared empty
-// table and this loop does not run.
+// Commit this file's overload sets (D7). A file that overloads nothing carries the shared empty table and
+// this loop does not run.
 //
-// ⚠ It does NOT detect a CROSS-FILE contest, and cannot: the members were chosen by a parser that saw one
-// file. Two files declaring one name collide in `commitFuncSignatures` above (E3006) exactly as they did
-// before this rung, which is the boundary `Parser.overloadRegistrationNameFor` states.
+// ⭐⭐ **THE MEMBERS ACCUMULATE ACROSS FILES RATHER THAN REPLACING (X-contains).** An `extension` method
+// declared by two files' extensions onto one conformer is ONE overload set whose members are minted in two
+// different parses, and neither parser can see the other's — so this is where they meet, and a plain upsert
+// left whichever file merged last as the whole set. The dedup is by registration NAME and not by position,
+// because the same file is re-merged on a warm rebuild; `OverloadSetMap` carries why that makes the reset
+// mandatory.
+//
+// ⚠ The resulting ORDER is file-merge order, then declaration order within a file — the order E3007 lists
+// tied candidates in. It is deterministic (the merge walks the project's sources in one fixed order), but it
+// is no longer "declaration order" in any sense the author of a single file can see, which is why the
+// diagnostic says which candidates rather than which came first.
 function commitOverloadSets(project Project, artifact FileParseArtifact)
 	for (base, members) in artifact.overloadSets 'each'
-		project.overloadSets.upsert(base, value: members)
+		var accumulated = try project.overloadSets.get(base) otherwise ByteArrayArray.create()
+		for member in members 'eachMember'
+			if not namesInclude(accumulated, name: member) 'notYetCommitted'
+				accumulated.push(member)
+			end 'notYetCommitted'
+		end 'eachMember'
+		project.overloadSets.upsert(base, value: accumulated)
 	end 'each'
 end 'commitOverloadSets'
 

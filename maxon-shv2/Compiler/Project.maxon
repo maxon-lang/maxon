@@ -4082,16 +4082,24 @@ export typealias FuncSignatureMap = Map with (ByteArray, FuncSignature)
 // carries is the bare name while the key `funcSignatures` holds a later overload under is not. This map is
 // what turns one into the other, and `SemanticCheck.resolveOverloadedCalls` is its only reader.
 //
+// ⚠ **A CONTESTED EXTENSION METHOD PUTS NO MEMBER AT ALL UNDER THE BARE NAME (X-contains)** — every
+// declaration of a `<Conformer>.<method>` that two files' extensions declare is registered under its
+// parameter-type suffix. The bare name is still the KEY here and still the callee a call op carries; it is
+// simply not one of the values. See `Parser.overloadRegistrationNameFor`.
+//
 // It is EMPTY for every program that overloads nothing, which is what keeps the resolver a single
 // `isEmpty()` test on that overwhelming majority.
 //
-// ⚠ **IT IS DELIBERATELY NOT IN `resetMergeTargets`.** Every other merge target must reset because it is a
-// PUSH target (a warm rebuild would double it) or FIRST-WINS (a warm rebuild would report every declaration
-// as a duplicate of itself). This one is an UPSERT keyed by the bare name whose VALUE is the whole set, so
-// re-merging a file REPLACES its entry. A member left behind by a previous fold — an edit that deleted an
-// overload — is inert rather than wrong: the resolver looks every candidate up in `funcSignatures`, which IS
-// reset, and skips one that is absent, so a stale name can only shrink a candidate list back to what the
-// program actually declares.
+// ⚠⚠ **IT IS A UNION ACROSS FILES, AND SO IT IS IN `resetMergeTargets` — WHICH THIS HEADER USED TO ARGUE
+// AGAINST (X-contains).** The argument was sound for what the map then held: one file declared every member
+// of a set, so `commitOverloadSets` could UPSERT the whole value and a re-merge would REPLACE it. A
+// cross-file set has no such file. Three files each declaring one member each know only their own, so the
+// members have to ACCUMULATE — and the moment they accumulate, a warm rebuild that re-merges the same files
+// would append every member a second time. `commitOverloadSets` dedups by name, so the doubling itself is
+// inert; the reset is what keeps a member of a set the sources no longer declare from surviving the edit
+// that deleted it. (The resolver's `funcSignatures` filter still makes such a leftover harmless — see
+// `SemanticCheck.overloadCandidates` — but "harmless because a second mechanism catches it" is the
+// arrangement this compiler keeps paying for.)
 export typealias OverloadSetMap = Map with (ByteArray, ByteArrayArray)
 
 // ⭐⭐ **WHICH MEMBER SATISFIES EACH WITNESS-TABLE SLOT — THE CONFORMANCE DECISION, WRITTEN DOWN ONCE (R10).**
@@ -4145,6 +4153,21 @@ let OverloadNameSeparator = "#"
 export function overloadRegistrationName(base ByteArray, suffix ByteArray) returns ByteArray
 	return "{String.from(base)}{OverloadNameSeparator}{String.from(suffix)}".toByteArray()
 end 'overloadRegistrationName'
+
+// ⭐ **AND ITS INVERSE: THE BARE NAME A REGISTRATION NAME WAS MINTED FROM** — `Array.contains` for
+// `Array.contains#Element`. The FIRST separator is the join above; every later one is a suffix PART
+// (`lookup#Registry#bool`), and a base can hold none of them because `#` is outside the identifier alphabet.
+//
+// A name carrying no separator comes back UNCHANGED, which is the answer and not a fallback: an unmangled
+// registration name IS its own bare name. `bareMethodName` takes the same shape one join over.
+//
+// ⚠ One caller, and it is a diagnostic (`ParseStaging.duplicateFunctionMessage`): the name it must explain
+// is one no declaration wrote, so it has to say what the author DID write. Kept beside the join for the
+// reason every inverse in this file is — the separator has one speller.
+export function overloadRegistrationBaseName(registered ByteArray) returns ByteArray
+	let segments = String.from(registered).split(OverloadNameSeparator)
+	return (try segments.get(0) otherwise String.from(registered)).toByteArray()
+end 'overloadRegistrationBaseName'
 
 // ⭐ **THE NAME OF THE SYNTHESIZED NULLARY FUNCTION THAT PRODUCES PARAMETER `paramIndex`'s DEFAULT VALUE**
 // (BATCH2 slice 4) — `__paramDefault#greet#0`. See `SignatureIndex.ParamDefaultInfo` for what the mechanism
