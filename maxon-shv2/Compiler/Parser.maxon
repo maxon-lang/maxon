@@ -1781,10 +1781,16 @@ type MethodDescriptorScan
 	// record's destructor drops, so it needs the descriptor to take that reference through. See
 	// `recordConstructionIn` for why the tuple half is a paren-stack walk rather than a token test.
 	export let buildsRecord as bool
+	// ⭐ Does this region CALL a method whose name some declaration in the program returns a bare type
+	// parameter from (W58)? Such a call hands the caller a `+1` the caller ADOPTS, and when the receiver's
+	// instance binds that position to the caller's OWN type parameter the adopted value is opaque and is
+	// released through the descriptor-gated `__drop_type_param`. The receiver is not resolved here, for the
+	// reason `hasArrayMoveOut`'s is not; see `ProgramSignatures.methodNameEverReturnsBareTypeParameter`.
+	export let adoptsOpaqueCallResult as bool
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -10254,6 +10260,19 @@ export type Parser
 				// type-parameter return at all, and one that did would have no receiver to source a descriptor
 				// from — `staticLayoutNeedsSelfReturn` says so with a position.
 				let returnsBorrowableOpaque = self.signatures.calleeReturnsBareTypeParameter(qualified) and not self.functionDeclIsStatic(q)
+				// ⭐⭐ **A method that ADOPTS a `returns T` result owes that `+1` a release, and the release
+				// is the descriptor-gated `__drop_type_param` (W58).** The exact dual of the signal above: that
+				// one reserves for the body that HANDS a bare `T` over, this one for the body that TAKES it.
+				// Written apart because they are asked of different things — a declaration's own return type
+				// against the calls its body makes — and folded here so one reservation covers a body that does
+				// both.
+				//
+				// `not isStatic` mirrors every sibling opaque signal: a static generic method has no receiver to
+				// source a descriptor from, and one that needed one is `E2015` (`staticLayoutNeedsSelfReturn`).
+				// Gated on the enclosing type being GENERIC as well, which the siblings get for free from the
+				// questions they ask and this one does not: a non-generic type's method has no opaque `T` to
+				// adopt and no `uses` position a descriptor could describe.
+				let adoptsOpaqueResult = scan.adoptsOpaqueCallResult and not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q)
 				// ⭐⭐ **TWO DECLARATIONS CAN WEAR ONE QUALIFIED NAME, AND THE MERGE IS A UNION — NOT THE LAST
 				// ONE IN (found at review).** The columns are keyed by `Type.method` and nothing above this
 				// line guarantees that key is unique: a type body may declare `slotSize()` twice (shv2 keeps
@@ -10271,7 +10290,7 @@ export type Parser
 				// answer that must be wrong is wrong upwards, and `solveDescriptorNeeds`' claim that same-named
 				// methods "share one answer" is made true here rather than assumed.
 				let alreadyContributed = directSeeds.contains(qualified)
-				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque
+				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult
 				var edges = self.qualifiedSelfCallees(site.typeName, callees: scan.callees)
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
 				// (W43b). See `fieldDefaultHelperNamesOf` for why every helper is named rather than only the
@@ -10437,6 +10456,9 @@ export type Parser
 		var constructsSelfLiteral = false
 		// ⭐ Does this region build a RECORD — a struct literal or a tuple literal (W41-opaque)?
 		var buildsRecord = false
+		// ⭐ Does this region CALL a method that hands back a bare type parameter (W58)? See
+		// `MethodDescriptorScan.adoptsOpaqueCallResult`.
+		var adoptsOpaqueCallResult = false
 		// The open `(`/`[`/`{` groups enclosing the cursor, each carrying whether a comma directly inside it
 		// would be a TUPLE's separator rather than an argument list's. See the comma arm below.
 		var groupIsTuplePosition = BoolArray.create()
@@ -10521,6 +10543,18 @@ export type Parser
 			if tokenCanBeAName(self.tokenAt(q)) and not kindSpellsBlockStructure(kind) and self.isBareCallAt(q) 'bareCall'
 				callees.push(self.tokenAt(q).value)
 			end 'bareCall'
+			// ⭐⭐ **A `.<name>(` WHOSE NAME SOME DECLARATION RETURNS A BARE `T` FROM (W58)** — the CALLER's
+			// half of the `returns T` hand-off, and the one shape whose descriptor the sibling signals could not
+			// reach. A SELF call is already covered twice over (its callee's own `returnsBorrowableOpaque` seed
+			// reaches this caller through the fixpoint), so this arm exists for the receivers the fixpoint has no
+			// edge for: a field, a parameter, a local — `cell.get()` inside `type Holder uses T` over a
+			// `Cell with T`, which adopted a `+1` on `T` and had nothing to release it through.
+			//
+			// Read at the `.` rather than at the name, so a keyword-named method (D8) is seen for
+			// `tokenCanBeAName`'s reason and a bare `name(` — which is a SIBLING call, and covered — is not.
+			if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen and self.signatures.methodNameEverReturnsBareTypeParameter(self.tokenAt(q + 1).value) 'adoptsOpaqueResult'
+				adoptsOpaqueCallResult = true
+			end 'adoptsOpaqueResult'
 			if kind == TokenKind.selfType and self.kindAt(q + 1) == TokenKind.leftBrace 'selfLiteral'
 				constructsSelfLiteral = true
 			end 'selfLiteral'
@@ -10560,7 +10594,7 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, endPos: regionEnd)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
 
 	// ⭐ **DOES THE TOKEN AT `q` END A PRIMARY EXPRESSION — i.e. does a `(` after it open a CALL rather than a
@@ -24361,25 +24395,56 @@ export type Parser
 		self.poisonValueAliases(value)
 	end 'poisonMoveSource'
 
-	// The owned-set half of `poisonMoveSource`: mark the ONE live owner of `value` moved-from, refusing a
-	// move that would escape the innermost loop.
-	function poisonOwningBinding(value ValueId, anchor Token) throws ParseError
+	// ⭐ **WHERE IN `ownedBindings` THE ONE LIVE OWNER OF `value` SITS — or `ownedBindings.count()` when this
+	// frame owns it through no BINDING at all** (a statement-scoped temporary, or a value it does not own).
+	// Past-the-end is the same answer `typeParamPositionOf` gives for a name that is not a parameter, and it is
+	// read the same way: `bindingIndexEscapesLoop` compares it against a loop's `ownedFloor`, which is a mark
+	// taken at loop entry and so never exceeds the count — a past-the-end index is therefore below no floor,
+	// which is exactly right for "no binding owns this, so no move of it can escape anything".
+	//
+	// ⚠ **ONE SCAN, BECAUSE ITS TWO CALLERS MUST AGREE ON *WHICH* BINDING THE MOVE IS ABOUT.** The move itself
+	// (`poisonOwningBinding`, which marks that binding `movedFrom`) and the question asked BEFORE moving
+	// (`moveOfValueEscapesLoop`, which decides whether an opaque container store may move at all) would
+	// otherwise be two walks free to settle on two owners — and then a store would take a reference against one
+	// binding's position while the poison landed on another's.
+	function liveOwnerIndexOf(value ValueId) returns BindingMark
 		var i = 0
 		while i < self.ownedBindings.count() 'each'
-			// A `var` bound from `.get(i)`, not a bare `for` element: a field write needs a mutable
-			// binding, and it is written THROUGH the shared `VarInfo` reference (the `Scope.setValue`
-			// idiom), so the flag is observed by every holder — `ownedBindings`, `Scope.vars`, any
-			// loop-phi list.
-			var owned = try self.ownedBindings.get(i) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
+			let owned = try self.ownedBindings.get(i) otherwise panic("liveOwnerIndexOf: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
 			if self.isLiveOwnerOf(owned, value: value) 'source'
-				if self.bindingIndexEscapesLoop(i as BindingMark) 'escapesLoop'
-					throw ParseError.unsupported("moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary", line: anchor.line, column: anchor.column)
-				end 'escapesLoop'
-				owned.movedFrom = true
-				return
+				return i as BindingMark
 			end 'source'
 			i = i + 1
 		end 'each'
+		return self.ownedBindings.count()
+	end 'liveOwnerIndexOf'
+
+	// ⭐ **WOULD MOVING `value` CROSS OUT OF THE INNERMOST ENCLOSING LOOP?** The question a door asks when it
+	// has a second way to discharge its obligation and wants to know whether the cheap one is available — see
+	// `moveElementIntoContainer`'s opaque arm, which takes a REFERENCE instead when the answer is yes. Asked of
+	// the same binding `poisonOwningBinding` would poison, so the two doors cannot disagree about which move
+	// this is.
+	function moveOfValueEscapesLoop(value ValueId) returns bool
+		return self.bindingIndexEscapesLoop(self.liveOwnerIndexOf(value))
+	end 'moveOfValueEscapesLoop'
+
+	// The owned-set half of `poisonMoveSource`: mark the ONE live owner of `value` moved-from, refusing a
+	// move that would escape the innermost loop.
+	function poisonOwningBinding(value ValueId, anchor Token) throws ParseError
+		let index = self.liveOwnerIndexOf(value)
+		if index >= self.ownedBindings.count() 'noBindingOwnsIt'
+			return
+		end 'noBindingOwnsIt'
+
+		if self.bindingIndexEscapesLoop(index) 'escapesLoop'
+			throw ParseError.unsupported("moving a value declared outside this loop from inside the loop body — its drop on the loop's other exit paths (the back edge would re-move it next iteration; a `break` leaves it live on the normal exit) needs path-sensitive elaboration across the loop boundary, which arrives with a later wave. Move the value into the loop body, or restructure so the move does not cross the loop boundary", line: anchor.line, column: anchor.column)
+		end 'escapesLoop'
+
+		// A `var` bound from `.get(index)`, not a bare `for` element: a field write needs a mutable binding,
+		// and it is written THROUGH the shared `VarInfo` reference (the `Scope.setValue` idiom), so the flag is
+		// observed by every holder — `ownedBindings`, `Scope.vars`, any loop-phi list.
+		var owned = try self.ownedBindings.get(index) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		owned.movedFrom = true
 	end 'poisonOwningBinding'
 
 	// ⭐⭐ **A MOVE POISONS EVERY NAME THAT READS THE VALUE, NOT ONLY THE ONE THAT OWNS IT.** An immutable
@@ -45780,6 +45845,28 @@ export type Parser
 		// concrete argument.
 		if self.signatures.containerElementIsOpaque(giid) 'opaque'
 			try self.requireOwnedOpaqueElement(value, valueStart: valueStart)
+
+			// ⭐⭐ **INSIDE A LOOP THE FRAME TAKES A NEW REFERENCE INSTEAD OF GIVING UP ITS OWN (W58).** A move
+			// is the right and cheaper discharge only while this frame will not read the value again, and
+			// across a back edge it provably will: the next iteration stores the same value into the next
+			// slot. A `movedFrom` bit is set once, at the store's TEXT, and cannot say "moved on iteration 3,
+			// live on iteration 4" — which is why the move door refuses this outright
+			// (`poisonOwningBinding`). Taking a reference needs no such distinction: N iterations take N
+			// references, the binding is never poisoned, and its own one is released at scope exit exactly as
+			// it would have been had the loop not been written.
+			//
+			// ⚠ **AND THE ZERO-ITERATION CASE IS WHY THIS IS A CORRECTION AND NOT ONLY A WIDENING.** A move
+			// decides at parse time that the store happened; a loop whose body never runs then leaks the
+			// reference its consuming caller handed over, with the binding marked moved and nothing left to
+			// release it. `a-loop-that-never-runs-still-releases-the-value` is that program.
+			//
+			// The value must still be one this frame OWNS (the refusal above is unmoved): a BORROW handed to
+			// an opaque sink is a different question, answered at the caller (`handleEscapingBorrowFeed`), and
+			// widening it here would trade a clean refusal for a leak — see `requireOwnedOpaqueElement`.
+			if self.moveOfValueEscapesLoop(value) 'referenceRatherThanMove'
+				return self.coOwnBorrowedOpaque(value, range: SourceRange.ofToken(self.tokenAt(valueStart)))
+			end 'referenceRatherThanMove'
+
 			try self.moveOpaqueFeedArg(value, valueStart: valueStart)
 			return value
 		end 'opaque'
@@ -45870,17 +45957,27 @@ export type Parser
 	// *whoever hands a value to an opaque sink hands over a reference IT owns; if it does not own one, it takes
 	// one first* — and the refusal below is this frame's half of it.
 	//
-	// ⚠ **WIDENING THIS DOOR TO CO-OWN A BORROW INSTEAD WAS TRIED AND MEASURED WORSE, TWICE.** (a) Alone it
-	// changes nothing: a feed parameter is enrolled OWNED, so `emitScopeDrops` releases it at the method's exit
-	// and that release cancels the retain the store just took — read off the emitted x64 as
-	// `__retain_type_param` … `__arr_set` … `__drop_type_param`, with the `Map` still segfaulting at 13.
-	// (b) Reserving the descriptor such a co-own needs (a `push`/`set`/`insert` token seed) turns
-	// `feed-into-borrowing-user-push-rejected` from a clean REFUSAL into a compiling program that LEAKS
-	// (exit 101) — the descriptor it gains has a ZERO `destroyFunc@40`, because that word is stamped only for an
-	// instance holding a managed opaque `Array` FIELD while `retainFunc@64` is stamped off the type ARGUMENT.
-	// A refusal traded for a leak is not a widening. That asymmetry is a defect of its own and is filed, not
-	// worked around here: the identical leak reproduces with the descriptor sourced from a plain `sizeof(T)`,
-	// so it predates any of this.
+	// ⚠ **WIDENING THIS DOOR TO CO-OWN A BORROW *UNCONDITIONALLY* WAS TRIED AND MEASURED WORSE.** A feed
+	// parameter is enrolled OWNED, so `emitScopeDrops` releases it at the method's exit and that release
+	// cancels the retain an unconditional store would take — read off the emitted x64 as
+	// `__retain_type_param` … `__arr_set` … `__drop_type_param`, with the `Map` still segfaulting at 13. The
+	// caller is the frame that can see the borrow and it is where the reference is taken
+	// (`handleEscapingBorrowFeed`); this door's job is to refuse the borrows no caller can be asked about.
+	//
+	// ⭐ **THE *CONDITIONAL* CO-OWN IS BUILT, AND IT IS NOT THAT WIDENING** (W58). An opaque store INSIDE A
+	// LOOP takes a reference rather than moving — see `moveElementIntoContainer`'s arm — because a `movedFrom`
+	// bit cannot describe a back edge. It leaves this refusal exactly where it was: the value must still be one
+	// the frame owns, and both spellings of a borrowed element are still refused here.
+	//
+	// ⛔ **THE SECOND HALF OF THAT MEASUREMENT HAS SINCE GONE STALE, AND IT IS RECORDED RATHER THAN DELETED
+	// BECAUSE IT IS WHY THE CONDITIONAL FORM IS SAFE.** It read: *"reserving the descriptor such a co-own needs
+	// turns `feed-into-borrowing-user-push-rejected` from a clean REFUSAL into a compiling program that LEAKS
+	// (exit 101) — the descriptor it gains has a ZERO `destroyFunc@40`, because that word is stamped only for
+	// an instance holding a managed opaque `Array` FIELD while `retainFunc@64` is stamped off the type
+	// ARGUMENT."* That asymmetry was filed as a defect of its own and has been CLOSED at its source — both
+	// words now come off ONE `typeParamOwnershipProtocol` answer, so they are non-zero together by
+	// construction. MEASURED on the tip: that program compiles and 100 calls of it exit **0**, and it is now
+	// `generic-type-nested-array-typealias.feed-into-a-borrowing-user-push-releases-what-it-took`.
 	function requireOwnedOpaqueElement(value ValueId, valueStart TokenIndex) throws ParseError
 		if self.valueIsOwnedHeap(value) 'owned'
 			return

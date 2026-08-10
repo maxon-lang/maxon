@@ -1739,18 +1739,31 @@ end 'main'
 error E2015: <fragment>:19:13: Unsupported: moving a value that is not owned into an `Array with <type parameter>` in a shared generic body — the body cannot copy an opaque `T`, so the element must come from a parameter the method consumes or from a `pop`/`remove` that moved one out; a borrowed element (`get`/`first`/`last`, a `for` element, an opaque field read) would give the array a second reference to a record it destroys once
 ```
 
-### A feed handed to a BORROWING `push` that is not an array's is rejected, not aborted
+### A feed handed to a BORROWING `push` that is not an array's releases what it took
 
 The receiver of a `push`/`set`/`insert` is not resolvable when the feed sweep runs — it precedes every body
 parse — so a call on a USER type whose `push` merely borrows marks its argument a feed exactly as a real array
 move-in does. The parameter is then enrolled owned and nothing moves it, so it is released at the method's exit
-through the descriptor-gated `__drop_type_param`; and the descriptor is reserved only for a method whose feed
-can be left live, which this straight-line body is not. The two bodies are the same token shape one receiver
-TYPE apart, so no pre-scan can separate them — the disagreement is caught once the body is emitted and REFUSED
-with a position. Before, it reached the lowering, which ABORTED THE COMPILER naming the function and no source
-location at all.
+through the descriptor-gated `__drop_type_param`. The two bodies are the same token shape one receiver TYPE
+apart, so no pre-scan can separate them.
 
-<!-- test: feed-into-borrowing-user-push-rejected -->
+⭐⭐ **THIS CASE WAS A REFUSAL, AND IT WAS PINNING A MISSING RESERVATION RATHER THAN AN UNSOUND BODY (W58).**
+The release above is perfectly well-defined; what `add` lacked was the descriptor to read the destructor out
+of, because the reservation was seeded only for a method whose feed can be left LIVE and this straight-line
+body's cannot. Its receiver `Sink.push(x S) returns S` is a bare type-parameter return, so `add` ADOPTS the
+`+1` that hand-off owes (`specs-shv2/generic-opaque-call-result.md`) — and the seed for THAT is what now gives
+`add` a descriptor. The adopted `kept` and the enrolled `item` are then released once each at the method's
+exit, through the same descriptor.
+
+⛔ **THE PREDICTION THIS CONTRADICTS IS RECORDED IN `requireOwnedOpaqueElement`'s HEADER, AND IT WAS TRUE WHEN
+IT WAS WRITTEN.** *"Reserving the descriptor such a co-own needs turns `feed-into-borrowing-user-push-rejected`
+from a clean REFUSAL into a compiling program that LEAKS (exit 101) — the descriptor it gains has a ZERO
+`destroyFunc@40`."* That zero was the `destroyFunc@40`/`retainFunc@64` asymmetry, and it has since been closed
+at its source (`ProgramSignatures.typeParamOwnershipProtocol` — both words off ONE protocol answer). MEASURED
+on this tip: 100 adds of a heap-built element print and exit **0**, not 101. A blocker note ages faster than
+the code it is about.
+
+<!-- test: feed-into-a-borrowing-user-push-releases-what-it-took -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 
@@ -1784,12 +1797,20 @@ typealias StringContainer = Container with String
 
 function main() returns ExitCode
 	var sc = StringContainer.create()
-	sc.add("a string long enough to force a heap allocation")
+	var i = 0 as ExitCode
+	while i < 100 'addMany'
+		sc.add("a string number {i} long enough to force a heap allocation")
+		i = i + 1
+	end 'addMany'
+	print("added\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:25:18: Unsupported: 'add' owns an opaque type-parameter value it must release on some path, but the method reserves no layout descriptor to release it through — the shared generic body compiles once for every instantiation, so the value's destructor is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a type-parameter argument handed to a `push`/`set`/`insert` on something that is NOT an `Array` and so never takes ownership of it (move it into an `Array with <type parameter>` or a type-parameter field instead); a `pop`/`remove` of an opaque element in a `static function` (do it on an instance method, which can source the descriptor from `self`)
+```exitcode
+0
+```
+```stdout
+added
 ```
 
 ### A TYPE EXTENSION's array mutator feeds the opaque element exactly as the type's own body does
@@ -2656,27 +2677,33 @@ end 'main'
 8
 ```
 
-### Forwarding a BORROWED opaque element to a sibling that stores it is refused, not miscompiled
+### Forwarding a BORROWED opaque element to a sibling that stores it takes a reference for it
 
-⛔ **This is the `Map.grow()` double free in its smallest form, and until W41-fix it COMPILED.** The
-sibling's parameter is a callee-storage feed: it is enrolled OWNED and moved into durable storage, so the
-callee's whole ownership story rests on the caller having handed over a reference. A borrowed element
-handed over at that position is a reference nobody transferred — freed once by the sibling's container and
-once by the container it was read out of.
+⛔ **This is the `Map.grow()` double free in its smallest form, and it once COMPILED.** The sibling's
+parameter is a callee-storage feed: it is enrolled OWNED and moved into durable storage, so the callee's
+whole ownership story rests on the caller having handed over a reference. A borrowed element handed over at
+that position is a reference nobody transferred — freed once by the sibling's container and once by the
+container it was read out of.
 
-The caller is the only frame that can see the borrow, so that is where the reference is now taken
-(`handleEscapingBorrowFeed`). It needs the enclosing instance's layout descriptor to take it through, and
-`relay` reserves none: the storing sibling MOVES its parameter, so IT needs no descriptor either, so the
-need-fixpoint has nothing to propagate. Refused with a position rather than compiled — the same trade
-`requireDescriptorForOpaqueDrops` documents.
+The caller is the only frame that can see the borrow, so that is where the reference is taken
+(`handleEscapingBorrowFeed`), through the enclosing instance's layout descriptor.
 
-⚠ **The refusal is the shape, not the borrow.** The identical program with the read moved INTO `stash`
-compiles and runs; so does one that hands `stash` a value `relay` owns. What is missing is a descriptor
-seed for "forwards a borrowed opaque value to a storing sibling", and the token pre-scan cannot see that
-forward at all — the forwarded value is an expression, not a parameter, so the feed-edge scanner does not
-record it either.
+⭐⭐ **THIS CASE WAS A REFUSAL, AND WHAT IT WAS REALLY PINNING WAS A MISSING RESERVATION (W58).** `relay`
+reserved no descriptor, so the reference it owed had nothing to be taken through and the body was refused
+with a position. Its own paragraph said what was missing — *"a descriptor seed for 'forwards a borrowed
+opaque value to a storing sibling'"* — and named the reason no seed could exist: the forwarded value is an
+EXPRESSION, so no feed scan records it. The seed that closes it does not look at the forward at all. It
+looks at the CALL the expression is: `items.get(i)` names a method some declaration in the program returns
+a bare type parameter from, and a body that calls one ADOPTS the `+1` it hands back
+(`ProgramSignatures.methodNameEverReturnsBareTypeParameter`). `relay` therefore carries a descriptor for
+its own adopted result, and the reference it owes the forward is taken through the same one.
 
-<!-- test: forwarding-a-borrowed-opaque-element-to-a-storing-sibling-rejected -->
+⚠ **MEASURED, and against the runnable oracle**, because a refusal traded for a leak would be strictly
+worse than the refusal: 100 relays of one element print `spare 100` and exit **0** under both `maxon-shv2`
+and the C# bootstrap. The loop is what makes that reading worth having — a per-call leak would be a hundred
+records rather than one, and a doubled release faults on the poison byte.
+
+<!-- test: a-borrowed-opaque-element-forwarded-to-a-storing-sibling-is-referenced -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Idx = int(0 to u64.max)
@@ -2702,6 +2729,10 @@ type GHolder uses T
 	export function relay(i Idx)
 		stash(try items.get(i) otherwise panic("out of range"))
 	end 'relay'
+
+	export function spareCount() returns Idx
+		return spare.count()
+	end 'spareCount'
 end 'GHolder'
 
 typealias StringHolder = GHolder with String
@@ -2709,10 +2740,18 @@ typealias StringHolder = GHolder with String
 function main() returns ExitCode
 	var h = StringHolder.create()
 	h.seed("a value long enough to force a heap allocation")
-	h.relay(0)
+	var n = 0 as Idx
+	while n < 100 'relayMany'
+		h.relay(0)
+		n = n + 1
+	end 'relayMany'
+	print("spare {h.spareCount()}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:23:18: Unsupported: 'relay' takes a reference to a borrowed type-parameter value, but the method reserves no layout descriptor to take that reference through — the shared generic body compiles once for every instantiation, so how a `T` is referenced (a copy for a `String`, an incref for a struct, nothing for an `int`) is read from the enclosing instance's descriptor at run time, and the parameter carrying it is reserved only for the method shapes that are known ahead of the body to need one. Two shapes reach this: a `static function` that builds a record out of a borrowed `T`, which has no `self` to source the descriptor from (build the record in an instance method instead); and a method that FORWARDS a borrowed `T` — a `get`/`first`/`last`, a `for` element, an opaque field read — to a sibling that moves it into durable storage, which is not built yet (read the value in the sibling itself, or pass it a value this method owns)
+```exitcode
+0
+```
+```stdout
+spare 100
 ```
