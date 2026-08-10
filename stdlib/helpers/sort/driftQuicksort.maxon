@@ -29,9 +29,39 @@ export extension Array
 	//
 	// Buffers whichever class is smaller, so `scratch` need only hold
 	// `min(lessCount, geCount) <= (hi - lo) / 2` elements.
-	function stablePartition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, scratch MergeScratchArray, cmp SortComparator) returns SortIndex
+	//
+	// ⚠ THE PIVOT IS HELD IN `pivotHold`, NOT READ OUT OF THE RANGE IT PARTITIONS.
+	// A pivot read straight from `managed[pivotIndex]` is a BORROW of that slot,
+	// and the compaction cursor `w` walks up to and past `pivotIndex` — so the
+	// `managed.set(w, …)` that arrives there RELEASES the record the comparator
+	// is still reading (`__managed_mem_set` frees the occupant it displaces).
+	// Nothing else holds that record: the store takes its own reference through
+	// `retainFunc@64`, which for a byte record is `__str_clone`, a DEEP CLONE —
+	// so the copy the buffer or the lower slot receives is a DIFFERENT record and
+	// the borrowed one is freed under the borrow. MEASURED under the self-hosted
+	// move model: a partition that must answer 3 answered 5, silently, with no
+	// crash and no leak. Parking the pivot in a one-slot storage that this pass
+	// never writes puts it out of every store's reach for the whole pass.
+	// `smallSort.maxon:24-32` names the same hazard as the reason `swap` routes
+	// through the raw `managed.swap` builtin rather than get + set.
+	//
+	// `pivotHold` costs no allocation per call: `clear` keeps the capacity it
+	// already has, so only the very first `push` of a whole sort grows it.
+	//
+	// The SCANNED element is the same hazard one slot smaller, and both split
+	// loops below answer it the same way: each tests membership of the BUFFERED
+	// class first, so `v`'s last mention is the in-place `managed.set` that
+	// consumes it. `v` borrows `managed`, and a borrow of `managed` still named
+	// after a write to `managed` is the shape this whole function exists to keep
+	// out. Written the other way round the two arms remain mutually exclusive
+	// and the program is still sound, but the borrow rule cannot see that and
+	// refuses it (E3070, blaming the arm that in that iteration never runs).
+	function stablePartition(lo SortIndex, hi SortIndex, pivotIndex SortIndex, scratch MergeScratchArray, pivotHold MergeScratchArray, cmp SortComparator) returns SortIndex
 		Log.trace("driftQuicksort.partition")
-		let pv = try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot")
+		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("stablePartition: get OOB at pivot")
+		pivotHold.clear()
+		pivotHold.push(pivotAtHome)
+		let pv = try pivotHold.get(0) otherwise panic("stablePartition: pivotHold is empty one line after a push into it")
 		// Count the `< pivot` class so we can pick the smaller class to buffer.
 		var lessCount = 0 as SortIndex
 		var scan = lo
@@ -57,13 +87,13 @@ export extension Array
 			var i = lo
 			while i < hi 'splitGe'
 				let v = try managed.get(i) otherwise panic("stablePartition: get OOB at i (ge)")
-				if cmp(v, pv) == Ordering.lessThan 'keepLeft'
-					try managed.set(w, value: v) otherwise panic("stablePartition: set OOB at w (ge)")
-					w = w + 1
-				end 'keepLeft' else 'toScratch'
+				if cmp(v, pv) != Ordering.lessThan 'toScratch'
 					try scratch.set(k, value: v) otherwise panic("stablePartition: scratch.set OOB (ge)")
 					k = k + 1
-				end 'toScratch'
+				end 'toScratch' else 'keepLeft'
+					try managed.set(w, value: v) otherwise panic("stablePartition: set OOB at w (ge)")
+					w = w + 1
+				end 'keepLeft'
 				i = i + 1
 			end 'splitGe'
 			var out = lo + lessCount
@@ -125,12 +155,16 @@ export extension Array
 	// pivot — impossible, since the pivot is drawn from the slice (so at least
 	// one element equals it and sits in the right class), making the left side
 	// shrink whenever it is non-empty and the right side shrink otherwise.
-	export function stableQuicksortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
+	//
+	// `pivotHold` is `stablePartition`'s one-slot pivot storage, threaded from
+	// `driftsortRange` alongside `scratch` for the same reason: allocated once
+	// per sort rather than once per partition.
+	export function stableQuicksortRange(lo SortIndex, hi SortIndex, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator)
 		var curLo = lo
 		var curHi = hi
 		while curHi - curLo > 32 'loop'
 			let pivotIndex = self.choosePivot(curLo, hi: curHi, cmp: cmp)
-			let p = self.stablePartition(curLo, hi: curHi, pivotIndex: pivotIndex, scratch: scratch, cmp: cmp)
+			let p = self.stablePartition(curLo, hi: curHi, pivotIndex: pivotIndex, scratch: scratch, pivotHold: pivotHold, cmp: cmp)
 			// [curLo, p) is the `< pivot` class; [p, curHi) is `>= pivot`.
 			// If the left class is empty, every element is `>= pivot`; sorting
 			// the right class alone makes progress because the pivot's group is
@@ -159,10 +193,10 @@ export extension Array
 			end 'allGe'
 
 			if leftLen <= rightLen 'leftSmaller'
-				self.stableQuicksortRange(curLo, hi: p, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+				self.stableQuicksortRange(curLo, hi: p, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 				curLo = p
 			end 'leftSmaller' else 'rightSmaller'
-				self.stableQuicksortRange(p, hi: curHi, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+				self.stableQuicksortRange(p, hi: curHi, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 				curHi = p
 			end 'rightSmaller'
 		end 'loop'

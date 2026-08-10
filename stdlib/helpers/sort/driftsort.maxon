@@ -175,7 +175,7 @@ export extension Array
 	//     logical run; `mergeTopTwo` quicksorts it just before merging.
 	// The eager/lazy choice is the caller's (driftsort sets eager for small
 	// inputs where a sort-then-merge beats deferring); see `driftsortRange`.
-	function createRun(lo SortIndex, hi SortIndex, minGood SortIndex, eager bool, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator) returns SortRun
+	function createRun(lo SortIndex, hi SortIndex, minGood SortIndex, eager bool, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator) returns SortRun
 		let avail = hi - lo
 		if avail <= 1 'trivial'
 			return SortRun.init(lo, length: avail, power: 0 as NodePower)
@@ -188,7 +188,7 @@ export extension Array
 		let want = minGood if minGood < avail else avail
 		if eager 'eagerSort'
 			Log.trace("driftsort.eagerRun")
-			self.stableQuicksortRange(lo, hi: lo + want, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+			self.stableQuicksortRange(lo, hi: lo + want, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 			return SortRun.init(lo, length: want, power: 0 as NodePower)
 		end 'eagerSort'
 		Log.trace("driftsort.logicalRun")
@@ -251,16 +251,16 @@ export extension Array
 	// Driftsort's `logical_merge`: an unsorted (logical) run is stably
 	// quicksorted here, just before it is physically merged. The merged result
 	// is always sorted.
-	function mergeTopTwo(stack RunArrayStack, scratch MergeScratchArray, scratchCap SortIndex, cmp SortComparator)
+	function mergeTopTwo(stack RunArrayStack, scratch MergeScratchArray, scratchCap SortIndex, pivotHold MergeScratchArray, cmp SortComparator)
 		Log.trace("driftsort.merge")
 		let top = stack.count() - 1
 		let right = try stack.get(top) otherwise panic("mergeTopTwo: stack.get OOB at top")
 		let left = try stack.get(top - 1) otherwise panic("mergeTopTwo: stack.get OOB at top-1")
 		if not left.sorted 'sortLeft'
-			self.stableQuicksortRange(left.startIndex, hi: left.startIndex + left.length, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+			self.stableQuicksortRange(left.startIndex, hi: left.startIndex + left.length, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 		end 'sortLeft'
 		if not right.sorted 'sortRight'
-			self.stableQuicksortRange(right.startIndex, hi: right.startIndex + right.length, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+			self.stableQuicksortRange(right.startIndex, hi: right.startIndex + right.length, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 		end 'sortRight'
 		self.mergeAdaptive(left.startIndex, mid: right.startIndex, hi: right.startIndex + right.length, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
 		// Replace the top two stack entries with the merged run. The new
@@ -291,6 +291,13 @@ export extension Array
 		let minGood = self.minGoodRunLen(n)
 		var stack = RunArrayStack.create()
 		var scratch = MergeScratchArray.create()
+		// `stablePartition`'s one-slot pivot storage. It lives out here for the
+		// same reason `scratch` does — so a sort pays for it once rather than
+		// once per partition — and it must be a storage NOTHING ELSE WRITES: that
+		// is the whole point of it (see `driftQuicksort.stablePartition`). It
+		// starts empty; the first partition's `push` gives it its one slot and
+		// every later `clear` + `push` reuses that slot's capacity.
+		var pivotHold = MergeScratchArray.create()
 		// Driftsort auxiliary-buffer sizing. Rust uses
 		//   alloc_len = max(n - n/2, min(n, MAX_FULL_ALLOC_BYTES / sizeof(T)), SMALL_SORT_SCRATCH)
 		// i.e. a full-size buffer (capped at 8 MB worth of elements) shrinking
@@ -332,7 +339,7 @@ export extension Array
 		let eager = n <= 64
 		var curStart = lo
 		while curStart < hi 'streamRuns'
-			let newRun = self.createRun(curStart, hi: hi, minGood: minGood, eager: eager, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+			let newRun = self.createRun(curStart, hi: hi, minGood: minGood, eager: eager, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 			let runLen = newRun.length
 			// Compute power between the previous top-of-stack run and this
 			// new one, then pop-merge while existing top runs have power
@@ -359,7 +366,7 @@ export extension Array
 					// Merge top into below. The boundary power of the merged
 					// pair against `newRun` is the same as `top.power` since
 					// top is the rightmost stack entry adjacent to `newRun`.
-					self.mergeTopTwo(stack, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+					self.mergeTopTwo(stack, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 				end 'popMerge'
 			end 'havePrev'
 			Log.trace("driftsort.push")
@@ -368,14 +375,14 @@ export extension Array
 		end 'streamRuns'
 		// Drain: merge top-to-bottom until only one run remains.
 		while stack.count() > 1 'drain'
-			self.mergeTopTwo(stack, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+			self.mergeTopTwo(stack, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 		end 'drain'
 		// A lone logical run never reached a merge (e.g. the whole input became
 		// one short run). Sort it so the final array is ordered.
 		if stack.count() == 1 'lone'
 			let only = try stack.get(0) otherwise panic("driftsortRange: stack.get OOB at drain end")
 			if not only.sorted 'loneLogical'
-				self.stableQuicksortRange(only.startIndex, hi: only.startIndex + only.length, scratch: scratch, scratchCap: scratchCap, cmp: cmp)
+				self.stableQuicksortRange(only.startIndex, hi: only.startIndex + only.length, scratch: scratch, scratchCap: scratchCap, pivotHold: pivotHold, cmp: cmp)
 			end 'loneLogical'
 		end 'lone'
 	end 'driftsortRange'

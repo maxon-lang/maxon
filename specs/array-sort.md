@@ -1142,6 +1142,101 @@ end 'main'
 stable
 ```
 
+<!-- test: driftsort-stable-partition-managed-elements -->
+Driftsort's stable quicksort run-builder (`driftQuicksort.stablePartition`) over
+elements that OWN heap memory. Nothing else in this file reaches that pair: every
+case that gets past the small-sort threshold sorts bare integers, and every case
+with a String or a managed field is small enough to finish in `smallSortRange`.
+That gap is why a use-after-free sat in the partition unnoticed — it reads its
+pivot out of the very range it rearranges, and the compaction cursor walks over
+that slot. The `partitioned` token is part of the assertion: without it a future
+change to `minGoodRunLen` could stop reaching the partition and this case would
+keep passing while testing nothing.
+
+Input is 25 descending blocks of 4 (n = 100, natural runs of 4 < minGood 50), so
+run creation defers a 50-element logical run and the merge stably quicksorts it.
+Keys repeat five times each, so `stable` is a real question; `intact` re-derives
+every element's String from the tag it travelled with, so a freed or duplicated
+record is caught rather than merely survived.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Labelled
+	export var key as Integer
+	export var tag as Integer
+	export var label as String
+
+	export static function init(key Integer, tag Integer, label String) returns Self
+		return Self{key: key, tag: tag, label: label}
+	end 'init'
+end 'Labelled'
+
+typealias LabelledArray = Array with Labelled
+
+function byKey(a Labelled, b Labelled) returns Ordering
+	return a.key.compare(b.key)
+end 'byKey'
+
+function main() returns ExitCode
+	var a = LabelledArray.create()
+	var blk = 0
+	var tag = 0
+	while blk < 25 'blocks'
+		let base = (blk mod 5) * 4
+		var d = 4
+		while d > 0 'desc'
+			a.push(Labelled.init(base + d, tag: tag, label: "item-{tag} carrying a payload long enough to be a heap record"))
+			tag = tag + 1
+			d = d - 1
+		end 'desc'
+		blk = blk + 1
+	end 'blocks'
+	Log.startCapture()
+	a.sort(byKey)
+	let keys = Log.stopCapture()
+	if Log.fired(keys, key: "driftQuicksort.partition") 'partitioned'
+		print("partitioned ")
+	end 'partitioned'
+	var sorted = true
+	var stable = true
+	var intact = true
+	var i = 0
+	while i < a.count() 'walk'
+		let curr = try a.get(i) otherwise return 90
+		if not curr.label.equals("item-{curr.tag} carrying a payload long enough to be a heap record") 'labelWrong'
+			intact = false
+		end 'labelWrong'
+		if i > 0 'hasPrev'
+			let prev = try a.get(i - 1) otherwise return 91
+			if prev.key > curr.key 'outOfOrder'
+				sorted = false
+			end 'outOfOrder'
+			if prev.key == curr.key and prev.tag > curr.tag 'unstable'
+				stable = false
+			end 'unstable'
+		end 'hasPrev'
+		i = i + 1
+	end 'walk'
+	if sorted 'isSorted'
+		print("sorted ")
+	end 'isSorted'
+	if stable 'isStable'
+		print("stable ")
+	end 'isStable'
+	if intact 'isIntact'
+		print("intact")
+	end 'isIntact'
+	print("\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+partitioned sorted stable intact
+```
+
 <!-- test: referenceMergeSort-callable -->
 `referenceMergeSort(cmp)` is the public entry that Stage 5+ driftsort tests
 cross-check against. Same output as `sort(cmp)` for the same input.
