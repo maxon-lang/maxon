@@ -1887,12 +1887,6 @@ function requireTriedWitnessDispatch(project Project, func IrFunction, opIndex O
 	reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing interface method requires try: wrap the witness dispatch as `try <receiver>.<method>(…)` — a bare call drops the error flag the method returns", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 end 'requireTriedWitnessDispatch'
 
-// ⭐ **`args[0]` IS THE BORROWED RECEIVER, WHICH FILLS NO FORMAL** — so interface formal `j` is
-// `args[j + WitnessReceiverArgCount]`. The convention's home is `Parser.withWitnessReceiver`, which is what
-// prepends the receiver after the user's arguments have been slotted; this names the offset rather than
-// spelling a bare `1` at the one site in this pass that has to undo it.
-let WitnessReceiverArgCount = 1 as ParamCount
-
 // The witness slot list per dispatched interface, keyed by the declaration-order handle a `witnessDispatch`
 // op carries. See `checkCalls`, where the one instance is created, for why it exists.
 typealias WitnessSlotsByDeclIndex = Map with (InterfaceDeclIndex, CollectedInterfaceMethodArray)
@@ -1942,7 +1936,7 @@ function checkWitnessArgTypes(project Project, func IrFunction, signatures Progr
 	let slots = witnessSlotsAt(signatures, witnessSlots: witnessSlots, dispatched: dispatched, interfaceDeclIndex: interfaceDeclIndex)
 	let requirement = (try slots.get(methodIndex) otherwise panic("checkWitnessArgTypes: slot {methodIndex} is outside the {slots.count()} witness slots of interface '{String.from(dispatched.name)}' — the op's `(interfaceDeclIndex, methodIndex)` pair was numbered against a different slot list")).method
 	let callRange = project.opRanges.get(opIndex)
-	let witnessReceiver = try args.get(0) otherwise panic("checkWitnessArgTypes: args.get OOB at 0 on an empty argument list — a witness dispatch carries its borrowed receiver at position 0 before any actual")
+	let witnessReceiver = witnessDispatchReceiver(args)
 
 	for j in 0 upto requirement.paramTypeNames.count() 'eachFormal'
 		let formalName = try requirement.paramTypeNames.get(j) otherwise panic("checkWitnessArgTypes: paramTypeNames.get OOB at {j} below count {requirement.paramTypeNames.count()}")
@@ -3751,22 +3745,43 @@ type ExistentialSiteClaim
 	export var siteBinding as ByteArray
 	export var conformerBinding as ByteArray
 
+	// ⭐⭐ **THE ROUTE A NESTED FAULT WAS FOUND DOWN, OR THREE EMPTY NAMES FOR ONE FOUND DIRECTLY (W59).** A
+	// claim can fail one level below the interface the position is declared at — `Bag with (Integer, Cursor
+	// with Integer)` claims something about the CURSOR a conformer binds, not about the conformer — and a
+	// sentence that reported it as the outer interface's would name the wrong type twice: the wrong interface
+	// ('Bag' where the fault is 'Cursor'), and the wrong binder ('UpBag' where it is the cursor `UpBag` bound).
+	// MEASURED as exactly that pair of wrong nouns before these fields existed.
+	//
+	// EMPTY for a direct claim, which is the overwhelming majority, and the two sentence builders branch on
+	// `heldRoute` being empty. That is the same statement `agreeing()` makes with its three empty names — a
+	// name this claim has nothing to say about is written as no name, never as an invented one.
+	export var heldRoute as ByteArray
+	export var heldAt as ByteArray
+	export var heldBinding as ByteArray
+
 	// An agreeing claim names nothing: there is no disagreement to describe, and inventing spellings for the
-	// three fields would be exactly the sentinel this codebase refuses. Every reader gates on `status` first.
+	// fields would be exactly the sentinel this codebase refuses. Every reader gates on `status` first.
 	static function agreeing() returns Self
-		return Self{status: ExistentialSiteClaimStatus.agrees, associatedName: EmptySourceText, siteBinding: EmptySourceText, conformerBinding: EmptySourceText}
+		return Self{status: ExistentialSiteClaimStatus.agrees, associatedName: EmptySourceText, siteBinding: EmptySourceText, conformerBinding: EmptySourceText, heldRoute: EmptySourceText, heldAt: EmptySourceText, heldBinding: EmptySourceText}
 	end 'agreeing'
 
 	static function disagreeing(associatedName ByteArray, siteBinding ByteArray, conformerBinding ByteArray) returns Self
-		return Self{status: ExistentialSiteClaimStatus.disagrees, associatedName: associatedName, siteBinding: siteBinding, conformerBinding: conformerBinding}
+		return Self{status: ExistentialSiteClaimStatus.disagrees, associatedName: associatedName, siteBinding: siteBinding, conformerBinding: conformerBinding, heldRoute: EmptySourceText, heldAt: EmptySourceText, heldBinding: EmptySourceText}
 	end 'disagreeing'
 
 	// An unresolvable claim names no conformer binding, and that is not a missing field: the fault is that
 	// nothing has fixed the SITE's side, so the conformer's was never reached and there is nothing to report
 	// about it. The two sentences that word this refusal say so.
 	static function unresolved(associatedName ByteArray, siteBinding ByteArray) returns Self
-		return Self{status: ExistentialSiteClaimStatus.unresolvable, associatedName: associatedName, siteBinding: siteBinding, conformerBinding: EmptySourceText}
+		return Self{status: ExistentialSiteClaimStatus.unresolvable, associatedName: associatedName, siteBinding: siteBinding, conformerBinding: EmptySourceText, heldRoute: EmptySourceText, heldAt: EmptySourceText, heldBinding: EmptySourceText}
 	end 'unresolved'
+
+	// The same verdict, re-anchored on the HELD position it was reached through — what
+	// `heldPositionNestedClaim` returns once the recursion has answered. The verdict's own three names stay
+	// exactly as the nested level found them; what this adds is where that level came from.
+	export function throughHeldPosition(route ByteArray, at ByteArray, binding ByteArray) returns Self
+		return Self{status: self.status, associatedName: self.associatedName, siteBinding: self.siteBinding, conformerBinding: self.conformerBinding, heldRoute: route, heldAt: at, heldBinding: binding}
+	end 'throughHeldPosition'
 end 'ExistentialSiteClaim'
 
 // ⭐⭐ **DOES THE VALUE BEING WIDENED BIND WHAT THE SITE CLAIMED? — E3127, the discharge the E3125 DEFERRAL
@@ -3812,7 +3827,23 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
 		// programs across `associated-type-held-at-an-interface` and `parameterized-existential`.** What a held
 		// argument must agree with is checked whole-program instead — the holding by E3125, and every
 		// conformer's binding against it by E3126.
+		//
+		// ⚠⚠ **WHAT IS EXEMPT IS THE ARGUMENT ITSELF, NOT THE ARGUMENTS *IT* CARRIES (W59).** `Bag with
+		// (Integer, Cursor with Integer)` says two things: that `Iter` is held at `Cursor`, which is E3126's, and
+		// that whatever cursor arrives binds `Cursor`'s OWN associated type to `Integer` — a claim no other door
+		// checks. E3125 DEFERS it whenever the nested argument is the declaring type's parameter, which is the
+		// shape `stdlib/Array.maxon`'s `Iterable with (Element, Iterator with Element)` has, and this deferral
+		// used to be discharged by nothing at all. It cost nothing while E3119 forbade two `Iterator` conformers
+		// from disagreeing; W59 lifts that for exactly the sites that make a claim, so the claim is now load-
+		// bearing and is checked here. **MEASURED with it missing: a conformer binding `Iterable.Element` to
+		// `Integer` and `Iter` to an iterator binding `Iterator.Element` to `String` compiled clean, and the
+		// `String` came back through a slot typed `Integer` — exit 101 on the leak gate.**
 		if signatures.associatedTypeIsHeldAt(iface.name, position: position) 'heldAtAnInterface'
+			let nested = heldPositionNestedClaim(project, signatures: signatures, siteInstance: siteInstance, conformerTag: conformerTag, conformerNameId: conformerNameId, iface: iface, position: position)
+			if nested.status != ExistentialSiteClaimStatus.agrees 'theNestedClaimIsNotKept'
+				return nested
+			end 'theNestedClaimIsNotKept'
+
 			continue
 		end 'heldAtAnInterface'
 
@@ -3836,6 +3867,57 @@ function existentialSiteClaimAgainst(project Project, signatures ProgramSignatur
 
 	return ExistentialSiteClaim.agreeing()
 end 'existentialSiteClaimAgainst'
+
+// ⭐⭐ **THE `with` ARGUMENTS A HELD POSITION'S ARGUMENT CARRIES, AGAINST THE CONFORMER THAT WILL FILL IT
+// (W59).** The site wrote `Iter` held at `Cursor with Integer`; the conformer being widened binds `Iter` to
+// some concrete cursor; the claim is that THAT cursor binds `Cursor`'s associated type to `Integer`. It is
+// the same question one level down, so it is asked through the same door rather than by a second walk — the
+// arity gate, the type-parameter gate and the held exemption are all stated once, in
+// `existentialSiteClaimAgainst`, and the recursion descends into a strictly nested written instance, so it
+// terminates on any program whose types are acyclic, which is what `TypeCycleCheck` guarantees.
+//
+// `agreeing()` for the two shapes that claim nothing: a site naming the BARE interface (`Bag with (Integer,
+// Cursor)`), which carries no nested arguments to keep, and a conformer that declares no binding at this
+// position at all — E3016's to report, and not a disagreement.
+//
+// ⚠ **THE ARGUMENT IS READ THROUGH `instanceArgHeldInstance` AND NOT OFF ITS TAG.** A held argument reaches
+// the registry in THREE spellings depending on the order two `typealias` lines were swept in, and only one of
+// them is a `genericInstance` — MEASURED: a tag test read `Iterable with (Integer, IntIterator)`'s second
+// argument as a bare `named` and let the wrong-iterator program through, still leaking.
+function heldPositionNestedClaim(project Project, signatures ProgramSignatures, siteInstance GenericInstanceId, conformerTag ValueTypeTag, conformerNameId TypeNameId, iface IrInterface, position ElementCount) returns ExistentialSiteClaim
+	let nestedInstance = try signatures.instanceArgHeldInstance(siteInstance, position: position) otherwise 'theSiteNamesTheBareInterface'
+		return ExistentialSiteClaim.agreeing()
+	end 'theSiteNamesTheBareInterface'
+
+	let binding = try conformerBindingThroughInstance(project, signatures: signatures, conformerTag: conformerTag, conformerNameId: conformerNameId, interfaceName: iface.name, position: position) otherwise 'thisConformerBindsNothingHere'
+		return ExistentialSiteClaim.agreeing()
+	end 'thisConformerBindsNothingHere'
+
+	let heldAt = try signatures.associatedTypeHeldAt(iface.name, position: position) otherwise panic("heldPositionNestedClaim: '{String.from(iface.name)}' position {position} answered `associatedTypeIsHeldAt` and then held nothing — both doors read the one `associatedTypeHoldings` row")
+	let associatedName = try iface.associatedTypeNames.get(position) otherwise panic("heldPositionNestedClaim: associatedTypeNames.get OOB at {position} below count {iface.associatedTypeNames.count()} — the caller's loop is bounded by that same list")
+	return nestedClaimAgainstBinding(project, signatures: signatures, nestedInstance: nestedInstance, binding: binding, heldAt: heldAt).throughHeldPosition(associatedName, at: heldAt, binding: signatures.displaySpellingOfDeclaredName(binding))
+end 'heldPositionNestedClaim'
+
+// The conformer's binding is a RENDERED NAME and the verdict door names a conformer by `(tag, nameId)`, so
+// this is the adapter between them — and it is an adapter rather than a second walk on purpose: reproducing
+// `existentialSiteClaimAgainst`'s gates one level down is exactly how the outer and inner rules would come to
+// disagree.
+//
+// The two spellings a binding can have are the two `conformerBindingThroughInstance` already knows: a
+// canonical INSTANCE mint (`ArrayIterator_Integer`, which `renderedInstanceOfUnclaimedName` reverses and no
+// declaration claims) and a nominal declaration. `agreeing()` for a name this program never interned, which
+// is a name no conformance can be keyed by either.
+function nestedClaimAgainstBinding(project Project, signatures ProgramSignatures, nestedInstance GenericInstanceId, binding ByteArray, heldAt ByteArray) returns ExistentialSiteClaim
+	if let instance = try signatures.renderedInstanceOfUnclaimedName(binding) 'aCanonicalInstanceMint'
+		return existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: nestedInstance, conformerTag: ValueTypeTag.genericInstance, conformerNameId: instance, interfaceName: heldAt)
+	end 'aCanonicalInstanceMint'
+
+	let id = try project.typeNames.idOf(binding) otherwise 'noFileNamedIt'
+		return ExistentialSiteClaim.agreeing()
+	end 'noFileNamedIt'
+
+	return existentialSiteClaimVerdict(project, signatures: signatures, siteInstance: nestedInstance, conformerTag: ValueTypeTag.named, conformerNameId: id, interfaceName: heldAt)
+end 'nestedClaimAgainstBinding'
 
 // What the value being widened binds `interfaceName`'s associated type at `position` to — the conformer's own
 // answer (`conformerAssociatedBinding`), reduced through the conformer's INSTANCE when it has one.
@@ -3891,8 +3973,24 @@ end 'existentialSiteThroughCallInstance'
 // one sentence and not two spellings of it. What differs between the positions is the head in front of it and
 // the advice behind it, which is exactly where the two callers take over.
 function existentialSiteClaimSentence(interfaceName ByteArray, claim ExistentialSiteClaim) returns String
-	return "the existential type '{String.from(interfaceName)}' with its associated type '{String.from(claim.associatedName)}' bound to '{String.from(claim.siteBinding)}'"
+	if claim.heldRoute.count() == 0 'foundAtTheDeclaredInterface'
+		return "the existential type '{String.from(interfaceName)}' with its associated type '{String.from(claim.associatedName)}' bound to '{String.from(claim.siteBinding)}'"
+	end 'foundAtTheDeclaredInterface'
+
+	return "the existential type '{String.from(interfaceName)}' with its associated type '{String.from(claim.heldRoute)}' held at '{String.from(claim.heldAt)}', and that holding's own '{String.from(claim.associatedName)}' bound to '{String.from(claim.siteBinding)}'"
 end 'existentialSiteClaimSentence'
+
+// WHO contradicts the claim and with what — the other half of both refusals' sentences, split for the reason
+// the half above is: one rule decides it, so the two positions must be told one sentence. A NESTED fault
+// names the type the conformer bound at the held position, because that is the declaration whose `with`
+// clause has to change; the conformer is still named first, because it is what the author wrote at the site.
+function existentialSiteClaimContradiction(conformer String, claim ExistentialSiteClaim) returns String
+	if claim.heldRoute.count() == 0 'foundAtTheDeclaredInterface'
+		return "'{conformer}' binds '{String.from(claim.associatedName)}' to '{String.from(claim.conformerBinding)}'"
+	end 'foundAtTheDeclaredInterface'
+
+	return "'{conformer}' binds '{String.from(claim.heldRoute)}' to '{String.from(claim.heldBinding)}', which binds '{String.from(claim.associatedName)}' to '{String.from(claim.conformerBinding)}'"
+end 'existentialSiteClaimContradiction'
 
 // The `with` arguments the function's DECLARED RETURN named — off its signature, which is where the parser put
 // them. `MapError.keyNotFound` for a name no signature is registered under, which the one caller answers with
@@ -3931,7 +4029,7 @@ function checkExistentialSiteClaimAtArgument(project Project, func IrFunction, p
 	let associated = String.from(claim.associatedName)
 	match claim.status 'claim'
 		agrees then break 'claim'
-		disagrees then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {argParamLabel(paramName, position: position)}, which is declared at {siteText} — '{conformer}' binds '{associated}' to '{String.from(claim.conformerBinding)}'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds '{associated}' to '{String.from(claim.siteBinding)}'", line: callRange.line, column: callRange.column, filePath: filePath)
+		disagrees then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {argParamLabel(paramName, position: position)}, which is declared at {siteText} — {existentialSiteClaimContradiction(conformer, claim: claim)}. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds '{associated}' to '{String.from(claim.siteBinding)}'", line: callRange.line, column: callRange.column, filePath: filePath)
 		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot widen '{conformer}' into {argParamLabel(paramName, position: position)}, which is declared at {siteText} — '{String.from(claim.siteBinding)}' is a type parameter this call fixes to nothing, so what '{conformer}' would have to bind '{associated}' to is not known here. Call through a concrete instance of the declaring type, or write the binding the conformers declare", line: callRange.line, column: callRange.column, filePath: filePath)
 	end 'claim'
 end 'checkExistentialSiteClaimAtArgument'
@@ -3975,7 +4073,7 @@ function checkExistentialSiteClaimAtReturn(project Project, func IrFunction, ret
 	let associated = String.from(claim.associatedName)
 	match claim.status 'claim'
 		agrees then break 'claim'
-		disagrees then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot return '{conformer}' from '{funcName}', which is declared to return {siteText} — '{conformer}' binds '{associated}' to '{String.from(claim.conformerBinding)}'. A dispatch through the returned value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or return a conformer that binds '{associated}' to '{String.from(claim.siteBinding)}'", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
+		disagrees then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot return '{conformer}' from '{funcName}', which is declared to return {siteText} — {existentialSiteClaimContradiction(conformer, claim: claim)}. A dispatch through the returned value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or return a conformer that binds '{associated}' to '{String.from(claim.siteBinding)}'", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 		unresolvable then reportPositioned(project, code: ErrorCode.existentialWideningBindingDisagreement, message: "cannot return a value from '{funcName}', which is declared to return {siteText} — '{String.from(claim.siteBinding)}' is a type parameter of the declaring type, and a `return` is checked once against the shared body, where no instantiation has fixed it. Write the binding the conformers declare, or take the value as a PARAMETER instead, where the call's own instance resolves it", line: retRange.line, column: retRange.column, filePath: func.sourceFilePath)
 	end 'claim'
 end 'checkExistentialSiteClaimAtReturn'

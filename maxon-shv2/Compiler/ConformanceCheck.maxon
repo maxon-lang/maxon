@@ -78,9 +78,26 @@ export function checkConformance(project Project, module MaxonModule, signatures
 end 'checkConformance'
 
 // ⭐⭐ **AN ASSOCIATED TYPE A DISPATCHED REQUIREMENT WRITES IN AN ABI POSITION HAS EXACTLY ONE LEGAL BINDING
-// (E3119), AND MUST NOT BE MANAGED WHEN IT IS THE RESULT (E3120).** Both refusals key on the same three
-// facts, so they are decided in one walk: the interface is actually DISPATCHED, the associated type reaches
-// the CALLING CONVENTION, and what the conformers bound it to.
+// *WHERE NO DISPATCH SITE SAYS OTHERWISE* (E3119), AND MUST NOT BE MANAGED WHEN IT IS THE RESULT (E3120).**
+// Both refusals key on the same FOUR facts, so they are decided in one walk: the interface is actually
+// DISPATCHED, the associated type reaches the CALLING CONVENTION, no receiver of such a dispatch FIXED it,
+// and what the conformers bound it to.
+//
+// ⭐⭐ **THE FOURTH FACT IS W59's, AND IT IS WHAT MAKES `stdlib/Array.maxon` LISTABLE.** An associated binding
+// is a property of the USE SITE (user ruling): a receiver declared `Taker with Integer` fixes `Element` for
+// every dispatch on it, the emission takes the site's binding
+// (`LowerMaxonToStd.associatedFormalType`, `Parser.associatedReturnThroughReceiverInstance`), and
+// `SemanticCheck.checkExistentialSiteClaimAtArgument` (E3127) refuses every conformer that would not keep
+// that claim. So the conformers' fold is never read for such a position and nothing about their disagreement
+// can reach the ABI. What is left for these two refusals is exactly the receivers that say NOTHING — a bare
+// `Taker` parameter, a constrained type parameter, a field load, a merge phi — which is the shape all three
+// of E3119's recorded failures have, and they stay refused.
+//
+// ⚠ MEASURED, the corpus case the narrowing exists for: `stdlib/Array.maxon`'s
+// `from(source Iterable with (Element, Iterator with Element))` is the ONLY site in the listed stdlib that
+// dispatches `Iterator`, and it names its bindings — while `ByteIterator` binds `Iterator.Element` to `Byte`
+// and `WithIterIterator` binds it to a tuple. Under the old rule that pair refused every program that listed
+// `stdlib/Array.maxon`, `for … in` included.
 //
 // ⚠ **DISPATCH IS THE GATE, AND WITHOUT IT THE CHECK FALSE-REJECTS A CORRECT PROGRAM.** Two conformers of one
 // interface are only in tension if a SHARED body is compiled against both; a program whose every call is
@@ -101,8 +118,9 @@ end 'checkConformance'
 // with it. What that costs is one map probe per declared interface that has `uses` names at all, on a program
 // that dispatches nothing; what it bought is that `checkHeldAssociatedTypeBindings` runs at all.
 //
-// ⭐⭐ **THE GATE IS THE DISPATCHED SLOT, NOT THE DISPATCHED INTERFACE NAME, AND THE WIDER ONE WAS A FALSE
-// REJECT.** Both refusals exist because ONE consumer reads the fold: `LowerMaxonToStd.witnessFormalType`
+// ⭐⭐ **THE GATE IS THE DISPATCHED SLOT AND THE POSITION ITS RECEIVERS LEFT UNSETTLED, NOT THE DISPATCHED
+// INTERFACE NAME, AND EACH WIDER READING WAS A FALSE REJECT.** Both refusals exist because ONE consumer
+// reads the fold: `LowerMaxonToStd.witnessFormalType`
 // resolves an associated FORMAL of the requirement a `witnessCall` names, and the parser types an associated
 // RESULT of that same requirement. Both are asked per `(interfaceDeclIndex, methodIndex)` — never of the
 // interface's other slots — so a requirement nothing dispatches has no consumer and constrains nothing. Asked
@@ -156,11 +174,18 @@ function checkOneAssociatedType(project Project, signatures ProgramSignatures, i
 	end 'binding'
 end 'checkOneAssociatedType'
 
-// The witness slots this program dispatches, per interface — an interface NAME to the set of slot indices
-// some call actually jumps through. A `Set` per interface rather than a flat pair key because the consumer
-// asks it once per interface, walking that interface's own slot list.
-typealias DispatchedSlotSet = Set with WitnessMethodIndex
-typealias DispatchedSlotMap = Map with (ByteArray, DispatchedSlotSet)
+// ⭐⭐ **THE WITNESS SLOTS THIS PROGRAM DISPATCHES, PER INTERFACE — AND, PER SLOT, HOW MUCH THE LEAST
+// INFORMATIVE RECEIVER SAYS (W59).** A slot index maps to the number of the dispatched interface's associated
+// positions that EVERY receiver jumping through it fixed: a receiver declared `Taker with Integer` fixes one,
+// a bare `Taker` parameter or a constrained type parameter fixes none, and the entry keeps the MINIMUM,
+// because a position is only settled per-site if it is settled at EVERY site.
+//
+// It is a count and not a set of positions because a `with` clause binds a PREFIX — an instance's arguments
+// are positional and `checkGenericInstance` reports a short one — so "the first k positions" is the whole of
+// what a receiver can claim. A `Map` per interface rather than a flat pair key because the consumer asks it
+// once per interface, walking that interface's own slot list.
+typealias DispatchedSlotClaims = Map with (WitnessMethodIndex, TypeParamPosition)
+typealias DispatchedSlotMap = Map with (ByteArray, DispatchedSlotClaims)
 
 typealias AssociatedTypeNameSet = Set with ByteArray
 
@@ -194,7 +219,7 @@ function dispatchedRequirementSlots(module MaxonModule, signatures ProgramSignat
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try module.blocks.get(blockRef) otherwise panic("dispatchedRequirementSlots: blockRef {blockRef} not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
-				noteDispatchedSlot(try module.ops.get(opIdx) otherwise panic("dispatchedRequirementSlots: opIdx {opIdx} not in module.ops"), slots: slots, signatures: signatures)
+				noteDispatchedSlot(try module.ops.get(opIdx) otherwise panic("dispatchedRequirementSlots: opIdx {opIdx} not in module.ops"), slots: slots, signatures: signatures, func: func)
 			end 'eachOp'
 		end 'eachBlock'
 	end 'eachFunc'
@@ -204,47 +229,64 @@ end 'dispatchedRequirementSlots'
 // Record the slot one op dispatches through, if it dispatches at all. It RANGES over the whole `MaxonOp`
 // union so a newly-appended op FAILS TO COMPILE here rather than being silently swept into an ignore arm (the
 // band-append invariant) — which for this walk would mean a dispatch form that quietly escapes both refusals.
-function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures ProgramSignatures)
+function noteDispatchedSlot(op MaxonOp, slots DispatchedSlotMap, signatures ProgramSignatures, func IrFunction)
 	match op 'op'
 		call to switch then break 'op'
-		witnessDispatch(_, _, _, methodIndex, interfaceDeclIndex, _, _) then recordDispatchedSlot(slots, interfaceName: signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), methodIndex: methodIndex)
-		witnessTryDispatch(_, _, _, _, methodIndex, interfaceDeclIndex, _) then recordDispatchedSlot(slots, interfaceName: signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), methodIndex: methodIndex)
+		witnessDispatch(_, args, _, methodIndex, interfaceDeclIndex, _, _) then recordDispatchedSlot(slots, interfaceName: signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), methodIndex: methodIndex, claimed: receiverClaimedPositions(func, signatures: signatures, args: args))
+		witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then recordDispatchedSlot(slots, interfaceName: signatures.interfaceNameAtDeclIndex(interfaceDeclIndex), methodIndex: methodIndex, claimed: receiverClaimedPositions(func, signatures: signatures, args: args))
 		panicAbortValue then break 'op'
 	end 'op'
 end 'noteDispatchedSlot'
 
-// ⚠ **THE SET IS REBUILT RATHER THAN ADDED TO, BECAUSE A VALUE FETCHED OUT OF A `Map` BORROWS THE MAP** — an
-// `insert` on it is E3019 and an `upsert` while that borrow is live is E3070 (`buildDeclaredConformanceMap`'s
-// header records the same constraint from the other side). The rebuild is paid ONCE PER DISTINCT
-// `(interface, slot)` pair, which is bounded by the program's requirement count and not by its op count:
-// every repeat of an already-recorded slot — the common case, since one requirement is called from many
-// sites — leaves through the membership probe having allocated nothing.
-function recordDispatchedSlot(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex)
-	if slotAlreadyRecorded(slots, interfaceName: interfaceName, methodIndex: methodIndex) 'nothingNew'
+// ⭐ **HOW MANY ASSOCIATED POSITIONS THIS DISPATCH'S RECEIVER FIXES** — the `with` arguments its declaration
+// named, off the SAME `IrFunction.valueExistentialInstances` column `LowerMaxonToStd.receiverSiteBinding`
+// reads to emit the formal's ABI. One column, so the refusal below and the emission cannot come to different
+// answers about which receivers say what they hold.
+//
+// ZERO for every receiver that claims nothing — a bare `Taker` parameter, a constrained type parameter, a
+// field load, a merge phi — which is the shape all three of E3119's recorded failures have, and is why they
+// stay refused.
+function receiverClaimedPositions(func IrFunction, signatures ProgramSignatures, args ValueIdArray) returns TypeParamPosition
+	let instance = try func.valueExistentialInstances.get(witnessDispatchReceiver(args)) otherwise return 0
+	return signatures.genericInstanceArgCount(instance)
+end 'receiverClaimedPositions'
+
+// ⚠ **THE INNER MAP IS REBUILT RATHER THAN WRITTEN INTO, BECAUSE A VALUE FETCHED OUT OF A `Map` BORROWS THE
+// MAP** — an `upsert` on it is E3019 and an `upsert` on the outer one while that borrow is live is E3070
+// (`buildDeclaredConformanceMap`'s header records the same constraint from the other side). The rebuild is
+// paid once per distinct `(interface, slot)` pair AND once more each time a site claims strictly LESS than
+// every site before it — bounded by the interface's associated-type count, which is a source-written arity,
+// so it is still bounded by the program's requirement count and not by its op count. Every repeat that adds
+// nothing — the common case, since one requirement is called from many sites and they usually claim alike —
+// leaves through the probe having allocated nothing.
+function recordDispatchedSlot(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex, claimed TypeParamPosition)
+	if slotClaimAlreadyAtOrBelow(slots, interfaceName: interfaceName, methodIndex: methodIndex, claimed: claimed) 'nothingNew'
 		return
 	end 'nothingNew'
 
-	var widened = DispatchedSlotSet.create()
+	var widened = DispatchedSlotClaims.create()
 	copyRecordedSlots(slots, interfaceName: interfaceName, into: widened)
-	widened.insert(methodIndex)
+	widened.upsert(methodIndex, value: claimed)
 	slots.upsert(interfaceName, value: widened)
 end 'recordDispatchedSlot'
 
 // The probe half of the rebuild above, split out so the borrow of `slots` ENDS before the `upsert` — which is
 // the whole reason the set is rebuilt rather than added to.
-function slotAlreadyRecorded(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex) returns bool
+function slotClaimAlreadyAtOrBelow(slots DispatchedSlotMap, interfaceName ByteArray, methodIndex WitnessMethodIndex, claimed TypeParamPosition) returns bool
 	if let recorded = try slots.get(interfaceName) 'thisInterfaceHasSlotsAlready'
-		return recorded.contains(methodIndex)
+		if let already = try recorded.get(methodIndex) 'thisSlotHasBeenSeen'
+			return already <= claimed
+		end 'thisSlotHasBeenSeen'
 	end 'thisInterfaceHasSlotsAlready'
 
 	return false
-end 'slotAlreadyRecorded'
+end 'slotClaimAlreadyAtOrBelow'
 
 // The copy half, split for its sibling's reason. An interface with no slots yet copies nothing.
-function copyRecordedSlots(slots DispatchedSlotMap, interfaceName ByteArray, into DispatchedSlotSet)
+function copyRecordedSlots(slots DispatchedSlotMap, interfaceName ByteArray, into DispatchedSlotClaims)
 	if let recorded = try slots.get(interfaceName) 'thisInterfaceHasSlotsAlready'
-		for slot in recorded 'eachRecorded'
-			into.insert(slot)
+		for (slot, claimed) in recorded 'eachRecorded'
+			into.upsert(slot, value: claimed)
 		end 'eachRecorded'
 	end 'thisInterfaceHasSlotsAlready'
 end 'copyRecordedSlots'
@@ -277,24 +319,40 @@ function dispatchedAssociatedNamesOf(interfaces IrInterfaceMap, dispatched Dispa
 	var inAResult = AssociatedTypeNameSet.create()
 	let requirements = interfaceWitnessSlots(interfaces, iface: iface)
 	for methodIndex in 0 upto requirements.count() 'eachRequirement'
-		if not slots.contains(methodIndex) 'noCallJumpsThroughThisSlot'
+		let claimed = try slots.get(methodIndex) otherwise 'noCallJumpsThroughThisSlot'
 			continue
 		end 'noCallJumpsThroughThisSlot'
 
 		let method = (try requirements.get(methodIndex) otherwise panic("dispatchedAssociatedNamesOf: requirements.get OOB at {methodIndex} below count {requirements.count()} — the loop bounds it by that same list")).method
-		if namesInclude(iface.associatedTypeNames, name: method.returnTypeName) 'anAssociatedResult'
+		if unclaimedAssociatedPosition(iface, name: method.returnTypeName, claimed: claimed) 'anUnclaimedAssociatedResult'
 			inAResult.insert(method.returnTypeName)
 			inAnAbiPosition.insert(method.returnTypeName)
-		end 'anAssociatedResult'
+		end 'anUnclaimedAssociatedResult'
 
 		for paramTypeName in method.paramTypeNames 'eachFormal'
-			if namesInclude(iface.associatedTypeNames, name: paramTypeName) 'anAssociatedFormal'
+			if unclaimedAssociatedPosition(iface, name: paramTypeName, claimed: claimed) 'anUnclaimedAssociatedFormal'
 				inAnAbiPosition.insert(paramTypeName)
-			end 'anAssociatedFormal'
+			end 'anUnclaimedAssociatedFormal'
 		end 'eachFormal'
 	end 'eachRequirement'
 	return DispatchedAssociatedNames.create(inAnAbiPosition, inAResult: inAResult)
 end 'dispatchedAssociatedNamesOf'
+
+// ⭐⭐ **IS `name` AN ASSOCIATED TYPE OF `iface` THAT THE DISPATCH SITES LEFT UNSETTLED? — the whole of W59's
+// narrowing, in one predicate.** A name that is not associated at all answers no, exactly as `namesInclude`
+// did. An associated one answers no as well once EVERY receiver through this slot fixed its position, because
+// then the emission takes the SITE's binding (`LowerMaxonToStd.associatedFormalType` for the formal,
+// `Parser.associatedReturnThroughReceiverInstance` for the result) and the conformers' fold is never read —
+// so what the conformers do or do not agree on cannot reach the ABI.
+//
+// ⚠ **WHAT MAKES THAT SOUND IS E3127 AND NOT THIS FUNCTION.** A site's claim decides the ABI, so only
+// conformers that KEEP the claim may be widened into it; `SemanticCheck.checkExistentialSiteClaimAtArgument`
+// refuses the rest, at the one place a concrete conformer and a claim meet. Narrowing here without that
+// refusal in place would be E3119's own recorded failure with an extra step.
+function unclaimedAssociatedPosition(iface IrInterface, name ByteArray, claimed TypeParamPosition) returns bool
+	let position = try namePositionIn(iface.associatedTypeNames, name: name) otherwise return false
+	return position >= claimed
+end 'unclaimedAssociatedPosition'
 
 // ⭐⭐ **WHAT A HOLDING OWES, AND WHY IT REPLACES E3119/E3120 RATHER THAN JOINING THEM: every conformer's
 // binding must be widenable into the interface the position is held at.** E3119's rule is forced by there
@@ -367,7 +425,7 @@ end 'checkOneHeldBinding'
 // breaks as a RESULT, where the front end has to type it.
 function checkAgreedBindingIsCarryable(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, isDispatchedResult bool)
 	if signatures.declaredNameIsFatPointer(binding) 'twoWordsThroughAOneWordSlot'
-		reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to the interface type '{String.from(binding)}', and '{String.from(name)}' reaches the calling convention of a requirement this program DISPATCHES — {ExistentialIsFatPointerReason}, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+		reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to the interface type '{String.from(binding)}', and '{String.from(name)}' reaches the calling convention of a requirement this program DISPATCHES through a receiver that does not say which binding it holds — {ExistentialIsFatPointerReason}, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 		return
 	end 'twoWordsThroughAOneWordSlot'
 
@@ -376,15 +434,21 @@ end 'checkAgreedBindingIsCarryable'
 
 // ⭐⭐ **REFUSE AN ASSOCIATED RETURN BOUND TO ANYTHING BUT AN UNMANAGED MACHINE WORD (E3120), AND "MACHINE
 // WORD" ALONE WAS THE WRONG PREDICATE.** The parser types a dispatch's result from the interface's own
-// rendered spelling, which names the associated type and can never name what a conformer bound it to — so the
-// result is typed `int`. For a `float` binding that is the wrong WIDTH and register file. For a MANAGED
-// binding it is the wrong OWNERSHIP: nothing takes ownership of the returned refcounted value and nothing
-// releases it. MEASURED: `with String` and `with Point` both leaked, **exit 101 on x64 AND wasm**, while the
+// rendered spelling, which names the associated type and — at a receiver that claims nothing — can never name
+// what a conformer bound it to, so the result is typed `int`. For a `float` binding that is the wrong WIDTH
+// and register file. For a MANAGED binding it is the wrong OWNERSHIP: nothing takes ownership of the returned
+// refcounted value and nothing releases it. MEASURED: `with String` and `with Point` both leaked, **exit 101 on x64 AND wasm**, while the
 // same interface with the return SPELLED `String` instead of associated was clean — which attributes the leak
 // exactly to this path.
 //
 // The admitted set is therefore "an unmanaged machine word", asked of the BINDING NAME because the resolved
 // type has already collapsed a struct and a ranged alias to the same `integer` (`renderedTypeNameAbiType`).
+//
+// ⚠ **AT A RECEIVER THAT DOES SAY WHICH BINDING IT HOLDS THE PARSER *CAN* NAME IT, WHICH IS WHY THIS IS NO
+// LONGER ASKED THERE (W59).** `Parser.associatedReturnThroughReceiverInstance` reads the site's own `with`
+// argument and types the result as that binding, ownership included, so the stated cause above is simply
+// false at such a position. The gate that keeps this refusal off them is `unclaimedAssociatedPosition`, one
+// walk up — the SAME gate E3119 gets, which is how these two go on keying on one set of facts.
 function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, conformer ConformanceDecl, binding ByteArray, isDispatchedResult bool)
 	if bindingIsUnmanagedMachineWord(signatures, binding: binding) 'travelsAsAPlainWord'
 		return
@@ -397,7 +461,7 @@ function checkAssociatedReturnIsUnmanagedMachineWord(project Project, signatures
 	// The AUTHOR's spelling: a generic-instance binding reaches here as `Box_Integer`, the canonical mint, and
 	// the author wrote `IntBox`. Its two sibling refusals above print an INTERFACE name — `declaredNameIsFatPointer`
 	// is true of no other declared form — so a rendered instance cannot reach them and they need no reduction.
-	reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(signatures.displaySpellingOfDeclaredName(binding))}', and '{String.from(name)}' is the RETURN type of one of '{String.from(iface.name)}'s requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
+	reportPositioned(project, code: ErrorCode.associatedTypeReturnNotMachineWord, message: "'{String.from(conformer.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(signatures.displaySpellingOfDeclaredName(binding))}', and '{String.from(name)}' is the RETURN type of one of '{String.from(iface.name)}'s requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at '{String.from(iface.name)} with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved", line: conformer.nameLine, column: conformer.nameColumn, filePath: conformer.filePath)
 end 'checkAssociatedReturnIsUnmanagedMachineWord'
 
 // Can shv2 PROVE this binding is a plain, unowned machine word? The BUILTIN names it answers itself — `int`
@@ -434,7 +498,7 @@ end 'bindingIsUnmanagedMachineWord'
 // Both bindings are DISPLAYED rather than printed raw, for `checkAssociatedReturnIsUnmanagedMachineWord`'s
 // reason: either side may be a generic instance, which a conformance records as the canonical mint.
 function reportAssociatedTypeBindingDisagreement(project Project, signatures ProgramSignatures, iface IrInterface, name ByteArray, first ConformanceDecl, firstBinding ByteArray, second ConformanceDecl, secondBinding ByteArray)
-	reportPositioned(project, code: ErrorCode.associatedTypeAbiDisagreement, message: "'{String.from(second.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(signatures.displaySpellingOfDeclaredName(secondBinding))}', but '{String.from(first.typeName)}' binds it to '{String.from(signatures.displaySpellingOfDeclaredName(firstBinding))}' — and '{String.from(name)}' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces", line: second.nameLine, column: second.nameColumn, filePath: second.filePath)
+	reportPositioned(project, code: ErrorCode.associatedTypeAbiDisagreement, message: "'{String.from(second.typeName)}' binds '{String.from(iface.name)}'s associated type '{String.from(name)}' to '{String.from(signatures.displaySpellingOfDeclaredName(secondBinding))}', but '{String.from(first.typeName)}' binds it to '{String.from(signatures.displaySpellingOfDeclaredName(firstBinding))}' — and '{String.from(name)}' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at '{String.from(iface.name)} with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces", line: second.nameLine, column: second.nameColumn, filePath: second.filePath)
 end 'reportAssociatedTypeBindingDisagreement'
 
 // Is `name` a PARAMETER type of ANY of `iface`'s requirements — its own AND every one projected in through

@@ -10424,7 +10424,9 @@ export type ProgramSignatures
 	// value needs more, because a requirement returning the held interface's own associated type has to be
 	// typed against whatever THIS site bound that position to. `Cursor` alone cannot say what `Element` is;
 	// `Cursor with Element` can. `MapError.keyNotFound` for a bare interface name, which genuinely binds
-	// nothing — see `Parser.associatedReturnThroughReceiverInstance`, the one reader.
+	// nothing. TWO readers: `Parser.associatedReturnThroughReceiverInstance`, which carries the nested
+	// arguments onto the held value so a dispatch on it can be typed, and
+	// `SemanticCheck.heldPositionNestedClaim`, which is what makes the conformer keep them (W59).
 	export function instanceArgHeldInstance(gid GenericInstanceId, position TypeParamPosition) returns GenericInstanceId throws MapError
 		match try self.heldArgOf(self.substitutedInstanceArg(gid, position: position)) 'denoted'
 			instantiated(held) then return held

@@ -1535,11 +1535,6 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
-// The same COW anchor for the EXISTENTIAL-instance column (W57, `ValueExistentialInstanceMap`), with the same
-// invariant: `recordValueExistentialInstance` copy-on-writes on first use, so a program that never declares a
-// parameterized-interface value shares this one allocation and never mutates it.
-let sharedEmptyExistentialInstanceMap = ValueExistentialInstanceMap.create()
-
 // The same anchor for the two ASSOCIATED-TYPE columns an interface-extension body is parsed under
 // (conditional extensions) — see `Parser.extensionAssociatedTypeNames`. Never mutated: an extension pass
 // REPLACES both columns wholesale and the reset points them back here, so one allocation serves every parser
@@ -4266,7 +4261,8 @@ end 'pairArgs'
 // A witness dispatch's final argument list: the BORROWED receiver, then the user's actuals already in the
 // interface's declaration order (P1.7a slice 2b-vi). It is what re-establishes the `args[0]` = receiver /
 // interface formal `j` = `args[j+1]` convention after `slotCallArgs` — which knows only about the formals —
-// has done the reordering. `pairArgs`' variadic sibling, and the ONE place the receiver is put back.
+// has done the reordering. `pairArgs`' variadic sibling, and the ONE place the receiver is put back —
+// `MaxonDialect.witnessDispatchReceiver` is the ONE place it is taken back off.
 export function withWitnessReceiver(receiver ValueId, ordered ValueIdArray) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(receiver)
@@ -6555,23 +6551,9 @@ typealias InnerAliasNameSet = Set with ByteArray
 // `Idx` results and arguments DECAY to plain (no per-instance identity) — which matches the oracle.
 typealias ValueInstanceAliasMap = Map with (ValueId, TypeNameId)
 
-// ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE HELD AT AN INTERFACE TO THE `Base with Args` INSTANCE ITS
-// DECLARED TYPE NAMED (W57)** — the `with` arguments `ProgramSignatures.instanceDenotedType` drops on the way
-// to `interfaceRef(Base)`, kept BESIDE the type rather than on it.
-//
-// ⭐ **WHY BESIDE AND NOT ON IT.** That door's header states the design and it still holds: an interface this
-// program DISPATCHES through has ONE binding per associated position, the conformances state it, and a copy
-// riding on the type would be one fact written twice. What that argument does not cover is a SHARED GENERIC
-// BODY, where the binding is the enclosing type's own PARAMETER — `stdlib/Array.maxon`'s
-// `Iterable with (Element, ElementIterator)` inside `type Array uses Element` — which no conformance states
-// and which differs per instantiation while the body compiles once. There the site IS the only authority, so
-// the site's answer is carried per VALUE (never per interface name, which would collide with every other
-// site's) and read only where a dispatch on THAT value needs it.
-//
-// A value with NO entry — a bare `interface`-typed parameter, a field load, a merge phi — resolves an
-// associated-type return exactly as it did before this column existed. That is a narrower answer, not a wrong
-// one: a bare `Bag` genuinely binds nothing.
-typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanceId)
+// The per-value existential-instance column this parser fills is `IrFunction.valueExistentialInstances`, and
+// both the `ValueExistentialInstanceMap` typealias and its `sharedEmptyExistentialInstanceMap` COW anchor are
+// declared there — the parser WRITES the fact and three later tiers read it, so the IR tier owns the shape.
 
 // ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE TO THE RANGED TYPEALIAS ITS DECLARED TYPE NAMES — for the two
 // values whose OWN type columns cannot carry it.** E3010 ("unneeded cast") is a question about DECLARED
@@ -17132,6 +17114,7 @@ export type Parser
 		try self.consume(TokenKind.end)
 		self.skipOptionalLabel()
 
+		self.publishExistentialInstances(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
 		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart)), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(name)
@@ -18189,6 +18172,7 @@ export type Parser
 		// existential column has a token to read and both stay shared-empty. A parameter declared at a
 		// parameterized existential cannot have a default: `E3121`/`E2010` aside, a default is an EXPRESSION and
 		// there is no literal of an interface type to write.
+		self.publishExistentialInstances(helper)
 		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
@@ -21178,6 +21162,19 @@ export type Parser
 		end 'stillShared'
 		self.valueInstanceAlias.upsert(value, value: self.artifact.typeNames.intern(aliasName))
 	end 'recordValueInstanceAlias'
+
+	// ⭐⭐ **HAND THIS FUNCTION'S EXISTENTIAL-INSTANCE COLUMN TO THE `IrFunction`, ONCE, AFTER THE BODY (W59).**
+	// Every sibling value column is handed over at `IrFunction.create` and grown in place afterwards; this one
+	// is REPLACED by the copy-on-write below rather than grown, so the reference `create` was given is the
+	// shared empty for exactly the functions that later record something. Called at the end of all THREE parses
+	// that mint an `IrFunction` — a declared function, a default-value helper and a lifted closure — each at the
+	// point its own `recordFuncSignature` runs, which is the one place per parse where the body is complete and
+	// the parser's field still points at the map that body filled (a closure's body SWAPS the field, and swaps
+	// it back, so the enclosing function's publish must happen after the swap has been undone — which the end of
+	// its body is).
+	function publishExistentialInstances(func IrFunction)
+		func.valueExistentialInstances = self.valueExistentialInstance
+	end 'publishExistentialInstances'
 
 	// ⭐⭐ **RECORD THE `with` ARGUMENTS AN EXISTENTIAL VALUE'S DECLARED TYPE NAMED (W57)** — see
 	// `ValueExistentialInstanceMap` for what the column is for and why the fact cannot ride on the type. Two
@@ -50516,6 +50513,7 @@ export type Parser
 		// closure's parameters ARE spelled (`function(t IntTaker) gives …`) and carry the same `paramTypeStarts`
 		// every declared function's do, while its return type is INFERRED from the body and names no token for
 		// `declaredExistentialInstanceAt` to read.
+		self.publishExistentialInstances(lifted)
 		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`

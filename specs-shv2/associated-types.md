@@ -1808,7 +1808,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3119: specs/fragments/associated-types/error.two-conformers-binding-one-associated-type-differently.test:21:6: 'B' binds 'Taker's associated type 'Element' to 'Score', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces
+error E3119: specs/fragments/associated-types/error.two-conformers-binding-one-associated-type-differently.test:21:6: 'B' binds 'Taker's associated type 'Element' to 'Score', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
 
 <!-- test: associated-types.two-conformers-binding-the-same-type-still-compile -->
@@ -1952,7 +1952,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-string-beside-an-int.test:20:6: 'TextRunner' binds 'Taker's associated type 'Element' to 'String', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces
+error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-string-beside-an-int.test:20:6: 'TextRunner' binds 'Taker's associated type 'Element' to 'String', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
 
 <!-- test: error.dispatched-associated-type-bound-to-a-float-beside-an-int -->
@@ -2003,7 +2003,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-float-beside-an-int.test:20:6: 'FloatRunner' binds 'Taker's associated type 'Element' to 'float', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces
+error E3119: specs/fragments/associated-types/error.dispatched-associated-type-bound-to-a-float-beside-an-int.test:20:6: 'FloatRunner' binds 'Taker's associated type 'Element' to 'float', but 'IntRunner' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Taker with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
 
 <!-- test: associated-types.disagreement-in-a-requirement-no-dispatch-reaches -->
@@ -2107,7 +2107,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-managed-type.test:8:6: 'Runner' binds 'Maker's associated type 'Element' to 'String', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved
+error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-managed-type.test:8:6: 'Runner' binds 'Maker's associated type 'Element' to 'String', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Maker with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
 ```
 
 <!-- test: associated-types.assoc-return-bound-to-a-machine-word-still-compiles -->
@@ -2210,7 +2210,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3119: specs/fragments/associated-types/error.extends-projected-associated-type-disagreement.test:28:6: 'B' binds 'Derived's associated type 'Element' to 'float', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Bind the associated type to the same type in both conformances, or give the two conformers different interfaces
+error E3119: specs/fragments/associated-types/error.extends-projected-associated-type-disagreement.test:28:6: 'B' binds 'Derived's associated type 'Element' to 'float', but 'A' binds it to 'Integer' — and 'Element' is written as a parameter or return type of a requirement this program DISPATCHES THROUGH A RECEIVER THAT DOES NOT SAY WHICH BINDING IT HOLDS. A witness dispatch is compiled ONCE for every conformer, with no per-conformer specialization, so the shared body would be compiled against one of those two types and hand the other conformer's impl bits it reads as something else. Declare that receiver at 'Derived with <binding>', which settles it for that dispatch; or bind the associated type to the same type in both conformances; or give the two conformers different interfaces
 ```
 
 <!-- test: associated-types.extends-projected-associated-type-single-conformer -->
@@ -2316,7 +2316,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-generic-instance.test:18:6: 'Runner' binds 'Maker's associated type 'Element' to 'IntBox', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and that is chosen while the interface is still only a NAME, because a conformer's binding is not known until every file has parsed. Bind it to an `int`, a ranged typealias or a payload-free enum, or take the value as a PARAMETER instead, where the binding IS resolved
+error E3120: specs/fragments/associated-types/error.associated-return-bound-to-a-generic-instance.test:18:6: 'Runner' binds 'Maker's associated type 'Element' to 'IntBox', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Maker with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved
 ```
 
 <!-- test: error.associated-type-bound-to-an-interface -->
@@ -2375,7 +2375,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3120: specs/fragments/associated-types/error.associated-type-bound-to-an-interface.test:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
+error E3120: specs/fragments/associated-types/error.associated-type-bound-to-an-interface.test:24:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Shape', and 'Element' reaches the calling convention of a requirement this program DISPATCHES through a receiver that does not say which binding it holds — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type
 ```
 
 ### ⭐⭐ A PARAMETERIZED EXISTENTIAL CARRIES ITS ARGUMENTS INTO THE SIGNATURE, AND THE WIDENING DISCHARGES THE CLAIM (W58)
@@ -2967,4 +2967,221 @@ end 'main'
 ```
 ```maxoncstderr
 error E3127: specs/fragments/associated-types/error.a-deferred-claim-cannot-be-laundered-through-a-return.test:42:11: cannot pass a value already held at the interface type 'Taker' as 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare 't' at 'Taker' with no `with` clause
+```
+
+<!-- test: associated-types.two-conformers-disagree-but-every-dispatch-site-names-its-binding -->
+⭐⭐ **THE PER-SITE RULE, AND IT IS THE EXACT PROGRAM E3119's SECOND RECORDED FAILURE REFUSES, ONE `with`
+CLAUSE APART (W59).** `String` beside `Integer` is the pair that SEGFAULTED when a single shared body was
+compiled against one of them — and the body is only shared because the receiver was written at the bare
+interface. Here each dispatch is reached through a receiver that names its own binding, so there are TWO
+bodies and each is compiled against the binding only its own conformers can arrive at (E3127 refuses the
+rest). **Measured: refused E3119 by the compiler this rung started from; compiles and answers 61 now.**
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntTaker = Taker with Integer
+typealias TextTaker = Taker with String
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type IntRunner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'IntRunner'
+
+type TextRunner implements Taker with String
+	let base as Integer
+
+	function take(e String) returns Integer
+		return base + e.byteLength()
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'TextRunner'
+
+function useInt(t IntTaker) returns Integer
+	return t.take(20)
+end 'useInt'
+
+function useText(t TextTaker) returns Integer
+	return t.take("abcdefghij")
+end 'useText'
+
+function main() returns ExitCode
+	return (useInt(IntRunner.create(20)) + useText(TextRunner.create(11))) as ExitCode
+end 'main'
+```
+```exitcode
+61
+```
+
+<!-- test: associated-types.a-held-position-carries-its-own-with-arguments-through-the-dispatch -->
+⭐⭐ **THE SITE'S CLAIM SURVIVES ONE INDIRECTION — through a HELD position, which is the shape
+`stdlib/Array.maxon` is made of.** `Bag with (Integer, Cursor with Integer)` says `Iter` is held at `Cursor`
+AND that whatever cursor arrives yields `Integer`, so `b.cursor().item()` is typed from the site rather than
+from a fold over every `Cursor` conformer — and `TextCur`, which binds `Item` to `String`, is beside it in the
+same program. **Measured: refused E3119 before W59; answers 11 now** (7 from the bag, 4 from `"nope"`'s
+length through a DIRECT call on the other cursor, which is what keeps both conformers live).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntCursor = Cursor with Integer
+typealias IntBag = Bag with (Integer, IntCursor)
+
+interface Cursor uses Item
+	function item() returns Item
+end 'Cursor'
+
+interface Bag uses Element, Iter
+	function cursor() returns Iter
+end 'Bag'
+
+type IntCur implements Cursor with Integer
+	let v as Integer
+
+	function item() returns Integer
+		return v
+	end 'item'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'IntCur'
+
+type TextCur implements Cursor with String
+	let s as String
+
+	function item() returns String
+		return s
+	end 'item'
+
+	static function create(s String) returns Self
+		return Self{s: s}
+	end 'create'
+end 'TextCur'
+
+type GoodBag implements Bag with (Integer, IntCur)
+	let v as Integer
+
+	function cursor() returns IntCur
+		return IntCur.create(v)
+	end 'cursor'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'GoodBag'
+
+type BadBag implements Bag with (Integer, TextCur)
+	let v as Integer
+
+	function cursor() returns TextCur
+		return TextCur.create("nope")
+	end 'cursor'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'BadBag'
+
+function firstOf(b IntBag) returns Integer
+	return b.cursor().item()
+end 'firstOf'
+
+function main() returns ExitCode
+	return (firstOf(GoodBag.create(7)) + BadBag.create(1).cursor().item().byteLength()) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: error.held-position-nested-binding-disagreement -->
+⭐⭐ **THE OTHER HALF OF THE CASE ABOVE, AND WITHOUT IT W59 WOULD BE A SILENT WRONG ANSWER.** The site claims
+`Cursor with Integer` at a HELD position; `BadBag` binds `Iter` to a cursor yielding `String`. E3125 DEFERS a
+nested claim (it is opaque inside a generic declaration) and E3127's held-position exemption used to skip it,
+so nothing checked it — which cost nothing only while E3119 forbade `IntCur` and `TextCur` from coexisting.
+**MEASURED with the claim unchecked: the program compiled, `item()` handed back a `String` pointer through a
+slot typed `Integer`, and the leak gate reported exit 101.** The refusal names the level the fault is at:
+'Cursor', not 'Bag', and 'TextCur', not 'BadBag'.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntCursor = Cursor with Integer
+typealias IntBag = Bag with (Integer, IntCursor)
+
+interface Cursor uses Item
+	function item() returns Item
+end 'Cursor'
+
+interface Bag uses Element, Iter
+	function cursor() returns Iter
+end 'Bag'
+
+type IntCur implements Cursor with Integer
+	let v as Integer
+
+	function item() returns Integer
+		return v
+	end 'item'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'IntCur'
+
+type TextCur implements Cursor with String
+	let s as String
+
+	function item() returns String
+		return s
+	end 'item'
+
+	static function create(s String) returns Self
+		return Self{s: s}
+	end 'create'
+end 'TextCur'
+
+type GoodBag implements Bag with (Integer, IntCur)
+	let v as Integer
+
+	function cursor() returns IntCur
+		return IntCur.create(v)
+	end 'cursor'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'GoodBag'
+
+type BadBag implements Bag with (Integer, TextCur)
+	let v as Integer
+
+	function cursor() returns TextCur
+		return TextCur.create("nope")
+	end 'cursor'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'BadBag'
+
+function firstOf(b IntBag) returns Integer
+	return b.cursor().item()
+end 'firstOf'
+
+function main() returns ExitCode
+	return (firstOf(GoodBag.create(7)) + firstOf(BadBag.create(1))) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3127: specs/fragments/associated-types/error.held-position-nested-binding-disagreement.test:67:39: cannot widen 'BadBag' into 'b', which is declared at the existential type 'Bag' with its associated type 'Iter' held at 'Cursor', and that holding's own 'Item' bound to 'Integer' — 'BadBag' binds 'Iter' to 'TextCur', which binds 'Item' to 'String'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Item' to 'Integer'
 ```

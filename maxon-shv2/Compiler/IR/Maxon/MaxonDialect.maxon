@@ -1326,6 +1326,21 @@ end 'MaxonOp'
 // ONE named fact, read by both, rather than a bare `- 1` in each.
 export let IndirectCallEnvArgCount = 1 as ParamCount
 
+// ⭐ **`args[0]` OF A WITNESS DISPATCH IS THE BORROWED RECEIVER, WHICH FILLS NO FORMAL** — so interface
+// formal `j` is `args[j + WitnessReceiverArgCount]`. `Parser.withWitnessReceiver` is the ONE place the
+// receiver is put back after `slotCallArgs` (which knows only the formals) has reordered the actuals; this
+// is the ONE place it is taken back off, beside the op whose operand shape it describes and beside
+// `IndirectCallEnvArgCount`, which states the same kind of fact for the other indirect form.
+export let WitnessReceiverArgCount = 1 as ParamCount
+
+// The receiver of a witness dispatch. Three tiers ask for it — `SemanticCheck.checkWitnessArgTypes` to name
+// the call's instance subject, `LowerMaxonToStd.witnessFormalTypes` to read the site's own `with` arguments,
+// and `ConformanceCheck.noteDispatchedSlot` to ask whether the site fixes them at all — and an empty list is
+// a compiler defect at all three, since the parser prepends the receiver before the op is ever emitted.
+export function witnessDispatchReceiver(args ValueIdArray) returns ValueId
+	return try args.get(0) otherwise panic("witnessDispatchReceiver: a witness dispatch's argument list is empty — `Parser.withWitnessReceiver` puts the borrowed receiver at position 0 ahead of every actual")
+end 'witnessDispatchReceiver'
+
 // The dual-register error-flag ABI BIAS (P1.4b). The error flag is `0` for "no error in flight" and
 // `errorOrdinal + ErrorFlagOrdinalBias` when a scalar error is thrown — the bias is what reserves `0`.
 // This is ONE fact read from BOTH sides of a tier boundary and they MUST agree: the Std-tier lowering

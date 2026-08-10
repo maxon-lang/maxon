@@ -681,6 +681,10 @@ type MaxonToStdLowering
 	// `valueTags`, from `IrFunction.valueNameIds`. For a `genericInstance`-tagged receiver at a `sizeof(T)`
 	// call site it carries the `GenericInstanceId`, which `materializeLayoutArg` resolves to a descriptor.
 	var valueNameIds as TypeNameIdArray
+	// The per-value EXISTENTIAL-INSTANCE column of the function CURRENTLY being lowered — re-pointed per
+	// function like `valueTags`, from `IrFunction.valueExistentialInstances`. `witnessFormalType` reads the
+	// RECEIVER's entry to resolve an associated formal at the SITE that declared it (W59).
+	var currentExistentialInstances as ValueExistentialInstanceMap
 	// ⭐ The whole-program type-name interner (`project.typeNames`), which `valueNameIds` indexes into and
 	// into which `mergeArtifact` remapped every id on a merged signature or op type — copied out at `create`
 	// like every other registry here, because this pass holds no `Project`. Two questions need it, and this
@@ -755,7 +759,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -862,6 +866,9 @@ type MaxonToStdLowering
 			// The witness-pairing column travels with it too (P1.7a-existentials slice 1): an existential
 			// argument's witness half is FORWARDED from here rather than re-resolved.
 			self.valueWitnessIds = srcFunc.valueWitnessIds
+			// The existential-instance column travels with it as well (W59): a dispatch's associated FORMAL is
+			// resolved from the RECEIVER's own `with` arguments, which live only here.
+			self.currentExistentialInstances = srcFunc.valueExistentialInstances
 			// The name column travels with it too (P1.6-B1): `materializeLayoutArg` reads a `genericInstance`
 			// receiver's `GenericInstanceId` out of it.
 			self.valueNameIds = srcFunc.valueNameIds
@@ -2363,7 +2370,7 @@ type MaxonToStdLowering
 	// hands the other's impl bits it reads as something else. MEASURED, x64 SEGFAULTED on one such pair and
 	// silently answered 1 for 51 on another. That is refused whole-program by E3119, on every target, because
 	// the register targets are the half that fails quietly.
-	function witnessFormalTypes(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex) returns MaxonTypeArray
+	function witnessFormalTypes(methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, receiver ValueId) returns MaxonTypeArray
 		let slot = self.witnessRequirementSlot(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 		let formals = slot.method.paramTypeNames
 
@@ -2372,7 +2379,7 @@ type MaxonToStdLowering
 
 		for j in 0 upto formals.count() 'eachFormal'
 			let formalName = try formals.get(j) otherwise panic("witnessFormalTypes: formals.get OOB at {j} below count {formals.count()}")
-			types.push(self.witnessFormalType(formalName, interfaceDeclIndex: interfaceDeclIndex))
+			types.push(self.witnessFormalType(formalName, interfaceDeclIndex: interfaceDeclIndex, receiver: receiver))
 		end 'eachFormal'
 
 		return types
@@ -2404,27 +2411,63 @@ type MaxonToStdLowering
 	// ACTUAL's tag instead was this slice's own defect one level down: it is the unresolved `valueTags`
 	// column, it PANICKED `maxonTypeToStdType` outright on a `named` actual, and it cannot see a binding the
 	// actual does not happen to match.
-	function witnessFormalType(formalName ByteArray, interfaceDeclIndex InterfaceDeclIndex) returns MaxonType
+	function witnessFormalType(formalName ByteArray, interfaceDeclIndex InterfaceDeclIndex, receiver ValueId) returns MaxonType
 		let dispatched = self.interfaceAtDeclIndex(interfaceDeclIndex)
 		if let position = try namePositionIn(dispatched.associatedTypeNames, name: formalName) 'aConformerBindsIt'
-			return self.associatedFormalType(dispatched.name, position: position, formalName: formalName)
+			return self.associatedFormalType(dispatched.name, position: position, formalName: formalName, receiver: receiver)
 		end 'aConformerBindsIt'
 
 		return renderedTypeNameAbiType(formalName)
 	end 'witnessFormalType'
 
-	// The resolved type of an associated formal — `associatedAbiBindingOf`'s answer, with the two arms this
-	// pass cannot act on turned into the one thing it can. `unconformed` means no type in the program conforms,
-	// so no dispatch through this requirement is reachable and the machine word constrains nothing;
-	// `disagreed` is E3119's, reported with a position by `ConformanceCheck` before lowering ever runs, so
-	// reaching it here means the error gate did not fire.
-	function associatedFormalType(interfaceName ByteArray, position ElementCount, formalName ByteArray) returns MaxonType
+	// ⭐⭐ **THE RESOLVED TYPE OF AN ASSOCIATED FORMAL — THE RECEIVER'S OWN CLAIM FIRST, THE WHOLE-PROGRAM FOLD
+	// ONLY WHERE THE RECEIVER MAKES NONE (W59).** An associated binding is a property of the USE SITE, so a
+	// receiver declared `Taker with Integer` fixes `Element` for every dispatch on it whatever some other
+	// conformer binds — and `SemanticCheck.checkExistentialSiteClaimAtArgument` (E3127) is what makes only
+	// conformers binding `Integer` reach it.
+	//
+	// ⚠ **THE SITE'S ANSWER GOES THROUGH `renderedTypeNameAbiType` AND NOT THROUGH THE `MaxonType`**, so this
+	// arm and the fold below reduce one spelling by one rule. `instanceArgDisplayName` is the SAME rendered
+	// name `SemanticCheck.existentialSiteClaimAgainst` compares a conformer's binding against, so the check
+	// that admits a widening and the ABI this emits for it cannot come to read the string two ways.
+	//
+	// ⚠⚠ **`disagreed` IS UNREACHABLE, AND NOT FOR THE REASON IT USED TO BE.** It was sound because E3119
+	// refused every disagreement whole-program; W59 narrowed that refusal to exactly the positions no dispatch
+	// site fixes — `ConformanceCheck.dispatchedAssociatedNamesOf` walks the same receivers this function reads
+	// and gates on the same `valueExistentialInstances` column. So a `disagreed` here means a site fixed
+	// nothing AND that gate let it through, which is the two doors disagreeing about one receiver.
+	//
+	// `unconformed` means no type in the program conforms, so no dispatch through this requirement is
+	// reachable and the machine word constrains nothing — unchanged by the per-site rule, which narrows WHICH
+	// conformers can arrive and cannot conjure one where there are none.
+	function associatedFormalType(interfaceName ByteArray, position ElementCount, formalName ByteArray, receiver ValueId) returns MaxonType
+		if let siteBinding = try self.receiverSiteBinding(receiver, position: position) 'theReceiverClaimsIt'
+			return renderedTypeNameAbiType(siteBinding)
+		end 'theReceiverClaimsIt'
+
 		match associatedAbiBindingOf(self.conformances, interfaceName: interfaceName, position: position) 'binding'
 			agreed(_, _, declaredType) then return declaredType
 			unconformed then return MaxonType.integer
-			disagreed(first, firstBinding, second, secondBinding) then panic("associatedFormalType: '{String.from(interfaceName)}' binds `{String.from(formalName)}` to `{String.from(firstBinding)}` in '{String.from(first.typeName)}' and to `{String.from(secondBinding)}` in '{String.from(second.typeName)}' — which `ConformanceCheck.checkAssociatedTypeAbiAgreement` reports as E3119, so the pipeline's error gate must stop before lowering")
+			disagreed(first, firstBinding, second, secondBinding) then panic("associatedFormalType: '{String.from(interfaceName)}' binds `{String.from(formalName)}` to `{String.from(firstBinding)}` in '{String.from(first.typeName)}' and to `{String.from(secondBinding)}` in '{String.from(second.typeName)}', while the receiver v{receiver} of this dispatch claims nothing at position {position} — which `ConformanceCheck.checkAssociatedTypeAbiAgreement` reports as E3119, so the pipeline's error gate must stop before lowering")
 		end 'binding'
 	end 'associatedFormalType'
+
+	// ⭐ **WHAT THE RECEIVER'S OWN DECLARATION BOUND ONE ASSOCIATED POSITION TO** — the site's claim, as the
+	// RENDERED name. `MapError.keyNotFound` for a receiver that claims nothing at all (a bare `Taker`
+	// parameter, a constrained type parameter, a field load, a merge phi) and for one whose instance bound too
+	// few arguments, which is E3016's to report.
+	//
+	// The twin of `Parser.instanceBoundAssociatedType`, which answers the same question for the dispatch's
+	// RESULT out of the same column — one receiver, one instance, one position, so a call's result type and its
+	// argument ABI are decided by the same fact rather than by two readings of it.
+	function receiverSiteBinding(receiver ValueId, position ElementCount) returns ByteArray throws MapError
+		let instance = try self.currentExistentialInstances.get(receiver)
+		if position >= self.signatures.genericInstanceArgCount(instance) 'boundNothingHere'
+			throw MapError.keyNotFound
+		end 'boundNothingHere'
+
+		return self.signatures.instanceArgDisplayName(instance, position: position)
+	end 'receiverSiteBinding'
 
 	// Witness slot `methodIndex` of the interface `interfaceDeclIndex` names — the same `(interface, slot)` pair
 	// `Parser.appendInterfaceDispatchCandidates` numbered the dispatch by, so the requirement this recovers is
@@ -2529,7 +2572,7 @@ type MaxonToStdLowering
 	// pointing at a value and this is the single Std emission for them.
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
 		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendWitnessCall'
 
@@ -2539,7 +2582,7 @@ type MaxonToStdLowering
 	// function and touch it no other way.
 	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
-		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex)
+		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
 		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendWitnessTryCall'
 

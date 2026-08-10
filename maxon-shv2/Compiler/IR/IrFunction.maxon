@@ -84,6 +84,33 @@ end 'throwsClauseIsThrowing'
 
 export typealias ThrowsClauseArray = Array with ThrowsClause
 
+// ⭐⭐ **A PER-FUNCTION MAP FROM AN SSA VALUE HELD AT AN INTERFACE TO THE `Base with Args` INSTANCE ITS
+// DECLARED TYPE NAMED (W57)** — the `with` arguments `ProgramSignatures.instanceDenotedType` drops on the way
+// to `interfaceRef(Base)`, kept BESIDE the type rather than on it.
+//
+// ⭐ **WHY BESIDE AND NOT ON IT.** That door's header states the design and it still holds: an interface this
+// program DISPATCHES through has ONE binding per associated position *where no site says otherwise*, the
+// conformances state it, and a copy riding on the type would be one fact written twice. What that argument
+// does not cover is a SHARED GENERIC BODY, where the binding is the enclosing type's own PARAMETER —
+// `stdlib/Array.maxon`'s `Iterable with (Element, ElementIterator)` inside `type Array uses Element` — which
+// no conformance states and which differs per instantiation while the body compiles once. There the site IS
+// the only authority, so the site's answer is carried per VALUE (never per interface name, which would
+// collide with every other site's) and read only where a dispatch on THAT value needs it.
+//
+// A value with NO entry — a bare `interface`-typed parameter, a field load, a merge phi — resolves an
+// associated type exactly as it did before this column existed: from the whole-program fold, which
+// `ConformanceCheck` keeps unambiguous for exactly those positions (E3119, W59).
+//
+// It is homed in the IR tier rather than in the parser because THREE tiers read it — see
+// `IrFunction.valueExistentialInstances`.
+export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanceId)
+
+// The COW anchor the column starts at, and the answer every reader gets for a function that declared no
+// parameterized existential — which is very nearly every function. `Parser.recordValueExistentialInstance`
+// copy-on-writes on first use by `is`-identity against THIS binding, so a program that never writes a `with`
+// clause on an interface type allocates one map for the whole compile. Never mutated.
+export let sharedEmptyExistentialInstanceMap = ValueExistentialInstanceMap.create()
+
 // The per-function counter that names lifted NON-CAPTURING closure literals (P1.5-A2a). A count with
 // no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
 // the ranged-type convention rather than pinned to a false ceiling.
@@ -228,6 +255,30 @@ export type IrFunction
 	// interface-typed parameters, so it publishes each value's witness here and the lowering reads it.
 	// Empty on a Std-phase function (`createFromStd`).
 	export var valueWitnessIds as ValueIdArray
+	// ⭐⭐ **THE PER-VALUE EXISTENTIAL-INSTANCE COLUMN (W57), SPARSE by ValueId** — see
+	// `ValueExistentialInstanceMap` above for what a `Base with Args` instance is doing beside a value whose
+	// type says only `interfaceRef(Base)`.
+	//
+	// PUBLISHED for `valueWitnessIds`' reason, one fact over (W59). W57 built it as a PARSE-TIME column
+	// because the only reader was the parser's own associated-RESULT typing. The associated FORMAL of that
+	// same dispatch is decided at LOWERING (`LowerMaxonToStd.witnessFormalType`) and the refusal that used to
+	// make the formal decidable whole-program is decided at `ConformanceCheck` — two later tiers asking the
+	// SAME question about the SAME receiver, and neither can re-derive the answer: the `with` arguments live
+	// on no type and in no signature the callee's own body can reach. So the parser hands the column on
+	// instead of dropping it, exactly as it hands on the witness pairing.
+	//
+	// ⚠⚠ **IT IS THE ONE VALUE COLUMN `create` DOES NOT TAKE, BECAUSE IT CANNOT BE HANDED OVER BY REFERENCE.**
+	// Its siblings are ARRAYS the parser grows in place, so a function created before its body is parsed sees
+	// every later write through the reference it was built with. This one is a MAP with a copy-on-write
+	// anchor: `Parser.recordValueExistentialInstance` REPLACES the field with a fresh map on the first write
+	// (the shared empty is never mutated), so the reference `create` was handed is the EMPTY one for exactly
+	// the functions that have something to say. `Parser.publishExistentialInstances` fills it once the body is
+	// complete instead. MEASURED before that existed: `stdlib/Array.maxon`'s `from` published nothing, so
+	// every reader below fell back to the whole-program fold and E3119 still refused the corpus.
+	//
+	// Empty on a Std-phase function (`createFromStd`) and on a function that declared no parameterized
+	// existential, which is very nearly all of them.
+	export var valueExistentialInstances as ValueExistentialInstanceMap
 	// `throws E` clause from the declaration; `ThrowsClause.none` for non-throwing.
 	export var throwsTypeName as ThrowsClause
 	// Persistent per-function symbol table, handed off by the parser. Std-phase
@@ -396,6 +447,7 @@ export type IrFunction
 			valueClosureEnv: valueClosureEnv,
 			valueIsCapturingClosure: valueIsCapturingClosure,
 			valueWitnessIds: valueWitnessIds,
+			valueExistentialInstances: sharedEmptyExistentialInstanceMap,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: StdReturnType.void,
@@ -442,6 +494,7 @@ export type IrFunction
 			valueClosureEnv: ValueIdArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueWitnessIds: ValueIdArray.create(),
+			valueExistentialInstances: sharedEmptyExistentialInstanceMap,
 			throwsTypeName: throwsTypeName,
 			scope: Scope.create(),
 			returnType: returnType,
@@ -483,6 +536,7 @@ export type IrFunction
 			valueClosureEnv: src.valueClosureEnv,
 			valueIsCapturingClosure: src.valueIsCapturingClosure,
 			valueWitnessIds: src.valueWitnessIds,
+			valueExistentialInstances: src.valueExistentialInstances,
 			throwsTypeName: src.throwsTypeName,
 			scope: src.scope,
 			returnType: src.returnType,
