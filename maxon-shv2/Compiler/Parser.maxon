@@ -4866,32 +4866,25 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	// It sits beside `append` because `append` is its CALLER — `:262`'s whole body is
 	// `appendMemory(other.managed)` — so the roster shows the pair in the order the corpus builds them.
 	names.push(AppendMemoryMethod)
-	// ⚠⚠ **`contains` IS THE ONE MEMBER THIS RUNG COULD NOT RETIRE, AND IT IS NOT THE ROSTER'S FAULT
-	// (X-array-retire).** Struck from this list the call routes to `stdlib/Array.maxon:537`'s
-	// `where Element is Equatable` extension, which COMPILES AND THEN FAULTS: **MEASURED 0xC0000005 on
-	// `[10].contains(10)` and on `[10, 20].contains([10])`, and on a `String` element too**, so it is the
-	// BODY rather than an element's witness. The same body written by a USER is refused outright —
-	// `extension Array where Element is Equatable` with `for item in self` earns *"'hasIt' owns an opaque
-	// type-parameter value it must release on some path, but the method reserves no layout descriptor"* —
-	// which is the shape that faults, escaping its own refusal because the declaration is stdlib's. Its
-	// retirement is the largest single deletion left here (the whole `ArrayRuntime` contains family, its
-	// two witness-threading predicates and `parseArrayContains`) and it is a GENERICS rung, not a roster
-	// line.
-	// ⚠ **`contains` IS ON THE SURFACE UNCONDITIONALLY AND AVAILABLE CONDITIONALLY, and the two answers belong
-	// at different doors (conditional-extensions).** A roster says what the dispatch SERVES; whether THIS
-	// receiver's element satisfies `where Element is Equatable` is `requireArrayExtensionAvailable`'s question,
-	// asked at its own span with its own diagnostic (E4006, the same one a user's conditional extension is
-	// withheld with). Leaving the name off for a non-`Equatable` element would be the roster lying about the
-	// surface — the exact shape this list's header records twice already.
+	// ⭐⭐ **`contains` LEFT THIS ROSTER AT ARR3b, AND THE FAULT THAT KEPT IT WAS NOT THE ONE FILED HERE.**
+	// X-array-retire recorded *"COMPILES AND THEN FAULTS — 0xC0000005 on `[10].contains(10)`"* and blamed
+	// `stdlib/Array.maxon:534`'s body, calling the retirement a generics rung. RE-MEASURED: the body is fine
+	// and the layout descriptor it needs IS reserved. What faulted was the WITNESS slot — `Array.contains` is
+	// the corpus's only `<Conformer>.<method>` declared by extensions in TWO files, so D7 registers every
+	// member under a suffix and nobody keeps the bare spelling, while `extensionMethodConstraints` is keyed by
+	// the DECLARED name. The supply side therefore read ZERO `where` constraints for a body that had reserved
+	// one, the caller passed 3 arguments where the callee read 4, and `bindImplicitParams` — which places the
+	// layout descriptor at `paramCount - witnessCount - 1` — landed it on the witness slot. The clause is
+	// carried per REGISTRATION NAME now (`FuncSignature.extensionConstraints`), which is a whole-program ABI
+	// repair and not an `Array` one.
 
 	// ⚠ **`hash`/`equals` ARE ON THE SURFACE UNCONDITIONALLY AND AVAILABLE CONDITIONALLY** (array-hashable),
-	// for the sentence `contains` carries three lines up — whether THIS receiver's element satisfies `where
-	// Element is Hashable and Equatable` is `requireArrayExtensionAvailable`'s question, asked at its own
+	// for the sentence the retirement note above carries — whether THIS receiver's element satisfies `where
+	// Element is Hashable and Equatable` is `requireArrayConformanceAvailable`'s question, asked at its own
 	// span with its own diagnostic. The pair is APPENDED FROM ITS OWN SOURCE rather than typed out
 	// (`stringSurfaceMemberNames`'s rule): the conformance row is
 	// `IrInterface.isIntrinsicBuiltinConformance`'s, so the day `Array` gains a protocol, its method joins
 	// the roster, the refusal and the dispatch together.
-	names.push(ContainsMethod)
 	return names
 end 'arraySurfaceMemberNames'
 
@@ -4901,13 +4894,12 @@ end 'arraySurfaceMemberNames'
 // condition they actually failed are one fact. Typed out as a literal it would be a further spelling of
 // that list and the first one nothing checks.
 //
-// ⚠ **THE LIST IS A PARAMETER BECAUSE `Array` HAS TWO DIFFERENT CLAUSES, and they are two FACTS rather
-// than two spellings of one.** `contains` is `where Element is Equatable` (`stdlib/Array.maxon:534`) and
-// carries the element's `Equatable` witness table as a hidden argument, so its list is also what the
-// lowering threads (`arrayElementWitnessInterfaces`). `hash`/`equals` are `where Element is Hashable and
-// Equatable` (`:635`) and carry NOTHING, because an array's own hash is a byte walk — their list is
-// `Array`'s own conformance row (`IrInterface.intrinsicConformanceProtocolNames`). Each caller names the
-// source of its own.
+// ⚠ **THE LIST IS STILL A PARAMETER THOUGH `Array` NOW HAS ONE CLAUSE LEFT, and the parameter is what says
+// the renderer is not the clause's OWNER.** `contains` was the second (`where Element is Equatable`,
+// `stdlib/Array.maxon:534`) and served its own conditional extension in the corpus from ARR3b; what remains
+// is `hash`/`equals`'s `where Element is Hashable and Equatable` (`:635`), whose list is `Array`'s own
+// conformance row (`IrInterface.intrinsicConformanceProtocolNames`). The one caller names the source of it,
+// so this function renders a list it is handed and never states one.
 function arrayWhereClause(interfaces ByteArrayArray) returns String
 	var constraints = WhereConstraintArray.create()
 	for i in 0 upto interfaces.count() 'eachConstraint'
@@ -5654,6 +5646,7 @@ typealias ProducerMask = int(0 to 31)
 let CharacterSetProducerBit = 1 as ProducerMask
 let ManagedFileProducerBit = 2 as ProducerMask
 let ManagedDirectoryProducerBit = 4 as ProducerMask
+
 // ⭐ **A `<Enum>.allCaseNames` — the fourth question this walk answers, and the only one that names no
 // compiler-owned LAYOUT.** What it registers is the `Array with String` INSTANCE the member materializes,
 // which — like a bare `[…]` literal's — has no typealias in the file to be interned from. It rides this
@@ -8779,6 +8772,17 @@ export type Parser
 	// `recordScannedType` are the writers); points at `sharedEmptyWhereConstraints` for an unconstrained
 	// type, so a non-generic (or unconstrained-generic) type declaration allocates nothing here.
 	var enclosingWhereConstraints as WhereConstraintArray
+	// ⭐⭐ **THE EXTRA CLAUSE OF THE CONDITIONAL TYPE EXTENSION whose body is being parsed (ARR3b)** — the
+	// half of `enclosingWhereConstraints` that came from the `extension … where …` header rather than from
+	// the target type's own declaration, empty everywhere else. Written and cleared in lockstep with
+	// `enclosingWhereConstraints`, whose value is exactly
+	// `typeExtensionWitnessConstraints(<enclosing type>, extensionConstraints: this)`.
+	//
+	// It exists so that `parseFunction` can record the clause under the REGISTRATION NAME it has just minted:
+	// the fold files a conditional extension's clause under the DECLARED `<Conformer>.<method>` name, which a
+	// contested or overloaded member does not wear. See `FuncSignature.extensionConstraints` for the two
+	// measured ABI mismatches that bare key caused.
+	var enclosingExtensionConstraints as WhereConstraintArray
 	// ⭐ **WHERE THE DECLARING FUNCTION'S HIDDEN WITNESS PARAMETERS START, AND HOW MANY (P1.7a slice 2a; a
 	// PARSER fact since P1.7a-existentials slice 1).** `parseFunction` reserves them — one per `where`
 	// constraint of the enclosing type, trailing after the layout slot — and a witness dispatch in the body
@@ -9314,6 +9318,7 @@ export type Parser
 			enclosingTypeIsEnum: false,
 			enclosingTypeParams: ByteArrayArray.create(),
 			enclosingWhereConstraints: sharedEmptyWhereConstraints,
+			enclosingExtensionConstraints: sharedEmptyWhereConstraints,
 			declaringWitnessParamBase: 0,
 			declaringWitnessParamCount: 0,
 			witnessSlotsByInterface: sharedEmptyWitnessSlots,
@@ -13234,6 +13239,7 @@ export type Parser
 		// `sharedEmptyWhereConstraints` is the extension's OWN side, which is empty for the reason above.
 		self.enclosingTypeParams = index.structTypeParamsOf(conformer)
 		self.enclosingWhereConstraints = index.typeExtensionWitnessConstraints(conformer, extensionConstraints: sharedEmptyWhereConstraints)
+		self.enclosingExtensionConstraints = sharedEmptyWhereConstraints
 
 		// BOTH COLUMNS OR NEITHER — the length agreement `conformerAssociatedBindings` enforces has already
 		// emptied a list that cannot be paired, so an empty one here means only "this conformer binds nothing
@@ -13265,6 +13271,7 @@ export type Parser
 	function openTypeExtensionBodyScope(header ExtensionHeader, index ProgramSignatures)
 		self.enclosingTypeParams = extensionTargetParamNames(header.target)
 		self.enclosingWhereConstraints = index.typeExtensionWitnessConstraints(header.nameTok.value, extensionConstraints: header.constraints)
+		self.enclosingExtensionConstraints = header.constraints
 	end 'openTypeExtensionBodyScope'
 
 	// What `conformer` binds the extended interface's associated types to — the same column
@@ -13492,6 +13499,7 @@ export type Parser
 		self.enclosingInnerAliases = sharedEmptyInnerAliases
 		self.innerAliasesFromIndex = false
 		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
+		self.enclosingExtensionConstraints = sharedEmptyWhereConstraints
 		self.clearExtensionAssociatedTypes()
 	end 'enterTypeScope'
 
@@ -13577,6 +13585,7 @@ export type Parser
 		// Restored in lockstep (P1.7a slice 2a) so a dispatch outside a constrained type body resolves against
 		// no stale constraints — and allocates nothing, exactly as `emptyTypeParams` restores.
 		self.enclosingWhereConstraints = sharedEmptyWhereConstraints
+		self.enclosingExtensionConstraints = sharedEmptyWhereConstraints
 		// Restored in lockstep for the identical reason (conditional extensions): the NEXT conformer's pass
 		// over the same extension body installs its own bindings, and a `Element` left pointing at the previous
 		// conformer's would be a silently wrong type rather than an error.
@@ -17496,7 +17505,7 @@ export type Parser
 
 		self.publishExistentialInstances(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart)), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -18377,6 +18386,8 @@ export type Parser
 	function installDeclaringTypeScope(layout StructLayout)
 		self.enclosingTypeParams = layout.typeParamNames
 		self.enclosingWhereConstraints = layout.whereConstraints
+		// A TYPE's own declaration carries no extension clause; the extension half is the extension's alone.
+		self.enclosingExtensionConstraints = sharedEmptyWhereConstraints
 	end 'installDeclaringTypeScope'
 
 	// ⭐ **THE NAME AND THE TIER — the ONLY two things a parameter default's helper and a field default's
@@ -18553,7 +18564,7 @@ export type Parser
 		// parameterized existential cannot have a default: `E3121`/`E2010` aside, a default is an EXPRESSION and
 		// there is no literal of an interface type to write.
 		self.publishExistentialInstances(helper)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
 
@@ -40717,7 +40728,7 @@ export type Parser
 
 		let clause = self.signatures.renderExtensionClause(typeName, constraints: constraints)
 		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'opaqueReceiver'
-			if whereConstraintsMatch(self.enclosingWhereConstraints, other: self.signatures.witnessConstraintsOfMethod(callee)) 'callerCarriesThem'
+			if whereConstraintsMatch(self.enclosingWhereConstraints, other: self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: constraints)) 'callerCarriesThem'
 				return
 			end 'callerCarriesThem'
 
@@ -41025,7 +41036,7 @@ export type Parser
 		if self.tagOf(base.box) != ValueTypeTag.structRef or not base.layout.name.equals(self.enclosingType) 'notSameTypeValue'
 			return
 		end 'notSameTypeValue'
-		if self.signatures.witnessConstraintsOfMethod(callee).isEmpty() 'calleeDispatchesNothing'
+		if self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: self.signatures.extensionMethodConstraintsOf(callee)).isEmpty() 'calleeDispatchesNothing'
 			return
 		end 'calleeDispatchesNothing'
 
@@ -41421,89 +41432,38 @@ export type Parser
 		return try self.emitMaterializedFill(resultGiid, callee: callee, source: container, extraArgs: pairArgs(transform, second: self.emitClosureEnvArg(transform, range: range)), range: range)
 	end 'parseContainerMap'
 
-	// ⭐⭐ **`contains(…)` — THE `Array`'s CONDITIONAL EXTENSION, AND THE CONTAINER SURFACE'S FIRST OVERLOAD
-	// SET (conditional-extensions).** `stdlib/Array.maxon:534` declares two methods under one name inside
-	// `export extension Array where Element is Equatable` — `contains(element Element)` (membership) and
-	// `contains(sequence ElementArray)` (contiguous subsequence) — and `[10,20,30,40].contains([20])` takes the
-	// SECOND, which is why the spec's `array-contains` case expects `true` from what reads like a typo.
-	//
-	// ⭐ **THE DISCRIMINATOR IS THE ARGUMENT'S INSTANCE, WHICH IS `ElementArray` READ LITERALLY.** The
-	// reference names the sequence overload's parameter `Array with Element` — the RECEIVER's own type — so
-	// "is this argument the receiver's instance?" is the whole test, and it is the only one that stays
-	// unambiguous when the element is ITSELF an array: for `Array with IntArray` the element is
-	// `Array with Integer` and the sequence is `Array with (Array with Integer)`, two distinct instances.
-	// ⚠ Everything that is NOT that instance goes to the membership overload and is then type-checked as an
-	// ELEMENT, so a wrong argument type is reported by the element door (naming the element type) rather than
-	// by a bespoke "neither overload matched" sentence that would have to name both.
-	//
-	// ⚠ **NOTHING CHANGES OWNER.** Both overloads only COMPARE, so the argument is BORROWED — no
-	// `moveElementIntoContainer`, no poisoned bare local, no promotion of a borrowed String literal. That is
-	// the `Set`'s `contains`/`remove` rule (`parseSetKeyArg`'s `consume: false`), and it is why a temporary
-	// argument (`nums.contains([20])`) is left to the statement's own pending drops.
-	//
-	// ⚠ **THE ELEMENT IS STILL PUT INTO ITS SLOT SHAPE (`containerElementWord`).** A float element lives in a
-	// slot as its 64 BITS, and the runtime reads slots — so the needle has to arrive in the same
-	// representation the haystack's elements are stored in, or the comparison compares a float against a bit
-	// pattern. One door decides that for the write side and for this one.
-	function parseArrayContains(func IrFunction, arr ValueId, giid GenericInstanceId, methodTok Token, range SourceRange) returns ValueId throws ParseError
-		try self.requireArrayExtensionAvailable(giid, interfaces: arrayElementWitnessInterfaces(), methodName: methodTok.value, anchor: methodTok)
-		try self.consume(TokenKind.leftParen)
-		let argTok = self.current()
-		let argStart = self.pos
-		let parsed = try self.parseExpression(func, block: self.currentBlock)
-		let subsequence = self.tagOf(parsed) == ValueTypeTag.genericInstance and self.valueNameId(parsed) == giid
-
-		var needle = parsed
-		if not subsequence 'membership'
-			needle = self.containerElementWord(try self.requireContainerElementType(giid, value: parsed, valueStart: argStart, methodTok: methodTok), giid: giid, range: SourceRange.ofToken(argTok))
-		end 'membership'
-
-		try self.consume(TokenKind.rightParen)
-		return self.emitRuntimeCall(arrayContainsCallee(subsequence, elementIsFloat: self.containerElementIsFloatWord(giid)), args: pairArgs(arr, second: needle), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-	end 'parseArrayContains'
-
-	// ⭐⭐ **DOES THIS RECEIVER'S ELEMENT SATISFY THE `where` CLAUSE OF AN `Array` CONDITIONAL EXTENSION? —
-	// the WITHHOLDING rule, and it is the SAME question, the same predicate and the same diagnostic a user's
-	// own conditional extension gets.** `ConformanceCheck.typeConformsTo` over `sweptConformanceIndex` is
-	// what `requireReceiverSatisfiesExtensionConstraints` asks of a declared type's extension methods; the
-	// only difference here is that `Array`'s extensions are not read from a file — shv2 loads no
-	// `stdlib/Array.maxon` — so the clause is stated by an interface list instead of parsed. E4006 is
+	// ⭐⭐ **DOES THIS RECEIVER'S ELEMENT SATISFY THE `where` CLAUSE OF `Array`'s OWN CONDITIONAL
+	// CONFORMANCE? — the WITHHOLDING rule, and it is the SAME question, the same predicate and the same
+	// diagnostic a user's own conditional extension gets.** `ConformanceCheck.typeConformsTo` over
+	// `sweptConformanceIndex` is what `requireReceiverSatisfiesExtensionConstraints` asks of a declared type's
+	// extension methods; the only difference here is that `Array`'s conformance is not read from a file — shv2
+	// loads no `stdlib/Array.maxon` — so the clause is stated by an interface list instead of parsed. E4006 is
 	// therefore the same sentence a reader gets from a `where` clause they wrote themselves.
 	//
-	// ⭐ **THE CONSTRAINT LIST IS READ, NOT WRITTEN, AND IT IS THE CALLER'S TO NAME.** `contains` passes
-	// `arrayElementWitnessInterfaces()`, which is ALSO what `LowerMaxonToStd.appendArrayElementWitnessArgs`
-	// threads tables for — split, the front end could admit a constraint the lowering threads no table for.
-	// `hash`/`equals` pass `Array`'s own conformance row; see `arrayWhereClause` for why those are two facts.
+	// ⭐ **THE CLAUSE IS READ FROM `isIntrinsicBuiltinConformance` RATHER THAN TRANSCRIBED** (see that
+	// predicate's `Array` arm): `where Element is Hashable and Equatable` is the SAME two protocols `Array`
+	// conditionally supplies, so the sentence a reader is given and the row that decides it are one fact.
 	//
-	// ⚠ **AN OPAQUE `T` ELEMENT IS REFUSED, AND IT IS A WITNESS-FORWARDING GAP RATHER THAN A CONFORMANCE
-	// ONE.** Inside a generic body `self.items.contains(x)` has no concrete element to look a table up for,
-	// and the runtime call takes that table as an ordinary argument — so the caller's own witness slot would
-	// have to be forwarded, which needs the enclosing function to carry the SAME constraint
-	// (`requireReceiverSatisfiesExtensionConstraints`'s `callerCarriesThem`). Answering E4006 instead would
-	// claim the element does not conform, which is not what is known: nothing here knows what it binds to.
-	// ⚠ `hash`/`equals` take NO witness, so the sentence's "takes the element's witness table as an argument"
-	// half is not theirs — but the refusal still stands for them and for a reason of its own: a `T` element's
-	// STRIDE is not known here either (`Array with T` is opaque), and their bodies read `element_size@24` to
-	// bound the walk. Both are "this array's element type is not known here", which is what the sentence says.
-	// ⭐ **THE `Hashable`/`Equatable` HALF OF THE RULE ABOVE, ASKED UNDER `Array`'s OWN CONFORMANCE ROW.**
-	// `where Element is Hashable and Equatable` is the SAME two protocols `Array` conditionally supplies, so
-	// the clause is READ from `isIntrinsicBuiltinConformance` rather than transcribed (see that predicate's
-	// `Array` arm). The doors that WITHHOLD a method under it share this one, so the refusal they raise is one
-	// sentence. ⚠ X-array-retire left it with a SINGLE caller — the `==`/`!=` OPERATOR — because the
-	// `arr.hash()` and `a.equals(b)` METHOD arms retired to `stdlib/Array.maxon:637`'s extension, which states
-	// the same clause in the language and withholds itself. The operator has no declaration to withhold it,
-	// which is exactly why this survives them. (The hash-table KEY
-	// gate reads the same row but does NOT come through here: it refuses a key rather than a method, so it
-	// wants the verdict's payload and not this throw. See `requireArrayKeyElementConforms`.)
-	function requireArrayConformanceAvailable(giid GenericInstanceId, methodName ByteArray, anchor Token) throws ParseError
-		try self.requireArrayExtensionAvailable(giid, interfaces: intrinsicConformanceProtocolNames(ArrayBuiltinBaseName), methodName: methodName, anchor: anchor)
-	end 'requireArrayConformanceAvailable'
-
+	// ⚠ **IT IS DOWN TO A SINGLE CALLER — THE `==`/`!=` OPERATOR — AND EVERY METHOD THAT USED TO SHARE IT
+	// RETIRED TO THE CORPUS.** `arr.hash()` and `a.equals(b)` went to `stdlib/Array.maxon:637`'s extension at
+	// X-array-retire and `arr.contains(x)` to `:534`'s at ARR3b; each states its clause in the language and
+	// withholds itself. The operator has no declaration to withhold it, which is exactly why this survives
+	// them — and it is why the interface list is no longer a PARAMETER: there is one clause left to ask about,
+	// so a caller can no longer name a different one. (The hash-table KEY gate reads the same row but does NOT
+	// come through here: it refuses a key rather than a method, so it wants the verdict's payload and not this
+	// throw. See `requireArrayKeyElementConforms`.)
+	//
+	// ⚠ **AN OPAQUE `T` ELEMENT IS REFUSED, AND THE REASON IS A STRIDE AND NOT A CONFORMANCE.** `Array with T`
+	// is opaque, so `element_size@24` — which `__arr_hash`/`__arr_eq` read to bound their byte walk — is not
+	// known here. Answering E4006 instead would claim the element does not conform, which is not what is
+	// known: nothing here knows what it binds to.
+	//
 	// ⚠ **THE METHOD NAME AND THE POSITION ARE TWO PARAMETERS, because the OPERATOR door has one and not the
 	// other.** `a == b` fails this rule as `Array.equals` — that is the method whose availability was
 	// withheld — but the only span to blame is the operator's, and there is no `equals` token to read a name
-	// off. Every other caller passes its own method token for both.
-	function requireArrayExtensionAvailable(giid GenericInstanceId, interfaces ByteArrayArray, methodName ByteArray, anchor Token) throws ParseError
+	// off.
+	function requireArrayConformanceAvailable(giid GenericInstanceId, methodName ByteArray, anchor Token) throws ParseError
+		let interfaces = intrinsicConformanceProtocolNames(ArrayBuiltinBaseName)
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
 			throw ParseError.unsupported("'{String.from(ArrayBuiltinBaseName)}.{String.from(methodName)}' is a conditional extension method ({arrayWhereClause(interfaces)}), and this array's element type is not known here — it is the enclosing generic's own type parameter, and a compiler-owned `{String.from(methodName)}` cannot be given the element facts it needs from this body. Call it on an array of a concrete element type", line: anchor.line, column: anchor.column)
 		end 'opaqueElement'
@@ -41512,7 +41472,7 @@ export type Parser
 			satisfied then return
 			unmet(unmetInterfaceName, bindingName) then throw ParseError.conditionalExtensionWithheld(String.from(ArrayBuiltinBaseName), methodName: String.from(methodName), clause: arrayWhereClause(interfaces), unmetInterfaceName: String.from(unmetInterfaceName), bindingName: String.from(bindingName), line: anchor.line, column: anchor.column)
 		end 'clause'
-	end 'requireArrayExtensionAvailable'
+	end 'requireArrayConformanceAvailable'
 
 	// `( transform )` — `map`'s single positional argument, a FUNCTION VALUE over the container's element.
 	// Parsed as an ordinary expression, so every producer of a function value reaches it: an inline closure
@@ -46629,23 +46589,6 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
-
-		// ⭐ **`contains(…)` — the CONDITIONAL extension (conditional-extensions), and the LAST of `stdlib`'s
-		// `Array` extension members still served here.** It is on the `Array` roster and NOT the buffer's, so
-		// a receiver reaching here is an `Array` and `mm.contains(x)` is the roster refusal.
-		//
-		// ⚠ It is the FIRST overload set on any container surface, and the arm is one call because the choice
-		// is made where the argument is parsed — see `parseArrayContains`. It also carries the surface's first
-		// AVAILABILITY rule, which is why the arm cannot be a bare `emitRuntimeCall` the way `count` is.
-		//
-		// ⚠⚠ **`map`, `hash` AND `equals` LEFT THIS SPOT AT X-array-retire AND THIS ONE COULD NOT** — see
-		// `arraySurfaceMemberNames`, which records the measured fault that kept it. The two runtimes they
-		// took their names from are still built: `__arr_map` is `Map.map`'s and `__arr_hash`/`__arr_eq` are
-		// the WITNESS door's and the `==` operator's.
-		if methodTok.value.equals(ContainsMethod) 'contains'
-			return try self.parseArrayContains(func, arr: arr, giid: giid, methodTok: methodTok, range: range)
-		end 'contains'
-
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
 		// (`requireVoidMethodIsStatement`, whose header carries the D11 measurement).** The refusal used to
 		// be one call HERE, ahead of them all, which an UNKNOWN name reached too — so a typo was told the
@@ -51589,7 +51532,7 @@ export type Parser
 		// every declared function's do, while its return type is INFERRED from the body and names no token for
 		// `declaredExistentialInstanceAt` to read.
 		self.publishExistentialInstances(lifted)
-		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
 		self.closureReturns.upsert(closureName, value: returnType)
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
 		// resolves them against the function whose SSA space numbered them. It sits here — after the body,

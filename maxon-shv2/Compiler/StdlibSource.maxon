@@ -519,9 +519,10 @@ function drainReachableWorklist(module MaxonModule, project Project, signatures 
 		end 'anOpThreadsOne'
 		// ⚠ **THE `not demandsWitnessTable` GUARD IS A COST GUARD AND IS WORTH ITS LINE.** The op question
 		// above rides the callee classification this loop already computes, but this one asks
-		// `witnessConstraintsOfMethod` — a qualified-name split and two map lookups PER REACHED FUNCTION, on
-		// every compile that touches stdlib. Once the answer is known it cannot change, and `or` is monotone.
-		if not demandsWitnessTable and functionDeclaresAWitnessPosition(func, signatures: signatures) 'aDeclarationWidensOne'
+		// `witnessConstraintsOfMethod` — a qualified-name split and a handful of map lookups PER REACHED
+		// FUNCTION, on every compile that touches stdlib. Once the answer is known it cannot change, and `or`
+		// is monotone.
+		if not demandsWitnessTable and functionDeclaresAWitnessPosition(func, signatures: signatures, funcSignatures: project.funcSignatures) 'aDeclarationWidensOne'
 			demandsWitnessTable = true
 		end 'aDeclarationWidensOne'
 	end 'walk'
@@ -568,9 +569,9 @@ end 'drainReachableWorklist'
 // prediction of which call sites will fire, which is the shape the measured `+81%` cut got wrong (see
 // `markConformerWitnessImpls`):
 //
-//   • **A CONTAINER's key or element** (`withWitnessTableArgs` — `__set_*`/`__map_*`'s key, an
-//     `Array.contains`'s element, `__str_trim`/`__cs_contains`'s hardcoded `Character`). Its evidence is an
-//     OP: the runtime callee that threads the table, asked through `opThreadsAWitnessTable`.
+//   • **A CONTAINER's key** (`withWitnessTableArgs` — `__set_*`/`__map_*`'s key, `__str_trim`/
+//     `__cs_contains`'s hardcoded `Character`). Its evidence is an OP: the runtime callee that threads the
+//     table, asked through `opThreadsAWitnessTable`.
 //   • **A `where T is I` CONSTRAINT witness** (`materializeWitnessArg`), carried by every call to a method of
 //     a `where`-constrained type. Its evidence is that method's own DECLARATION, and the reached method is
 //     exactly the one whose call materialized the table.
@@ -612,7 +613,7 @@ end 'drainReachableWorklist'
 //     own source — so the list this gate tests and the list that pass fills are one answer, and a conditional
 //     TYPE EXTENSION's extra constraints (which no `structWhereConstraints` read would see) are covered by
 //     construction.
-function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSignatures) returns bool
+function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns bool
 	for paramType in func.maxonParamTypes 'eachParam'
 		if maxonTypeTag(paramType) == ValueTypeTag.interfaceRef 'existentialParam'
 			return true
@@ -623,19 +624,31 @@ function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSig
 		return true
 	end 'existentialReturn'
 
-	return signatures.witnessConstraintsOfMethod(func.name).count() > 0
+	// ⭐ **THE EXTENSION HALF IS READ OFF THE REGISTRATION NAME'S OWN SIGNATURE (ARR3b)**, because the
+	// declaration-sweep map is keyed by the DECLARED name and a D7 overload member does not wear it — see
+	// `FuncSignature.extensionConstraints`. A function with no recorded signature (a synthesized graph, a
+	// witness adapter) has no registration name to read one off, so it falls back to the DECLARATION-SWEEP
+	// clause — which is exactly what every callee read before ARR3b, and cannot be wrong for a name no
+	// declaration wears. Over-answering here costs a walk; under-answering skips a table the image needs.
+	if let sig = try funcSignatures.get(func.name) 'declared'
+		return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: sig.extensionConstraints).count() > 0
+	end 'declared'
+
+	return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: signatures.extensionMethodConstraintsOf(func.name)).count() > 0
 end 'functionDeclaresAWitnessPosition'
 
 // ⭐ **DOES THIS OP THREAD A WITNESS TABLE INTO A COMPILER-OWNED RUNTIME CALLEE?** — the third
-// `ensureWitnessTable` route, and the one whose evidence can only be an op: a hash table's KEY, an
-// `Array.contains`'s ELEMENT and a `CharacterSet`'s hardcoded `Character` are named by the RECEIVER's type at
-// lowering, not by any declaration.
+// `ensureWitnessTable` route, and the one whose evidence can only be an op: a hash table's KEY and a
+// `CharacterSet`'s hardcoded `Character` are named by the RECEIVER's type at lowering, not by any
+// declaration.
 //
-// ⚠ **THE ROSTER IS READ FROM THE FOUR RUNTIMES THAT OWN IT** (`isSetWitnessCallee`, `isMapWitnessCallee`,
-// `isCharacterKeyedWitnessCallee`, `isArrayElementWitnessCallee`) — the very four `LowerMaxonToStd`'s
-// `lowerRuntimeCall` parts on. Spelling `__set_insert` a second time here would be this project's signature
-// bug in the file that seeds off it, and a fifth family would then be learned by the lowering and missed by
-// this walk, which is the silent direction.
+// ⚠ **THE ROSTER IS READ FROM THE THREE RUNTIMES THAT OWN IT** (`isSetWitnessCallee`, `isMapWitnessCallee`,
+// `isCharacterKeyedWitnessCallee`) — the very three `LowerMaxonToStd`'s `lowerRuntimeCall` parts on. Spelling
+// `__set_insert` a second time here would be this project's signature bug in the file that seeds off it, and
+// a fourth family would then be learned by the lowering and missed by this walk, which is the silent
+// direction. (It WAS four: the `Array`'s ELEMENT retired with `__arr_contains` at ARR3b, and the corpus
+// `contains` now carries its element witness as an ordinary dictionary parameter — covered by the
+// DECLARATION route above, not by this one.)
 function opThreadsAWitnessTable(op MaxonOp) returns bool
 	return match maxonOpCalleeKind(op) 'kind'
 		direct to functionValue gives calleeThreadsAWitnessTable(maxonOpCalleeName(op))
@@ -643,10 +656,10 @@ function opThreadsAWitnessTable(op MaxonOp) returns bool
 	end 'kind'
 end 'opThreadsAWitnessTable'
 
-// The four witness-threading runtime families, joined once so the reached-op scan and the user-op
+// The three witness-threading runtime families, joined once so the reached-op scan and the user-op
 // short-circuit cannot come to test different sets.
 function calleeThreadsAWitnessTable(callee ByteArray) returns bool
-	return isSetWitnessCallee(callee) or isMapWitnessCallee(callee) or isCharacterKeyedWitnessCallee(callee) or isArrayElementWitnessCallee(callee)
+	return isSetWitnessCallee(callee) or isMapWitnessCallee(callee) or isCharacterKeyedWitnessCallee(callee)
 end 'calleeThreadsAWitnessTable'
 
 // Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
@@ -850,9 +863,9 @@ end 'markMaxonCalleeEdge'
 // join that names nothing costs nothing, where a RELOCATION that names nothing is a wrong code pointer.
 // Overloads are covered because `markReachable` credits the whole set.
 //
-// ⚠ **THE FOURTH `ensureWitnessTable` ROUTE — `withWitnessTableArgs` / `appendArrayElementWitnessArgs`, the
-// `Hashable`/`Equatable` witness a `Set`/`Map`/`Array` threads — NEEDS NOTHING EXTRA TODAY, AND THAT IS
-// MEASURED RATHER THAN ASSUMED.** Its conformer is the container's KEY or ELEMENT, and a USER type there is
+// ⚠ **THE FOURTH `ensureWitnessTable` ROUTE — `withWitnessTableArgs`, the `Hashable`/`Equatable` witness a
+// `Set`/`Map` threads — NEEDS NOTHING EXTRA TODAY, AND THAT IS
+// MEASURED RATHER THAN ASSUMED.** Its conformer is the container's KEY, and a USER type there is
 // refused: *"E2015: `Set` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, so a
 // key must be one of `int`, `String`, `Character`, `Array` — a 'Point' key is a later slice"*. So every such
 // conformer is a BUILTIN whose impls `BuiltinConformanceRuntime` SYNTHESIZES, and a synthesized body calls no
@@ -1004,7 +1017,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	// scan below is: with no user edge into stdlib, the reached set IS a subset of user code. Gated on the
 	// corpus actually DECLARING one of the seed's conformances, so an unlisted declaring module leaves this
 	// scan — and every program's answer — exactly as it was.
-	if corpusDeclaresASeededConformance(project) and userCodeDemandsAWitnessTable(module, signatures: signatures, stdlib: stdlib) 'widensOrThreadsOne'
+	if corpusDeclaresASeededConformance(project) and userCodeDemandsAWitnessTable(module, project: project, signatures: signatures, stdlib: stdlib) 'widensOrThreadsOne'
 		return true
 	end 'widensOrThreadsOne'
 
@@ -1046,7 +1059,7 @@ end 'userCodeReachesStdlib'
 //
 // It over-answers only by ignoring reachability — a user function nothing calls still counts — which is the
 // direction that costs a walk rather than a wrong answer.
-function userCodeDemandsAWitnessTable(module MaxonModule, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
+function userCodeDemandsAWitnessTable(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
 	for func in module.functions 'eachFunc'
 		// Stdlib's own declarations are skipped for `userCodeReachesStdlib`'s reason: a demand inside a stdlib
 		// body is reached only through a user edge into stdlib, which that scan has already answered TRUE for.
@@ -1054,7 +1067,7 @@ function userCodeDemandsAWitnessTable(module MaxonModule, signatures ProgramSign
 			continue
 		end 'skipStdlibBody'
 
-		if functionDeclaresAWitnessPosition(func, signatures: signatures) 'widensOne'
+		if functionDeclaresAWitnessPosition(func, signatures: signatures, funcSignatures: project.funcSignatures) 'widensOne'
 			return true
 		end 'widensOne'
 

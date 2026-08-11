@@ -2974,11 +2974,16 @@ end 'checkSlottedCall'
 // `conditionalExtensionWithheldMessage`, both shared verbatim with the parse-time gate — what differs is only
 // WHICH callee is asked about, which is the entire reason two askers exist.
 //
-// Allocation-free on every program that declares no conditional type extension: `extensionMethodConstraintsOf`
-// misses an empty map and returns the shared empty list.
+// ⛔ **THE CLAUSE COMES OFF THE RESOLVED MEMBER'S OWN SIGNATURE, NOT OFF THE DECLARATION-SWEEP MAP (ARR3b).**
+// That map is keyed by the DECLARED `<Conformer>.<method>`, and this asker holds the REGISTRATION name of the
+// member overload resolution chose — which for a contested set is a suffixed name the map has never heard of,
+// so this decider silently never fired for exactly the sets it was written for. `FuncSignature.extensionConstraints`
+// is the same clause recorded under the name that was actually minted; see it for the ABI half of the defect.
+//
+// Allocation-free on every program that declares no conditional type extension: the field is the shared empty
+// list for every other declaration.
 function checkResolvedExtensionConstraints(project Project, func IrFunction, callee ByteArray, sig FuncSignature, argIds ValueIdArray, callRange SourceRange, filePath FilePath)
-	var signatures = programSignaturesIn(project, asker: "checkResolvedExtensionConstraints")
-	let constraints = signatures.extensionMethodConstraintsOf(callee)
+	let constraints = sig.extensionConstraints
 	if constraints.isEmpty() 'notAConditionalTypeExtensionMethod'
 		return
 	end 'notAConditionalTypeExtensionMethod'
@@ -2997,6 +3002,9 @@ function checkResolvedExtensionConstraints(project Project, func IrFunction, cal
 	end 'notAConcreteInstance'
 
 	let gid = try func.valueNameIds.get(receiverId) otherwise panic("checkResolvedExtensionConstraints: value v{receiverId} of '{String.from(func.name)}' has no recorded type name — the two type columns are minted in lockstep")
+	// Asked only once every cheaper test has passed — the index is needed for the VERDICT and for the
+	// sentence, and neither is reached by a call whose callee carries no clause.
+	var signatures = programSignaturesIn(project, asker: "checkResolvedExtensionConstraints")
 	match receiverMeetsExtensionConstraints(signatures, gid: gid, constraints: constraints) 'constraint'
 		met then break 'constraint'
 		unmet(interfaceName, argDisplayName) then reportConditionalExtensionWithheld(project, signatures: signatures, callee: callee, constraints: constraints, interfaceName: interfaceName, argDisplayName: argDisplayName, callRange: callRange, filePath: filePath)

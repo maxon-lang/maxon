@@ -1045,6 +1045,7 @@ end 'builtinStdlibAlias'
 // is what every ranged alias in the language already is — `int(0 to 100)` rides an i64, and `lookup`'s
 // header spells that argument out in full.
 let ExitCodeAliasLow = 0 as ParsedInt
+
 // The byte-sized POSIX status shared by Linux, macOS and WASI — the `#else` arm of the declaration
 // mirrored above.
 let PosixExitCodeAliasHigh = 255 as ParsedInt
@@ -2662,7 +2663,6 @@ end 'isBuiltinManagedWrapperInterface'
 export let BuiltinStringLiteralInterfaceName = b"BuiltinStringLiteral"
 export let BuiltinCharLiteralInterfaceName = b"BuiltinCharLiteral"
 export let BuiltinArrayLiteralInterfaceName = b"BuiltinArrayLiteral"
-
 
 // The size of a struct with NO fields. A zero-byte allocation would hand two distinct empty
 // structs the SAME address (the bump allocator advances by nothing), so identity would collapse
@@ -4406,8 +4406,36 @@ export type FuncSignature
 	// reason), and every signature in a generics-free program would mint one just to read "none".
 	export var returnExistentialSites as GenericInstanceIdArray
 
-	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray) returns FuncSignature
-		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites}
+	// ⭐⭐ **THE CONDITIONAL TYPE-EXTENSION CLAUSE OF THE DECLARATION THAT CLAIMED *THIS REGISTRATION NAME*
+	// (ARR3b)** — the extra `where` constraints on top of the enclosing type's own, and so the second half of
+	// the witness-slot count this function's ABI reserves. EMPTY for everything else, which is every function
+	// in a program that declares no conditional type extension.
+	//
+	// ⛔⛔ **IT LIVES ON THE SIGNATURE BECAUSE THE QUESTION IS PER *REGISTRATION NAME* AND
+	// `ProgramSignatures.extensionMethodConstraints` IS KEYED PER *DECLARED* NAME — one key, and a contested
+	// set has several declarations behind it.** `Array.contains` is declared by `stdlib/Array.maxon`'s
+	// `where Element is Equatable` extension AND by `stdlib/Interfaces.maxon`'s unconditional
+	// `extension Iterable`, so D7 registers its members as `Array.contains#type parameter`,
+	// `Array.contains#struct` and `Array.contains#Array.ElementPredicate` and NOBODY keeps the bare spelling.
+	// The bare-keyed map then answered the SUPPLY side (`LowerMaxonToStd.witnessParamCountForCallee`) with
+	// nothing at all while the body reserved a slot from its lexical clause — **MEASURED: the caller passed 3
+	// arguments where the callee read 4, `bindImplicitParams` computed the layout descriptor's id as
+	// `paramCount - witnessCount - 1` and landed on the WITNESS slot, and `[10].contains(10)` segfaulted
+	// (0xC0000005).** The mirror shape is a same-file pair where the UNCONDITIONAL declaration is written
+	// first and keeps the bare name: there the bare key answered with the CONDITIONAL sibling's clause and
+	// every caller pushed a witness argument the callee never reserved.
+	//
+	// ⭐ **AND IT IS FILLED WHERE THE REGISTRATION NAME IS MINTED** (`Parser.parseFunction`), from the very
+	// clause `Parser.openTypeExtensionBodyScope` opened the body with — so the reservation and the supply are
+	// not two agreeing derivations, they are one recorded list read twice. A witness-slot count is ABI, and a
+	// reservation and a supply that disagree is an argument-register mismatch nothing downstream can notice.
+	//
+	// Travels as a plain constraint list (interface names are `ByteArray`s, no interner id), so the merge fold
+	// needs no remap and `syncResolvedSignature` carries it through untouched.
+	export var extensionConstraints as WhereConstraintArray
+
+	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramAggregateNames ByteArrayArray, paramDeclaredNames ByteArrayArray, returnAggregateName ByteArray, paramExistentialSites ParamExistentialSiteArray, returnExistentialSites GenericInstanceIdArray, extensionConstraints WhereConstraintArray) returns FuncSignature
+		return Self{paramNames: paramNames, paramTypes: paramTypes, paramAggregateNames: paramAggregateNames, paramDeclaredNames: paramDeclaredNames, returnAggregateName: returnAggregateName, paramExistentialSites: paramExistentialSites, returnExistentialSites: returnExistentialSites, extensionConstraints: extensionConstraints}
 	end 'create'
 
 	// The declared parameter count — the arity a call must match.

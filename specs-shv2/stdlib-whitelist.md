@@ -863,8 +863,7 @@ which is one fact with two readers and the narrower one deciding. Both now ask
 `DeadFunctionElimination`, and adding a single non-overloaded stdlib call (`"a".isAscii()`) to
 either one made it compile — which is what identified the short-circuit rather than the walk.
 
-<!-- disabled-test: stdlib-whitelist.a-contested-extension-method-is-the-only-edge-into-stdlib -->
-<!-- the rung that retires `Array.contains` from `Parser.arraySurfaceMemberNames` -->
+<!-- test: stdlib-whitelist.a-contested-extension-method-is-the-only-edge-into-stdlib -->
 ```maxon
 function main() returns ExitCode
 	let nums = [10, 20, 30, 40]
@@ -882,8 +881,7 @@ The ELEMENT overload of the same contested set, which registers under a differen
 reached by the same widening. Both are here because the two members are separate functions and a
 walk that widened to only the first would keep this one red.
 
-<!-- disabled-test: stdlib-whitelist.the-other-member-of-the-contested-set-is-an-edge-too -->
-<!-- the rung that retires `Array.contains` from `Parser.arraySurfaceMemberNames` -->
+<!-- test: stdlib-whitelist.the-other-member-of-the-contested-set-is-an-edge-too -->
 ```maxon
 function main() returns ExitCode
 	let nums = [10, 20, 30, 40]
@@ -897,20 +895,19 @@ end 'main'
 7
 ```
 
-⛔⛔ **THE TWO CASES ABOVE ARE DISABLED, AND SAYING WHY IS THE WHOLE POINT OF LEAVING THEM HERE.** They
+⭐ **THE TWO CASES ABOVE SHIPPED DISABLED FOR TWO RUNGS, AND `ARR3b` IS THE CONDITION THEY NAMED.** They
 were written RED and measured RED — both panicked in `DeadFunctionElimination`, naming
 `Array.contains#struct` and `Array.contains#type parameter` — against a tree where `contains` had been
-struck from `Parser.arraySurfaceMemberNames`, and they went GREEN on the fix. `contains` did NOT retire
-in the end (its corpus body faults; `arraySurfaceMemberNames` carries that measurement), so with the
-roster serving `contains` again these two programs never cross into stdlib at all: they would PASS
-without touching the rule they exist for, which is the one thing a test must not do.
+struck from `Parser.arraySurfaceMemberNames`, and they went GREEN on the widening. `contains` did not
+retire at the time (its corpus body faulted), so with the roster serving it these two programs never
+crossed into stdlib at all and would have PASSED without touching the rule they exist for. `contains` is
+struck now, so they cross, and they are live again.
 
-⚠ **AND THEY CANNOT BE REWRITTEN AROUND IT TODAY** — `Array.contains` is the ONLY contested
-`<Conformer>.<method>` the corpus has (`stdlib/Interfaces.maxon`'s `extension Iterable` and
-`stdlib/Array.maxon`'s `where Element is Equatable` extension are the two files; every other method
-either of them declares is unique to one). A user file cannot manufacture a second: MEASURED, a user
-`extension Array` declaring `filter(bump Int)` beside `Iterable`'s `filter(keep ElementPredicate)`
-does not resolve by argument type — `nums.filter(6)` reports `E3005 Cannot return 'struct' from
-function declared to return 'int'`, i.e. it binds the stdlib member — which is a separate finding and
-not a vehicle. The fix stands (a strict widening of a conservative predicate: over-answering costs a
-walk, under-answering skips a body the back end calls); these two go green with `contains`.
+⚠ **`Array.contains` IS STILL THE ONLY CONTESTED `<Conformer>.<method>` THE CORPUS HAS**
+(`stdlib/Interfaces.maxon`'s `extension Iterable` and `stdlib/Array.maxon`'s `where Element is Equatable`
+extension are the two files; every other method either of them declares is unique to one), and a user file
+still cannot manufacture a second: RE-MEASURED at `ARR3b`, a user `extension Array` declaring
+`filter(element Element)` beside `Iterable`'s `filter(keep ElementPredicate)` does not resolve by argument
+type — `nums.filter(10)` reports `E3005 'if' requires a bool condition, got 'struct'`, i.e. it binds the
+stdlib member. That is a separate finding about overload resolution across a contested set, not a vehicle
+for these two.

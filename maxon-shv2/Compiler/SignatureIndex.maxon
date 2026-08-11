@@ -10477,10 +10477,24 @@ export type ProgramSignatures
 	// never computed a second time at the reservation door — the same fact derived twice is the defect this
 	// replaced, not the cure for it. See that function for the order argument and for why it is
 	// declaration-order independent.
-	export function witnessConstraintsOfMethod(callee ByteArray) returns WhereConstraintArray
+	//
+	// ⛔⛔ **THE EXTENSION CLAUSE IS A PARAMETER BECAUSE ITS SOURCE DEPENDS ON WHICH NAME THE ASKER HOLDS,
+	// AND READING IT HERE OFF THE CALLEE WAS A SEGFAULT (ARR3b).** `extensionMethodConstraints` is keyed by
+	// the DECLARED `<Conformer>.<method>`, and a D7 overload member does not wear that name: a `<Conformer>.
+	// <method>` declared by extensions in more than one FILE registers every member under a parameter-type
+	// suffix and NOBODY keeps the bare spelling. So the supply side, which holds the RESOLVED member name,
+	// read an empty clause while the body had reserved a slot from its lexical one — see
+	// `FuncSignature.extensionConstraints` for the measured 0xC0000005 and for its mirror.
+	//
+	// ⇒ each asker states where its clause came from, and there are exactly two honest sources:
+	//   • **the PARSE-TIME gates**, which hold the BARE name deliberately (a call is dispatched before its
+	//     arguments are read) ⇒ `extensionMethodConstraintsOf(callee)`, the declaration sweep's answer;
+	//   • **everything after the merge**, which holds a REGISTRATION name ⇒ that name's own
+	//     `FuncSignature.extensionConstraints`, recorded by the parse that minted the name.
+	export function witnessConstraintsOfMethod(callee ByteArray, extensionConstraints WhereConstraintArray) returns WhereConstraintArray
 		match splitQualifiedName(callee) 'q'
 			notQualified then return sharedEmptyMethodWitnessConstraints
-			parts(typeName, _) then return self.typeExtensionWitnessConstraints(typeName, extensionConstraints: self.extensionMethodConstraintsOf(callee))
+			parts(typeName, _) then return self.typeExtensionWitnessConstraints(typeName, extensionConstraints: extensionConstraints)
 		end 'q'
 	end 'witnessConstraintsOfMethod'
 
@@ -12233,11 +12247,11 @@ export type ProgramSignatures
 	// spelling would name a table nothing registers.
 	//
 	// One question, whatever the caller does with it: `arrayElementConstraintCheck` asks it to decide whether
-	// a conditional extension method exists on this receiver at all (and through it the front end's
-	// withholding and the conformer-name reduction), and `LowerMaxonToStd.appendArrayElementWitnessArgs` asks
-	// it to name the table such a call dispatches through. Split, the front end could admit a call the
-	// lowering then cannot resolve a symbol for. The readers are deliberately NOT counted here: a number
-	// beside the thing it counts is one edit away from being wrong, and this one already was.
+	// `Array`'s conditional conformance holds on this receiver at all — and through it the front end's
+	// withholding and the conformer-name reduction. `LowerMaxonToStd.appendArrayElementWitnessArgs` asked it
+	// to name the table a compiler-owned `__arr_contains` dispatched through, and retired with that family at
+	// ARR3b. The readers are deliberately NOT counted here: a number beside the thing it counts is one edit
+	// away from being wrong, and this one already was.
 	export function containerElementConformerName(id GenericInstanceId) returns String
 		return self.conformerNameOfType(self.containerElementType(id), idsFrom: self.typeNames)
 	end 'containerElementConformerName'
@@ -12245,7 +12259,7 @@ export type ProgramSignatures
 	// ⭐⭐ **DOES A CONTAINER INSTANCE'S ELEMENT SATISFY A CONDITIONAL EXTENSION'S `where` CLAUSE? — THE ONE
 	// WALK, FOR EVERY DOOR THAT ASKS (array-hashable; unified at the tick's review).** `Array`'s conditional
 	// conformance is asked at doors whose CONSEQUENCES differ — the front end WITHHOLDS a method
-	// (`Parser.requireArrayExtensionAvailable`), the reduction collapses the instance's conformer name to
+	// (`Parser.requireArrayConformanceAvailable`), the reduction collapses the instance's conformer name to
 	// `Array` (`arrayElementCarriesConformance`, and through it every `__witness_Array.*` stamp, every
 	// admitted hash-table key and every `where T is Hashable` slot) — and a second copy of the walk lets those
 	// two answer differently with nothing failing to compile: `a == b` refused while the same array is still
@@ -12255,9 +12269,9 @@ export type ProgramSignatures
 	// Everything downstream of `conformerNameOfType` works in NAMES — a name cannot carry an element — so the
 	// conditional half has to be discharged by the reduction itself; see that function's `Array` arm.
 	//
-	// ⭐ **THE CLAUSE IS A PARAMETER, because `Array` has TWO of them and they are two FACTS** — `contains`'s
-	// `where Element is Equatable` (whose list is also what the lowering threads witness tables for) and the
-	// conformance's `where Element is Hashable and Equatable`. See `Parser.arrayWhereClause`.
+	// ⭐ **THE CLAUSE IS A PARAMETER SO THAT THIS WALK NEVER STATES ONE.** `Array`'s compiler-owned clause is
+	// down to the conformance's `where Element is Hashable and Equatable`; `contains`'s `where Element is
+	// Equatable` retired to the corpus extension that declares it (ARR3b). See `Parser.arrayWhereClause`.
 	//
 	// It answers in `ExtensionConstraintCheck`, the verdict a USER's conditional extension is filtered by
 	// (`ConformanceCheck.checkExtensionConstraints`), so the compiler-owned clause and the parsed one are

@@ -1254,7 +1254,7 @@ type MaxonToStdLowering
 		if not sig.takesReceiver() and not self.signatures.calleeReturnsItsDeclaringType(callee) 'noWitnessSource'
 			return 0
 		end 'noWitnessSource'
-		return self.signatures.witnessConstraintsOfMethod(callee).count()
+		return self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints).count()
 	end 'witnessParamCountForCallee'
 
 	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden IMPLICIT arguments a
@@ -1372,7 +1372,7 @@ type MaxonToStdLowering
 	// witnesses from another.
 	function appendWitnessArgs(out ValueIdArray, argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock)
 		let source = self.witnessSourceValue(argIds, sig: sig, result: result, callee: callee)
-		let constraints = self.signatures.witnessConstraintsOfMethod(callee)
+		let constraints = self.signatures.witnessConstraintsOfMethod(callee, extensionConstraints: sig.extensionConstraints)
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("appendWitnessArgs: whereConstraints.get OOB at {i}")
 			out.push(self.materializeWitnessArg(source, constraint: constraint, constraintIndex: i, callee: callee, dstBlock: dstBlock))
@@ -2222,14 +2222,6 @@ type MaxonToStdLowering
 			self.appendSetWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'setWitness'
-		// ⭐ The `Array` surface's `contains` (conditional-extensions) COMPARES ELEMENTS, so it takes the
-		// ELEMENT's `Equatable` table as its one hidden trailing argument — the same dictionary-passing the
-		// hash-table families take, one interface shorter because an element is compared but never hashed. The
-		// element's conformer name comes off the RECEIVER instance (`args[0]`), which is concrete here.
-		if isArrayElementWitnessCallee(callee) 'arrayElementWitness'
-			self.appendArrayElementWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)
-			return
-		end 'arrayElementWitness'
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
 	end 'lowerRuntimeCall'
 
@@ -2257,12 +2249,15 @@ type MaxonToStdLowering
 	end 'withKeyWitnessArgs'
 
 	// ⭐ **`args` PLUS ONE `__witness_<conformerType>.<interface>` ADDRESS PER CONSTRAINT, IN ORDER — the whole
-	// of dictionary-passing into a compiler-owned runtime entry, written once.** Two families thread witnesses
-	// today and they differ only in WHOSE type argument they name and WHICH constraints that argument carries:
-	// a hash table's KEY is `Hashable and Equatable` (`hashTableKeyWitnessInterfaces`), an `Array`'s ELEMENT is
-	// `Equatable` alone (`arrayElementWitnessInterfaces`). Each list lives beside the runtime whose entry
-	// points declare those trailing parameters, so a body's signature and the arguments it is handed are one
-	// fact — and a third family adds a list rather than a second copy of this loop.
+	// of dictionary-passing into a compiler-owned runtime entry, written once.** The constraint list lives
+	// beside the runtime whose entry points declare those trailing parameters — a hash table's KEY is
+	// `Hashable and Equatable` (`hashTableKeyWitnessInterfaces`) — so a body's signature and the arguments it
+	// is handed are one fact, and a second family adds a list rather than a second copy of this loop.
+	//
+	// ⚠ **IT IS DOWN TO ONE FAMILY, AND THAT IS A RETIREMENT AND NOT A SIMPLIFICATION (ARR3b).** An `Array`'s
+	// ELEMENT was the second, `Equatable` alone, threaded into the compiler-owned `__arr_contains`; the corpus
+	// `stdlib/Array.maxon:534` extension serves `contains` now and carries the element's witness as an ordinary
+	// dictionary parameter of its own, filled by `appendWitnessArgs`.
 	//
 	// ⚠⚠ **EVERY LOWERING PATH THAT EMITS A WITNESS-CARRYING CALLEE MUST COME THROUGH HERE, AND THE COST OF
 	// ONE THAT DID NOT WAS A MEASURED ACCESS VIOLATION — not a tidiness point.** Every witness-carrying callee
@@ -2272,8 +2267,7 @@ type MaxonToStdLowering
 	// left the two witness PARAMETERS reading whatever the ABI registers happened to hold, and the fused
 	// `witnessCall` inside the probe's `hash()` jumped through it: measured as `create` + `upsert` + `contains`
 	// all correct and the first `try m.get(k)` faulting with 0xC0000005. ⇒ A new family, or a new op shape for
-	// an existing one, adds an arm that reaches THIS function — the `Array` family's is
-	// `appendArrayElementWitnessArgs`, which calls it directly rather than through the hash-table door.
+	// an existing one, adds an arm that reaches THIS function.
 	function withWitnessTableArgs(args ValueIdArray, conformerType ByteArray, interfaceNames ByteArrayArray, dstBlock IrBlock) returns ValueIdArray
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
@@ -2283,18 +2277,6 @@ type MaxonToStdLowering
 		end 'eachConstraint'
 		return fullArgs
 	end 'withWitnessTableArgs'
-
-	// The `Array` twin of `appendSetWitnessArgs` (conditional-extensions). The conformer whose table is
-	// threaded is the receiver's ELEMENT — `args[0]` is the array record for all four `contains` entries, and
-	// its instance is concrete here — reduced through the SAME canonical reducer the hash-table path uses
-	// (`containerElementConformerName` -> `conformerNameOfType`), so an `Array with Integer` and a
-	// `Set with Integer` name their `int` witness table identically.
-	function appendArrayElementWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
-		let receiver = try args.get(0) otherwise panic("appendArrayElementWitnessArgs: array runtime call '{String.from(callee)}' has no receiver argument — its first parameter is the array record")
-		let gid = try self.valueNameIds.get(receiver) otherwise panic("appendArrayElementWitnessArgs: array receiver v{receiver} has no name-id (its GenericInstanceId) — an `Array` value is always a concrete generic instance")
-		let elementType = self.signatures.containerElementConformerName(gid).toByteArray()
-		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.withWitnessTableArgs(args, conformerType: elementType, interfaceNames: arrayElementWitnessInterfaces(), dstBlock: dstBlock)))
-	end 'appendArrayElementWitnessArgs'
 
 	// ⭐ **WHOSE KEY TYPE NAMES THE WITNESS TABLES?** — the one question `appendSetWitnessArgs` asks, with two
 	// answers. A `Set` runtime call reads it off the instance a value carries; a `CharacterSet` call
@@ -2330,8 +2312,8 @@ type MaxonToStdLowering
 	// registers the blob and its `funcAbs64` slot reloc (to the synthesized `int.hash`/`int.equals`) on first
 	// reference, idempotent by label, so many operations on one conformer build ONE table per interface.
 	//
-	// ⚠ It was `materializeKeyWitness` while a hash-table KEY was the only conformer threaded this way; an
-	// `Array`'s ELEMENT is the second (`appendArrayElementWitnessArgs`), and nothing here was ever about a key.
+	// ⚠ It was `materializeKeyWitness` while a hash-table KEY was the only conformer threaded this way, and an
+	// `Array`'s ELEMENT was briefly the second; nothing here was ever about a key.
 	function materializeWitnessTableAddr(conformerType ByteArray, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
 		let label = self.ensureWitnessTable(conformerType, interfaceName: interfaceName)
 		let addrId = self.mintStdValueId()
