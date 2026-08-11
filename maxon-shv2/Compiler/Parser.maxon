@@ -894,7 +894,7 @@ export union ParseError implements Error
 	matchNotExhaustive(subject String, line LineNumber, column ColumnNumber)
 	// Two arms test the same single value (`1 then … 1 then …`). Renders as **E2027**, positioned at
 	// the duplicate pattern. `pattern` is the pattern AS THE SOURCE SPELLS IT — which for a `bool` arm is
-	// not the folded value it compares as (`duplicatePatternDisplay` carries that measurement).
+	// not the folded value it compares as (`tokenTextFrom` carries that measurement).
 	matchDuplicatePattern(pattern String, line LineNumber, column ColumnNumber)
 	// A pattern whose type cannot be compared to the scrutinee's — a `"string"` pattern on an `int`
 	// scrutinee, say. Renders as **E2028**, positioned at the pattern. Both type names ride along
@@ -956,6 +956,11 @@ export union ParseError implements Error
 	// A range arm `high to low` whose upper case is declared BEFORE its lower case, so it covers no
 	// cases. Renders as **E2027**, positioned at the range. `low`/`high` are the case names written.
 	matchEmptyRange(low String, high String, line LineNumber, column ColumnNumber)
+	// A range arm covering exactly ONE value — `5 to 5`, `5 upto 6`, `red to red`, `red upto green`,
+	// `'a' to 'a'`, `'a' upto 'b'`. Renders as **E2027**, positioned at the range's LOWER bound.
+	// `pattern` is the whole range AS THE SOURCE SPELLS IT, bounds and keyword alike — one
+	// `tokenTextFrom` span (`requireRangeIsMultiValued` carries the rule).
+	matchSingleValueRange(pattern String, line LineNumber, column ColumnNumber)
 	// A `union` value is compared with `==`/`!=`. Renders as **E3066**, positioned at the operator.
 	// A union carries no synthesized equality — `Container.value(1) == Container.value(1)` would
 	// compare two BOX ADDRESSES, reference equality answering a question about values, the exact
@@ -31053,6 +31058,7 @@ export type Parser
 	// range (`lo to/upto hi`, `lo to max`), or a single value.
 	function emitPatternAtom(scrut ValueId, scrutTag ValueTypeTag, seenValues SeenPatternValues) returns ValueId throws ParseError
 		let startTok = self.current()
+		let loStart = self.pos
 
 		if self.isOpenBoundIdentifier(startTok, marker: MinBoundField) 'openLower'
 			self.advance()
@@ -31062,14 +31068,11 @@ export type Parser
 		let lo = try self.emitPatternValue(scrutTag)
 
 		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeArm'
-			let isUpto = self.at(TokenKind.upto)
-			let rangeTok = self.current()
-			self.advance()
-			return try self.emitClosedRange(scrut, scrutTag: scrutTag, loValue: lo, isUpto: isUpto, rangeTok: rangeTok)
+			return try self.emitClosedRange(scrut, scrutTag: scrutTag, loValue: lo, loStart: loStart)
 		end 'rangeArm'
 
 		// A single value: `scrut == lo`.
-		try self.checkAndRecordDuplicate(lo, seenValues: seenValues, patternTok: startTok)
+		try self.checkAndRecordDuplicate(lo, seenValues: seenValues, start: loStart, pastEnd: self.pos)
 		return try self.emitCompare(scrut, rhs: lo, op: MaxonCmpOp.eq, opTok: startTok)
 	end 'emitPatternAtom'
 
@@ -31094,14 +31097,22 @@ export type Parser
 	end 'emitOpenLowerRange'
 
 	// `lo to/upto <hi>` where `lo` is already emitted — a two-compare AND, or (`lo to max`) just the
-	// lower compare.
-	function emitClosedRange(scrut ValueId, scrutTag ValueTypeTag, loValue ValueId, isUpto bool, rangeTok Token) returns ValueId throws ParseError
+	// lower compare. Entered with the cursor ON the range keyword, so `loStart` plus the cursor bracket
+	// the lower bound and the arm's whole source span is available to the single-value diagnostic.
+	function emitClosedRange(scrut ValueId, scrutTag ValueTypeTag, loValue ValueId, loStart TokenIndex) returns ValueId throws ParseError
+		let rangeTok = self.current()
+		let isUpto = rangeTok.kind == TokenKind.upto
+		self.advance()
+
 		if self.isOpenBoundIdentifier(self.current(), marker: MaxBoundField) 'openUpper'
 			self.advance()
 			return try self.emitCompare(scrut, rhs: loValue, op: MaxonCmpOp.ge, opTok: rangeTok)
 		end 'openUpper'
 
+		let hiStart = self.pos
 		let hi = try self.emitPatternValue(scrutTag)
+		try self.checkChainRangeIsMultiValued(scrutTag, isUpto: isUpto, loStart: loStart, hiStart: hiStart)
+
 		let loCmp = try self.emitCompare(scrut, rhs: loValue, op: MaxonCmpOp.ge, opTok: rangeTok)
 		let hiCmp = try self.emitCompare(scrut, rhs: hi, op: self.rangeUpperCmpOp(isUpto), opTok: rangeTok)
 		return try self.emitBinOp(loCmp, rhs: hiCmp, op: MaxonBinOp.bitAnd, opTok: rangeTok)
@@ -31213,50 +31224,144 @@ export type Parser
 	// same VALUE (`+0.0` and `-0.0` compare equal), so a bit-set membership test would report the arms
 	// distinct while the second is dead. Deciding a duplicate float needs `floatOrderKey`, and no corpus case
 	// tests one — so the reach is unchanged and the reason it is unchanged is now a rule rather than a gap.
-	function checkAndRecordDuplicate(value ValueId, seenValues SeenPatternValues, patternTok Token) throws ParseError
+	function checkAndRecordDuplicate(value ValueId, seenValues SeenPatternValues, start TokenIndex, pastEnd TokenIndex) throws ParseError
 		if not self.constIsKnown(value) 'notConst'
 			return
 		end 'notConst'
 
-		try self.recordDuplicateInt(self.constOf(value), seenValues: seenValues, patternTok: patternTok)
+		try self.recordDuplicateInt(self.constOf(value), seenValues: seenValues, start: start, pastEnd: pastEnd)
 	end 'checkAndRecordDuplicate'
 
 	// The integer core of duplicate detection, shared by the compare-emitting scalar path (`value` read
 	// off a known constant) and the interval-plan path (`value` decoded straight from the pattern token).
 	// The set membership test throws on the FIRST repeat in arm order — the same value, the same arm, the
 	// linear scan reported — in O(1) rather than O(seen).
-	function recordDuplicateInt(value ParsedInt, seenValues SeenPatternValues, patternTok Token) throws ParseError
+	function recordDuplicateInt(value ParsedInt, seenValues SeenPatternValues, start TokenIndex, pastEnd TokenIndex) throws ParseError
 		if seenValues.contains(value) 'duplicate'
-			throw ParseError.matchDuplicatePattern(duplicatePatternDisplay(patternTok, value: value), line: patternTok.line, column: patternTok.column)
+			let patternTok = self.tokenAt(start)
+			throw ParseError.matchDuplicatePattern(self.tokenTextFrom(start, endIndex: pastEnd), line: patternTok.line, column: patternTok.column)
 		end 'duplicate'
 		seenValues.insert(value)
 	end 'recordDuplicateInt'
 
-	// ⭐ **HOW A DUPLICATE PATTERN IS NAMED — THE SOURCE SPELLING, WHICH IS NOT ALWAYS THE FOLDED VALUE.**
-	// A `bool` pattern folds to `BoolTrueValue`/`BoolFalseValue` — 1 and 0 — so a message built from the
-	// value alone reported *duplicate pattern in match: '1'* for an arm the programmer wrote as `true`.
-	// Every sibling in this family names what was WRITTEN (`enum-match-exhaustive.md` pins *"overlapping
-	// pattern in match: 'medium'"*), and `tokenDisplayText`'s own header already states the rule this broke:
-	// a diagnostic must not *"quietly name the offending token something the source never wrote"*. It is
-	// reached through that one function rather than spelling `true`/`false` here, so the two words come from
-	// the same table the LEXER matches on (`TokenKind` is string-backed, its `rawValue` IS the display text).
+	// ⭐ **IS A RANGE PATTERN EMPTY?** — `upto` whose upper is at or below its lower, or an inclusive `to`
+	// whose upper is below it. Written ONCE for both range paths: the scalar one lets an empty arm
+	// contribute no interval, the enum one refuses it outright (E2027), and they disagreed about nothing
+	// while spelling the same predicate with their operands mirrored.
 	//
-	// ⚠ **IT IS KEYED ON THE PATTERN TOKEN, NOT ON THE VALUE'S TYPE, AND EVERY OTHER PATTERN KIND KEEPS THE
-	// FOLDED VALUE DELIBERATELY.** A negative literal is TWO tokens (`-` then `1`), so a token's own text
-	// would name `1` for a `-1` pattern — the folded value is the honest answer there and the token is the
-	// honest answer here. Only the two spellings the fold DESTROYS are redirected.
-	//
-	// ⚠ The interval-plan caller cannot reach the bool arm: a `bool` pattern is a single value and never a
-	// RANGE, so its `startTok` is never a `true`/`false` keyword. One function serves both callers anyway,
-	// because which spelling a pattern deserves is a property of the pattern and not of the path that found
-	// it duplicated.
-	function duplicatePatternDisplay(patternTok Token, value ParsedInt) returns String
-		if patternTok.kind == TokenKind.true or patternTok.kind == TokenKind.false 'aBoolArmIsSpelledNotNumbered'
-			return tokenDisplayText(patternTok)
-		end 'aBoolArmIsSpelledNotNumbered'
+	// ⚠ **IT IS THE OTHER HALF OF "IS THIS RANGE DEGENERATE", AND `requireRangeIsMultiValued` LEANS ON
+	// IT.** The two verdicts are disjoint — a range covering NO value cannot also cover exactly one — and
+	// that is what lets each caller ask them in either order. Disjointness is a property of these two
+	// expressions together, so they belong together: moving a boundary in one while the other keeps its
+	// own copy would silently make one of the two rules unreachable, with no compile error anywhere.
+	function rangeIsEmpty(lo ParsedInt, hi ParsedInt, isUpto bool) returns bool
+		return (hi <= lo) if isUpto else (hi < lo)
+	end 'rangeIsEmpty'
 
-		return "{value}"
-	end 'duplicatePatternDisplay'
+	// ⭐⭐ **THE SINGLE-VALUE RANGE RULE — ONE PREDICATE, EVERY OPERAND SHAPE.** A range pattern covering
+	// exactly one value is always a mistake: the author meant the bare value or got the bounds wrong. So
+	// `5 to 5`, `red to red`, `'a' to 'a'` and their exclusive twins `5 upto 6`, `red upto green`,
+	// `'a' upto 'b'` are refused (`specs-shv2/match-range-single-value.md`).
+	//
+	// ⚠ **THE OPERAND SHAPES DIFFER IN THEIR DOMAIN, NOT IN THE RULE.** An int compares values, a char
+	// compares CODEPOINTS, an enum compares DECLARATION INDICES (what a range pattern means — never the
+	// tags, which an explicit `= N` may reorder), a float compares `floatOrderKey`s. Each caller projects
+	// its bounds into its own ordered domain and asks HERE. Both references grew a separate emit site per
+	// shape — three in v1, four in the bootstrap — and copies of a refusal are chances for them to
+	// disagree about what is legal.
+	//
+	// ⚠ **`hasAdjacentValues` IS WHY FLOAT IS NOT ANOTHER COPY.** `upto` excludes its upper bound, so it
+	// covers exactly one value only where the domain has an immediate SUCCESSOR. Between two f64s there is
+	// always another f64, so no float `upto` is ever single-valued and only the equal-bound `to` form is —
+	// the same exclusion v1's `parseFloatRangeTail` states.
+	//
+	// ⚠ **AN OPEN BOUND NEVER ARRIVES HERE.** `min to X` and `X to max` span more than one value by
+	// construction and the spec exempts them outright, so each caller returns before asking.
+	//
+	// ⚠ **CALLED WITH THE CURSOR JUST PAST THE UPPER BOUND**, which is what makes the message ONE span —
+	// `[loStart, self.pos)` covers both bounds AND the keyword between them, so the range is quoted back
+	// exactly as the file lays it out and nothing here re-spells `to`/`upto`. Every caller asks the moment
+	// it has decoded its upper bound. The span is rendered only on the failing path: the callers hand over
+	// a token INDEX, not a string, so a legal range arm allocates nothing for a diagnostic it will not raise.
+	function requireRangeIsMultiValued(lo ParsedInt, hi ParsedInt, isUpto bool, hasAdjacentValues bool, loStart TokenIndex) throws ParseError
+		let coversOneValue = (hasAdjacentValues and hi == lo + 1) if isUpto else hi == lo
+		if not coversOneValue 'multiValued'
+			return
+		end 'multiValued'
+
+		let loTok = self.tokenAt(loStart)
+		throw ParseError.matchSingleValueRange(self.tokenTextFrom(loStart, endIndex: self.pos), line: loTok.line, column: loTok.column)
+	end 'requireRangeIsMultiValued'
+
+	// The single-value rule for the COMPARE-CHAIN match — the scrutinee kinds `matchUsesIntervalPlan`
+	// leaves out. The interval paths project their bounds where they DECODE them (an integer already, an
+	// enum case index already); these two must project theirs from their BOUND TOKENS, because neither a
+	// `Character` nor a `float` bound is an integer-domain constant a pattern value can be read as.
+	//
+	// ⚠ **THE REMAINING CHAIN SCRUTINEES HAVE NO ORDERED DOMAIN, AND THE LIST IS EXHAUSTIVE.** A `String`
+	// (`"a" to "b"` has no notion of how many values it covers) and an `unresolved` scrutinee (a call to a
+	// function no file declares, which `comparableOperands` DEFERS rather than rejecting) fall through
+	// deliberately. Every other tag `matchUsesIntervalPlan` excludes — a struct, an interface, a generic
+	// instance — cannot reach here at all: `checkPatternType` asks `comparableOperands`, so a literal bound
+	// against any of them is E2028 at the LOWER bound, one call before this. A ranged-FLOAT typealias is
+	// not a fourth case either: MEASURED, its scrutinee carries the `float` tag (both as `x as Ratio` and
+	// as a declared `r Ratio` parameter), so it lands in the float arm below and is refused there.
+	function checkChainRangeIsMultiValued(scrutTag ValueTypeTag, isUpto bool, loStart TokenIndex, hiStart TokenIndex) throws ParseError
+		// A `Character` scrutinee compares grapheme-cluster RECORDS, but its bounds are char literals
+		// whose CODEPOINTS are the ordered domain the rule needs (`'a' upto 'b'` is adjacent). A
+		// multi-codepoint cluster has no codepoint and therefore no successor, so no single-value question
+		// can be asked of it — the rule does not apply rather than guessing an answer.
+		if scrutTag == ValueTypeTag.character 'characterDomain'
+			let hiDecoded = try self.charLiteralCodepoint(self.tokenAt(hiStart))
+			match try self.charLiteralCodepoint(self.tokenAt(loStart)) 'lowerBound'
+				cluster then return
+				codepoint(low) then try self.requireCharRangeIsMultiValued(low, hiDecoded: hiDecoded, isUpto: isUpto, loStart: loStart)
+			end 'lowerBound'
+			return
+		end 'characterDomain'
+
+		// ⚠ **`floatOrderKey`, NOT THE RAW BITS.** `-0.0` and `+0.0` are two bit patterns for one VALUE, so
+		// a bit compare would call `-0.0 to 0.0` a two-value range while the compare the arm emits matches
+		// exactly one. Both references compare float VALUES for the same reason.
+		if tagIsFloat(scrutTag) 'floatDomain'
+			try self.requireRangeIsMultiValued(floatOrderKey(try self.floatBoundBits(loStart)), hi: floatOrderKey(try self.floatBoundBits(hiStart)), isUpto: isUpto, hasAdjacentValues: false, loStart: loStart)
+		end 'floatDomain'
+	end 'checkChainRangeIsMultiValued'
+
+	// ⭐ **THE f64 BITS OF A FLOAT PATTERN BOUND, READ FROM ITS TOKENS** — `[-]? floatLiteral`, decoded by
+	// the one float decoder every other bound uses and sign-flipped by the one `negatedFloatBits`.
+	//
+	// ⚠ **IT IS NOT `floatConstIsKnown` ON THE EMITTED VALUE, AND THAT DISTINCTION WAS A LIVE HOLE.** A
+	// negated float pattern is emitted as `0.0 - x` through `emitBinOp`, and `recordBinOpFold` folds only
+	// INTEGER results — so no negated float bound is ever a known float constant, and a check written
+	// against the value silently passed `-1.0 to -1.0` while refusing `1.0 to 1.0`. The tokens say what
+	// the author wrote whether or not the emitter folded it.
+	//
+	// ⚠ **ANY OTHER SHAPE IS AN INVARIANT BREAK, NOT A CASE TO SKIP.** `comparableOperands` ends
+	// `tagIsFloat(left) == tagIsFloat(right)` (`IR/Maxon/TypeRules.maxon`), so an int, char, bool or string
+	// bound against a float scrutinee is E2028 at `checkPatternType` before this is asked, and `min`/`max`
+	// are consumed by the open-bound paths that never reach a closed range's check.
+	function floatBoundBits(start TokenIndex) returns ParsedInt throws ParseError
+		let isNegated = self.kindAt(start) == TokenKind.minus
+		let literalIndex = (start + 1) if isNegated else start
+		let literalTok = self.tokenAt(literalIndex)
+		if literalTok.kind != TokenKind.floatLiteral 'notAFloatLiteral'
+			panic("Parser.floatBoundBits: a float scrutinee's range bound at token {literalIndex} is '{tokenDisplayText(literalTok)}', not a float literal — every other spelling is E2028 at `checkPatternType` before this is asked")
+		end 'notAFloatLiteral'
+
+		let bits = try self.floatLiteralBits(literalTok)
+		return negatedFloatBits(bits) if isNegated else bits
+	end 'floatBoundBits'
+
+	// The upper half of the character domain's projection. Split out only because a `match` arm may not
+	// open another block (E2049): with the lower bound's codepoint in hand, the upper bound decides by
+	// exactly the same rule, and a cluster upper bound withdraws the question for the same reason.
+	function requireCharRangeIsMultiValued(low ParsedInt, hiDecoded CharLiteralCodepoint, isUpto bool, loStart TokenIndex) throws ParseError
+		match hiDecoded 'upperBound'
+			cluster then return
+			codepoint(high) then try self.requireRangeIsMultiValued(low, hi: high, isUpto: isUpto, hasAdjacentValues: true, loStart: loStart)
+		end 'upperBound'
+	end 'requireCharRangeIsMultiValued'
 
 	// Does `tok` name an open range bound (`min` / `max`) — an identifier whose text is the marker?
 	// `min`/`max` lex as identifiers (they are not keywords), and appear only in a range, so their
@@ -31320,21 +31425,22 @@ export type Parser
 	// `lo to max`), or a single value. Appends exactly one interval.
 	function collectScalarPatternAtom(scrutTag ValueTypeTag, seenValues SeenPatternValues, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
 		let startTok = self.current()
+		let loStart = self.pos
 
 		if self.isOpenBoundIdentifier(startTok, marker: MinBoundField) 'openLower'
 			self.advance()
-			try self.collectScalarRangeInterval(I64MinBound, scrutTag: scrutTag, bodyBlockId: bodyBlockId, into: into)
+			try self.collectScalarRangeInterval(I64MinBound, loStart: loStart, scrutTag: scrutTag, bodyBlockId: bodyBlockId, into: into)
 			return
 		end 'openLower'
 
 		let lo = try self.decodeScalarPatternBound(scrutTag)
 
 		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeArm'
-			try self.collectScalarRangeInterval(lo, scrutTag: scrutTag, bodyBlockId: bodyBlockId, into: into)
+			try self.collectScalarRangeInterval(lo, loStart: loStart, scrutTag: scrutTag, bodyBlockId: bodyBlockId, into: into)
 			return
 		end 'rangeArm'
 
-		try self.recordDuplicateInt(lo, seenValues: seenValues, patternTok: startTok)
+		try self.recordDuplicateInt(lo, seenValues: seenValues, start: loStart, pastEnd: self.pos)
 		into.push(DispatchInterval.create(lo, hi: lo, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
 	end 'collectScalarPatternAtom'
 
@@ -31346,7 +31452,7 @@ export type Parser
 	// i64.min` is ALWAYS empty (nothing is below `i64.min`) and `i64.min - 1` would wrap to `i64.max`,
 	// turning the empty range into a near-universal one. That underflow was a real miscompile: `0 upto
 	// i64.min` matched every value ≥ 0 instead of nothing.
-	function collectScalarRangeInterval(lo ParsedInt, scrutTag ValueTypeTag, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
+	function collectScalarRangeInterval(lo ParsedInt, loStart TokenIndex, scrutTag ValueTypeTag, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
 		let isUpto = self.at(TokenKind.upto)
 		self.advance()
 
@@ -31360,12 +31466,18 @@ export type Parser
 
 		let rawHi = try self.decodeScalarPatternBound(scrutTag)
 
-		// `upto` excludes `rawHi`, so it is empty when `lo >= rawHi`; inclusive `to` when `lo > rawHi`. An
-		// empty range (as before this rung) contributes no interval — the arm body is left unreachable.
-		let isEmpty = (isUpto and lo >= rawHi) or ((not isUpto) and lo > rawHi)
-		if isEmpty 'emptyRange'
+		// An empty range (as before this rung) contributes no interval — the arm body is left unreachable.
+		if self.rangeIsEmpty(lo, hi: rawHi, isUpto: isUpto) 'emptyRange'
 			return
 		end 'emptyRange'
+
+		// An OPEN lower bound (`min to X`) spans more than one value by construction, and the spec exempts
+		// the open forms outright — asked through the same predicate the caller used to recognise it, so
+		// "is this bound open?" is one question with one answer. (`X to max` already returned above.)
+		// Reached only past the empty test, so `lo < rawHi` under `upto` and the successor cannot wrap.
+		if not self.isOpenBoundIdentifier(self.tokenAt(loStart), marker: MinBoundField) 'closedLowerBound'
+			try self.requireRangeIsMultiValued(lo, hi: rawHi, isUpto: isUpto, hasAdjacentValues: true, loStart: loStart)
+		end 'closedLowerBound'
 
 		let hi = (rawHi - 1) if isUpto else rawHi
 		into.push(DispatchInterval.create(lo, hi: hi, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
@@ -31532,12 +31644,22 @@ export type Parser
 	// covered case tag(s) as point/range intervals into `into` and returns the payload bindings.
 	function collectEnumPatternAtomIntervals(layout EnumLayout, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray) returns PayloadBindingArray throws ParseError
 		let patternTok = self.current()
+		let loStart = self.pos
 		let lowIndex = try self.resolveEnumArmCase(layout)
 
 		if self.at(TokenKind.to) or self.at(TokenKind.upto) 'rangeArm'
 			let isUpto = self.at(TokenKind.upto)
 			self.advance()
 			let highIndex = try self.resolveEnumArmCase(layout)
+
+			// A case-name range MEANS the DECLARATION-INDEX slice, so the indices are its ordered domain —
+			// never the tags, which an explicit `= N` may reorder (`collectEnumRangeIntervals` argues that
+			// distinction at length). Asked before the interval collection because the two degenerate-range
+			// verdicts are disjoint by construction — `rangeIsEmpty` and `requireRangeIsMultiValued` are
+			// one pair of expressions kept in one place for exactly that reason — so `red upto red` (no
+			// case) and `red upto green` (one case) cannot mask each other whichever runs first.
+			try self.requireRangeIsMultiValued(lowIndex, hi: highIndex, isUpto: isUpto, hasAdjacentValues: true, loStart: loStart)
+
 			try self.collectEnumRangeIntervals(layout, lowIndex: lowIndex, highIndex: highIndex, isUpto: isUpto, covered: covered, patternTok: patternTok, bodyBlockId: bodyBlockId, into: into)
 			return PayloadBindingArray.create()
 		end 'rangeArm'
@@ -31833,9 +31955,9 @@ export type Parser
 	// interval list, from which the dispatch emits the range/point compares once.
 	function collectEnumRangeIntervals(layout EnumLayout, lowIndex CaseIndex, highIndex CaseIndex, isUpto bool, covered BoolArray, patternTok Token, bodyBlockId BlockId, into DispatchIntervalArray) throws ParseError
 		// An empty range: `upto` whose upper is at or before the lower, or a reversed `to` (upper
-		// declared before lower). Computed before `lastCovered` so its subtraction cannot underflow.
-		let coversNothing = (isUpto and highIndex <= lowIndex) or ((not isUpto) and highIndex < lowIndex)
-		if coversNothing 'empty'
+		// declared before lower). Asked before `lastCovered` so its subtraction cannot underflow, and
+		// asked of `rangeIsEmpty` so the enum and scalar paths cannot drift apart on what empty means.
+		if self.rangeIsEmpty(lowIndex, hi: highIndex, isUpto: isUpto) 'empty'
 			throw ParseError.matchEmptyRange(String.from(layout.caseNameAt(lowIndex)), high: String.from(layout.caseNameAt(highIndex)), line: patternTok.line, column: patternTok.column)
 		end 'empty'
 
@@ -51618,11 +51740,9 @@ export type Parser
 	// column is the only positional fact available for every token — and it is enough: writing each
 	// token's spelling at its own column reproduces the line.
 	//
-	// ⚠ The cursor advances by the SPELLING's length, which is the source width for every token except a
-	// STRING LITERAL, whose `value` is the body without its quotes. A literal in a leftover therefore
-	// under-advances the cursor by two and the next gap is padded two spaces wider. That is a cosmetic
-	// inexactness on a COLD path (a rejected program) and it is bounded to the gap it occurs in; the
-	// alternative is threading the source buffer through the parser for a diagnostic.
+	// ⚠ The cursor advances by the SPELLING's length, and that is the source width for every token —
+	// including a quoted literal, whose delimiters `tokenSourceSpelling` restores. Reading `value`
+	// directly used to under-advance a string literal by two and pad the next gap two spaces wider.
 	//
 	// ⚠ **A TOKEN'S `value` IS ITS LEXEME ONLY WHERE THE KIND DOES NOT ALREADY IMPLY ONE.** The lexer
 	// fills it for words and literals — keywords included — and leaves it EMPTY for punctuation, whose
@@ -51630,6 +51750,12 @@ export type Parser
 	// alone therefore printed NOTHING for a leftover made of punctuation — `var xs = [1]]` and
 	// `var a = 1)` both reported `''`, a diagnostic that promises to name the text it could not
 	// evaluate and then names nothing at all.
+	//
+	// ⚠ **IT IS ALSO THE MATCH-PATTERN DIAGNOSTICS' RENDERER**, which is why it is not private to the
+	// const evaluator: a duplicate pattern and a single-value range both name a span of source
+	// (`-5`, `'a' upto 'b'`), and a second loop over the same tokens with its own spelling rule is the
+	// drift `tokenDisplayText`'s header warns about — it does not fail loudly, it quietly names the
+	// offending token something the source never wrote.
 	function tokenTextFrom(start TokenIndex, endIndex TokenIndex) returns String
 		var text = ""
 		var cursor = self.tokenAt(start).column
@@ -51646,7 +51772,7 @@ export type Parser
 				cursor = cursor + 1
 			end 'padToItsColumn'
 
-			let spelling = tokenDisplayText(tok)
+			let spelling = tokenSourceSpelling(tok)
 			text = "{text}{spelling}"
 			cursor = cursor + spelling.count()
 		end 'each'

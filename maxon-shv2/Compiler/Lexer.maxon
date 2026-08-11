@@ -325,6 +325,33 @@ export function tokenDisplayText(token Token) returns String
 	return String.from(token.value)
 end 'tokenDisplayText'
 
+// ⭐ **THE TOKEN AS THE SOURCE WROTE IT — `tokenDisplayText` PLUS THE DELIMITERS THE LEXER STRIPPED.**
+// A quoted literal's `value` is its BODY: `'a'` carries `a`, `"hi"` carries `hi`, `b"hi"` carries `hi`.
+// That is what a diagnostic naming ONE token wants — the message supplies its own quotes — and it is
+// exactly wrong for a diagnostic that reproduces a SPAN of source. `'a' upto 'b'` would read
+// `a upto b`, naming bounds the reader will not find in the file, which is the very failure
+// `tokenDisplayText`'s header names; and a span laid out by COLUMN drifts by the two characters the
+// spelling did not write (`tokenTextFrom` used to carry that under-advance as a known inexactness).
+//
+// ⚠ It is a SECOND function rather than a widening of `tokenDisplayText`, for the reason
+// `expressionOperandDisplayText` is one too: the QUESTION differs, not the answer. That one names a
+// token in PROSE, inside a message that quotes it; this one reconstructs SOURCE.
+export function tokenSourceSpelling(token Token) returns String
+	if token.kind == TokenKind.charLiteral 'singleQuoted'
+		return "'{String.from(token.value)}'"
+	end 'singleQuoted'
+
+	if token.kind == TokenKind.stringLiteral 'doubleQuoted'
+		return "\"{String.from(token.value)}\""
+	end 'doubleQuoted'
+
+	if token.kind == TokenKind.byteStringLiteral 'bytePrefixed'
+		return "b\"{String.from(token.value)}\""
+	end 'bytePrefixed'
+
+	return tokenDisplayText(token)
+end 'tokenSourceSpelling'
+
 // What E2004 prints in place of a token when the source wrote no operand AT ALL. A cross-compiler
 // WIRE VALUE rather than a phrasing choice: `specs/expected-expression-error.md` pins these exact
 // bytes, and each compiler is tested against its own copy of that file (shv2's is
