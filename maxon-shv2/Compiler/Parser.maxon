@@ -573,7 +573,8 @@ export union ParseError implements Error
 	// is a valid but MULTI-BYTE character — `'é'`, an emoji — is not this: it is a
 	// legitimate program shv2 cannot yet compile, so it reports as `unsupported`.)
 	invalidCharacterLiteral(reason String, line LineNumber, column ColumnNumber)
-	// A `\xNN`/`\uNNNN` escape with the wrong number of hex digits, in a character or string literal.
+	// A `\xNN`/`\uNNNN` escape with the wrong number of hex digits, in any of the three literal forms that
+	// admit one — a character literal, a string literal/interpolation, or a `b"…"` byte string.
 	// Renders as E1004, the same `LexerInvalidEscape` code both reference compilers use for it — NOT the
 	// E2016 an unrecognized `\q` gets, because `\x` and `\u` ARE recognized escapes and only their digit
 	// count is wrong. It carries the FULLY-BUILT message (`invalidDigitEscapeError`, the one place the
@@ -5994,11 +5995,11 @@ function decodeEscapes(raw ByteArray) returns DecodedLiteral
 		// canonical corpus pins both spellings (`specs/unicode-escape.md:151`, `specs/hex-escape.md:147`).
 		if next == LowerX or next == LowerU 'digitEscape'
 			let form = digitEscapeOf(next)
-			if not hexEscapeWellFormed(raw, at: i, len: len, digitCount: form.digitCount) 'malformed'
-				return DecodedLiteral.badDigitEscape(availableDigitEscapeText(raw, at: i, len: len, digitCount: form.digitCount), offset: i, marker: next)
+			if not hexEscapeWellFormed(raw, at: i, len: len, form: form) 'malformed'
+				return DecodedLiteral.badDigitEscape(availableDigitEscapeText(raw, at: i, len: len, form: form), offset: i, marker: next)
 			end 'malformed'
-			appendUtf8Encoded(buf, codepoint: digitEscapeValue(raw, at: i, digitCount: form.digitCount))
-			i = i + EscapeMarkerBytes + form.digitCount
+			appendUtf8Encoded(buf, codepoint: digitEscapeValue(raw, at: i, form: form))
+			i = i + form.width
 			continue
 		end 'digitEscape'
 
@@ -6076,10 +6077,9 @@ end 'escapeByte'
 // wrote — rather than the `\uNNNN` they failed to write or the bare `\u` the old unknown-escape arm
 // showed. v1's `validateEscapes` computes exactly this window (`maxon-selfhosted/Compiler/Parser.maxon:
 // 16982-16986`) and the bootstrap quotes the same bytes (`maxon-sharp/StringUtils.cs:29`).
-function availableDigitEscapeText(raw ByteArray, at ByteOffset, len ByteOffset, digitCount ByteOffset) returns String
-	let whole = EscapeMarkerBytes + digitCount
-	var available = whole
-	if len - at < whole 'truncated'
+function availableDigitEscapeText(raw ByteArray, at ByteOffset, len ByteOffset, form DigitEscape) returns String
+	var available = form.width
+	if len - at < form.width 'truncated'
 		available = len - at
 	end 'truncated'
 	return String.from(try raw.slice(at, endIndex: at + available) otherwise panic("availableDigitEscapeText: [{at}, {at + available}) is inside a {len}-byte body by construction"))
@@ -6090,19 +6090,50 @@ end 'availableDigitEscapeText'
 // they wrote — and the message exists once so a character literal and a string literal, and `\x` and
 // `\u`, cannot come to word the same fault differently. Both reference compilers phrase it this way and
 // the canonical corpus pins both markers' spelling.
-// ⚠ The column is the LITERAL's, advanced by the escape's byte offset in the body — v1's own
-// `token.column + i` (`maxon-selfhosted/Compiler/Parser.maxon:16987`), so the SECOND escape in a string is
-// blamed where it is written rather than at the opening quote.
-function invalidDigitEscapeError(text String, kind String, offset ByteOffset, marker Byte, tok Token) returns ParseError
+// ⚠⚠ **THE COLUMN IS `tok.column + <the escape's byte offset in the BODY>`, WHICH IS SHORT OF THE ESCAPE
+// BY THE OPENING DELIMITER'S WIDTH — 1 for `'` and `"`, 2 for `b"`. THAT IS THE RULE, NOT A DEFECT, AND NO
+// GOLDEN CAN DEFEND IT** (every canonical pin puts the escape at body offset 0, where the two addends'
+// disagreement is invisible and all three compilers coincide). Measured: for `b"AB\xG0"` at token column 10
+// the `\` sits at source column 14 and this says 12.
+// ⭐ It is v1's rule verbatim — `token.column + i`, applied UNIFORMLY to all three literal forms, byte
+// strings included (`maxon-selfhosted/Compiler/Parser.maxon:16975` for `\x`, `:16987` for `\u`; one
+// `validateEscapes` serves all three). shv2 applies it uniformly too.
+// ⚠ **The BOOTSTRAP is the inconsistent one, three ways**, so do not read a disagreement with it as a
+// regression here: `StringUtils.ResolveEscapes` throws with NO position and each catcher adds its own —
+// string interpolation adds the body offset (`maxon-sharp/Compiler/2-Parser.cs:19779`), character literals
+// do NOT (`:20155`), byte strings do NOT (`:20167`). shv2 therefore already diverged from it on CHARACTER
+// literals long before byte strings joined; this is one shipped divergence, not a new class. `specs-shv2/
+// unicode-escape.md`'s `nonfirst-escape-column` case pins the shv2 answer so it stays a fact under test.
+function invalidDigitEscapeError(text String, kind LiteralEscapeKind, offset ByteOffset, marker Byte, tok Token) returns ParseError
 	let form = digitEscapeOf(marker)
-	return ParseError.invalidDigitEscape("Invalid {form.noun} escape '{text}': expected {form.digitCount} hex digits in {kind}", line: tok.line, column: tok.column + offset)
+	return ParseError.invalidDigitEscape("Invalid {form.noun} escape '{text}': expected {form.digitCount} hex digits in {literalEscapeKindPhrase(kind)}", line: tok.line, column: tok.column + offset)
 end 'invalidDigitEscapeError'
 
-// The trailing context phrase the diagnostic above names, one per literal form that admits a digit escape.
-// v1 takes the same three (`maxon-selfhosted/Compiler/Parser.maxon:16953-16955`); shv2 has only two,
-// because its byte-string decoder raises its own `unsupported` for a malformed escape.
-let CharacterLiteralEscapeKind = "character literal"
-let StringLiteralEscapeKind = "string interpolation"
+// ⭐ **WHICH LITERAL FORM A MALFORMED DIGIT ESCAPE WAS WRITTEN IN — AN ENUM, NOT THREE LOOSE STRINGS.**
+// The three forms that admit a digit escape are one closed set (v1 names the same three,
+// `maxon-selfhosted/Compiler/Parser.maxon:16949-16951`), so they are one type rather than three constants
+// a caller may or may not reach for: `kind` has no default at any of the five call sites, and typing it
+// this way additionally makes a HAND-SPELLED phrase a compile error instead of a fourth wording. Same
+// reasoning as `BytePackedProducer` below, which this file already settled.
+//
+// ⚠ The byte-string arm used to be absent because that decoder raised its own `unsupported` instead; one
+// rule with two validators is how `b"\xG0"` came to be told it was "unsupported" while `"\xG0"` was told
+// what was actually wrong with it.
+enum LiteralEscapeKind
+	characterLiteral
+	stringInterpolation
+	byteStringLiteral
+end 'LiteralEscapeKind'
+
+// The trailing context phrase the diagnostic names. Exhaustive over the enum with no `default`, so a
+// fourth literal form cannot be added and left silently sharing another form's wording.
+function literalEscapeKindPhrase(kind LiteralEscapeKind) returns String
+	return match kind 'kind'
+		characterLiteral gives "character literal"
+		stringInterpolation gives "string interpolation"
+		byteStringLiteral gives "byte string literal"
+	end 'kind'
+end 'literalEscapeKindPhrase'
 
 // What a `panic(…)` argument must be, as the diagnostic spells it. Deliberately narrower than
 // `typeTagName(ValueTypeTag.string)`: a `String` BINDING is refused too (see `parsePanicMessage`), so a
@@ -6177,16 +6208,24 @@ let HexEscapeNoun = "hex"
 let UniEscapeNoun = "unicode"
 
 // ⭐ **THE TWO DIGIT ESCAPES, KEYED BY THE MARKER BYTE AFTER THE BACKSLASH.** Everything that varies
-// between `\x` and `\u` is a function of that ONE byte — how many hex digits follow it, and what a
-// diagnostic calls it — so both derivations are made together, once. Three callers ask (the regular-literal
-// decoder, the byte-string decoder, and the malformed-escape diagnostic they share), and a second copy of
-// the mapping is exactly how a decoder that reads 2 digits and a message that says "expected 4" arise.
+// between `\x` and `\u` is a function of that ONE byte — how many hex digits follow it, how many source
+// bytes a well-formed one occupies, and what a diagnostic calls it — so all three derivations are made
+// together, once. Three callers ask (the regular-literal decoder, the byte-string decoder, and the
+// malformed-escape diagnostic they share), and a second copy of the mapping is exactly how a decoder that
+// reads 2 digits and a message that says "expected 4" arise.
 type DigitEscape
 	export let digitCount as ByteOffset
 	export let noun as String
 
+	// ⭐ **HOW WIDE A WELL-FORMED DIGIT ESCAPE IS, WRITTEN DOWN ONCE.** It was `EscapeMarkerBytes +
+	// digitCount` spelled out at FOUR sites — the well-formedness bound, the quoted-text window, the digit
+	// walk's end, and each decoder's advance — and the desync symptom is WRONG BYTES, not a compile error:
+	// a future escape whose marker or digit run is a different size edits one of them and the others keep
+	// stepping the old distance.
+	export let width as ByteOffset
+
 	static function of(digitCount ByteOffset, noun String) returns Self
-		return Self{digitCount: digitCount, noun: noun}
+		return Self{digitCount: digitCount, noun: noun, width: EscapeMarkerBytes + digitCount}
 	end 'of'
 end 'DigitEscape'
 
@@ -6232,7 +6271,12 @@ end 'CharLiteralCodepoint'
 
 // ⭐ Decode a `b"…"` literal body (the raw bytes between the quotes, escapes undecoded) to its Latin-1 byte
 // payload. `tok` positions the E2015 an UNKNOWN escape raises (the byte-string twin of `decodeEscapes`'
-// `unknownEscape`); a codepoint-range rejection is E1004 and rendered anchor-less (see `reportParseError`).
+// `unknownEscape`) and the E1004 a MALFORMED digit escape raises.
+// ⛔ **A codepoint-range rejection is E1004 rendered ANCHOR-LESS, and that is the SPECIFIED answer, not a
+// gap to close.** `specs/byte-string-literal-codepoint-range.md` is canonical and its three expectations
+// carry no `<file>:line:col:` prefix at all, so threading `tok` into `requireByteCodepoint` to "match" the
+// arm above would DIVERGE from canonical rather than repair anything. The asymmetry with the malformed
+// escape beside it is the corpus's, and it is deliberate.
 function decodeByteStringLiteral(raw ByteArray, tok Token) returns ByteArray throws ParseError
 	var buf = ByteArray.create()
 	let len = raw.count()
@@ -6269,8 +6313,17 @@ function appendByteStringEscape(buf ByteArray, raw ByteArray, at ByteOffset, len
 	let next = try raw.get(at + 1) otherwise panic("appendByteStringEscape: at + 1 < len just held but get({at + 1}) failed")
 	if next == LowerX or next == LowerU 'digitEscape'
 		let form = digitEscapeOf(next)
-		try requireByteStringHexEscape(raw, at: at, len: len, digitCount: form.digitCount, tok: tok)
-		let value = digitEscapeValue(raw, at: at, digitCount: form.digitCount)
+
+		// The SAME malformed-escape diagnostic the regular-literal decoder reaches (`decodeEscapes`), named
+		// with this literal's own `LiteralEscapeKind`. The only difference between the two routes is
+		// DELIVERY — `decodeEscapes` serves both character literals and strings, so it cannot name the kind
+		// and defers through `DecodedLiteral.badDigitEscape` for its caller to; this decoder serves exactly
+		// one literal form, so it throws on the spot.
+		if not hexEscapeWellFormed(raw, at: at, len: len, form: form) 'malformed'
+			throw invalidDigitEscapeError(availableDigitEscapeText(raw, at: at, len: len, form: form), kind: LiteralEscapeKind.byteStringLiteral, offset: at, marker: next, tok: tok)
+		end 'malformed'
+
+		let value = digitEscapeValue(raw, at: at, form: form)
 
 		// ⚠ THE TWO MARKERS MEAN DIFFERENT THINGS HERE, which is the whole reason this decoder exists
 		// beside `decodeEscapes`. `\xNN` names the RAW BYTE, which two hex digits cannot put out of range;
@@ -6280,7 +6333,7 @@ function appendByteStringEscape(buf ByteArray, raw ByteArray, at ByteOffset, len
 		end 'codepoint'
 
 		buf.push((value and ByteMask) as Byte)
-		return at + EscapeMarkerBytes + form.digitCount
+		return at + form.width
 	end 'digitEscape'
 	match escapeByte(next) 'esc'
 		byte(b) then buf.push(b)
@@ -6290,7 +6343,8 @@ function appendByteStringEscape(buf ByteArray, raw ByteArray, at ByteOffset, len
 end 'appendByteStringEscape'
 
 // Reject a codepoint with no single-byte Latin-1 encoding (`> 0xFF`) as E1004. The message names the
-// codepoint in the oracle's `U+NNNN` (lowercase-hex, ≥ 4-digit) form and is rendered anchor-less.
+// codepoint in the oracle's `U+NNNN` (lowercase-hex, ≥ 4-digit) form and is rendered anchor-less BY
+// CANONICAL REQUIREMENT — it takes no `tok` on purpose; see `decodeByteStringLiteral`'s header.
 function requireByteCodepoint(codepoint ParsedInt) throws ParseError
 	if codepoint > ByteCodepointMax 'tooBig'
 		throw ParseError.byteStringCodepointRange(byteStringCodepointRangeMessage(codepoint))
@@ -6386,22 +6440,14 @@ function formatCodepointHex(codepoint ParsedInt) returns String
 	return String.from(out)
 end 'formatCodepointHex'
 
-// Validate that a `\x`/`\u` escape at `at` is followed by exactly `digitCount` hex digits in bounds; an
-// ill-formed one is E2015 (positioned). No enabled spec hits this — it is the correctness floor that keeps a
-// malformed escape a clean reject rather than a silent mis-decode.
-function requireByteStringHexEscape(raw ByteArray, at ByteOffset, len ByteOffset, digitCount ByteOffset, tok Token) throws ParseError
-	if not hexEscapeWellFormed(raw, at: at, len: len, digitCount: digitCount) 'malformed'
-		throw ParseError.unsupported("a malformed hex/unicode escape in a byte string literal: `\\x`/`\\u` must be followed by {digitCount} hex digits", line: tok.line, column: tok.column)
-	end 'malformed'
-end 'requireByteStringHexEscape'
-
-// Is the `\x`/`\u` escape at `at` followed by exactly `digitCount` hex digits, in bounds? THE one
+// Is the `\x`/`\u` escape at `at` followed by exactly `form.digitCount` hex digits, in bounds? THE one
 // statement of a digit escape's well-formedness, shared by the two decoders that admit one — the
-// byte-string one (which raises its own `unsupported`) and the regular-literal one (which reports the
-// E1004 `badDigitEscape`). They differ only in what they do with the answer, so only the answer is shared.
-function hexEscapeWellFormed(raw ByteArray, at ByteOffset, len ByteOffset, digitCount ByteOffset) returns bool
+// byte-string one (which throws `invalidDigitEscapeError` on the spot) and the regular-literal one (which
+// defers it as `DecodedLiteral.badDigitEscape`). They differ only in how the E1004 the two now share is
+// delivered, so the answer and the message are both shared and only the delivery is not.
+function hexEscapeWellFormed(raw ByteArray, at ByteOffset, len ByteOffset, form DigitEscape) returns bool
 	let firstDigit = at + EscapeMarkerBytes
-	let afterDigits = firstDigit + digitCount
+	let afterDigits = at + form.width
 	return afterDigits <= len and hexDigitsPresent(raw, from: firstDigit, to: afterDigits)
 end 'hexEscapeWellFormed'
 
@@ -6432,12 +6478,12 @@ end 'hexDigitValue'
 
 // ⭐ The value the digit escape at `at` spells — THE one hex accumulation, for both markers and both
 // decoders. It was two hand-unrolled copies (one 2-digit, one 4-digit) of the same `value * 16 + digit`
-// fold; the digit COUNT is the only thing that ever differed, and it is now the parameter. The caller
-// must have validated the digits via `hexEscapeWellFormed`.
-function digitEscapeValue(raw ByteArray, at ByteOffset, digitCount ByteOffset) returns ParsedInt
+// fold; the MARKER's derivations are the only thing that ever differed, and they are now the parameter.
+// The caller must have validated the digits via `hexEscapeWellFormed`.
+function digitEscapeValue(raw ByteArray, at ByteOffset, form DigitEscape) returns ParsedInt
 	var value = 0 as ParsedInt
 	var i = at + EscapeMarkerBytes
-	let pastDigits = i + digitCount
+	let pastDigits = at + form.width
 	while i < pastDigits 'digits'
 		value = (value shl HexNibbleBits) or hexDigitValue(try raw.get(i) otherwise panic("digitEscapeValue: validated digit at {i} missing"))
 		i = i + 1
@@ -38210,7 +38256,7 @@ export type Parser
 			multiByte(bytes) then return bytes
 			empty then throw ParseError.invalidCharacterLiteral("a character literal must contain exactly one character", line: tok.line, column: tok.column)
 			badEscape(text) then throw ParseError.invalidCharacterLiteral("unknown escape sequence '{text}'", line: tok.line, column: tok.column)
-			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: CharacterLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
+			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: LiteralEscapeKind.characterLiteral, offset: offset, marker: marker, tok: tok)
 		end 'decoded'
 	end 'charLiteralBytes'
 
@@ -38390,7 +38436,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then return buf
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
-			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
+			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: LiteralEscapeKind.stringInterpolation, offset: offset, marker: marker, tok: tok)
 		end 'decoded'
 	end 'decodedStringLiteralBytes'
 
@@ -38593,7 +38639,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then self.materializeFragmentBytes(buf, partBufs: partBufs, partLens: partLens, range: range)
 			unknownEscape(text) then throw ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column)
-			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, marker: marker, tok: tok)
+			badDigitEscape(text, offset, marker) then throw invalidDigitEscapeError(text, kind: LiteralEscapeKind.stringInterpolation, offset: offset, marker: marker, tok: tok)
 		end 'decoded'
 	end 'materializeLiteralFragment'
 
@@ -54242,7 +54288,7 @@ export type Parser
 		match decodeEscapes(tok.value) 'decoded'
 			bytes(buf) then return buf
 			unknownEscape(text) then throw ConstEvalError.defective(ParseError.unsupported("the escape sequence '{text}' in a string literal is not a recognized escape", line: tok.line, column: tok.column))
-			badDigitEscape(text, offset, marker) then throw ConstEvalError.defective(invalidDigitEscapeError(text, kind: StringLiteralEscapeKind, offset: offset, marker: marker, tok: tok))
+			badDigitEscape(text, offset, marker) then throw ConstEvalError.defective(invalidDigitEscapeError(text, kind: LiteralEscapeKind.stringInterpolation, offset: offset, marker: marker, tok: tok))
 		end 'decoded'
 	end 'decodeConstStringLiteral'
 
