@@ -222,10 +222,10 @@ export type RuntimeUsage
 	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesArray`/
 	// `usesHeap` (the helpers are `__arr_`-prefixed). Drives the managed-copy install in `installArrayRuntime`.
 	export var usesManagedArrayCopy as bool
-	// The program copies an OPAQUE-`T` array (`__arr_slice_opaque`/`__arr_clone_opaque`/`__arr_append_opaque`,
-	// P1.7 slice 3b-vi-b-β) — a `slice`/`clone`/`append` on an `Array with <type parameter>` field in a generic
-	// body. Its OWN bit, DECOUPLED from `usesArray`, so a program that touches no opaque-array copy does not carry
-	// the three wrappers. Set alongside `usesManagedArrayCopy` (`recordCallUsage`), because each wrapper's managed
+	// The program copies an OPAQUE-`T` array (`__arr_slice_opaque`/`__arr_append_opaque`, P1.7 slice
+	// 3b-vi-b-β) — a `slice`/`append` on an `Array with <type parameter>` field in a generic body. Its OWN bit,
+	// DECOUPLED from `usesArray`, so a program that touches no opaque-array copy does not carry the wrappers.
+	// Set alongside `usesManagedArrayCopy` (`recordCallUsage`), because each wrapper's managed
 	// branch calls the α `__arr_*_managed` helpers. Drives the opaque-copy install in `installArrayRuntime`.
 	export var usesOpaqueArrayCopy as bool
 	// The `__clone_<T>` symbols this module references (P1.7 slice 3b-vi-b) — the CLONE twin of
@@ -656,8 +656,8 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isManagedArrayCopyCallee(callee) 'managedcopy'
 		usage.usesManagedArrayCopy = true
 	end 'managedcopy'
-	// The three OPAQUE-`T` array copies (`__arr_slice_opaque`/`__arr_clone_opaque`/`__arr_append_opaque`, P1.7
-	// slice 3b-vi-b-β). `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
+	// The OPAQUE-`T` array copies (`__arr_slice_opaque`/`__arr_append_opaque`, P1.7 slice 3b-vi-b-β).
+	// `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
 	// prefixed); THIS turns on the opaque-copy install AND `usesManagedArrayCopy`, because each wrapper's managed
 	// branch calls the α `__arr_*_managed` helpers whose own install is gated on that bit.
 	if isOpaqueArrayCopyCallee(callee) 'opaquecopy'

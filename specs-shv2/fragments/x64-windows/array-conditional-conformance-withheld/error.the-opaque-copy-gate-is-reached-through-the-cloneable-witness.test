@@ -1,0 +1,14 @@
+// Test: error.the-opaque-copy-gate-is-reached-through-the-cloneable-witness
+typealias Nested = Array with (Array with String)
+
+function copyIt(c Cloneable) returns Cloneable
+	return c.clone()
+end 'copyIt'
+
+function main() returns ExitCode
+	let n = copyIt(Nested.create())
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: stdlib/Array.maxon:145:32: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).

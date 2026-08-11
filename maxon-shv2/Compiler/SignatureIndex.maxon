@@ -17578,16 +17578,16 @@ export type ProgramSignatures
 		// `String`s and nothing else, whatever a file does or does not declare.
 		//
 		// ⚠ **MEASURED as a DOUBLE FREE the day `stdlib/Array.maxon`'s own bodies started serving the calls.**
-		// `slice`/`clone`/`append` inside `type Array` are a SHARED generic body over an opaque `Element`, so
-		// they emit `__arr_slice_opaque`/`__arr_clone_opaque`/`__arr_append_opaque`, each of which branches on
-		// `copyFunc@32`. With this walk answering absent, the slot stayed 0 for `Array with String` too, the
+		// `slice`/`append` inside `type Array` are a SHARED generic body over an opaque `Element`, so they
+		// emit `__arr_slice_opaque`/`__arr_append_opaque`, each of which branches on `copyFunc@32`. With this walk answering absent, the slot stayed 0 for `Array with String` too, the
 		// wrapper took its TRIVIAL branch — a COW view that retains no ELEMENT — and both the view and its
 		// parent then cascaded `__str_decref` over the same records: **0xC0000005 at teardown**, measured on
 		// `Array with String`, `Array with <struct>`, `Array with <enum>` and `Array with <union>` alike, and
 		// on 25 `array-slice-managed-elements` / `array-clone-managed-elements` / `array-sort` cases (that run
-		// had `clone` struck as well, which ARR3a then put back for a reason of its own — see the `clone` arm;
-		// `slice` alone reaches five of them). The concrete surface never showed any of it, because a concrete
-		// receiver picks `__arr_slice_managed` at the call site and never reads a descriptor.
+		// had `clone` struck as well, which ARR3a put back and ARRH struck for good — since ARRH a corpus
+		// `Array.clone` reaches this walk through its own `managed.slice(0, len)`, so the same 25 ride
+		// `slice`). The concrete surface never showed any of it, because a concrete receiver picks
+		// `__arr_slice_managed` at the call site and never reads a descriptor.
 		//
 		// ⚠ **POSITION 0 IS NOT AN ASSUMPTION**: an `Array` takes exactly one type parameter, so its element
 		// is its only argument, and a `position` past that finds nothing exactly as the field walk would.

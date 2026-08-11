@@ -137,6 +137,12 @@ descriptor whose `__mf_destruct` closes once. Both `typeSupportsDeepClone` and `
 ask one `compilerOwnedAggregateOf`, so the gate refuses exactly what the strategy cannot emit — which is what
 the gate's own header exists to say — and the front end reports a positioned E2015 where the backend used to
 die.
+
+⚠ **THE SPAN IS `stdlib/Array.maxon`'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER** — `arr.clone()`
+is the library's own declaration now, so this program is refused by the OPAQUE copy gate inside that body
+rather than by the concrete gate at the call. Refused all the same; what moved is WHERE it is reported and
+which of the two sentences is printed. `specs-shv2/array-conditional-conformance-withheld.md` explains that
+relocation once, for all four cases it touched, and names the missing blame edge that would undo it.
 ```maxon
 type Holder
 	export var f as __ManagedFile
@@ -153,5 +159,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:12: Unsupported: `clone` on an array whose managed element has a nested type this rung cannot deep-clone yet — a `Box with T` generic-instance field/element (its per-instance cloner is a later slice) or an array-of-managed-arrays. String / struct / boxed-union elements, including nested String, struct, union and Array fields, ARE supported.
+error E2015: stdlib/Array.maxon:145:32: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
 ```

@@ -4738,7 +4738,19 @@ end 'cursorSurfaceMemberNames'
 // branch, and view and parent both cascaded `__str_decref` over the same records: **0xC0000005 at teardown,
 // 25 cases**. An `Array` IS its own column, and that walk now says so.
 //
-// ⚠⚠ **THE SEVEN THAT DID NOT GO, AND WHAT EACH ONE MEASURED** — no two of them for the same reason. Both
+// ⭐⭐ **AND ARRH STRUCK `clone`, WHICH IS THE ONE ARR3a MEASURED GREEN AND PUT BACK FOR THE HARNESS.** Its
+// blocker was never the code: `requireArrayCopyMethodSupported` fires where the `managed.slice(0, len)` IS, so
+// two refusals relocate from `<fragment>:12:12 … 'clone'` to `stdlib/Array.maxon:145:32 … 'slice'`, and no
+// `maxoncstderr` block could name an absolute checkout path. ARRH cured THAT —
+// `SpecTestRunner.rewriteStdlibPaths` rewrites the compiler's library root to the repo-relative `stdlib/`
+// exactly as a staged fragment's path is rewritten to `<fragment>` — and the retirement then cost 27
+// expectation texts and NOTHING else: 21 of them this roster rendering itself, 4 the relocated refusals, and
+// the deletion took `emitArrayCloneCall` and the whole `__arr_clone_opaque` wrapper with it (its only emitter
+// was that arm). What it did NOT cure is that the relocated sentence names a line no user wrote; the blame
+// edge that would re-point a stdlib-body diagnostic at the construct that forced it still does not exist, and
+// `specs-shv2/array-conditional-conformance-withheld.md`'s disabled case is the standing record of it.
+//
+// ⚠⚠ **THE SIX THAT DID NOT GO, AND WHAT EACH ONE MEASURED** — no two of them for the same reason. Both
 // compiler defects above are FIXED, so several of these are one named mechanism away rather than open-ended;
 // each says which:
 //   • **`get`** — it is a BORROW SOURCE, exactly as `first` is, so it belongs to the FIRST bullet above and
@@ -4775,10 +4787,6 @@ end 'cursorSurfaceMemberNames'
 //     'IntArray'`. Behind that refusal sat four SEGFAULTS in `array-append-managed-elements` — the
 //     `copyFunc@32` defect above, which this rung fixed, so `append`'s remaining blocker is only the argument
 //     rule.
-//   • **`clone`** — the one that got all the way to a green run and was put back anyway, for a reason that is
-//     not about the code: its REFUSALS move into `stdlib/Array.maxon` and a `maxoncstderr` block cannot pin an
-//     absolute path. The `clone` arm carries the whole argument, and it is the same wall every later
-//     retirement meets.
 //   • **`appendMemory`** — the CLEANEST of the eight (struck alone: 19 of its 21 failures were this list
 //     rendering itself) and blocked by the SECOND bullet rather than by anything of its own:
 //     `stdlib/String.maxon:823` calls it, and a program that declares its OWN `type Array`
@@ -4793,7 +4801,6 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(ArrayFirstMethod)
 	names.push(CountMethod)
 	names.push(IsEmptyMethod)
-	names.push(CloneMethodName)
 	names.push(ArrayPushMethod)
 	// ⚠ **`reserve` STAYED, AND THE REASON IS `stdlib/String.maxon:807` RATHER THAN THIS SURFACE
 	// (X-array-retire).** A program may declare its OWN `type Array` (`array-declared-record.md`), and that
@@ -11220,6 +11227,13 @@ export type Parser
 	// distinguish the array method from a bare free call; the RECEIVER is deliberately NOT resolved (the pre-scan
 	// runs before the body is parsed), so ANY copy is signalled and the caller reserves an (at worst unused,
 	// always sound) descriptor. Shares `isDotMethodCallHeadAt` with `arrayMoveOutMethodAt`, over the COPY names.
+	//
+	// ⚠ **`clone` STAYED ON THIS LIST AFTER ARRH TOOK IT OFF THE `Array` ROSTER, and the two lists ask different
+	// questions.** A roster says what the SURFACE serves; this says what a body might have to reserve a descriptor
+	// FOR. Since ARRH an `arr.clone()` performs its copy inside `stdlib/Array.maxon`'s body rather than in the
+	// function that wrote it, so naming it here is over-approximate — which is the direction this pre-scan is
+	// built to err in, the other one being a MISSING descriptor. `String.clone()` and a user `clone()` spell the
+	// name too, and this resolves no receiver for either.
 	function arrayCopyMethodAt(q TokenIndex) returns bool
 		if not self.isDotMethodCallHeadAt(q) 'notMethodCall'
 			return false
@@ -46354,26 +46368,6 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
-		// ⛔⛔ **`clone` WAS STRUCK AT ARR3a AND PUT BACK, AND THE REASON IS THE SPEC HARNESS RATHER THAN THE
-		// CODE.** Everything `slice` needed, `clone` had: the `Self`-return retype and the `copyFunc@32` stamp
-		// carry `stdlib/Array.maxon:143`'s body (`managed.slice(0, len)`) correctly, and with both fixes in
-		// place the whole `array` filter was green on it but for diagnostics. **The two it could not keep are
-		// REFUSALS that move house**: `requireArrayCopyMethodSupported` fires where the `managed.slice` IS, so
-		// `array-clone-managed-elements.error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused` and
-		// `generic-type-nested-array-typealias.opaque-copy-uncopyable-instantiation-rejected` stop reading
-		// `<fragment>:12:12 … 'clone'` and start reading `<abs>/stdlib/Array.maxon:145:32 … 'slice'`.
-		// ⇒ **A `maxoncstderr` block cannot pin that**: only a STAGED fragment path is normalized to
-		// `<fragment>` (`SpecTestRunner.normalizeCompilerOutput`), so the expectation would carry this
-		// worktree's absolute path and go red on any other checkout — including the one it merges into.
-		// The refusal itself is intact and correct; what a corpus body cannot yet do is report it at the CALL
-		// that instantiated it. That is one rung (diagnostic attribution through a stdlib body, which every
-		// later retirement needs too), and normalizing a stdlib path in the harness would hide the regression
-		// rather than fix it.
-		if methodTok.value.equals(CloneMethodName) 'clone'
-			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
-			try self.consumeEmptyArgList()
-			return self.inheritArrayElementSurface(self.emitArrayCloneCall(giid, arr: arr, range: range), source: arr)
-		end 'clone'
 
 		// ⭐ **`contains(…)` — the CONDITIONAL extension (conditional-extensions), and the LAST of `stdlib`'s
 		// `Array` extension members still served here.** It is on the `Array` roster and NOT the buffer's, so
@@ -47371,19 +47365,6 @@ export type Parser
 		return self.inheritArrayElementSurface(sliced, source: arr)
 	end 'parseArraySlice'
 
-	// Which of the three `clone` runtimes this instance's element takes — `emitArraySliceCall`'s three-way
-	// choice verbatim, split out of the `clone` arm for the identical reason: the element-surface inheritance
-	// needs ONE value to name rather than one per arm.
-	function emitArrayCloneCall(giid GenericInstanceId, arr ValueId, range SourceRange) returns ValueId
-		if self.signatures.containerElementIsOpaque(giid) 'opaqueClone'
-			return self.emitOwnedRuntimeResult(ArrCloneOpaqueName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
-		end 'opaqueClone'
-		if self.signatures.containerElementIsManaged(giid) 'managedClone'
-			return self.emitOwnedRuntimeResult(ArrCloneManagedName, args: pairArgs(arr, second: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
-		end 'managedClone'
-		return self.emitOwnedRuntimeResult(ArrCloneName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
-	end 'emitArrayCloneCall'
-
 	// ⭐ **A COPY OF AN ARRAY OF BUFFERS HOLDS BUFFERS (A2m).** A whole-array producer hands back a value of the
 	// receiver's own instance, and the element spelling cannot ride that instance (`Array with __ManagedMemory`
 	// and `Array with ByteArray` are one id) — so it rides the value here. MEASURED before this line:
@@ -47393,7 +47374,9 @@ export type Parser
 	// ⚠ **ITS CALLERS WERE THE `clone` AND `slice` ARMS; SINCE ARR3a IT IS ALSO EVERY CORPUS `Self` RETURN**
 	// (`retypeInstanceMethodResult`), because the `Array`-surface `slice` is `stdlib/Array.maxon`'s declaration
 	// now and the same fact has to reach it. One helper, asked from the synthesized side and from the corpus
-	// side, rather than a second answer on each.
+	// side, rather than a second answer on each. ⇒ **`bufs.clone()` above is now served by that CORPUS route
+	// (ARRH struck `clone` from the roster), so the measurement it records is answered by the `Self`-return
+	// caller rather than by an arm of its own — which is the retirement working, not the case going away.**
 	function inheritArrayElementSurface(result ValueId, source ValueId) returns ValueId
 		if self.valueElementIsBufferSurface(source) 'sourceHoldsBuffers'
 			self.markBufferSurfaceElements(result)

@@ -344,20 +344,27 @@ export let ArrSliceManagedName = b"__arr_slice_managed"
 export let ArrCloneManagedName = b"__arr_clone_managed"
 export let ArrAppendManagedName = b"__arr_append_managed"
 
-// ⭐ **THE OPAQUE-`T` copy operations (P1.7 slice 3b-vi-b-β).** A `slice`/`clone`/`append` on an `Array with
-// <type parameter>` field inside a GENERIC body serves both a MANAGED (`Container with String`) and a TRIVIAL
+// ⭐ **THE OPAQUE-`T` copy operations (P1.7 slice 3b-vi-b-β).** A `slice`/`append` on an `Array with <type
+// parameter>` field inside a GENERIC body serves both a MANAGED (`Container with String`) and a TRIVIAL
 // (`Container with SmallInt`) instantiation from ONE shared body, so the shared body cannot pick the trivial
 // byte-blit or the managed deep-clone statically. Each is a thin RUNTIME wrapper that takes the enclosing
 // instance's layout DESCRIPTOR (appended by `LowerMaxonToStd.opaqueCopyArgsWithDescriptor`, exactly as an
 // opaque `__arr_create` appends its `destroyFunc@40`), reads the descriptor's `copyFunc@32`, and BRANCHES: a
 // 0 slot (a trivial instantiation — a scalar element byte-copies correctly, or a non-copied managed element
-// whose base the front end rejected) routes to the trivial `__arr_{slice,clone,append}` (the COW/block-copy);
-// a non-zero slot (a managed instantiation) routes to the α `__arr_{slice,clone,append}_managed` with the
+// whose base the front end rejected) routes to the trivial `__arr_{slice,append}` (the COW/block-copy); a
+// non-zero slot (a managed instantiation) routes to the α `__arr_{slice,append}_managed` with the
 // descriptor's cloner as `elemCloneFn`, so it NEVER `callIndirect(0)`. `slice` is THROWING (it forwards the
-// bounds `errorReturn` of whichever inner slice it calls), `clone`/`append` are not — exactly the inner
-// operations' shapes.
+// bounds `errorReturn` of whichever inner slice it calls), `append` is not — exactly the inner operations'
+// shapes.
+//
+// ⚠ **THERE WERE THREE UNTIL ARRH, AND `__arr_clone_opaque` WENT WITH THE ROSTER LINE THAT WAS ITS ONLY
+// CALLER.** `Array.clone` is `stdlib/Array.maxon:143` now and its body is `managed.slice(0, len)`, so an
+// opaque-element clone reaches the descriptor through `__arr_slice_opaque` like every other corpus copy —
+// and a second wrapper doing the same branch for a name nothing emits is emitted runtime no program can
+// call. `__arr_clone` and `__arr_clone_managed` both STAYED, because neither was ever the `Array` SURFACE's:
+// the first is what a managed-array FIELD's cloner calls (`SignatureIndex.managedFieldCloneStrategy`) and
+// the second is the deep-clone half that field cascade branches to.
 export let ArrSliceOpaqueName = b"__arr_slice_opaque"
-export let ArrCloneOpaqueName = b"__arr_clone_opaque"
 export let ArrAppendOpaqueName = b"__arr_append_opaque"
 
 // ⭐ **`__arr_map(src, dest, transform, env)` — `arr.map(f)` (interface-extensions).** It FILLS a caller-created
@@ -714,12 +721,12 @@ export function isManagedArrayCopyCallee(callee ByteArray) returns bool
 	return callee.equals(ArrSliceManagedName) or callee.equals(ArrCloneManagedName) or callee.equals(ArrAppendManagedName)
 end 'isManagedArrayCopyCallee'
 
-// Is `callee` one of the three OPAQUE-`T` array copies — the `usesOpaqueArrayCopy` gate (P1.7 slice
+// Is `callee` one of the OPAQUE-`T` array copies — the `usesOpaqueArrayCopy` gate (P1.7 slice
 // 3b-vi-b-β). Their install is decoupled from `usesArray` (like the managed copies) so a program that
 // touches no opaque-array copy does not carry them; and a reference ALSO turns on `usesManagedArrayCopy`
 // (`recordCallUsage`), because each wrapper's managed branch calls the α `__arr_*_managed` helpers.
 export function isOpaqueArrayCopyCallee(callee ByteArray) returns bool
-	return callee.equals(ArrSliceOpaqueName) or callee.equals(ArrCloneOpaqueName) or callee.equals(ArrAppendOpaqueName)
+	return callee.equals(ArrSliceOpaqueName) or callee.equals(ArrAppendOpaqueName)
 end 'isOpaqueArrayCopyCallee'
 
 // ⭐ **THE SINGLE-VALUE DESCRIPTOR-GATED DROP (P1.7 slice 3b-v).** `__drop_type_param(descriptor, value)`
@@ -1159,7 +1166,6 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	// The OPAQUE-`T` copy wrappers (P1.7 slice 3b-vi-b-β) — installed under their OWN bit, which also implies
 	// `usesManagedArrayCopy` (`recordCallUsage`), so the α helpers they branch to are already built above.
 	if usage.usesOpaqueArrayCopy 'opaqueCopy'
-		buildArrCloneOpaque(module)
 		buildArrSliceOpaque(module)
 		buildArrAppendOpaque(module)
 	end 'opaqueCopy'
@@ -4747,41 +4753,6 @@ function emitCopyFuncBranch(module StdModule, entry IrBlock, descriptor ValueId,
 	module.setTerminator(entry, op: StdOp.condBranch(hasCloner, thenBlockId: managedId, elseBlockId: trivialId))
 	return copyFn
 end 'emitCopyFuncBranch'
-
-// `__arr_clone_opaque(arr, descriptor) -> newArr` — the descriptor-gated dispatch of `clone` on an opaque-`T`
-// array. Trivial → the O(1) COW `__arr_clone`; managed → the deep-clone `__arr_clone_managed(arr, copyFunc)`.
-// Both yield a fresh owned array, joined and returned.
-function buildArrCloneOpaque(module StdModule)
-	var func = IrFunction.createFromStd(ArrCloneOpaqueName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var trivial = module.addBlock(func, label: b"trivial")
-	var managed = module.addBlock(func, label: b"managed")
-	var join = module.addBlock(func, label: b"join")
-
-	emitParams(module, block: entry, count: 2)
-	let arr = 0 as ValueId
-	let descriptor = 1 as ValueId
-
-	let copyFn = emitCopyFuncBranch(module, entry: entry, descriptor: descriptor, trivialId: trivial.id, managedId: managed.id, ids: ids)
-
-	let resTrivial = ids.mint()
-	module.appendOp(trivial, op: StdOp.call(resTrivial, callee: ArrCloneName, args: argsOf(arr)))
-	module.setTerminator(trivial, op: StdOp.branch(join.id))
-	trivial.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(resTrivial)))
-
-	let resManaged = ids.mint()
-	module.appendOp(managed, op: StdOp.call(resManaged, callee: ArrCloneManagedName, args: twoArgs(arr, second: copyFn)))
-	module.setTerminator(managed, op: StdOp.branch(join.id))
-	managed.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(resManaged)))
-
-	let result = ids.mint()
-	join.blockArgs.push(IrBlockArg.create(result, argType: StdType.i64))
-	module.setTerminator(join, op: StdOp.ret(result))
-
-	module.functions.push(func)
-end 'buildArrCloneOpaque'
 
 // `__arr_slice_opaque(arr, start, end, descriptor) -> (newArr, flag)` — the descriptor-gated dispatch of the
 // THROWING `slice`. Each branch `tryCall`s the inner slice (which does its OWN bounds check) and FORWARDS its

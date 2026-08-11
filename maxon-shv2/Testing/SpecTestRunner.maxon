@@ -1255,11 +1255,16 @@ type StagedTest
 	export let compilerExe as FilePath
 	// Every path the compiler may name, with the offset that maps it onto the fragment.
 	export let paths as FragmentPathMappingArray
+	// ⭐ THE LIBRARY ROOT THAT COMPILE WILL LOAD, as a STRING because that is the form a diagnostic
+	// carries it in. Asked of `compilerExe` and not of this process: a `// --- stdlib-overlay:` case is
+	// compiled by its own copy beside its own `stdlib/`, and the checkout's is not the one it names.
+	// See `rewriteStdlibPaths` for what it is for.
+	export let stdlibRoot as String
 	// What was written, so it can be removed afterwards.
 	export let writtenFiles as FilePathArray
 
-	static function create(buildTargets FilePathArray, compilerExe FilePath, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
-		return Self{buildTargets: buildTargets, compilerExe: compilerExe, paths: paths, writtenFiles: writtenFiles}
+	static function create(buildTargets FilePathArray, compilerExe FilePath, stdlibRoot String, paths FragmentPathMappingArray, writtenFiles FilePathArray) returns StagedTest
+		return Self{buildTargets: buildTargets, compilerExe: compilerExe, paths: paths, stdlibRoot: stdlibRoot, writtenFiles: writtenFiles}
 	end 'create'
 end 'StagedTest'
 
@@ -1583,7 +1588,8 @@ function stageTest(tempDir FilePath, test SpecTest, compilerExe FilePath) return
 	var buildTargets = FilePathArray.create()
 	buildTargets.push(fragmentPath)
 
-	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compilerExe, paths: paths, writtenFiles: written))
+	let stdlibRoot = try stdlibRootOf(compilerExe) otherwise return StagingResult.failed(missingStdlibReason(compilerExe))
+	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compilerExe, stdlibRoot: stdlibRoot, paths: paths, writtenFiles: written))
 end 'stageTest'
 
 // A MULTI-file test: one directory, one file per `// --- file:` section, compiled as a project — and
@@ -1649,8 +1655,34 @@ function stageSourceFiles(tempDir FilePath, test SpecTest, compilerExe FilePath)
 	// new — the directory is here to fix the project ROOT, not to contribute a unit.
 	buildTargets.push(testDir)
 
-	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compiler, paths: paths, writtenFiles: written))
+	// Asked of `compiler` rather than of `compilerExe`, so an overlay case's root is the PRIVATE
+	// checkout its copy will load and not this one's.
+	let stdlibRoot = try stdlibRootOf(compiler) otherwise return StagingResult.failed(missingStdlibReason(compiler))
+	return StagingResult.staged(StagedTest.create(buildTargets, compilerExe: compiler, stdlibRoot: stdlibRoot, paths: paths, writtenFiles: written))
 end 'stageSourceFiles'
+
+// The `stdlib/` a compile driven by `compilerExe` will load, in the spelling a diagnostic from inside it
+// will carry.
+//
+// ⚠ **IT IS THE COMPILER'S OWN WALK, CALLED ON THE COMPILER'S OWN DIRECTORY** (`stdlibDirAbove`, which
+// `StdlibSource.locateStdlibDir` reaches from `Process.executablePath()`). A second rule here would be a
+// second answer to "where is the library", and the way that failure presents is the nastiest kind: the
+// rewrite silently does not fire and a case reports the host's absolute path as though normalization had
+// never been asked for.
+function stdlibRootOf(compilerExe FilePath) returns String throws CompileError
+	let exeDir = try compilerExe.resolve(Directory.currentPath()).parent() otherwise throw CompileError.stdlibNotFound
+	let root = try stdlibDirAbove(exeDir)
+	return root.toString()
+end 'stdlibRootOf'
+
+// Why staging stopped when the library could not be located. Its own function because both staging
+// shapes report it and the sentence has to say the same thing in both — and because it is worth being
+// explicit that this is a STAGING failure rather than a compile one: the compile would have failed too
+// (`CompileError.stdlibNotFound`), but it would have failed AFTER the runner had already promised it
+// could rewrite what the compiler printed.
+function missingStdlibReason(compilerExe FilePath) returns String
+	return "no {StdlibDirName}/ above the compiler under test {compilerExe.toString()}, so a diagnostic raised inside the library could not be rewritten to a portable path"
+end 'missingStdlibReason'
 
 // Why a `// --- stdlib-overlay:` case could not be staged. A one-arm union implementing `Error` — the
 // shape `ScaleError` already uses next door — so the staging steps below read as a `try` chain and every
@@ -1989,7 +2021,7 @@ end 'fragmentExitCodeText'
 // stderr (the ACTUAL diagnostic the compiler produced — what the fragment exists
 // to track — with every compiled file's path and line rewritten onto the fragment).
 function buildErrorFragment(test SpecTest, compile ProcessCapture, staged StagedTest) returns String
-	let normalizedError = normalizeCompilerOutput(compile.stderr, paths: staged.paths).trim()
+	let normalizedError = normalizeCompilerOutput(compile.stderr, paths: staged.paths, stdlibRoot: staged.stdlibRoot).trim()
 	return "{fragmentHeader(test)}{CompilerErrorLabel}\n{normalizedError}\n"
 end 'buildErrorFragment'
 
@@ -2027,11 +2059,14 @@ function checkCompilerError(expectedText String, specName String, testName Strin
 		return TestOutcome.fail("expected a compile error but compilation succeeded")
 	end 'unexpectedSuccess'
 
-	let actual = normalizeCompilerOutput(compile.stderr, paths: staged.paths).trim()
+	let actual = normalizeCompilerOutput(compile.stderr, paths: staged.paths, stdlibRoot: staged.stdlibRoot).trim()
 	// The EXPECTED side needs no renumbering: an expectation — ported or authored — already names
 	// the MERGED fragment's lines, because that is the file a reader has in front of them. Only its
-	// PATH is rewritten, which is one mapping with no offset.
-	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName)).trim()
+	// PATH is rewritten, which is one mapping with no offset. It goes through the SAME library rewrite
+	// for the reason this whole routine is one function: what "normalized" means may not differ by side,
+	// and an expectation naming a host's absolute checkout is a mistake worth normalizing INTO agreement
+	// rather than one worth passing through so it can fail somewhere else.
+	let expected = normalizeCompilerOutput(expectedText, paths: referencePathMapping(specName, testName: testName), stdlibRoot: staged.stdlibRoot).trim()
 	if actual == expected 'matched'
 		return TestOutcome.pass
 	end 'matched'
@@ -3100,13 +3135,72 @@ end 'writeFragment'
 // is where the line sits in the merged block a reader is looking at. The C# reference does exactly
 // this translation (`TestRunner.RewriteMultiFileErrorPaths`), and a spec expectation is not a claim
 // about where a temp file lived, so neither side of it should decide a test.
-function normalizeCompilerOutput(text String, paths FragmentPathMappingArray) returns String
+function normalizeCompilerOutput(text String, paths FragmentPathMappingArray, stdlibRoot String) returns String
 	var out = text
 	for mapping in paths 'eachPath'
 		out = rewriteDiagnosticPaths(out, path: mapping.compiledPath, lineOffset: mapping.lineOffset, token: mapping.replacementToken)
 	end 'eachPath'
-	return out
+
+	// LAST, and the order is load-bearing: a `// --- stdlib-overlay:` section's file lies UNDER the very
+	// root this rewrites and is also a staged source, so it has to become `<fragment>` above — with the
+	// renumbering its section is owed — before anything general about the library is applied to it.
+	return rewriteStdlibPaths(out, stdlibRoot: stdlibRoot)
 end 'normalizeCompilerOutput'
+
+// ⭐⭐ **THE SECOND FILE A DIAGNOSTIC CAN NAME, AND UNTIL ARRH NOTHING COULD PIN IT.** A refusal raised
+// inside a LIBRARY body — `stdlib/Array.maxon:145:32`, `Array.clone`'s own `managed.slice(0, len)` — is as
+// much a claim about the language as one raised in the program, and it is the shape EVERY retirement from
+// the `Array`/`String` surface rosters produces: the refusal stops being the parser's and becomes the
+// stdlib body's. But the compiler locates its library by walking up from its own EXECUTABLE
+// (`StdlibSource.locateStdlibDir`), so what it prints is `C:\Users\…\<whoever's checkout>\stdlib\Array.maxon`
+// and a `maxoncstderr` block carrying that string passes on exactly one machine. Rewritten to the
+// REPO-RELATIVE form the checkout's own layout already spells, the file and the line — the two things such
+// a case actually asserts — survive, and the host drops out.
+//
+// ⚠ **THE C# REFERENCE NEEDS NO COUNTERPART TO THIS, AND ITS ABSENCE THERE IS NOT A SECOND SPELLING.** The
+// bootstrap's compiler renders EVERY diagnostic path relative to the project root with forward slashes
+// before printing it (`CompileError.Format`), so it EMITS this exact form rather than normalizing one —
+// MEASURED (ARRH): a broken `stdlib/Sleep.maxon` under a copied checkout reports `stdlib/Sleep.maxon:1:35`.
+// The two runners therefore agree on ONE spelling for a stdlib expectation, reached from two ends; a
+// rewrite added to the reference could never fire and would be the second copy of the rule.
+//
+// ⚠ **A LINE PINNED HERE IS THE LIBRARY'S, and an expectation naming one moves when `stdlib/` gains a line
+// above it.** That is a real cost, deliberately accepted: it is the same one the four `/specs` cases
+// pinning `Array.maxon:382`'s runtime panic already pay, and the alternative — normalizing the number away
+// — would delete the half of the assertion that says WHICH construct in the library refused.
+function rewriteStdlibPaths(text String, stdlibRoot String) returns String
+	if not text.contains(stdlibRoot) 'namesNoLibraryFile'
+		return text
+	end 'namesNoLibraryFile'
+
+	let pieces = text.split(stdlibRoot)
+	var out = try pieces.get(0) otherwise panic("rewriteStdlibPaths: pieces.get(0) failed on a {pieces.count()}-part split of a text that contains '{stdlibRoot}'")
+	for i in 1 upto pieces.count() 'eachOccurrence'
+		let tail = try pieces.get(i) otherwise panic("rewriteStdlibPaths: pieces.get({i}) failed on a {pieces.count()}-part split")
+		out = "{out}{StdlibDirName}{portableLibraryTail(tail)}"
+	end 'eachOccurrence'
+	return out
+end 'rewriteStdlibPaths'
+
+// What follows a library root, with the PATH part put in the corpus's own forward-slash spelling and
+// everything from `:<line>:<col>` on left exactly as the compiler wrote it.
+//
+// ⭐ **THE CUT IS THE FIRST `:`, AND ON THIS SIDE OF THE ROOT THAT IS UNAMBIGUOUS.** A Windows drive
+// letter's colon sits inside the root, which has already been consumed, and no path segment may contain
+// one — so the first colon after the root is always the one that ends the file name. Rewriting the
+// separators matters as much as the prefix does: `…\stdlib\helpers\sort\smallSort.maxon` and
+// `…/stdlib/helpers/sort/smallSort.maxon` are the same library file on two hosts, and a prefix swap alone
+// would leave the host's separator inside the token so that no ONE expectation could pass on both.
+function portableLibraryTail(tail String) returns String
+	// A library named with no position after it — nothing bounds the path, so only the root is rewritten.
+	// `rewriteDiagnosticLine` declines in the same shape and for the same reason: guessing where a path
+	// ends is worse than leaving what follows it alone.
+	let cut = try tail.findFirst(PositionSeparator) otherwise return tail
+
+	let relative = tail.slice(tail.startIndex(), endIndex: cut)
+	let position = tail.slice(cut, endIndex: tail.endIndex())
+	return "{relative.replace(WindowsPathSeparator, with: PathSeparator)}{position}"
+end 'portableLibraryTail'
 
 // The single mapping an EXPECTED text needs: the path a `/specs` expectation names for this test,
 // and NO renumbering (its lines are already the fragment's). An shv2-native expectation names
