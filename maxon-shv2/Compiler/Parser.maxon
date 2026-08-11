@@ -3064,8 +3064,10 @@ export function bareMethodName(name ByteArray) returns String
 end 'bareMethodName'
 
 // Where a signature's USER parameters begin — past the receiver an instance method carries at slot 0. Stated
-// once because both halves of an overload key skip the same slot for the same reason (see
-// `Parser.overloadTypeSuffix`).
+// once because both halves of an overload key skip the same slot for the same reason, and that reason is
+// `Parser.overloadTypeSuffix`'s: the BASE a declaration contests under carries receiver-presence, so within
+// one base every member's slot 0 holds the same value of the same type. (It is NOT "the receiver
+// distinguishes nothing" — see there for the pair that falsified exactly that claim.)
 export function firstUserParamIndex(takesReceiver bool) returns ParamCount
 	return 1 if takesReceiver else 0
 end 'firstUserParamIndex'
@@ -12818,16 +12820,55 @@ export type Parser
 	// ⚠ The bare name remains the overload set's KEY (`OverloadSetMap`) and the callee a call op carries, so
 	// nothing at a call site changes — `SemanticCheck.resolveOverloadedCalls` rebinds it to a member exactly
 	// as it does for a same-file set.
+	//
+	// ⭐⭐ **THE ONE CONTEST THAT IS NOT AN OVERLOAD SET AT ALL: a `static` MEMBER BESIDE AN INSTANCE MEMBER OF
+	// THE SAME NAME** (`same-name-methods.md`). It changes the BASE this whole ladder runs against rather than
+	// adding a rung to it, so the static's set — if it has one — is keyed by that base and the call door mints
+	// the same base. See the body, and `staticMemberRegistrationName` for the name.
 	function overloadRegistrationNameFor(base ByteArray, paramTypes MaxonTypeArray, paramNames ByteArrayArray, takesReceiver bool, nameTok Token) returns ByteArray throws ParseError
+		// ⭐⭐ **A `static` MEMBER AND AN INSTANCE MEMBER OF ONE TYPE ARE TWO NAMES, NOT ONE OVERLOAD SET** —
+		// `same-name-methods.md`. Nothing in the ARGUMENTS can separate them (their user parameter lists may be
+		// identical), so the language separates them by SYNTAX at the call and this compiler separates them by
+		// NAME at the declaration: the instance keeps the source spelling and the static takes
+		// `staticMemberRegistrationName`. Both reference compilers make the same split, and neither puts the
+		// receiver in its overload key either (v1's `tryResolveStaticInstanceCollision`, the bootstrap's
+		// `ResolveStaticInstanceCollision`).
+		//
+		// ⚠ **IT IS A CHANGE OF *BASE*, NOT AN EXTRA SUFFIX, and that is what makes the two mechanisms compose.**
+		// Two statics of one contested name then contest with EACH OTHER under the static base — `m#__static`
+		// and `m#__static#Integer` — and their overload SET is keyed by the base the call door mints, so the
+		// resolver finds it exactly as it finds any other. Putting receiver-presence in the SUFFIX instead
+		// would have merged both kinds into one set, where the receiver is the only discriminator and every
+		// existing candidate rule reads arguments.
+		//
+		// ⚠ And it makes `overloadTypeSuffix`'s premise TRUE rather than assumed: every member of one base now
+		// agrees about whether it takes a receiver, so the receiver really does distinguish nothing within a
+		// base. See there.
+		//
+		// ⚠ **THE NAME COMES FROM `memberRegistrationKey` AND IS NOT COMPOSED HERE.** The sweep files this
+		// declaration's facts under that key and the static call door asks for the same one; three spellings of
+		// "contest ⇒ the static name" would be three chances to disagree about a symbol. The `pairContest` flag
+		// beside it is a different question — whether the REFUSALS below apply — so it is asked separately.
+		let pairContest = self.signatures.isStaticInstanceContest(base)
+		let registrationBase = self.signatures.memberRegistrationKey(base, takesReceiver: takesReceiver)
 		let contested = self.signatures.isContestedExtensionMethod(base)
-		if not contested and not self.declaredFuncNames.contains(base) 'firstOfThisName'
-			self.claimFuncName(base)
-			return base
+		if not contested and not self.declaredFuncNames.contains(registrationBase) 'firstOfThisName'
+			// A pair member is the FIRST of its own base, so the four refusals an overload set earns are asked
+			// here for it — of the SOURCE name, which is the key the whole-program sweep filed them under and
+			// the one thing the two members still share. The transfer bit is derived INSIDE the gate and not
+			// above it: it walks the parameter list asking `typeIsManaged` per parameter, and this fast path is
+			// every function declaration in a program that neither overloads nor pairs anything.
+			if pairContest 'aStaticAndAnInstanceShareThisSourceName'
+				try self.requireOverloadableName(base, nameTok: nameTok, transfersOwnership: self.declaresTransferableParam(paramTypes, takesReceiver: takesReceiver))
+			end 'aStaticAndAnInstanceShareThisSourceName'
+
+			self.claimFuncName(registrationBase)
+			return registrationBase
 		end 'firstOfThisName'
 
-		var members = self.overloadMembersOf(base)
+		var members = self.overloadMembersOf(registrationBase)
 		let hasTransferableParam = self.declaresTransferableParam(paramTypes, takesReceiver: takesReceiver)
-		try self.requireOverloadableName(base, nameTok: nameTok, members: members, newcomerTransfers: hasTransferableParam)
+		try self.requireOverloadableName(base, nameTok: nameTok, transfersOwnership: hasTransferableParam or overloadMembersTransferOwnership(members))
 		let typeSuffix = self.overloadTypeSuffix(paramTypes, takesReceiver: takesReceiver)
 		let labelSuffix = overloadLabelSuffix(paramNames, takesReceiver: takesReceiver)
 		match overloadMemberHoldingSignature(members, typeSuffix: typeSuffix, labelSuffix: labelSuffix) 'redeclaration'
@@ -12836,10 +12877,10 @@ export type Parser
 		end 'redeclaration'
 
 		let suffix = labelSuffix if overloadMembersHoldTypeSuffix(members, typeSuffix: typeSuffix) else typeSuffix
-		let registered = self.unclaimedRegistrationName(base, suffix: suffix)
+		let registered = self.unclaimedRegistrationName(registrationBase, suffix: suffix)
 		self.claimFuncName(registered)
 		members.push(OverloadMember.create(registered, typeSuffix: typeSuffix, labelSuffix: labelSuffix, hasTransferableParam: hasTransferableParam))
-		self.artifact.recordOverloadSet(base, members: overloadMemberNames(members))
+		self.artifact.recordOverloadSet(registrationBase, members: overloadMemberNames(members))
 		return registered
 	end 'overloadRegistrationNameFor'
 
@@ -12876,8 +12917,20 @@ export type Parser
 	// ⚠ **THE FIX IS NOT A BETTER TEST HERE, IT IS PER-MEMBER FACTS IN THE SWEEP** — which needs the sweep to
 	// key its tables by something finer than the bare name, and that is a whole-program-query change with a
 	// parse-memo hash behind it. Until then this is the boundary, stated where a reader meets it.
-	function requireOverloadableName(base ByteArray, nameTok Token, members OverloadMemberArray, newcomerTransfers bool) throws ParseError
-		if (newcomerTransfers or overloadMembersTransferOwnership(members)) and overloadBlockingConsume(self.signatures.consumeOf(base)) 'consumingOverload'
+	//
+	// ⭐⭐ **AND IT IS ASKED OF A `static`/INSTANCE PAIR TOO, WHICH IS NOT AN OVERLOAD SET AT ALL** — the two
+	// take two registration names and are told apart at the call by SYNTAX
+	// (`ProgramSignatures.isStaticInstanceContest`). What they still SHARE is the source name every table
+	// named above is keyed by, so every sentence below is true of them word for word, and the pair is refused
+	// on exactly these terms rather than on a rule of its own. Its members are checked one at a time — each
+	// declaration arrives here with its OWN transfer bit and nothing else in hand, which is precisely the
+	// disjunction the overload path spells with `overloadMembersTransferOwnership`.
+	//
+	// ⚠ It takes the transfer answer as ONE bool rather than the member set, because the two callers know it
+	// from different places: the overload path ORs the newcomer's bit over the incumbent members', while a
+	// pair member has no member set to consult. The refusal owns the rule; neither caller owns a copy of it.
+	function requireOverloadableName(base ByteArray, nameTok Token, transfersOwnership bool) throws ParseError
+		if transfersOwnership and overloadBlockingConsume(self.signatures.consumeOf(base)) 'consumingOverload'
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations MOVES a parameter into durable storage and one of them takes a managed parameter, and the whole-program declaration sweep publishes a function's consume facts under the name the source wrote, so a call to this name cannot be told which overload's ownership transfer to apply (it would leak in one direction and free twice in the other). Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'consumingOverload'
 
@@ -12909,7 +12962,8 @@ export type Parser
 	// Does this signature declare a parameter whose OWNERSHIP a call can transfer — a managed value (String,
 	// struct, union, array, generic instance) or an opaque `T`, which `transferConsumedArg` may move as an
 	// owned value it cannot see the type of? A scalar cannot: it is inert at a consumed position. The receiver
-	// is excluded for the reason every overload key excludes it — it is the same value for every member.
+	// is excluded for the reason every overload key excludes it (`overloadTypeSuffix`) — within one base it is
+	// the same value of the same type for every member, and a borrowed receiver transfers nothing anyway.
 	function declaresTransferableParam(paramTypes MaxonTypeArray, takesReceiver bool) returns bool
 		for i in firstUserParamIndex(takesReceiver) upto paramTypes.count() 'eachParam'
 			let paramType = try paramTypes.get(i) otherwise panic("declaresTransferableParam: paramTypes.get OOB at {i} inside its own count()")
@@ -12994,9 +13048,20 @@ export type Parser
 		return candidate
 	end 'unclaimedRegistrationName'
 
-	// The TYPE half of an overload key: every parameter's source-level type name, receiver excluded (the
-	// receiver is the same type for every overload of one method, so it distinguishes nothing — both
-	// references exclude it too). A zero-parameter overload renders the EMPTY suffix, which is still a
+	// The TYPE half of an overload key: every parameter's source-level type name, receiver excluded.
+	//
+	// ⚠⚠ **THE RECEIVER IS EXCLUDED BECAUSE THE *BASE* CARRIES ITS PRESENCE, NOT BECAUSE IT "DISTINGUISHES
+	// NOTHING".** This sentence used to read *"the receiver is the same type for every overload of one method,
+	// so it distinguishes nothing"*, and that premise is FALSE of a `static` member beside an instance member:
+	// one of them has no receiver at all. It was the sentence that made `same-name-methods.basic` an E3006 —
+	// static `getValue()` and instance `getValue()` both rendered the empty suffix and claimed one registration
+	// name. What is true, and is now made true by construction rather than assumed, is that every member of
+	// ONE BASE agrees about receiver-presence: `overloadRegistrationNameFor` gives a contested static its own
+	// base (`staticMemberRegistrationName`), so within a base the receiver genuinely is the same value of the
+	// same type. Both references exclude it from their overload key for the same reason and separate the two
+	// kinds by NAME, exactly as shv2 now does.
+	//
+	// A zero-parameter overload renders the EMPTY suffix, which is still a
 	// distinct name (`Counter.create#`) because the separator is unconditional: `create()` and
 	// `create(value Integer)` are a legitimate arity-only overload pair.
 	//
@@ -41919,8 +41984,28 @@ export type Parser
 		// result side (which instance the value IS) are two halves of one fact, and each used to re-derive it
 		// from `aliasName`: a second derivation is a second chance to answer the same call site differently,
 		// which is what `staticCallClaimsBase`'s own header says about the callee name one door up.
+		// ⭐⭐ **THIS DOOR IS THE `static` SIDE OF A `static`/INSTANCE PAIR, AND THE SYNTAX IS THE WHOLE
+		// DISCRIMINATOR** (`same-name-methods.md`). `Type.m(…)` means the static and `receiver.m(…)` the
+		// instance — with identical user parameter lists there is nothing else to decide it — so the pair is two
+		// registration names (`staticMemberRegistrationName`) and this is the only door that asks for the
+		// static one. Every INSTANCE call door is untouched, which is exactly why the instance keeps the source
+		// spelling.
+		//
+		// ⚠ **IT IS ONE RECORDED FACT AND NOT A PROBE-THEN-FALL-BACK.** Both references try `<name>~static`
+		// first and take the bare name when nothing answers, which makes the resolution a property of what the
+		// registry happens to hold; here the CONTEST is recorded by the one sweep that sees both declarations
+		// and the name is DERIVED from it — by `memberRegistrationKey`, the same reader that chose the key this
+		// declaration's facts were filed under, so the call and the declaration cannot come to spell one symbol
+		// two ways. That also keeps `Adder.bump(a)` — an INSTANCE method named statically, which this routine's
+		// header settles as legal — on the source spelling without a second rule: no static of that name
+		// exists, so there is no contest.
+		//
+		// `takesReceiver: false` is the reason and not a convention: a `Type.m(…)` call passes no receiver, so
+		// it is asking for the receiverless member of that name.
+		let staticCallee = self.signatures.memberRegistrationKey(declaredCallee, takesReceiver: false)
+
 		let constructed = self.constructorInstanceOf(aliasName)
-		let result = try self.parseCallNamed(func, callee: declaredCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
+		let result = try self.parseCallNamed(func, callee: staticCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
 		match constructed 'constructed'
 			none then break 'constructed'
 			instance(gid) then self.retypeGenericAliasConstructorResult(result, gid: gid, aliasName: aliasName)

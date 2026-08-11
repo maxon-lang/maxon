@@ -5062,6 +5062,35 @@ export function overloadRegistrationBaseName(registered ByteArray) returns ByteA
 	return (try segments.get(0) otherwise String.from(registered)).toByteArray()
 end 'overloadRegistrationBaseName'
 
+// ⭐ **THE SUFFIX THAT MARKS A CONTESTED `static` MEMBER, AND WHY IT IS IN THE RESERVED SPACE.** A suffix part
+// is otherwise a TYPE name or a PARAMETER name (`Parser.overloadTypeSuffix` / `overloadLabelSuffix`), and
+// `Parser.requireUnreservedName` refuses a declaration of either under the `__` prefix (E2051) — so no legal
+// overload set can render this one and contend for the key it makes. Declared ahead of its join for
+// `OverloadNameSeparator`'s reason: the constant is the fact, and a reader who finds it wants the rule here.
+let StaticMemberNameSuffix = "__static"
+
+// ⭐⭐ **THE REGISTRATION NAME A TYPE'S `static` MEMBER TAKES WHEN AN INSTANCE MEMBER OF THE SAME TYPE WEARS
+// THE SAME NAME** — `Box.getValue#__static` beside the instance's `Box.getValue`. The pair is NOT one
+// overload set: with identical user parameter lists there is nothing in the arguments to select on, and the
+// discriminator the language actually gives is SYNTACTIC — `Type.m(…)` means the static, `receiver.m(…)` the
+// instance. So the two are two names.
+//
+// ⚠ **THIS IS THE MINT AND NOT THE DECISION.** Whether a declaration or a call takes this name is
+// `ProgramSignatures.memberRegistrationKey`'s — THE one composition of the contest and this mint, and the only
+// caller that should reach here. Everything else asks that.
+//
+// ⚠ **MINTED ON CONTEST ONLY, which is what leaves every emitted symbol in the tree exactly where it was.** A
+// static whose name no instance member shares registers under the bytes it always did — and a static/instance
+// pair is a shape that could not COMPILE before this rung (both declarations rendered one registration name
+// and collided as E3006), so no program that has ever built holds one.
+//
+// It joins through `overloadRegistrationName` because the `#` separator has one speller, and it keeps the
+// SOURCE name as its head so `overloadRegistrationBaseName` (which a duplicate diagnostic reads) still
+// recovers `Box.getValue`.
+export function staticMemberRegistrationName(sourceName ByteArray) returns ByteArray
+	return overloadRegistrationName(sourceName, suffix: StaticMemberNameSuffix.toByteArray())
+end 'staticMemberRegistrationName'
+
 // ⭐ **THE NAME OF THE SYNTHESIZED NULLARY FUNCTION THAT PRODUCES PARAMETER `paramIndex`'s DEFAULT VALUE**
 // (BATCH2 slice 4) — `__paramDefault#greet#0`. See `SignatureIndex.ParamDefaultInfo` for what the mechanism
 // is and why a default is a FUNCTION rather than a replayed expression; this is only where its name is

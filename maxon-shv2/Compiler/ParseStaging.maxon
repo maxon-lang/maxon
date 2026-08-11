@@ -1190,6 +1190,10 @@ end 'commitFuncSignatures'
 // refusal working exactly as designed (`Parser.overloadRegistrationNameFor`), but the name it names is one
 // no declaration wrote, and the fix — change the PARAMETERS, or the name — is not inferable from it.
 //
+// ⭐ **AND THE THIRD IS A `static` MEMBER BESIDE AN INSTANCE MEMBER OF ONE NAME** (`same-name-methods.md`),
+// whose static side is filed as `<name>#__static`. Same reason again; see its arm below, which also records
+// what reading a contest flag OUTSIDE the minted-name band measured.
+//
 // ⛔ **THE PLAIN SENTENCE'S WORDING IS THE CANONICAL ONE AND IS NOT OURS TO CHOOSE** — `Duplicate function
 // 'X'` is what `/specs/duplicate-functions.md` states the language emits for a plain redefinition, and the
 // bootstrap emits it verbatim.
@@ -1237,9 +1241,33 @@ function duplicateFunctionMessage(project Project, name ByteArray) returns Strin
 		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "is declared by an `extension` in more than one FILE")
 	end 'anExtensionMethodContestedAcrossFiles'
 
-	if not base.equals(name) 'aMintedNameNoContestExplains'
+	// ⛔⛔ **THE MINTED-NAME SENTENCES ARE GATED ON THE PROPERTY — `name` IS NOT WHAT A DECLARATION WROTE — AND
+	// NOT ON WHICH CONTEST EXISTS. A CONTEST FLAG READ OUTSIDE THIS BAND IS A WRONG SENTENCE, MEASURED.** The
+	// `static`/instance arm below was first written as a bare `isStaticInstanceContest(base)` test above this
+	// gate, and a `type Box` declaring `static getValue()` plus TWO instance `getValue()` reported *"more than
+	// one `static` declaration of it claims that spelling. Give the statics distinct parameter types"* — about
+	// a program whose statics are fine, quoting `Box.getValue`, which is exactly what the author wrote. The two
+	// instance members take the redeclaration path (`Parser.overloadMemberHoldingSignature`) and collide on the
+	// SOURCE name, where the canonical wording is the whole point of the header's sort rule.
+	//
+	// ⇒ Every sentence that names a synthesized spelling lives inside this band, so it cannot fire on a name
+	// the author can grep for, and the plain sentence is earned by the property rather than by exhausting a
+	// list of kinds.
+	if not base.equals(name) 'aMintedNameNoDeclarationWrote'
+		// ⭐⭐ **THE THIRD SYNTHESIZED-NAME KIND: A `static` MEMBER BESIDE AN INSTANCE MEMBER OF THE SAME NAME**
+		// (`same-name-methods.md`), and it earns its own sentence for the two kinds above's reason plus one of
+		// its own. The `#__static` spelling is minted by `staticMemberRegistrationName` and no declaration wrote
+		// it — but unlike those two, the reason the name has several declarations is NOT the parameter spelling:
+		// two `static getValue()` declarations collide on it because they are two STATICS. The advice is still
+		// about parameters, because that IS the remaining way two statics of one type may differ — and it is
+		// correct for the further-suffixed spelling too (`Box.getValue#__static#Integer` collides when two
+		// statics spell `Integer`), which is why the arm keys on the base rather than on an exact suffix.
+		if signatures.isStaticInstanceContest(base) 'aStaticBesideAnInstanceOfOneName'
+			return mangledDuplicateFunctionMessage(name, why: "'{String.from(base)}' names both a `static` member and an instance member, so the static is registered under a spelling of its own — and more than one `static` declaration of it claims that spelling. Give the statics distinct parameter types, or distinct names")
+		end 'aStaticBesideAnInstanceOfOneName'
+
 		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "has more than one declaration in this program")
-	end 'aMintedNameNoContestExplains'
+	end 'aMintedNameNoDeclarationWrote'
 
 	return "Duplicate function '{String.from(name)}'"
 end 'duplicateFunctionMessage'

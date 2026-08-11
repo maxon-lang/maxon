@@ -4885,6 +4885,10 @@ typealias ExtensionMethodNameSet = Set with ByteArray
 // see `ProgramSignatures.extensionInnerAliasMembers`.
 typealias ExtensionInnerAliasNameSet = Set with ByteArray
 
+// The `<Type>.<method>` SOURCE names a `static` member and an INSTANCE member both wear — see
+// `ProgramSignatures.staticInstanceContests`.
+typealias StaticInstanceContestNameSet = Set with ByteArray
+
 // `<Conformer>.<method>` ⇒ the file whose `extension` published it FIRST (X-contains). It exists to answer
 // exactly one question — *"has a SECOND FILE published this name?"* — which is why it holds a path and not a
 // count: two `extension` declarations in ONE file are the per-file overload registry's business
@@ -6023,7 +6027,7 @@ let sharedEmptyContestedSpellings = ByteArrayArray.create()
 
 // ⭐⭐ **WHICH OF THE SWEEP'S CONDITIONAL PER-FUNCTION FACTS *ONE* DECLARATION ACTUALLY STATES (A5l).**
 //
-// Five of the six facts `copyFreeFunctionSweepEntries` moves are recorded only by a declaration that HAS
+// Five of the seven facts `copyDeclarationSweepEntries` moves are recorded only by a declaration that HAS
 // them — that is the "absence is the answer" the whole registry rests on — and every one of them is written
 // under the BARE name, which ACCUMULATES across files. So at the end-of-fold SELF refile the bare key may
 // hold a positive fact no declaration in this file ever stated, and copying it files another file's answer
@@ -6036,8 +6040,9 @@ let sharedEmptyContestedSpellings = ByteArrayArray.create()
 // `Parser.captureParamDefault`'s positioned refusal; a mid-fold clear blinds it and retires that refusal
 // silently. The bare key must keep accumulating, so the COPY is what learns to be selective.
 //
-// The RETURN TYPE is not here because it is not conditional: `record` writes one for every declaration, so
-// the bare key holds this file's by the time the SELF refile runs.
+// The other TWO — the RETURN TYPE and the DECLARATION SITE — have no field here because they are not
+// conditional: `record` writes both for every declaration, so the bare key holds this file's by the time the
+// SELF refile runs. Five conditional facts, five fields.
 type StatedSweepFacts
 	export let returnSurface as bool
 	export let returnDeclFile as bool
@@ -6057,6 +6062,33 @@ type StatedSweepFacts
 	export static function everyFact() returns StatedSweepFacts
 		return StatedSweepFacts.create(true, returnDeclFile: true, paramConsumes: true, paramDefaults: true, throwsClause: true)
 	end 'everyFact'
+
+	// ⭐⭐ **ONLY THE FACTS `record` ITSELF WRITES — the answer for a refile that cannot establish `everyFact`'s
+	// premise** (`ProgramSignatures.noteStaticInstanceDeclaration`). The split is by WHICH PASS WROTE THE FACT,
+	// and it is exactly the line `foldFile`'s own order draws:
+	//
+	//   • **`record` writes four of the seven** (the return type, the declaration site, the return SURFACE and
+	//     the return type's declaring file), one declaration at a time, under the key that declaration chose.
+	//     At the instant a contest is detected exactly ONE declaration of the name has reached `record` — the
+	//     incumbent — so every one of the four at the source key is the incumbent's, which is `everyFact`'s
+	//     argument holding for these four and no others. They all ride.
+	//   • **The three BY-NAME SCANS fold AHEAD of the declaration loop** — `funcParamConsumes`,
+	//     `funcParamDefaults`, `funcThrows` (`foldFile`, above the `record` loop) — so BOTH members' entries are
+	//     already sitting on the shared source name before either `record` runs. A positive one there is
+	//     UNATTRIBUTABLE, not merely possibly another file's, and copying it would file one member's answer
+	//     under the other's key. They stay put: a pair declaring any of the three is REFUSED by
+	//     `Parser.requireOverloadableName`, on exactly the terms an ordinary overload set is, so a program that
+	//     compiles never reads the shared entry.
+	//
+	// ⚠ **`returnSurface` RODE ON THE WRONG SIDE OF THAT LINE, AND THE COST WAS TWO DIFFERENT INDEXES FOR ONE
+	// PROGRAM.** It was listed with the by-name scans, which it is not — `record` is its only writer besides
+	// this copy — so a pair naming `__ManagedMemory` was filed under the static key when the static declared
+	// SECOND and dropped when it declared FIRST, i.e. the index depended on declaration order. Only
+	// `requireOverloadableName`'s buffer refusal made that unobservable, which is an argument about a refusal
+	// and not a reason for the asymmetry.
+	export static function perDeclarationFactsOnly() returns StatedSweepFacts
+		return StatedSweepFacts.create(true, returnDeclFile: true, paramConsumes: false, paramDefaults: false, throwsClause: false)
+	end 'perDeclarationFactsOnly'
 end 'StatedSweepFacts'
 
 // ⭐ **WHAT *THIS FILE'S* DECLARATION OF `bareName` STATES, read off the very arrays the fold recorded from.**
@@ -6670,6 +6702,31 @@ export type ProgramSignatures
 	// both. Marking it contested would re-mint two symbols to fix nothing.
 	var extensionMethodDeclFiles as ExtensionMethodDeclFileMap
 	var contestedExtensionMethods as ExtensionMethodNameSet
+	// ⭐⭐ **THE `<Type>.<method>` NAMES A `static` MEMBER AND AN INSTANCE MEMBER BOTH WEAR** — the fact that
+	// makes `Type.m()` and `receiver.m()` two functions instead of a duplicate definition. `record` fills it
+	// the instant the second of the two folds, whichever order they arrive in, and moves the STATIC's own
+	// declaration facts onto `memberRegistrationKey`'s answer at the same moment: the sweep files a
+	// declaration's return type by NAME, and a pair sharing one key answers the instance's question with the
+	// static's return type or the reverse (`same-name-methods.returns-self` — `Counter.reset()` returns
+	// `Counter` while `c.reset()` returns nothing, and one key can hold one of those).
+	//
+	// ⚠ **IT IS THE INSTANCE THAT KEEPS THE BARE KEY**, so every instance call door is untouched and only the
+	// one static door has to ask (`Parser.parseQualifiedCall`). Both reference compilers land on the same
+	// split for the same reason and neither puts the receiver in its overload key — v1's
+	// `tryResolveStaticInstanceCollision` re-keys the static to `~static`, the bootstrap's
+	// `ResolveStaticInstanceCollision` to the same spelling.
+	//
+	// ⚠ **THE THREE SWEEP FACTS THAT CANNOT BE SPLIT ARE REFUSED INSTEAD, NOT GUESSED** — a `throws` clause, a
+	// consume set over a MANAGED parameter and a parameter default are folded by the BY-NAME scans that run
+	// ahead of the declaration loop (`foldFile`), which have no second key to offer, so a pair declaring one of
+	// them is refused by `Parser.requireOverloadableName` on exactly the terms an ordinary overload set is. That
+	// is why this set carries no per-member copy of them. (A `__ManagedMemory` RETURN SURFACE is not one of
+	// them and was once listed here as a fourth: `record` writes it per declaration, so it splits with the rest
+	// — see `StatedSweepFacts.perDeclarationFactsOnly`. It is refused as well, for its own A2j/A2m reason.)
+	//
+	// It is EMPTY for every program in the tree — the shape did not compile before this rung — so
+	// `Set.contains` returns at its `capacity == 0` test for every declaration and every static call.
+	var staticInstanceContests as StaticInstanceContestNameSet
 	// The content hash OF THE DECLARATIONS — not of the source they were read from. This is the
 	// second half of a parse memo's key (`QueryEngine.parseMemoKey`), and hashing the folded
 	// ENTRIES rather than the FILES is the whole point of it:
@@ -6891,7 +6948,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -7364,19 +7421,24 @@ export type ProgramSignatures
 	//
 	// So `declaredReturnSurface` is exact for every name that reaches a call: a name with no entry names the
 	// buffer in no declaration anywhere, and a name with one is either unique or already refused.
+	//
+	// ⭐⭐ **THE KEY IS NOT ALWAYS `name`: A `static` MEMBER WHOSE NAME AN INSTANCE MEMBER ALSO WEARS IS FILED
+	// UNDER ITS OWN** — see `noteStaticInstanceDeclaration`, which is asked first because every write below has
+	// to land on one key.
 	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo)
+		let key = self.noteStaticInstanceDeclaration(name, takesReceiver: takesReceiver)
 		// Read BEFORE the upsert below, which is what makes `returnTypes` the arrival counter: every
 		// declaration reaches here exactly once and writes it, so a name already present is a name some
 		// other declaration already claimed. It is `recordParamDefaults`' membership test, one registry over.
-		let secondDeclaration = self.returnTypes.contains(name)
-		self.returnTypes.upsert(name, value: returnType)
+		let secondDeclaration = self.returnTypes.contains(key)
+		self.returnTypes.upsert(key, value: returnType)
 		if not surfaceIsPlain(declaredSurface) 'namesTheBufferAlias'
-			self.declaredReturnSurfaces.upsert(name, value: declaredSurface)
+			self.declaredReturnSurfaces.upsert(key, value: declaredSurface)
 		end 'namesTheBufferAlias'
 		if returnTypeNamesAType(returnType) 'aNameThisFileMustBeAbleToResolveLaterOn'
-			self.funcReturnDeclFiles.upsert(name, value: declFilePath)
+			self.funcReturnDeclFiles.upsert(key, value: declFilePath)
 		end 'aNameThisFileMustBeAbleToResolveLaterOn'
-		self.funcDeclSites.upsert(name, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver))
+		self.funcDeclSites.upsert(key, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver))
 		// ⭐ **THE OPAQUE-PARAMETER POSITIONS ARE WRITTEN HERE, WITH THE DECLARATION THEY DESCRIBE (ARRR)** —
 		// the same one-act discipline `declaredSurface`, `visibility` and `takesReceiver` ride on, and for
 		// their reason: they are facts about ONE declaration, and a second writer is a second chance for them
@@ -7386,15 +7448,107 @@ export type ProgramSignatures
 		// (`refileContestedFreeFunction`), AND THAT IS EXACT RATHER THAN AN OMISSION: a bare type-parameter
 		// parameter can only be declared inside a generic type's body, and a free function is by definition
 		// outside every one — so this map never holds an entry a namespace contest could be about.
-		if secondDeclaration and not self.storedOpaqueParams(name).matches(opaqueParams) 'twoDeclarationsDisagree'
-			self.contestedOpaqueParams.insert(name)
+		if secondDeclaration and not self.storedOpaqueParams(key).matches(opaqueParams) 'twoDeclarationsDisagree'
+			self.contestedOpaqueParams.insert(key)
 		end 'twoDeclarationsDisagree'
 		if opaqueParams.declaresATypeParameterParam() 'takesABareTypeParameter'
-			self.funcOpaqueParams.upsert(name, value: opaqueParams)
+			self.funcOpaqueParams.upsert(key, value: opaqueParams)
 		end 'takesABareTypeParameter'
 
-		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams)
+		// The KEY is mixed and not the source name, which is what makes a static/instance pair move the hash
+		// without a discriminator of its own: the static's declaration is folded under a different key the
+		// moment the pair exists, so a program that starts or stops being one cannot leave a reader's parse
+		// memo valid. (`DeclShapeContestedExtensionMethod` needs one precisely because THAT contest is minted by
+		// the parser, leaving nothing here to move.)
+		self.hash = self.mixDeclaration(self.hash, name: key, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams)
 	end 'record'
+
+	// ⭐⭐ **NOTE ONE DECLARATION AGAINST THE `static`/INSTANCE CONTEST, AND ANSWER THE KEY IT BELONGS UNDER** —
+	// the bare source name for an instance member and for every uncontested declaration in the program, the
+	// STATIC twin for a `static` member an instance member of the same type shares a name with. See
+	// `staticInstanceContests` for what the contest means; the KEY itself is `memberRegistrationKey`'s, asked
+	// here rather than composed, so this routine and the parser's two doors cannot spell one symbol three ways.
+	//
+	// **THE CONTEST IS DETECTED AT THE SECOND OF THE TWO DECLARATIONS TO FOLD**, because that is the first
+	// moment anything in the program can see both — so the two ORDERS need two different things done, and
+	// exactly one of them is a refile:
+	//
+	//   • **The STATIC is the NEWCOMER** ⇒ nothing to move. It is handed its own key and `record` writes all
+	//     four of the facts it owns under that key on the next line — the same four, under the same conditions,
+	//     that `perDeclarationFactsOnly` would have copied.
+	//   • **The STATIC is the INCUMBENT** ⇒ its facts are sitting on the bare key, written by a fold that could
+	//     not yet know, and this instance's own writes are about to overwrite them. They move first. What may
+	//     and may not travel is `StatedSweepFacts.perDeclarationFactsOnly`'s subject.
+	//
+	// ⚠ **THE ASYMMETRY IS ALSO WHAT KEEPS `record`'s `secondDeclaration` HONEST.** That flag reads "does this
+	// key already hold a declaration?" off `returnTypes`, and a copy into the static key would have made it
+	// answer yes about a key no declaration had reached — mis-marking the static as an opaque-parameter contest
+	// with itself.
+	//
+	// ⚠ **THE INCUMBENT IS READ OFF `funcDeclSites`, WHICH IS THE ONE HOME OF "does this declaration take a
+	// receiver?"** (`FuncSignature.takesReceiver` states the same fact for a PARSED signature). A name with no
+	// site is the first declaration of it and has nothing to contest.
+	//
+	// ⚠ **A THIRD DECLARATION OF THE NAME NEEDS NO SPECIAL CASE**: two members of the SAME kind are a duplicate
+	// definition, which `commitFuncSignatures` reports with both positions — the pair's own two keys are already
+	// distinct, so the third simply collides with whichever of them it belongs to.
+	//
+	// ⚠ **NO HASH MIXING HERE**, for `refileContestedFreeFunction`'s reason: every fact the copy moves was
+	// already mixed under the bare name by the write that made it, and the key change itself rides `record`'s
+	// own `mixDeclaration` (see there).
+	function noteStaticInstanceDeclaration(name ByteArray, takesReceiver bool) returns ByteArray
+		let incumbent = try self.funcDeclSites.get(name) otherwise return name
+		if incumbent.takesReceiver == takesReceiver 'oneKindOfMemberOnly'
+			return name
+		end 'oneKindOfMemberOnly'
+
+		// Inserted BEFORE either key is derived, because `memberRegistrationKey` reads exactly this set — so
+		// this routine composes the contest and the mint through the ONE reader that does, rather than spelling
+		// the composition a second time here.
+		self.staticInstanceContests.insert(name)
+		if not takesReceiver 'theStaticIsTheNewcomerAndOwnsItsOwnKeyOutright'
+			return self.memberRegistrationKey(name, takesReceiver: false)
+		end 'theStaticIsTheNewcomerAndOwnsItsOwnKeyOutright'
+
+		self.copyDeclarationSweepEntries(name, to: self.memberRegistrationKey(name, takesReceiver: false), stating: StatedSweepFacts.perDeclarationFactsOnly())
+		return name
+	end 'noteStaticInstanceDeclaration'
+
+	// ⭐⭐⭐ **THE KEY A MEMBER OF `sourceName` WITH THIS RECEIVER-PRESENCE IS FILED UNDER — AND THEREFORE THE
+	// NAME A CALL TO IT MUST ASK FOR. THE ONE COMPOSITION OF THE CONTEST AND THE MINT.**
+	//
+	// Three sites need it and every one of them must produce the SAME BYTES: this index's own `record` (the
+	// sweep key), `Parser.overloadRegistrationNameFor` (the base a declaration claims, and so the emitted
+	// symbol), and `Parser.parseQualifiedCall` (the callee a static call carries). Nothing would make three
+	// spellings of `contest? ⇒ static key : source key` agree, and divergence is not a compile error — it is a
+	// callee whose sweep facts read back from a key nothing wrote: a wrong return type at a parsed call, or a
+	// backend `call to unknown function` with no position. That is the failure
+	// `Project.paramDefaultHelperName`'s header records from history ("A name derived in one place cannot
+	// disagree with itself"), and it is why the composition lives here rather than at each of the three.
+	//
+	// ⚠ **AN INSTANCE MEMBER ALWAYS KEEPS THE SOURCE NAME**, contest or not — which is what leaves every
+	// instance call door in the parser untouched, and what makes the static side the only one that has to ask.
+	// A `Type.m(…)` call therefore asks with `takesReceiver: false`, and that argument is the reason rather
+	// than a convention: there is no receiver at a type-qualified call.
+	//
+	// It costs one `Set.contains` on a set that is EMPTY for every program in this tree (the shape did not
+	// compile before this rung), and that returns at its `capacity == 0` test before hashing — so the two asks
+	// a declaration makes (this and the `pairContest` refusal gate) are free rather than merely cheap.
+	export function memberRegistrationKey(sourceName ByteArray, takesReceiver bool) returns ByteArray
+		if takesReceiver or not self.isStaticInstanceContest(sourceName) 'theSourceNamesOwnKey'
+			return sourceName
+		end 'theSourceNamesOwnKey'
+
+		return staticMemberRegistrationName(sourceName)
+	end 'memberRegistrationKey'
+
+	// ⭐ **DO A `static` MEMBER AND AN INSTANCE MEMBER OF ONE TYPE SHARE THIS SOURCE NAME?** The bare flag, for
+	// the readers that need the CONTEST itself rather than the key it implies: `Parser.overloadRegistrationNameFor`
+	// asks it to put a pair member through the overload refusals, and `ParseStaging.duplicateFunctionMessage` to
+	// explain a collision on the minted spelling. A reader that wants a NAME asks `memberRegistrationKey`.
+	export function isStaticInstanceContest(sourceName ByteArray) returns bool
+		return self.staticInstanceContests.contains(sourceName)
+	end 'isStaticInstanceContest'
 
 	// The opaque record already stored for `name`, or the shared "declares none" — split out for
 	// `storedReturnSurface`'s reason: `Map.get` is a `try` and a name with no entry is the common case
@@ -8697,7 +8851,7 @@ export type ProgramSignatures
 		// the end of the ROOT file's own fold (the root is a later contestant, and its record loops have just
 		// run). There is no third caller and no fourth moment.
 		if registrationName.equals(bareName) 'aRootDeclarationOwnsTheBareKey'
-			self.copyFreeFunctionSweepEntries(bareName, to: self.rootDeclarationShadowName(bareName), stating: stating)
+			self.copyDeclarationSweepEntries(bareName, to: self.rootDeclarationShadowName(bareName), stating: stating)
 			return
 		end 'aRootDeclarationOwnsTheBareKey'
 
@@ -8728,7 +8882,7 @@ export type ProgramSignatures
 		// declaration below. Declining to TAKE another declaration's key says nothing about whose entries the
 		// key this fold overwrote must end up holding.
 		if not self.returnTypes.contains(registrationName) 'thisKeyIsThisDeclarationsToTake'
-			self.copyFreeFunctionSweepEntries(bareName, to: registrationName, stating: stating)
+			self.copyDeclarationSweepEntries(bareName, to: registrationName, stating: stating)
 			// ⚠ Gated on the SAME fact as the copy above: a declaration that states no default has no helper
 			// to rename, and the object sitting at the bare key belongs to another file — renaming through it
 			// would move THAT declaration's helper names out from under it.
@@ -8764,28 +8918,41 @@ export type ProgramSignatures
 	// A miss on the mirror is the common case and means what it says: no ROOT declaration contests this name,
 	// so every contestant has a qualified key, a bare call to the name is E3095, and which stale entry
 	// survives is genuinely nobody's business — the original premise, now scoped to where it is true.
-	// `returnTypes` is the presence flag because it is the one of the five that is NEVER absent: `record`
-	// writes a return type for every declaration, while the other four record only a positive fact.
+	// `returnTypes` is the presence flag because it is never absent: `record` writes a return type for every
+	// declaration. Five of the seven `copyDeclarationSweepEntries` moves record only a positive fact, and the
+	// remaining unconditional one — the declaration SITE — would serve equally; the return type is asked because
+	// that is the fact the reader is about to move. (This said "the one of the five", counting the five
+	// conditional facts as the whole set.)
 	function restoreRootDeclarationToBareKey(bareName ByteArray)
 		let shadow = self.rootDeclarationShadowName(bareName)
 		if not self.returnTypes.contains(shadow) 'noRootDeclarationContestsThisName'
 			return
 		end 'noRootDeclarationContestsThisName'
 
-		self.clearFreeFunctionSweepEntries(bareName)
-		self.copyFreeFunctionSweepEntries(shadow, to: bareName, stating: StatedSweepFacts.everyFact())
+		self.clearDeclarationSweepEntries(bareName)
+		self.copyDeclarationSweepEntries(shadow, to: bareName, stating: StatedSweepFacts.everyFact())
 	end 'restoreRootDeclarationToBareKey'
 
-	// ⭐ **THE SIX PER-DECLARATION FACTS THE SWEEP FILES UNDER A FUNCTION NAME, COPIED FROM ONE KEY TO
+	// ⭐ **THE SEVEN PER-DECLARATION FACTS THE SWEEP FILES UNDER A FUNCTION NAME, COPIED FROM ONE KEY TO
 	// ANOTHER.** They travel together because they are exactly what a CALL SITE reads about a callee whose
-	// declaration it cannot see — `returnTypeOf`, `declaredReturnSurface`, the recorded return type's
-	// declaring file, `consumeOf`, `defaultsOf` and `throwsOf` — so a key holding five of them answers five
-	// questions about one declaration and the sixth about another.
+	// declaration it cannot see — `returnTypeOf`, the DECLARATION SITE (visibility, declaring file and
+	// receiver-presence), `declaredReturnSurface`, the recorded return type's declaring file, `consumeOf`,
+	// `defaultsOf` and `throwsOf` — so a key holding six of them answers six questions about one declaration
+	// and the seventh about another. ⚠ **THE COUNT IS SEVEN AND THIS HEADER SAID SIX**, having left out the
+	// declaration site while the sibling `clearDeclarationSweepEntries` counted it — see there for why the two
+	// counts are load-bearing rather than decorative.
 	//
-	// ⚠ **AN ABSENT FACT IS NOT COPIED, AND ABSENCE IS AN ANSWER IN FIVE OF THE SIX** ("the plain surface",
+	// ⚠ **TWO CONTESTS RE-KEY A DECLARATION AND BOTH COME THROUGH HERE**: a free function declared in more
+	// than one DIRECTORY (N1c, `refileContestedFreeFunction`), and a `static` member whose name an INSTANCE
+	// member of its type also wears (`noteStaticInstanceDeclaration`). They differ only in which key a
+	// declaration moves to and in what its caller can establish about the source key (`stating`); the facts
+	// that must travel with a declaration are the same seven, and a second copy of that list is a second answer
+	// to "what does a function name carry".
+	//
+	// ⚠ **AN ABSENT FACT IS NOT COPIED, AND ABSENCE IS AN ANSWER IN FIVE OF THE SEVEN** ("the plain surface",
 	// "no name left to resolve", "borrows every parameter", "every parameter required", "does not throw"). A
 	// caller that needs the DESTINATION to inherit the source's absences too must therefore
-	// `clearFreeFunctionSweepEntries` first — which is what `restoreRootDeclarationToBareKey` does and what
+	// `clearDeclarationSweepEntries` first — which is what `restoreRootDeclarationToBareKey` does and what
 	// the qualified-key copy deliberately does not, its destination being a key nothing has written.
 	//
 	// ⛔⛔ **A PRESENT FACT IS NOT NECESSARILY *THIS* DECLARATION'S, AND THAT IS WHAT `stating` DECIDES
@@ -8798,7 +8965,7 @@ export type ProgramSignatures
 	// The DEFAULT-HELPER rename is NOT part of this: it renames the helper a declaration's own real parse
 	// synthesizes, which is a property of the destination NAME rather than of the facts, and the mirror
 	// direction must leave those names alone.
-	function copyFreeFunctionSweepEntries(from ByteArray, to ByteArray, stating StatedSweepFacts)
+	function copyDeclarationSweepEntries(from ByteArray, to ByteArray, stating StatedSweepFacts)
 		// The return type is unconditional at every recorder (`record` writes one per declaration), so the
 		// source key holds this declaration's own by construction and `stating` has nothing to say about it.
 		if let returnType = try self.returnTypes.get(from) 'hasReturnType'
@@ -8834,14 +9001,14 @@ export type ProgramSignatures
 				self.funcThrows.upsert(to, value: clause)
 			end 'throws'
 		end 'declaresAThrowsClause'
-	end 'copyFreeFunctionSweepEntries'
+	end 'copyDeclarationSweepEntries'
 
 	// Drop all SEVEN, so the copy that follows lands the source's ABSENCES as well as its entries. The
 	// booleans are discarded because a key with no entry is the ordinary case here, not an error: five of
 	// the seven are written only by a declaration that has the fact to state — the same count
-	// `copyFreeFunctionSweepEntries` states above, and the two must move together or one of them is lying
+	// `copyDeclarationSweepEntries` states above, and the two must move together or one of them is lying
 	// about how many facts a function name carries.
-	function clearFreeFunctionSweepEntries(name ByteArray)
+	function clearDeclarationSweepEntries(name ByteArray)
 		_ = self.returnTypes.remove(name)
 		_ = self.funcDeclSites.remove(name)
 		_ = self.declaredReturnSurfaces.remove(name)
@@ -8849,7 +9016,7 @@ export type ProgramSignatures
 		_ = self.funcParamConsumes.remove(name)
 		_ = self.funcParamDefaults.remove(name)
 		_ = self.funcThrows.remove(name)
-	end 'clearFreeFunctionSweepEntries'
+	end 'clearDeclarationSweepEntries'
 
 	// ⭐⭐ **A CONTESTED FUNCTION'S SYNTHESIZED DEFAULT HELPERS ARE RENAMED WITH IT (N1c review), AND THAT IS
 	// CORRECTNESS RATHER THAN TIDINESS.** `Project.paramDefaultHelperName`'s own header rests the mechanism's
