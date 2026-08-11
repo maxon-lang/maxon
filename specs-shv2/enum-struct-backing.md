@@ -409,6 +409,89 @@ end 'main'
 ```
 
 
+## shv2 additions — reads the canonical file does not write
+
+The two cases below are **shv2 additions**, not part of the canonical `/specs` file. Both pin spellings that
+were REFUSED until `/specs/union-struct-backing.md` forced the type-qualified read to be built, and both are
+served by the same one door as the spellings above — so an unpinned half here is exactly how such a fix
+becomes regressible in one edit.
+
+### A backing field read off a case named through its TYPE
+
+`Preset.large.width` reads the metadata without ever binding a value, which is `p.width` with the receiver
+written as `<Enum>.<case>` instead of as a local. It used to report `E2010 Expected '(' but got 'newline'`,
+because the type-qualified door admitted only `name`/`ordinal`/`rawValue` while the binding door already
+admitted a backing FIELD. The bootstrap compiles it and answers 9 (MEASURED).
+
+<!-- test: struct-backing-type-qualified-field -->
+```maxon
+typealias W = int(0 to 50)
+
+type Spec
+	export let width as W
+end 'Spec'
+
+enum Preset
+	small = Spec{width: 3}
+	large = Spec{width: 9}
+end 'Preset'
+
+function main() returns ExitCode
+	return Preset.large.width
+end 'main'
+```
+```exitcode
+9
+```
+
+### A field of a backing field's own backing
+
+`t.size.width` continues the chain through a field that is ITSELF a struct-backed enum: `Theme.bold`'s
+`size` is `Size.large`, whose backing declares `width`. The hop past a selected enum-typed field admitted
+only the three accessors before this, so `.ordinal` worked and `.width` did not — one rule for two doors
+closes that.
+
+⛔ **WRITING THIS CASE TOOK THE C# BOOTSTRAP DOWN, and that defect is fixed in the same commit.** Every
+spelling below crashed it with `E9001 Value cannot be null. (Parameter 'key')` in `ParseFieldAccessChain`
+— including with a payload-free `Size`, so it was never about struct backing twice over. The SHORTHAND
+`t.size` computed its result type name with a hand-rolled `is IrStructType ? .Name : null`, a one-arm copy
+of `GetFieldStructName`, so an ENUM-typed backing field was minted as a `MaxonEnum` with a null `TypeName`.
+The long spelling `t.rawValue.size.ordinal` routes elsewhere and is pinned by the canonical file, which is
+why the suite never saw it. Both compilers now print `9 1 3`.
+
+<!-- test: struct-backing-enum-field-chain -->
+```maxon
+typealias W = int(0 to 50)
+
+type Spec
+	export let width as W
+end 'Spec'
+
+enum Size
+	small = Spec{width: 3}
+	large = Spec{width: 9}
+end 'Size'
+
+type Style
+	export let size as Size
+end 'Style'
+
+enum Theme
+	plain = Style{size: Size.small}
+	bold = Style{size: Size.large}
+end 'Theme'
+
+function main() returns ExitCode
+	let t = Theme.bold
+	print("{t.size.width} {t.rawValue.size.ordinal} {Theme.plain.size.width}")
+	return 0
+end 'main'
+```
+```stdout
+9 1 3
+```
+
+
 ## shv2 refusals
 
 The cases below are **shv2 additions**, not part of the canonical `/specs` file. Each pins a refusal this

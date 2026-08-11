@@ -16966,33 +16966,39 @@ export type Parser
 			throw ParseError.enumDuplicateCase(String.from(caseName), line: nameTok.line, column: nameTok.column)
 		end 'duplicateCase'
 
-		// A PAYLOAD case (`circle(radius Integer)`) — P1.3 slice 1. It takes an auto-increment tag
-		// like a bare case (a payload case carries no explicit raw value in the corpus) and captures
-		// its declared field types. The managed/float REJECTION is NOT here — it would `throw` in the
-		// tolerant sweep (`recordScannedEnum`'s `otherwise break`), truncating the layout and
-		// misassigning every later case's tag. The construct and extract sites resolve each field
-		// type and reject the ones slice 1 cannot lower, exactly as a struct's `structRef` field is
-		// refused at its USE site (`requireStructBase`) rather than at declaration.
-		if self.at(TokenKind.leftParen) 'payload'
-			let payloads = try self.readPayloadFieldsInto()
-			try self.appendAutoTaggedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok, payloads: payloads)
-			return
-		end 'payload'
-
 		// ⭐ **AN IMPLICITLY BACKED CASE — the literal stood where the NAME goes, so it is both.** `"North"`
 		// declares the case `North` with the raw value `"North"`, and `'N'` declares `N` with the raw value
-		// `'N'`. Asked before the `=` test because such a case never writes one: its raw value is already in
-		// hand, and an `=` after it would be a second raw value for one case.
+		// `'N'`. Asked before everything below because such a case has no payload list to read (a literal is
+		// not a callable head) and never writes an `=`: its raw value is already in hand, and an `=` after it
+		// would be a second raw value for one case.
 		if tokenKindIsEnumLiteralBacking(nameTok.kind) 'implicitBacking'
-			try self.appendLiteralBackedEnumCase(layout, caseName: caseName, literalTok: nameTok, counter: counter, caseTok: nameTok)
+			try self.appendLiteralBackedEnumCase(layout, caseName: caseName, literalTok: nameTok, counter: counter, caseTok: nameTok, payloads: PayloadFieldArray.create())
 			return
 		end 'implicitBacking'
 
-		if not self.at(TokenKind.equals) 'bareName'
-			// A bare case takes the auto-increment tag and requires integer backing.
-			try self.appendAutoTaggedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok, payloads: PayloadFieldArray.create())
+		// ⭐⭐ **A CASE'S PAYLOAD LIST AND ITS RAW VALUE ARE INDEPENDENT, AND THAT IS WHY THIS IS READ HERE
+		// RATHER THAN IN AN ARM THAT RETURNS.** `add(dest ID, src ID) = OpMeta.create(1)` writes BOTH — a
+		// runtime payload and compile-time metadata (`/specs/union-struct-backing.md`) — and for one edit a
+		// payload list ENDED the case, so every one of those died at the `=` as *"Expected 'an enum case name'"*.
+		// Both references read it in exactly this position and say so: v1's `parseCaseBacking` documents its
+		// entry as *"right after the case name (enum) or after the optional payload list (union), i.e. at the
+		// optional `=`"*, and the bootstrap COMPILES the full grammar there (MEASURED: `add(dest ID, src ID) =
+		// 5` beside `nop = 7` prints `op.rawValue` 5 and `op.ordinal` 0).
+		//
+		// ⇒ so every append site below takes the payload list, and no arm may re-mint an empty one: which
+		// raw value a case wrote cannot change which payload slots it declared.
+		//
+		// The managed/float REJECTION is NOT in the reader — it would `throw` in the tolerant sweep
+		// (`recordScannedEnum`'s `otherwise break`), truncating the layout and misassigning every later case's
+		// tag. The construct and extract sites resolve each field type and reject the ones P1.3 slice 1 cannot
+		// lower, exactly as a struct's `structRef` field is refused at its USE site (`requireStructBase`).
+		let payloads = try self.readOptionalPayloadFields()
+
+		if not self.at(TokenKind.equals) 'noRawValue'
+			// A bare or payload-only case takes the auto-increment tag and requires integer backing.
+			try self.appendAutoTaggedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok, payloads: payloads)
 			return
-		end 'bareName'
+		end 'noRawValue'
 
 		try self.consume(TokenKind.equals)
 
@@ -17012,7 +17018,7 @@ export type Parser
 			let bits = negatedFloatBits(magnitude) if floatNegated else magnitude
 			let rawDisplay = "-{String.from(floatTok.value)}" if floatNegated else String.from(floatTok.value)
 			try self.requireEnumBacking(layout, kind: EnumBacking.float, structName: EmptySourceText, caseTok: nameTok)
-			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawValue: rawDisplay, caseTok: nameTok, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawValue: rawDisplay, caseTok: nameTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 			return
 		end 'floatValue'
 
@@ -17021,7 +17027,7 @@ export type Parser
 		if tokenKindIsEnumLiteralBacking(self.current().kind) 'literalRawValue'
 			let literalTok = self.current()
 			self.advance()
-			try self.appendLiteralBackedEnumCase(layout, caseName: caseName, literalTok: literalTok, counter: counter, caseTok: nameTok)
+			try self.appendLiteralBackedEnumCase(layout, caseName: caseName, literalTok: literalTok, counter: counter, caseTok: nameTok, payloads: payloads)
 			return
 		end 'literalRawValue'
 
@@ -17030,14 +17036,14 @@ export type Parser
 		// function arm because both open with a bare identifier; the two lookaheads are complementary, so the
 		// order is a reading convenience rather than a precedence.
 		if self.atEnumStructRawValue() 'structValue'
-			try self.appendStructBackedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok)
+			try self.appendStructBackedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok, payloads: payloads)
 			return
 		end 'structValue'
 
 		// A FUNCTION raw value (`doubleOp = doubleFn`) — the case is backed by a reference to a declared
 		// function, and `Op.doubleOp.rawValue` hands that function back as a callable value.
 		if self.atEnumFunctionRawValue() 'functionValue'
-			try self.appendFunctionBackedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok)
+			try self.appendFunctionBackedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok, payloads: payloads)
 			return
 		end 'functionValue'
 
@@ -17046,8 +17052,20 @@ export type Parser
 		let intValue = try self.readEnumIntRawValue()
 		try self.requireEnumBacking(layout, kind: EnumBacking.integer, structName: EmptySourceText, caseTok: nameTok)
 		counter.nextTag = intValue + 1
-		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawValue: "{intValue}", caseTok: nameTok, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawValue: "{intValue}", caseTok: nameTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 	end 'readEnumCaseInto'
+
+	// The payload list a case opens with (`circle(radius Real)`), or an empty one where it writes none.
+	// Written as its own reader because "does this case declare payload slots" is now a question ASKED
+	// rather than a route TAKEN — see `readEnumCaseInto`, where the answer no longer decides whether a raw
+	// value may follow.
+	function readOptionalPayloadFields() returns PayloadFieldArray throws ParseError
+		if not self.at(TokenKind.leftParen) 'noPayloadList'
+			return PayloadFieldArray.create()
+		end 'noPayloadList'
+
+		return try self.readPayloadFieldsInto()
+	end 'readOptionalPayloadFields'
 
 	// The auto-increment half of a case that writes no raw value of its own — a bare case (`green`) and a
 	// payload case (`circle(r Real)`), which differ only in the payload list they carry. ONE body, because
@@ -17086,18 +17104,18 @@ export type Parser
 	// continue the count — bare, payload, int — fixes `integer` and so raises E3032 at
 	// `requireEnumBacking` first. A reset here would therefore be a store nothing can read, and the bootstrap
 	// does not write one either (its char arms are a plain `ordinal++`, `2-Parser.cs:4324`, `:4418`).
-	function appendLiteralBackedEnumCase(layout EnumLayout, caseName ByteArray, literalTok Token, counter EnumTagCounter, caseTok Token) throws ParseError
+	function appendLiteralBackedEnumCase(layout EnumLayout, caseName ByteArray, literalTok Token, counter EnumTagCounter, caseTok Token, payloads PayloadFieldArray) throws ParseError
 		if literalTok.kind == TokenKind.charLiteral 'characterBacking'
 			let codepoint = try self.enumCharacterRawValue(literalTok)
 			try self.requireEnumBacking(layout, kind: EnumBacking.character, structName: EmptySourceText, caseTok: caseTok)
-			try self.appendEnumCase(layout, caseName: caseName, tag: codepoint, rawValue: String.from(try self.charLiteralBytes(literalTok)), caseTok: caseTok, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+			try self.appendEnumCase(layout, caseName: caseName, tag: codepoint, rawValue: String.from(try self.charLiteralBytes(literalTok)), caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 			return
 		end 'characterBacking'
 
 		let bytes = try self.decodedStringLiteralBytes(literalTok)
 		try self.requireEnumBacking(layout, kind: EnumBacking.string, structName: EmptySourceText, caseTok: caseTok)
 		let tag = self.nextAutoEnumTag(counter)
-		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(bytes), caseTok: caseTok, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(bytes), caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 	end 'appendLiteralBackedEnumCase'
 
 	// ⭐ **IS THE CURSOR ON A FUNCTION RAW VALUE — `= doubleFn` — RATHER THAN ON A STRUCT ONE?** Both are
@@ -17134,11 +17152,11 @@ export type Parser
 	// function reference is not a number, so it cannot be one. E3031 then compares the recorded NAMES
 	// (`EnumLayout.rawValueCollidesAt` past `tagCarriesRawValue`), which is what refuses `a = f  b = f` —
 	// the reference keys its duplicate check on the same column.
-	function appendFunctionBackedEnumCase(layout EnumLayout, caseName ByteArray, counter EnumTagCounter, caseTok Token) throws ParseError
+	function appendFunctionBackedEnumCase(layout EnumLayout, caseName ByteArray, counter EnumTagCounter, caseTok Token, payloads PayloadFieldArray) throws ParseError
 		let functionTok = try self.consume(TokenKind.identifier)
 		try self.requireEnumBacking(layout, kind: EnumBacking.functionRef, structName: EmptySourceText, caseTok: caseTok)
 		let tag = self.nextAutoEnumTag(counter)
-		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(functionTok.value), caseTok: caseTok, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(functionTok.value), caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 	end 'appendFunctionBackedEnumCase'
 
 	// ⭐⭐ **THE NAME OF CASE `index`'S BACKING FUNCTION — the ONE reader of the convention that, for this
@@ -17562,7 +17580,7 @@ export type Parser
 	// that builds the whole-program index — so `structOf` (which field is position 0?) and `enumOf` (what tag
 	// is `Priority.low`?) have no answer yet. Both are asked at the USE (`emitEnumBackingFieldSelect`). See
 	// `EnumBackingField`.
-	function appendStructBackedEnumCase(layout EnumLayout, caseName ByteArray, counter EnumTagCounter, caseTok Token) throws ParseError
+	function appendStructBackedEnumCase(layout EnumLayout, caseName ByteArray, counter EnumTagCounter, caseTok Token, payloads PayloadFieldArray) throws ParseError
 		let typeTok = try self.consume(TokenKind.identifier)
 		try self.requireEnumBacking(layout, kind: EnumBacking.structRecord, structName: typeTok.value, caseTok: caseTok)
 		let fields = try self.readEnumBackingFields(typeTok)
@@ -17571,7 +17589,7 @@ export type Parser
 		// The struct's own name is what `caseRawValues` can carry of a value that is not one — the column's
 		// "how the raw value was written" for a backing whose fields ride a column of their own. Nothing reads
 		// it back: E3031 and the decl hash both route through `rawValueIdentity`, which answers `incomparable`.
-		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(typeTok.value), caseTok: caseTok, payloads: PayloadFieldArray.create(), backingFields: fields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(typeTok.value), caseTok: caseTok, payloads: payloads, backingFields: fields)
 	end 'appendStructBackedEnumCase'
 
 	// ⭐⭐ **THE TWO SPELLINGS OF A CONSTANT STRUCT, AND THEY PRODUCE THE IDENTICAL FIELD LIST.** The cursor
@@ -39724,6 +39742,33 @@ export type Parser
 		let index = try self.enumCaseIndexOrThrow(layout, nameTok: caseTok, posTok: typeTok)
 		let range = SourceRange.ofToken(typeTok)
 
+		// ⭐⭐ **`Op.doubleOp.rawValue`, `Preset.large.width`, `TestOp.mul.latency` — A MEMBER READ ON A CASE
+		// NAMED THROUGH ITS TYPE.** A type-qualified case is the ONE enum reference that reaches an accessor
+		// without ever being bound to a name, so nothing upstream can route it: `parseDottedPrimary`'s accessor
+		// arm tests a base that is a BINDING, and the postfix loop reads `. <name>` as a method call and
+		// demanded a `(` (*"Expected '(' but got 'newline'"* — MEASURED on `Mime.json.rawValue` and on
+		// `Preset.large.width`, both of which the oracle compiles). So the hop is claimed here and answered by
+		// the SAME emitter a binding's accessor uses — one dispatch, not a second one free to disagree.
+		//
+		// ⭐⭐ **IT IS ASKED *BEFORE* THE REPRESENTATION SPLIT BELOW, AND THAT IS WHAT LETS A BOXED UNION REACH
+		// IT.** The case is already resolved, so its tag is a compile-time constant and no value need exist
+		// (`emitEnumCaseTagConstant`) — which is the whole difference between reading `TestOp.mul`'s metadata
+		// and CONSTRUCTING `TestOp.mul`, an act that would demand the `dest`/`src` arguments the read has none
+		// of. `/specs/union-struct-backing.md` writes exactly that read.
+		//
+		// ⚠ **NOTHING IS ALLOCATED ON THIS PATH, WHICH IS WHY IT IS NOT THE DECLINED LIFETIME QUESTION.**
+		// `Shape.circle(1).rawValue` — a member read on a CONSTRUCTED rvalue box — keeps its existing
+		// *"Expected '('"* routing, because there the box IS built and enrolled as an owned temporary, and
+		// reading one field out of it asks who drops it and when. That question is still nobody's; this path
+		// never puts it.
+		//
+		// ⚠ **A TRAILING `(` LEAVES IT ALONE, which is how a binding's accessor is separated from a same-named
+		// METHOD too** — there by `parseDottedPrimary` asking `methodCallsAt` first, here by
+		// `atEnumInstanceAccessor` stating it, because no earlier arm claims the type-qualified call shape.
+		if self.atEnumInstanceAccessor(layout, index: self.pos) 'accessorHop'
+			return try self.consumeEnumAccessorHop(layout, tag: self.emitEnumCaseTagConstant(layout, index: index, range: range), anchorTok: typeTok)
+		end 'accessorHop'
+
 		// ⭐ A PAYLOAD-BEARING union is HEAP-BOXED, and EVERY case of it takes the boxed form — a
 		// payload-free case (`Container.empty`) is a bare tag in a box, so the box lifetime is uniform
 		// (`isBoxed` decides once, per the union, not per the case). A payload-free enum/union stays
@@ -39739,35 +39784,9 @@ export type Parser
 			throw ParseError.unsupported("a payload on case '{String.from(caseTok.value)}' of `{layout.kindWord()} {String.from(layout.name)}`, which declares no payload on any case", line: parenTok.line, column: parenTok.column)
 		end 'unexpectedPayload'
 
-		let value = self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: range)
-
-		// ⭐⭐ **`Op.doubleOp.rawValue` — THE THIRD HOP, WHICH IS AN ACCESSOR ON THE VALUE JUST BUILT.** A
-		// type-qualified case is the ONE enum value that reaches an accessor without ever being bound to a
-		// name, so nothing upstream can route it: `parseDottedPrimary`'s accessor arm tests a base that is a
-		// BINDING, and the postfix loop reads `. <name>` as a method call and demanded a `(`
-		// (*"Expected '(' but got 'newline'"* — MEASURED on `Mime.json.rawValue`, which the oracle compiles).
-		// So the hop is claimed here, where the value exists, and answered by the SAME emitter a binding's
-		// accessor uses — one dispatch over `EnumInstanceAccessor`, not a second one free to disagree.
-		//
-		// ⚠ **A TRAILING `(` LEAVES IT ALONE, which is how a binding's accessor is separated from a same-named
-		// METHOD too** — there by `parseDottedPrimary` asking `methodCallsAt` first, here by
-		// `atEnumInstanceAccessor` stating it, because no earlier arm claims the type-qualified call shape.
-		//
-		// ⛔ **IT IS THE SCALAR SPELLING ONLY, AND A BOXED UNION DOES NOT REACH THIS LINE.** `layout.isBoxed()`
-		// returns above, so `Shape.circle(1).rawValue` keeps the older *"Expected '('"* routing while
-		// `sh.rawValue` on a BINDING of one works — the accessor emitter handles both (`emitEnumTagOf` loads a
-		// boxed tag), so what is missing is only this hop. It is left missing deliberately rather than
-		// extended: the boxed construct is an OWNED heap box enrolled as a temporary, and reading one field
-		// out of an rvalue box asks who drops the box and when — a lifetime question no case in `/specs` puts,
-		// and the wrong answer to it is a leak or a double free rather than a diagnostic. Whoever puts that
-		// question builds the hop; until then this header claims exactly the two spellings it serves.
-		if not self.atEnumInstanceAccessor(self.pos) 'noAccessorHop'
-			return value
-		end 'noAccessorHop'
-
-		try self.consume(TokenKind.dot)
-		let memberTok = try self.consumeMemberNameToken()
-		return try self.emitEnumInstanceAccessor(layout, receiver: value, memberTok: memberTok, range: SourceRange.between(typeTok, last: memberTok))
+		// An unboxed case's VALUE is its tag, which is the unboxed arm of the very function the hop above
+		// takes its tag from — so the two readings are one line and cannot come apart.
+		return self.emitEnumCaseTagConstant(layout, index: index, range: range)
 	end 'parseEnumLiteral'
 
 	// ⭐⭐ **`. <member>` — THE TWO-TOKEN SHAPE ITSELF, WRITTEN ONCE FOR BOTH SPELLINGS OF AN ENUM ACCESSOR.**
@@ -39776,12 +39795,14 @@ export type Parser
 	// OFFSET ARITHMETIC is what must be written once: `index` is the dot and `index + 1` is the member, and a
 	// door that spells that itself is free to classify the wrong token.
 	//
-	// ⚠⚠ **THE TWO DOORS NO LONGER ADMIT THE SAME MEMBER SET, AND THAT IS DELIBERATE** — the BINDING door
-	// also admits a struct backing's FIELD (`p.width`, see `enumMemberIsReadable`), the type-qualified one
-	// still admits only the three. So what is shared is the SHAPE, and each door supplies its own admission
-	// rule; an earlier draft of this diff got that by inlining `kindAt(index + 1) != dot` at the binding door
-	// and classifying at `index + 2` by hand, which left this helper with one caller and a header arguing for
-	// an invariant its own file no longer maintained.
+	// ⭐⭐ **AND THE TWO DOORS NOW ADMIT THE SAME MEMBER SET AGAIN — ONE RULE, `enumMemberIsReadable`.** For
+	// one rung they did not: the BINDING door admitted a struct backing's FIELD (`p.width`) while the
+	// type-qualified one admitted only the three accessors, and the header here argued that each door should
+	// supply its own admission rule. **`/specs/union-struct-backing.md` writes `TestOp.mul.latency`, which is
+	// that missing half**, and the oracle compiles the enum spelling of it (`Preset.large.width` ⇒ 9,
+	// MEASURED) — so the asymmetry was a gap wearing a design's clothes. What is shared is now the shape AND
+	// the rule; what stays each door's own is the `(` exclusion, which genuinely differs (see
+	// `atEnumInstanceAccessor`).
 	function enumMemberTokenAt(index TokenIndex) returns Token
 		return self.tokenAt(index + 1)
 	end 'enumMemberTokenAt'
@@ -39792,18 +39813,56 @@ export type Parser
 		return self.kindAt(index) == TokenKind.dot
 	end 'enumMemberReadFollowsAt'
 
-	// The shape AND the three-accessor admission rule — the type-qualified door's whole test, and the fast
-	// half of the binding door's.
-	function enumInstanceAccessorMemberAt(index TokenIndex) returns bool
-		return self.enumMemberReadFollowsAt(index) and namesAnEnumInstanceAccessor(enumInstanceAccessorOf(self.enumMemberTokenAt(index).value))
-	end 'enumInstanceAccessorMemberAt'
+	// Is there a `. <member>` at `index` naming something readable off a value of `layout`, and is it NOT a
+	// call — the tail of `Op.doubleOp.rawValue`, of `Preset.large.width`, of `TestOp.mul.latency`? The
+	// admission rule is `enumMemberIsReadable`, shared with the binding door; the `(` exclusion is genuinely
+	// this door's own, because a BINDING's accessor gets it from `parseDottedPrimary` asking `methodCallsAt`
+	// first, while nothing upstream claims the type-qualified `Color.red.name()` shape.
+	//
+	// ⚠ **THE MEMBER SET IT NOW ADMITS, ENUMERATED — because the last two rungs each widened a predicate and
+	// each admitted one member its premise was false for.** `enumMemberIsReadable` says yes to exactly two
+	// things: one of the three accessors the language defines on every enum VALUE, and — on a `structRecord`
+	// backing whose struct some file DECLARES — a field of that struct. The second is the new half. Both are
+	// answered from the case's TAG and nothing else (`emitEnumInstanceAccessor`), and the tag of a
+	// type-qualified case is a compile-time constant in BOTH representations
+	// (`emitEnumCaseTagConstant`) — so unlike `.ordinal`'s measured defect there is no value here whose
+	// representation the answer could be wrong about, boxed or not.
+	function atEnumInstanceAccessor(layout EnumLayout, index TokenIndex) returns bool
+		if not self.enumMemberReadFollowsAt(index) 'notAMemberRead'
+			return false
+		end 'notAMemberRead'
 
-	// Is the cursor at `index` on such a hop and NOT on a call — the tail of `Op.doubleOp.rawValue`? The `(`
-	// exclusion is genuinely this door's own: a BINDING's accessor gets it from `parseDottedPrimary` asking
-	// `methodCallsAt` first, while nothing upstream claims the type-qualified `Color.red.name()` shape.
-	function atEnumInstanceAccessor(index TokenIndex) returns bool
-		return self.enumInstanceAccessorMemberAt(index) and self.kindAt(index + 2) != TokenKind.leftParen
+		if self.enumMemberTrailerAt(index) == TokenKind.leftParen 'aCall'
+			return false
+		end 'aCall'
+
+		return self.enumMemberIsReadable(layout, memberTok: self.enumMemberTokenAt(index))
 	end 'atEnumInstanceAccessor'
+
+	// The kind of the token FOLLOWING the member — `index + 2`, the third of the three this shape spans, and
+	// the one the `(` exclusion tests. It sits beside `enumMemberTokenAt` on that helper's own argument: the
+	// OFFSET ARITHMETIC is what must be written once, and a door spelling `+ 2` itself is free to classify the
+	// wrong token. `+ 1` lived here and `+ 2` did not, which is that argument one offset short.
+	function enumMemberTrailerAt(index TokenIndex) returns TokenKind
+		return self.kindAt(index + 2)
+	end 'enumMemberTrailerAt'
+
+	// ⭐⭐ **CONSUME THE `. <member>` HOP AND ANSWER — THE MIRROR OF `enumMemberTokenAt`'S OFFSET ARITHMETIC,
+	// AND WRITTEN ONCE FOR THE IDENTICAL REASON.** Both callers past `atEnumInstanceAccessor` had these three
+	// lines verbatim, differing only in the tag expression and the anchor token: `parseEnumLiteral`'s
+	// type-qualified case and `emitEnumBackingFieldSelect`'s hop past a selected enum-typed field.
+	//
+	// ⚠ **THE COPIES COULD NOT BE MADE TO DISAGREE LOUDLY.** `consumeMemberNameToken` already admits more than
+	// an identifier (a keyword, and a NUMBER rewritten into a name for a tuple member); widen the member to
+	// TWO tokens and one site consumes one token too few — a parse error at a token nobody wrote, not a
+	// compile error anywhere. `anchorTok` is the caller's because the RANGE is the caller's fact: the read
+	// spans from the type name in one spelling and from the first field name in the other.
+	function consumeEnumAccessorHop(layout EnumLayout, tag ValueId, anchorTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.dot)
+		let memberTok = try self.consumeMemberNameToken()
+
+		return try self.emitEnumInstanceAccessor(layout, tag: tag, memberTok: memberTok, range: SourceRange.between(anchorTok, last: memberTok))
+	end 'consumeEnumAccessorHop'
 
 	// ⭐ **CONSUME A `unionCases .` HOP AND ANSWER WITH THE COMPANION'S LAYOUT** — or hand back the layout that
 	// was named, unchanged, when the cursor is on anything else.
@@ -40535,6 +40594,34 @@ export type Parser
 
 		return self.emitUnionTagLoad(value, range: range)
 	end 'emitEnumTagOf'
+
+	// ⭐⭐ **THE SAME QUESTION WHERE THERE IS NO VALUE TO ASK IT OF — a case named through its TYPE
+	// (`Preset.large`, `TestOp.mul`), whose tag is a COMPILE-TIME CONSTANT.** It sits beside `emitEnumTagOf`
+	// because it is the third answer to that function's one question, and the split between its two arms is
+	// exactly the split there: for an UNBOXED declaration a case's tag IS its value, so the enum-typed literal
+	// this mints serves both readers — the construct `Color.red` evaluates to and the tag an accessor selects
+	// from. For a BOXED union the two part company (the value is a heap box, the tag a bare i64 at offset 0),
+	// and only the tag is knowable without arguments, so that is all this mints.
+	//
+	// ⭐⭐ **THAT ASYMMETRY IS THE WHOLE OF WHY `TestOp.mul.latency` CAN WORK ON A PAYLOAD-BEARING UNION.**
+	// Constructing `mul` would demand its `dest`/`src` arguments; reading its compile-time metadata needs no
+	// value at all, so the read is answered from the tag alone and no box is ever allocated — which also means
+	// there is no owned heap record minted mid-expression, the lifetime question `emitEnumBackingRawValue`
+	// declines for a materialized backing.
+	//
+	// ⚠ **THE BOXED ARM MUST MINT `integer` AND NOT `named(<Union>)`.** A `named` claim over a bare tag is
+	// this rung's own measured defect class — a box pointer stored as a tag, `0xC0000005`
+	// (`enumBackingNamedFieldDomain`) — read in the other direction: `enumTagAsANumber` asks precisely
+	// "is this already a bare number", and answering "no, it is a TestOp" about an i64 that IS one would be a
+	// false claim kept honest only by luck.
+	function emitEnumCaseTagConstant(layout EnumLayout, index CaseIndex, range SourceRange) returns ValueId
+		let tag = layout.tagOfIndex(index)
+		if layout.isBoxed() 'theValueIsNotTheTag'
+			return self.emitLiteral(tag, valueType: MaxonType.integer, range: range)
+		end 'theValueIsNotTheTag'
+
+		return self.emitEnumTagLiteral(layout.name, tag: tag, range: range)
+	end 'emitEnumCaseTagConstant'
 
 	// Load a payload field out of the box at `8 + slot*8` — the `emitFieldLoad` split, one op further.
 	// A SCALAR is minted at the field's DECLARED type (so a nested `match dir` sees a `Direction`, and the
@@ -57017,57 +57104,14 @@ export type Parser
 		end 'backing'
 	end 'enumBackingFieldMember'
 
-	// ⭐⭐ **`s.ordinal` / `s.name` / `s.rawValue` — THE THREE READS OF AN ENUM VALUE, THROUGH ONE DOOR.**
+	// ⭐⭐ **THE BINDING SPELLING OF AN ENUM MEMBER READ — `s.ordinal`, `s.name`, `s.rawValue`, `p.width`.**
 	// Guarded by `enumAccessorFieldAt`, so the base is a local binding whose value belongs to a declared
-	// enum; this consumes `<base> . <member>` and answers.
+	// enum; this consumes `<base> . <member>`.
 	//
-	// ⭐ **THE SPLIT BETWEEN THEM IS THE *CONSTANT* EACH SELECTS AND NOTHING ELSE.** All three ask the same
-	// two questions of the same layout, in the same order (below), and all three that must compute an answer
-	// compute it with the same branchless sum — see `emitEnumCaseConstantSelect`, and `EnumCaseConstant` for
-	// the three columns it selects from. What differs per member is which column, and what TYPE the answer
-	// is handed back at.
-	//
-	// ⭐⭐ **IT ASKS TWO INDEPENDENT QUESTIONS, IN THIS ORDER, AND THEY MUST NEVER BE FUSED INTO ONE.**
-	//
-	//   1. **WHERE IS THE TAG?** Not asked here at all — delegated to `emitEnumTagOf`, the ONE function that
-	//      answers it, which the `match` dispatch reads too. So the accessor and the `match` agree about
-	//      where a union keeps its tag by construction, and — the part that matters — about WHETHER to go
-	//      looking, which is the half they each used to decide for themselves.
-	//   2. **IS THAT TAG THE ORDINAL, OR ONLY A KEY TO IT?** Where the tag column is `0,1,2,…` the ordinal
-	//      is the tag and the accessor costs no instruction; where the author renumbered the cases it is a
-	//      different number and the mapping has to be computed (`emitEnumCaseConstantSelect` below).
-	//   3. **IS THE ANSWER ALREADY AN `integer`-TYPED VALUE?** A loaded tag is; an unboxed enum's value is
-	//      `named(<Enum>)` and needs the `+ 0` below. Asked of the value's TYPE COLUMN, not re-derived from
-	//      question 1 — see the call site.
-	//
-	// ⚠ **THEY ARE INDEPENDENT EVEN THOUGH ONE COMBINATION IS UNREACHABLE TODAY.** A boxed union cannot
-	// currently declare raw values, so "boxed AND renumbered" never arrives — but that is a fact about what
-	// the case reader admits this month, not a law about ordinals, and a single fused condition would answer
-	// the day it changes by silently taking the wrong route. Each question is asked where it is decided.
-	//
-	// ⚠⚠ **QUESTION 1 WENT UNASKED UNTIL IT WAS MEASURED, AND EVERY BOXED UNION'S `.ordinal` WAS A BOX
-	// POINTER** — `Container.value(7).ordinal` printed 7077912 and `Container.empty.ordinal` printed 7078078
-	// against the oracle's 1 and 0, and the numbers MOVED between runs because they were addresses. Both arms
-	// of the union, not only the payload-bearing one (see `emitEnumTagOf`). `tagsAreDeclarationIndices` was
-	// true for such a union, so it took the `+ 0` route and added zero to an address. This is why the
-	// questions are separate: that one predicate was answering all three, and it is only ever an answer to
-	// the second.
-	//
-	// ⭐⭐ **PAST BOTH QUESTIONS, AN UNBOXED ENUM'S ANSWER IS SPELLED `<enum> + 0`, AND THAT IS THE MEANING RATHER THAN A TRICK FOR PRODUCING IT.**
-	// An enum value IS its tag (`parseEnumLiteral`), so under this function's guard the ordinal and the
-	// value are the same 64 bits — and `s + 0` is already a legal Maxon expression whose result the
-	// language types `integer` (`TypeRules.arithResultTag`, a `named` operand being `TypeClass.numeric`).
-	// So the accessor emits exactly the IR the equivalent source expression does, and gets its result type
-	// from the one rule that types every other arithmetic result rather than from an assertion here.
-	//
-	// ⚠ **THE FRESH VALUE IS THE POINT, AND HANDING BACK THE RECEIVER'S OWN `ValueId` WAS MEASURED WRONG.**
-	// It looks free — same bits, no instruction — but the receiver's value is tagged `named(LocalStatus)`,
-	// and that tag is what E3005 reads: `return s.ordinal` from a `returns Integer` function reported
-	// *"Cannot return 'LocalStatus' from function declared to return 'int'"*. The tag is not decoration; it
-	// is the value's source type, and an ordinal is not of the enum's type. `retypeValue` is not the fix
-	// either — it rewrites the columns IN PLACE, and this value is a BINDING's, so retyping it would break
-	// the `match s` two lines later. (`s as Integer` does not help for the same reason: shv2's `as` inside
-	// one numeric domain leaves the tag alone, so it is refused identically.)
+	// ⭐ **WHAT IT CONTRIBUTES IS THE ONE THING THIS SPELLING KNOWS AND THE TYPE-QUALIFIED ONE DOES NOT: that
+	// there IS a value.** So it answers "where is the tag" through `emitEnumTagOf` and hands the tag on;
+	// every question about what the MEMBER means is asked once, in `emitEnumInstanceAccessor`, whose header
+	// carries them. Written the other way round, the two spellings would each have a copy.
 	//
 	// It takes no `IrFunction`: the emitters it calls append to `self.currentBlock`, exactly as the
 	// `.managed` field door's do. A parameter kept for symmetry would be an unused one (E3012).
@@ -57082,20 +57126,62 @@ export type Parser
 		// name takes — a moved-from enum binding is dead here exactly as it is at `requireStructBase`.
 		try self.requireBindingLive(baseBinding, nameTok: baseTok)
 
-		return try self.emitEnumInstanceAccessor(requireEnumLayout(self.enumMatchFor(baseBinding.boundValue)), receiver: baseBinding.boundValue, memberTok: memberTok, range: SourceRange.between(baseTok, last: memberTok))
+		let range = SourceRange.between(baseTok, last: memberTok)
+		let layout = requireEnumLayout(self.enumMatchFor(baseBinding.boundValue))
+
+		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through, and the
+		// one thing this spelling knows that the type-qualified one does not: there IS a value here.
+		return try self.emitEnumInstanceAccessor(layout, tag: self.emitEnumTagOf(baseBinding.boundValue, layout: layout, range: range), memberTok: memberTok, range: range)
 	end 'parseEnumAccessor'
 
-	// ⭐⭐ **THE ANSWER ITSELF, ONCE THE RECEIVER IS IN HAND — shared by the two SPELLINGS of an enum-value
-	// accessor.** A BINDING's (`op.rawValue`, above) and a type-qualified CASE's (`Op.doubleOp.rawValue`,
-	// `parseEnumLiteral`) differ only in how the receiving value was obtained; past that they are the same
-	// three questions of the same layout, so they are asked here once. Written separately, the case spelling
-	// would have been a second `.ordinal`/`.name`/`.rawValue` dispatch free to answer differently from the
-	// binding one — the shape this file has paid for before.
-	function emitEnumInstanceAccessor(layout EnumLayout, receiver ValueId, memberTok Token, range SourceRange) returns ValueId throws ParseError
-		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through. Asked
-		// ONCE for all three members: which of them was written cannot change where a union keeps its tag.
-		let tag = self.emitEnumTagOf(receiver, layout: layout, range: range)
-
+	// ⭐⭐ **THE ANSWER ITSELF, ONCE THE TAG IS IN HAND — shared by the two SPELLINGS of an enum member read.**
+	// A BINDING's (`op.rawValue`, above) and a type-qualified CASE's (`Op.doubleOp.rawValue`,
+	// `TestOp.mul.latency`, `parseEnumLiteral`) differ ONLY in how the tag was obtained; past that they are
+	// the same questions of the same layout, so they are asked here once. Written separately, the case
+	// spelling would have been a second `.ordinal`/`.name`/`.rawValue` dispatch free to answer differently
+	// from the binding one — the shape this file has paid for before.
+	//
+	// ⭐ **THE SPLIT BETWEEN THE MEMBERS IS THE *CONSTANT* EACH SELECTS AND NOTHING ELSE.** They ask the same
+	// questions of the same layout, in the same order, and every one that must compute an answer computes it
+	// with the same branchless sum — see `emitEnumCaseConstantSelect`, and `EnumCaseConstant` for the columns
+	// it selects from. What differs per member is which column, and what TYPE the answer is handed back at.
+	//
+	// ⭐⭐ **IT TAKES THE TAG AND NOT A RECEIVER, BECAUSE ONE OF ITS TWO SPELLINGS HAS NO RECEIVER.**
+	// `TestOp.mul.latency` names a case of a BOXED union: the read is answered from the constant tag and no
+	// box is ever built, so there is no value to hand in.
+	//
+	// ⭐⭐ **IT ASKS THREE INDEPENDENT QUESTIONS, IN THIS ORDER, AND THEY MUST NEVER BE FUSED INTO ONE.**
+	//
+	//   1. **WHERE IS THE TAG?** Not asked here at all — asked by each CALLER, through one of the two
+	//      functions that answer it: `emitEnumTagOf` for a value (which the `match` dispatch also asks, so
+	//      the accessor and the `match` agree about where a union keeps its tag by construction) or
+	//      `emitEnumCaseTagConstant` for a case named through its type. The two sit together and neither
+	//      rule is spelled out anywhere else.
+	//   2. **IS THAT TAG THE ORDINAL, OR ONLY A KEY TO IT?** Where the tag column is `0,1,2,…` the ordinal
+	//      is the tag and the accessor costs no instruction; where the author renumbered the cases it is a
+	//      different number and the mapping has to be computed (`emitEnumCaseConstantSelect` below).
+	//   3. **IS THE ANSWER ALREADY AN `integer`-TYPED VALUE?** A loaded tag is; an unboxed enum's value is
+	//      `named(<Enum>)` and needs a `+ 0`. Asked of the value's TYPE COLUMN, not re-derived from question
+	//      1 — see `enumTagAsANumber`, which owns that obligation and the measurement behind it.
+	//
+	// ⭐⭐ **THEY ARE INDEPENDENT, AND THE COMBINATION THIS HEADER CALLED UNREACHABLE NOW ARRIVES — WHICH IS
+	// THE ARGUMENT PAYING OUT RATHER THAN AGEING.** It read *"a boxed union cannot currently declare raw
+	// values, so 'boxed AND renumbered' never arrives — but that is a fact about what the case reader admits
+	// this month, not a law about ordinals"*. The month came: `readEnumCaseInto` reads a case's payload list
+	// and its raw value as INDEPENDENT halves (`/specs/union-struct-backing.md` needs both on one case), so
+	// `union Instr  add(dest ID, src ID) = 5  nop = 7 end` is boxed AND renumbered. MEASURED, and
+	// byte-identical to the oracle: `op.rawValue` is **5** while `op.ordinal` is **0**. A single fused
+	// condition would have answered one of those with the other. ⛔ It also broke a THIRD reader that had
+	// quietly keyed on the same coincidence — see `appendUnionCasesCompanion`.
+	//
+	// ⚠⚠ **QUESTION 1 WENT UNASKED UNTIL IT WAS MEASURED, AND EVERY BOXED UNION'S `.ordinal` WAS A BOX
+	// POINTER** — `Container.value(7).ordinal` printed 7077912 and `Container.empty.ordinal` printed 7078078
+	// against the oracle's 1 and 0, and the numbers MOVED between runs because they were addresses. Both arms
+	// of the union, not only the payload-bearing one (see `emitEnumTagOf`). `tagsAreDeclarationIndices` was
+	// true for such a union, so it took the `+ 0` route and added zero to an address. This is why the
+	// questions are separate: that one predicate was answering all three, and it is only ever an answer to
+	// the second.
+	function emitEnumInstanceAccessor(layout EnumLayout, tag ValueId, memberTok Token, range SourceRange) returns ValueId throws ParseError
 		// The dispatch is EXHAUSTIVE over `EnumInstanceAccessor`, which is what makes the door's cursor test and
 		// this answer one rule: a member added to the classifier stops this function compiling until it is
 		// answered here. `notAnAccessor` survives as the unreachable arm the guard already excluded.
@@ -57108,9 +57194,11 @@ export type Parser
 			// through `enumMemberIsReadable`, which is the same function this arm's refusal comes from — so the
 			// door and the answer stay one rule, exactly as the three accessors are.
 			//
-			// ⚠ **REACHABLE FROM THE BINDING SPELLING ONLY.** `atEnumInstanceAccessor` — the type-qualified
-			// door (`Preset.large.width`) — still asks only about the three, so such a spelling keeps its
-			// existing refusal rather than arriving here unadmitted. Nothing in `/specs` writes one.
+			// ⭐ **REACHABLE FROM BOTH SPELLINGS.** `atEnumInstanceAccessor` — the type-qualified door — asks
+			// the same `enumMemberIsReadable` this arm's refusal comes from, so `Preset.large.width` and
+			// `TestOp.mul.latency` arrive here exactly as `p.width` does. `/specs/union-struct-backing.md`
+			// writes the second; the enum spelling is pinned by `specs-shv2/enum-struct-backing.md`'s
+			// `struct-backing-type-qualified-field`.
 			notAnAccessor then return try self.emitEnumBackingFieldRead(layout, tag: tag, memberTok: memberTok, range: range)
 		end 'member'
 
@@ -57180,24 +57268,32 @@ export type Parser
 	//     `enumFunctionBackingGoverningName` for why the first case's name is the whole enum's answer.
 	function emitEnumRawValue(layout EnumLayout, tag ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		match layout.backing 'backing'
-			integer then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
-			// ⭐⭐ **AN UNNUMBERED DECLARATION HAS NO ESTABLISHED BACKING, AND ITS RAW VALUE IS ITS DECLARATION
-			// INDEX** — the same answer the `integer` arm gives, because the tag IS that index.
-			//
-			// ⚠⚠ **THIS ARM ALSO CARRIES EVERY PAYLOAD-BEARING UNION, AND THAT IS THE MEASURED ANSWER RATHER
-			// THAN A FALLTHROUGH.** No case of `union Shape circle(r Integer) … end` ever writes a raw value,
-			// so its backing is `unresolved` and `sh.rawValue` arrives here. Review flagged it as an invented
-			// answer — reasoning from the fact that the two STATIC members (`allCases`, `fromRawValue`) are
-			// gated `not layout.isUnion` thirty lines up, where the oracle refuses them.
+			// ⚠⚠ **THIS ARM CARRIES EVERY PAYLOAD-BEARING UNION, AND THAT IS THE MEASURED ANSWER RATHER THAN A
+			// FALLTHROUGH.** A payload-only case takes `appendAutoTaggedEnumCase`, whose FIRST statement fixes
+			// `EnumBacking.integer` — so `union Shape circle(r int) square(s int) blank end` is
+			// integer-backed with tags `0,1,2` and `sh.rawValue` lands HERE, not on the `unresolved` arm below.
+			// Review once flagged the answer as invented, reasoning from the two STATIC members (`allCases`,
+			// `fromRawValue`) being gated `not layout.isUnion` thirty lines up, where the oracle refuses them.
 			//
 			// ⇒ **REFUTED, twice.** MEASURED against the C# bootstrap on exactly that union: it COMPILES and
-			// prints `0/1/2` — the declaration indices, byte-identical to shv2's answer. And the CANONICAL
-			// spec requires it: `/specs/union-cases.md`'s `union-cases.runtime-accessors` declares
+			// prints `0/1/2`, byte-identical to shv2's answer. And the CANONICAL spec requires it:
+			// `/specs/union-cases.md`'s `union-cases.runtime-accessors` declares
 			// `function tagOf(sh Shape) returns Integer  return sh.rawValue` on a payload-bearing union and
 			// pins `0`/`1`/`2`. A refusal here would turn that committed case red. The asymmetry with the
 			// static members is real and is the reference's: `allCases`/`fromRawValue` need a per-case RAW
 			// VALUE the union has not got, while `.rawValue`, `.name` and `.ordinal` need only the tag column
 			// every declaration has.
+			integer then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
+			// ⭐⭐ **AN UNNUMBERED DECLARATION HAS NO ESTABLISHED BACKING, AND ITS RAW VALUE WOULD BE ITS
+			// DECLARATION INDEX** — the same answer the `integer` arm gives, because the tag IS that index.
+			//
+			// ⛔ **THE PARAGRAPH ABOVE USED TO LIVE HERE, CLAIMING THIS ARM CARRIED EVERY PAYLOAD-BEARING
+			// UNION. IT DOES NOT, AND THE MEASUREMENT THAT REFUTES IT RUNS THROUGH `integer`.** Same answer
+			// either way, so it was never a wrong answer — which is exactly why it survived: an arm carrying a
+			// measurement it is not on the path of. SETTLED by replacing this body with a `panic` and running
+			// the union families: **171 passed, 0 failed**, and `tagOf` above still printed `0 1 2`. So the
+			// backing is fixed by the first case whatever that case is, and `requireEnumBacking` is the only
+			// door to this state — a declaration with NO cases, which cannot be read from.
 			unresolved then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
 			float then return self.emitUnaryOp(tag, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
 			character then break 'backing'
@@ -57221,7 +57317,7 @@ export type Parser
 	// because `parseDottedPrimary` falls through to `parseFieldAccess`'s refusal instead.
 	function emitEnumBackingFieldRead(layout EnumLayout, tag ValueId, memberTok Token, range SourceRange) returns ValueId throws ParseError
 		if not self.enumBackingFieldMember(layout, memberTok: memberTok) 'notAMemberAtAll'
-			panic("emitEnumBackingFieldRead: member '{String.from(memberTok.value)}' reached the accessor and names neither one of the three enum accessors nor a field of `{layout.kindWord()} {String.from(layout.name)}`'s backing struct — `enumAccessorFieldAt` admits a member through `enumMemberIsReadable`, the very predicate this line re-asks, so a member it admitted cannot be one this refuses")
+			panic("emitEnumBackingFieldRead: member '{String.from(memberTok.value)}' reached the accessor and names neither one of the three enum accessors nor a field of `{layout.kindWord()} {String.from(layout.name)}`'s backing struct — EVERY door into this dispatch admits a member through `enumMemberIsReadable`, the very predicate this line re-asks, so a member any of them admitted cannot be one this refuses")
 		end 'notAMemberAtAll'
 
 		return try self.emitEnumBackingFieldSelect(layout, tag: tag, fieldTok: memberTok, range: range)
@@ -57388,9 +57484,13 @@ export type Parser
 		try self.requireEnumBackingFieldDomainIsAWord(leaf.lastStep(), fieldType: fieldType, domain: domain, anchor: fieldTok)
 		let selected = try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.structBackingField(leaf.path, domain: domain), valueType: fieldType, anchor: fieldTok, range: range)
 
-		if not self.atEnumInstanceAccessor(self.pos) 'noAccessorHop'
+		// The cheap SHAPE test first, then the layout, then the admission rule — in that order because the
+		// admission rule is a property of the field's own enum and cannot be asked before it is in hand, while
+		// `enumMatchFor` boxes a `DeclaredEnum` even to answer "no". Same arrangement, same reason, as
+		// `enumAccessorFieldAt`.
+		if not self.enumMemberReadFollowsAt(self.pos) 'noMemberFollows'
 			return selected
-		end 'noAccessorHop'
+		end 'noMemberFollows'
 
 		let fieldEnum = self.enumMatchFor(selected)
 		// A `.name`-shaped member on a field that is NOT enum-typed is left where it was: the field may be a
@@ -57399,10 +57499,16 @@ export type Parser
 			return selected
 		end 'notAnEnumField'
 
-		try self.consume(TokenKind.dot)
-		let memberTok = try self.consumeMemberNameToken()
+		let fieldLayout = requireEnumLayout(fieldEnum)
+		if not self.atEnumInstanceAccessor(fieldLayout, index: self.pos) 'noAccessorHop'
+			return selected
+		end 'noAccessorHop'
 
-		return try self.emitEnumInstanceAccessor(requireEnumLayout(fieldEnum), receiver: selected, memberTok: memberTok, range: SourceRange.between(fieldTok, last: memberTok))
+		// The selected leaf is a value of `fieldLayout` — the `enumWord` domain, which
+		// `enumBackingNamedFieldDomain` admits only for an UNBOXED declaration, so `emitEnumTagOf` is the
+		// identity here. It is still asked rather than assumed: that premise lives at the classifier, and a
+		// reader that spelled the conclusion out would be a second copy of it.
+		return try self.consumeEnumAccessorHop(fieldLayout, tag: self.emitEnumTagOf(selected, layout: fieldLayout, range: range), anchorTok: fieldTok)
 	end 'emitEnumBackingFieldSelect'
 
 	// ⭐ **AN ADDRESS-VALUED ACCESSOR — the selection, then the ONE line that says what was selected.** The

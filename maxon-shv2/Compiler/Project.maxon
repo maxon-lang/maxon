@@ -3848,15 +3848,47 @@ export function appendUnionCasesCompanion(enums EnumLayoutArray, layout EnumLayo
 		return
 	end 'noAssociatedValues'
 
-	// `integer` backing, never `unresolved`: the companion's cases are numbered by the compiler rather than
-	// read by the case READER that would otherwise fix a backing, and every tag IS its declaration index —
-	// which is exactly `createCompilerOwned`'s reason for stating the same thing. It nonetheless carries the
-	// UNION's own visibility and declaring file, not `global`/compiler-owned: the companion is nameable
-	// exactly where the union is, so a `module union` does not leak its discriminant type across files.
-	var companion = EnumLayout.create(unionCasesCompanionName(layout.name), isUnion: false, conformsTo: sharedEmptyDeclaredConformances, visibility: layout.visibility, declFilePath: layout.declFilePath, backing: EnumBacking.integer)
+	// ⛔⛔ **THE COMPANION'S TAG IS THE UNION'S TAG, READ THROUGH `tagOfIndex` — NEVER THE LOOP INDEX.** It was
+	// written `tag: i, rawValue: "{i}"`, and that was true only while a boxed union could not declare raw
+	// values: every tag WAS its declaration index, so the index was the union's tag spelled differently. The
+	// day `Parser.readEnumCaseInto` began reading a payload list and a raw value as independent halves
+	// (`/specs/union-struct-backing.md` needs both on one case), `union Instr add(dest ID, src ID) = 5 nop = 7
+	// end` became expressible and the two numbers came apart.
+	//
+	// ⛔ **MEASURED, and it BREAKS THE COMPANION'S STATED PURPOSE** — `/specs/union-cases.md`: *"write the
+	// variant's `rawValue` to a buffer …; on read, lift the raw `int` back to a `U.unionCases` via
+	// `fromRawValue`"*. On that union, `op.rawValue` answered **5** while `Instr.unionCases.add.rawValue`
+	// answered **0**, so `fromRawValue(op.rawValue)` THREW. Both halves are separately pinned by the corpus and
+	// nothing COMPOSED them, which is why a full green suite said nothing. ⚠ The C# bootstrap has the identical
+	// defect (byte-identical output, same throw), so the oracle does not adjudicate this one — v1 does, and it
+	// anticipated exactly this: *"Mirror the parent case's ordinal so `.rawValue` agrees with the union's tag
+	// value (the natural pairing for de/serialization)"* (`registerUnionCasesCompanion`).
+	//
+	// ⇒ **BYTE-NEUTRAL FOR EVERY DECLARATION THAT COULD EXIST BEFORE**, whose tags were `0..n-1` — which is
+	// what makes this a latent bug being closed rather than a behaviour change.
+	//
+	// ⭐⭐ **AND THE BACKING MUST TRAVEL WITH THE TAG, BUT ONLY WHERE THE TAG *IS* THE RAW VALUE.** Copying
+	// `layout.backing` unconditionally is WRONG and the classifier says why: a `string` or `functionRef`
+	// backing keeps its value in `caseRawValues`, a column the companion does not carry, so a string-backed
+	// companion would answer `.rawValue` with the TEXT OF ITS TAG (`"0"`) instead of `"alpha"`. `structRecord`
+	// has no single-word raw value at all. For those three the tag is only a declaration index — which is an
+	// integer, and that is why `integer` is the right answer there rather than a fallback.
+	//
+	// ⛔ **KEEPING `integer` FOR ALL SIX IS EQUALLY WRONG, AND ALSO NEWLY REACHABLE.** MEASURED on this tree
+	// before the fix: `union F a(x ID) = 1.5 b = 2.5 end` gave `v.rawValue` **1.5** and the companion **0**,
+	// and a character-backed one gave `'p'` against **0**. Copying the tag into an `integer` companion would
+	// have turned those into an IEEE bit pattern printed as an integer and a bare codepoint — a WRONG ANSWER
+	// rather than a refusal. `rawValueIdentity` is the exhaustive classifier that already owns this question,
+	// so a backing added to `EnumBacking` cannot slip through unclassified.
+	let mirrorsTheUnionsBacking = layout.rawValueIdentity() == EnumRawValueIdentity.theTag
+
+	// It carries the UNION's own visibility and declaring file, not `global`/compiler-owned: the companion is
+	// nameable exactly where the union is, so a `module union` does not leak its discriminant type across files.
+	var companion = EnumLayout.create(unionCasesCompanionName(layout.name), isUnion: false, conformsTo: sharedEmptyDeclaredConformances, visibility: layout.visibility, declFilePath: layout.declFilePath, backing: layout.backing if mirrorsTheUnionsBacking else EnumBacking.integer)
 
 	for i in 0 upto layout.caseCount() 'eachVariant'
-		companion.addCase(layout.caseNameAt(i), tag: i, rawValue: "{i}", payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+		let tag = layout.tagOfIndex(i)
+		companion.addCase(layout.caseNameAt(i), tag: tag, rawValue: "{tag}", payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 	end 'eachVariant'
 
 	enums.push(companion)

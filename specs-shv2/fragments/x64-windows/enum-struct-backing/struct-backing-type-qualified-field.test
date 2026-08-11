@@ -1,0 +1,34 @@
+// Test: struct-backing-type-qualified-field
+typealias W = int(0 to 50)
+
+type Spec
+	export let width as W
+end 'Spec'
+
+enum Preset
+	small = Spec{width: 3}
+	large = Spec{width: 9}
+end 'Preset'
+
+function main() returns ExitCode
+	return Preset.large.width
+end 'main'
+---
+ExitCode: 9
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.imulRegRegImm32 rcx, rcx, 3
+    x64.leaRegRegImm32 rcx, rcx, 0
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg equal, rax
+    x64.imulRegRegImm32 rax, rax, 9
+    x64.leaRegRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}

@@ -137,3 +137,43 @@ end 'main'
 mir.sub.i64
 sub
 ```
+
+
+## shv2 additions
+
+<!-- test: payload-case-scalar-raw-value -->
+A case's PAYLOAD LIST and its RAW VALUE are independent halves, so a case may write both. This is the shape
+`/specs/union-struct-backing.md` forced — `add(dest ID, src ID) = OpMeta.create(1)` — read at the scalar
+backing this file is about; for one rung a payload list ENDED the case and every such declaration died at
+the `=` with `E2010 Expected 'an enum case name'`. Both references read the raw value after the optional
+payload list, and the bootstrap prints the identical line (MEASURED).
+
+⚠ It is also the first declaration that is **heap-boxed AND renumbered at once**: `op.rawValue` is the
+written raw value `5` while `op.ordinal` is the declaration index `0`. Those are two independent questions
+about one tag — where it LIVES (offset 0 of the box) and what it MEANS — and a compiler that fused them
+answers one of them with the other.
+```maxon
+typealias ID = int(i64.min to i64.max)
+
+union Instr
+	add(dest ID, src ID) = 5
+	nop = 7
+end 'Instr'
+
+function main() returns ExitCode
+	let op = Instr.add(1, src: 2)
+	var r = 0
+	match op 'h'
+		add(d, s) then r = d + s
+		nop then r = 99
+	end 'h'
+	print("{r} {op.rawValue} {op.ordinal} {op.name}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3 5 0 add
+```

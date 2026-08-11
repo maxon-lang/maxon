@@ -320,3 +320,99 @@ end 'main'
 ```exitcode
 5
 ```
+
+
+## shv2 additions
+
+### The write/read round-trip this file's Documentation describes, COMPOSED
+
+<!-- test: union-cases.rawvalue-companion-roundtrip -->
+The Documentation states the companion's purpose: *"write the variant's `rawValue` to a buffer alongside its
+payload; on read, lift the raw `int` back to a `U.unionCases` via `fromRawValue`"*. Both halves are pinned
+above — `union-cases.runtime-accessors` reads a union's `rawValue`, `union-cases.fromrawvalue-roundtrip`
+lifts an `int` — but **nothing composed them**, and the composition is the feature.
+
+⛔ It was BROKEN the moment a boxed union could renumber its cases. The companion builder hard-coded
+`tag: i, rawValue: "{i}"`, which was the union's own tag spelled differently only while every boxed union's
+tags were `0..n-1`. On the union below, `op.rawValue` answered **5** while `Instr.unionCases.add.rawValue`
+answered **0**, so the `fromRawValue` on the next line THREW. ⚠ The C# bootstrap has the identical defect,
+so the oracle does not adjudicate it; v1 does, and states the rule — *"Mirror the parent case's ordinal so
+`.rawValue` agrees with the union's tag value (the natural pairing for de/serialization)"*.
+
+The three accessors must agree: `rawValue` is the union's TAG, `ordinal` is the DECLARATION INDEX, and they
+are different numbers here on purpose.
+```maxon
+typealias ID = int(i64.min to i64.max)
+
+union Instr
+	add(dest ID, src ID) = 5
+	nop = 7
+end 'Instr'
+
+function main() returns ExitCode
+	let op = Instr.add(1, src: 2)
+	let k = Instr.unionCases.add
+
+	print("{op.rawValue} {k.rawValue} {k.ordinal} {k.name}\n")
+
+	// The round-trip: the union's own tag, lifted back through the companion.
+	let back = try Instr.unionCases.fromRawValue(op.rawValue) otherwise return 42
+	match back 'dispatch'
+		add then print("add\n")
+		nop then print("nop\n")
+	end 'dispatch'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 5 0 add
+add
+```
+
+### A non-integer backing keeps the TAG round-trip
+
+<!-- test: union-cases.companion-mirrors-backing -->
+The companion mirrors the union's backing only where the tag IS the raw value. For `float` and `character`
+the tag is an IEEE bit pattern / a codepoint, so the backing travels with it and `.rawValue` decodes to the
+written value. For a `string` backing the raw text rides a column the companion does not carry, so its tag
+is the declaration index and `integer` is what that index IS — copying `string` there would have made
+`.rawValue` answer the text of its own tag (`"0"`) instead of `"alpha"`.
+```maxon
+typealias ID = int(i64.min to i64.max)
+
+union F
+	a(x ID) = 1.5
+	b = 2.5
+end 'F'
+
+union C
+	m(x ID) = 'm'
+	n = 'n'
+end 'C'
+
+union S
+	p(x ID) = "alpha"
+	q = "beta"
+end 'S'
+
+function main() returns ExitCode
+	let f = F.a(1)
+	let c = C.m(1)
+	let s = S.p(1)
+	print("{f.rawValue} {F.unionCases.a.rawValue}\n")
+	print("{c.rawValue} {C.unionCases.m.rawValue}\n")
+	print("{s.rawValue} {S.unionCases.p.rawValue} {S.unionCases.q.ordinal}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1.5 1.5
+m m
+alpha 0 1
+```

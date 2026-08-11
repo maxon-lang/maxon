@@ -1,0 +1,147 @@
+// Test: union-backing-runtime-rawvalue
+typealias Latency = int(0 to 50)
+typealias ID = int(i64.min to i64.max)
+
+type OpMeta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+union TestOp
+	add(dest ID, src ID) = OpMeta.create(1)
+	mul(dest ID, src ID) = OpMeta.create(3)
+	nop = OpMeta.create(0)
+end 'TestOp'
+
+// Read the struct-backing metadata off a RUNTIME union value (a parameter),
+// not a constant case. A payload-bearing union is heap-boxed, so its i64 tag
+// lives at offset 0 of the box; the boxed-union `.rawValue` lowering must load
+// that tag before the per-case select-chain compares it against each case
+// ordinal. Without the load the box pointer was compared instead, no case
+// matched, and `.rawValue.latency` summed to 0 for every input.
+function latencyOf(op TestOp) returns Latency
+	return op.rawValue.latency
+end 'latencyOf'
+
+function main() returns ExitCode
+	let a = TestOp.add(10, src: 20)
+	let m = TestOp.mul(1, src: 2)
+	let n = TestOp.nop
+	return latencyOf(a) + latencyOf(m) + latencyOf(n)
+end 'main'
+---
+ExitCode: 4
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @latencyOf {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.imulRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegImm32 rcx, rcx, 0
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg equal, rdx
+    x64.imulRegRegImm32 rdx, rdx, 3
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rax, 2
+    x64.setccReg equal, rax
+    x64.imulRegRegImm32 rax, rax, 0
+    x64.leaRegRegReg r8, rcx, rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rbx, 10
+    x64.movRegImm32 r12, 20
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.storeBaseDispReg.word64 [r13 + 16], r12
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 16], r12
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect latencyOf
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect latencyOf
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect latencyOf
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

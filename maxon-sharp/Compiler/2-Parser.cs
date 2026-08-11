@@ -19554,7 +19554,18 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
           // Now do the struct field access directly
           var structField = sbtStruct.Fields.First(f => f.Name == fieldName);
           var backingFieldKind = structField.Type.ToValueKind();
-          var backingFieldStructName = structField.Type is IrStructType bfst ? bfst.Name : null;
+          // ⛔ This was a hand-rolled `is IrStructType ? .Name : null`, i.e. a one-arm copy of
+          // GetFieldStructName, which answers for a STRUCT, an ENUM and an INTERFACE. An enum-typed
+          // backing field therefore reached MaxonFieldAccessOp with ResultKind=Enum and a NULL type
+          // name, and that op mints `new MaxonEnum(id, resultStructTypeName!)` — a null-forgiving
+          // assertion that was simply false. The next step of the chain read that null TypeName and
+          // took the compiler down at `PrimitiveTypes.ContainsKey(null)`:
+          //   `enum Size small large end` + `type Style export let size as Size end`
+          //   + `enum Theme bold = Style{size: Size.large} end` + `t.size.ordinal`
+          //   => E9001 Value cannot be null. (Parameter 'key') in ParseFieldAccessChain
+          // Only the SHORTHAND spelling was affected; `t.rawValue.size.ordinal` routes elsewhere and
+          // is pinned by /specs/enum-struct-backing.md, which is why the suite never saw it.
+          var backingFieldStructName = GetFieldStructName(structField.Type);
           var fieldAccessOp = new MaxonFieldAccessOp(structRawOp.Result, sbtDirect.StructTypeName, fieldName, backingFieldKind, backingFieldStructName);
           _currentBlock!.AddOp(fieldAccessOp);
           result = new ExprResult.Direct(fieldAccessOp.Result);
