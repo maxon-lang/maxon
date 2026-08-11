@@ -409,8 +409,15 @@ end 'undefinedImplNames'
 //
 // What binds the copies instead is a COMPILE-TIME CHECK, not this comment. The arms RANGE over the whole
 // union in declaration order, ending at the current last variant, so a variant appended past it makes BOTH
-// matches non-exhaustive — **verified: E2026 "match on enum 'Op' is not exhaustive, missing: dd"**, which
-// names the variant. A new variant carrying a callee name must be added as its own arm in both, and neither
+// matches non-exhaustive — **RE-MEASURED 2026-08-11 by appending a variant and building: E2026 "match on
+// enum 'StdOp' is not exhaustive, missing: probeAppendedVariant"**, at this function's own `match` and at
+// 30-odd others, which names the variant. (The quoted name was `'Op'` until that measurement — a type
+// nothing declares. ⚠ And the noun is *"enum"* here for a reason that is easy to mis-correct: `StdOp` is
+// `export union StdOp`, but this sentence is the BOOTSTRAP's, because shv2's own source is compiled by
+// `maxon build maxon-shv2`, and the bootstrap HARDCODES `"enum"` at that one site while branching on
+// `IsUnion` at its E3034 sites four lines away. shv2 itself derives the word from `EnumLayout.kindWord()`
+// and would say "union" — pinned by `enum-match-exhaustive/error.union-not-exhaustive`. So this transcript
+// changes on the day shv2 compiles itself, and not before.) A new variant carrying a callee name must be added as its own arm in both, and neither
 // can be forgotten silently. (The residual is the human who *extends the last band* instead of adding an
 // arm; that mistake is equally available in `markCalleeOf` and is what these per-band comments exist to
 // make loud in review.)
