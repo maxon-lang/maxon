@@ -1546,6 +1546,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		enumDuplicateRawValue(rawValue, line, column) then reportPositioned(project, code: ErrorCode.enumDuplicateRawValue, message: "duplicate raw value: '{rawValue}'", line: line, column: column, filePath: path)
 		enumRawValueTypeMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.enumRawValueTypeMismatch, message: "raw value type mismatch: '{detail}'", line: line, column: column, filePath: path)
 		enumUnknownCase(kindWord, caseName, line, column) then reportPositioned(project, code: ErrorCode.enumUnknownCase, message: "unknown {kindWord} case: '{caseName}'", line: line, column: column, filePath: path)
+		// ⚠ E4006, and NOT the E3034 above it: both references refuse `allCases` on a union in these exact
+		// words rather than as an unknown case. Its sibling `fromRawValue` is disposed differently; what that
+		// disposition is is `Parser.parseEnumLiteral`'s to state, not this arm's.
+		allCasesOnUnion(line, column) then reportPositioned(project, code: ErrorCode.invalidFieldAccess, message: "allCases is not available on unions", line: line, column: column, filePath: path)
 		matchQualifiedCaseName(bare, qualified, line, column) then reportPositioned(project, code: ErrorCode.matchQualifiedCaseName, message: "use '{bare}' instead of '{qualified}' in match", line: line, column: column, filePath: path)
 		matchDiscardedBindings(caseName, discardList, line, column) then reportPositioned(project, code: ErrorCode.semanticMatchDiscardedBindings, message: "use '{caseName}' instead of '{caseName}({discardList})' to ignore associated values", line: line, column: column, filePath: path)
 		matchDefaultEnumMustThrow(kindWord, typeName, line, column) then reportPositioned(project, code: ErrorCode.matchDefaultEnumMustThrow, message: "'default' in a match on {kindWord} '{typeName}' must be followed by 'throws <error>' or 'panic(\"message\")'", line: line, column: column, filePath: path)

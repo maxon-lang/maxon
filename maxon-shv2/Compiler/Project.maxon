@@ -3869,9 +3869,9 @@ export let EnumFromRawValueMemberName = b"fromRawValue"
 // `rawValue` to a buffer and lift it back through `fromRawValue` — and adding a variant breaks the match in
 // the writer AND the reader.
 //
-// ⚠ **IT IS SYNTHESIZED ONLY FOR A UNION WITH ASSOCIATED VALUES**, which the spec states outright: a
-// payload-free enum or union already exposes `.allCases` / `.fromRawValue` on itself, so a companion would
-// be a second name for the same thing.
+// ⚠ **IT IS SYNTHESIZED ONLY FOR A UNION WITH ASSOCIATED VALUES.** The gate is
+// `appendUnionCasesCompanion`'s and so is its reason — stated there once, INCLUDING what the reason is not,
+// because this sentence used to carry a false version of it and being the second copy is how it survived.
 export let UnionCasesMemberName = b"unionCases"
 
 // ⭐ **THE COMPANION'S REGISTERED NAME — `<Union>.unionCases`, the spelling the author writes.** A DOTTED
@@ -3908,9 +3908,27 @@ end 'unionCasesCompanionName'
 // synthesized, taking the x64 backend down at `resolveCallFixups`.
 //
 // ⚠ **ONLY FOR A UNION WITH ASSOCIATED VALUES.** `isBoxed` is that question — a union is boxed exactly when
-// some case declares a payload — and the spec states the exclusion outright: a payload-free enum or union
-// already exposes this surface on itself, so a companion would be a second name for one thing. The gate
-// lives HERE rather than at either caller, so the two cannot come to disagree about which unions have one.
+// some case declares a payload. The gate lives HERE rather than at either caller, so the two cannot come to
+// disagree about which unions have one, and `UnionCasesMemberName`'s note points at this paragraph instead of
+// keeping a second copy of it.
+//
+// ⛔⛔ **THE REASON IS NOT THAT A PAYLOAD-FREE UNION ALREADY HAS THIS SURFACE — IT HAS NEITHER HALF OF IT.**
+// This comment said so twice and credited the spec both times. `/specs/union-cases.md` says *"Plain ENUMS (no
+// payloads) already expose `.allCases` / `.fromRawValue` directly"*; the widening from "enum" to "enum or
+// union" was this comment's own, and it is false for a union of ANY shape, because both refusals key on the
+// declaration keyword rather than on payloads (`Parser.parseEnumLiteral`). MEASURED on `union Level low = 1
+// high = 2 end`, a payload-free scalar-backed union: `.allCases` is **E4006** *allCases is not available on
+// unions* (shv2 and the bootstrap, byte-identical) and `.fromRawValue` is **E3034** *unknown union case*.
+// `specs-shv2/union-scalar-backing.md:17-19` states that rule for unions outright — the helpers *"remain an
+// `enum`-only surface"*.
+//
+// ⇒ **What the exclusion is actually about is what a companion would be FOR.** Its purpose is to expose a
+// union's DISCRIMINANT as a first-class enum value (see `UnionCasesMemberName`), and a payload-free union's
+// cases ARE first-class values carrying their own tag already — so there is nothing for a second type to
+// name, while a BOXED union's discriminant is reachable no other way.
+// ⇒ ⚠ **A payload-free union therefore has no route to `.allCases` at all**, and that is the language's rule
+// as BOTH references implement it, not a consequence of this gate. Do not "restore" a direct route here (the
+// refusal is `parseEnumLiteral`'s and deliberate) and do not delete the gate to grant one.
 //
 // ⚠ It must be called with the layout AFTER every case is read, because the companion's case list IS the
 // union's.

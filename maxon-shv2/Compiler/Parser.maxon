@@ -948,6 +948,26 @@ export union ParseError implements Error
 	// bad case of a `union` reads "unknown union case", matching the bootstrap and shv2's own
 	// E2026/E2046 rather than hardcoding "enum" (which disagreed with both).
 	enumUnknownCase(kindWord String, caseName String, line LineNumber, column ColumnNumber)
+	// ⭐ **`<Union>.allCases` — THE ENUM-ONLY STATIC THAT A UNION IS REFUSED BY NAME, NOT BY THE CASE
+	// LOOKUP.** Renders as **E4006**, positioned at the TYPE name, with the sentence both references emit
+	// verbatim (`maxon-sharp/Compiler/2-Parser.cs:19089-19091`, `maxon-selfhosted/Compiler/Parser.maxon:14850-14851`).
+	// It reads nothing like a mistyped case name because it is a fact about the MEMBER, and it carries NO
+	// payload because the sentence names no part of the program.
+	//
+	// ⚠ **THE TEST IS THE DECLARATION KEYWORD, AND IT IS PAYLOAD-BLIND** — `layout.isUnion`, which is also
+	// both references' own (`enumType.IsUnion`, `enumIsUnion(token.value)`, neither of which consults a
+	// payload). So a payload-free SCALAR-BACKED union is refused too, and for that one the array could plainly
+	// exist — its cases are bare values already. MEASURED on `union Level low = 1 high = 2 end`: shv2 and the
+	// bootstrap both answer this sentence, byte-identical.
+	// ⇒ **The payload argument** — a union with payloads has no ordinal sequence to enumerate — **is the
+	// MOTIVATION for the language's rule and NOT the predicate**, and the two must not be written as one:
+	// stating that motivation as though it were the test is exactly how `Project.appendUnionCasesCompanion`'s
+	// comment came to claim a route for payload-free unions that does not exist.
+	//
+	// ⚠ Its sibling `fromRawValue` is deliberately disposed DIFFERENTLY on a union. WHICH disposition, and
+	// which pin holds it, is stated once at `parseEnumLiteral` — deliberately not restated here, because a
+	// verdict written at three sites is the drift surface this very member's header was repaired for.
+	allCasesOnUnion(line LineNumber, column ColumnNumber)
 	// A match arm names a case in QUALIFIED form (`Color.red`). Renders as **E3075**, positioned at
 	// the type name — the scrutinee's enum is already known, so the bare name suffices.
 	matchQualifiedCaseName(bare String, qualified String, line LineNumber, column ColumnNumber)
@@ -40769,45 +40789,67 @@ export type Parser
 			return try self.emitEnumAllCaseNames(layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
 		end 'allCaseNames'
 
-		// ⭐ **`allCases` AND `fromRawValue` ARE AN *ENUM*-ONLY SURFACE, WHERE `allCaseNames` IS ON BOTH — AND
-		// THAT ASYMMETRY IS THE REFERENCE'S, MEASURED.** The oracle answers `allCases is not available on
-		// unions` (E4006) and `unknown union case: 'fromRawValue'` (`2-Parser.cs:19113`) for a payload-free
-		// UNION, and `specs-shv2/union-scalar-backing.md`'s documentation states the second outright. Both are
-		// therefore claimed only for an enum; on a union they fall through to the case lookup, which words it
-		// `unknown union case: '<member>'` — the sentence that spec's prose describes. `allCaseNames` returns
-		// only NAMES, which every declaration has, so it needs no such gate (see `EnumAllCaseNamesMemberName`).
+		// ⭐⭐ **`allCases` AND `fromRawValue` ARE BOTH *ENUM*-ONLY (WHERE `allCaseNames` IS ON BOTH), AND A
+		// UNION IS REFUSED THEM IN TWO DIFFERENT SENTENCES — THAT ASYMMETRY IS THE REFERENCE'S, MEASURED, AND
+		// EACH HALF HAS ITS OWN PIN.** `allCases` earns a refusal BY NAME: `allCases is not available on
+		// unions`, E4006, at the TYPE token (`maxon-sharp/Compiler/2-Parser.cs:19089-19091` and
+		// `maxon-selfhosted/Compiler/Parser.maxon:14850-14851`, which agree to the character; pinned by
+		// `specs-shv2/enum-allcases.md`'s `enum-allcases.error-enum`). `fromRawValue` instead FALLS THROUGH to
+		// the case lookup and comes out `unknown union case: 'fromRawValue'`, E3034
+		// (`2-Parser.cs:19113-19116`; pinned by `specs-shv2/enum-full.md`'s
+		// `error.fromRawValue-associated-values`). ⇒ **A change that moves either pin has merged two rules the
+		// language keeps apart.**
+		//
+		// ⛔⛔ **THIS COMMENT USED TO RECORD THE E4006 MEASUREMENT AND THEN CONCLUDE THAT *BOTH* MEMBERS FALL
+		// THROUGH — the two halves of one paragraph saying opposite things — and the code obeyed the wrong
+		// half.** `allCases` sat inside a single `not layout.isUnion` gate with `fromRawValue`, so a union got
+		// E3034 for it and `enum-allcases.error-enum` was red on a spec whose expectation the same paragraph
+		// quotes correctly. The measurement was right; the disposition it drew was the OTHER member's.
+		//
+		// `allCaseNames` (above) needs no gate at all: it returns only NAMES, which every declaration has
+		// (see `EnumAllCaseNamesMemberName`).
 		//
 		// The SYNTHESIZED `<Union>.unionCases` companion is an ENUM, which is precisely how a payload-bearing
-		// union reaches this surface at all.
-		if not layout.isUnion 'enumOnlyStatics'
-			// `<Enum>.allCases` — claimed for `allCaseNames`' stated reason, and interned by the same sweep
-			// walk. The two are siblings in every respect but their element type.
-			if self.atStaticEnumMember(EnumAllCasesMemberName) 'allCases'
-				self.advance()
-				return try self.emitEnumAllCases(layout, range: SourceRange.ofToken(typeTok))
-			end 'allCases'
+		// union reaches this surface at all — through the hop above, never through the refusal here.
+		//
+		// `<Enum>.allCases` is interned by the same sweep walk `allCaseNames` is; the two are siblings in
+		// every respect but their element type. A UNION never reads that instance, so the throw below cannot
+		// desynchronize the sweep from this read (see `atStaticEnumMember`).
+		//
+		// ⚠ **THE REFUSAL IS ASKED BEFORE THE CASE LOOKUP, so it now reaches a union that DECLARES a case
+		// named `allCases` as well** — which is the member-name-first ordering `allCaseNames` above records as
+		// a divergence from the bootstrap (whose `GetCase` runs first), extended to the one construct where
+		// the gate previously hid it. Nothing in `/specs` or the corpus declares such a case, so the
+		// divergence stays exactly as wide as the one already recorded; it is not a second decision.
+		if self.atStaticEnumMember(EnumAllCasesMemberName) 'allCases'
+			if layout.isUnion 'allCasesOnUnion'
+				throw ParseError.allCasesOnUnion(typeTok.line, column: typeTok.column)
+			end 'allCasesOnUnion'
 
-			// `<Enum>.fromRawValue(raw)` — the one member of this surface that is a CALL, and the one that
-			// throws. Claimed here so the case lookup never sees it.
-			//
-			// ⛔⛔ **EXCEPT ON A STRUCT-BACKED ENUM, WHERE THE MEMBER DOES NOT EXIST AND THE CASE LOOKUP IS THE
-			// RIGHT ANSWER.** `.rawValue` on such an enum denotes no VALUE in shv2 — only `.rawValue.<field>`
-			// does, a select per field — so there is nothing `fromRawValue` could take as an argument and
-			// nothing for it to hand back. Declining the claim here lets `enumCaseIndexOrThrow` word it, which
-			// is `E3034 unknown enum case: 'fromRawValue'` at the TYPE name — the verdict BOTH references
-			// reach (v1 by never synthesizing the helper and rejecting the call in
-			// `classifyEnumLookupForFromRawValue`; the bootstrap the same way), and the one
-			// `specs-shv2/enum-struct-backing.md`'s `error.struct-backing-fromRawValue` pins.
-			//
-			// ⚠ It is deliberately NOT the E2015 the other non-integer backings get
-			// (`requireFromRawValueBacking`): those declare a raw value shv2 declines to SEARCH, which is a
-			// different sentence from a member that is not there.
-			if self.atStaticEnumMember(EnumFromRawValueMemberName) and layout.backing != EnumBacking.structRecord 'fromRawValue'
-				let memberTok = self.current()
-				self.advance()
-				return try self.parseEnumFromRawValue(func, layout: layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
-			end 'fromRawValue'
-		end 'enumOnlyStatics'
+			self.advance()
+			return try self.emitEnumAllCases(layout, range: SourceRange.ofToken(typeTok))
+		end 'allCases'
+
+		// `<Enum>.fromRawValue(raw)` — the one member of this surface that is a CALL, and the one that
+		// throws. Claimed here so the case lookup never sees it, EXCEPT on the two constructs where the
+		// member does not exist and that lookup is the right answer: a UNION (per the pin above) and —
+		//
+		// ⛔⛔ **A STRUCT-BACKED ENUM.** `.rawValue` on such an enum denotes no VALUE in shv2 — only
+		// `.rawValue.<field>` does, a select per field — so there is nothing `fromRawValue` could take as an
+		// argument and nothing for it to hand back. Declining the claim here lets `enumCaseIndexOrThrow` word
+		// it, which is `E3034 unknown enum case: 'fromRawValue'` at the TYPE name — the verdict BOTH
+		// references reach (v1 by never synthesizing the helper and rejecting the call in
+		// `classifyEnumLookupForFromRawValue`; the bootstrap the same way), and the one
+		// `specs-shv2/enum-struct-backing.md`'s `error.struct-backing-fromRawValue` pins.
+		//
+		// ⚠ It is deliberately NOT the E2015 the other non-integer backings get
+		// (`requireFromRawValueBacking`): those declare a raw value shv2 declines to SEARCH, which is a
+		// different sentence from a member that is not there.
+		if self.atStaticEnumMember(EnumFromRawValueMemberName) and not layout.isUnion and layout.backing != EnumBacking.structRecord 'fromRawValue'
+			let memberTok = self.current()
+			self.advance()
+			return try self.parseEnumFromRawValue(func, layout: layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
+		end 'fromRawValue'
 
 		let caseTok = try self.consumeNameToken(NamePosition.enumCase)
 
