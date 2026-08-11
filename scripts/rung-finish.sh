@@ -251,8 +251,18 @@ build_tree() {                       # build_tree <tree> <tag> [force-bootstrap]
   [ "$warns" = "0" ] || warn "[$tag] the build emitted $warns warning line(s) — see $LOGDIR/rung-$tag-build.log"
 }
 
-build_tree "$WORKTREE" "tip"
-ok "shv2 built from the rebased branch"
+# ⛔⛔ THE TIP'S BOOTSTRAP IS FORCED, AND THE mtime TEST INSIDE `build_tree` IS WHY.
+#   That test asks "is any `.cs` NEWER than the binary?" — which is the right question for a tree that
+#   BUILT its binary, and an unanswerable one for a tree that was HANDED one. `rung-start.sh` seeds a
+#   worktree with `cp -r bin/`, stamping the copy with NOW while `git worktree add` stamps every source
+#   with NOW; the copy therefore always looks fresh, whatever commit its CONTENT was built at.
+#   Measured 2026-08-10, three times in one session: worktrees cut from a main that already carried
+#   ARR0's `of`-is-not-a-keyword change were seeded with a bootstrap built before it, and the C# suite
+#   failed `keyword-parameter-names` — a false red charged to the rung, each costing a full battery.
+#   The base tree below is force-built for the same reason and always has been; the tip was the half
+#   nobody re-ran.
+build_tree "$WORKTREE" "tip" 1
+ok "shv2 built from the rebased branch, on a bootstrap rebuilt from that branch's own sources"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 step "4/10  The full unfiltered shv2 suite"

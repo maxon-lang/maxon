@@ -310,6 +310,25 @@ if [ "$NO_BUILD" = "1" ]; then
 elif [ ! -x "$(maxon_bootstrap_path "$WORKTREE")" ]; then
   warn "no bootstrap in the worktree — skipping the shv2 build"
 else
+  # ⛔⛔ THE COPIED BOOTSTRAP IS OF UNKNOWN VINTAGE, AND NO mtime TEST CAN SAY OTHERWISE.
+  #   `cp -r` above stamps `$WORKTREE/bin/maxon.exe` with NOW, while `git worktree add` has just
+  #   written every source with NOW too — so the binary always looks at least as new as the sources
+  #   whatever its CONTENT is. It is as old as whenever the MAIN CHECKOUT last built, which may be
+  #   many commits back, and nothing in the worktree records that.
+  #
+  #   Measured 2026-08-10, three times in one session: a worktree cut from a main that already
+  #   carried ARR0's `of`-is-not-a-keyword change was seeded with a bootstrap built BEFORE it, so the
+  #   C# suite failed `keyword-parameter-names` — a false red attributed to the rung, each one
+  #   costing a full ~10-minute `rung-finish` battery to discover and re-run. `rung-finish.sh`'s own
+  #   `build_tree` has the same blind spot and is fixed the same way.
+  #
+  # ⇒ BUILD IT UNCONDITIONALLY. ~65 s, once, against a re-run of everything downstream. The bootstrap
+  #   BUILDS shv2, so a stale one also emits an shv2 that does not match its own sources.
+  echo "  rebuilding the bootstrap in the worktree (the copied one is of unknown vintage — see above)…"
+  ( cd "$WORKTREE/maxon-sharp" && dotnet build --nologo -v q ) > "$LOGDIR/rung-start-bootstrap.log" 2>&1 \
+    || { tail -30 "$LOGDIR/rung-start-bootstrap.log"; die "bootstrap build FAILED in the worktree — see $LOGDIR/rung-start-bootstrap.log"; }
+  ok "bootstrap rebuilt — the worktree's compiler now matches the worktree's sources"
+
   echo "  building shv2 in the worktree…"
   ( cd "$WORKTREE" && "$(maxon_bootstrap_path .)" build maxon-shv2 ) > "$LOGDIR/rung-start-build.log" 2>&1 \
     || { tail -30 "$LOGDIR/rung-start-build.log"; die "shv2 build FAILED in the worktree — see $LOGDIR/rung-start-build.log"; }
