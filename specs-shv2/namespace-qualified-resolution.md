@@ -400,7 +400,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: dir/specs/fragments/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.test:12:17: duplicate definition of function 'pick'
+error E3006: dir/specs/fragments/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.test:12:17: Duplicate function 'pick'
 ```
 
 
@@ -431,7 +431,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.test:12:17: duplicate definition of function 'pick'
+error E3006: specs/fragments/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.test:12:17: Duplicate function 'pick'
 ```
 
 
@@ -452,7 +452,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: beta/specs/fragments/namespace-qualified-resolution/error.two-main-declarations-in-different-directories-still-collide.test:8:10: duplicate definition of function 'main'
+error E3006: beta/specs/fragments/namespace-qualified-resolution/error.two-main-declarations-in-different-directories-still-collide.test:8:10: Duplicate function 'main'
 ```
 
 

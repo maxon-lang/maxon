@@ -180,6 +180,44 @@ end 'main'
 error E2015: specs/fragments/function-overloads/error.overloads-disagree-with-the-void-member-recorded.test:11:2: the overloads of 'emit' do not agree on their return type ('void' and 'String'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type
 ```
 
+<!-- test: error.overload-redeclared-with-the-same-parameters -->
+<!-- A REDECLARED OVERLOAD IS REFUSED BY NAME, AND THE NAME E3006 QUOTES IS A MINTED ONE — so the diagnostic
+has to say what the author actually wrote. `pick(x Integer)` takes the bare name; `pick(x bool)` is minted
+`pick#bool`; the second `pick(x bool)` matches an already-registered signature, so
+`Parser.overloadMemberHoldingSignature` hands it the INCUMBENT'S name and the two land on one key. MEASURED
+before this pin, and the reason it exists: the refusal read `Duplicate function 'pick#bool'` — the canonical
+plain sentence, whose slot `duplicate-functions.md` fills only with names a declaration wrote, quoting a
+symbol that appears nowhere in the program. The sort in `ParseStaging.duplicateFunctionMessage` was an
+ENUMERATION of the two contested kinds and this kind is neither, so it fell through to the one sentence that
+promises the name is greppable. It now tests the PROPERTY — is this the written name? — and a minted name
+nobody classifies lands here.
+
+⚠ The bootstrap does NOT refuse this program at all; it compiles it, reporting only the unused-variable
+warnings. shv2 is deliberately stricter — a duplicate is a duplicate — so there is no oracle to match on the
+wording, only the canonical rule about whose names may fill that slot. -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pick(x Integer) returns Integer
+	return x
+end 'pick'
+
+function pick(flag bool) returns Integer
+	return 1 if flag else 0
+end 'pick'
+
+function pick(flag bool) returns Integer
+	return 2 if flag else 0
+end 'pick'
+
+function main() returns ExitCode
+	return pick(3) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3006: specs/fragments/function-overloads/error.overload-redeclared-with-the-same-parameters.test:12:10: duplicate definition of function 'pick#bool' — 'pick' has more than one declaration in this program, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
+```
+
 <!-- test: method-type-disambiguation -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)

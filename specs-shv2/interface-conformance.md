@@ -713,8 +713,15 @@ end 'main'
 ⭐⭐ **THE ONE DUPLICATE D7 STILL REFUSES — and the only program left that reaches the conformance check's
 malformed-module gate.** Overloading resolves a collision by MANGLING the later member's registration name, so
 two methods of one name are two distinct keys unless their signatures are IDENTICAL too; then
-`Parser.overloadRegistrationNameFor` hands back the BARE name on purpose and it collides in
-`commitFuncSignatures`, earning the E3006 it always did.
+`Parser.overloadRegistrationNameFor` hands back the INCUMBENT'S OWN registration name on purpose and it
+collides in `commitFuncSignatures`, earning the E3006 it always did.
+
+⚠ **THAT NAME IS BARE ONLY WHEN THE INCUMBENT IS THE FIRST MEMBER OF ITS SET** — which is the case here, and
+is why this test reads `'Widget.label'`. Redeclare a LATER member and the name handed back is the incumbent's
+MINTED one (`Parser.overloadMemberHoldingSignature`), which is a symbol no declaration wrote; E3006 then says
+so rather than quoting it bare, and `function-overloads/error.overload-redeclared-with-the-same-parameters`
+pins that half. Stated because the earlier wording said "the BARE name" flatly, which is true of this program
+and false of the mechanism.
 
 ⚠ **D7 DID NOT LOSE THE OLD PANIC GUARD — IT MADE THE PANIC UNREACHABLE, AND THAT IS A STRONGER OUTCOME THAN A
 TEST.** The panic needed TWO things: a name collision, AND the module's function table and `funcSignatures`
@@ -759,7 +766,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:16:11: duplicate definition of function 'Widget.label'
+error E3006: <fragment>:16:11: Duplicate function 'Widget.label'
 ```
 
 ### `static` interface requirements (R9)

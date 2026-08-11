@@ -103,7 +103,7 @@ A whitelisted module must declare no name a user program declares and no builtin
   its own `type Clock` with a `nowMs()` is rejected with
 
   ```text
-  error E3006: <path>/stdlib/Clock.maxon:18:25: duplicate definition of function 'Clock.nowMs'
+  error E3006: <path>/stdlib/Clock.maxon:18:25: Duplicate function 'Clock.nowMs'
   ```
 
   naming the whitelisted definition it collided with. (That path is the real `stdlib/Clock.maxon`,

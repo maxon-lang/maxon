@@ -1161,10 +1161,9 @@ end 'commitFuncSignatures'
 // same discipline applied to the one kind whose name is SYNTHESIZED. A free function contested across
 // directories is filed as `<directory>.<name>` — the same construction, and the same flat key space, a
 // method is filed under — so a `create` in a directory called `Point/` collides with `type Point`'s own
-// `create`. Told only "duplicate definition of function 'Point.create'", the author searches for a string
-// that appears nowhere in their source and finds two declarations that do not look like duplicates of each
-// other. The fix is a rename on either side, and it has to be said, because it is not inferable from the
-// name.
+// `create`. Told only "Duplicate function 'Point.create'", the author searches for a string that appears
+// nowhere in their source and finds two declarations that do not look like duplicates of each other. The
+// fix is a rename on either side, and it has to be said, because it is not inferable from the name.
 //
 // ⭐⭐ **THE SECOND SYNTHESIZED-NAME KIND IS A CONTESTED `extension` METHOD (X-contains)**, and it earns its
 // own sentence for the identical reason one kind up. A `<Conformer>.<method>` declared by extensions in more
@@ -1173,22 +1172,74 @@ end 'commitFuncSignatures'
 // refusal working exactly as designed (`Parser.overloadRegistrationNameFor`), but the name it names is one
 // no declaration wrote, and the fix — change the PARAMETERS, or the name — is not inferable from it.
 //
+// ⛔ **THE PLAIN SENTENCE'S WORDING IS THE CANONICAL ONE AND IS NOT OURS TO CHOOSE** — `Duplicate function
+// 'X'` is what `/specs/duplicate-functions.md` states the language emits for a plain redefinition, and the
+// bootstrap emits it verbatim.
+//
+// ⚠ **THE MANGLED SENTENCES ARE shv2-SPECIFIC SITUATIONS CANONICAL DOES NOT COVER, and the citation below is
+// to the REGISTER, not to a spelling.** `/specs` does carry a `duplicate definition of 'X' - <why they
+// collide>` register for a name collision after mangling (`function-overloads.md:821`,
+// `generic-instance-names.md:238`) — but that is its own sentence for its own situation, and no canonical
+// text spells any of the three below. Nothing here may be described as "matching canonical": these say
+// `duplicate definition of function 'X' — …`, which is a fourth spelling, and shv2's generic-instance
+// sentence (`checkGenericInstanceNameCollision`) is a fifth. That the wordings have drifted apart is a real
+// debt, and reconciling them is a decision about ALL of them at once — not something a tick touching one
+// member may do to it alone, which is exactly how they drifted.
+//
+// ⛔ **WHAT MUST NOT CHANGE IS THE SPLIT, whatever the wordings settle on.** A plain redefinition tells the
+// author to DELETE a definition; a mangled collision tells them to RENAME a spelling. Folding these into one
+// sentence would erase the only thing that distinguishes those two fixes.
+//
 // ⚠ The index is taken through the memo `compileToCodeResult` fills before the pipeline runs — merge is
 // downstream of it, so this can only ever be the hit, exactly as `SemanticCheck.programSignaturesIn` argues
 // for its own three askers.
+//
+// ⭐⭐ **THE SORT IS ON A PROPERTY, NOT ON AN ENUMERATION OF KINDS, and that is the correctness of it.** The
+// plain sentence is earned by `name` BEING the name a declaration wrote — never by failing to match the
+// mangled kinds this function happens to know about. It was an enumeration, and the set of names the parser
+// MINTS is larger than any list kept here: an ordinary same-file overload set whose member is redeclared with
+// identical parameters is handed the incumbent's minted name (`Parser.overloadMemberHoldingSignature`), which
+// matches neither contested test and fell through to the canonical sentence. MEASURED: two declarations of
+// `pick(x bool)` beside a `pick(x Integer)` gave `Duplicate function 'pick#bool'` — a canonical sentence, in
+// canonical's own shape, quoting a symbol that appears nowhere in the program, against the one spec that
+// states only WRITTEN names go in that slot. Pinned by
+// `function-overloads/error.overload-redeclared-with-the-same-parameters`.
+//
+// ⇒ A new mint nobody classifies now lands on a mangled sentence and says what the author WROTE, which is
+// imprecise rather than wrong. The enumeration failed OPEN, onto the one sentence that promises the name it
+// quotes is greppable — the worst of the four places it could have landed.
 function duplicateFunctionMessage(project Project, name ByteArray) returns String
 	let signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage: queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
 	if signatures.isContestedRegistrationName(name) 'aFreeFunctionContestedAcrossDirectories'
-		return "duplicate definition of function '{String.from(name)}' — a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function"
+		return mangledDuplicateFunctionMessage(name, why: "a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function")
 	end 'aFreeFunctionContestedAcrossDirectories'
 
 	let base = overloadRegistrationBaseName(name)
 	if signatures.isContestedExtensionMethod(base) 'anExtensionMethodContestedAcrossFiles'
-		return "duplicate definition of function '{String.from(name)}' — '{String.from(base)}' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names"
+		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "is declared by an `extension` in more than one FILE")
 	end 'anExtensionMethodContestedAcrossFiles'
 
-	return "duplicate definition of function '{String.from(name)}'"
+	if not base.equals(name) 'aMintedNameNoContestExplains'
+		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "has more than one declaration in this program")
+	end 'aMintedNameNoContestExplains'
+
+	return "Duplicate function '{String.from(name)}'"
 end 'duplicateFunctionMessage'
+
+// THE one speller of the mangled register's opening. Three call sites above, identical up to the tail; it is
+// written once so that a future reconciliation of the wordings (see the header) is one edit and cannot leave
+// a sibling behind — which is precisely what happened to this family the first time one member was reworded.
+function mangledDuplicateFunctionMessage(name ByteArray, why String) returns String
+	return "duplicate definition of function '{String.from(name)}' — {why}"
+end 'mangledDuplicateFunctionMessage'
+
+// The two PARAMETER-SPELLING kinds — a contested `extension` method, and an ordinary overload set's member
+// redeclared — differ only in why the name has several declarations. What follows from that is one fact: every
+// declaration is filed under its parameter spelling, two spelled the same, and the fix is the parameters or
+// the name. It is stated once.
+function parameterSpellingCollisionMessage(name ByteArray, base ByteArray, whyThereAreSeveral String) returns String
+	return mangledDuplicateFunctionMessage(name, why: "'{String.from(base)}' {whyThereAreSeveral}, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names")
+end 'parameterSpellingCollisionMessage'
 
 // Commit this file's overload sets (D7). A file that overloads nothing carries the shared empty table and
 // this loop does not run.
