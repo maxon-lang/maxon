@@ -103,14 +103,16 @@ things at once and both matter:
   site, so `requireArrayElementCopyable` never fires; it reaches `Array.clone`'s shared body purely through
   the `Cloneable` witness that `type Array … implements … Cloneable` promises unconditionally. Delete
   `requireOpaqueArrayCopyable` and it compiles and byte-blits a managed pointer through `copyFunc@32`.
-- **A stdlib-body refusal is PINNABLE, which is the property the case below was shelved for lacking.** The
-  span is `stdlib/Array.maxon:145:32` — `Array.clone`'s own `managed.slice(0, len)`, a line no user wrote —
-  and it reads REPO-RELATIVE because the runner rewrites the compiler's absolute `stdlib/` root the way it
-  already rewrites a staged fragment's path (`SpecTestRunner.rewriteStdlibPaths`). The line number is the
-  library's, so this expectation moves when `stdlib/Array.maxon` gains a line above 145; that is a real
-  cost and it is the same one the four `/specs` cases pinning `Array.maxon:413`'s panic already pay.
+- **A stdlib-body refusal is BLAMED AT THE USER'S OWN CONSTRUCT, and the library line survives as a NOTE.**
+  It is RAISED at `stdlib/Array.maxon:145:32` — `Array.clone`'s own `managed.slice(0, len)`, a line no user
+  wrote — and REPORTED at `typealias Nested = Array with (Array with String)`, the instantiation this
+  program wrote that made the element uncopyable. The library location reads REPO-RELATIVE because the
+  runner rewrites the compiler's absolute `stdlib/` root the way it already rewrites a staged fragment's
+  path (`SpecTestRunner.rewriteStdlibPaths`). Only the NOTE now carries the library's line number, so an
+  edit above `stdlib/Array.maxon:145` still moves this expectation — a real cost, and the same one the four
+  `/specs` cases pinning `Array.maxon:413`'s panic already pay.
 
-⭐⭐ **THIS SPAN IS NOW FOUR OTHER CASES' ANSWER TOO, AND THIS IS WHERE THAT IS EXPLAINED ONCE.** ARRH struck
+⭐⭐ **THIS REFUSAL IS FOUR OTHER CASES' ANSWER TOO, AND THIS IS WHERE THAT IS EXPLAINED ONCE.** ARRH struck
 `clone` from `Parser.arraySurfaceMemberNames`, so `arr.clone()` is `stdlib/Array.maxon:143`'s declaration
 rather than a dispatch arm — and a corpus body is a SHARED generic body over an opaque `Element`, so a
 receiver whose element cannot be deep-cloned is refused by the OPAQUE gate in the library instead of by the
@@ -120,13 +122,19 @@ CONCRETE gate at the call. Four expectations moved onto exactly the sentence abo
 `generic-type-substitution.error.bare-generic-name-nesting-is-not-deep-cloneable` and
 `typealias-file-scope.error.contested-generic-alias-at-the-opaque-copy-gate`.
 
-⚠ **WHAT THAT COSTS IS PRECISION, NOT SOUNDNESS, AND IT IS THE SAME MISSING BLAME EDGE THE CASE BELOW IS
-SHELVED FOR.** Each of those four is still refused, at the same exit code, for the same underlying gap — but
-the sentence no longer names the user's element (`Holder`, `StrHolder`) or the user's line, because the gate
-that knew them is the concrete one and `clone` no longer reaches it. `slice` and `append` still do
-(`requireArrayCopyMethodSupported` → `requireArrayElementCopyable`), so the concrete message is live, just
-not through `clone`. Re-pointing a stdlib-body diagnostic at the construct that forced it is the one rung
-that would give all five their user-side span back.
+⭐⭐ **THAT COST PRECISION, AND BLAME (this rung) GIVES IT BACK — WITHOUT MOVING THE SENTENCE.** Each of the
+five prints the OPAQUE sentence, which does not name the user's element the way the concrete one did
+(`Holder`, `StrHolder`); what it now names instead is the user's own LINE — the `typealias` that
+instantiated the uncopyable element — so the element is read off the source the reader is pointed at rather
+than quoted into the message. The gate consults the INSTANCE REGISTRY, so the construct it is really about
+is an instantiation, and `ProgramSignatures.instantiationSiteOf` is the route from the offending instance
+back to where the program wrote it. An instance the program never wrote — `Array with Bag`, substituted
+into `Container`'s inner `typealias ElementArray = Array with Element` by
+`typealias NestedContainer = Container with Bag` — is followed one hop further through
+`substitutedInstanceOrigins` to the enclosing instantiation that minted it, which is how the two
+`Container` cases land on their own `NestedContainer` line and not in the library. `slice` and `append`
+still reach the CONCRETE gate (`requireArrayCopyMethodSupported` → `requireArrayElementCopyable`), so that
+message is live too, just not through `clone`.
 ```maxon
 typealias Nested = Array with (Array with String)
 
@@ -140,32 +148,38 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: stdlib/Array.maxon:145:32: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+error E2015: <fragment>:2:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 
 <!-- disabled-test: error.a-map-key-array-is-refused-for-its-element -->
-<!-- the refusal is CORRECT but it is the WRONG refusal: it lands in `Array.clone`'s body, and what is missing is the blame edge that would re-point a stdlib-body diagnostic at the user construct that forced it (no re-anchoring on any reporting path; `GenericInstantiationSite` records where the `typealias` was WRITTEN, so for a stdlib alias the site IS the stdlib). The other half of this note — that no portable `maxoncstderr` could name a stdlib path — was cured by ARRH and the case directly above pins that same stdlib span. Not an `Array` gap — the deep-clone slice it names is a real documented one -->
+<!-- ⚠ THE BLAME EDGE THIS NOTE USED TO NAME IS BUILT (rung BLAME) AND IT WAS NOT THE BLOCKER. MEASURED on the enabled case: the E2015 is now reported at `<fragment>:13:11` — the very line and column the two E3017s below expect, `typealias OpaqueArrMap = Map with (OpaqueArr, Val)` — so the refusal names the user's construct exactly right and the case still fails. What is left is ORDER, not blame: the copy gate raises a `ParseError`, which stops the file, and `checkWhereConstraints` short-circuits on `projectHasErrors`, so the two E3017s never speak. Enabling this needs the opaque copy gate not to refuse a key type that is merely UNSERVED (the spec below measures that it refuses valid programs too — `Map with (Array with String, V)`), or the constraint check to run anyway. Neither is a blame question. Not an `Array` gap — the deep-clone slice it names is a real documented one -->
 ### A `Map` key array is refused for its ELEMENT, not as an unserved key type
 
 ⛔⛔ **SHELVED BY `land-the-listing`, AND THE REASON IS NOT THAT THE COMPILER GOT WORSE — READ THIS BEFORE
 RE-ENABLING IT.** With `stdlib/Array.maxon` listed, this program is refused by the OPAQUE COPY GATE
-(`Parser.requireOpaqueArrayCopyable`) before the constraint check ever runs, and the sentence it prints names
-`stdlib/Array.maxon:145:32` — `Array.clone`'s own `managed.slice(0, len)`, a line no user wrote. The two
-E3017s below are what the user's mistake actually IS and they never speak, because a `ParseError` stops the
-file before the pipeline and `checkWhereConstraints` short-circuits on `projectHasErrors`.
+(`Parser.requireOpaqueArrayCopyable`) before the constraint check ever runs. The two E3017s below are what
+the user's mistake actually IS and they never speak, because a `ParseError` stops the file before the
+pipeline and `checkWhereConstraints` short-circuits on `projectHasErrors`.
+
+⚠ **HALF OF THE ORIGINAL REASON IS GONE AND SAYING SO IS THE POINT.** This block used to add that the
+sentence *"names `stdlib/Array.maxon:145:32` … a line no user wrote"*. It does not any more: rung BLAME
+reports it at `<fragment>:13:11`, which is the E3017s' own line and column, and keeps the library line as a
+`note:`. So the WRONG-LOCATION half is cured and the WRONG-DIAGNOSTIC half is all that is left — the copy
+gate speaking at all on a program whose fault is a constraint.
 
 ⭐⭐ **THE CANDIDATE CURE WAS EVALUATED AND MUST NOT BE TAKEN — THERE IS A RUN THAT REFUTES IT, AND IT IS NOW
 A CASE RATHER THAN A TRANSCRIPT.** The standing proposal was to drop `Array`'s own opaque gate, on the ground
 that *"`Array`'s body is the one opaque body whose every call site is already concretely gated
 (`requireArrayElementCopyable`)"*. That is false, and the counterexample needs no `Map` at all: it is
 `error.the-opaque-copy-gate-is-reached-through-the-cloneable-witness` directly above, which reaches
-`Array.clone`'s shared body through the `Cloneable` witness alone and takes this same refusal at this same
-stdlib line. ⇒ **the existential-dispatch hole the previous rung could not close is real, and closing it is
+`Array.clone`'s shared body through the `Cloneable` witness alone and takes this same refusal from this same
+library body. ⇒ **the existential-dispatch hole the previous rung could not close is real, and closing it is
 what a cure must do first — not something to route around.**
 
 ⚠ **AND THE COST IS WIDER THAN THIS CASE, WHICH IS THE PART WORTH CARRYING FORWARD.** MEASURED: `typealias
 StrArrMap = Map with (Array with String, Val)` — a key type that satisfies `Hashable` and `Equatable`
-perfectly well, and which the bootstrap oracle compiles — takes the SAME refusal at the SAME stdlib line. So
+perfectly well, and which the bootstrap oracle compiles — takes the SAME refusal from the SAME body. So
 the gate is not merely misplaced on an already-invalid program; it refuses valid ones. The underlying gap
 (`Array with (Array with String)` has no single `copyFunc`) is a documented later slice, not something this
 rung invents.

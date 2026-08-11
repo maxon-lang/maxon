@@ -9543,6 +9543,15 @@ export type Parser
 	// reached only from `Queries.foldDescriptorNeeds`, which `scanDescriptorNeedsInto`'s header records as
 	// running once the index is whole. A second asker placed inside the sweep must not share this table.
 	var corpusServedArrayMembers as DescriptorNeedMap
+	// ⭐⭐ **THE USER CONSTRUCT THIS FILE'S REFUSAL IS REALLY ABOUT (BLAME)** — see `LibraryBlame`, and
+	// `blameLibraryRefusalOnInstantiation`, its one writer today. It is read by `Queries.queryParseOps` on
+	// the parse-failure path, which is why it lives on the parser and not on the `FileParseArtifact`: a
+	// blame exists only for a parse that THREW, and a throw abandons the artifact.
+	//
+	// The parser stays PURE. This is derived from `self.signatures` — the whole-program declaration index
+	// the parse memo's key already covers — and never from `Project`, so the same file parsed twice records
+	// the same blame.
+	export var libraryBlame as LibraryBlame
 
 	// ⭐⭐ **THE STDLIB/USER SHADOW RENAME IS APPLIED HERE, TO THE TOKENS, AND THAT PLACEMENT IS THE WHOLE
 	// DESIGN (A1s wave 2).**
@@ -9606,6 +9615,7 @@ export type Parser
 			namespace: namespace,
 			artifact: FileParseArtifact.create(filePath, livesUnderStdlibDirectory: livesUnderStdlibDirectory),
 			scope: Scope.create(),
+			libraryBlame: LibraryBlame.unblamed,
 			topLevelBorrowSubjects: sharedEmptyTopLevelBorrowSubjects,
 			valueIds: ValueIdRef.create(0),
 			mutableVars: VarInfoArray.create(),
@@ -49335,15 +49345,49 @@ export type Parser
 	// instance (`Box with String`, a later slice) — because that element has no single `copyFunc` and its copy
 	// would byte-blit a managed pointer and double-free it. The reject is per-INSTANTIATION (the shared body's
 	// element is opaque), so it enumerates the enclosing type's instances through
-	// `genericTypeFieldHasUncopyableInstantiation`, mirroring the concrete gate's `arrayElementSupportsDeepClone`.
+	// `genericTypeFieldUncopyableInstantiation`, mirroring the concrete gate's `arrayElementSupportsDeepClone`.
 	function requireOpaqueArrayCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
 		// ⚠ The declaring type is NOT paired in here from `self.enclosingType` any more (W14): the element's
 		// token names its own declaration, so the gate resolves both halves from one fact — see
-		// `anyInstanceTypeArgHasKind` for the hand-pairing that removes.
-		if self.signatures.genericTypeFieldHasUncopyableInstantiation(typeNameIdOf(self.signatures.containerElementType(giid))) 'uncopyable'
-			throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).", line: methodTok.line, column: methodTok.column)
+		// `instanceWithTypeArgKind` for the hand-pairing that removes.
+		match self.signatures.genericTypeFieldUncopyableInstantiation(typeNameIdOf(self.signatures.containerElementType(giid))) 'uncopyable'
+			noInstance then return
+			// ⭐ The offending INSTANTIATION is what the user wrote, so it is what this refusal is blamed at
+			// when the body raising it is the library's — see `blameLibraryRefusalOnInstantiation`.
+			instance(offender) then self.blameLibraryRefusalOnInstantiation(offender)
 		end 'uncopyable'
+
+		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).", line: methodTok.line, column: methodTok.column)
 	end 'requireOpaqueArrayCopyable'
+
+	// ⭐⭐ **BLAME A LIBRARY-BODY REFUSAL ON THE INSTANTIATION THAT FORCED IT (BLAME).**
+	//
+	// This gate is contingent on the INSTANCE REGISTRY — it refuses `Array.clone`'s own
+	// `managed.slice(0, len)` because SOME instantiation of the enclosing generic type substitutes an
+	// element with no single `copyFunc`. When the body it refuses is `stdlib/`'s, the line it names is a
+	// line no user wrote; the instantiation is the user's own construct, and blaming it there restores both
+	// halves of what the relocation cost — the user's line, and (because the line IS `typealias Holders =
+	// Array with Holder`) the user's element.
+	//
+	// ⚠ **ONLY FOR A LIBRARY BODY.** In a USER generic body the refusal already lands on a line its author
+	// wrote, and re-pointing it at the instantiation would move a diagnostic that was never mis-blamed.
+	// `isStdlibSource` is the right bit and not `livesUnderStdlibDirectory`: the question is whose code the
+	// author is reading, which is exactly the visibility partition (`maxon-shv2 build stdlib/URL.maxon`
+	// makes those files the user's own, and there the refusal must stay where it is raised).
+	//
+	// An instance the program never WROTE — one substituted into a generic body's inner alias — is followed
+	// back to the enclosing instantiation that minted it, and one with no written origin at all simply keeps
+	// the raise site. Both are `ProgramSignatures.instantiationSiteOf`'s business, argued there.
+	function blameLibraryRefusalOnInstantiation(offender GenericInstanceId)
+		if not self.isStdlibSource 'theAuthorWroteThisBody'
+			return
+		end 'theAuthorWroteThisBody'
+
+		match self.signatures.instantiationSiteOf(offender) 'site'
+			unwritten then return
+			written(site) then self.libraryBlame = LibraryBlame.userSite(site.filePath, line: site.nameLine, column: site.nameColumn)
+		end 'site'
+	end 'blameLibraryRefusalOnInstantiation'
 
 	// Emit a VOID array mutator call; return the receiver (what the statement still denotes).
 	function emitArrayVoidCall(callee ByteArray, args ValueIdArray, receiver ValueId, range SourceRange) returns ValueId

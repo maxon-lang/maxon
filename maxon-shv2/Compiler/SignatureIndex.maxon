@@ -1354,7 +1354,7 @@ end 'DeclKind'
 // The per-argument classification the three "does any interned instance of `baseName` classify its type
 // parameter at `position` as …?" instance-scan gates in `ProgramSignatures` differ on — the ONE thing that
 // varies between them, named here so the registry SCAN (match base name, bounds-guard the arg) lives in one
-// place (`anyInstanceTypeArgHasKind`) and a fix to the loop or the bound cannot reach one gate and silently
+// place (`instanceWithTypeArgKind`) and a fix to the loop or the bound cannot reach one gate and silently
 // miss the other two.
 enum TypeArgInstantiationKind
 	// The box MOVES the argument in and the caller may not reuse it (`typeArgIsOwned`): a String, an owning
@@ -1370,8 +1370,17 @@ enum TypeArgInstantiationKind
 	uncopyableElement
 end 'TypeArgInstantiationKind'
 
+// Which instance of the declaring base classified its argument as the asked-for kind, or that none did.
+// A UNION rather than a bool because the two questions have different answers to give: an EMISSION gate
+// wants membership, and a REFUSAL wants the instance itself — it is what the user WROTE, and so the only
+// route from the refusal back to a source anchor the author can read (`LibraryBlame`).
+export union TypeArgKindMatch
+	noInstance
+	instance(id GenericInstanceId)
+end 'TypeArgKindMatch'
+
 // ⭐ **WHICH OF THE THREE GATES MAY NOT READ A SPECULATIVELY MINTED INSTANCE (A4q)** — the direction test
-// `anyInstanceTypeArgHasKind` applies, stated here beside the kinds it splits so the reason travels with
+// `instanceWithTypeArgKind` applies, stated here beside the kinds it splits so the reason travels with
 // them. A speculative row (`ProgramSignatures.internAggregateElementInstances`) records that a
 // `[<identifier>…]` literal's element COULD be this type, never that it IS.
 //
@@ -4760,6 +4769,24 @@ export typealias CanonicalInstanceNameMap = Map with (GenericInstanceId, ByteArr
 // there is no author's spelling to quote and the mint is the only thing that can distinguish it.
 export typealias InstanceDisplayNameMap = Map with (GenericInstanceId, ByteArray)
 
+// ⭐⭐ **WHICH INSTANTIATION AN UNWRITTEN INSTANCE WAS SUBSTITUTED OUT OF (BLAME).** A generic body's inner
+// `typealias ElementArray = Array with Element` is re-interned per enclosing instance
+// (`substituteInstanceArgsThrough`), so `Container with Bag` mints `Array with Bag` — an instance the PROGRAM
+// NEVER WROTE and which therefore has no `GenericInstantiationSite`. That is exactly the instance a
+// library-body refusal may have to be blamed on, and the only construct an author can be shown for it is the
+// enclosing instantiation they DID write. One edge per mint records that.
+//
+// ⚠ **FIRST WRITE WINS.** One instance can be the substitution of several enclosing instantiations
+// (`Container with Bag` and `Holder with Bag` both mint `Array with Bag`); the blame must not depend on which
+// call happened to run last, so the edge is written once and never overwritten. Which one that is remains a
+// property of declaration order, the same order every other last-wins/first-wins rule in this index reads.
+//
+// ⚠ It is a DIAGNOSTIC edge and nothing else — no emission, no check and no hash reads it, so a missing edge
+// costs precision in one message and never an answer. It is deliberately NOT filed into `genericAliasSites`,
+// which the E3017 where-constraint check walks: a synthesized instantiation is not one the author wrote, and
+// reporting constraints against it would be a real behaviour change wearing a diagnostic's clothes.
+typealias SubstitutedInstanceOriginMap = Map with (GenericInstanceId, GenericInstanceId)
+
 // ⭐ **THE REVERSE OF `CanonicalInstanceNameMap` — every interned instance's canonical name back TO ITS ID,
 // so "is this NAME an instance?" is a probe rather than a walk.** `isCanonicalInstanceName` used to answer it
 // by scanning `0 upto genericInstances.count()`, which its own header justified with *"a program interns a
@@ -4939,7 +4966,7 @@ export type GenericInstanceRegistry
 	// ⭐⭐ **WAS THIS ROW MINTED BY A GUESS RATHER THAN BY THE SOURCE (A4q)?** True only of a row
 	// `ProgramSignatures.internAggregateElementInstances` materialized for a `[<identifier>…]` literal whose
 	// element type the token sweep could not name — a candidate, not a fact. Read by
-	// `anyInstanceTypeArgHasKind`, whose copy gate refuses on what it finds and so may not count a guess; see
+	// `instanceWithTypeArgKind`, whose copy gate refuses on what it finds and so may not count a guess; see
 	// `kindIgnoresSpeculativeInstances` for why the other two gates still do.
 	var speculative as BoolArray
 
@@ -5256,6 +5283,14 @@ export type GenericInstantiationSite
 end 'GenericInstantiationSite'
 
 export typealias GenericInstantiationSiteArray = Array with GenericInstantiationSite
+
+// Whether the program WROTE the instantiation being asked about, and where. See
+// `ProgramSignatures.instantiationSiteOf`, which owns the argument for why `unwritten` is a real answer
+// and not a lookup failure.
+export union InstantiationSiteLookup
+	unwritten
+	written(site GenericInstantiationSite)
+end 'InstantiationSiteLookup'
 
 // One RANGED typealias declared INSIDE a generic type (P1.6-C): `type Wrapper uses T` with
 // `export typealias Idx = int(0 to u64.max)` ⇒ `(Wrapper, Idx=int(0..u64.max))`. The sweep
@@ -6225,6 +6260,8 @@ export type ProgramSignatures
 	// `InstanceDisplayNameMap`. Filled once by `deriveInstanceDisplayNames`, which is the only writer, so the
 	// parse (which fans out per file) only ever reads it.
 	var instanceDisplayNames as InstanceDisplayNameMap
+	// Which written instantiation each SUBSTITUTED instance came out of — see `SubstitutedInstanceOriginMap`.
+	var substitutedInstanceOrigins as SubstitutedInstanceOriginMap
 	// The reverse of `canonicalInstanceNames` — see `CanonicalInstanceNameIndex` for the quadratic it removes.
 	// Filled by `indexCanonicalInstanceNames`, which is the ONLY writer, so the index and the watermark below
 	// cannot disagree about which ids are in it.
@@ -6837,7 +6874,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -15041,7 +15078,7 @@ export type ProgramSignatures
 	//     a descriptor and a destructor are both synthesized on USAGE, and an over-interned instance nobody
 	//     names has none — so the growth is bounded bookkeeping and reaches no emitted byte.
 	//     ⛔ **"REACHES NO EMITTED BYTE" IS NOT "HARMLESS", AND THE DIFFERENCE WAS A WRONG REFUSAL (A4q).** A
-	//     row here is also read by `anyInstanceTypeArgHasKind`, whose copy gate REFUSES on it — which is why
+	//     row here is also read by `instanceWithTypeArgKind`, whose copy gate REFUSES on it — which is why
 	//     each row now carries whether anything NAMED it. See `internAggregateElementInstances`.
 	//   • **THE GIDS MOVE.** A gid is intern ORDER, and these interns now all happen after the last file folds
 	//     instead of interleaved with it, so every over-interned instance's gid shifts. Nothing DERIVES from a
@@ -15078,8 +15115,8 @@ export type ProgramSignatures
 	// argues the rows are harmless because "a descriptor and a destructor are both synthesized on USAGE, and
 	// an over-interned instance nobody names has none — so the growth is bounded bookkeeping and reaches no
 	// emitted byte". That is true of EMISSION and beside the point for DIAGNOSIS:
-	// `anyInstanceTypeArgHasKind` walks this same registry, and the copy gate it serves
-	// (`genericTypeFieldHasUncopyableInstantiation` ⇒ `Parser.requireOpaqueArrayCopyable`) reads a row as
+	// `instanceWithTypeArgKind` walks this same registry, and the copy gate it serves
+	// (`genericTypeFieldUncopyableInstantiation` ⇒ `Parser.requireOpaqueArrayCopyable`) reads a row as
 	// evidence that the program CONTAINS an array of that element — then REFUSES on it.
 	//
 	// ⇒ MEASURED once `stdlib/Array.maxon`, `File.maxon` and `Directory.maxon` are listed. This walk minted
@@ -16473,7 +16510,16 @@ export type ProgramSignatures
 		// The fixed size travels with the re-intern for `GenericInstanceRegistry.intern`'s stated reason: a
 		// caller re-interning an instance it already holds must carry every component of its key, and the one
 		// silence can lose is this one.
-		return MaxonType.genericInstance(self.genericInstances.intern(self.genericInstances.instanceBaseId(nested), args: substituted, fixedSize: self.genericInstances.instanceFixedSize(nested)))
+		let substitutedId = self.genericInstances.intern(self.genericInstances.instanceBaseId(nested), args: substituted, fixedSize: self.genericInstances.instanceFixedSize(nested))
+		// ⭐ The instance this mints was written by nobody — `through` is the construct that forced it into
+		// existence, and the only one an author can be shown. See `SubstitutedInstanceOriginMap`, including
+		// why the edge is first-write-wins and why the `moved` early return above is what keeps this off the
+		// path a concrete field type takes.
+		if not self.substitutedInstanceOrigins.contains(substitutedId) 'firstMintOfThisInstance'
+			self.substitutedInstanceOrigins.upsert(substitutedId, value: through)
+		end 'firstMintOfThisInstance'
+
+		return MaxonType.genericInstance(substitutedId)
 	end 'substituteInstanceArgsThrough'
 
 	// ⭐⭐ **A TUPLE'S INSTANCE VIEW — the third declaration-view shape, and the ONE that cannot ride
@@ -16868,7 +16914,7 @@ export type ProgramSignatures
 	// point), and it became load-bearing the moment a REFUSAL read the same rows.
 	//
 	// ⇒ MEASURED once `stdlib/Array.maxon`, `File.maxon` and `Directory.maxon` are listed: `Array.clone`'s own
-	// `managed.slice` (`stdlib/Array.maxon:145`) is gated by `genericTypeFieldHasUncopyableInstantiation`, and
+	// `managed.slice` (`stdlib/Array.maxon:145`) is gated by `genericTypeFieldUncopyableInstantiation`, and
 	// the speculative walk minted `Array with FileWriter`, `Array with FileReader`, `Array with Directory`,
 	// `Array with ArrayIterator` and `Array with __CharacterSet` — each uncopyable, none named by any program.
 	// One of them was enough to refuse **every** `clone`/`slice`/`append` in **every** program holding a
@@ -16880,8 +16926,15 @@ export type ProgramSignatures
 	// (`kindIgnoresSpeculativeInstances`). Over-approximating there costs a descriptor-gated drop on a shape
 	// that never occurs, which is a no-op at run time; under-approximating there would drop nothing where a
 	// drop is owed. A refusal is the one direction where a phantom's cost is a wrong ANSWER.
-	function anyInstanceTypeArgHasKind(param TypeParamId, kind TypeArgInstantiationKind) returns bool
-		let owner = try self.typeParamOwnerOf(param) otherwise return false
+	//
+	// ⭐ **IT ANSWERS WITH THE INSTANCE, AND THE BOOL IS DERIVED FROM THAT (BLAME).** The walk used to
+	// return a bare `true`, which is everything the two EMISSION gates need and one fact short of what a
+	// REFUSAL needs: the instance is the thing the USER WROTE, so it is the only handle on a source
+	// anchor to blame the refusal at (`Parser.requireOpaqueArrayCopyable` →
+	// `ProgramSignatures.instantiationSiteOf`). One walk answers both rather than a second one being
+	// written for the identity, which is how the two would come to disagree about which instance matched.
+	function instanceWithTypeArgKind(param TypeParamId, kind TypeArgInstantiationKind) returns TypeArgKindMatch
+		let owner = try self.typeParamOwnerOf(param) otherwise return TypeArgKindMatch.noInstance
 		let position = owner.position
 		if let baseId = try self.typeNames.idOf(owner.declaringTypeName) 'namedType'
 			if let siblings = try self.genericInstances.instancesOfBase(baseId) 'instantiated'
@@ -16891,17 +16944,25 @@ export type ProgramSignatures
 					end 'nothingNamedIt'
 
 					let args = self.genericInstances.instanceArgs(id)
-					if position < args.count() and self.typeArgHasKind(try args.get(position) otherwise panic("ProgramSignatures.anyInstanceTypeArgHasKind: instanceArgs.get OOB at {position} despite the range guard"), kind: kind) 'match'
-						return true
+					if position < args.count() and self.typeArgHasKind(try args.get(position) otherwise panic("ProgramSignatures.instanceWithTypeArgKind: instanceArgs.get OOB at {position} despite the range guard"), kind: kind) 'match'
+						return TypeArgKindMatch.instance(id)
 					end 'match'
 				end 'eachInstance'
 			end 'instantiated'
 		end 'namedType'
 
-		return false
+		return TypeArgKindMatch.noInstance
+	end 'instanceWithTypeArgKind'
+
+	// The bool the walk above deliberately is not, for the two EMISSION gates that need only membership.
+	function anyInstanceTypeArgHasKind(param TypeParamId, kind TypeArgInstantiationKind) returns bool
+		return match self.instanceWithTypeArgKind(param, kind: kind) 'match'
+			noInstance gives false
+			instance gives true
+		end 'match'
 	end 'anyInstanceTypeArgHasKind'
 
-	// The per-kind argument predicate the instance-scan gates read (see `anyInstanceTypeArgHasKind`). Each arm
+	// The per-kind argument predicate the instance-scan gates read (see `instanceWithTypeArgKind`). Each arm
 	// reads off the SAME `typeArgIsOwned` / `typeArgIsCoOwnedTrivial` / `typeSupportsDeepClone` boundary the
 	// corresponding drop, consume or copy site decides on, so a gate and the emission it guards cannot disagree.
 	function typeArgHasKind(t MaxonType, kind TypeArgInstantiationKind) returns bool
@@ -16919,7 +16980,7 @@ export type ProgramSignatures
 	// trivial (`Box with SmallInt`). This is the exact gate that tells a crash-prone managed reassignment (the
 	// old value would be leaked and a borrow double-freed by the box's destructor: `0xC0000005` — rejected until
 	// the single-value drop runtime is installable off the array floor) from an all-trivial one (left to the
-	// unchanged plain store). HOW the instances are found is `anyInstanceTypeArgHasKind`'s business and is
+	// unchanged plain store). HOW the instances are found is `instanceWithTypeArgKind`'s business and is
 	// described there once; what this gate adds is the KIND — each instance's argument at `position` read
 	// through the SAME `typeArgIsOwned` boundary the box's own per-field drop gate
 	// (`genericInstanceFieldIsManaged`) uses, so the reject and the destructor agree on what "managed" means.
@@ -16961,7 +17022,7 @@ export type ProgramSignatures
 	// VALUE's own type-parameter token rather than of a declaration site's name, so the store side and the
 	// descriptor-need seed decide off ONE predicate. The token carries both halves of "which type's parameter
 	// is this" (W14), which is exactly what lets the store ask it without being handed the enclosing type from
-	// somewhere else — the pairing hazard `anyInstanceTypeArgHasKind`'s header records.
+	// somewhere else — the pairing hazard `instanceWithTypeArgKind`'s header records.
 	//
 	// A token no ledger holds answers `false`, for `anyInstanceTypeArgHasKind`'s reason: nothing declares it,
 	// so nothing instantiates it.
@@ -17035,14 +17096,56 @@ export type ProgramSignatures
 	// String)`) or a non-Array generic instance (`Box with String`, a later slice) — has no single `copyFunc`,
 	// so a copy of it would byte-blit a managed pointer and double-free it; such an instantiation is rejected
 	// with a positioned E2015 at the copy site rather than crash at descriptor emit. HOW the instances are found
-	// is `anyInstanceTypeArgHasKind`'s business and is described there once; what this gate adds is the KIND —
+	// is `instanceWithTypeArgKind`'s business and is described there once; what this gate adds is the KIND —
 	// each instance's argument at that parameter's position read through the SAME
 	// `typeSupportsDeepClone(asElement: true)` the concrete element-copy gate (`arrayElementSupportsDeepClone`)
 	// uses, so the opaque reject and the concrete reject agree on what "deep-cloneable as an element" means. A
 	// TRIVIAL argument is copyable (a byte blit), so it never triggers the reject.
-	export function genericTypeFieldHasUncopyableInstantiation(param TypeParamId) returns bool
-		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.uncopyableElement)
-	end 'genericTypeFieldHasUncopyableInstantiation'
+	//
+	// ⭐ It hands back the INSTANCE and not a bool, alone among the three gates, because it is the only one
+	// that REFUSES: the instantiation is what the user wrote, so it is what the refusal is blamed at
+	// (`instantiationSiteOf` → `LibraryBlame`). See `instanceWithTypeArgKind`.
+	export function genericTypeFieldUncopyableInstantiation(param TypeParamId) returns TypeArgKindMatch
+		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.uncopyableElement)
+	end 'genericTypeFieldUncopyableInstantiation'
+
+	// ⭐⭐ **WHERE THE PROGRAM WROTE THIS INSTANTIATION — the source anchor a library-body refusal is blamed
+	// at (BLAME).** `genericAliasSites` is the whole-program list of every WRITTEN `Base with Args` carrying a
+	// source anchor, built by the token sweep before any file is parsed, so this answer is available to the
+	// PURE parser and rides the parse memo's key exactly as every other signature fact does.
+	//
+	// ⭐ **AN INSTANCE THE PROGRAM DID NOT WRITE IS FOLLOWED BACK TO ONE IT DID.** A generic body's inner
+	// `typealias ElementArray = Array with Element` is re-interned per enclosing instance, so
+	// `typealias NestedContainer = Container with Bag` mints `Array with Bag` — the instance that gets
+	// refused, and one no author ever spelled. `substitutedInstanceOrigins` records the enclosing
+	// instantiation each such mint came out of, and the walk chases that chain (an inner alias of an inner
+	// alias is two hops) until it reaches something written.
+	//
+	// ⚠ Some instances still have neither: a compiler-minted alias has no declaring file at all, and an
+	// instance whose enclosing instantiation was itself never written bottoms out unwritten. A caller that
+	// finds nothing leaves the diagnostic where it was raised — the pre-BLAME behaviour, which loses
+	// precision and nothing else.
+	//
+	// The scan is linear in the written instantiation sites per hop and runs only on the REFUSAL path, so it
+	// costs a clean compile nothing; an index would be a map built for every program to serve the failing
+	// ones. The hop count is bounded by the origin map's size and guarded below, because an origin chain is
+	// derived data and a cycle in it must cost a lost note rather than a hang.
+	export function instantiationSiteOf(id GenericInstanceId) returns InstantiationSiteLookup
+		var current = id
+		var hops = 0 as ElementCount
+		while hops <= self.substitutedInstanceOrigins.count() 'followTheChain'
+			for site in self.genericAliasSites 'eachSite'
+				if site.gid == current 'written'
+					return InstantiationSiteLookup.written(site)
+				end 'written'
+			end 'eachSite'
+
+			current = try self.substitutedInstanceOrigins.get(current) otherwise return InstantiationSiteLookup.unwritten
+			hops = hops + 1
+		end 'followTheChain'
+
+		return InstantiationSiteLookup.unwritten
+	end 'instantiationSiteOf'
 
 	// ⭐ **IS `fieldName` OF `structName` A BARE OPAQUE TYPE-PARAMETER field whose element is MANAGED for some
 	// instantiation (P1.7 Finding A)** — a `typeParameter`-tagged field (`export var saved as Element` on
@@ -18007,7 +18110,7 @@ export type ProgramSignatures
 	// stamped, and the element's `__clone_<T>` SYNTHESIZED, only when the element is deep-cloneable by this rung's
 	// single-`(box) -> newBox` mechanism: a String / boxed-union / struct / trivial-element-array element WHOSE WHOLE
 	// reachable type graph is itself clonable. It MUST read the SAME full-graph classifier the front-end reject
-	// (`genericTypeFieldHasUncopyableInstantiation`) and the concrete gate (`arrayElementSupportsDeepClone`) use —
+	// (`genericTypeFieldUncopyableInstantiation`) and the concrete gate (`arrayElementSupportsDeepClone`) use —
 	// `typeSupportsDeepClone(asElement: true)` — NOT merely the element's TOP-LEVEL clone strategy. The reason is the
 	// stamp+root synthesizes the cloner UNCONDITIONALLY for every copyable-opaque instance, INCLUDING in a program
 	// that never copies (drop-only) and so never reaches the copy-site reject: a struct/union element that is

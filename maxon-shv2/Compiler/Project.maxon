@@ -5798,6 +5798,13 @@ export type Project
 	export let target as Target
 	// Accumulated user-facing diagnostics; a non-empty set fails the build.
 	export var diagnostics as DiagnosticArray
+	// ⭐ **THE USER CONSTRUCT THE DIAGNOSTICS REPORTED RIGHT NOW ARE ON BEHALF OF** — see
+	// `LibraryBlame`. Ambient rather than a parameter on `reportDiagnostic` because the front-end
+	// mappers reach that sink through ~200 `reportParseError` match arms, and threading a blame
+	// through every one of them would put the rule in 200 places instead of one; it is SET at exactly
+	// one site (`Queries.queryParseOps`' parse-failure arm) and cleared on the next line, so the only
+	// diagnostic it can reach is the one that arm reports.
+	export var libraryBlame as LibraryBlame
 	// Backend rdata/global constant table, threaded to `buildBackend`. Empty for
 	// the `return 42` slice (no floats / string literals / static globals yet).
 	export var globalData as GlobalDataTable
@@ -5856,6 +5863,7 @@ export type Project
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
+			libraryBlame: LibraryBlame.unblamed,
 			globalData: GlobalDataTable.create(),
 			timings: CompileTimings.create(),
 			memory: CompileMemory.create(),
@@ -5904,9 +5912,11 @@ export function rootIsUnderStdlibDirectory(project Project, cwd FilePath) return
 end 'rootIsUnderStdlibDirectory'
 
 // Append a diagnostic to the project's sink. The single funnel every reporting
-// pass routes through, so diagnostic bookkeeping lives in one place.
+// pass routes through, so diagnostic bookkeeping lives in one place — which is
+// why the library-blame swap (`Diagnostic.blamedAt`) is applied HERE and not at
+// each of the parse mappers, semantic checks and conformance checks that report.
 export function reportDiagnostic(project Project, diagnostic Diagnostic)
-	project.diagnostics.push(diagnostic)
+	project.diagnostics.push(diagnostic.blamedAt(project.libraryBlame))
 end 'reportDiagnostic'
 
 // True once any diagnostic has been reported. The pipeline's error gate reads

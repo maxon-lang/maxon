@@ -852,11 +852,12 @@ consume boundary learned anything: `typeSupportsDeepClone` carries the identical
 spelling refuses nothing, so the refusal that stands is the one the live instantiations earn — the
 managed-element array `Bag` genuinely has no single `copyFunc`.
 
-⚠ **THE SPAN IS `stdlib/Array.maxon`'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER** — `arr.clone()`
-is the library's own declaration now, so this program is refused by the OPAQUE copy gate inside that body
-rather than by the concrete gate at the call. Refused all the same; what moved is WHERE it is reported and
-which of the two sentences is printed. `specs-shv2/array-conditional-conformance-withheld.md` explains that
-relocation once, for all four cases it touched, and names the missing blame edge that would undo it.
+⚠ **THE REFUSAL IS THE LIBRARY'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER, AND BLAME GIVES IT
+THE USER'S SPAN BACK** — `arr.clone()` is the library's own declaration now, so this program is refused by the
+OPAQUE copy gate inside that body rather than by the concrete gate at the call, and the sentence printed is
+the opaque one. What the refusal is POSITIONED at is the user's own instantiation, with `stdlib/Array.maxon`'s
+line kept as a `note:`; `specs-shv2/array-conditional-conformance-withheld.md` explains that relocation and
+the blame edge once, for all four cases ARRH touched.
 ```maxon
 // --- file: acontainer.maxon
 export type Container uses Element
@@ -904,7 +905,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: stdlib/Array.maxon:145:32: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+error E2015: <fragment>:23:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 
 <!-- test: contested-generic-alias-argument-that-owns-heap-is-not-co-owned-trivial -->

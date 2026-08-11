@@ -16,6 +16,43 @@
 // registry. To add a code: edit `docs/error-codes.txt`, run
 // `maxon error-codes generate`.
 
+// A SECOND source position on one diagnostic — where it was RAISED, when that is
+// not where it is BLAMED. `none` for the overwhelming majority; see
+// `Diagnostic.blamedAt`, the ONE producer of an `at`.
+export union DiagnosticNote
+	none
+	at(message String, line LineNumber, column ColumnNumber, filePath FilePath)
+end 'DiagnosticNote'
+
+// ⭐⭐ **THE USER CONSTRUCT A LIBRARY-BODY DIAGNOSTIC IS REALLY ABOUT (BLAME).**
+//
+// A `stdlib/` module is ordinary compiled source, so a refusal that a user's own
+// program forces is raised at a line in the library — `stdlib/Array.maxon:145`,
+// which no user wrote and which names neither the user's type nor the user's
+// line. That is not hypothetical drift: every member struck from
+// `Parser.arraySurfaceMemberNames` RELOCATES its refusals out of a dispatch arm
+// and into the library body that now serves them, and `String` and `Map` retired
+// by the same route.
+//
+// ⚖ **USER RULING:** such a diagnostic reports the USER's construct as its
+// primary location and keeps the library line as a NOTE. Losing the library line
+// is not the fix — it is what makes a library BUG diagnosable.
+//
+// The blame is produced by whichever gate consulted the user-supplied fact (only
+// `Parser.requireOpaqueArrayCopyable` does today: it reads the INSTANTIATION
+// registry, so the construct it is about is the instantiation the user wrote),
+// carried out of the parse on `Parser.libraryBlame`, and applied by the single
+// diagnostic sink `reportDiagnostic`. One producer per gate, ONE applier.
+export union LibraryBlame
+	unblamed
+	userSite(filePath FilePath, line LineNumber, column ColumnNumber)
+end 'LibraryBlame'
+
+// What the retained library location says once the user's site has taken the
+// primary slot. Written once, here, so every re-anchored diagnostic says it the
+// same way and no gate has to phrase it.
+let LibraryBlameNoteText = "raised inside the library, on behalf of the construct above"
+
 // One reported problem. `line` / `column` are 1-based source positions, or 0
 // when the diagnostic has no single anchor (E3001 "no main" is whole-program).
 // `filePath` is the declaring file, empty when program-wide. The rendered form
@@ -26,10 +63,24 @@ export type Diagnostic
 	export let line as LineNumber
 	export let column as ColumnNumber
 	export let filePath as FilePath
+	export let note as DiagnosticNote
 
 	export static function create(code ErrorCode, message String, line LineNumber = 0, column ColumnNumber = 0, filePath FilePath = FilePath from "") returns Diagnostic
-		return Self{code: code, message: message, line: line, column: column, filePath: filePath}
+		return Self{code: code, message: message, line: line, column: column, filePath: filePath, note: DiagnosticNote.none}
 	end 'create'
+
+	// ⭐ **THE ONE PRODUCER OF A NOTED DIAGNOSTIC — the blame SWAP, in one place.**
+	// The user's site becomes primary and the location this diagnostic was raised
+	// at becomes the note, so nothing is lost and the reader meets their own line
+	// first. `unblamed` — every diagnostic in a normal compile — returns `self`
+	// untouched, so a program that forces nothing out of the library renders
+	// byte-for-byte what it always did.
+	export function blamedAt(blame LibraryBlame) returns Diagnostic
+		match blame 'blame'
+			unblamed then return self
+			userSite(blamedPath, blamedLine, blamedColumn) then return Self{code: self.code, message: self.message, line: blamedLine, column: blamedColumn, filePath: blamedPath, note: DiagnosticNote.at(LibraryBlameNoteText, line: self.line, column: self.column, filePath: self.filePath)}
+		end 'blame'
+	end 'blamedAt'
 
 	// Render as `error <code>: <message>` — the exact wire format the spec's
 	// `maxoncstderr` blocks compare against. The code's `.rawValue` is the 4-digit
@@ -43,10 +94,21 @@ export type Diagnostic
 	// lines start at 1 — line 0 is unreachable for a real span.
 	export function render() returns String
 		if self.line == 0 'wholeProgram'
-			return "error {self.code.rawValue}: {self.message}"
+			return "error {self.code.rawValue}: {self.message}{self.renderedNote()}"
 		end 'wholeProgram'
-		return "error {self.code.rawValue}: {self.filePath.toString()}:{self.line}:{self.column}: {self.message}"
+		return "error {self.code.rawValue}: {self.filePath.toString()}:{self.line}:{self.column}: {self.message}{self.renderedNote()}"
 	end 'render'
+
+	// A NOTE renders as a SECOND LINE below the error, `note: <file>:<line>:<col>:
+	// <message>` — clang's shape, and one a `maxoncstderr` block can carry unchanged,
+	// since that comparison is a whole-text equality after trimming
+	// (`SpecTestRunner.checkCompilerError`) rather than a per-line match.
+	function renderedNote() returns String
+		match self.note 'note'
+			none then return ""
+			at(noteText, noteLine, noteColumn, notePath) then return "\nnote: {notePath.toString()}:{noteLine}:{noteColumn}: {noteText}"
+		end 'note'
+	end 'renderedNote'
 end 'Diagnostic'
 
 export typealias DiagnosticArray = Array with Diagnostic

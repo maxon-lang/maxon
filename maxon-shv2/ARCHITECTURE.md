@@ -197,6 +197,37 @@ as a **fresh** `compileError`. (Re-throwing the *caught* error NULL-increfs unde
 C#-emitted refcount runtime; a fresh throw of the same arm is clean. A driver-shape
 gotcha worth remembering.)
 
+### ⭐ A REFUSAL RAISED INSIDE `stdlib/` IS BLAMED AT THE USER'S CONSTRUCT (`LibraryBlame`)
+
+`stdlib/` is ordinary compiled source, so a refusal a user's program forces can be
+*raised* at a line no user wrote — and every member struck from a builtin's synthesized
+roster **relocates** its refusals out of a dispatch arm and into the library body that
+now serves them. ⚖ **User ruling:** such a diagnostic reports the **user's construct as
+its primary location** and keeps the library line as a **`note:` second line**. Losing
+the library line is not the fix; it is what makes a *library* bug diagnosable.
+
+The mechanism is one path with one applier, and the three parts are deliberately apart:
+
+1. **Produced** by whichever gate consulted the user-supplied fact. Only
+   `Parser.requireOpaqueArrayCopyable` does today: it reads the INSTANCE REGISTRY, so
+   the construct it is about is an *instantiation*, and
+   `ProgramSignatures.instantiationSiteOf` maps the offending instance back to where the
+   program wrote it. An instance the program never wrote — one substituted into a
+   generic body's inner `typealias` — is followed one hop further through
+   `substitutedInstanceOrigins` to the enclosing instantiation that minted it.
+2. **Carried** on `Parser.libraryBlame`, which the parse-failure arm of `queryParseOps`
+   reads. The parser stays PURE: a blame is derived from `signatures`, never from
+   `Project`. `Queries.blameOutsideTheLibrary` then drops a blame whose own file is also
+   `stdlib/` — the parser cannot ask that question, and one library line blaming another
+   is no improvement.
+3. **Applied** by `reportDiagnostic`, the single writer of `project.diagnostics`, through
+   `Diagnostic.blamedAt` — the ONE swap. `project.libraryBlame` is ambient rather than a
+   parameter because the front-end mappers reach that sink through ~200
+   `reportParseError` match arms; it is armed for exactly one reporting call.
+
+An instance with no written origin at all keeps the raise site: precision is lost, never
+the refusal.
+
 ## Query spine (incremental)
 
 `QueryDatabase` / `QueryEngine` / `Queries` implement
