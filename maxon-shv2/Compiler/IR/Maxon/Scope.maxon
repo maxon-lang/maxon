@@ -43,27 +43,29 @@
 // nothing. At M1 every binding is `trivial`, so the hook never fires.
 //
 // ⚠⚠ **THE SLOT HALF OF THIS API HAS NO CALLERS, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.**
-// Measured at P1.1a wave 3: `declare`, `declareShadowing`, `declarePayloadBinding`,
-// `declarePayloadBindingShadowing`, `bindExistingSlot`, `installVerbatim`, `lookup`, `getType`,
-// `allVars`, `nextSlot` and `setNextSlot` are called from nowhere outside this file. Everything the
-// parser actually binds goes through `declareValueBinding` (the M2 SSA-substitution model) or
-// `declareSelfField` (which is slotless by construction).
+// Measured at P1.1a wave 3: `declare`, `declareShadowing`, `bindExistingSlot`, `installVerbatim`,
+// `lookup`, `getType`, `allVars`, `nextSlot` and `setNextSlot` are called from nowhere outside this
+// file. Everything the parser actually binds goes through `declareValueBinding` (the M2
+// SSA-substitution model), its payload/parameter siblings, or `declareSelfField` (which is slotless by
+// construction).
 //
-// **The consumers, named rather than implied:**
-//   • `declarePayloadBinding` + `declarePayloadBindingShadowing` → **P1.1b** (enums + `match`), which
-//     is the next rung and does have the shape they were written for.
-//   • everything else → the mutable/`mem2reg` model, whose rung is not scheduled and whose shape is
-//     not settled.
+// **The consumers, named rather than implied:** all of them are the mutable/`mem2reg` model, whose
+// rung is not scheduled and whose shape is not settled.
 //
-// ⚠ **AND THE SECOND GROUP IS OWED A HARDER LOOK THAN "IT WILL BE USED LATER", BECAUSE THIS RUNG
-// DISPROVED ITS SIBLING.** `VarInfo.fieldOffset` was scaffolded beside these at M1, for the
+// ⚠ **AND THAT GROUP IS OWED A HARDER LOOK THAN "IT WILL BE USED LATER", BECAUSE TWO RUNGS HAVE NOW
+// DISPROVED ITS SIBLINGS.** `VarInfo.fieldOffset` was scaffolded beside these at M1, for the
 // self-field alias, with a comment explaining why an offset was the right thing to carry. When the
-// consumer finally arrived — this rung — the right answer turned out to be the field's INDEX, and
+// consumer finally arrived — P1.1b — the right answer turned out to be the field's INDEX, and
 // the scaffold was not extended but DELETED: an offset would have forced a second emit site and
-// left the mutability check no home. The scaffold did not save the rung any work; it had to be
-// undone first. That is the `mintPhi` trap's other face, and it is direct evidence about THESE
-// members, not an analogy — they were guessed at by the same commit, for the same tier, on the same
-// reasoning. Deleting them is real work with a real diff (it reaches `VarInfo.slot`,
+// left the mutability check no home. **`declarePayloadBinding`/`declarePayloadBindingShadowing` went
+// the same way, and they were the ones this paragraph named a consumer for**: the rung that finally
+// wrote to a payload (`mutable-enums`) needed a VALUE binding keyed on the scrutinee's `ValueId`, not
+// a SLOT binding keyed on its name, so the scaffold was deleted rather than called and
+// `declarePayloadValueBinding` written against the model shv2 actually has. The scaffold did not save
+// either rung any work; both had to undo it first. That is the `mintPhi` trap's other face, and it is
+// direct evidence about THESE members, not an analogy — they were guessed at by the same commit, for
+// the same tier, on the same reasoning. Deleting them is real work with a real diff (it reaches
+// `VarInfo.slot`,
 // `IrFunction.varSlotCount` and the Maxon→Std lowering's comments) and is deliberately NOT smuggled
 // into a review commit; it is its own change, with the full suite as its gate. Until it lands, no
 // one should read this API as a design that has been agreed — it is a guess that is still waiting to
@@ -78,10 +80,9 @@ end 'ScopeLookupError'
 // instance-method entry (E3006). Scope is the only layer that sees both the alias and the
 // colliding declaration, so detection lives here.
 //
-// `declareValueBinding` is the live raiser — it is the one path a parameter and a body local are
-// both bound through, so it covers both shapes the bootstrap reports. (`declare` /
-// `declarePayloadBinding` carry the same guard for the slot-based model; neither has a caller
-// today — see `declareShadowing`.)
+// `declareBinding` is the live raiser — it is the one path a parameter, a body local and a match-arm
+// payload binding are all bound through, so it covers both shapes the bootstrap reports. (`declare`
+// carries the same guard for the slot-based model; it has no caller today — see `declareShadowing`.)
 export union ScopeError implements Error
 	// String, not the raw slice: this arm exists only to be FORMATTED into a diagnostic.
 	shadowsSelfField(name String)
@@ -190,23 +191,13 @@ export type Scope
 		self.install(VarInfo.createSelfField(name, varType: varType, fieldIndex: fieldIndex))
 	end 'declareSelfField'
 
-	// Declare a match-arm payload binding. Reads work like a normal local;
-	// writes go through a payload store against the scrutinee + field index.
-	export function declarePayloadBinding(name ByteArray, varType MaxonType, mutable bool, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarSlot throws ScopeError
-		if self.isSelfField(name) 'shadow'
-			throw ScopeError.shadowsSelfField(String.from(name))
-		end 'shadow'
-		return self.declarePayloadBindingShadowing(name, varType: varType, mutable: mutable, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName)
-	end 'declarePayloadBinding'
-
-	// Non-guarded payload-binding declaration: the E3006 recovery path and the
-	// shared core for `declarePayloadBinding`.
-	export function declarePayloadBindingShadowing(name ByteArray, varType MaxonType, mutable bool, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarSlot
-		let slot = nextSlot
-		nextSlot = nextSlot + 1
-		self.install(VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, slot: slot, scrutineeName: scrutineeName, fieldIndex: fieldIndex, caseName: caseName))
-		return slot
-	end 'declarePayloadBindingShadowing'
+	// Declare a MATCH-ARM PAYLOAD binding. A value binding like any other — reads resolve to the SSA
+	// value the arm loaded out of the box — carrying the box coordinates a WRITE goes back through
+	// (`VarInfo.isPayloadBinding`, `Parser.writeBackPayload`). It shares `declareBinding` with the two
+	// constructors below, so the self-field shadow rule is the one rule for every name a scope installs.
+	export function declarePayloadValueBinding(name ByteArray, varType MaxonType, mutable bool, value ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createPayloadBinding(name, varType: varType, mutable: mutable, boundValue: value, scrutBox: scrutBox, slotOffset: slotOffset, storage: storage))
+	end 'declarePayloadValueBinding'
 
 	// Declare a value binding (M2's SSA-substitution model): bind `name` to the SSA
 	// value `value`, so a later reference resolves to it via `lookupValue`. No slot
@@ -239,9 +230,9 @@ export type Scope
 		return try self.declareBinding(VarInfo.createParameterBinding(name, varType: varType, mutable: mutable, boundValue: value))
 	end 'declareParameterBinding'
 
-	// The shared body of the two value-binding declarations above: refuse a name that would shadow a
-	// self-field alias, then install. One home, so a local and a parameter cannot come to disagree
-	// about whether shadowing a field is legal.
+	// The shared body of the three value-binding declarations above: refuse a name that would shadow a
+	// self-field alias, then install. One home, so a local, a parameter and a match-arm payload binding
+	// cannot come to disagree about whether shadowing a field is legal.
 	function declareBinding(info VarInfo) returns VarInfo throws ScopeError
 		if self.isSelfField(info.name) 'shadow'
 			throw ScopeError.shadowsSelfField(String.from(info.name))

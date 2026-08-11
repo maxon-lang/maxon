@@ -1792,6 +1792,43 @@ export function payloadClassIsManaged(class PayloadClass) returns bool
 	end 'c'
 end 'payloadClassIsManaged'
 
+// ⭐ **MAY A MATCH-ARM BINDING ON THIS SLOT BE WRITTEN BACK INTO THE BOX (`specs/mutable-enums.md`)?**
+// The write-back (`Parser.writeBackPayload`) must state, statically, who owns the value the slot held
+// BEFORE it and who owns the one going in — and only these two classes state it:
+//
+//   • `scalar` — the slot owns nothing, so a store is the whole of the write.
+//   • `managed` — writable only where the payload was MOVED OUT, which nulls the slot: there is then no
+//     previous owner to release, and the box simply takes its own reference to the new value.
+//
+// ⚠ **THIS PREDICATE IS NOT THE WHOLE GATE, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.** It answers
+// about the CLASS. Whether a managed payload was actually moved out is a fact about the ACQUISITION, and
+// `Parser.declarePayloadBindings` decides it separately (`scrutOwned`) — from PROVENANCE, where this
+// door's caller decides writability from MEMBERSHIP, and the two disagree on a loop-carried phi. An
+// earlier version of this comment claimed they could not ("a BORROWED scrutinee has no mutable binding to
+// write through"), which conflated "borrowed" with "the provenance bit says false"; the phi is the second
+// thing, and it MEASURED as an exit-101 leak. The retain arm there demotes such a binding to read-only.
+//
+// Every other class keeps today's read-only binding rather than a guessed protocol. `typeParam` is the
+// one that could be wrongly waved through: its slot's reference protocol is a RUN-TIME fact reached
+// through the instance descriptor (`Parser.moveOpaqueValueInto`), so a plain store would drop the
+// reference the box still holds — and it is unreachable today besides, a generic union having no
+// construct syntax. `nestedUnion`/`floatPayload` never reach a binding at all
+// (`Parser.requirePayloadLowerable` refuses them), and `undeclaredName` is an error path.
+//
+// A `match` like its siblings, so a case appended to `PayloadClass` fails to compile here rather than
+// being silently absorbed into either answer.
+export function payloadBindingAcceptsWrites(class PayloadClass) returns bool
+	return match class 'c'
+		scalar gives true
+		managed gives true
+		typeParam gives false
+		existential gives false
+		nestedUnion gives false
+		floatPayload gives false
+		undeclaredName gives false
+	end 'c'
+end 'payloadBindingAcceptsWrites'
+
 // Is a classified slot an EXISTENTIAL (P1.7a-existentials slice 2) — the two-slot fat pointer, whose
 // admitted values and whose DROP both differ from every other managed kind? Its readers are the field-type
 // door (`Parser.requireFieldType`) and nothing else today; it is a `match` like its two siblings rather than

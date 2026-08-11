@@ -335,9 +335,12 @@ export typealias VisibilityArray = Array with Visibility
 // value written down twice.
 export let CompilerOwnedDeclFilePath = FilePath from ""
 
-// Ordinal of a union case (and, for a payload binding, the field index within
-// that case's payload). Bounded by the max cases a union may declare.
-export typealias CaseOrdinal = int(0 to 65535)
+// The `payloadStorage` of a binding that is not a match-arm payload binding — `unresolved`, the
+// MaxonType arm that means "no type has been settled here", so a reader that ignored
+// `isPayloadBinding` and used it as a store width would get a tag nothing lowers rather than a
+// plausible `integer` that silently stores eight bytes at offset 0. Named rather than spelled at the
+// default, so "what does a non-payload binding carry here" has one answer.
+let NoPayloadStorage = MaxonType.unresolved
 
 // VarInfo — one entry in a function's `Scope` symbol table.
 //
@@ -361,10 +364,11 @@ export type VarInfo
 	// `let`/`var x = <expr>` binds `x` directly to the ValueId its initializer
 	// produced, so a reference to `x` resolves to that value at parse time and no
 	// `x` op ever enters the IR (`let x = 42; return x` lowers identically to
-	// `return 42`). Meaningful ONLY for value bindings — exactly like `fieldIndex`
-	// for self-fields and `payloadFieldIndex` for payload bindings, it is 0 (unused)
-	// for every other binding shape. When mutation + `mem2reg` land, the slot
-	// model (above) supersedes this direct substitution.
+	// `return 42`). Meaningful ONLY for value bindings — which is every name the parser
+	// installs today, a match-arm PAYLOAD binding included (it aliases the value the
+	// arm loaded out of the box). It is 0 and unread for a self-field alias, whose
+	// reads and writes go through the receiver instead. When mutation + `mem2reg`
+	// land, the slot model (above) supersedes this direct substitution.
 	export var boundValue as ValueId
 	// Ownership lattice kind for this binding — the M1 ownership scaffold's
 	// per-binding attribute (see OwnershipKind in MaxonDialect.maxon). ALWAYS
@@ -416,15 +420,33 @@ export type VarInfo
 	// `fieldMutable`. One number, one lookup, no column to keep in step.
 	export var isSelfField as bool
 	export var fieldIndex as FieldIndex
-	// True when this name was introduced as a match-arm binding on a union
-	// payload. Reads go through the local slot; writes are rewritten to a
-	// payload store against the scrutinee + field index.
+	// ⭐ **THIS NAME IS A MATCH-ARM PAYLOAD BINDING, AND A WRITE TO IT GOES BACK INTO THE BOX** — the
+	// whole of `specs/mutable-enums.md`. `full(value) then value = 42` on a `var` union rebinds the
+	// SSA name AND stores 42 into the scrutinee's heap block, so a later `match` reads the new value.
+	//
+	// ⭐ **KEYED ON THE SCRUTINEE'S SSA VALUE, NOT ON ITS NAME.** v1 carries the scrutinee's NAME plus
+	// the case name and re-resolves both at the write; shv2 resolves names at parse time and passes
+	// `ValueId`s everywhere else, so the box is named by the id the LOAD read from. A name would have
+	// to be looked up again in a scope the write may have shadowed, and a scrutinee that has no name
+	// at all (a temporary) would need a second answer.
+	//
+	// ⭐ **THE OFFSET AND THE STORAGE TYPE ARE CARRIED RATHER THAN RE-DERIVED, and that is the opposite
+	// of `fieldIndex` above ON PURPOSE.** A self-field alias re-derives from `(layout, index)` because
+	// its use site HOLDS the layout; an assignment holds nothing but the binding — reaching a layout
+	// would mean re-resolving the union off the box AND re-classifying the slot, i.e. a second
+	// derivation of the two numbers the load already committed to. The store must hit exactly the
+	// address and width `emitUnionPayloadLoad` read, so they are computed ONCE, at the bind, from the
+	// one `PayloadClass` that load classified.
 	export var isPayloadBinding as bool
-	export var payloadScrutineeName as ByteArray
-	export var payloadFieldIndex as CaseOrdinal
-	// The union case this binding belongs to — different cases of the same
-	// union have independent payload field types, so the case name is required.
-	export var payloadCaseName as ByteArray
+	export var payloadScrutBox as ValueId
+	export var payloadSlotOffset as ByteOffset
+	export var payloadStorage as MaxonType
+	// ⭐ **IS THIS BINDING'S SLOT IN THE BOX CURRENTLY NULL?** True from the moment a MANAGED payload is
+	// moved out of an OWNED scrutinee (`Parser.moveOutManagedPayload` nulls the slot) until a write-back
+	// refills it. It is what lets the write-back answer the scrutinee's `partiallyMoved` question
+	// HONESTLY: a case with two managed payloads of which only one is assigned still has a hole, and
+	// clearing the scrutinee's bit there would hand a later match a null slot to dereference.
+	export var payloadSlotVacated as bool
 	// ⭐ **IS THIS NAME A PARAMETER?** — set only by `Parser.bindParameters`.
 	//
 	// It exists because `mutable` answers a DIFFERENT question and the two diverge on exactly one
@@ -511,8 +533,27 @@ export type VarInfo
 	//     measured one and this is where it lives when `unused-variables.md` brings locals in.
 	export var referenced as bool
 
+	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
+	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
+	// that starts cleared — comes from a default here.
+	//
+	// ⚠ **IT IS A DEFENCE, NOT A TIDY-UP.** This record has nineteen fields and six constructors, so the
+	// literal was written out six times, and a field given the WRONG default in ONE of them is not a
+	// compile error and not a crash — it is a binding that quietly claims to be a parameter, or a payload
+	// binding pointing at box 0, in exactly one code path. (The rung that replaced four payload fields had
+	// to make the identical six-site edit to add them, which is what put this here.) A new field is now one
+	// default and one line, and the kinds that care name it.
+	//
+	// `ownership`, `movedFrom`, `partiallyMoved`, `payloadSlotVacated`, `lastUseToken` and `referenced` take
+	// no parameter at all: they are per-path STATE the parser writes as it goes, and every binding starts
+	// with them clear. A constructor argument for one of them would be a way to start a binding already
+	// moved-from, which nothing means.
+	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false}
+	end 'make'
+
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false, referenced: false}
+		return Self.make(name, varType: varType, mutable: mutable, slot: slot)
 	end 'create'
 
 	// ⭐⭐ **THE E3070 SUBJECT STAND-IN FOR A TOP-LEVEL `var`** — the ONE object a global's name is keyed
@@ -527,7 +568,7 @@ export type VarInfo
 	// ⚠ Its `boundValue`/`slot` are 0 and MUST NOT be read: `namesModuleStorage` is what says so, and it
 	// is the bit every reader of `boundValue` in the E3070 path tests first.
 	export static function createModuleStorageSubject(name ByteArray, varType MaxonType) returns VarInfo
-		return Self{name: name, varType: varType, mutable: true, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: true, referenced: false}
+		return Self.make(name, varType: varType, mutable: true, namesModuleStorage: true)
 	end 'createModuleStorageSubject'
 
 	// A self-field alias: the name of field `fieldIndex` of the enclosing type, bound at
@@ -543,11 +584,18 @@ export type VarInfo
 	// to disagree with it; a `false` states the honest fact that no reassignment of the alias
 	// itself is ever legal, and leaves the field's own answer where it lives.
 	export static function createSelfField(name ByteArray, varType MaxonType, fieldIndex FieldIndex) returns VarInfo
-		return Self{name: name, varType: varType, mutable: false, slot: 0, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: true, fieldIndex: fieldIndex, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false, referenced: false}
+		return Self.make(name, varType: varType, mutable: false, isSelfField: true, fieldIndex: fieldIndex)
 	end 'createSelfField'
 
-	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, slot VarSlot, scrutineeName ByteArray, fieldIndex CaseOrdinal, caseName ByteArray) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: 0, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: true, payloadScrutineeName: scrutineeName, payloadFieldIndex: fieldIndex, payloadCaseName: caseName, isParameter: false, lastUseToken: 0, namesModuleStorage: false, referenced: false}
+	// The value binding a MATCH-ARM PAYLOAD gets — `createValueBinding` plus the box coordinates a write
+	// back into the scrutinee needs (see `isPayloadBinding`). It is a VALUE binding like every other name
+	// the parser installs: the payload is an SSA substitution, and `slot` is 0 and unread.
+	//
+	// `mutable` is the caller's, and it is a fact about the SCRUTINEE rather than about this name — a
+	// payload bound out of a `let` union is read-only however the pattern spells it
+	// (`Parser.declarePayloadBindings`).
+	export static function createPayloadBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId, scrutBox ValueId, slotOffset ByteOffset, storage MaxonType) returns VarInfo
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, isPayloadBinding: true, payloadScrutBox: scrutBox, payloadSlotOffset: slotOffset, payloadStorage: storage)
 	end 'createPayloadBinding'
 
 	// Construct a value binding for M2's substitution model: `name` aliases the SSA
@@ -555,7 +603,7 @@ export type VarInfo
 	// none), so `slot` is 0 — a value binding never reads it. The slot-backed
 	// constructors above stay the home of the future mutable/mem2reg model.
 	export static function createValueBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: false, lastUseToken: 0, namesModuleStorage: false, referenced: false}
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue)
 	end 'createValueBinding'
 
 	// The value binding a PARAMETER gets — `createValueBinding` plus the one bit that distinguishes it
@@ -568,7 +616,7 @@ export type VarInfo
 	// re-read the constant would take that flag out of the caller's hands — exactly the defeat that
 	// tripwire's comment warns about.
 	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: 0, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: false, fieldIndex: 0, isPayloadBinding: false, payloadScrutineeName: EmptySourceText, payloadFieldIndex: 0, payloadCaseName: EmptySourceText, isParameter: true, lastUseToken: 0, namesModuleStorage: false, referenced: false}
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, isParameter: true)
 	end 'createParameterBinding'
 
 	// ⭐ **IS THIS BINDING A LIVE NAME OF `value`?** — the predicate every symbol-table scan over "who else

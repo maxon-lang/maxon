@@ -20718,7 +20718,85 @@ export type Parser
 		end 'aggregateReassignMismatch'
 
 		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: assigned, rhsWasBareLocal: rhsWasBareLocal)
+
+		// ⭐ A MATCH-ARM PAYLOAD BINDING IS ALSO A PLACE IN THE SCRUTINEE'S BOX, so the rebind above is only
+		// half of the write — the other half is the store that makes a later `match` read the new value.
+		// AFTER the rebind, deliberately: the box takes its reference to the value the BINDING ended up
+		// holding, which for a borrowed RHS is the owned copy `reassignBindingValue` promoted it to.
+		if binding.isPayloadBinding 'writeBackIntoTheBox'
+			self.writeBackPayload(binding, nameTok: nameTok)
+		end 'writeBackIntoTheBox'
 	end 'parseAssignment'
+
+	// ⭐⭐ **WRITE A MUTATED PAYLOAD BINDING BACK INTO THE SCRUTINEE'S BOX** — the exact inverse of
+	// `emitUnionPayloadLoad`, and the whole of `specs/mutable-enums.md`. It stores through
+	// `emitIndirectStore` (THE one `storeIndirect` emit) at the offset and width the LOAD committed to,
+	// carried on the binding rather than re-derived (see `VarInfo.isPayloadBinding`).
+	//
+	// ⭐ **THE BOX TAKES ITS OWN REFERENCE; THE BINDING KEEPS ITS OWN.** After the store the value has TWO
+	// owners — the box, whose `__destruct_<U>` cascade releases the slot, and the binding, which
+	// `dropArmScopedOwned` releases at the arm's exit — so a MANAGED payload is increfed here. It is the
+	// same unconditional, structural refcount `retainBorrowedPayload` takes for the mirror-image case (a
+	// binding retained out of a box somebody else owns), and it balances for the same reason: shv2's
+	// release is structural, so an unconditional acquire is unconditionally released.
+	//
+	// ⚠ **v1's TRAP DOES NOT TRANSFER, AND ITS COMMENT SAYS SO FROM THE OTHER SIDE.** v1 DELETED the manual
+	// incref/decref triple at its own payload store (`LowerMaxonToStd.maxon:12594-12632` — the
+	// "mutable-enums garbage-header over-release") because its `InsertRefcounts` dataflow pass supplied the
+	// same pair and the two DOUBLED. shv2 has no such pass; the ops emitted here are the only accounting
+	// there is, so omitting them would leak the displaced value and free the new one twice.
+	//
+	// ⚠ **"MANAGED" IS READ FROM `ownedBindings` MEMBERSHIP, not from a bit copied onto the binding.** The
+	// binding is in the owned set iff its payload is managed (`ownPayloadBinding` is the only enroller, and
+	// a reassignment cannot change the answer — a scalar binding's declared type refuses a heap RHS), so
+	// membership IS the fact, already single-homed in `bindingIsOwned`. A second column would be free to
+	// disagree with the set that actually emits the drop.
+	function writeBackPayload(binding VarInfo, nameTok Token)
+		let range = SourceRange.ofToken(nameTok)
+		let value = binding.boundValue
+		let managed = self.bindingIsOwned(binding)
+
+		// ⛔ **THE PREMISE, STATED LOUDLY: A MANAGED PAYLOAD REACHING A WRITE-BACK WAS MOVED OUT.** The store
+		// below overwrites the slot without releasing what it held, which is sound ONLY because a move-out
+		// nulled it. `declarePayloadBindings` guarantees that by making a RETAINED managed payload read-only
+		// — and it did not, until a measured exit-101 leak said so (see the `borrowedRetain` arm). A third
+		// acquisition path, or a mutability rule that drifts from the acquisition again, lands here; it must
+		// stop here rather than emit a store that strands the box's reference.
+		if managed and not binding.payloadSlotVacated 'retainedManagedWrite'
+			panic("writeBackPayload: managed payload binding '{String.from(binding.name)}' is writable but its slot was never vacated — a retained payload's box still owns the slot, so this store would strand that reference; `declarePayloadBindings` must not mint such a binding mutable")
+		end 'retainedManagedWrite'
+
+		if managed 'boxBecomesASecondOwner'
+			self.emitIncref(value, range: range)
+		end 'boxBecomesASecondOwner'
+
+		self.emitIndirectStore(binding.payloadScrutBox, offset: binding.payloadSlotOffset, value: value, storageType: binding.payloadStorage, range: range)
+
+		// ⭐ **THE SLOT IS WHOLE AGAIN, so the scrutinee may stop being partially moved — BUT ONLY IF NO
+		// OTHER BINDING OF THE SAME BOX IS STILL HOLDING A HOLE.** `values(a String, b String)` with only
+		// `a` assigned leaves `b`'s slot null; clearing the bit there would let the code after the match
+		// re-bind `b` and dereference a null payload. So the bit is RECOMPUTED from the live bindings
+		// rather than assumed, and `mutate-string-payload`'s second `match n` is legal because that
+		// recomputation genuinely finds no hole left.
+		if binding.payloadSlotVacated 'holeFilled'
+			binding.payloadSlotVacated = false
+			self.setScrutineePartiallyMoved(binding.payloadScrutBox, value: self.boxHasVacatedPayloadSlot(binding.payloadScrutBox))
+		end 'holeFilled'
+	end 'writeBackPayload'
+
+	// Does any LIVE payload binding still have its slot in `box` nulled? The honest half of the
+	// `partiallyMoved` recomputation above. It scans `ownedBindings` because that is exactly where a
+	// vacated binding lives — only a MANAGED payload is moved out, and only a managed payload binding is
+	// enrolled (`ownPayloadBinding`) — and those entries are popped at the arm's own exit
+	// (`dropArmScopedOwned`), which is also the last point a write-back can be parsed.
+	function boxHasVacatedPayloadSlot(box ValueId) returns bool
+		for owned in self.ownedBindings 'each'
+			if owned.isPayloadBinding and owned.payloadSlotVacated and owned.payloadScrutBox == box 'stillEmpty'
+				return true
+			end 'stillEmpty'
+		end 'each'
+		return false
+	end 'boxHasVacatedPayloadSlot'
 
 	// ⭐ **REBIND A `var` TO A NEW VALUE, RELEASING WHAT IT OWNED.** The rebinding half is one line —
 	// `Scope.setValue` — but a `var` that owns a heap allocation (an owned interpolation String, a
@@ -24960,6 +25038,12 @@ export type Parser
 	// owns (a double-free with the caller's own drop). Keyed on the bound VALUE rather than on position:
 	// a returned binding is rarely the last declared, so identity is what stays correct. A filter-rebuild,
 	// the `removeFromPendingTemps` shape for the owned-BINDING list.
+	//
+	// ⛔ **IT IS DELIBERATELY *NOT* `liveOwnerIndexOf`, AND IT MUST NOT BE "CONSOLIDATED" ONTO IT.** That scan
+	// finds the ONE LIVE owner (`isLiveOwnerOf` skips `movedFrom` ghosts) and stops; this asks a different
+	// question — which entries HOLD this value, ghosts included, ALL of them. A moved-from ghost left behind
+	// here would be dropped at scope exit against a box the caller now owns, which is the double-free the
+	// removal exists to prevent. Every OTHER reader of `ownedBindings` does go through the one scan.
 	function removeFromOwnedBindings(value ValueId)
 		var kept = VarInfoArray.create()
 		for binding in self.ownedBindings 'each'
@@ -25019,12 +25103,7 @@ export type Parser
 	// moved to, so counting it would report two owners of one value. An O(ownedBindings) scan; a
 	// reassignment is not a hot path.
 	function bindingIsOwned(binding VarInfo) returns bool
-		for owned in self.ownedBindings 'each'
-			if self.isLiveOwnerOf(owned, value: binding.boundValue) 'match'
-				return true
-			end 'match'
-		end 'each'
-		return false
+		return not self.noLiveOwner(self.liveOwnerIndexOf(binding.boundValue))
 	end 'bindingIsOwned'
 
 	// ⭐ **WHAT MAKES AN OWNED-SET ENTRY THE ONE LIVE OWNER OF `value`**: it holds that value AND has not
@@ -25215,15 +25294,16 @@ export type Parser
 	// across the back-edge), so it never reaches lowering, and marking its (outer) owner here is harmless.
 	function consumePromiseThread(promise ValueId)
 		self.removeFromPendingTemps(promise)
-		var i = 0
-		while i < self.ownedBindings.count() 'each'
-			var owned = try self.ownedBindings.get(i) otherwise panic("consumePromiseThread: ownedBindings.get OOB at {i} — the list is only appended to and drained at a block's end")
-			if self.isLiveOwnerOf(owned, value: promise) 'owner'
-				owned.movedFrom = true
-				return
-			end 'owner'
-			i = i + 1
-		end 'each'
+
+		let index = self.liveOwnerIndexOf(promise)
+		if self.noLiveOwner(index) 'unownedSpawn'
+			return
+		end 'unownedSpawn'
+
+		// A `var` bound from `.get(index)`: the flag is written THROUGH the shared `VarInfo` reference (the
+		// `Scope.setValue` idiom `poisonOwningBinding` uses), so every holder observes it.
+		var owned = try self.ownedBindings.get(index) otherwise panic("consumePromiseThread: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		owned.movedFrom = true
 	end 'consumePromiseThread'
 
 	// ⭐ **IS A GREEN THREAD `p` OWNS STILL NAMED BY A LIVE ALIAS? (P1.5-B2 #88, Finding 2)** `let q = p` binds
@@ -25292,6 +25372,15 @@ export type Parser
 		return self.ownedBindings.count()
 	end 'liveOwnerIndexOf'
 
+	// ⭐ **DOES A `liveOwnerIndexOf` ANSWER MEAN "NO BINDING OWNS THIS"?** The past-the-end convention above,
+	// given a NAME so that its six readers spell the test identically. Written out, `index >=
+	// ownedBindings.count()` is a bare comparison whose MEANING lives only in the scan's header — and the
+	// day the convention changes (a real sentinel, a lookup union) every copy is a site to find rather than
+	// a body to edit.
+	function noLiveOwner(index BindingMark) returns bool
+		return index >= self.ownedBindings.count()
+	end 'noLiveOwner'
+
 	// ⭐ **WOULD MOVING `value` CROSS OUT OF THE INNERMOST ENCLOSING LOOP?** The question a door asks when it
 	// has a second way to discharge its obligation and wants to know whether the cheap one is available — see
 	// `moveElementIntoContainer`'s opaque arm, which takes a REFERENCE instead when the answer is yes. Asked of
@@ -25305,7 +25394,7 @@ export type Parser
 	// move that would escape the innermost loop.
 	function poisonOwningBinding(value ValueId, anchor Token) throws ParseError
 		let index = self.liveOwnerIndexOf(value)
-		if index >= self.ownedBindings.count() 'noBindingOwnsIt'
+		if self.noLiveOwner(index) 'noBindingOwnsIt'
 			return
 		end 'noBindingOwnsIt'
 
@@ -29953,6 +30042,11 @@ export type Parser
 		// mutually exclusive, so an arm that did not run moved nothing), while an `and fallthrough`
 		// successor INHERITS it, exactly as it inherits `movedFrom`.
 		let scrutOwned = self.valueIsOwnedHeap(scrut)
+		// ⭐ **AND WHETHER THE ARMS MAY WRITE THROUGH THEIR BINDINGS (`specs/mutable-enums.md`)** — read
+		// HERE, beside the ownership question it is the second half of, and BEFORE the temporary-scrutinee
+		// enrolment below so the question is asked of the author's own bindings. See
+		// `scrutineeBindingIsMutable`.
+		let scrutMutable = self.scrutineeBindingIsMutable(scrut)
 		// "Some reaching path left the scrutinee consumed" — the merge-level union of the per-arm bit, which
 		// is NOT the same as "some arm of THIS match moved a payload out": a nested `match m` in an arm body
 		// consumes the same binding, and `beginFreshArm` carries that out of the arm it happened in.
@@ -30177,12 +30271,17 @@ export type Parser
 				if hasPayloadBindings 'openArmBindings'
 					self.currentBlock = bodyBlock
 					self.scope.pushScope()
-					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutOwned: scrutOwned, layout: requireEnumLayout(enumMatch))
+					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutOwned: scrutOwned, scrutMutable: scrutMutable, layout: requireEnumLayout(enumMatch))
 					if armMovedManaged 'consumed'
-						scrutConsumed = true
 						// The scrutinee is dead for the REST OF THIS ARM from here — its slot is nulled, so the
 						// arm body's own re-read must be E3102 rather than a null deref. See the match-consume
 						// header for the measured SIGSEGV this ordering is the cure for.
+						//
+						// ⚠ **IT DOES NOT LATCH `scrutConsumed`, AND THAT IS `mutable-enums`.** "This arm took a
+						// payload out" and "this arm LEFT the scrutinee consumed" stopped being the same fact the
+						// moment a write-back could put the payload back (`writeBackPayload`), so the merge-level
+						// bit is read off the arm's EXIT state instead — by the next arm's `beginFreshArm`, and
+						// for the last arm by the single read after the loop.
 						self.setScrutineePartiallyMoved(scrut, value: true)
 					end 'consumed'
 				end 'openArmBindings'
@@ -30303,6 +30402,14 @@ export type Parser
 		// ⚠ Re-asserted here rather than left to the in-arm mark, because the LAST arm parsed may have been
 		// a fresh non-consuming one, which rewound it (`beginFreshArm`). The consuming arm's mark governs
 		// its OWN body; this one governs the code after the whole match, where any arm may have run.
+		//
+		// ⭐ **THE LAST ARM'S OWN EXIT STATE IS READ HERE, and it is the same read every EARLIER arm gets
+		// from the `beginFreshArm` that follows it.** No arm follows the last one, so without this line its
+		// consume would be lost. Reading the STATE rather than latching a bit at the bind is what lets a
+		// write-back un-consume the scrutinee (`writeBackPayload` — `mutable-enums`): the question is what
+		// the arm LEFT BEHIND, not what it did on the way.
+		scrutConsumed = scrutConsumed or self.scrutineeIsPartiallyMoved(scrut)
+
 		if scrutConsumed 'consumeScrut'
 			self.setScrutineePartiallyMoved(scrut, value: true)
 		end 'consumeScrut'
@@ -30389,35 +30496,68 @@ export type Parser
 	// moved a managed payload out (a re-read is then E3102, but the box is still dropped: see
 	// `VarInfo.partiallyMoved`), `false` where a fresh sibling arm rewinds that.
 	//
-	// The read/write PAIR is the `pendingTempsContain`/`removeFromPendingTemps` shape, and it cannot drift
-	// on WHICH binding it means for the same reason that pair cannot: the key is ONE shared predicate
-	// (`isLiveOwnerOf`, the same one `poisonMoveSource` uses), not a condition spelled once per function.
-	// A temporary scrutinee is owned by no binding, so both halves are correctly inert on it — it has no
-	// name to re-read.
+	// ⭐ **THE THREE QUESTIONS BELOW ARE ALL "WHAT DOES THE BINDING BEHIND THIS SCRUTINEE SAY?", AND THEY ALL
+	// GO THROUGH `liveOwnerIndexOf`** — THE one owner scan (see its header). They each used to walk
+	// `ownedBindings` themselves, which was three more spellings of a predicate whose whole point is being
+	// single-homed: a refinement of what "the live owner" means, taught to the scan and not to a copy, would
+	// have one of these answering about a `movedFrom` ghost while the move machinery answered about the real
+	// owner — a disagreement invisible at either site read alone. A temporary scrutinee is owned by no
+	// binding, so all three are correctly inert on it: it has no name to re-read, write through or ask.
+
+	// Set the `partiallyMoved` bit of the binding a match scrutinee denotes — `true` where a binding arm
+	// moved a managed payload out (a re-read is then E3102, but the box is still dropped: see
+	// `VarInfo.partiallyMoved`), `false` where a fresh sibling arm rewinds that, or where a write-back has
+	// refilled the last vacated slot (`writeBackPayload`).
 	function setScrutineePartiallyMoved(scrut ValueId, value bool)
-		var i = 0
-		while i < self.ownedBindings.count() 'each'
-			// A `var` bound from `.get(i)`: the flag is written THROUGH the shared `VarInfo` reference
-			// (the `Scope.setValue` idiom `poisonMoveSource` uses), so every holder observes it.
-			var owned = try self.ownedBindings.get(i) otherwise panic("setScrutineePartiallyMoved: ownedBindings.get OOB at {i}")
-			if self.isLiveOwnerOf(owned, value: scrut) 'source'
-				owned.partiallyMoved = value
-				return
-			end 'source'
-			i = i + 1
-		end 'each'
+		let index = self.liveOwnerIndexOf(scrut)
+		if self.noLiveOwner(index) 'temporaryScrutinee'
+			return
+		end 'temporaryScrutinee'
+
+		// A `var` bound from `.get(index)`: the flag is written THROUGH the shared `VarInfo` reference (the
+		// `Scope.setValue` idiom `poisonOwningBinding` uses), so every holder observes it.
+		var owned = try self.ownedBindings.get(index) otherwise panic("setScrutineePartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		owned.partiallyMoved = value
 	end 'setScrutineePartiallyMoved'
 
 	// Has the binding a match scrutinee denotes had a managed payload moved out of it on the path parsed so
 	// far? The reader half of the pair above.
 	function scrutineeIsPartiallyMoved(scrut ValueId) returns bool
-		for owned in self.ownedBindings 'each'
-			if self.isLiveOwnerOf(owned, value: scrut) 'source'
-				return owned.partiallyMoved
-			end 'source'
-		end 'each'
-		return false
+		let index = self.liveOwnerIndexOf(scrut)
+		if self.noLiveOwner(index) 'temporaryScrutinee'
+			return false
+		end 'temporaryScrutinee'
+
+		let owned = try self.ownedBindings.get(index) otherwise panic("scrutineeIsPartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		return owned.partiallyMoved
 	end 'scrutineeIsPartiallyMoved'
+
+	// ⭐⭐ **MAY A `match` ARM WRITE THROUGH THIS SCRUTINEE'S PAYLOAD BINDINGS (`specs/mutable-enums.md`)?**
+	// True iff a MUTABLE binding is the live owner of the box — `var b = Box.full(10)` yes, `let b` no.
+	//
+	// ⭐ **IT ASKS OWNERSHIP, WHERE v1 ASKS THE TOKENS.** v1 probes for `identifier` + the match label BEFORE
+	// parsing the scrutinee, so only a bare local can ever be written through. Ownership answers the same
+	// question from the fact that actually licenses the store, and answers it in shv2's own currency (a
+	// `ValueId`): a parameter, a receiver, a field read and a computed expression all own nothing here, so
+	// none of them is writable, and a TEMPORARY (`match makeBox() …`) is enrolled by
+	// `giveTemporaryScopeLifetime` as `mutable: false` precisely so a write into a box that is about to be
+	// dropped is refused. Those are v1's answers, reached without a second grammar for "what shapes may
+	// appear before a match label".
+	//
+	// ⚠ **IT IS MEMBERSHIP, AND THE ACQUISITION DECISION (`scrutOwned`) IS PROVENANCE — THEY DISAGREE ON THE
+	// LOOP-CARRIED PHI.** This one is right about mutability there and the provenance bit is wrong about
+	// ownership, so a `var` union matched inside the loop that reassigns it comes out mutable-but-retained.
+	// `declarePayloadBindings` demotes that combination to read-only at the branch that chose the retain —
+	// see the `borrowedRetain` arm, and the exit-101 leak that measured it.
+	function scrutineeBindingIsMutable(scrut ValueId) returns bool
+		let index = self.liveOwnerIndexOf(scrut)
+		if self.noLiveOwner(index) 'ownedByNoBinding'
+			return false
+		end 'ownedByNoBinding'
+
+		let owner = try self.ownedBindings.get(index) otherwise panic("scrutineeBindingIsMutable: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		return owner.mutable
+	end 'scrutineeBindingIsMutable'
 
 	// Parse ONE arm's body. A `gives` arm is a single expression (its value feeds the merge phi); a
 	// `then` arm is a single statement, and `and fallthrough` may follow it. Reports E2049 for a
@@ -31853,7 +31993,14 @@ export type Parser
 	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
 	// (`setScrutineePartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
 	// borrowed box, and marking it moved would make the caller's later re-read a false E3102.
-	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutOwned bool, layout EnumLayout) returns bool throws ParseError
+	//
+	// ⭐ **`scrutMutable` DECIDES WHETHER THE BINDINGS ACCEPT A WRITE (`specs/mutable-enums.md`).** It is a
+	// fact about the SCRUTINEE and never about the pattern: every binding of a `var` union is writable and
+	// every binding of a `let` one is E2013, whatever the arm spells. Both reference compilers say the same
+	// (v1 refuses a per-binding `var` keyword from overriding an immutable scrutinee), and it is the honest
+	// rule — the write is a store into the scrutinee's box, so the scrutinee's own mutability is the
+	// permission being asked for.
+	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutOwned bool, scrutMutable bool, layout EnumLayout) returns bool throws ParseError
 		var movedManaged = false
 		for binding in bindings 'each'
 			if binding.isDiscard 'discard'
@@ -31865,15 +32012,45 @@ export type Parser
 			// It was a bare `adoptType` here, at the construct check and at the payload LOAD, which is the
 			// spelling A4k retired: a generic-alias payload arrived `named`, i.e. an int (A4i's defect one
 			// slot over).
-			let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames), slotScopeFilePath: layout.declFilePath)
-			let loaded = try self.emitUnionPayloadLoad(scrutBox, field: binding.field, slot: binding.slot, layout: layout, posTok: binding.nameTok, range: range)
-			var bindingInfo = try self.scope.declareValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: false, value: loaded) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
+			let declared = self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames)
+			let class = try self.requirePayloadLowerable(binding.field, declared: declared, layout: layout, posTok: binding.nameTok)
+
+			// ⭐ **THE SLOT'S ADDRESS AND ITS WIDTH, DERIVED ONCE AND HANDED TO ALL THREE HALVES** — the
+			// LOAD, the binding that records them for a write-back, and the move-out's null store. They were
+			// derived independently inside `emitUnionPayloadLoad` and again here, which is two derivations
+			// of the pair a load and its store must agree on EXACTLY; pure functions on equal inputs, so
+			// they could not disagree today, but nothing made that a property rather than a coincidence.
+			let offset = layout.payloadSlotOffset(binding.slot)
+			let storage = payloadStorageOf(class)
+			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, offset: offset, valueType: payloadValueTypeOf(class, declared: declared), storage: storage, range: range)
+			var bindingInfo = try self.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: scrutMutable and payloadBindingAcceptsWrites(class), value: loaded, scrutBox: scrutBox, slotOffset: offset, storage: storage) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
 			if payloadClassIsManaged(class) 'managedPayload'
 				if scrutOwned 'ownedMoveOut'
-					self.moveOutManagedPayload(bindingInfo, loaded: loaded, class: class, scrutBox: scrutBox, slot: binding.slot, layout: layout, range: range)
+					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
 					movedManaged = true
 				end 'ownedMoveOut' else 'borrowedRetain'
 					self.retainBorrowedPayload(bindingInfo, loaded: loaded, range: range)
+
+					// ⭐⭐ **A RETAINED MANAGED PAYLOAD IS READ-ONLY, WHATEVER THE SCRUTINEE'S MUTABILITY SAYS —
+					// AND THE STATE THIS CLOSES IS A MEASURED LEAK.** Writability is decided from
+					// `scrutMutable`, which is MEMBERSHIP in `ownedBindings`; the acquisition above is decided
+					// from `scrutOwned`, which is VALUE PROVENANCE — and the tree already records that those two
+					// disagree (`reassignBindingValue`'s header: a loop-carried `var`'s current value is a header
+					// phi, and a phi carries no provenance bit, so the value column reads `false` for a binding
+					// the loop genuinely owns). A `var` union matched INSIDE the loop that reassigns it lands
+					// exactly there: mutable by membership, borrowed by provenance. It took this retain path —
+					// slot still occupied, box still holding a reference — while the binding was minted writable,
+					// so the write-back stored straight over an occupied slot and nothing released what the box
+					// held. MEASURED as exit 101 before this line existed.
+					//
+					// It is stated HERE, at the branch that chose the acquisition, rather than folded into the
+					// `mutable:` argument above — that would re-derive the move-vs-retain decision at a second
+					// site, which is the very split that produced the leak. The write-back protocol shv2 has is
+					// "store into a VACATED slot"; a retained payload has no vacancy, so the honest answer is
+					// that this binding does not accept a write (E2013) rather than a guessed release of a
+					// reference whose owner this frame cannot name. `writeBackPayload` panics if the combination
+					// ever reaches it again.
+					bindingInfo.mutable = false
 				end 'borrowedRetain'
 			end 'managedPayload'
 		end 'each'
@@ -31889,11 +32066,15 @@ export type Parser
 	// would STEAL it from its owner — the caller's cascade would then skip a payload the callee already
 	// dropped, or double-free one it did not. A borrowed scrutinee takes `retainBorrowedPayload` instead,
 	// which leaves the slot alone; `declarePayloadBindings` is the one place that picks between them.
-	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, class PayloadClass, scrutBox ValueId, slot CaseIndex, layout EnumLayout, range SourceRange)
+	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, scrutBox ValueId, offset ByteOffset, storage MaxonType, range SourceRange)
 		self.ownPayloadBinding(bindingInfo, loaded: loaded)
 
 		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
-		self.emitIndirectStore(scrutBox, offset: layout.payloadSlotOffset(slot), value: zero, storageType: payloadStorageOf(class), range: range)
+		self.emitIndirectStore(scrutBox, offset: offset, value: zero, storageType: storage, range: range)
+		// The HOLE this just made, recorded ON the binding that made it. A write-back through this binding
+		// fills it again, and only when NO hole is left may the scrutinee stop being `partiallyMoved` —
+		// see `VarInfo.payloadSlotVacated` and `writeBackPayload`.
+		bindingInfo.payloadSlotVacated = true
 	end 'moveOutManagedPayload'
 
 	// ⭐ **RETAIN A MANAGED PAYLOAD BOUND OUT OF A BORROWED UNION (D1b).** The load borrowed the payload —
@@ -38701,6 +38882,13 @@ export type Parser
 	// `owner` is the RECORD the slot belongs to — passed so the one door that takes a descriptor-mediated
 	// reference can record the release obligation ON THE RECORD, rather than a caller inferring "a reference
 	// was taken" from the returned value differing (which the substituted-concrete arm also does).
+	//
+	// ⚠ **ITS SIBLING IS `writeBackPayload`, AND THE TWO PROTOCOLS DIFFER WHILE THE INVARIANT DOES NOT.** This
+	// is the MOVE: the box becomes the value's SOLE owner, the source is poisoned or de-listed, no incref.
+	// A write-back is the RETAIN: the binding keeps its own reference and lives on for the rest of the arm, so
+	// the box takes a SECOND one. Both leave the box holding exactly one reference it will release through
+	// `__destruct_<U>`, which is why they agree — but a caller reaching for the wrong one either strands a
+	// reference or frees the binding's value out from under it.
 	function moveInPayload(class PayloadClass, arg ValueId, argBareLocal bool, owner ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		if payloadClassIsTypeParam(class) 'opaqueSlot'
 			return try self.moveOpaqueValueInto(arg, argBareLocal: argBareLocal, owner: owner, anchor: anchor, range: range)
@@ -39045,22 +39233,27 @@ export type Parser
 	// shift rule reads a ranged alias's low bound); a MANAGED payload is minted at its concrete storage
 	// type (`structRef`/`string`) so an extracted struct's field access (`b.mass`) resolves and its
 	// ownership is read off the tag. The op carries the concrete storage width in both cases
-	// (`maxonTypeToStdType` panics on a `named`). `requirePayloadLowerable` rejects float/nested here.
-	function emitUnionPayloadLoad(box ValueId, field PayloadField, slot CaseIndex, layout EnumLayout, posTok Token, range SourceRange) returns ValueId throws ParseError
-		// A scalar payload's loaded value is tagged with its DECLARED type (an enum payload stays
-		// `named(<Enum>)` so a nested `match` recognizes it), so it is the RESOLVED one that must be handed
-		// on: a function-alias payload bound out as a bare `named` is an int, which is what made
-		// `print("{f(3)}")` on such a binding `E2015 … a value of type 'unknown'` (A4k). `payloadTypeOf`
-		// also adopts the id into this file's interner, or the minted value carries a signatures id
-		// `enumMatchFor` would misresolve (OPEN #52).
-		let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
-		let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: posTok)
-		let storage = payloadStorageOf(class)
-		let valueType = payloadValueTypeOf(class, declared: declared)
-		let result = self.emitIndirectLoad(valueType, box: box, offset: layout.payloadSlotOffset(slot), storageType: storage, range: range)
+	// (`maxonTypeToStdType` panics on a `named`).
+	//
+	// ⚠ **THE ADDRESS, THE WIDTH AND THE VALUE TYPE ARE ALL THE CALLER'S, exactly as they are on the STORE
+	// side (`emitEnumBox`), and that is not a convenience.** `declarePayloadBindings` needs the slot's
+	// `PayloadClass` anyway — to decide managed-vs-scalar ownership, and to record the slot's ADDRESS and
+	// WIDTH on a binding a write-back may later store through — and it used to classify the slot a SECOND
+	// time to get it, after which each of the three numbers was derived twice. A load and the store that
+	// mirrors it must agree on the address and the width EXACTLY or the store corrupts the box, so they are
+	// derived ONCE at the caller and passed to everything that emits with them.
+	//
+	// A scalar payload's `valueType` is its DECLARED type (an enum payload stays `named(<Enum>)` so a
+	// nested `match` recognizes it) and never the storage: a function-alias payload bound out as a bare
+	// `named` is an int, which is what made `print("{f(3)}")` on such a binding `E2015 … a value of type
+	// 'unknown'` (A4k). The caller reaches it through `payloadValueTypeOf`, off the same `payloadTypeOf`
+	// call that adopts the id into this file's interner — without which the minted value carries a
+	// signatures id `enumMatchFor` would misresolve (OPEN #52).
+	function emitUnionPayloadLoad(box ValueId, field PayloadField, offset ByteOffset, valueType MaxonType, storage MaxonType, range SourceRange) returns ValueId
+		let result = self.emitIndirectLoad(valueType, box: box, offset: offset, storageType: storage, range: range)
 
 		// ⭐ **A PAYLOAD DECLARED `__ManagedMemory` BINDS AS THE BUFFER SURFACE (BATCH22)** — the declared
-		// SPELLING, which `declared` above cannot carry (the alias resolves to the same `genericInstance` a
+		// SPELLING, which `valueType` cannot carry (the alias resolves to the same `genericInstance` a
 		// `ByteArray` payload does), taken off the payload record's own column. It sits at THIS mint for
 		// `emitFieldLoad`'s reason: every `match` arm, every nesting depth and every scrutinee ownership
 		// mode funnels through this one line, and a per-door mark would be the enumeration that misses one.
