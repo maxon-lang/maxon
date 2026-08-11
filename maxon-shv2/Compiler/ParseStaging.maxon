@@ -301,6 +301,15 @@ export type FileParseArtifact
 	// and a single list would have to re-derive that split at the drain.
 	export var unusedTypeAliases as DeferredNameDiagnosticArray
 	export var hiddenTypeNames as DeferredNameDiagnosticArray
+	// ⭐ THE DECLARATION-HYGIENE DIAGNOSTICS this file's function bodies earned (E3012 unused, E3077
+	// var-should-be-let), kept OUT of `diagnostics` above so they cannot gate the pipeline ahead of the
+	// checks that could explain the body instead. `mergeArtifact` folds them into
+	// `project.bindingHygieneDiagnostics`, which carries the measured cascade this deferral cures.
+	//
+	// They are finished `Diagnostic`s and not `DeferredNameDiagnostic`s because nothing about them needs
+	// re-deciding later — only the REPORTING is deferred, never the verdict, which is a fact about one
+	// function body and is settled at its `end`.
+	export var bindingHygieneDiagnostics as DiagnosticArray
 
 	export static function create(filePath FilePath, livesUnderStdlibDirectory bool) returns FileParseArtifact
 		return Self{
@@ -330,7 +339,8 @@ export type FileParseArtifact
 			currentFuncIndex: 0,
 			diagnostics: DiagnosticArray.create(),
 			unusedTypeAliases: sharedEmptyDeferredNameDiagnostics,
-			hiddenTypeNames: sharedEmptyDeferredNameDiagnostics
+			hiddenTypeNames: sharedEmptyDeferredNameDiagnostics,
+			bindingHygieneDiagnostics: DiagnosticArray.create()
 		}
 	end 'create'
 
@@ -634,6 +644,14 @@ function commitDiagnostics(project Project, artifact FileParseArtifact)
 	for diagnostic in artifact.diagnostics 'each'
 		reportDiagnostic(project, diagnostic: diagnostic)
 	end 'each'
+
+	// ⭐ The hygiene half does NOT go through `reportDiagnostic`: reaching the project's sink is exactly
+	// what would gate the pipeline before the checks that might explain the body — see
+	// `Project.bindingHygieneDiagnostics`. It is appended, and drained past the BACKEND by
+	// `Compiler.reportBindingHygieneDiagnostics`, which is the only place that position is argued for.
+	for diagnostic in artifact.bindingHygieneDiagnostics 'eachHygiene'
+		project.bindingHygieneDiagnostics.push(diagnostic)
+	end 'eachHygiene'
 end 'commitDiagnostics'
 
 // ⭐ **COMMIT EVERY TYPE-NAME DECLARATION, AND REPORT A NAME DECLARED TWICE.** The whole-program

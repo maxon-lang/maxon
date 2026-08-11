@@ -557,6 +557,14 @@ public enum ErrorCode {
   /// per-function reassigned-var set). E3012 (unused variable) takes
   /// precedence -- an unused `var` reports as unused, not as should-be-let.
   /// Mirrors the C# bootstrap's `SemanticVarShouldBeLet`.
+  /// shv2 decides it at the declaring function's `end` (`reportVarShouldBeLet`)
+  /// off the same candidate list E3012 walks, reading a per-function name set
+  /// (`mutabilityExercisedNames`) that seven doors record into, and REPORTS it
+  /// past the backend so a body with any other diagnostic never also reports
+  /// this one. shv2 additionally counts a MOVE-OUT as a use of mutability,
+  /// which neither reference does: there `var` and `let` copy alike, while in
+  /// shv2 the keyword decides move-vs-alias, so advising `let` would silently
+  /// turn a move into an alias.
   /// </summary>
   SemanticVarShouldBeLet = 3077,
   /// <summary>

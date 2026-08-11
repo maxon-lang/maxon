@@ -135,7 +135,7 @@ union Num
 end 'Num'
 
 function main() returns ExitCode
-	var result = 7
+	let result = 7
 	while result > 0 'loop'
 		match Num.val(1) 'check'
 			zero then return 0

@@ -538,7 +538,7 @@ function main() returns ExitCode
 	let e = Weird.end
 	let x = Weird.export
 	let o = Weird.omega
-	var acc = a.tag() + f.tag() * 10 + e.tag() * 100 + x.tag() * 1000 + o.tag() * 10000
+	let acc = a.tag() + f.tag() * 10 + e.tag() * 100 + x.tag() * 1000 + o.tag() * 10000
 	if acc != 54321 'bad'
 		return 1
 	end 'bad'

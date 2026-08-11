@@ -118,9 +118,11 @@ end 'main'
 ```
 
 <!-- test: idle-vars-across-a-loop -->
-THE FALSE E5001, and the program that forced `elimTrivialBlockArgs`. Character for character the
-test above with `let` replaced by `var`. The vars are never reassigned, so the two programs are
-SEMANTICALLY IDENTICAL and must compile identically.
+THE FALSE E5001, and the program that forced `elimTrivialBlockArgs`. The test above with `let`
+replaced by `var` — each declared then assigned once, before the loop, because E3077 refuses a
+`var` that is never reassigned at all. What matters is unchanged and is the whole point: **not one
+of them is assigned INSIDE the loop**, so the two programs are SEMANTICALLY IDENTICAL across it and
+must compile identically.
 
 They did not. The parser mints a loop-header phi per mutable var in scope — it must, since the
 body has not been parsed yet — so each of these fifteen became a loop-carried phi, self-sustaining
@@ -136,21 +138,36 @@ IS `k` — leaving ordinary values the splitter spills around the loop exactly a
 Same answer, 126.
 ```maxon
 function idleVars(p int) returns int
-	var k1 = p + 1
-	var k2 = p + 2
-	var k3 = p + 3
-	var k4 = p + 4
-	var k5 = p + 5
-	var k6 = p + 6
-	var k7 = p + 7
-	var k8 = p + 8
-	var k9 = p + 9
-	var k10 = p + 10
-	var k11 = p + 11
-	var k12 = p + 12
-	var k13 = p + 13
-	var k14 = p + 14
-	var k15 = p + 15
+	var k1 = 0
+	k1 = p + 1
+	var k2 = 0
+	k2 = p + 2
+	var k3 = 0
+	k3 = p + 3
+	var k4 = 0
+	k4 = p + 4
+	var k5 = 0
+	k5 = p + 5
+	var k6 = 0
+	k6 = p + 6
+	var k7 = 0
+	k7 = p + 7
+	var k8 = 0
+	k8 = p + 8
+	var k9 = 0
+	k9 = p + 9
+	var k10 = 0
+	k10 = p + 10
+	var k11 = 0
+	k11 = p + 11
+	var k12 = 0
+	k12 = p + 12
+	var k13 = 0
+	k13 = p + 13
+	var k14 = 0
+	k14 = p + 14
+	var k15 = 0
+	k15 = p + 15
 	var sum = 0
 	var i = 0
 	while i < 4 'loop'
@@ -181,18 +198,30 @@ sweep; one pass over the function would leave every inner phi in place.
 outer runs `i = 0,1,2` — so the loop contributes `3 · 1 = 3`. Total `78 + 3 = 81`.
 ```maxon
 function nestedIdle(p int) returns int
-	var k1 = p + 1
-	var k2 = p + 2
-	var k3 = p + 3
-	var k4 = p + 4
-	var k5 = p + 5
-	var k6 = p + 6
-	var k7 = p + 7
-	var k8 = p + 8
-	var k9 = p + 9
-	var k10 = p + 10
-	var k11 = p + 11
-	var k12 = p + 12
+	var k1 = 0
+	k1 = p + 1
+	var k2 = 0
+	k2 = p + 2
+	var k3 = 0
+	k3 = p + 3
+	var k4 = 0
+	k4 = p + 4
+	var k5 = 0
+	k5 = p + 5
+	var k6 = 0
+	k6 = p + 6
+	var k7 = 0
+	k7 = p + 7
+	var k8 = 0
+	k8 = p + 8
+	var k9 = 0
+	k9 = p + 9
+	var k10 = 0
+	k10 = p + 10
+	var k11 = 0
+	k11 = p + 11
+	var k12 = 0
+	k12 = p + 12
 	var sum = 0
 	var i = 0
 	while i < 3 'outer'
@@ -246,21 +275,36 @@ function gate(p int) returns bool
 end 'gate'
 
 function idleVarsPastABreak(p int) returns int
-	var k1 = p + 1
-	var k2 = p + 2
-	var k3 = p + 3
-	var k4 = p + 4
-	var k5 = p + 5
-	var k6 = p + 6
-	var k7 = p + 7
-	var k8 = p + 8
-	var k9 = p + 9
-	var k10 = p + 10
-	var k11 = p + 11
-	var k12 = p + 12
-	var k13 = p + 13
-	var k14 = p + 14
-	var k15 = p + 15
+	var k1 = 0
+	k1 = p + 1
+	var k2 = 0
+	k2 = p + 2
+	var k3 = 0
+	k3 = p + 3
+	var k4 = 0
+	k4 = p + 4
+	var k5 = 0
+	k5 = p + 5
+	var k6 = 0
+	k6 = p + 6
+	var k7 = 0
+	k7 = p + 7
+	var k8 = 0
+	k8 = p + 8
+	var k9 = 0
+	k9 = p + 9
+	var k10 = 0
+	k10 = p + 10
+	var k11 = 0
+	k11 = p + 11
+	var k12 = 0
+	k12 = p + 12
+	var k13 = 0
+	k13 = p + 13
+	var k14 = 0
+	k14 = p + 14
+	var k15 = 0
+	k15 = p + 15
 	var sum = 0
 	var i = 0
 	if gate(p) 'guard'

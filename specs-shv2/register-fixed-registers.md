@@ -93,8 +93,8 @@ function take3(p1 int, p2 int, p3 int) returns int
 end 'take3'
 
 function main() returns ExitCode
-	var n = 97
-	var d = 5
+	let n = 97
+	let d = 5
 	let r = take3(1, p2: n / d, p3: n mod d)
 	if r == 11902 'ok'
 		return 0
@@ -121,12 +121,12 @@ function digits6(p1 int, p2 int, p3 int, p4 int, p5 int, p6 int) returns int
 end 'digits6'
 
 function main() returns ExitCode
-	var n1 = 100
-	var n2 = 45
-	var n3 = 23
-	var d1 = 12
-	var d2 = 7
-	var d3 = 9
+	let n1 = 100
+	let n2 = 45
+	let n3 = 23
+	let d1 = 12
+	let d2 = 7
+	let d3 = 9
 	let r = digits6(n1 / d1, p2: n1 mod d1, p3: n2 / d2, p4: n2 mod d2, p5: n3 / d3, p6: n3 mod d3)
 	if r == 846325 'ok'
 		return 0
@@ -203,9 +203,9 @@ what `forbidOperandsFromImplicit` guarantees for an operand that dies at the op.
 clobber the divisor, computing `1000 / 1000 = 1`.
 ```maxon
 function main() returns ExitCode
-	var a = 1000
-	var b = 84
-	var c = 4
+	let a = 1000
+	let b = 84
+	let c = 4
 	let inner = b / c
 	let r = a / inner
 	if r == 47 'ok'
@@ -226,10 +226,10 @@ back INTO `RAX`); the second quotient is the third divide's DIVISOR (so it must 
 `1000 / 7 = 142` (994); `60 / 4 = 15`; `142 / 15 = 9` (135).
 ```maxon
 function main() returns ExitCode
-	var a = 1000
-	var b = 7
-	var c = 60
-	var d = 4
+	let a = 1000
+	let b = 7
+	let c = 60
+	let d = 4
 	let q1 = a / b
 	let q2 = c / d
 	let r = q1 / q2
@@ -255,7 +255,7 @@ wrong answer.
 `x = 37`: `x / x = 1`, `x mod x = 0`, so `37·100 + 1·10 + 0 = 3710`.
 ```maxon
 function main() returns ExitCode
-	var x = 37
+	let x = 37
 	let q = x / x
 	let m = x mod x
 	let r = x * 100 + q * 10 + m
@@ -281,7 +281,7 @@ function bump(x int) returns int
 end 'bump'
 
 function main() returns ExitCode
-	var n = 500
+	let n = 500
 	var d = 6
 	let t = bump(d)
 	let q = n / d
@@ -308,8 +308,8 @@ function twice(x int) returns int
 end 'twice'
 
 function main() returns ExitCode
-	var n = 1000
-	var d = 7
+	let n = 1000
+	let d = 7
 	let q = n / d
 	let t = twice(q)
 	let r = q + t
@@ -360,7 +360,7 @@ function press(p int) returns int
 	var sum = 0
 	var i = 1
 	while i <= 5 'loop'
-		var t = k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9
+		let t = k1 + k2 + k3 + k4 + k5 + k6 + k7 + k8 + k9
 		sum = sum + t / (i as Positive)
 		i = i + 1
 	end 'loop'

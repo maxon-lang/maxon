@@ -177,8 +177,8 @@ and the first quotient, which must survive the second `idiv`'s `RAX`/`RDX` clobb
 in non-`RAX`/`RDX` registers. `q = 100 / 7 = 14`, `r = 100 mod 7 = 2`, `q + r = 16`.
 ```maxon
 function main() returns ExitCode
-	var a = 100
-	var b = 7
+	let a = 100
+	let b = 7
 	let q = a / b
 	let r = a mod b
 	return q + r

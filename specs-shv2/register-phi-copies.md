@@ -78,7 +78,7 @@ function swapLoop(p int) returns int
 	var b = p + 2
 	var i = 0
 	while i < 3 'loop'
-		var t = a
+		let t = a
 		a = b
 		b = t
 		i = i + 1
@@ -113,7 +113,7 @@ function rotate3(p int) returns int
 	var c = p + 3
 	var i = 0
 	while i < 4 'loop'
-		var t = a
+		let t = a
 		a = b
 		b = c
 		c = t
@@ -151,7 +151,7 @@ function rotate5(p int) returns int
 	var e = p + 5
 	var i = 0
 	while i < 3 'loop'
-		var t = a
+		let t = a
 		a = b
 		b = c
 		c = d
@@ -193,7 +193,7 @@ function cycleAndLeaf(p int) returns int
 	var d = p
 	var i = 0
 	while i < 4 'loop'
-		var t = a
+		let t = a
 		d = a
 		a = b
 		b = c
@@ -234,11 +234,11 @@ function twoPerms(p int) returns int
 	var i = 0
 	while i < 4 'loop'
 		if i mod 2 == 0 'even'
-			var t = a
+			let t = a
 			a = b
 			b = t
 		end 'even' else 'odd'
-			var u = b
+			let u = b
 			b = c
 			c = u
 		end 'odd'
@@ -287,7 +287,7 @@ function permutePressure(p int) returns int
 	var b = p + 2
 	var i = 0
 	while i < 3 'loop'
-		var t = a
+		let t = a
 		a = b
 		b = t
 		i = i + 1
@@ -326,7 +326,7 @@ function swapAcrossCall(p int) returns int
 	var b = p + 2
 	var i = 0
 	while i < 3 'loop'
-		var t = a
+		let t = a
 		a = b
 		b = t
 		i = i + sink(1)

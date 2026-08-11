@@ -693,7 +693,15 @@ function fillerLocalsDecl(localCount KnobSize, tracked TrackedValueArray) return
 	var out = StringBuilder.create()
 	for v in 0 upto localCount 'fill'
 		let slot = v mod WorkingLocalsPerFunction
-		out.append("\tvar l{v} = a + {v + 1}\n")
+		// ⚠ **DECLARED EMPTY AND ASSIGNED, RATHER THAN INITIALIZED — because a `var` that is never
+		// reassigned is now E3077**, and this filler MUST stay a `var` or the whole V dimension above
+		// evaporates (a `let` leaves the parser's mutable-var set, which is the O(V) cost this knob exists
+		// to grow). The assignment is the cheapest spelling that keeps it mutable AND legal; the VALUE is
+		// unchanged, so `tracked` below still predicts the same witness. It costs one extra statement per
+		// filler, which shifts this corpus's absolute counts — rows logged before 2026-08-10 are against
+		// the one-statement shape and are not comparable term for term.
+		out.append("\tvar l{v} = 0\n")
+		out.append("\tl{v} = a + {v + 1}\n")
 		out.append("\tw{slot} = w{slot} + l{v}\n")
 		trackedSet(tracked, slot: slot, value: trackedAt(tracked, slot: slot) + corpusSeedValue() + v + 1)
 	end 'fill'
@@ -5074,7 +5082,10 @@ function namespacedInnerSource(m KnobIndex) returns String
 	out.append(driverHeader("{NsDeepFuncPrefix}{m}"))
 	// The enclosing directory's `module` declaration, named BARE from a file one level DOWN — the subtree
 	// prefix compare, which is `isVisibleFrom`'s most expensive arm and had no traffic at all before N1b.
-	out.append("\tvar acc = {NsSharedPrefix}{m}(a)\n")
+	// Split for `fillerLocalsDecl`'s reason: module 0 has no predecessor, so its `acc` would be a `var`
+	// nothing reassigns — E3077 — while the rest of the ladder reassigns it one line down.
+	out.append("\tvar acc = 0\n")
+	out.append("\tacc = {NsSharedPrefix}{m}(a)\n")
 
 	// A qualified reference written from INSIDE a namespaced file, and pointing at a DIFFERENT namespace.
 	// Module 0 has no predecessor and simply skips it — the chain is what makes these references

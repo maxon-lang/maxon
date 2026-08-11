@@ -327,7 +327,7 @@ enum Kw
 end 'Kw'
 
 function main() returns ExitCode
-	var k = Kw.alpha
+	let k = Kw.alpha
 	var i = 0
 	while k == Kw.otherwise 'loop'
 		i = i + 1

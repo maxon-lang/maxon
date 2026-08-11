@@ -1182,6 +1182,22 @@ The four earliest rows predate the automated log; their numbers are reconstructe
 git, so they are accurate but were not written by the tool. They also predate the exponent table,
 which is why it starts empty.
 
+**2026-08-11 — CORPUS CHANGE, NO ROW: the scaling corpus grew one statement per SCOPE-FILLER LOCAL, so
+rows above this line are not comparable term for term with rows below it.** The `var-should-be-let` spec
+port made E3077 (a `var` that is never reassigned) a compile error, and `ScaleCorpus.fillerLocalsDecl`
+emitted exactly that shape — the whole ladder stopped compiling, reported as a BROKEN RUN. The filler MUST
+stay a `var` or the V dimension it exists to grow disappears (a `let` leaves the parser's mutable-var set,
+which IS the O(V) cost), so each filler is now declared empty and assigned (`var lN = 0` / `lN = a + N`)
+instead of initialized in one statement. Values, the witness, the knob and the mutable-var count are all
+unchanged; the SOURCE and the statement count are not.
+
+No row was appended, deliberately: a row minted across a corpus change measures the instrument and the
+compiler at once and can be attributed to neither. The last rows against the one-statement filler are
+ARR1/ARRR/ARRG/ARR3a-c (2026-08-11); the next row minted after this note is the new baseline, and a reader
+comparing across this line is comparing two different ladders. The tip was read at the port (6 rungs,
+`--repeat=1`) and every phase is x1.9-2.0 across a doubling ladder — `phase:parse` x1.94 allocations and
+x1.89 CPU — so nothing about the new rule bends a curve; the numbers simply start from a different place.
+
 **2026-08-07 — W41 optimization pass. NO CHANGE SHIPPED, and this note is the result.** No row was
 appended because nothing moved the corpus ladder: the pass measured the three constant factors W41's
 implementers flagged in words, plus the paths the generated corpus structurally cannot reach, and

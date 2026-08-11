@@ -113,7 +113,7 @@ legitimately needs a reuse copy. The loop runs `b = 20 - b` three times from `b 
 15, 5, 15 — a missing or mis-targeted copy would compute on the wrong value and fail.
 ```maxon
 function main() returns ExitCode
-	var a = 20
+	let a = 20
 	var b = 5
 	var i = 0
 	while i < 3 'loop'

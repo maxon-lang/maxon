@@ -1814,13 +1814,16 @@ a conformer whose drop is inert has an inert retain.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-function use(h Comparable) returns Integer
+function use(h Comparable, replace bool) returns Integer
 	var v = h
+	if replace 'maybe'
+		v = h
+	end 'maybe'
 	return 11 if true else 12
 end 'use'
 
 function main() returns ExitCode
-	return use(7) as ExitCode
+	return use(7, replace: false) as ExitCode
 end 'main'
 ```
 ```exitcode

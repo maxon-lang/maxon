@@ -639,7 +639,7 @@ function main() returns ExitCode
 	var a = IntArray.create()
 	a.push(3)
 	a.push(4)
-	var w = IntWalker.create(a)
+	let w = IntWalker.create(a)
 	var total = 0
 	for x in w 'walk'
 		total = total + x

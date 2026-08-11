@@ -984,12 +984,21 @@ E3076 SemanticConstructorRestriction
 E3077 SemanticVarShouldBeLet
 	csharp SemanticVarShouldBeLet
 	selfhosted semanticVarShouldBeLet
+	shv2 semanticVarShouldBeLet
 	doc a local declared with `var` is never reassigned, so it should
 	doc be a `let`. Detected after type resolution by
 	doc `checkVarShouldBeLetForEntry` (a `var` whose name never appears in the
 	doc per-function reassigned-var set). E3012 (unused variable) takes
 	doc precedence -- an unused `var` reports as unused, not as should-be-let.
 	doc Mirrors the C# bootstrap's `SemanticVarShouldBeLet`.
+	doc shv2 decides it at the declaring function's `end` (`reportVarShouldBeLet`)
+	doc off the same candidate list E3012 walks, reading a per-function name set
+	doc (`mutabilityExercisedNames`) that seven doors record into, and REPORTS it
+	doc past the backend so a body with any other diagnostic never also reports
+	doc this one. shv2 additionally counts a MOVE-OUT as a use of mutability,
+	doc which neither reference does: there `var` and `let` copy alike, while in
+	doc shv2 the keyword decides move-vs-alias, so advising `let` would silently
+	doc turn a move into an alias.
 
 E3078 SemanticVarFromImmutable
 	csharp SemanticVarFromImmutable

@@ -810,8 +810,53 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	let codeResult = try buildBackend(pipeline.stdModule, target: project.target, globalData: project.globalData, project: project, usage: usage) otherwise 'backendFailed'
 		try refuseCompile(project)
 	end 'backendFailed'
+	// ⭐ **THE DECLARATION-HYGIENE DRAIN (E3012 unused, E3077 var-should-be-let) — AFTER THE BACKEND, which
+	// is the first point at which nothing else has anything to say about a body.** See
+	// `reportBindingHygieneDiagnostics`.
+	try reportBindingHygieneDiagnostics(project)
+
 	return codeResult
 end 'compileToCodeResult'
+
+// ⭐⭐ **REPORT THE HYGIENE DIAGNOSTICS THE PARSER DECIDED, NOW THAT EVERY PASS THAT COULD EXPLAIN THE BODY
+// INSTEAD HAS RUN.** Both verdicts (E3012 unused, E3077 var-should-be-let) are facts about ONE function,
+// settled at its `end` during the parse; only the REPORTING waits, and `Project.bindingHygieneDiagnostics`
+// carries the measured cascade that makes it wait.
+//
+// ⭐⭐ **IT IS CALLED AFTER `buildBackend`, AND EACH STEP OF THAT POSITION WAS PAID FOR BY A MEASUREMENT.**
+// Reported where they are DECIDED, they gate the pipeline ahead of `resolveTypes`, and 26 committed
+// error-cases moved — `let x = 256 as Byte` reported *"unused variable: 'x'"* instead of the out-of-range
+// cast `type-casting.md` exists to pin, and that file is a canonical `/specs` port whose program may not be
+// edited to suit us. Moved to the end of `semanticCheck` that specific case STILL moved, because the
+// compile-time narrowing (E3005) is `InsertRangeChecks`, a Std-tier pass. And after the lowering stage two
+// BACKEND diagnostics still followed it: **E5001** (the register allocator out of registers) and **E4015**
+// (the reachability prune) — and the co-occurrence is not hypothetical, since `register-stress.md`'s whole
+// subject is a function stuffed with idle `var`s. Here there is nothing left below.
+//
+// The cost is that a doomed compile pays one codegen pass it will throw away. That is the right trade for a
+// diagnostic whose entire purpose is to be the LAST thing a reader is told.
+//
+// ⚠ **THE SUPPRESSION IS WHOLE-PROGRAM, WHERE v1's IS PER FUNCTION (`functionHasPriorDiagnostic`).** A
+// per-function rule needs a second index from a diagnostic's position back to the body containing it, and
+// every case in either suite that reaches this point has ONE complaint in the whole program — so the finer
+// rule would cost an index to make a distinction nothing observes. It errs toward reporting LESS, which for
+// a hygiene diagnostic is the harmless direction.
+//
+// ⚠ **THE GATE IS NOT REDUNDANT, THOUGH NOTHING CAN TRIP IT FROM HERE TODAY.** Every `otherwise` above
+// refuses the compile, so reaching this call means the sink is empty — but that is a property of the
+// CALLER, and a hygiene diagnostic stacked on top of a real one is precisely the defect this deferral
+// exists to prevent. The rule is written where the rule is, not left resting on the control flow above it.
+function reportBindingHygieneDiagnostics(project Project) throws CompileError
+	if project.bindingHygieneDiagnostics.count() == 0 or projectHasErrors(project) 'nothingToSayOrSomethingRealerSaidIt'
+		return
+	end 'nothingToSayOrSomethingRealerSaidIt'
+
+	for diagnostic in project.bindingHygieneDiagnostics 'each'
+		reportDiagnostic(project, diagnostic: diagnostic)
+	end 'each'
+
+	try refuseCompile(project)
+end 'reportBindingHygieneDiagnostics'
 
 // --- Source loading ---
 

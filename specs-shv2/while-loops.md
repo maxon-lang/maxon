@@ -311,7 +311,8 @@ once minting is eager, a read needs no phi to be correct.)
 `limit` is 6, so the loop runs 6 times adding 6 each: `acc = 36`.
 ```maxon
 function main() returns ExitCode
-	var limit = 6
+	var limit = 0
+	limit = 6
 	var i = 0
 	var acc = 0
 	while i < limit 'l'
@@ -334,13 +335,17 @@ surplus phi is φ(preheader: v, back-edge: v), which `elimTrivialBlockArgs` fold
 would coalesce regardless. A MISSING phi would be a silent miscompile, so the scan is built to err this
 way and never the other.
 
-The outer `t` is never actually written, so it must still be 100.
+The outer `t` is never written INSIDE THE LOOP, so it must still be 100. (Its `t = 100` one line above
+the loop is what keeps it a `var` at all: a `var` nothing ever assigns is E3077, and this case needs it to
+be a `var` to be given the surplus phi at all.)
 ```maxon
 function main() returns ExitCode
-	var t = 100
+	var t = 0
+	t = 100
 	var i = 0
 	while i < 3 'l'
-		var t = i + 1
+		var t = 0
+		t = i + 1
 		i = i + t
 	end 'l'
 	return t

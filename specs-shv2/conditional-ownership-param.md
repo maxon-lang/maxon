@@ -481,10 +481,11 @@ end 'main'
 
 `q` aliases the borrowed param and is never reassigned, just read. The retain at declaration and the
 decref at scope exit cancel, so the box's count is unchanged and the caller stays the sole owner —
-no leak, no double free. (The bootstrap lints a never-reassigned `var` as E3077; shv2 permits it,
-and the value 5 is the else-path's oracle-verified twin, where the reassignment is likewise skipped.)
+no leak, no double free. (Both compilers lint a never-reassigned `var` as E3077, so the reassignment
+is WRITTEN and then skipped at run time behind a `false` argument — which is exactly what this case
+is about. The value 5 is the else-path's oracle-verified twin, where it is likewise skipped.)
 
-<!-- test: struct-borrowed-var-never-reassigned -->
+<!-- test: struct-borrowed-var-reassignment-not-taken -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -496,14 +497,17 @@ type Point
 	end 'create'
 end 'Point'
 
-function pick(p Point) returns Integer
+function pick(p Point, replace bool) returns Integer
 	var q = p
+	if replace 'maybe'
+		q = Point.create(9)
+	end 'maybe'
 	return q.x
 end 'pick'
 
 function main() returns ExitCode
 	let base = Point.create(5)
-	return pick(base)
+	return pick(base, replace: false)
 end 'main'
 ```
 ```exitcode

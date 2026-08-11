@@ -43,8 +43,7 @@ end 'main'
 
 ## Tests
 
-<!-- disabled-test: unused-var -->
-<!-- unused BODY LOCALS (`let`/`var`). Not separable from two refusals shv2 also lacks: MEASURED on the oracle, `let _ = expr` is E2001 ("use `_ = expr` to discard a result") and `_ = <pure call>` is E3064 — until all three land together a borrowed element that may be neither bound, nor discarded, nor used has no legal spelling at all. A `for` binding rides ahead of them only because `for _ in` is already legal in BOTH compilers. Its own rung -->
+<!-- test: unused-var -->
 ```maxon
 
 function main() returns ExitCode
@@ -57,7 +56,7 @@ error E3012: specs/fragments/unused-variables/unused-var.test:4:6: unused variab
 ```
 
 <!-- disabled-test: unused-let -->
-<!-- unused BODY LOCALS (`let`/`var`) — the same missing mechanism as `unused-var` above, one rung -->
+<!-- unused BODY `let`s. shv2 checks body `var`s (E3077 owes that half — an unmentioned `var` reports as unused rather than as should-be-let); the `let` half is its own rung, and its cost is EXPRESSIVENESS rather than tidiness: MEASURED, it refuses 82 cases of this suite whose shape IS the test — a leak gate binds an owned value and deliberately never touches it, so scope exit is the only thing that can free it, and `register-pressure` needs a def that is never read. The E2001/E3064 reason this note used to give was the ORACLE's and does not transfer: shv2 has no purity analysis, so `_ = <any call>` is already legal here -->
 ```maxon
 
 function main() returns ExitCode
@@ -140,7 +139,7 @@ error E3012: specs/fragments/unused-variables/tuple-destructuring-unused.test:10
 ```
 
 <!-- disabled-test: multiple-unused-first-reported -->
-<!-- two unused BODY LOCALS — the same missing mechanism as `unused-var` above, one rung. (The "first reported" property itself is already live: `reportUnusedBindings` scans `unusedCandidates` in declaration order and returns on the first hit.) -->
+<!-- two unused BODY `let`s — the same missing rung as `unused-let` above. (The "first reported" property itself is already live: `reportUnusedBindings` scans `unusedCandidates` in declaration order and returns on the first hit, and `unused-var` above now exercises it for a `var`.) -->
 ```maxon
 
 function main() returns ExitCode

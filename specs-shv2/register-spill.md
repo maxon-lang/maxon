@@ -742,14 +742,14 @@ end 'leaf'
 
 function edgeAnchor(p int, q int) returns int
 	let t = p + q
-	var a1 = p + 1
-	var a2 = p + 2
-	var a3 = p + 3
-	var a4 = p + 4
-	var a5 = p + 5
-	var a6 = p + 6
-	var a7 = p + 7
-	var a8 = p + 8
+	let a1 = p + 1
+	let a2 = p + 2
+	let a3 = p + 3
+	let a4 = p + 4
+	let a5 = p + 5
+	let a6 = p + 6
+	let a7 = p + 7
+	let a8 = p + 8
 	var m = 0
 	if p > 0 'br'
 		m = t

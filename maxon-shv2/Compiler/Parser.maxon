@@ -2553,6 +2553,11 @@ let ParametersAreMutable = false
 // (`_` means discard), spelled once.
 let DiscardBindingName = b"_"
 
+// How far past a `.` a member's ARGUMENT LIST begins: the member name, then its `(`. Named because the
+// offset is a claim about the grammar (`recv . name ( args )`) rather than a step count — see
+// `noteMethodCallMutabilityUses`, its one reader.
+let MethodArgListOffset = 2 as TokenIndex
+
 // Add `item` to a `", "`-separated list — the separator every list a diagnostic spells out uses (E2026's
 // uncovered-case list, E3081's discard list, E3016's overload-set list), spelled ONCE so two messages
 // rendering a list of the same kind cannot come to punctuate it differently.
@@ -9235,6 +9240,21 @@ export type Parser
 	// captures)`). Sharing it across the boundary instead would let a closure's private local excuse an
 	// enclosing declaration of the same name.
 	var referencedNames as ByteArrayArray
+	// ⭐⭐ **THE NAMES THIS FUNCTION EVER NEEDED WRITABLE — E3077's evidence**, the exact twin of
+	// `referencedNames` above, appended by `markMutabilityExercised` and read by `reportVarShouldBeLet`.
+	// A `var` whose name never lands here could have been a `let`.
+	//
+	// ⚠ **NAME-SCOPED FOR THE SAME REASON ITS TWIN IS, and here the reason is a SHADOW rather than two
+	// sibling loops.** An inner `var x` that IS written must excuse an enclosing `var x` that is not: both
+	// reference compilers key on a per-function name SET (`_reassignedVars`, `reassignedVars`), so a
+	// per-binding verdict would refuse a program both of them accept. `VarInfo.mutabilityExercised` is the
+	// once-per-binding dedup in front of the append, exactly as `referenced` is for the list above.
+	//
+	// Saved/CLEARED/restored around a closure body like its twin — a closure is a separate function and its
+	// own writes say nothing about the enclosing body's `var`s. ⚠ Unlike `referencedNames` it takes NO
+	// capture push-back at the restore: a capture is BY VALUE in shv2 (`captureEnclosing`), so a write
+	// inside the closure cannot reach the enclosing binding and is no reason to keep it a `var`.
+	var mutabilityExercisedNames as ByteArrayArray
 	// ⭐ **THE OWNED HEAP TEMPORARIES CREATED BY THE STATEMENT BEING PARSED, awaiting their drop.** An
 	// UNBOUND owned value — `print("{x}")`, where the interpolation result is consumed by `print` (which
 	// BORROWS it) and bound to no name — has, under static single-owner, exactly one possible owner: the
@@ -9570,6 +9590,7 @@ export type Parser
 			unusedCandidates: UnusedBindingCandidateArray.create(),
 			functionMintedValueAliases: false,
 			referencedNames: ByteArrayArray.create(),
+			mutabilityExercisedNames: ByteArrayArray.create(),
 			pendingTempDrops: ValueIdArray.create(),
 			noForkTemps: ValueIdArray.create(),
 			lastDispatchedMemberIndex: 0,
@@ -15337,6 +15358,13 @@ export type Parser
 		self.artifact.diagnostics.push(Diagnostic.create(code, message: message, line: range.line, column: range.column, filePath: self.artifact.filePath))
 	end 'recordArtifactDiagnostic'
 
+	// The DECLARATION-HYGIENE twin of the above (E3012, E3077) — same record, a different list, and the
+	// difference is WHEN it is reported rather than what it says. See `Project.bindingHygieneDiagnostics`
+	// for the cascade that makes the second list necessary.
+	function recordBindingHygieneDiagnostic(code ErrorCode, message String, range SourceRange)
+		self.artifact.bindingHygieneDiagnostics.push(Diagnostic.create(code, message: message, line: range.line, column: range.column, filePath: self.artifact.filePath))
+	end 'recordBindingHygieneDiagnostic'
+
 	// The argument list of a `Base with Args` (P1.6-A) — a single arg (`Box with Integer`) or a
 	// parenthesized comma list (`Pair with (Integer, Bool)`). Each arg is an ordinary type reference,
 	// so `Box with Integer` binds `[Integer]` and `Pair with (A, B)` binds `[A, B]`.
@@ -18377,6 +18405,8 @@ export type Parser
 		// would excuse a candidate of that name here. The name-scoped half is bounded to ONE function,
 		// exactly as the oracle's per-function `_referencedVars` is.
 		self.referencedNames = ByteArrayArray.create()
+		// E3077's half of the same accounting, bounded to one function for the identical reason.
+		self.mutabilityExercisedNames = ByteArrayArray.create()
 		// Re-created per function for the same reason `ownedBindings` is: a stray pending temp carried
 		// across a function boundary would decref a value from the PREVIOUS function's SSA space.
 		self.pendingTempDrops = ValueIdArray.create()
@@ -18572,7 +18602,11 @@ export type Parser
 			// may be mangled on top of that for an overload; either would match no contract, silently, and the
 			// waiver would simply never fire (measured: `interface-method-local-var-still-errors` reported the
 			// contract's own `volume`).
-			self.reportUnusedBindings(nameTok.value)
+			// E3012 first, E3077 only when it found nothing — the precedence, stated as the order of the two
+			// scans over one list. See `reportVarShouldBeLet`.
+			if not self.reportUnusedBindings(nameTok.value) 'nothingUnused'
+				self.reportVarShouldBeLet()
+			end 'nothingUnused'
 		end 'bodyReached'
 
 		try self.consume(TokenKind.end)
@@ -18888,18 +18922,27 @@ export type Parser
 
 	// ⭐⭐ **E3012 — THE FIRST BINDING THIS FUNCTION DECLARED AND NEVER MENTIONED.** Called at the `end` of
 	// a function, once the whole body has been seen, because "never mentioned" is a fact about the WHOLE
-	// body and about no smaller part of it. A candidate is a PARAMETER or a `for` binding (A4g), which is
-	// why the list is walked with a `continue` and its kind is asked at the waiver below rather than once
-	// before the loop.
+	// body and about no smaller part of it. A candidate is a PARAMETER, a `for` binding (A4g) or a body
+	// `var`, which is why the list is walked with a `continue` and its kind is asked at the waiver below
+	// rather than once before the loop.
 	//
-	// ⚠ **PARAMETERS AND `for` BINDINGS — a body `let`/`var` is still NOT checked, and that is a scope line
-	// drawn at the spec boundary rather than a gap.** The local rule is not separable from two refusals shv2
-	// lacks: MEASURED on the oracle, `let _ = expr` is **E2001** ("use '_ = expr' to discard a result") and
-	// `_ = <pure call>` is **E3064** ("result of pure function … must be used"). Until all three land
-	// together, a borrowed element that may be neither bound, nor discarded, nor used has no legal spelling at
-	// all. **A `for` binding is separable precisely because `for _ in` is ALREADY legal in both compilers** —
-	// the refusal has a spelling to point the author at before it is written, which is the whole reason it
-	// rides ahead of the locals. `specs-shv2/unused-variables.md` carries both halves, the locals disabled.
+	// ⭐⭐ **BODY `var`s ARE IN, AND THE NOTE SAYING NO LOCAL COULD BE WAS WRONG ABOUT ITS REASON.** It read:
+	// the local rule "is not separable from two refusals shv2 lacks — `let _ = expr` is E2001 and
+	// `_ = <pure call>` is E3064 — until all three land together, a borrowed element that may be neither
+	// bound, nor discarded, nor used has no legal spelling at all." That premise is the ORACLE's and does
+	// not transfer: **shv2 has no purity analysis**, so `_ = <any call>` is already the discard spelling
+	// here (`parseAssignment`'s `DiscardBindingName` arm) and such a value HAS a legal spelling before this
+	// rule is written. MEASURED, not reasoned: `_ = f()` on a non-mutating call compiles and runs. E2001 and
+	// E3064 are not blockers, and neither is anything else the note names.
+	//
+	// ⚠ **WHAT IS REAL IS A COST THE NOTE NEVER MENTIONED — the unused-`let` half costs 82 cases of this
+	// suite, in EXPRESSIVENESS rather than tidiness.** See `UnusedBindingKind.mutableLocal`, which carries
+	// the measurement and says which spec owns the rung. A body `var` rides now because E3077 owes it.
+	//
+	// ⇒ **it returns a VERDICT, because E3077 rides behind it** (`reportVarShouldBeLet`): "an unused `var`
+	// reports as UNUSED, not as should-be-let" is the two scans' ORDER over one list, which is how both
+	// reference compilers state it (v1's `checkPendingUnusedVars` runs the same three checks in the same
+	// order behind the same "has anything fired yet" flag).
 	//
 	// ⭐⭐ **"REFERENCED" IS A FACT ABOUT THE NAME, NOT ABOUT THE BINDING**, so the verdict asks TWO questions
 	// and the second is the one a per-binding bit cannot answer: two sequential `for i` loops mint two
@@ -18908,49 +18951,96 @@ export type Parser
 	// `specs-shv2/unused-variable-name-scope.md`, which pins it.
 	//
 	// ⭐ **ONE DIAGNOSTIC PER FUNCTION, AND IT IS THE EARLIEST DECLARATION.** `unusedCandidates` is in
-	// declaration order — parameters as `bindParameters` mints them, then each `for` binding as the body
-	// reaches it — so a forward scan reports the leftmost unused one, which is what both
+	// declaration order — parameters as `bindParameters` mints them, then each `for` binding and each body
+	// `var` as the body reaches it — so a forward scan reports the leftmost unused one, which is what both
 	// reference compilers produce, because both THROW on the first one they find. The scan stops for the
-	// same reason they do: the rest are the same fact about the same edit, and `multiple-unused` (two unused
-	// parameters) pins exactly one line.
+	// same reason they do: the rest are the same fact about the same edit, and `multiple-unused` (two
+	// unused parameters) pins exactly one line.
+	//
+	// ⚠ **PARAMETERS DO NOT ALL PRECEDE LOCALS IN THE ORACLE, AND HERE THEY DO — a deliberate difference
+	// with nothing to pin it.** v1 pushes every parameter, THEN every local, so an unused parameter outranks
+	// an unused local declared above it; shv2's list is in true source order. No case in either suite
+	// declares an unused parameter and an unused local in one function, so the two agree everywhere the
+	// corpus looks, and source order is the rule the header above already states.
 	//
 	// ⚠ **A FUNCTION WHOSE BODY FAILED TO PARSE NEVER REACHES HERE**, which is the suppression v1 has to
 	// spend a diagnostic scan on (`functionHasPriorDiagnostic`): a `ParseError` unwinds past this call, so a
 	// body with a real error never also reports its unused names as cascade noise. shv2 gets it structurally
 	// and needs no rule for it.
-	function reportUnusedBindings(methodName ByteArray)
+	function reportUnusedBindings(methodName ByteArray) returns bool
 		for candidate in self.unusedCandidates 'eachCandidate'
-			if candidate.binding.referenced 'wasMentioned'
+			if self.bindingNameWasMentioned(candidate.binding) 'wasMentioned'
 				continue
 			end 'wasMentioned'
 
-			// The name-scoped half. Reached only by a declaration that is about to be reported, so the scan
-			// costs nothing on a function whose bindings are all used.
-			if self.nameWasReferenced(candidate.binding.name) 'anotherBindingOfThisNameWasMentioned'
-				continue
-			end 'anotherBindingOfThisNameWasMentioned'
-
-			// ⭐ **THE WAIVER IS ABOUT PARAMETERS AND MUST NOT REACH A LOOP BINDING.** MEASURED on the oracle:
-			// an unread `for i in 0 upto limit 'l'` inside an interface-dictated method is still
-			// `error E3012: unused variable: 'i'`. The oracle draws the same line structurally — its
-			// `skipParamCheck` skips the parameter loop and never the locals loop.
+			// ⭐ **THE WAIVER IS ABOUT PARAMETERS AND MUST NOT REACH A LOOP BINDING OR A LOCAL.** MEASURED on
+			// the oracle: an unread `for i in 0 upto limit 'l'` inside an interface-dictated method is still
+			// `error E3012: unused variable: 'i'`, and so is an unread body `let`. The oracle draws the same
+			// line structurally — its `skipParamCheck` skips the parameter loop and never the locals loop.
 			//
-			// A `continue` rather than the `return` this used to be: with two candidate kinds in one list, a
-			// waived parameter must not suppress a later loop binding the contract has no say over. Asked
+			// A `continue` rather than the `return` this used to be: with three candidate kinds in one list, a
+			// waived parameter must not suppress a later declaration the contract has no say over. Asked
 			// here rather than before the loop because it walks two registries, and the overwhelming majority
-			// of functions never reach it; `and` short-circuits, so a loop binding never pays for it.
+			// of functions never reach it; `and` short-circuits, so a non-parameter never pays for it.
 			let waivable = match candidate.kind 'candidateKind'
 				parameter gives true
 				loopVariable gives false
+				mutableLocal gives false
 			end 'candidateKind'
 			if waivable and self.parametersAreInterfaceDictated(methodName) 'contractDictatedTheList'
 				continue
 			end 'contractDictatedTheList'
 
-			self.recordArtifactDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from(candidate.binding.name)}'", range: candidate.nameRange)
+			self.recordBindingHygieneDiagnostic(ErrorCode.semanticUnusedVariable, message: "unused variable: '{String.from(candidate.binding.name)}'", range: candidate.nameRange)
+			return true
+		end 'eachCandidate'
+
+		return false
+	end 'reportUnusedBindings'
+
+	// ⭐⭐ **E3077 — THE FIRST `var` THIS FUNCTION DECLARED AND NEVER NEEDED WRITABLE.** The twin of the scan
+	// above, over the SAME candidate list, run only when that one reported nothing — which is the whole of
+	// "E3012 takes precedence" (`unused-takes-precedence`: `var x = 10` + `return 0` is the unused
+	// diagnostic, not this one). Both reference compilers order the two exactly this way.
+	//
+	// ⭐ **THE CANDIDATE TEST IS `binding.mutable`, WHICH IS EXACTLY "THE AUTHOR WROTE `var`"** — not a kind
+	// match, and deliberately: a parameter is immutable (`ParametersAreMutable` is false) and a `for`
+	// element is bound `mutable: false`, so the property already separates the kinds and cannot drift from
+	// them the way an enumerated list of exempt kinds would. A future mutable binding kind is checked the
+	// day it becomes mutable, which is the day the rule starts applying to it.
+	//
+	// ⚠ **A `var` NOTHING MENTIONED IS SKIPPED RATHER THAN REPORTED, and that is not the same as the
+	// precedence above.** The precedence covers one function reaching both rules; this covers the SECOND
+	// unused declaration, which E3012 deliberately did not report (one diagnostic per function). Reporting
+	// it here would say "use `let`" about a binding whose real fix is deletion. v1 skips it on the identical
+	// `referenced` test, for the identical reason.
+	function reportVarShouldBeLet()
+		for candidate in self.unusedCandidates 'eachCandidate'
+			if not candidate.binding.mutable 'notAVar'
+				continue
+			end 'notAVar'
+
+			if not self.bindingNameWasMentioned(candidate.binding) 'unusedIsE3012sToReport'
+				continue
+			end 'unusedIsE3012sToReport'
+
+			if candidate.binding.mutabilityExercised or self.nameIsListed(self.mutabilityExercisedNames, name: candidate.binding.name) 'neededTheMutability'
+				continue
+			end 'neededTheMutability'
+
+			self.recordBindingHygieneDiagnostic(ErrorCode.semanticVarShouldBeLet, message: "variable '{String.from(candidate.binding.name)}' is never reassigned; use 'let' instead of 'var'", range: candidate.nameRange)
 			return
 		end 'eachCandidate'
-	end 'reportUnusedBindings'
+	end 'reportVarShouldBeLet'
+
+	// Was the NAME this binding declared mentioned anywhere in the function being parsed? The per-binding
+	// bit first, then the name-scoped half — see `referencedNames` for why the second question exists and
+	// why a per-binding bit structurally cannot answer it. The scan is reached only by a declaration one of
+	// the two scans above is about to report or excuse, so a function whose bindings are all used never
+	// walks the list at all.
+	function bindingNameWasMentioned(binding VarInfo) returns bool
+		return binding.referenced or self.nameIsListed(self.referencedNames, name: binding.name)
+	end 'bindingNameWasMentioned'
 
 	// ⭐ **THE SINGLE WRITER OF E3012'S EVIDENCE** — the per-binding bit and the per-function name list,
 	// together. Three doors call it (`requireBindingLive`, `parseAssignment`, `emitCaptureRead`); see
@@ -18967,19 +19057,59 @@ export type Parser
 		self.referencedNames.push(binding.name)
 	end 'markBindingReferenced'
 
-	// Did SOME binding of this name get mentioned in the function being parsed? A linear scan because the
-	// list is short (one entry per mentioned binding) and it is consulted only for a declaration E3012 is
-	// about to report — a map would cost a hash of every name on the read path to save a walk on a path that
-	// runs a handful of times per compile.
-	function nameWasReferenced(name ByteArray) returns bool
-		for mentioned in self.referencedNames 'eachMentioned'
-			if mentioned.equals(name) 'sameName'
+	// ⭐ **THE SINGLE WRITER OF E3077'S EVIDENCE**, the exact twin of `markBindingReferenced` above and
+	// deduped the same way. Its doors are the ones that REQUIRE a binding to be writable and then let the
+	// program through — see `VarInfo.mutabilityExercised` for the list and for why a receiver and an
+	// argument are marked without asking whether the callee actually writes.
+	function markMutabilityExercised(binding VarInfo)
+		if binding.mutabilityExercised 'alreadyRecorded'
+			return
+		end 'alreadyRecorded'
+
+		binding.mutabilityExercised = true
+		self.mutabilityExercisedNames.push(binding.name)
+	end 'markMutabilityExercised'
+
+	// The same mark reached by NAME, for the doors that hold a name rather than the binding — a call
+	// ARGUMENT, a method RECEIVER and a `match` scrutinee, all of which carry the storage's name because
+	// E3019, E3070 and the payload write-back already needed it.
+	//
+	// ⭐ **THE GUARD IS `innermostMutableVarPosition`, NOT `scope.contains`, and it is the QUESTION rather
+	// than a cheap proxy for it**: only a `var` in scope can ever be an E3077 candidate, so a name that is
+	// not one — a `let`, a parameter, a global, an undeclared token the sweep happened to walk past — has
+	// nothing to mark. It is also what makes this affordable on the parse path: the index is the SHARED
+	// EMPTY map for any function that declares no `var` (`sharedEmptyMutableVarInnermost`), so such a
+	// function pays one lookup that cannot hit, and the argument sweep never reaches this at all.
+	//
+	// ⚠ **THE BINDING IT THEN MARKS MAY BE A `let` THAT SHADOWS THAT `var`, AND THAT IS CORRECT.** The
+	// verdict is name-scoped (see `mutabilityExercisedNames`), so what matters is that the NAME lands in
+	// the list — which excuses the outer `var`, exactly as both references' per-name sets do.
+	function markNameMutabilityExercised(name ByteArray)
+		if self.innermostMutableVarPosition(name) == NoMutableVar 'namesNoVarInScope'
+			return
+		end 'namesNoVarInScope'
+
+		self.markMutabilityExercised(self.scope.getInfo(name))
+	end 'markNameMutabilityExercised'
+
+	// Does `names` hold this name? A linear scan because these lists are short (one entry per binding that
+	// recorded the fact) and each is consulted only for a declaration E3012 or E3077 is about to report or
+	// excuse — a map would cost a hash of every name on the write path to save a walk on a path that runs a
+	// handful of times per compile.
+	//
+	// ONE scan for the two lists rather than one function each: they answer different questions
+	// (`referencedNames`, `mutabilityExercisedNames`) and are read through the two predicates that name
+	// those questions, but "is this name in that list" is a single fact and a second copy of the walk would
+	// be a second place for the name-scoped rule to be got wrong.
+	function nameIsListed(names ByteArrayArray, name ByteArray) returns bool
+		for listed in names 'eachListed'
+			if listed.equals(name) 'sameName'
 				return true
 			end 'sameName'
-		end 'eachMentioned'
+		end 'eachListed'
 
 		return false
-	end 'nameWasReferenced'
+	end 'nameIsListed'
 
 	// ⭐ **DOES AN INTERFACE THIS TYPE IMPLEMENTS REQUIRE A METHOD OF THIS NAME?** — the E3012 parameter
 	// exemption. An implementer is forced to declare every parameter the contract names, even one this
@@ -21259,7 +21389,36 @@ export type Parser
 		try self.requireMutableBindingSource(nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
 
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
+		self.noteBodyVarDeclared(nameTok, mutable: mutable)
 	end 'parseBinding'
+
+	// ⭐ **E3077 / E3012 CANDIDATE: A BODY `var` THE AUTHOR WROTE.** Enrolled at the SAME two doors E3078 is
+	// asked at — this one and the destructuring ELEMENT — and for the same reason spelled there:
+	// `declareInitializedBinding`'s third caller declares the destructuring TEMP, a name the compiler mints,
+	// and no diagnostic telling an author what to change may name it.
+	//
+	// ⚠ A body `let` is deliberately not enrolled — see `UnusedBindingKind.mutableLocal` for the measured
+	// reason and for which spec owns that rung.
+	//
+	// ⭐ `_` is the discard and is exempt, exactly as it is in a `for` header (`declareLoopVariable`) and as
+	// v1 filters it out of its parameter candidates. It binds a name the source never intends to read.
+	//
+	// The binding is read back out of the scope rather than threaded out of the declaration: the declaration
+	// door has more callers than this rule has candidates, so a return value would make the others carry a
+	// binding nothing reads.
+	//
+	// ⚠ **THE ENROLMENT DOORS ARE NARROWER THAN THE DECLARATION DOORS, and the third one is not the temp.**
+	// `parseBoundThenBody` declares `if var x = try f()`'s binding through `declareInitializedBinding`
+	// directly, so a bound-then `var` is a candidate for NEITHER rule. That is the safe direction — a missed
+	// diagnostic, never a refused program — and it is written down here because "two doors" reads like an
+	// exhaustive claim otherwise.
+	function noteBodyVarDeclared(nameTok Token, mutable bool)
+		if not mutable or nameTok.value.equals(DiscardBindingName) 'notACandidateName'
+			return
+		end 'notACandidateName'
+
+		self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(nameTok.value), nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.mutableLocal))
+	end 'noteBodyVarDeclared'
 
 	// ⭐ **BIND ONE NAME TO ONE ALREADY-PARSED INITIALIZER — the whole declaration half of a `let`/`var`.**
 	// Split out of `parseBinding` when destructuring landed (P1.10): `let (x, y) = t` declares N names from
@@ -21457,17 +21616,35 @@ export type Parser
 			return
 		end 'notAMutableBindOfANamedSource'
 
+		// ⭐ **ASKED FIRST, AND THE ORDER IS E3077'S RATHER THAN E3078's.** A scalar copy is an independent
+		// value: neither the shape this refuses, nor a reason the SOURCE had to be writable. Both arms below
+		// merely `return`, so moving this above the writability test moves nothing observable for E3078 —
+		// what it buys is that the mark below fires only where a mutable name really did reach the source's
+		// storage, so `var y = x` over an `int` does not silently excuse `x`.
+		if not self.valueIsManagedHeap(value) and self.tagOf(value) != ValueTypeTag.function 'independentCopy'
+			return
+		end 'independentCopy'
+
 		// A source whose storage is already writable is not the shape this refuses. A `var` is the move
 		// model's own case — it gives the value up, so no second live name aliases it. A PARAMETER is a
 		// borrowed reference to the caller's record, which the callee may mutate; that exemption is
 		// `bindingStorageIsWritable`'s, shared with E3019, and MEASURED on the oracle.
+		//
+		// ⭐⭐ **AND IT IS E3077's SEVENTH DOOR — the one that was missing, and whose absence left a correct
+		// program with NO LEGAL SPELLING.** `bindingStorageIsWritable`'s header states the invariant these
+		// two rules rest on and must not drift from; E3077's evidence was recorded on the E3019 side only,
+		// so `var i = o.inner` did not count as a use of `o`'s mutability. MEASURED, all four spellings of
+		// the canonical `var-from-immutable-struct-field` program, each following the previous diagnostic's
+		// own advice: `var o`/`var i` was **E3077** on `o`, `let o`/`var i` **E3078** on `i`, `let o`/`let i`
+		// **E2013** at the write, and the `clone()` E3078 advertises **E2015** on a struct-field read. Four
+		// refusals and no way through, for "take a mutable handle into a field of a local struct".
+		//
+		// Marked HERE rather than at a second `markMutabilityExercised` call site, because the exemption and
+		// the mark are the same fact: the source had to be writable for this binding to be legal.
 		if self.bindingStorageIsWritable(self.scope.getInfo(sourceName)) 'sourceIsWritableToo'
+			self.markNameMutabilityExercised(sourceName)
 			return
 		end 'sourceIsWritableToo'
-
-		if not self.valueIsManagedHeap(value) and self.tagOf(value) != ValueTypeTag.function 'independentCopy'
-			return
-		end 'independentCopy'
 
 		throw ParseError.varFromImmutable(self.immutableSourceSubject(sourceName, sourceReadsAField: sourceReadsAField), binding: String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
 	end 'requireMutableBindingSource'
@@ -21565,6 +21742,7 @@ export type Parser
 			// No source name for the DECLARATION: a field load is a fresh borrowed value held by no binding,
 			// so there is nothing for the move poison to find.
 			try self.declareInitializedBinding(func, nameTok: nameTok, value: element, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
+			self.noteBodyVarDeclared(nameTok, mutable: mutable)
 		end 'eachName'
 	end 'parseDestructuringBinding'
 
@@ -22336,6 +22514,11 @@ export type Parser
 		if not binding.mutable or self.bindingIsIterationLocked(binding) 'immutable'
 			throw assignToImmutableError(nameTok)
 		end 'immutable'
+
+		// ⭐ **E3077's FIRST DOOR, and it is this one BECAUSE it is the one that refuses.** A write that gets
+		// past here is a write a `let` would not have survived, which is exactly the fact E3077 needs — so
+		// the rule reads the enforcement rather than re-deriving from the syntax which statements are writes.
+		self.markMutabilityExercised(binding)
 	end 'requireMutableBinding'
 
 	// **THE `__`-RESERVATION RULE, IN ONE PLACE.** A user may not DECLARE a name that starts with the
@@ -26700,6 +26883,28 @@ export type Parser
 		// observed by every holder — `ownedBindings`, `Scope.vars`, any loop-phi list.
 		var owned = try self.ownedBindings.get(index) otherwise panic("poisonOwningBinding: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 		owned.movedFrom = true
+
+		// ⭐⭐ **E3077's shv2-ONLY DOOR: BEING MOVED OUT OF IS A USE OF MUTABILITY HERE, AND IN NEITHER
+		// REFERENCE.** MEASURED on the oracle: `var a = Point.create(7)` + `let u = a` + `return u.x` is
+		// E3077 there, because a copy out of a `var` is a copy out of a `let` and the keyword changes
+		// nothing. In shv2 it changes everything — `let u = a` from a MUTABLE `a` MOVES (this poison), and
+		// from an IMMUTABLE `a` it ALIASES, both names staying live (the ownership ruling
+		// `declareInitializedBinding` states). So the keyword is load-bearing at the source, and telling the
+		// author to write `let` would silently turn their move into an alias.
+		//
+		// It is the whole of `specs-shv2/moves.md`, `conditional-move-drops.md` and
+		// `try-block-ownership.md`: every one of them binds a `var`, moves out of it once and never
+		// reassigns it, and under the oracle's rule the move semantics they exist to pin would have no
+		// legal spelling at all.
+		//
+		// ⚠ **THE DOOR IS BROADER THAN THE ARGUMENT, AND DELIBERATELY NOT NARROWED TO MATCH IT.** The
+		// argument above is about a binding-to-binding rebind, where advising `let` would silently convert a
+		// move into an alias. This fires on EVERY move-out — `return s`, a consuming call argument, a
+		// container store — and for those `let` would have been perfectly legal, so the rule is simply lost
+		// on them. That is a MISSED diagnostic and never a refused program, which is the direction that costs
+		// nothing; narrowing it would mean a second classification of what kind of move this is, at a door
+		// whose whole job is that it does not care.
+		self.markMutabilityExercised(owned)
 	end 'poisonOwningBinding'
 
 	// ⭐⭐ **A MOVE POISONS EVERY NAME THAT READS THE VALUE, NOT ONLY THE ONE THAT OWNS IT.** An immutable
@@ -31258,8 +31463,19 @@ export type Parser
 		// The scrutinee. It may itself short-circuit and move `currentBlock`, so the first arm's
 		// test goes into wherever the scrutinee left control — its exit block, not `block`.
 		let scrutTempFloor = self.pendingTempDrops.count()
+		let scrutStart = self.pos
 		let scrut = try self.parseExpression(func, block: block)
 		let scrutTag = self.tagOf(scrut)
+
+		// ⭐ **E3077's SCRUTINEE DOOR.** A `match` arm may WRITE a payload back into the scrutinee's box
+		// (`full(value) then value = 42` — `VarInfo.isPayloadBinding`), which is legal only for a `var`
+		// scrutinee, so matching on one is a use of its mutability. Both references say the same
+		// (`_reassignedVars.Add(scrutineeVarName)` when the scrutinee is a mutable var), and
+		// `specs-shv2/mutable-enums.md`'s six cases are exactly this shape and nothing else. Marked for a
+		// BARE-NAME scrutinee through the shared cursor test, which is the only shape that names a binding.
+		if self.argWasBareName(self.tokenAt(scrutStart), valueStart: scrutStart) 'bareNameScrutinee'
+			self.markNameMutabilityExercised(self.tokenAt(scrutStart).value)
+		end 'bareNameScrutinee'
 
 		if not self.at(TokenKind.charLiteral) 'noLabel'
 			let missing = self.current()
@@ -41471,6 +41687,22 @@ export type Parser
 		// point holds only a value.
 		try self.requireBindingLive(binding, nameTok: baseTok)
 
+		// ⭐ **E3077's RECEIVER DOOR — the one place a method call holds the BINDING it dispatches on.** A
+		// method may write its receiver (`arr.push(9)`, and any user method whose `self` is written), so a
+		// `var` that receives one has exercised its mutability. Marked before the dispatch splits into its
+		// arms, because every arm past here holds only a value.
+		//
+		// ⚠ **UNCONDITIONALLY, WITHOUT ASKING WHETHER THIS METHOD WRITES — which makes shv2 weaker than the
+		// bootstrap on exactly one shape, deliberately.** For a USER method the answer is whole-program and
+		// arrives a phase after this diagnostic is decided, and the bootstrap marks every user-method
+		// receiver unconditionally for that reason. For a CONTAINER method the parser DOES know
+		// (`noteReceiverWrite`'s `mutatesReceiver`), and the bootstrap marks only the mutating ones — so
+		// `var a = …` + `a.count()` is E3077 there and is accepted here. That is a MISSED diagnostic, never
+		// a refused program, and buying it back means threading the receiver's name through six
+		// `noteReceiverWrite` callers to make a corpus-wide refusal fire on MORE programs. Not worth it: the
+		// direction that costs something is the other one.
+		self.markMutabilityExercised(binding)
+
 		// ⚠ The OWNER mask is read off the binding as it ARRIVED, before `methodReceiverBinding` materializes
 		// a self-field alias into an ordinary value binding — materializing is exactly what erases the fact
 		// that the record belongs to `self`. See `receiverOwnerMask`.
@@ -41534,6 +41766,61 @@ export type Parser
 		return layout.conformsToBuiltinManagedWrapper() and binding.fieldIndex == layout.inlineManagedFieldIndex()
 	end 'selfFieldIsInlineManaged'
 
+	// ⭐⭐ **E3077's METHOD-CALL DOOR: THE STORAGE THE RECEIVER DENOTES, AND EVERY NAME IN THE ARGUMENT
+	// LIST.** Called at the `.`, before anything is consumed, so the whole call is still ahead of the cursor.
+	//
+	// ⭐ **THE RECEIVER HALF IS `subjectName`, WHICH IS THE CHAIN'S ROOT AND NOT THE IMMEDIATE VALUE** — the
+	// E3070 column, already derived through the one `borrowSubjectNameAt`. That is exactly the name E3077
+	// needs: `b.items.push(42)` writes storage rooted at `b`, and MEASURED on the oracle it is `b`'s `var`
+	// that the write excuses. A field READ does not excuse it (`var q` + `return q.x` is E3077 there), which
+	// is why this hangs off the METHOD dispatch and not off `requireStructBase`.
+	//
+	// ⭐⭐ **THE ARGUMENT HALF IS A TOKEN SWEEP, AND THAT IS THE POINT RATHER THAN A SHORTCUT.** A call
+	// argument may be written by the callee, so both references count every mutable-var argument
+	// (`ParseCallArgValue`'s three `_reassignedVars.Add` sites) — MEASURED: `var b = IntArray.create()` +
+	// `a.append(b)` is accepted by the oracle, and it is `specs/arrays.md:append-empty-to-nonempty`, a
+	// CANONICAL program shv2 may not edit. `parseCallArgs` covers a user call, but a BUILTIN container
+	// method parses its own arguments with a bare `parseExpression` at dozens of arms across six
+	// dispatchers, and a marker added to each would be a list that fails OPEN: the arm somebody forgets is a
+	// program REFUSED, which is the expensive direction. A sweep of the parenthesised span cannot miss an
+	// arm, and what it over-marks — a name inside `a.push(b.count())` — costs a missed diagnostic and
+	// nothing else.
+	//
+	// It is gated on the function having a `var` IN SCOPE at all, so a body that declares none pays one
+	// `count()` per method call and sweeps nothing; past that, every name it finds is settled by one
+	// `innermostMutableVarPosition` lookup (see `markNameMutabilityExercised`).
+	function noteMethodCallMutabilityUses(recv MethodReceiver)
+		if self.mutableVars.count() == 0 'noVarCouldBeTheSubject'
+			return
+		end 'noVarCouldBeTheSubject'
+
+		self.markNameMutabilityExercised(recv.subjectName)
+
+		// The cursor is ON the `.`, so the method name is the next token and its argument list — if it has
+		// one — opens at the one after that.
+		var index = (self.pos + MethodArgListOffset) as TokenIndex
+		if self.kindAt(index) != TokenKind.leftParen 'memberTakesNoArguments'
+			return
+		end 'memberTakesNoArguments'
+
+		var depth = 0 as BlockDepth
+		while self.kindAt(index) != TokenKind.eof 'sweep'
+			let kind = self.kindAt(index)
+			if kind == TokenKind.leftParen 'opens'
+				depth = depth + 1
+			end 'opens' else if kind == TokenKind.rightParen 'closes'
+				depth = depth - 1
+				if depth == 0 'argumentListClosed'
+					return
+				end 'argumentListClosed'
+			end 'closes' else if tokenCanBeAName(self.tokenAt(index)) 'aName'
+				self.markNameMutabilityExercised(self.tokenAt(index).value)
+			end 'aName'
+
+			index = (index + 1) as TokenIndex
+		end 'sweep'
+	end 'noteMethodCallMutabilityUses'
+
 	// ⭐ **THE RECEIVER A VALUE IS.** A temporary — a string literal, a call result, a parenthesised
 	// expression, a field read — is bound to no name, and the three provenance fields are the empty answer
 	// for a REASON rather than by omission:
@@ -41562,6 +41849,7 @@ export type Parser
 	// precede the conformer arm or `s.byteLength()` would be resolved against `String`'s intrinsic
 	// conformances instead of the String method table.
 	function dispatchMethodOnReceiver(func IrFunction, recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
+		self.noteMethodCallMutabilityUses(recv)
 		try self.consume(TokenKind.dot)
 		self.noteMemberDispatch(recv)
 
@@ -42055,6 +42343,18 @@ export type Parser
 		if not callFollows 'unknownFieldRead'
 			throw ParseError.unknownField(String.from(base.layout.name), fieldName: String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
 		end 'unknownFieldRead'
+
+		// ⭐ **E3077's THIRD DISPATCH ENTRY POINT.** `dispatchMethodOnBinding` and `dispatchMethodOnReceiver`
+		// mark their receiver's storage; this is the door a receiver that is NOT a bare name comes through
+		// (`o.inner.bump()`), and both references mark the chain root at it. `subjectName` is the same E3070
+		// derivation the other two read, so the three doors ask one question.
+		//
+		// ⚠ **IT IS BENIGN TODAY ONLY BECAUSE A SECOND DIVERGENCE CANCELS IT, WHICH IS NOT AN INVARIANT.** A
+		// method writing its own receiver's fields records no parameter mutation in shv2 (`receiverOwnerMask`'s
+		// ruling), so `let o` still compiles and the missing mark refused nothing. Two independent divergences
+		// that happen to cancel is not a rule — and `emitFieldWrite`'s note already says the rung that makes a
+		// struct PARAMETER's field writable inherits the question. Marked here so it inherits an answer too.
+		self.markNameMutabilityExercised(base.subjectName)
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
 
@@ -52913,6 +53213,7 @@ export type Parser
 		let savedUnusedCandidates = self.unusedCandidates
 		let savedMintedValueAliases = self.functionMintedValueAliases
 		let savedReferencedNames = self.referencedNames
+		let savedMutabilityExercisedNames = self.mutabilityExercisedNames
 		let savedPendingTempDrops = self.pendingTempDrops
 		// The last-field-read record is ONE fact spread over FOUR fields, and ALL FOUR are saved/restored as
 		// a unit — not `lastFieldReadValid` alone. The closure body opens with `lastFieldReadValid = false`,
@@ -53070,6 +53371,9 @@ export type Parser
 		// excuse an `i` the ENCLOSING function declared and never mentioned. What DOES cross the boundary is
 		// what the closure captured, pushed back at the restore below.
 		self.referencedNames = ByteArrayArray.create()
+		// Cleared, and NOT re-seeded at the restore: capture is by VALUE, so a write inside the closure
+		// reaches a copy and is no reason for the enclosing binding to stay a `var` — see the field.
+		self.mutabilityExercisedNames = ByteArrayArray.create()
 		self.pendingTempDrops = ValueIdArray.create()
 		self.lastFieldReadValid = false
 		self.loops = LoopContextArray.create()
@@ -53286,6 +53590,7 @@ export type Parser
 		for capturedName in self.captureNames 'eachCapture'
 			self.referencedNames.push(capturedName)
 		end 'eachCapture'
+		self.mutabilityExercisedNames = savedMutabilityExercisedNames
 		self.pendingTempDrops = savedPendingTempDrops
 		// Restore the whole last-field-read record, not just its `Valid` flag — see the save block: the
 		// closure body may have overwritten the value/box/offset with its own SSA ids.
@@ -55871,6 +56176,16 @@ export type Parser
 			// `currentBlock`, and re-seeding it would discard a short-circuit an EARLIER argument performed.
 			let value = try self.parseValueExpression(func)
 
+			// ⭐ **E3077's ARGUMENT DOOR.** `f(x)` may write `x` — whether it does is the callee's
+			// `writtenParamMask`, a whole-program fact SemanticCheck settles a phase after this diagnostic is
+			// decided — so a `var` handed to a call has exercised its mutability. Asked HERE, with the
+			// argument's own tokens still in hand and before anything moves the cursor, for the reason
+			// `bareArgImmutableName` gives. See `VarInfo.mutabilityExercised` for why both references make
+			// the same conservative choice and why matching them is load-bearing.
+			if self.argWasBareName(valueTok, valueStart: valueStart) 'bareNameArgument'
+				self.markNameMutabilityExercised(valueTok.value)
+			end 'bareNameArgument'
+
 			// A capturing closure handed DOWN to a direct callee is now SUPPORTED (P1.5-A2b-2): its environment
 			// travels as the companion argument the lowering appends at the function-typed parameter position
 			// (`LowerMaxonToStd.appendCalleeEnvArgs`), so the callee's `f(x)` reads the right env. No refusal
@@ -55918,12 +56233,20 @@ export type Parser
 	// identifier control does not raise E3019 either on every shape I tried), so this closes an asymmetry
 	// rather than a reproduced defect.
 	function bareArgImmutableName(valueTok Token, valueStart TokenIndex) returns ByteArray
-		if not tokenCanBeAName(valueTok) or self.pos != valueStart + 1 'notABareName'
+		if not self.argWasBareName(valueTok, valueStart: valueStart) 'notABareName'
 			return EmptySourceText
 		end 'notABareName'
 
 		return self.lastBareBindingImmutableName
 	end 'bareArgImmutableName'
+
+	// Did the argument just parsed consist of exactly ONE token, and was that token a name? The cursor test
+	// the block above argues for, lifted because E3077's argument door asks the identical question of the
+	// identical position — "did this argument hand a BINDING over, or a value the binding does not own" —
+	// and the two verdicts must not be free to disagree about what a bare name is.
+	function argWasBareName(valueTok Token, valueStart TokenIndex) returns bool
+		return tokenCanBeAName(valueTok) and self.pos == valueStart + 1
+	end 'argWasBareName'
 
 	// ⭐⭐ **THE E3019 BLAME OF AN EXPRESSION JUST PARSED — the one-token test, OR the merge it came out of.**
 	//

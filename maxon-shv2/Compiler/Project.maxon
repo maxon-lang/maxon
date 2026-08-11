@@ -532,6 +532,29 @@ export type VarInfo
 	//     (`ParametersAreMutable`), so assigning one is E2013 before this bit is read — but the rule is the
 	//     measured one and this is where it lives when `unused-variables.md` brings locals in.
 	export var referenced as bool
+	// ⭐⭐ **DID THIS BINDING EVER NEED TO BE WRITABLE? — E3077's evidence** (`Parser.reportVarShouldBeLet`).
+	//
+	// Set at every door that REQUIRES a binding to be writable and lets the program through: the assignment
+	// / field-assignment door (`Parser.requireMutableBinding`), the method RECEIVER door (the dispatchers,
+	// where a `let` receiver of a mutating method is E3019) and the call-ARGUMENT door (`parseCallArgs`,
+	// where a `let` argument to a mutating parameter is E3019). A `var` none of them ever admitted could
+	// have been written `let`, which is precisely what E3077 says.
+	//
+	// ⚠ **A RECEIVER AND AN ARGUMENT ARE MARKED WITHOUT ASKING WHETHER THE CALLEE ACTUALLY WRITES, and that
+	// is the reference rule rather than an approximation shv2 settled for.** Whether a callee mutates its
+	// parameter is a WHOLE-PROGRAM fact (`SemanticCheck.checkImmutableArgToMutatingParam` holds it, one
+	// phase later); the parser cannot know it at the `end` this diagnostic is decided at. Both reference
+	// compilers make the same choice — the bootstrap adds EVERY mutable-var call argument and method
+	// receiver to `_reassignedVars`, v1's `markVarReassigned` the same — so being stricter here would make
+	// shv2 refuse programs both of them accept. That matters concretely and not academically: `stdlib/` is
+	// vetted by the bootstrap alone, so a stricter shv2 would fail to compile the library every program
+	// links.
+	//
+	// ⚠ **IT IS THE DEDUP, NOT THE AUTHORITY.** The verdict is name-scoped for the reason `referenced`'s
+	// note gives one door up — a shadowing inner `var x` that IS written must excuse the outer `x`, exactly
+	// as both references' per-name sets do — so `Parser.mutabilityExercisedNames` holds the answer and this
+	// bit only keeps the append once-per-binding instead of once-per-mention.
+	export var mutabilityExercised as bool
 
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
@@ -544,12 +567,12 @@ export type VarInfo
 	// to make the identical six-site edit to add them, which is what put this here.) A new field is now one
 	// default and one line, and the kinds that care name it.
 	//
-	// `ownership`, `movedFrom`, `partiallyMoved`, `payloadSlotVacated`, `lastUseToken` and `referenced` take
-	// no parameter at all: they are per-path STATE the parser writes as it goes, and every binding starts
-	// with them clear. A constructor argument for one of them would be a way to start a binding already
-	// moved-from, which nothing means.
+	// `ownership`, `movedFrom`, `partiallyMoved`, `payloadSlotVacated`, `lastUseToken`, `referenced` and
+	// `mutabilityExercised` take no parameter at all: they are per-path STATE the parser writes as it goes,
+	// and every binding starts with them clear. A constructor argument for one of them would be a way to
+	// start a binding already moved-from, which nothing means.
 	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false}
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
@@ -649,9 +672,31 @@ export typealias VarInfoArray = Array with VarInfo
 // `tally`.
 export enum UnusedBindingKind
 	parameter
-	// A `for x in …` element. Separable from the body-local rule (`let`/`var`, still unchecked) because
-	// `for _ in` is already legal in BOTH compilers, so the refusal has a spelling to point the author at.
+	// A `for x in …` element.
 	loopVariable
+	// ⭐⭐ **A body `var` the author wrote — and a body `let` is DELIBERATELY NOT ONE.**
+	//
+	// This kind exists because E3077 owes it: `var` locals are that rule's candidate set, and for a
+	// candidate nothing mentions the honest sentence is not *"use `let`"* — the fix is to delete it — so it
+	// reports E3012 instead. That IS the precedence `specs-shv2/var-should-be-let.md:unused-takes-precedence`
+	// pins, and it is the whole of why a `var` local is checked here.
+	//
+	// ⚠ **THE UNUSED-`let` HALF IS A SEPARATE RUNG WITH A MEASURED COST, and the cost is not corpus tidying
+	// — it is EXPRESSIVENESS.** Admitting body `let`s refuses **82** cases of this suite, and the shapes are
+	// the point of the tests rather than sloppiness in them: a leak gate binds an owned value and
+	// deliberately never touches it, so that scope exit is the only thing that can free it
+	// (`union-managed-payload.string-payload-drop-leak-free`, `block-scope-drops.owned-struct-in-block`, and
+	// ~40 more); `register-pressure.dead-def-mid-block-holds-a-register` needs a def that is never read, by
+	// name. MEASURED on the oracle, all of those are E3012 there — which is presumably why it has no such
+	// tests, and why shv2 has found register-allocator and drop defects through shapes the oracle cannot
+	// express. Making them legal again means either deleting the binding (the test goes) or adding a mention
+	// (which moves the drop, so the test silently stops testing the drop). `specs-shv2/unused-variables.md`
+	// owns that rung and carries the disabled cases; nothing in THIS spec reaches it.
+	//
+	// ⚠ The compiler-minted destructuring TEMP is not one either: it goes through the same
+	// `declareInitializedBinding`, and a name the source cannot spell can be the subject of no sentence
+	// telling the author what to change — the identical line E3078 draws at the same three doors.
+	mutableLocal
 end 'UnusedBindingKind'
 
 // ⭐ **ONE DECLARATION THE UNUSED CHECK (E3012) MUST ACCOUNT FOR** — paired with the span of the NAME the
@@ -662,10 +707,15 @@ end 'UnusedBindingKind'
 // copied here would have to be looked up again in a `Scope` an inner block may since have shadowed — and the
 // shadow is a different declaration with its own answer.
 //
-// The RANGE rides here and not on `VarInfo` because only these two binding kinds are candidates: a body
-// local, a self-field alias, a payload binding, a closure parameter and the module-storage stand-in all
-// construct a `VarInfo` and none of them is checked, so a declaration span on the record would be a column
-// most constructors fill with nothing.
+// The RANGE rides here and not on `VarInfo` because only these binding kinds are candidates: a self-field
+// alias, a payload binding, the destructuring temp and the module-storage stand-in all construct a
+// `VarInfo` and none of them is checked, so a declaration span on the record would be a column most
+// constructors fill with nothing.
+//
+// ⭐ **E3077 WALKS THIS SAME LIST** (`Parser.reportVarShouldBeLet`), and that is the shape that makes the
+// precedence between the two rules structural rather than stated: "an unused `var` reports as UNUSED, not
+// as should-be-let" is one list scanned twice in a fixed order, not two lists that could disagree about
+// which declarations exist.
 export type UnusedBindingCandidate
 	export let binding as VarInfo
 	export let nameRange as SourceRange
@@ -5632,6 +5682,24 @@ export type Project
 	// targets so a warm rebuild does not double them.
 	export var unusedTypeAliasDiagnostics as DeferredNameDiagnosticArray
 	export var hiddenTypeNameDiagnostics as DeferredNameDiagnosticArray
+	// ⭐⭐ **THE DECLARATION-HYGIENE DIAGNOSTICS (E3012 unused, E3077 var-should-be-let), HELD BACK UNTIL
+	// EVERY CHECK THAT COULD EXPLAIN THE BODY HAS RUN** — appended per file by `mergeArtifact` and drained
+	// by `Compiler.reportBindingHygieneDiagnostics`, the last thing `compileToCodeResult` does — AFTER the
+	// backend, which is where the reason lives and where the four measurements that fixed the position are
+	// written down. ⛔ Moving the drain earlier re-breaks `type-casting.md`; read that header first.
+	//
+	// ⚠ **REPORTING THEM WHERE THEY ARE FOUND IS A MEASURED CASCADE, and it is why this list exists.** They
+	// are decided at a function's `end` DURING THE PARSE, and the parser's diagnostics gate the pipeline
+	// before `resolveTypes`/`semanticCheck` ever run — so `let x = 256 as Byte`, whose whole point is the
+	// out-of-range cast, reported `unused variable: 'x'` and the E3005 it is a test OF never happened. 26
+	// committed error-cases moved that way the first time locals were admitted, `type-casting.md` (a
+	// canonical `/specs` port) among them. Both reference compilers defer for exactly this reason: v1 pushes
+	// `PendingUnusedCheck` records and drains them in `SemanticCheck`, the bootstrap runs its scan after
+	// type resolution.
+	//
+	// ⇒ **A body the compiler had a real complaint about never also reports its hygiene diagnostics**, which
+	// is the drain's one rule (see there for why the suppression is whole-program rather than per function).
+	export var bindingHygieneDiagnostics as DiagnosticArray
 	// ⭐ Every declaration a type-name COLLISION was reported for (E3061/E3006,
 	// `reportTypeNameCollision`) — the suppression set the unused-typealias drain reads, so one mistake
 	// earns one diagnostic. Keyed by `fileScopedDeclKey`, per DECLARING FILE: a bare name would let one
@@ -5764,6 +5832,7 @@ export type Project
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			unusedTypeAliasDiagnostics: DeferredNameDiagnosticArray.create(),
 			hiddenTypeNameDiagnostics: DeferredNameDiagnosticArray.create(),
+			bindingHygieneDiagnostics: DiagnosticArray.create(),
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
 			pendingTransformArities: PendingTransformArityArray.create(),

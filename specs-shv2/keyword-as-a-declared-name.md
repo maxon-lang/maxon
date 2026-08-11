@@ -360,7 +360,7 @@ end 'Box'
 typealias StrBox = Box with String
 
 function main() returns ExitCode
-	var n = 7
+	let n = 7
 	let msg = "hello{n}"
 	let b = StrBox.create(msg)
 	return b.value.byteLength() * 7 as ExitCode
