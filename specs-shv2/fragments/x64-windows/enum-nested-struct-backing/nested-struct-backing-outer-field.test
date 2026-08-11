@@ -1,0 +1,66 @@
+// Test: nested-struct-backing-outer-field
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+type TargetMeta
+	export let meta as OpMeta
+	export let setsFlags as bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'TargetMeta'
+
+enum Op
+	add = TargetMeta.create(OpMeta.create(1), setsFlags: true)
+	mov = TargetMeta.create(OpMeta.create(2), setsFlags: false)
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.add
+	if op.rawValue.setsFlags 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.imulRegRegImm32 rcx, rcx, 1
+    x64.leaRegRegImm32 rcx, rcx, 0
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg equal, rax
+    x64.imulRegRegImm32 rax, rax, 0
+    x64.leaRegRegReg rax, rcx, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

@@ -1473,13 +1473,96 @@ union EnumCaseConstant
 	// `/specs/enum-struct-backing.md` describes, and the shape v1's runtime lowering emits
 	// (`LowerMaxonToStd.emitStructRawValueScalarFieldSelect` — one chain per LEAF field).
 	//
-	// ⚠ **IT CARRIES THE FIELD'S POSITION *AND* ITS NAME, WHICH ARE NOT REDUNDANT HERE.** Resolving a case's
-	// constant matches a LABELLED entry by name and an unlabelled one by position (`enumBackingFieldConstant`),
-	// so both are needed — and re-deriving either from the other is a whole-program `structOf` probe, which
-	// this column is read once PER CASE inside the sum. Both come from the single lookup
-	// `emitEnumBackingFieldSelect` already performs.
-	structBackingField(field FieldIndex, fieldName ByteArray, domain EnumBackingFieldDomain)
+	// ⚠ **IT CARRIES A PATH AND NOT ONE FIELD, BECAUSE A BACKING FIELD MAY ITSELF BE A STRUCT**
+	// (`/specs/enum-nested-struct-backing.md`: `op.rawValue.meta.latency`). One STEP per hop, and the leaf
+	// the last step names is what this column selects — which is still one machine word per case, so nothing
+	// about the sum changes. See `EnumBackingFieldStep` for why a step carries three facts.
+	structBackingField(path EnumBackingFieldStepArray, domain EnumBackingFieldDomain)
 end 'EnumCaseConstant'
+
+// ⭐⭐ **ONE HOP OF A BACKING-FIELD READ, RESOLVED AGAINST THE STRUCT THAT DECLARES IT** — `meta` then
+// `latency` out of `op.rawValue.meta.latency`. Minted once per read by `Parser.resolveEnumBackingLeaf`,
+// which walks the declared types, and consumed once PER CASE by `Parser.enumBackingFieldConstant`, which
+// walks that case's written entries.
+//
+// ⚠ **ALL THREE FACTS ARE THE WALK'S, AND RE-DERIVING ANY OF THEM IS A `structOf` PROBE PER CASE.** The
+// INDEX is what an unlabelled entry (`OpMeta.create(1)`) is matched by, the NAME is what a labelled one
+// (`setsFlags: true`) is matched by — a case may write both spellings, so neither alone answers — and the
+// OWNER is the struct that declares this hop, which the "case writes no value for it" diagnostic names and
+// which is not `EnumLayout.backingStructName` past the first hop.
+export type EnumBackingFieldStep
+	export let field as FieldIndex
+	export let fieldName as ByteArray
+	export let ownerName as ByteArray
+
+	export static function create(field FieldIndex, fieldName ByteArray, ownerName ByteArray) returns EnumBackingFieldStep
+		return Self{field: field, fieldName: fieldName, ownerName: ownerName}
+	end 'create'
+end 'EnumBackingFieldStep'
+
+export typealias EnumBackingFieldStepArray = Array with EnumBackingFieldStep
+
+// ⭐⭐ **WHAT A `.rawValue.<field>[.<field>…]` CHAIN RESOLVED TO — the ONE scalar leaf it names, plus the
+// path that reaches it.** Minted by `Parser.resolveEnumBackingLeaf`, which is the only thing that may build
+// one: the `domain` here is by construction NOT `nestedRecord`, because that walk keeps descending while it
+// is (see `Parser.requireEnumBackingFieldDomainIsAWord`'s assertion, which rests on exactly that).
+type EnumBackingLeaf
+	export let path as EnumBackingFieldStepArray
+	// The leaf's DECLARED type, which is what the selected word is finally claimed to be — a ranged alias
+	// included, so `op.rawValue.meta.latency` types as `Latency` exactly as `s.latency` on a record does.
+	export let fieldType as MaxonType
+	export let domain as EnumBackingFieldDomain
+
+	export static function create(path EnumBackingFieldStepArray, fieldType MaxonType, domain EnumBackingFieldDomain) returns EnumBackingLeaf
+		return Self{path: path, fieldType: fieldType, domain: domain}
+	end 'create'
+
+	// The hop that named the leaf itself — whose two names every diagnostic about the leaf renders. The
+	// panic's guard is the producer's own loop, which pushes a step before it can return.
+	export function lastStep() returns EnumBackingFieldStep
+		return try self.path.get(self.path.count() - 1) otherwise panic("EnumBackingLeaf.lastStep: the path is EMPTY — `Parser.resolveEnumBackingLeaf` pushes one step per hop BEFORE any exit, so a leaf with no step means that walk returned without resolving anything")
+	end 'lastStep'
+end 'EnumBackingLeaf'
+
+// One entry of a case's flat backing tree, with the OOB panic written once — `EnumLayout.backingFieldsAt`'s
+// twin one level in, and here because both walks over that array (the door's and the read's) index it.
+function enumBackingEntryAt(entries EnumBackingFieldArray, entry EnumBackingEntryIndex) returns EnumBackingField
+	return try entries.get(entry) otherwise panic("enumBackingEntryAt: backing entry {entry} is past the {entries.count()} this case wrote — every index handed out is either a loop bound over this same array or an owner recorded by `Parser.readEnumBackingEntryInto` as it pushed")
+end 'enumBackingEntryAt'
+
+// ⭐⭐ **DOES THIS ENTRY FILL FIELD `field` OF THE STRUCT AT `group`? — THE MATCHING RULE, ONCE.** A LABELLED
+// entry fills the field its label names; an UNLABELLED one fills the field at its own position; and neither
+// counts unless the entry belongs to the group being filled. All three clauses are one rule, and both
+// spellings can appear in one group (`OpMeta.create(4, isMemory: true, isCall: false)`), so no clause of it
+// can be dropped.
+//
+// ⚠ **IT IS HERE BECAUSE THE RULE HAS TWO DIRECTIONS AND ONLY THIS ONE IS SHARED.** The door asks
+// ENTRY→FIELD (`Parser.requireEnumBackingFieldPosition`, which must name the field an entry claims in order
+// to diagnose a surplus positional argument) and the read asks FIELD→ENTRY
+// (`Parser.requireEnumBackingEntryFilling`). They cannot be one function, so the PREDICATE is one function
+// and the door's inverse points at it — a clause added to only one of them would not fail to compile
+// anywhere, it would select a different case's constant.
+// How many entries one group holds — the ARGUMENT COUNT the arity diagnostic reports, which is a property
+// of the group and not of whichever entry happened to overflow it first. A scan, walked only when that
+// diagnostic is being built.
+function enumBackingGroupEntryCount(entries EnumBackingFieldArray, group EnumBackingGroupId) returns FieldIndex
+	var written = 0 as FieldIndex
+	for entry in 0 upto entries.count() 'eachEntry'
+		if enumBackingEntryAt(entries, entry: entry).group == group 'thisGroup'
+			written = written + 1
+		end 'thisGroup'
+	end 'eachEntry'
+
+	return written
+end 'enumBackingGroupEntryCount'
+
+function enumBackingEntryFills(recorded EnumBackingField, group EnumBackingGroupId, field FieldIndex, fieldName ByteArray) returns bool
+	if recorded.group != group 'fillsAnotherStruct'
+		return false
+	end 'fillsAnotherStruct'
+
+	return recorded.name.equals(fieldName) if not recorded.name.isEmpty() else recorded.position == field
+end 'enumBackingEntryFills'
 
 // ⭐ **WHERE THE SUM STARTS, WHICH IS A PROPERTY OF THE COLUMN AND NOT OF THE ENUM.** A declaration index's
 // first term is `0 × (tag == tag₀)` — identically zero whichever case the value is — so it is folded into
@@ -17133,22 +17216,44 @@ export type Parser
 	// `1.5` panicked the x64 emitter (*"a register-to-register move from rax to xmm0 crosses register
 	// files"*) and a `String` field written `1` compiled clean and ACCESS-VIOLATED at run time, dereferencing
 	// a String record address of 1. Both are MEASURED; see `EnumBackingFieldValue.literal`.
+	//
+	// ⭐⭐ **AND IT ASKS ALL FOUR AT EVERY DEPTH, BECAUSE IT RECURSES INTO THE NESTED GROUPS**
+	// (`/specs/enum-nested-struct-backing.md`). `OpMeta.create(4, isMemory: true)` short of `isCall` is the
+	// same defect one level down as `X64OpMeta.create(…)` short of `setsFlags`, and a rule that stopped at
+	// the outermost group would be a door with a hole exactly the shape of the feature this rung added.
 	function checkStructBackedCase(layout EnumLayout, caseTok Token) throws ParseError
 		if layout.backing != EnumBacking.structRecord 'notStructBacked'
 			return
 		end 'notStructBacked'
 
-		let struct = try self.requireEnumBackingStruct(layout, anchor: caseTok)
 		let index = layout.caseCount() - 1
-		let entries = layout.backingFieldsAt(index)
+
+		try self.checkEnumBackingGroup(try self.requireEnumBackingStruct(layout, anchor: caseTok), entries: layout.backingFieldsAt(index), group: RootBackingGroup, layout: layout, index: index, caseTok: caseTok)
+	end 'checkStructBackedCase'
+
+	// ⭐⭐ **THE FOUR RULES, ASKED OF ONE GROUP** — the entries filling one constant struct, which is the
+	// case's own backing at `RootBackingGroup` and a nested constant at every deeper call. Every rule below
+	// is about ONE struct and the entries that fill it, so recursing is the whole of what nesting costs.
+	//
+	// ⚠ **THE RECURSION IS DRIVEN BY WHAT WAS *WRITTEN*, NOT BY THE TYPE GRAPH, AND THAT IS WHY IT
+	// TERMINATES WITHOUT A DEPTH GUARD.** It descends only into an entry that wrote a nested constant, and
+	// the source text holding those entries is finite. It could NOT rest on types being acyclic: E4014 is
+	// checked by `TypeCycleCheck` after every file is parsed (`Compiler.maxon`), so a `type A  export let a
+	// as A end` reaches this door FIRST — and here it is simply a case that fails the missing-field rule at
+	// whatever depth the author stopped writing.
+	function checkEnumBackingGroup(struct StructLayout, entries EnumBackingFieldArray, group EnumBackingGroupId, layout EnumLayout, index CaseIndex, caseTok Token) throws ParseError
 		var filled = BoolArray.create()
 		for _ in 0 upto struct.fieldCount() 'seedFilledColumn'
 			filled.push(false)
 		end 'seedFilledColumn'
 
 		for entry in 0 upto entries.count() 'eachWrittenField'
-			let recorded = try entries.get(entry) otherwise panic("checkStructBackedCase: backingFields.get OOB at {entry} below count {entries.count()}")
-			let field = try self.requireEnumBackingFieldPosition(struct, recorded: recorded, entry: entry, caseTok: caseTok)
+			let recorded = enumBackingEntryAt(entries, entry: entry)
+			if recorded.group != group 'fillsAnotherStruct'
+				continue
+			end 'fillsAnotherStruct'
+
+			let field = try self.requireEnumBackingFieldPosition(struct, entries: entries, recorded: recorded, caseTok: caseTok)
 
 			// ⚠ **A DUPLICATE IS CAUGHT BY THE FILLED COLUMN, WHICH IS WHY THERE IS ONE.** `Meta{value: 1,
 			// value: 2}` used to keep the FIRST and silently drop the second, because the resolution scan in
@@ -17158,13 +17263,21 @@ export type Parser
 			// literal is "initialized twice" wherever it is written, and a factory call in this position IS
 			// that literal (see `readEnumBackingFields`). Anchored at the CASE, the token every per-case
 			// declaration diagnostic names and the position the oracle uses.
-			let alreadyFilled = try filled.get(field) otherwise panic("checkStructBackedCase: filled.get OOB at {field} below count {filled.count()}")
+			let alreadyFilled = try filled.get(field) otherwise panic("checkEnumBackingGroup: filled.get OOB at {field} below count {filled.count()}")
 			if alreadyFilled 'writtenTwice'
 				throw ParseError.duplicateFieldInitializer(String.from(struct.name), fieldName: String.from(struct.fieldNameAt(field)), line: caseTok.line, column: caseTok.column)
 			end 'writtenTwice'
-			try filled.set(field, value: true) otherwise panic("checkStructBackedCase: filled.set OOB at {field} below count {filled.count()}")
+			try filled.set(field, value: true) otherwise panic("checkEnumBackingGroup: filled.set OOB at {field} below count {filled.count()}")
 
-			try self.requireEnumBackingFieldValueSuitsField(struct, field: field, value: recorded.value, caseTok: caseTok)
+			// The type rule ANSWERS with the domain it decided on, so the descent below reads the one
+			// classification this field was admitted under rather than asking a second time — the shape that
+			// keeps "what the door admitted" and "where the door recurses" from ever being two answers.
+			let domain = try self.requireEnumBackingFieldValueSuitsField(struct, field: field, value: recorded.value, caseTok: caseTok)
+			if not domainIsEnumBackingNestedRecord(domain) 'aScalarLeaf'
+				continue
+			end 'aScalarLeaf'
+
+			try self.checkEnumBackingGroup(self.enumBackingNestedStruct(struct, field: field), entries: entries, group: nestedBackingGroupOf(entry), layout: layout, index: index, caseTok: caseTok)
 		end 'eachWrittenField'
 
 		// ⛔⛔ EVERY DECLARED FIELD MUST BE WRITTEN, AND A DEFAULT DOES NOT EXCUSE ONE — MEASURED on the C#
@@ -17173,12 +17286,12 @@ export type Parser
 		// rather than at the read for this door's whole reason: the read only ever visits the field some
 		// expression named, so a case short of a field nobody reads was admitted silently.
 		for field in 0 upto struct.fieldCount() 'eachDeclaredField'
-			let wasWritten = try filled.get(field) otherwise panic("checkStructBackedCase: filled.get OOB at {field} below count {filled.count()}")
+			let wasWritten = try filled.get(field) otherwise panic("checkEnumBackingGroup: filled.get OOB at {field} below count {filled.count()}")
 			if not wasWritten 'neverWritten'
 				throw self.enumBackingMissingFieldError(struct.name, fieldName: struct.fieldNameAt(field), layout: layout, index: index, anchor: caseTok)
 			end 'neverWritten'
 		end 'eachDeclaredField'
-	end 'checkStructBackedCase'
+	end 'checkEnumBackingGroup'
 
 	// ⭐ THE ONE SENTENCE FOR "this case supplies no constant for that field", rendered here because it has
 	// TWO throwers and must not become two rules: this door (which asks it of every declared field, at the
@@ -17199,13 +17312,22 @@ export type Parser
 	// WHICH declared field an entry fills — its LABEL's field, or the field at its own POSITION. Both ways of
 	// being wrong are reported here: a label naming no declared field, and a positional entry past the last
 	// one (`Meta.create(1, 2, 3)` on a one-field struct, whose surplus entries nothing ever visited).
-	function requireEnumBackingFieldPosition(struct StructLayout, recorded EnumBackingField, entry FieldIndex, caseTok Token) returns FieldIndex throws ParseError
+	//
+	// ⚠ **THIS IS THE INVERSE OF `enumBackingEntryFills`, AND THE MATCHING CLAUSES ARE ITS.** The door needs
+	// ENTRY→FIELD (only that direction can name the field a surplus positional claims) where the read needs
+	// FIELD→ENTRY, so the two cannot be one function — but the RULE they share is written once, there.
+	//
+	// ⚠ **THE COUNT IN THE SENTENCE IS THE GROUP'S, NOT THIS ENTRY'S POSITION.** It read
+	// `recorded.position + 1`, which is where the FIRST offender sits: `Meta.create(1, 2, 3)` on a one-field
+	// struct announced *"2 argument(s)"* about a three-argument call. A diagnostic that states a wrong number
+	// is worse than one that states none, and this one was golden-pinned while saying it.
+	function requireEnumBackingFieldPosition(struct StructLayout, entries EnumBackingFieldArray, recorded EnumBackingField, caseTok Token) returns FieldIndex throws ParseError
 		if recorded.name.isEmpty() 'positional'
-			if entry >= struct.fieldCount() 'pastTheLastField'
-				throw ParseError.unsupported("{entry + 1} argument(s) to a `{String.from(struct.name)}` backing, which declares {struct.fieldCount()} field(s) — a factory call in this position is read as the struct LITERAL its arguments fill, so an argument past the last field names nothing", line: caseTok.line, column: caseTok.column)
+			if recorded.position >= struct.fieldCount() 'pastTheLastField'
+				throw ParseError.unsupported("{enumBackingGroupEntryCount(entries, group: recorded.group)} argument(s) to the `{String.from(struct.name)}` constant, which declares {struct.fieldCount()} field(s) — a factory call in this position is read as the struct LITERAL its arguments fill, so an argument past the last field names nothing", line: caseTok.line, column: caseTok.column)
 			end 'pastTheLastField'
 
-			return entry
+			return recorded.position
 		end 'positional'
 
 		return try self.requireFieldIndex(struct, name: recorded.name, anchor: caseTok)
@@ -17228,7 +17350,12 @@ export type Parser
 	// ⭐⭐ **DOES THE WRITTEN CONSTANT SUIT THE FIELD'S DECLARED TYPE?** — the rule whose absence was the
 	// panic and the wild pointer. It is asked against `enumBackingFieldDomainOf`, the SAME classifier the
 	// read's decode is exhaustive over, so the door admits exactly what the read can produce a value for.
-	function requireEnumBackingFieldValueSuitsField(struct StructLayout, field FieldIndex, value EnumBackingFieldValue, caseTok Token) throws ParseError
+	//
+	// ⭐ **IT HANDS BACK THE DOMAIN IT DECIDED ON**, which is what the door's descent into a nested constant
+	// reads. Re-asking the classifier there would be the same question answered twice, free to disagree the
+	// day either half changes — and "the field this recursed into is the field the rule admitted" is the
+	// property that keeps a nested group being checked against the struct it actually fills.
+	function requireEnumBackingFieldValueSuitsField(struct StructLayout, field FieldIndex, value EnumBackingFieldValue, caseTok Token) returns EnumBackingFieldDomain throws ParseError
 		let fieldType = self.signatures.fieldTypeOf(struct, index: field, into: self.artifact.typeNames)
 		let fieldName = String.from(struct.fieldNameAt(field))
 		let domain = self.enumBackingFieldDomainOf(fieldType)
@@ -17237,11 +17364,11 @@ export type Parser
 		// sentences. This one is shared with the READ (see `enumBackingUnsupportedFieldError`).
 		try self.requireEnumBackingFieldTypeIsSupported(struct.name, fieldName: struct.fieldNameAt(field), fieldType: fieldType, domain: domain, anchor: caseTok)
 
-		if enumBackingValueSuitsDomain(value, domain: domain, enumName: self.enumBackingFieldEnumName(fieldType, domain: domain)) 'suits'
-			return
+		if enumBackingValueSuitsDomain(value, domain: domain, declaredName: self.enumBackingFieldTypeIdentity(fieldType, domain: domain)) 'suits'
+			return domain
 		end 'suits'
 
-		throw ParseError.unsupported("the constant written for field '{fieldName}' of the `{String.from(struct.name)}` backing, which is declared `{maxonTypeName(fieldType, typeNames: self.artifact.typeNames)}` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, and `<ThatEnum>.<case>` of THAT enum for a field of a declared enum", line: caseTok.line, column: caseTok.column)
+		throw ParseError.unsupported("the constant written for field '{fieldName}' of the `{String.from(struct.name)}` backing, which is declared `{maxonTypeName(fieldType, typeNames: self.artifact.typeNames)}` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`", line: caseTok.line, column: caseTok.column)
 	end 'requireEnumBackingFieldValueSuitsField'
 
 	// The domain gate, spelled as a `throws` so both askers can use it — the door below (once per declared
@@ -17266,21 +17393,37 @@ export type Parser
 	// ⚠ It names the FIELD's type, never the constant written into it: a `String`-typed backing field is
 	// wrong whatever is written there, and the author's fix is the field's type or the backing's shape.
 	function enumBackingUnsupportedFieldError(structName ByteArray, fieldName ByteArray, fieldType MaxonType, anchor Token) returns ParseError
-		return ParseError.unsupported("field '{String.from(fieldName)}' of the `{String.from(structName)}` backing is declared `{maxonTypeName(fieldType, typeNames: self.artifact.typeNames)}`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, or a PAYLOAD-FREE enum, because the select that reads one field produces a single i64 per case. A `{String.from(StringConformerName)}`, a `{String.from(CharacterConformerName)}`, a record, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of", line: anchor.line, column: anchor.column)
+		return ParseError.unsupported("field '{String.from(fieldName)}' of the `{String.from(structName)}` backing is declared `{maxonTypeName(fieldType, typeNames: self.artifact.typeNames)}`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `{String.from(StringConformerName)}`, a `{String.from(CharacterConformerName)}`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of", line: anchor.line, column: anchor.column)
 	end 'enumBackingUnsupportedFieldError'
 
-	// The enum a field of `enumWord` domain names — the identity an `<Enum>.<case>` value must match, so
-	// `Config{mode: Priority.low}` on a `Mode`-typed field is refused. Empty for every other domain, where
-	// no enum-case value is admitted at all and the name is never compared.
-	function enumBackingFieldEnumName(fieldType MaxonType, domain EnumBackingFieldDomain) returns ByteArray
+	// The TYPE a field of one of the two NAMED domains denotes — the identity a written `<Type>.<member>`
+	// must match, so `Config{mode: Priority.low}` on a `Mode`-typed field is refused and so is
+	// `X64OpMeta.create(Other.create(1), …)` on an `OpMeta`-typed one. Empty for every other domain, where no
+	// value naming a type is admitted at all and the name is never compared.
+	function enumBackingFieldTypeIdentity(fieldType MaxonType, domain EnumBackingFieldDomain) returns ByteArray
 		match domain 'd'
 			enumWord then return self.internedName(typeNameIdOf(fieldType))
+			nestedRecord then return self.internedName(typeNameIdOf(fieldType))
 			integerWord then return EmptySourceText
 			booleanWord then return EmptySourceText
 			floatBits then return EmptySourceText
 			unsupported then return EmptySourceText
 		end 'd'
-	end 'enumBackingFieldEnumName'
+	end 'enumBackingFieldTypeIdentity'
+
+	// ⭐ **THE STRUCT A `nestedRecord` FIELD NAMES — the group's own declaration**, asked by the door as it
+	// recurses and by the read as it descends, so both check a nested group against the same layout.
+	//
+	// ⚠ **THE PANIC'S GUARD IS `enumBackingRecordFieldDomain`, WHICH PROBED THIS EXACT NAME.** A field is
+	// classified `nestedRecord` only because `structOf` answered `declared` for it, so an `undeclared` here
+	// means one name was read two ways — not a program the author could write.
+	function enumBackingNestedStruct(struct StructLayout, field FieldIndex) returns StructLayout
+		let fieldName = self.internedName(typeNameIdOf(self.signatures.fieldTypeOf(struct, index: field, into: self.artifact.typeNames)))
+		match self.signatures.structOf(fieldName) 'declaring'
+			declared(nested) then return nested
+			undeclared then panic("enumBackingNestedStruct: field '{String.from(struct.fieldNameAt(field))}' of `type {String.from(struct.name)}` is declared `{String.from(fieldName)}`, which was classified a NESTED RECORD and yet no file declares a `type` of that name — `enumBackingRecordFieldDomain` reaches that classification only through `structOf` answering `declared` for this very name")
+		end 'declaring'
+	end 'enumBackingNestedStruct'
 
 	// ⭐⭐ **WHAT A FIELD'S DECLARED TYPE DOES TO THE i64 THE SELECT PRODUCES — THE ONE CLASSIFIER**, read by
 	// the door above and by `emitEnumBackingFieldSelect`'s decode. See `EnumBackingFieldDomain`.
@@ -17305,6 +17448,13 @@ export type Parser
 		if resolved == ValueTypeTag.named 'aNamedType'
 			return self.enumBackingNamedFieldDomain(self.internedName(typeNameIdOf(fieldType)))
 		end 'aNamedType'
+		// ⭐ A DECLARED `type` is `structRef` and never `named` — the tag has its own arm precisely so the
+		// rules that read `named` cannot absorb a record (`MaxonType.structRef`). It is the one tag this rung
+		// added a domain for, and it is asked of the REGISTRY rather than assumed from the tag: a name no
+		// file declares is refused rather than descended into.
+		if resolved == ValueTypeTag.structRef 'aDeclaredRecord'
+			return self.enumBackingRecordFieldDomain(self.internedName(typeNameIdOf(fieldType)))
+		end 'aDeclaredRecord'
 
 		return EnumBackingFieldDomain.unsupported
 	end 'enumBackingFieldDomainOf'
@@ -17334,6 +17484,23 @@ export type Parser
 		return EnumBackingFieldDomain.enumWord
 	end 'enumBackingNamedFieldDomain'
 
+	// ⭐⭐ **A FIELD DECLARED AS ANOTHER `type` IS A NESTED RECORD** — the domain this rung added
+	// (`/specs/enum-nested-struct-backing.md`), and it is admitted on a DIFFERENT premise from the three word
+	// domains, which is the whole reason it is its own arm: **nothing is ever SELECTED at this domain.** A
+	// record IS a box pointer at run time — the trap `enumBackingNamedFieldDomain` records, one type over —
+	// so a select that produced one would be the same wild pointer. Instead the read keeps descending
+	// (`resolveEnumBackingLeaf` never returns this domain, and refuses a chain that stops on it) and the door
+	// recurses (`checkEnumBackingGroup`), until a SCALAR LEAF is reached, which is a word like any other.
+	//
+	// ⚠ Every leaf of such a record is classified by `enumBackingFieldDomainOf` itself, so a `String`, an
+	// array or a boxed union INSIDE a nested record is refused exactly as one at the top level is.
+	function enumBackingRecordFieldDomain(name ByteArray) returns EnumBackingFieldDomain
+		match self.signatures.structOf(name) 'declaring'
+			declared then return EnumBackingFieldDomain.nestedRecord
+			undeclared then return EnumBackingFieldDomain.unsupported
+		end 'declaring'
+	end 'enumBackingRecordFieldDomain'
+
 	// The read's gate on the remaining domains — an exhaustive match, so a domain added to
 	// `EnumBackingFieldDomain` cannot silently take the word route here.
 	//
@@ -17344,13 +17511,17 @@ export type Parser
 	// premise and a false one (see `enumBackingUnsupportedFieldError` for the pipeline reading that disproves
 	// it). It was a panic for one edit, which is the same mistake `enumBackingMissingFieldError` was split in
 	// two to avoid, made one rule over.
-	function requireEnumBackingFieldDomainIsAWord(struct StructLayout, fieldTok Token, fieldType MaxonType, domain EnumBackingFieldDomain) throws ParseError
+	function requireEnumBackingFieldDomainIsAWord(step EnumBackingFieldStep, fieldType MaxonType, domain EnumBackingFieldDomain, anchor Token) throws ParseError
 		match domain 'd'
 			integerWord then return
 			booleanWord then return
 			enumWord then return
-			floatBits then panic("requireEnumBackingFieldDomainIsAWord: field '{String.from(fieldTok.value)}' of `type {String.from(struct.name)}` is float-domained and reached the word route — the caller returns on `domainIsEnumBackingFloatBits` one branch above, so the two readings of one classifier have come apart")
-			unsupported then throw self.enumBackingUnsupportedFieldError(struct.name, fieldName: fieldTok.value, fieldType: fieldType, anchor: fieldTok)
+			floatBits then panic("requireEnumBackingFieldDomainIsAWord: field '{String.from(step.fieldName)}' of `type {String.from(step.ownerName)}` is float-domained and reached the word route — the caller returns on `domainIsEnumBackingFloatBits` one branch above, so the two readings of one classifier have come apart")
+			// A NESTED RECORD is the domain that is never an answer: `resolveEnumBackingLeaf` either descends
+			// through it or refuses the read outright, so the leaf it hands this gate cannot be one — a local
+			// guard, in the same descent, which is what makes this an assertion rather than a diagnostic.
+			nestedRecord then panic("requireEnumBackingFieldDomainIsAWord: field '{String.from(step.fieldName)}' of `type {String.from(step.ownerName)}` is a NESTED RECORD and reached the word route — `resolveEnumBackingLeaf` loops while `domainIsEnumBackingNestedRecord` holds and refuses a chain that stops on one, so no leaf it returns can carry this domain")
+			unsupported then throw self.enumBackingUnsupportedFieldError(step.ownerName, fieldName: step.fieldName, fieldType: fieldType, anchor: anchor)
 		end 'd'
 	end 'requireEnumBackingFieldDomainIsAWord'
 
@@ -17424,16 +17595,10 @@ export type Parser
 	// ⇒ What an argument means is its POSITION (or its label), and nothing else: `Meta.create(1)` IS
 	// `Meta{<field 0>: 1}`. That is why the two forms share one `EnumBackingFieldArray` and one reader.
 	function readEnumBackingFields(typeTok Token) returns EnumBackingFieldArray throws ParseError
-		if self.at(TokenKind.leftBrace) 'structLiteral'
-			return try self.readEnumBackingFieldList(typeTok, closer: TokenKind.rightBrace, labelled: true)
-		end 'structLiteral'
+		var fields = EnumBackingFieldArray.create()
+		try self.readEnumBackingGroupInto(fields, typeTok: typeTok, group: RootBackingGroup)
 
-		try self.consume(TokenKind.dot)
-		// The member's spelling decides nothing (see the header), so it is consumed and dropped rather than
-		// bound to a name nothing reads.
-		_ = try self.consume(TokenKind.identifier)
-
-		return try self.readEnumBackingFieldList(typeTok, closer: TokenKind.rightParen, labelled: false)
+		return fields
 	end 'readEnumBackingFields'
 
 	// ⭐⭐ **ONE DELIMITED LIST READER FOR BOTH SPELLINGS.** `{ name: v, name2: v2 }` and `( v, label: v2 )`
@@ -17452,16 +17617,44 @@ export type Parser
 	// entry (the only struct-literal spelling the language has, and what `parseStructLiteral` reads); a
 	// factory argument's label is optional, and an unlabelled one means the field at its own POSITION
 	// (`EnumBackingField.name`).
-	function readEnumBackingFieldList(typeTok Token, closer TokenKind, labelled bool) returns EnumBackingFieldArray throws ParseError
+	//
+	// ⭐⭐ **AND IT IS THE SAME READER AT EVERY DEPTH — THE ONE CALL THAT MAKES NESTING WORK**
+	// (`/specs/enum-nested-struct-backing.md`). `OpMeta.create(1)` written as an ARGUMENT is the identical
+	// construct written as a CASE's backing, so it is read by the identical function; what a nested group
+	// adds is only where its entries say they belong. Both spellings mix freely at every level, because the
+	// brace/factory question is asked per group rather than once for the case.
+	//
+	// ⚠ **THE CURSOR SITS JUST PAST THE TYPE NAME**, on `{` or on `.`, exactly as `readEnumBackingFields`
+	// finds it — which is what lets the caller be either `appendStructBackedEnumCase` or this function's own
+	// nested-entry arm.
+	function readEnumBackingGroupInto(fields EnumBackingFieldArray, typeTok Token, group EnumBackingGroupId) throws ParseError
+		let labelled = self.at(TokenKind.leftBrace)
+		if not labelled 'factoryCall'
+			try self.consume(TokenKind.dot)
+			// The member's spelling decides nothing (see `readEnumBackingFields`' header), so it is consumed
+			// and dropped rather than bound to a name nothing reads.
+			//
+			// ⚠ **THROUGH THE SAME DOOR `atEnumStructRawValue` ADMITTED IT.** That predicate claims the form on
+			// `tokenCanBeAName`, which admits a KEYWORD-spelled member — so a strict `consume(identifier)` here
+			// claimed `Meta.default(1)` and then refused it with a token-level *"Expected identifier"*, a
+			// predicate and its consumer disagreeing about one token. That is verbatim the defect
+			// `readEnumBackingFieldLabel`'s header records fixing for a field's LABEL, left standing one line
+			// away for the member name — and this rung made it reachable at every nesting depth.
+			_ = try self.consumeMemberNameToken()
+		end 'factoryCall'
+
+		let closer = TokenKind.rightBrace if labelled else TokenKind.rightParen
 		self.advance()
-		var fields = EnumBackingFieldArray.create()
 		if self.at(closer) 'noFields'
 			try self.consume(closer)
-			return fields
+			return
 		end 'noFields'
 
+		var position = 0 as FieldIndex
 		while true 'fieldLoop'
-			fields.push(EnumBackingField.create(try self.readEnumBackingFieldLabel(labelled), value: try self.readEnumBackingFieldValue(typeTok)))
+			let label = try self.readEnumBackingFieldLabel(labelled)
+			try self.readEnumBackingEntryInto(fields, typeTok: typeTok, group: group, label: label, position: position)
+			position = position + 1
 
 			if not self.at(TokenKind.comma) 'endFields'
 				break
@@ -17470,8 +17663,32 @@ export type Parser
 		end 'fieldLoop'
 
 		try self.consume(closer)
-		return fields
-	end 'readEnumBackingFieldList'
+	end 'readEnumBackingGroupInto'
+
+	// ⭐⭐ **ONE ENTRY: A SCALAR CONSTANT, OR A NESTED STRUCT WHOSE OWN ENTRIES FOLLOW IT.** The shape test is
+	// `atEnumStructRawValue` — the very predicate that decided the CASE was struct-backed — so "what a
+	// constant struct looks like" is one rule rather than one at the case and a second inside it. Anything
+	// else (`1`, `true`, `-1.5`, `Priority.low`) is a leaf and goes to `readEnumBackingFieldValue`, whose
+	// refusal names the token the author wrote.
+	//
+	// ⚠ **THE OWNER'S INDEX IS TAKEN AFTER ITS OWN PUSH AND BEFORE THE RECURSION**, which is the whole of
+	// the bookkeeping: the nested entries are appended to the SAME array (`EnumBackingField`'s header for
+	// why the tree cannot hold them) and say which entry they fill a field of.
+	function readEnumBackingEntryInto(fields EnumBackingFieldArray, typeTok Token, group EnumBackingGroupId, label ByteArray, position FieldIndex) throws ParseError
+		if not self.atEnumStructRawValue() 'scalarConstant'
+			let scalar = EnumBackingField.create(label, position: position, group: group, value: try self.readEnumBackingFieldValue(typeTok))
+			fields.push(scalar)
+			return
+		end 'scalarConstant'
+
+		let nestedTok = try self.consume(TokenKind.identifier)
+		let owning = EnumBackingField.create(label, position: position, group: group, value: EnumBackingFieldValue.nestedStruct(nestedTok.value))
+		fields.push(owning)
+		let owner = fields.count() - 1
+		let nestedGroup = nestedBackingGroupOf(owner)
+
+		try self.readEnumBackingGroupInto(fields, typeTok: nestedTok, group: nestedGroup)
+	end 'readEnumBackingEntryInto'
 
 	// The field an entry NAMES, or `EmptySourceText` for a positional factory argument.
 	//
@@ -17498,17 +17715,16 @@ export type Parser
 		return labelTok.value
 	end 'readEnumBackingFieldLabel'
 
-	// ⭐ **ONE FIELD'S VALUE, AND THE ADMITTED SET IS THE SPEC'S OWN.** `/specs/enum-struct-backing.md`
+	// ⭐ **ONE *LEAF* FIELD'S VALUE, AND THE ADMITTED SET IS THE SPEC'S OWN.** `/specs/enum-struct-backing.md`
 	// bounds it — *"compile-time integer, float, or boolean constants, or nested struct literals"* — and its
 	// cases add the enum-member reference (`Priority.low`, `Mode.fast`, `Cat.bool`).
 	//
-	// ⚠ **A NESTED STRUCT LITERAL IS REFUSED, AND THE REFUSAL NAMES WHAT IS MISSING RATHER THAN THE SHAPE.**
-	// The value column is FLAT (`EnumBackingFieldValue` carries a number or two names), so a nested struct
-	// would need the column to name itself — the recursion `/specs/enum-nested-struct-backing.md` is the
-	// canonical spec for and which nothing in THIS spec puts a case to.
+	// ⚠ **THE NESTED STRUCT IS NOT ONE OF THEM AND NEVER REACHES HERE**: it is not a leaf, so
+	// `readEnumBackingEntryInto` claims it one branch up and this reader only ever sees the constants at the
+	// bottom of the tree. What is refused below is a token that is neither.
 	//
-	// ⚠ **AND A NAMED TOP-LEVEL CONSTANT IS REFUSED TOO**, though `MAX` reads like a constant: resolving one
-	// is `ProgramSignatures.evaluateNamed`, whole-program, and this reader runs inside the sweep that builds
+	// ⚠ **A NAMED TOP-LEVEL CONSTANT IS REFUSED**, though `MAX` reads like a constant: resolving one is
+	// `ProgramSignatures.evaluateNamed`, whole-program, and this reader runs inside the sweep that builds
 	// that index. It would have to ride the column unresolved like the enum-case arm does; no case asks.
 	function readEnumBackingFieldValue(typeTok Token) returns EnumBackingFieldValue throws ParseError
 		// A sign belongs to a numeric LITERAL and to nothing else, so it is claimed only when one follows —
@@ -17555,7 +17771,7 @@ export type Parser
 		end 'enumCaseValue'
 
 		let tok = self.current()
-		throw ParseError.unsupported("`{tokenDisplayText(tok)}` as a field value of the `{String.from(typeTok.value)}` backing — a case's backing is a COMPILE-TIME constant, so each field is an integer, float or boolean literal, or a `<Enum>.<case>` reference. A nested struct literal is the one form the spec names that shv2's flat backing column cannot hold, and a named top-level constant cannot be reached at all: this runs inside the declaration sweep that builds the index one would be resolved through", line: tok.line, column: tok.column)
+		throw ParseError.unsupported("`{tokenDisplayText(tok)}` as a field value of the `{String.from(typeTok.value)}` backing — a case's backing is a COMPILE-TIME constant, so each field is an integer, float or boolean literal, a `<Enum>.<case>` reference, or a nested constant of the field's own `type` written as a literal or a factory call. A named top-level constant cannot be reached at all: this runs inside the declaration sweep that builds the index one would be resolved through", line: tok.line, column: tok.column)
 	end 'readEnumBackingFieldValue'
 
 	// The codepoint a CHARACTER raw value denotes.
@@ -57011,6 +57227,20 @@ export type Parser
 		return try self.emitEnumBackingFieldSelect(layout, tag: tag, fieldTok: memberTok, range: range)
 	end 'emitEnumBackingFieldRead'
 
+	// ⭐⭐ **DOES A `.<field>` HOP FOLLOW THE CURSOR? — THE ONE TOKEN-SHAPE TEST FOR CONTINUING A BACKING
+	// CHAIN.** Both places that must ask it are the same question about the same two tokens: `.rawValue`
+	// deciding whether a field follows it, and a NESTED RECORD deciding whether the chain descends into one.
+	//
+	// ⚠ **IT WAS WRITTEN OUT TWICE, CHARACTER FOR CHARACTER, AND THE COPIES CANNOT BE MADE TO DISAGREE
+	// LOUDLY.** `consumeMemberNameToken` admits more than an identifier (a keyword, and a NUMBER rewritten
+	// into a name for a tuple member), so widening one copy for `t.0` and not the other would not be a
+	// compile error anywhere — it would accept `.rawValue.0` while refusing `.rawValue.pair.0`, or the
+	// reverse. The two SENTENCES stay separate: they are about different subjects, the whole record and one
+	// nested field.
+	function atEnumBackingFieldHop() returns bool
+		return self.enumMemberReadFollowsAt(self.pos) and tokenCanBeAName(self.enumMemberTokenAt(self.pos))
+	end 'atEnumBackingFieldHop'
+
 	// ⭐⭐ **`e.rawValue.<field>` ON A STRUCT-BACKED ENUM — THE `.rawValue` IS A HOP, NOT AN ANSWER.** The
 	// cursor sits just past `rawValue`; this consumes the `. <field>` that must follow and hands the read to
 	// the per-field select.
@@ -57033,7 +57263,7 @@ export type Parser
 	// `requireFromRawValueBacking`'s `structRecord` arm, which PANICS — it asserts the claim site's decision
 	// rather than re-deriving it. Nothing about E3034 falls out on its own.
 	function emitEnumBackingRawValue(layout EnumLayout, tag ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
-		if not (self.enumMemberReadFollowsAt(self.pos) and tokenCanBeAName(self.enumMemberTokenAt(self.pos))) 'noFieldFollows'
+		if not self.atEnumBackingFieldHop() 'noFieldFollows'
 			throw ParseError.unsupported("`{String.from(EnumRawValueMemberName)}` on `{layout.kindWord()} {String.from(layout.name)}` read as a whole value — its raw value is a `{String.from(layout.backingStructName)}` record, which shv2 selects one FIELD of at a time (`.{String.from(EnumRawValueMemberName)}.<field>`) rather than materializing. Both reference compilers do materialize it; doing so here means minting an owned heap record inside an expression, and no case in `/specs/enum-struct-backing.md` asks for one", line: anchor.line, column: anchor.column)
 		end 'noFieldFollows'
 
@@ -57042,6 +57272,43 @@ export type Parser
 
 		return try self.emitEnumBackingFieldSelect(layout, tag: tag, fieldTok: fieldTok, range: range)
 	end 'emitEnumBackingRawValue'
+
+	// ⭐⭐ **WHICH SCALAR LEAF `<field>[.<field>…]` NAMES — THE WALK OVER THE DECLARED TYPES.** The cursor sits
+	// just past the FIRST field name (`fieldTok`); every further hop this consumes is one the chain wrote.
+	//
+	// ⭐⭐ **IT DESCENDS THE *TYPES*, NEVER THE WRITTEN CONSTANTS, AND THAT IS WHAT MAKES ONE PATH SERVE EVERY
+	// CASE.** `op.rawValue.meta.latency` means the same field of the same struct whichever case `op` holds —
+	// the cases differ only in the NUMBER at the end — so the path is resolved ONCE per read here and the
+	// per-case walk (`enumBackingFieldConstant`) merely follows it. Resolving against one case's entries
+	// would make the answer depend on which case happened to be looked at first.
+	//
+	// ⛔ **A CHAIN THAT STOPS ON A RECORD IS REFUSED, AND IT IS BARE `.rawValue`'s REFUSAL ONE LEVEL IN.**
+	// `op.rawValue.meta` names a whole `OpMeta` record; handing one back means minting an owned heap record
+	// inside an expression, which asks who drops it and when (see `emitEnumBackingRawValue`, where the same
+	// question is declined for the backing itself). Nothing in `/specs/enum-nested-struct-backing.md` asks
+	// for one: every read in it reaches a scalar.
+	//
+	// ⚠ **RECURSIVE RATHER THAN A LOOP, AND THE PATH IS PASSED DOWN**: each hop is the identical question of
+	// a different struct, and a loop would have to REBIND the struct — a managed value — once per hop.
+	function resolveEnumBackingLeaf(struct StructLayout, memberTok Token, path EnumBackingFieldStepArray) returns EnumBackingLeaf throws ParseError
+		let field = try self.requireFieldIndex(struct, name: memberTok.value, anchor: memberTok)
+		path.push(EnumBackingFieldStep.create(field, fieldName: struct.fieldNameAt(field), ownerName: struct.name))
+
+		let fieldType = self.signatures.fieldTypeOf(struct, index: field, into: self.artifact.typeNames)
+		let domain = self.enumBackingFieldDomainOf(fieldType)
+		if not domainIsEnumBackingNestedRecord(domain) 'reachedAScalar'
+			return EnumBackingLeaf.create(path, fieldType: fieldType, domain: domain)
+		end 'reachedAScalar'
+
+		let nested = self.enumBackingNestedStruct(struct, field: field)
+		if not self.atEnumBackingFieldHop() 'noFieldFollows'
+			throw ParseError.unsupported("field '{String.from(struct.fieldNameAt(field))}' of the `{String.from(struct.name)}` backing read as a whole value — it is declared `{String.from(nested.name)}`, a record, and shv2 selects one SCALAR field of a struct backing at a time (`.{String.from(struct.fieldNameAt(field))}.<field>`) rather than materializing one. That is the refusal `{String.from(EnumRawValueMemberName)}` itself carries, one level in: a materialized record is an owned heap value minted inside an expression", line: memberTok.line, column: memberTok.column)
+		end 'noFieldFollows'
+
+		try self.consume(TokenKind.dot)
+
+		return try self.resolveEnumBackingLeaf(nested, memberTok: try self.consumeMemberNameToken(), path: path)
+	end 'resolveEnumBackingLeaf'
 
 	// ⭐⭐ **ONE FIELD OF A CONSTANT STRUCT BACKING, AS A VALUE — the per-field column, selected by the very
 	// sum `.ordinal` and `.name` are selected by.** That is the whole mechanism: a struct is not one machine
@@ -57071,16 +57338,19 @@ export type Parser
 	// made here for the same reason: the selected value is the ONE enum value that reaches an accessor without
 	// ever being bound to a name, so nothing upstream can route it and the postfix loop would read `.ordinal`
 	// as a method call.
+	//
+	// ⭐⭐ **AND THE CHAIN MAY BE LONGER THAN ONE HOP, BECAUSE A BACKING FIELD MAY ITSELF BE A STRUCT**
+	// (`/specs/enum-nested-struct-backing.md`: `op.rawValue.meta.latency`). `resolveEnumBackingLeaf` walks
+	// the DECLARED types until it reaches a scalar, and what comes back is a PATH — everything past that
+	// point is unchanged, because the leaf is still one machine word that is constant per case.
 	function emitEnumBackingFieldSelect(layout EnumLayout, tag ValueId, fieldTok Token, range SourceRange) returns ValueId throws ParseError
-		let struct = try self.requireEnumBackingStruct(layout, anchor: fieldTok)
-		let field = try self.requireFieldIndex(struct, name: fieldTok.value, anchor: fieldTok)
-
-		// The field's DECLARED type through the one door an ordinary field read asks it through
+		// The leaf's DECLARED type comes through the one door an ordinary field read asks it through
 		// (`emitFieldLoad`), so a backing field of a ranged alias arrives tagged exactly as `s.width` on a
 		// real record does — which is what makes `return op.rawValue.value` from a `returns Latency` function
 		// type-check, and what gives the `named(Priority)` an `.ordinal` hop below needs.
-		let fieldType = self.signatures.fieldTypeOf(struct, index: field, into: self.artifact.typeNames)
-		let domain = self.enumBackingFieldDomainOf(fieldType)
+		let leaf = try self.resolveEnumBackingLeaf(try self.requireEnumBackingStruct(layout, anchor: fieldTok), memberTok: fieldTok, path: EnumBackingFieldStepArray.create())
+		let fieldType = leaf.fieldType
+		let domain = leaf.domain
 
 		// ⛔⛔ **THE SUM MUST BE DECODED INTO THE FIELD'S DOMAIN BEFORE IT IS CLAIMED TO BE OF THE FIELD'S
 		// TYPE — `retypeValue` ONLY REWRITES TYPE COLUMNS.** The sum is integer arithmetic
@@ -57101,7 +57371,7 @@ export type Parser
 		// operand and was handed Std type f64 … a mismatch here is a front-end bug"*. So the three word
 		// domains go through the shared typed select and the float one selects RAW.
 		if domainIsEnumBackingFloatBits(domain) 'floatField'
-			let bits = try self.emitEnumCaseConstantSelect(layout, tag: tag, column: EnumCaseConstant.structBackingField(field, fieldName: fieldTok.value, domain: domain), anchor: fieldTok, range: range)
+			let bits = try self.emitEnumCaseConstantSelect(layout, tag: tag, column: EnumCaseConstant.structBackingField(leaf.path, domain: domain), anchor: fieldTok, range: range)
 			let reinterpreted = self.emitUnaryOp(bits, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
 			// The declared type is restored on the DECODED value, so a field of a ranged-float alias arrives
 			// tagged `named(Ratio)` exactly as `emitFieldLoad` mints it - a claim that is now true of an
@@ -57110,13 +57380,13 @@ export type Parser
 			return reinterpreted
 		end 'floatField'
 
-		// `checkStructBackedCase` refuses an `unsupported` field at the DECLARATION, once per case, whether or
+		// `checkEnumBackingGroup` refuses an `unsupported` field at the DECLARATION, once per case, whether or
 		// not any expression reads it — but a READ can still arrive first (see
 		// `enumBackingUnsupportedFieldError`), so the gate below throws rather than asserting. Past it only
 		// the three word domains remain, and for each the i64 IS the value: an int (or ranged-int alias), a
 		// bool whose payload is 0 or 1, and a PAYLOAD-FREE enum whose value is its tag.
-		try self.requireEnumBackingFieldDomainIsAWord(struct, fieldTok: fieldTok, fieldType: fieldType, domain: domain)
-		let selected = try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.structBackingField(field, fieldName: fieldTok.value, domain: domain), valueType: fieldType, anchor: fieldTok, range: range)
+		try self.requireEnumBackingFieldDomainIsAWord(leaf.lastStep(), fieldType: fieldType, domain: domain, anchor: fieldTok)
+		let selected = try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.structBackingField(leaf.path, domain: domain), valueType: fieldType, anchor: fieldTok, range: range)
 
 		if not self.atEnumInstanceAccessor(self.pos) 'noAccessorHop'
 			return selected
@@ -57280,7 +57550,7 @@ export type Parser
 			caseName then return self.emitEnumCaseStringConstant(layout.caseNameAt(index), range: range)
 			declaredRawValue then return self.emitEnumCaseStringConstant(layout.rawValueAt(index).toByteArray(), range: range)
 			caseFunctionRef then return try self.emitEnumCaseFunctionConstant(layout, index: index, anchor: anchor)
-			structBackingField(field, fieldName, domain) then return self.emitLiteral(try self.enumBackingFieldConstant(layout, index: index, field: field, fieldName: fieldName, domain: domain, anchor: anchor), valueType: MaxonType.integer, range: range)
+			structBackingField(path, domain) then return self.emitLiteral(try self.enumBackingFieldConstant(layout, index: index, path: path, domain: domain, anchor: anchor), valueType: MaxonType.integer, range: range)
 		end 'c'
 	end 'emitEnumCaseConstant'
 
@@ -57292,27 +57562,48 @@ export type Parser
 	// rule `readEnumBackingFields`' header measures off both references: `OpInfo.create(1, throughput: 1)`
 	// fills field 0 from argument 0 and `throughput` from the label. A brace literal labels every field, so
 	// it only ever takes the name route.
-	function enumBackingFieldConstant(layout EnumLayout, index CaseIndex, field FieldIndex, fieldName ByteArray, domain EnumBackingFieldDomain, anchor Token) returns ParsedInt throws ParseError
+	//
+	// ⭐⭐ **AND IT FOLLOWS THE PATH, ONE GROUP PER HOP.** The read resolved which leaf is meant; this asks
+	// which entry of THIS case fills each hop, descending into the group that entry owns until the last hop
+	// answers with a number.
+	function enumBackingFieldConstant(layout EnumLayout, index CaseIndex, path EnumBackingFieldStepArray, domain EnumBackingFieldDomain, anchor Token) returns ParsedInt throws ParseError
 		let written = layout.backingFieldsAt(index)
+		var group = RootBackingGroup
 
+		for hop in 0 upto path.count() 'eachHop'
+			let step = try path.get(hop) otherwise panic("enumBackingFieldConstant: path.get OOB at {hop} below count {path.count()} for case '{String.from(layout.caseNameAt(index))}' of `{layout.kindWord()} {String.from(layout.name)}`")
+			let entry = try self.requireEnumBackingEntryFilling(written, group: group, step: step, layout: layout, index: index, anchor: anchor)
+			if hop + 1 == path.count() 'theLeafItself'
+				return try self.enumBackingFieldNumber(enumBackingEntryAt(written, entry: entry).value, step: step, domain: domain, anchor: anchor)
+			end 'theLeafItself'
+
+			group = nestedBackingGroupOf(entry)
+		end 'eachHop'
+
+		panic("enumBackingFieldConstant: the path handed here is EMPTY for case '{String.from(layout.caseNameAt(index))}' of `{layout.kindWord()} {String.from(layout.name)}` — `resolveEnumBackingLeaf` pushes one step per hop before any exit, so a read cannot produce a column with no hops")
+	end 'enumBackingFieldConstant'
+
+	// ⭐⭐ **WHICH ENTRY OF THIS CASE FILLS ONE HOP** — a LABELLED entry by its name, an UNLABELLED one by its
+	// position, and only ever among the entries that belong to the same group. Both spellings may appear in
+	// one group (`OpMeta.create(4, isMemory: true, isCall: false)`), which is why neither test alone answers.
+	//
+	// ⚠ **THE RULE AND ITS DIAGNOSTIC ARE ONE FUNCTION**, `requireFieldIndex`'s shape and for its reason: the
+	// only caller wants the entry, and "this case wrote nothing here" is the one thing to say when there is
+	// none. See `enumBackingMissingFieldError` for why this copy throws rather than asserting — a file that
+	// READS the enum can be parsed before the door that would have reported the gap.
+	function requireEnumBackingEntryFilling(written EnumBackingFieldArray, group EnumBackingGroupId, step EnumBackingFieldStep, layout EnumLayout, index CaseIndex, anchor Token) returns EnumBackingEntryIndex throws ParseError
 		for entry in 0 upto written.count() 'eachWrittenField'
-			let recorded = try written.get(entry) otherwise panic("enumBackingFieldConstant: backingFields.get OOB at {entry} below count {written.count()} for case '{String.from(layout.caseNameAt(index))}' of `{layout.kindWord()} {String.from(layout.name)}`")
-			let fills = recorded.name.equals(fieldName) if not recorded.name.isEmpty() else entry == field
-			if fills 'thisField'
-				return try self.enumBackingFieldNumber(recorded.value, domain: domain, anchor: anchor)
-			end 'thisField'
+			if enumBackingEntryFills(enumBackingEntryAt(written, entry: entry), group: group, field: step.field, fieldName: step.fieldName) 'thisHop'
+				return entry
+			end 'thisHop'
 		end 'eachWrittenField'
 
-		// The rule and the sentence are `enumBackingMissingFieldError`'s, shared with the door that asks it of
-		// every declared field at the declaration — see there for why this copy still throws rather than
-		// asserting.
-		//
-		// ⚠ **NOT `unknownField`, WHICH WOULD BE A FALSE SENTENCE.** The struct DOES declare this field -
-		// `emitEnumBackingFieldSelect` looked it up to get here — and what is missing is THIS CASE's value for
-		// it. It was `unknownField` for one edit, and on `a = Meta{value: 1}  b = Meta{value: 2, cost: 5}` it
-		// said *"type 'Meta' has no field named 'cost'"* about a type that declares `cost` on the line above.
-		throw self.enumBackingMissingFieldError(layout.backingStructName, fieldName: fieldName, layout: layout, index: index, anchor: anchor)
-	end 'enumBackingFieldConstant'
+		// ⚠ **NOT `unknownField`, WHICH WOULD BE A FALSE SENTENCE.** The struct DOES declare this field —
+		// `resolveEnumBackingLeaf` looked it up to get here — and what is missing is THIS CASE's value for it.
+		// It was `unknownField` for one edit, and on `a = Meta{value: 1}  b = Meta{value: 2, cost: 5}` it said
+		// *"type 'Meta' has no field named 'cost'"* about a type that declares `cost` on the line above.
+		throw self.enumBackingMissingFieldError(step.ownerName, fieldName: step.fieldName, layout: layout, index: index, anchor: anchor)
+	end 'requireEnumBackingEntryFilling'
 
 	// The STRUCT a `structRecord` backing names, or the diagnostic that no file declares it. Refused HERE and
 	// not at the declaration for the reason the whole backing is deferred: the case reader runs inside the
@@ -57327,10 +57618,17 @@ export type Parser
 	// ⭐ **THE NUMBER ONE WRITTEN FIELD VALUE DENOTES.** A literal already folded to its bits at the
 	// declaration; an enum-member reference is the one form that could not, because a case's TAG is a
 	// whole-program fact (see `EnumBackingFieldValue.enumCase`).
-	function enumBackingFieldNumber(value EnumBackingFieldValue, domain EnumBackingFieldDomain, anchor Token) returns ParsedInt throws ParseError
+	//
+	// ⚠ **AND A NESTED CONSTANT DENOTES NO NUMBER AT ALL, WHICH IS A DIAGNOSTIC AND NOT AN ASSERTION.** It
+	// arrives only when the case wrote a record where the field's DECLARED type is a scalar — which
+	// `requireEnumBackingFieldValueSuitsField` refuses at the declaration, in a fuller sentence. It is not
+	// asserted here for the reason `enumBackingUnsupportedFieldError` records: a file that READS the enum can
+	// be parsed before the one that declares it, so the door may not have run yet.
+	function enumBackingFieldNumber(value EnumBackingFieldValue, step EnumBackingFieldStep, domain EnumBackingFieldDomain, anchor Token) returns ParsedInt throws ParseError
 		match value 'form'
 			literal(bits, kind) then return enumBackingLiteralBits(bits, kind: kind, domain: domain)
 			enumCase(enumName, caseName) then return try self.enumBackingFieldCaseTag(enumName, caseName: caseName, anchor: anchor)
+			nestedStruct(structName) then throw ParseError.unsupported("a nested `{String.from(structName)}` constant written for field '{String.from(step.fieldName)}' of the `{String.from(step.ownerName)}` backing, which this read selects as a single word — a nested constant fills a field whose OWN declared type is that `type`, and this field's is not, so there is no number for the select to take", line: anchor.line, column: anchor.column)
 		end 'form'
 	end 'enumBackingFieldNumber'
 

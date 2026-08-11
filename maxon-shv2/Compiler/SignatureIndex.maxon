@@ -128,6 +128,10 @@ let EnumBackingFieldSlot = 83 as ContentHash
 // `Priority.low` and the bare number `0` cannot fold alike — they are resolved by different rules and one
 // of them moves when `Priority`'s case list is edited.
 let EnumBackingFieldEnumCase = 84 as ContentHash
+// The NESTED STRUCT form (`inner: Inner{value: 1}`), separated from the other two for their reason: it holds
+// a type NAME where the enum-case form holds two, and an entry that owns a group must not fold like a leaf
+// that happens to carry the same bytes.
+let EnumBackingFieldNestedStruct = 88 as ContentHash
 
 // ⭐ Which LITERAL a backing field was written as. `1` and `1.0` carry the same `ParsedInt`, and they
 // type-check differently against the field's declared type — so without this they fold alike and a file that
@@ -8309,19 +8313,29 @@ export type ProgramSignatures
 
 	// ⭐ **FOLD A CASE'S CONSTANT STRUCT BACKING IN — `mixPayloadField`'s twin for the one backing whose value
 	// lives in a column of its own.** The struct's NAME rides once per DECLARATION, mixed by `recordEnum`
-	// beside the backing discriminator (see there), so what is owed here is per case: each field's written
-	// label and its value, in the order written — because the
-	// order IS the field position for a positional factory argument (`EnumBackingField.name`), so two cases
-	// whose arguments were merely reordered mean different things and must fold differently.
+	// beside the backing discriminator (see there), so what is owed here is per case: each entry's written
+	// label, its POSITION, its GROUP and its value.
+	//
+	// ⚠ **THE POSITION AND THE GROUP RIDE EXPLICITLY, AND FOLDING ONLY THE ORDER WOULD NOW BE A COLLISION.**
+	// The position used to BE the entry's place in this array, so walking in order carried it — that stopped
+	// being true when a case's entries became a TREE held flat (`EnumBackingField`): `Outer.create(Inner.
+	// create(1), flag: true)` and a shape whose two entries sit in the other group write the same labels and
+	// the same numbers in the same order and mean different things.
 	function mixEnumBackingFields(state ContentHash, layout EnumLayout, index CaseIndex) returns ContentHash
 		var folded = state
 		for field in layout.backingFieldsAt(index) 'eachField'
-			folded = mixBytes(mix(folded, value: EnumBackingFieldSlot), bytes: field.name)
+			let slotted = mix(folded, value: EnumBackingFieldSlot)
+			let labelled = mixBytes(slotted, bytes: field.name)
+			let placed = mix(mix(labelled, value: field.position), value: field.group)
 			match field.value 'value'
 				// The literal's KIND rides beside its bits: `1` and `1.0` are different declarations that fold
 				// to the same `ParsedInt` (`floatLiteralBits(0.0)` is 0), and they type-check differently.
-				literal(bits, kind) then folded = mix(mix(folded, value: bits), value: enumBackingLiteralDiscriminator(kind))
-				enumCase(enumName, caseName) then folded = mixBytes(mixBytes(mix(folded, value: EnumBackingFieldEnumCase), bytes: enumName), bytes: caseName)
+				literal(bits, kind) then folded = mix(mix(placed, value: bits), value: enumBackingLiteralDiscriminator(kind))
+				enumCase(enumName, caseName) then folded = mixBytes(mixBytes(mix(placed, value: EnumBackingFieldEnumCase), bytes: enumName), bytes: caseName)
+				// The nested struct's own NAME, because it is checked against the field's declared type and a
+				// case naming a different one is a different declaration (`enumBackingNamedValueSuitsDomain`).
+				// Its constants ride as the entries of the group it owns, folded by this same loop.
+				nestedStruct(structName) then folded = mixBytes(mix(placed, value: EnumBackingFieldNestedStruct), bytes: structName)
 			end 'value'
 		end 'eachField'
 

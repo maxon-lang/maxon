@@ -24218,21 +24218,63 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // If any arg was evaluated in a different block than the final one,
     // retroactively insert a store in the arg's original block and reload here.
+    //
+    // ⛔⛔ **THE STORES GO IN FROM THE BACK, AND THAT IS THE WHOLE REASON THIS IS THREE PASSES.**
+    // Every `opIndex` was captured BEFORE any store existed, so inserting at an earlier index shifts
+    // every later one along by one — and the SECOND pin into the same block then lands exactly on top
+    // of the op that defines the NEXT argument's value. Lowering meets that store before the def and
+    // reports `assign value %N (kind=MaxonInteger) not in valueMap` (E9001, from
+    // `MaxonToStandardConversion`), which is not a wrong answer but is a legal program refused.
+    // MEASURED: `Entry.create(a, b: b, c: c, d: try f(a))` — two scalar args pinned into one block —
+    // failed; the same call with ONE scalar arg before the `try` compiled. The comment above
+    // `EmitRuntimeRangeCheck`'s call-site rule records the identical failure from the identical
+    // shape, reached through a range check's block split rather than a `try`'s.
+    //
+    // ⇒ Inserting in DESCENDING index order leaves every index not yet used untouched, so no capture
+    // can go stale. ⚠ **THAT IS ONLY SOUND BECAUSE THE INVARIANT IS PER BLOCK, AND THE SORT IS
+    // GLOBAL**: pins may target different blocks, an insertion into one block shifts no index in
+    // another, and a globally descending order is still descending WITHIN each block — which is the
+    // property actually needed. Equal indices are safe too: `OrderByDescending` is stable, so two
+    // pins captured at the same index keep argument order between them.
+    //
+    // ⚠ **IT ALSO SETTLES A SECOND HOLE, AND NOT THE ONE A "≥2 PINS ALWAYS FAILED BEFORE" READING
+    // WOULD SUGGEST.** `ParseNamedArg` fills slots by PARAMETER position, so `argLocations` is not
+    // ascending in `i` when labels are written out of declaration order — and in exactly that case
+    // the OLD loop happened to insert the higher index first and compiled correctly. So ≥2 pins per
+    // block did not always fail; they failed whenever argument order and index order agreed. Sorting
+    // reproduces the same sequence in the case that already worked and repairs the case that did not.
+    //
+    // Pass 1 mints the names in argument order and pass 3 both DECLARES and reloads in argument
+    // order, so the only order this rearranges is the stores' among themselves. The declare belongs
+    // with the reload rather than the store: `VarRegistry` keeps `_vars` in insertion order and hands
+    // that order to `MaxonScopeEndOp` (`GetScopeEndVars`), so declaring inside the descending loop
+    // would reorder a scope-end list for two pins in two DIFFERENT blocks — a shape the old code
+    // compiled correctly. Nothing between the passes reads the registry for a pin name (the reload
+    // constructs its `MaxonVarRefOp` directly), so the move costs nothing and makes the emitted IR
+    // provably identical wherever the old code emitted any.
     var finalBlock = _currentBlock!;
+    var pins = new List<(int argIndex, string pinName, MaxonValueKind kind, MaxonValue value)>();
     for (int i = 0; i < args.Length; i++) {
       if (args[i] == null || argLocations[i].block == null) continue;
       if (argLocations[i].block == finalBlock) continue;
       if (args[i] is MaxonStruct || args[i] is MaxonEnum) continue;
-      var kind = DetermineValueKind(args[i]!);
-      var pinName = $"__arg_pin_{_blockCounter++}";
-      // Insert store in the original block, right after the arg was evaluated
-      var storeOp = new MaxonAssignOp(pinName, args[i]!, true, true, kind);
-      argLocations[i].block!.Operations.Insert(argLocations[i].opIndex, storeOp);
-      _variables.Declare(pinName, kind, true, args[i]!, argLocations[i].block!);
-      // Reload in the current (final) block
-      var reloadOp = new MaxonVarRefOp(pinName, kind);
+      pins.Add((i, $"__arg_pin_{_blockCounter++}", DetermineValueKind(args[i]!), args[i]!));
+    }
+
+    // Insert store in the original block, right after the arg was evaluated — highest index first.
+    foreach (var pin in pins.OrderByDescending(p => argLocations[p.argIndex].opIndex)) {
+      var storeOp = new MaxonAssignOp(pin.pinName, pin.value, true, true, pin.kind);
+      argLocations[pin.argIndex].block!.Operations.Insert(argLocations[pin.argIndex].opIndex, storeOp);
+    }
+
+    // Declare and reload in the current (final) block. Separate from the stores because rebinding
+    // `args[i]` to the reload must not happen until every store has been built from the ORIGINAL
+    // value — and because the registry's insertion order is observable (see above).
+    foreach (var pin in pins) {
+      _variables.Declare(pin.pinName, pin.kind, true, pin.value, argLocations[pin.argIndex].block!);
+      var reloadOp = new MaxonVarRefOp(pin.pinName, pin.kind);
       finalBlock.AddOp(reloadOp);
-      args[i] = reloadOp.Result;
+      args[pin.argIndex] = reloadOp.Result;
     }
   }
 

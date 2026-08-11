@@ -437,7 +437,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-field-type.test:7:2: Unsupported: field 'label' of the `Meta` backing is declared `String`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, or a PAYLOAD-FREE enum, because the select that reads one field produces a single i64 per case. A `String`, a `Character`, a record, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
+error E2015: specs/fragments/enum-struct-backing/error.struct-backing-field-type.test:7:2: Unsupported: field 'label' of the `Meta` backing is declared `String`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
 ```
 
 ### Error: a payload-bearing union as a backing field
@@ -469,7 +469,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-boxed-union-field.test:14:2: Unsupported: field 's' of the `Meta` backing is declared `Shape`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, or a PAYLOAD-FREE enum, because the select that reads one field produces a single i64 per case. A `String`, a `Character`, a record, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
+error E2015: specs/fragments/enum-struct-backing/error.struct-backing-boxed-union-field.test:14:2: Unsupported: field 's' of the `Meta` backing is declared `Shape`, which has no constant a struct backing can hold — a backing field is an integer, a `bool`, a float, a PAYLOAD-FREE enum, or a declared `type` whose own fields are again those, because the select that reads one field produces a single i64 per case and a nested record is DESCENDED INTO rather than selected. A `String`, a `Character`, an array, an interface, a function, or a payload-bearing union is a heap value that i64 would only be an address of
 ```
 
 ### Error: a case that omits a field
@@ -568,7 +568,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-arity.test:9:2: Unsupported: 2 argument(s) to a `Meta` backing, which declares 1 field(s) — a factory call in this position is read as the struct LITERAL its arguments fill, so an argument past the last field names nothing
+error E2015: specs/fragments/enum-struct-backing/error.struct-backing-arity.test:9:2: Unsupported: 2 argument(s) to the `Meta` constant, which declares 1 field(s) — a factory call in this position is read as the struct LITERAL its arguments fill, so an argument past the last field names nothing
 ```
 
 ### Error: bare `.rawValue` on a struct-backed enum
@@ -597,33 +597,4 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: specs/fragments/enum-struct-backing/error.struct-backing-bare-rawvalue.test:14:12: Unsupported: `rawValue` on `enum Task` read as a whole value — its raw value is a `Meta` record, which shv2 selects one FIELD of at a time (`.rawValue.<field>`) rather than materializing. Both reference compilers do materialize it; doing so here means minting an owned heap record inside an expression, and no case in `/specs/enum-struct-backing.md` asks for one
-```
-
-### Error: a nested struct literal as a field value
-
-A backing field's value is a flat constant, so a field that is itself a record has no constant to be. The
-canonical spec for the nested form is `/specs/enum-nested-struct-backing.md`, which is not ported.
-
-<!-- test: error.struct-backing-nested-literal -->
-```maxon
-typealias Wide = int(0 to 100)
-
-type Inner
-	export let n as Wide
-end 'Inner'
-
-type Meta
-	export let inner as Inner
-end 'Meta'
-
-enum Task
-	quick = Meta{inner: Inner{n: 1}}
-end 'Task'
-
-function main() returns ExitCode
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E2015: specs/fragments/enum-struct-backing/error.struct-backing-nested-literal.test:13:22: Unsupported: `Inner` as a field value of the `Meta` backing — a case's backing is a COMPILE-TIME constant, so each field is an integer, float or boolean literal, or a `<Enum>.<case>` reference. A nested struct literal is the one form the spec names that shv2's flat backing column cannot hold, and a named top-level constant cannot be reached at all: this runs inside the declaration sweep that builds the index one would be resolved through
 ```

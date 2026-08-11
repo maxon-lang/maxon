@@ -3323,7 +3323,7 @@ end 'PayloadField'
 export typealias PayloadFieldArray = Array with PayloadField
 export typealias PayloadFieldArrayArray = Array with PayloadFieldArray
 
-// ⭐⭐ **ONE FIELD OF A CONSTANT STRUCT BACKING, AS THE DECLARATION COULD KNOW IT** — `value: 1` out of
+// ⭐⭐ **ONE ENTRY OF A CONSTANT STRUCT BACKING, AS THE DECLARATION COULD KNOW IT** — `value: 1` out of
 // `add = Meta{value: 1}`, or the argument `1` out of `add = Meta.create(1)`.
 //
 // ⚠⚠ **IT IS DELIBERATELY NOT RESOLVED, AND THE REASON IS *WHEN* AN ENUM CASE IS READ.** The reader runs in
@@ -3332,22 +3332,56 @@ export typealias PayloadFieldArrayArray = Array with PayloadFieldArray
 // carries. Both are answered at the USE (`Parser.emitEnumBackingFieldSelect`), where the index is complete.
 // This is the same split the FUNCTION backing already makes for the same reason: the declaration records a
 // NAME and the address is materialized per read (see `EnumBacking.functionRef`).
+//
+// ⭐⭐ **ONE CASE'S ENTRIES ARE A TREE, AND THE TREE IS HELD FLAT** (`/specs/enum-nested-struct-backing.md`):
+// a field's value may itself be a constant struct, to any depth. An entry cannot hold the ARRAY of its own
+// children — that array's element type would contain itself and Maxon forbids a type that does (E4014,
+// `type 'X' contains a reference cycle`) — so every entry of a case, at every depth, rides in the ONE array
+// `EnumLayout.backingFieldsAt` returns and says which GROUP it belongs to. It is the shape
+// `SignatureIndex.ConstFactoryCall` already uses one directory over, for the identical reason.
 export type EnumBackingField
 	// ⭐ **THE FIELD'S NAME AS WRITTEN, OR `EmptySourceText` FOR A POSITIONAL FACTORY ARGUMENT** — the same
 	// "no label here" spelling `Parser.consumeConstArgumentLabel` uses, and it means the same thing: the
-	// field is the one at THIS entry's position in the struct's declaration order, which only the use site
+	// field is the one at THIS entry's `position` in the struct's declaration order, which only the use site
 	// can look up. `Meta{value: 1}` names every field; `OpInfo.create(1, throughput: 1)` names the second.
 	export let name as ByteArray
+	// ⭐ **WHICH ARGUMENT SLOT OF ITS OWN GROUP THIS ENTRY IS** — the number an unlabelled entry's field is
+	// looked up by. It is WRITTEN DOWN rather than read off the entry's index in the array, which is what
+	// it used to be and stopped being the moment every group of a case shared one array.
+	export let position as FieldIndex
+	export let group as EnumBackingGroupId
 	export let value as EnumBackingFieldValue
 
-	export static function create(name ByteArray, value EnumBackingFieldValue) returns EnumBackingField
-		return Self{name: name, value: value}
+	export static function create(name ByteArray, position FieldIndex, group EnumBackingGroupId, value EnumBackingFieldValue) returns EnumBackingField
+		return Self{name: name, position: position, group: group, value: value}
 	end 'create'
 end 'EnumBackingField'
 
-// ⭐ **WHAT A BACKING FIELD'S VALUE IS, IN THE TWO FORMS THE DECLARATION CAN CARRY.** The admitted set is
-// exactly `/specs/enum-struct-backing.md`'s — *"compile-time integer, float, or boolean constants"* — plus
-// the enum-member reference its own two cases write (`Priority.low`, `Mode.fast`, `Cat.bool`).
+// The index of one entry in a case's flat entry array — `Parser.readEnumBackingEntryInto` pushes them and
+// `Parser.requireEnumBackingEntryFilling` hands them back. Bounded like `FieldIndex`, and named apart from
+// it because the two count different things: a field of a struct, and an entry of one case's backing.
+export typealias EnumBackingEntryIndex = int(0 to 65535)
+
+// ⭐⭐ **WHICH STRUCT CONSTANT AN ENTRY FILLS A FIELD OF** — `RootBackingGroup` for the case's own backing
+// struct, and the OWNING ENTRY's index for a nested one. The two live in one number space because the root
+// group is not an entry, and the `+ 1` that makes room for it is spelled in exactly one place below so no
+// caller does the arithmetic itself.
+export typealias EnumBackingGroupId = int(0 to 65536)
+
+// The group every entry the case wrote at its OUTERMOST level belongs to — the case's own backing struct
+// (`EnumLayout.backingStructName`), which has no entry of its own to be named by.
+export let RootBackingGroup = 0 as EnumBackingGroupId
+
+// The group of the entries filling the nested struct that entry `owner` writes. The ONE place the offset
+// between an entry index and a group id exists.
+export function nestedBackingGroupOf(owner EnumBackingEntryIndex) returns EnumBackingGroupId
+	return owner + 1
+end 'nestedBackingGroupOf'
+
+// ⭐ **WHAT A BACKING FIELD'S VALUE IS, IN THE THREE FORMS THE DECLARATION CAN CARRY.** The admitted set is
+// exactly `/specs/enum-struct-backing.md`'s — *"compile-time integer, float, or boolean constants, or nested
+// struct literals"* — plus the enum-member reference its own two cases write (`Priority.low`, `Mode.fast`,
+// `Cat.bool`).
 export union EnumBackingFieldValue
 	// A literal: `bits` is its value — an int's number, a bool's 0/1, or a float's IEEE-754 BIT PATTERN, the
 	// same `ParsedInt` payload every other constant in this compiler travels in (`ConstValue`,
@@ -3369,6 +3403,12 @@ export union EnumBackingFieldValue
 	// `Priority.low` — a case of ANOTHER enum, whose tag is a whole-program fact the declaration cannot
 	// reach. Both names ride verbatim and the tag is read at the use site.
 	enumCase(enumName ByteArray, caseName ByteArray)
+	// ⭐ **A NESTED STRUCT CONSTANT — `Inner{value: 1}` or `Inner.create(1)` written for a field whose own
+	// type is `Inner`.** It carries NO number, because a record is not one: this arm marks the entry as the
+	// OWNER of a group, and the constants are the entries of that group (see `EnumBackingField`). The
+	// struct's written NAME rides so the door can check it against the field's declared type, exactly as the
+	// `enumCase` arm's enum name is checked against a field's declared enum.
+	nestedStruct(structName ByteArray)
 end 'EnumBackingFieldValue'
 
 // ⭐ **THE THREE LITERALS A BACKING FIELD MAY BE WRITTEN AS** — the whole of what `readEnumBackingFieldValue`
@@ -3405,8 +3445,16 @@ export enum EnumBackingFieldDomain
 	// An int literal is promoted to its f64 value, the same widening `TypeRules.widensIntToFloat` states and
 	// `Parser.constFloatBits` performs for a constant.
 	floatBits
-	// `String`, `Character`, a record, an array, an interface, a function — a value the constant column
-	// cannot hold and the sum cannot denote. Refused AT THE DOOR, so the read's decode never meets one.
+	// ⭐⭐ **A DECLARED `type` — THE ONE DOMAIN THAT IS NOT A VALUE AT ALL.** A record is not one machine
+	// word and the sum cannot denote one, so nothing is ever SELECTED at this domain: it is the domain a
+	// read must keep DESCENDING through (`op.rawValue.meta.latency` — `Parser.resolveEnumBackingLeaf`) and
+	// the one the door recurses into (`Parser.checkEnumBackingGroup`). It reaches a leaf, or it is refused.
+	//
+	// ⚠ It is NOT `unsupported`, and the difference is exactly the one this rung exists for: `unsupported`
+	// says "no constant can stand for this", while a nested record's SCALAR LEAVES each can.
+	nestedRecord
+	// `String`, `Character`, an array, an interface, a function — a value the constant column cannot hold and
+	// the sum cannot denote. Refused AT THE DOOR, so the read's decode never meets one.
 	unsupported
 end 'EnumBackingFieldDomain'
 
@@ -3420,9 +3468,24 @@ export function domainIsEnumBackingFloatBits(domain EnumBackingFieldDomain) retu
 		integerWord then return false
 		booleanWord then return false
 		enumWord then return false
+		nestedRecord then return false
 		unsupported then return false
 	end 'd'
 end 'domainIsEnumBackingFloatBits'
+
+// ⭐ **DOES THIS DOMAIN NAME A RECORD THE READ MUST DESCEND INTO RATHER THAN SELECT?** — the third of the
+// family, and an exhaustive `match` for its siblings' reason: a domain appended to the enum must be
+// classified here too, so a new one cannot silently be treated as a leaf by the walk that reads a chain.
+export function domainIsEnumBackingNestedRecord(domain EnumBackingFieldDomain) returns bool
+	match domain 'd'
+		nestedRecord then return true
+		integerWord then return false
+		booleanWord then return false
+		enumWord then return false
+		floatBits then return false
+		unsupported then return false
+	end 'd'
+end 'domainIsEnumBackingNestedRecord'
 
 // ⭐ **IS THIS DOMAIN ONE NO CONSTANT COLUMN CAN HOLD?** — `domainIsEnumBackingFloatBits`' twin, and an
 // exhaustive `match` for its reason: a domain appended to the enum must be classified here too, so a new one
@@ -3434,17 +3497,21 @@ export function domainIsEnumBackingUnsupported(domain EnumBackingFieldDomain) re
 		booleanWord then return false
 		enumWord then return false
 		floatBits then return false
+		nestedRecord then return false
 	end 'd'
 end 'domainIsEnumBackingUnsupported'
 
 // ⭐⭐ **THE PAIRING TABLE — MAY THIS WRITTEN CONSTANT FILL A FIELD OF THIS DOMAIN?** One function, read by
 // one caller (`Parser.requireEnumBackingFieldValueSuitsField`), so the rule that decides and the sentence
-// that explains it sit together. Split into the two value forms below because they are answered by
-// different questions: a LITERAL by its kind alone, an enum case by its enum's IDENTITY.
-export function enumBackingValueSuitsDomain(value EnumBackingFieldValue, domain EnumBackingFieldDomain, enumName ByteArray) returns bool
+// that explains it sit together. Split into the value forms below because they are answered by different
+// questions: a LITERAL by its kind alone, and the two forms that NAME a type by that name's IDENTITY
+// against the field's declared one — which is why the third argument is the declared TYPE's name and not
+// specifically an enum's.
+export function enumBackingValueSuitsDomain(value EnumBackingFieldValue, domain EnumBackingFieldDomain, declaredName ByteArray) returns bool
 	match value 'written'
 		literal(_, kind) then return enumBackingLiteralSuitsDomain(kind, domain: domain)
-		enumCase(writtenEnum, _) then return enumBackingEnumCaseSuitsDomain(writtenEnum, domain: domain, enumName: enumName)
+		enumCase(writtenEnum, _) then return enumBackingNamedValueSuitsDomain(writtenEnum, domain: domain, declaredName: declaredName, wanted: EnumBackingFieldDomain.enumWord)
+		nestedStruct(writtenStruct) then return enumBackingNamedValueSuitsDomain(writtenStruct, domain: domain, declaredName: declaredName, wanted: EnumBackingFieldDomain.nestedRecord)
 	end 'written'
 end 'enumBackingValueSuitsDomain'
 
@@ -3462,6 +3529,9 @@ function enumBackingLiteralSuitsDomain(kind EnumBackingLiteralKind, domain EnumB
 		// A field of a declared enum takes `<ThatEnum>.<case>` and never a bare number: an enum value IS its
 		// tag, and WHICH number that is belongs to the enum's declaration, not to this case.
 		enumWord then return false
+		// A field of a declared `type` takes that type's own constant (`Inner{…}` / `Inner.create(…)`) and
+		// never a number: a record is not one word, and its constants are its LEAVES.
+		nestedRecord then return false
 		unsupported then return false
 	end 'd'
 end 'enumBackingLiteralSuitsDomain'
@@ -3482,18 +3552,32 @@ export function enumBackingLiteralBits(bits ParsedInt, kind EnumBackingLiteralKi
 	return bits
 end 'enumBackingLiteralBits'
 
-// The enum-case form suits exactly one domain, and only when the enums MATCH — `Config{mode: Priority.low}`
-// on a `Mode`-typed field is refused, where a name-blind check would store `Priority.low`'s tag into a field
-// every reader types `Mode`.
-function enumBackingEnumCaseSuitsDomain(writtenEnum ByteArray, domain EnumBackingFieldDomain, enumName ByteArray) returns bool
+// ⭐⭐ **THE TWO WRITTEN FORMS THAT NAME A TYPE — `Priority.low` and `Inner.create(1)` — SUIT A FIELD ONLY
+// WHEN THE DOMAIN IS THEIRS *AND* THE NAMES MATCH.** `Config{mode: Priority.low}` on a `Mode`-typed field is
+// refused, and so is `X64OpMeta.create(Other.create(1), setsFlags: true)` on an `OpMeta`-typed field — where
+// a name-blind check would file one type's constants under a field every reader types as the other.
+//
+// ⚠ **ONE FUNCTION FOR BOTH FORMS, AND `wanted` IS THE WHOLE OF WHAT DIFFERS.** They ask the identical
+// question of the identical pair of names; written out twice, the identity rule would be one fact in two
+// places and a later refinement would land in one of them.
+function enumBackingNamedValueSuitsDomain(written ByteArray, domain EnumBackingFieldDomain, declaredName ByteArray, wanted EnumBackingFieldDomain) returns bool
+	return enumBackingDomainTakesANamedValue(domain, wanted: wanted) and written.equals(declaredName)
+end 'enumBackingNamedValueSuitsDomain'
+
+// ⚠ **EVERY ARM SPELLED OUT — NO RANGES, AND NOT A BARE `domain == wanted`.** `EnumBacking`'s header states
+// the rule this obeys: a domain appended to the enum must be CLASSIFIED here, and an equality test would
+// answer for a new one silently — admitting a `<Type>.<member>` constant into a domain nobody decided it
+// suits, which is a wrong answer at the machine level rather than a diagnostic.
+function enumBackingDomainTakesANamedValue(domain EnumBackingFieldDomain, wanted EnumBackingFieldDomain) returns bool
 	match domain 'd'
-		enumWord then return writtenEnum.equals(enumName)
+		enumWord then return wanted == EnumBackingFieldDomain.enumWord
+		nestedRecord then return wanted == EnumBackingFieldDomain.nestedRecord
 		integerWord then return false
 		booleanWord then return false
 		floatBits then return false
 		unsupported then return false
 	end 'd'
-end 'enumBackingEnumCaseSuitsDomain'
+end 'enumBackingDomainTakesANamedValue'
 
 export typealias EnumBackingFieldArray = Array with EnumBackingField
 export typealias EnumBackingFieldArrayArray = Array with EnumBackingFieldArray
