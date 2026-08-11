@@ -2316,6 +2316,21 @@ union WitnessProtocolTarget
 	notRequired
 end 'WitnessProtocolTarget'
 
+// ⭐⭐ **HOW A VALUE HANDED BACK IN THE OPAQUE WORD HAS TO BE READ, once the receiver's instance says what it
+// really is** — `Parser.retypeOpaqueMethodResult`'s answer, and what `emitCall` spends. A shared generic body
+// is compiled ONCE against an opaque `T` and returns a bare 64-bit word, so two kinds of value arrive needing
+// work the callee could not do: an f64's BITS sitting in a general-purpose register, and a narrow SIGNED
+// value the zero-extending element load truncated the sign off.
+//
+// A union rather than a bool because there are now three answers and two of them emit a DIFFERENT op — it
+// was a bool while `aFloatsBits` was the only reading, and `enum-narrow-storage` is the second. `asItStands`
+// is by far the common case (every call in a program with no generic receiver).
+union OpaqueWordReading
+	asItStands
+	aFloatsBits
+	aNarrowSignedSlot(slotBytes ByteOffset)
+end 'OpaqueWordReading'
+
 // Whether this `for` statement grew the second entry edge a throwing `createIterator()` needs (W3) — and, if
 // so, the block that edge lands in, which is the one the statement's continuation has to merge with. See
 // `Parser.emitEmptyIterableEntry`.
@@ -8762,8 +8777,9 @@ export type Parser
 	// Sparse, reset per function and SWAPPED across a closure body, exactly like `bufferSurfaceValues`.
 	var bufferSurfaceSlots as ValueSlotSurfaceMap
 	// ⭐ **WHOSE ELEMENTS DENOTE THE BUFFER (A2m)** — an ARRAY value declared through an alias written
-	// `Array with __ManagedMemory`. Read at `emitContainerElementAccessor`, the one door every element-yielding
-	// array member comes out of.
+	// `Array with __ManagedMemory`. Read at `emitContainerElementAccessor`, the door every COMPILER-EMITTED
+	// element-yielding array member comes out of — one of two since the corpus took `last`/`pop`/`remove`
+	// (that function's ⛔⛔ header block).
 	//
 	// ⚠⚠ **WHY THESE ARE THREE CARRIERS AND NOT ONE `Map with (ValueId, DeclaredSurface)` — REVIEWED, A2m.**
 	// They are exactly the three fields of one `DeclaredSurfaceNode` (bit 0, bit 1, the slot count), so one
@@ -15344,7 +15360,7 @@ export type Parser
 	// The compiler MINTS `Array with Byte` for a byte-string literal (`internArrayByteInstance`) rather than
 	// reading it off a `Base with Args` in source, so a byte string never reaches this check at all. A program
 	// that WRITES `Array with Byte` declares its own `typealias Byte = int(0 to u8.max)` — a ranged alias the
-	// cascade resolves — which is exactly what `undeclaredNamedElementStorageBytes` means when it says no user
+	// cascade resolves — which is exactly what `undeclaredNamedElementSlot` means when it says no user
 	// type can name the literal's own instance.
 	function checkGenericArgType(argType MaxonType, argTok Token, inlineElement bool)
 		if not self.signatures.allFilesFolded 'indexStillBuilding'
@@ -16444,7 +16460,7 @@ export type Parser
 	function renderInterfaceTypeName(t MaxonType, interfaceName ByteArray) returns ByteArray
 		let tag = maxonTypeTag(t)
 		if tag == ValueTypeTag.structRef 'structRefType'
-			let refName = try self.artifact.typeNames.nameOf(typeNameIdOf(t)) otherwise panic("renderInterfaceTypeName: structRef id {typeNameIdOf(t)} not in the local interner")
+			let refName = self.localTypeName(t, asker: "renderInterfaceTypeName")
 			if refName.equals(interfaceName) 'selfRef'
 				return InterfaceSelfTypeName
 			end 'selfRef'
@@ -19522,7 +19538,39 @@ export type Parser
 				panic("bindParameters: parameter '{String.from(paramName)}' is being bound MUTABLE, but `assignedBindingsIn` finds a loop's carried vars by scanning tokens for `identifier =` — and a `var` parameter is written by `mutate(p)` at the CALL SITE, leaving no `=` for that scan to find. The loop would mint no phi and the parameter would silently reset to its entry value every iteration. Teach `assignsAt`/`assignedBindingsIn` the new write form before binding a parameter mutable.")
 			end 'writesThisScanCannotSee'
 
-			let binding = try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: i as ValueId) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
+			// ⭐⭐ **THE THIRD SIGN-EXTENSION DOOR: A PARAMETER MAY ARRIVE RAW OUT OF A NARROW SIGNED SLOT
+			// (`enum-narrow-storage`).** The other two answer *"a value coming OUT of a call"* —
+			// `emitContainerElementAccessor` for a compiler-emitted element read,
+			// `retypeOpaqueReturnValue` for one a corpus body hands back. Neither stands in front of the
+			// third shape: a shared corpus body reads a slot with the zero-extending element load and passes
+			// the raw word INTO user code as an ARGUMENT, through a function value or a witness call. The
+			// body is compiled once against an opaque `Element` and cannot extend it; the caller cannot
+			// reach inside the loop that does the read. **The callee's own entry is the one place that can,
+			// and it is COMPLETE rather than an enumeration: every value that enters a function from
+			// somewhere other than its own reads is a parameter.**
+			//
+			// ⚠ **MEASURED, and the wrong answer was not only a printed number.** `a.sort(cmpSig)` over
+			// `Signal { minus = -1 }` — `Array.sort`'s comparator overload carries no conformance
+			// constraint, so it is the cheapest reach — had `driftQuicksort`'s `managed.get(scan)` hand
+			// `-1` to the user's comparator as **255**, so the comparator saw a value no case of its own
+			// type has AND the resulting ORDER was wrong. `stdlib/helpers/sort/*` reaches this shape at
+			// five sites and `stdlib/Array.maxon`'s `contains` reaches it through witness dispatch.
+			//
+			// ⚠ **IT IS SAFE ON A PARAMETER THAT WAS ALREADY CORRECT** — the extension is the identity on
+			// every value of the type, because the slot was chosen to hold every one of them
+			// (`ProgramSignatures.narrowSignedSlotOf`'s header). So this needs no test for where the
+			// argument came from, which is exactly what makes one door enough for all the routes.
+			//
+			// ⚠ The SLOT keeps ValueId `i` and only the NAME binds to the extended value: the surface mark,
+			// the existential instance and the declaration span below are facts about the parameter's own
+			// slot, and a narrow signed enum can be none of the things they describe.
+			//
+			// ⚠ Gated on `buildsBodies` because an UNREACHED stdlib body is skipped whole a few lines after
+			// this returns (`skipUnreachedFunctionBody`), and emitting into its entry block would leave an
+			// op in a body nothing parses — the same byte-neutrality rule `lowerMaxonToStd` and
+			// `insertRangeChecks` both shut their doors onto.
+			let paramValue = self.narrowSignedParamValue(i as ValueId, paramType: paramType, range: paramRange)
+			let binding = try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: paramValue) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
 			// ⭐ **E3012 CANDIDATE: A DECLARED PARAMETER MUST BE READ** (`reportUnusedBindings`). Two names are
 			// not candidates and neither is a policy choice: `__self` is the RECEIVER the parser itself pushed,
 			// which no source token declares and a bare field read never mentions, so every instance method
@@ -23980,16 +24028,35 @@ export type Parser
 		return prevIdx if try self.opReinterpretsResultOf(lastIdx, producer: prevIdx) else lastIdx
 	end 'tryTargetCallOpIndex'
 
-	// Is op `idx` a float REINTERPRETATION of the value the CALL at `producer` defines — the one shape
-	// `tryTargetCallOpIndex` steps back over. Both halves are required: a `bitsToFloat` over anything else,
-	// and a reinterpretation sitting behind a non-call, leave the try target where it was.
+	// Is op `idx` a REINTERPRETATION of the value the CALL at `producer` defines — the one shape
+	// `tryTargetCallOpIndex` steps back over. Both halves are required: a reinterpretation over anything
+	// else, and a reinterpretation sitting behind a non-call, leave the try target where it was.
+	//
+	// ⭐ **TWO OPS QUALIFY, AND WHAT MAKES THEM QUALIFY IS THAT A USER CANNOT SPELL EITHER.** A float
+	// element's `bitsToFloat` and a narrow signed element's sign extension are both emitted by
+	// `emitContainerElementAccessor` as part of producing the call's result, so `try v.get(0) otherwise 0.0`
+	// and `try arr.get(0) otherwise Signal.zero` are each exactly one call. `try f() + 1` is NOT, and the
+	// only thing separating the two is that its `binOp` is the author's — which is why this is a membership
+	// test over compiler-only ops and not a shape test over the op graph. (`__Builtins.bitsToFloat(x)` is a
+	// CALL, not a bare op, so the author's spelling of the reinterpretation is not in the set either.)
 	function opReinterpretsResultOf(idx OpIndex, producer OpIndex) returns bool throws ParseError
 		return match try self.artifact.module.ops.get(idx) otherwise panic("opReinterpretsResultOf: opRef {idx} not in module.ops") 'reinterpretation'
-			unaryOp(_, operand, op) gives op == MaxonUnaryOp.bitsToFloat and try self.opDefines(producer, value: operand)
+			unaryOp(_, operand, op) gives unaryOpProducesACallResult(op) and try self.opDefines(producer, value: operand)
 			call to binOp gives false
 			compare to panicAbortValue gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
+
+	// The unary ops that are part of a CALL's RESULT PRODUCTION rather than an expression applied to it —
+	// the membership `opReinterpretsResultOf` tests. Exhaustive, so a unary op the compiler starts inserting
+	// after a call has to be classified here rather than silently breaking a `try` over that call.
+	function unaryOpProducesACallResult(op MaxonUnaryOp) returns bool
+		return match op 'o'
+			neg to floatToBits gives false
+			bitsToFloat gives true
+			signExtendI8 to signExtendI32 gives true
+		end 'o'
+	end 'unaryOpProducesACallResult'
 
 	// Does the op at `idx` DEFINE `value` as the result of a direct call — the producer half of the test above.
 	function opDefines(idx OpIndex, value ValueId) returns bool throws ParseError
@@ -32504,6 +32571,19 @@ export type Parser
 	// same VALUE (`+0.0` and `-0.0` compare equal), so a bit-set membership test would report the arms
 	// distinct while the second is dead. Deciding a duplicate float needs `floatOrderKey`, and no corpus case
 	// tests one — so the reach is unchanged and the reason it is unchanged is now a rule rather than a gap.
+	//
+	// ⭐⭐ **ENUM-CASE ARMS JOINED THIS DOOR WITH `enum-narrow-storage`, AND IT IS NEW BEHAVIOUR RATHER THAN
+	// A NO-OP.** `emitEnumTagLiteral` now records a case's tag as a known integer constant (it needed a
+	// constant enum literal to be recognisable as constant, for the `.rdata` blob), so a repeated arm is
+	// caught here where it used to compile: `match c` with `red` twice is now
+	// **`E2027: overlapping pattern in match: 'red' is already covered`** and used to be a silently dead
+	// second arm. MEASURED on exactly that program.
+	//
+	// ⚠ **IT IS SOUND AND IT WIDENS NOTHING, and both halves are worth stating.** Two DISTINCT cases can
+	// never collide, because `Project.rawValueCollidesAt` refuses two cases sharing a raw value at the
+	// DECLARATION (E3031) — so the only pattern pair this can now reject is literally the same case written
+	// twice, which has no reading under which the second arm is live. There is no false-reject surface to
+	// look for. What was here before was an arm that could not fire.
 	function checkAndRecordDuplicate(value ValueId, seenValues SeenPatternValues, start TokenIndex, pastEnd TokenIndex) throws ParseError
 		if not self.constIsKnown(value) 'notConst'
 			return
@@ -38035,7 +38115,7 @@ export type Parser
 		match self.signatures.arrayElementAliasOf(giid, readerFilePath: self.filePath) 'element'
 			// No declared range constrains the element, so no byte can be outside one. It is the program
 			// that declares no `Byte` at all, whose only `Array with Byte` record is the literal's own
-			// (`SignatureIndex.undeclaredNamedElementStorageBytes`).
+			// (`SignatureIndex.undeclaredNamedElementSlot`).
 			undeclared then return
 			declared(alias) then try self.requireEveryByteInRange(bytes, alias: alias, line: line, column: column)
 		end 'element'
@@ -40728,13 +40808,29 @@ export type Parser
 
 	// Emit a case's TAG as an i64 `literal` whose VALUE tag is `named(<enum>)`. The one site that
 	// mints an enum value, so the tag/op-type split (see `parseEnumLiteral`) lives in exactly one
-	// place. The const is deliberately NOT recorded (an enum value is not folded into arithmetic — it
-	// is only ever a `match` scrutinee), mirroring `emitLiteralIn`, which records a constant only for
-	// an `integer`-TAGGED value.
+	// place. See the ⭐ block on the `recordConst` below for why the tag IS written down, and what that
+	// retired: this header said the const was "deliberately NOT recorded (an enum value is not folded into
+	// arithmetic — it is only ever a `match` scrutinee)" until `enum-narrow-storage` needed a constant enum
+	// literal to be RECOGNISABLE as constant.
 	function emitEnumTagLiteral(enumName ByteArray, tag ParsedInt, range SourceRange) returns ValueId
 		let nameId = self.artifact.typeNames.intern(enumName)
 		let result = self.mintValue(ValueTypeTag.named, nameId: nameId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.literal(result, value: tag, valueType: MaxonType.integer), range: range)
+
+		// ⭐ **THE TAG IS WRITTEN DOWN AS A KNOWN CONSTANT, AND IT IS THE SAME FACT `bool` ALREADY WRITES DOWN
+		// RATHER THAN A WIDENING OF ONE.** `emitLiteralIn` records an INTEGER-tagged literal's value; this mint
+		// is deliberately separate (the value is `named(E)` while the op carries `integer`), so the recording
+		// has to be spelled here or the compiler declines to write down a value it has in hand.
+		//
+		// ⚠ **WHAT THAT COST WAS MEASURABLE, and it is the identical measurement `emitLiteralIn`'s float/bool
+		// split carries**: a CONSTANT `[Color.red, Color.green, Color.blue]` could not be recognised as constant
+		// at all, so `enum-narrow-storage`'s six literals could not become the `.rdata` blobs their spec pins.
+		// The domain is INTEGER because a payload-free enum's value IS an i64 tag — the same reading
+		// `emitEnumTagOf` and `TypeResolution` give it — so no float pattern can reach `foldIntBinOp` through
+		// this door. A BOXED union never arrives: `emitEnumCaseTagConstant` sends it to `emitLiteral` at
+		// `integer`, because its value is a box pointer and its tag is not it.
+		self.recordConst(result, folded: tag)
+
 		return result
 	end 'emitEnumTagLiteral'
 
@@ -44106,13 +44202,31 @@ export type Parser
 
 		let giid = try self.arrayLiteralInstanceFor(first, elemTok: firstTok)
 
-		// ⭐⭐ **A SUB-BYTE-PACKED ELEMENT COLLECTS ITS ELEMENTS BEFORE IT BUILDS ANYTHING**, because if they
-		// are all constants the whole literal is ONE `.rdata` blob and there is no record to push into. The
-		// element's packedness is settled by the FIRST element alone — it is what fixes `giid` — so the
-		// decision is available here, one line before the create this path would otherwise emit.
-		if self.signatures.arrayElementPackedBits(giid) != NotSubBytePacked 'aPackedElement'
-			return try self.parsePackedArrayLiteralBody(func, first: first, firstStart: firstStart, giid: giid, range: range)
-		end 'aPackedElement'
+		// ⭐⭐ **A NARROW ELEMENT COLLECTS ITS ELEMENTS BEFORE IT BUILDS ANYTHING**, because if they are all
+		// constants the whole literal is ONE `.rdata` blob and there is no record to push into. The element's
+		// width is settled by the FIRST element alone — it is what fixes `giid` — so the decision is available
+		// here, one line before the create this path would otherwise emit.
+		//
+		// ⭐ **THE GATE IS "NARROWER THAN A MACHINE WORD", NOT "SUB-BYTE PACKED", AND THAT IS WHAT
+		// `enum-narrow-storage` NEEDED.** A three-case enum's element strides ONE BYTE, not a fraction of one,
+		// so `[Color.red, Color.green, Color.blue]` is three contiguous `.rdata` bytes and was reaching
+		// `__arr_create` + three `__arr_push` instead — the spec's own sentence, and its six `RequiredRdata`
+		// pins. One comparison admits both ladders (`arrayElementIsNarrow`), and the machine-word literal
+		// `[10, 20, 30]` keeps the op order its goldens carry.
+		//
+		// ⚠ **THE ADMITTED SET IS WIDER THAN "ENUMS AND PACKED ELEMENTS", AND SAYING SO MATTERS.** Every
+		// 1/2/4-byte element reaches the blob now, so a literal whose first element FIXES a narrow ranged
+		// alias (`[1 as Percent, 2 as Percent]`) became a `.rdata` blob where it was `__arr_create` + pushes.
+		// ⭐ That drops no CHECK: `pushArrayLiteralElement` applies none a blob would skip — a ranged
+		// element's runtime guard rides `parseArraySetOrInsert`, which a literal never goes through — and the
+		// values were already required to be compile-time constants. ⚠ Most such literals do not reach here
+		// at all, and for a reason worth knowing before predicting a golden move: a cast to a NON-packing
+		// alias does not retag the element (`applyCast.castChangesTheElementPacking` mints a `named` result
+		// only across the byte/sub-byte boundary), so `[1 as Percent, …]` mints an `Array with integer` and
+		// strides 8 unless something else fixes the instance.
+		if self.signatures.arrayElementIsNarrow(giid) 'aNarrowElement'
+			return try self.parseNarrowArrayLiteralBody(func, first: first, firstStart: firstStart, giid: giid, range: range)
+		end 'aNarrowElement'
 
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
@@ -44120,13 +44234,14 @@ export type Parser
 		return try self.finishArrayLiteral(func, arr: arr, giid: giid, first: first, range: range)
 	end 'parseArrayLiteral'
 
-	// ⭐⭐ **A PACKED LITERAL'S BODY — COLLECTED FIRST, EMITTED ONCE.** Every element is parsed and held, and
+	// ⭐⭐ **A NARROW LITERAL'S BODY — COLLECTED FIRST, EMITTED ONCE.** Every element is parsed and held, and
 	// only at the `]` is it known whether they are ALL compile-time constants:
 	//
-	//   • **all constant** ⇒ ONE `constArrayLiteral` op over a bit-packed immortal `.rdata` blob. This is
-	//     what `ranged-int-bit-packing`'s three ```RequiredRdata cases pin BYTE-FOR-BYTE — `[0 as Q, 1 as Q,
+	//   • **all constant** ⇒ ONE `constArrayLiteral` op over an immortal `.rdata` blob. This is what
+	//     `ranged-int-bit-packing`'s three ```RequiredRdata cases pin BYTE-FOR-BYTE — `[0 as Q, 1 as Q,
 	//     2 as Q, 3 as Q]` at 2 bits is the single byte `0b11_10_01_00` — which is a claim about the bit
-	//     ORDER and the `ceil(count·bits/8)` sizing that no round-tripped value could make.
+	//     ORDER and the `ceil(count·bits/8)` sizing that no round-tripped value could make; and it is what
+	//     `enum-narrow-storage`'s six pin at the BYTE ladder (`u8[] 0, 1, 2`, `i16[] -200, 0, 200`).
 	//   • **any element non-constant** ⇒ the ordinary `__arr_create` + one `__arr_push` per element, over the
 	//     values already parsed. `specs/bool-bit-packing.md` requires both spellings to reach the identical
 	//     representation ("whether built from a constant literal, a NON-CONSTANT literal, or dynamically"),
@@ -44137,10 +44252,11 @@ export type Parser
 	// wasted. What the CONSTANT arm leaves behind is the elements' own `const` materializations, now unused —
 	// dead values the blob makes redundant, which the backend drops on the floor because nothing reads them.
 	//
-	// ⚠ Only a PACKED element reaches here, and a packed element is TRIVIAL by construction
-	// (`arrayElementPackedBits` answers `NotSubBytePacked` for every managed element first), so there is no
-	// managed move-in to preserve — which is what makes holding the elements across the `]` legitimate at all.
-	function parsePackedArrayLiteralBody(func IrFunction, first ValueId, firstStart TokenIndex, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+	// ⚠ Only a NARROW element reaches here, and a narrow element is TRIVIAL by construction (a managed
+	// element's slot is the 8-byte pointer `ManagedArrayElementBytes`, which is the machine word this gate
+	// excludes), so there is no managed move-in to preserve — which is what makes holding the elements across
+	// the `]` legitimate at all.
+	function parseNarrowArrayLiteralBody(func IrFunction, first ValueId, firstStart TokenIndex, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		var values = ValueIdArray.create()
 		var starts = TokenIndexColumn.create()
 		values.push(first)
@@ -44156,23 +44272,24 @@ export type Parser
 		try self.consume(TokenKind.rightBracket)
 
 		if self.everyElementIsAKnownConstant(values) 'aConstantBlob'
-			return self.emitPackedArrayBlob(values, giid: giid, range: range)
+			return self.emitNarrowArrayBlob(values, giid: giid, range: range)
 		end 'aConstantBlob'
 
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 		for i in 0 upto values.count() 'eachElement'
-			let elem = try values.get(i) otherwise panic("parsePackedArrayLiteralBody: values.get({i}) failed inside its own upto bound")
-			let elemStart = try starts.get(i) otherwise panic("parsePackedArrayLiteralBody: starts.get({i}) failed — it is pushed in lockstep with values")
+			let elem = try values.get(i) otherwise panic("parseNarrowArrayLiteralBody: values.get({i}) failed inside its own upto bound")
+			let elemStart = try starts.get(i) otherwise panic("parseNarrowArrayLiteralBody: starts.get({i}) failed — it is pushed in lockstep with values")
 			try self.pushArrayLiteralElement(arr, elem: elem, giid: giid, valueStart: elemStart, range: range)
 		end 'eachElement'
 
 		self.trackOwnedTemp(arr)
 		return arr
-	end 'parsePackedArrayLiteralBody'
+	end 'parseNarrowArrayLiteralBody'
 
 	// Does the compiler hold every one of these values as an integer constant — the question that decides
-	// whether a packed literal becomes a blob or a run of pushes. A `bool` element's `true`/`false` folds to
-	// 1/0 through the same constant table, which is why one predicate serves both element kinds.
+	// whether a narrow literal becomes a blob or a run of pushes. A `bool` element's `true`/`false` folds to
+	// 1/0 through the same constant table, and so does an enum case's TAG (`emitEnumTagLiteral`), which is why
+	// one predicate serves every narrow element kind.
 	function everyElementIsAKnownConstant(values ValueIdArray) returns bool
 		for elem in values 'each'
 			if not self.constIsKnown(elem) 'notAConstant'
@@ -44183,9 +44300,13 @@ export type Parser
 		return true
 	end 'everyElementIsAKnownConstant'
 
-	// ⭐ **PACK THE CONSTANTS AND EMIT THE ONE OP.** Precondition: `everyElementIsAKnownConstant(values)` and
-	// the instance's element is packed — both settled by the sole caller.
-	function emitPackedArrayBlob(values ValueIdArray, giid GenericInstanceId, range SourceRange) returns ValueId
+	// ⭐ **SERIALIZE THE CONSTANTS AND EMIT THE ONE OP.** Precondition: `everyElementIsAKnownConstant(values)`
+	// and the instance's element is narrow — both settled by the sole caller.
+	//
+	// The blob's bytes come from `constantElementsImage`, which reads the STRIDE this op is stamped with and
+	// dispatches on its sign, so the layout and the stamp are one number rather than two questions asked of
+	// the instance in two places.
+	function emitNarrowArrayBlob(values ValueIdArray, giid GenericInstanceId, range SourceRange) returns ValueId
 		var constants = ParsedIntArray.create()
 		for elem in values 'each'
 			constants.push(self.constOf(elem))
@@ -44193,10 +44314,10 @@ export type Parser
 
 		let stride = self.signatures.arrayElementSize(giid)
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: stride, elementCount: constants.count() as ParsedInt, bytes: packConstantElements(constants, packedBits: self.signatures.arrayElementPackedBits(giid))), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: stride, elementCount: constants.count() as ParsedInt, bytes: constantElementsImage(constants, stride: stride)), range: range)
 		self.trackOwnedTemp(result)
 		return result
-	end 'emitPackedArrayBlob'
+	end 'emitNarrowArrayBlob'
 
 	// The int-array-literal body (`[10, 20, 30]`) — the record is created FIRST (the element type is `integer`,
 	// which the caller's guard has already settled from the token), then each element is parsed and pushed.
@@ -44315,7 +44436,7 @@ export type Parser
 	// `Vector from [1.5, 2.5]`, and a `Vector from […]` builds its record through THIS literal — so the
 	// question was never "should a vector be special" but "why did a bare `[…]` refuse two element types the
 	// array runtime already strides correctly". Measured: `bool` needed nothing but this arm (its slot is one
-	// byte by `trivialElementStorageBytes`, and `Array with bool` built through `BArr.create()` + `push` has
+	// byte by `trivialElementSlot`, and `Array with bool` built through `BArr.create()` + `push` has
 	// always worked); `float` needed the element-word bitcast (`containerElementWord` /
 	// `containerSlotValueType`), which is the whole of what was missing and is now built.
 	//
@@ -46035,7 +46156,8 @@ export type Parser
 		let roster = try self.requireSurfaceMember(MemberSurface.cursor, methodTok: methodTok)
 
 		// ⭐ **THE TWO INFALLIBLE READS.** `current()` yields the ELEMENT and goes through
-		// `emitContainerElementAccessor` — the one door every element read in the language uses — as a BORROW:
+		// `emitContainerElementAccessor` — the compiler-emitted element-read door, one of the two the language
+		// now has (see its ⛔⛔ header for the corpus half) — as a BORROW:
 		// the buffer still owns what is in the slot, so a `String` element handed back here is neither cloned
 		// nor released. `index()` yields a plain integer and is emitted as one.
 		if methodTok.value.equals(CursorCurrentMethod) 'current'
@@ -48480,7 +48602,7 @@ export type Parser
 	// `__ManagedByte` kind: `emitArrayCreateOp` stamps its `element_size@24` from the very instance it is
 	// typed as, so a wide `Byte` gives a genuinely stride-2 record and `__str_to_bytes` fills it at THAT
 	// stride — `b0=97 b1=98 b2=99` under `typealias Byte = int(0 to 1000)`, correct today. `__ManagedByte`
-	// strides 1 always (`undeclaredNamedElementStorageBytes`), so a retyped view would be refused by that
+	// strides 1 always (`undeclaredNamedElementSlot`), so a retyped view would be refused by that
 	// door's STRIDE test at every declared byte-array position: measured on the tree as
 	// `E3005 … expected 'Array_Byte$0_1000', got 'Array___ManagedByte'` for the buffer that already wears the
 	// element. ⇒ the interning `parseByteView` does is deliberate and it is RIGHT; only the BOUNDS were never
@@ -48508,7 +48630,7 @@ export type Parser
 	// a wrong answer.
 	//
 	// `undeclared` is the program that declares no `Byte` at all — the literal's own instance
-	// (`SignatureIndex.undeclaredNamedElementStorageBytes`), where no declared range exists for a byte to
+	// (`SignatureIndex.undeclaredNamedElementSlot`), where no declared range exists for a byte to
 	// fall outside of.
 	function requireRawByteFillFitsItsElement(giid GenericInstanceId, methodTok Token) throws ParseError
 		match self.signatures.arrayElementAliasOf(giid, readerFilePath: self.filePath) 'element'
@@ -48595,7 +48717,37 @@ export type Parser
 		return receiver
 	end 'emitArrayVoidCall'
 
-	// ⭐ **EMIT A MANAGED-AWARE ELEMENT ACCESSOR** (`get`/`first`/`last`/`pop`/`remove`, P1.7 slice 3 / 3b-vi-a).
+	// ⭐ **EMIT A MANAGED-AWARE ELEMENT ACCESSOR** (`get`/`first`, the `Array` cursor's two, and the `List`
+	// accessors — P1.7 slice 3 / 3b-vi-a).
+	//
+	// ⛔⛔ **THIS IS NOT "THE ONE DOOR EVERY ELEMENT READ USES" ANY MORE, AND THIS HEADER SAID IT WAS UNTIL
+	// `enum-narrow-storage` MEASURED OTHERWISE. THERE ARE THREE DOORS, and each was found by a wrong answer
+	// the previous two did not cover.** This one carries the reads the COMPILER emits, and it used to carry
+	// `last`/`pop`/`remove` and the `for … in` element read as well — which is why the enumerations below
+	// still name them. Those are **CORPUS** members now (`stdlib/Array.maxon` is compiled, and iteration goes
+	// through the cursor surface), so they arrive as ordinary calls at `emitCall` and never reach here.
+	//
+	// ⇒ all three exist because a corpus body is compiled ONCE against an opaque `Element`: it reads a slot
+	// with the shared, zero-extending element load and can know nothing the INSTANCE fixes. Where the value
+	// GOES from there is what splits the doors:
+	//
+	//   1. **`emitContainerElementAccessor`** (here) — a read the compiler emits, which holds the instance.
+	//   2. **`retypeOpaqueReturnValue`** — a value a corpus body RETURNS through the opaque word; the caller
+	//      holds the instance. Two facts cross there, an f64 riding the general-purpose register and a
+	//      narrow SIGNED value, and both have a twin here.
+	//   3. **`bindParameters`** — a value a corpus body passes INTO user code as an ARGUMENT, through a
+	//      function value (`arr.sort(cmp)`) or a witness call (`contains`'s `item == element`). NEITHER
+	//      1 NOR 2 STANDS IN FRONT OF IT: nothing returns and nothing is read at the call site — the
+	//      callee's own entry is the only place that can see it.
+	//
+	// All three spell it through the same two helpers (`emitNarrowSignedSlotRead`,
+	// `narrowSignedSlotOfLocalType`) so the set cannot drift apart.
+	//
+	// ⚠⚠ **A RULE ADDED AT ONE AND NOT THE OTHERS IS A WRONG ANSWER ON THE REST OF THE SURFACE, MEASURED
+	// TWICE.** With the sign extension at door 1 alone, on a three-case `Signal { minus = -1 }`: `for s in a`
+	// summed **256** where 0 is correct and `a.pop()` answered **255** for `-1`. With doors 1 and 2:
+	// `a.sort(cmpSig)` handed the comparator `x=1 y=255` and sorted into the WRONG ORDER. Whatever you add
+	// below, ask what the other two owe.
 	//
 	// ⚠ **IT SERVES A `List` TOO, AND IT NEEDED NO CHANGE TO — which is what identifies it as a CONTAINER
 	// door rather than an `Array` one.** Everything below reads the instance through `containerElementType`
@@ -48691,7 +48843,26 @@ export type Parser
 				return self.emitUnaryOp(bits, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
 			end 'floatElement'
 
-			return self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
+			let slotValue = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(trivialType), resultNameId: typeNameIdOf(trivialType), range: range)
+
+			// ⭐⭐ **A NARROW SIGNED SLOT IS SIGN-EXTENDED HERE (`enum-narrow-storage`).** The shared element
+			// load ZERO-EXTENDS — one compiled byte loop, strided by the record's runtime `element_size@24`,
+			// ending in a shift and a width mask (`ArrayRuntime.emitLoadElemAt`) — and the record carries no
+			// signedness for it to consult. So an `i8`-slotted `Signal.minus` comes back as **255** and not
+			// `-1`, which is the wrong answer `specs/enum-narrow-storage.md:enum-rdata-i8-array` describes in
+			// its own prose and catches twice.
+			//
+			// ⚠⚠ **THIS DOOR IS NOT ENOUGH ON ITS OWN, AND BELIEVING IT WAS COST TWO MEASURED WRONG ANSWERS.**
+			// This function's own header calls itself the door "every element read in the language uses", and
+			// that was true when `last`/`pop`/`remove` and the iteration read were compiler-emitted. They are
+			// CORPUS members now (`stdlib/Array.maxon`, and `for … in` goes through the cursor surface), and a
+			// corpus body is compiled ONCE against an opaque `Element` — so it cannot know the sign and this
+			// door never sees the call. MEASURED on a three-case `Signal { minus = -1 }`: `for s in a` summed
+			// to **256** where 0 is correct, and `a.pop()` answered **255** for `-1`, while `get`/`first`/
+			// `match` through here were right. The corpus half is `retypeOpaqueReturnValue`'s, off the SAME
+			// `narrowSignedSlotOf` question — see `emitNarrowSignedSlotRead` for why asking it twice is one
+			// derivation and not two.
+			return self.emitNarrowSignedSlotRead(slotValue, valueType: trivialType, range: range)
 		end 'trivial'
 
 		let resultType = self.elementAccessorResultType(giid)
@@ -48709,10 +48880,12 @@ export type Parser
 			// a refusal, and no leak (the free is legitimate), so the suite was green over it for as long as it
 			// existed and only a hand-probe found it.
 			//
-			// ⭐ It is stated HERE, at the ONE door every element borrow leaves through, rather than at the
+			// ⭐ It is stated HERE, at the one door every borrow THIS FUNCTION mints leaves through, rather than at the
 			// five arms that reach it — the same argument `markElementReadSurface` makes one line up. So `get`,
 			// `first`, `last`, the `for … in` element read and the list's two accessors are covered by one line
-			// and a sixth arm cannot miss it.
+			// and a sixth arm cannot miss it. ⚠ **`last`/`pop`/`remove` AND THE LOOP READ ARE NOT AMONG THEM
+			// ANY MORE**, and that list named them until `enum-narrow-storage`: they are CORPUS calls now, so
+			// their lifetimes are `emitCall`'s. See this function's ⛔⛔ header block.
 			//
 			// ⚠ **IT IS THE BASE THAT IS PROMOTED, NOT THE ELEMENT THAT IS RETAINED** — the ruling's other
 			// half. Retaining here would make `get` mean two different things depending on the RECEIVER's
@@ -48745,6 +48918,105 @@ export type Parser
 		end 'borrowsInPlace'
 		return result
 	end 'emitContainerElementAccessor'
+
+	// ⭐⭐ **READ A VALUE OF `valueType` THAT MAY HAVE COME OUT OF A NARROW SIGNED SLOT — the ONE door both
+	// halves of `enum-narrow-storage`'s read side go through**, so the direct element accessor above and the
+	// opaque-word retype at `emitCall` cannot come to disagree about which types extend or how wide.
+	//
+	// `narrowSignedSlotOf` answers `notASignExtension` for everything else, so this is a pass-through for
+	// every value in every program that has no narrow signed enum — which is why the callers ask it
+	// unconditionally rather than guarding first and asking twice.
+	// The value a parameter's NAME binds to: the slot itself, or the sign-extended reading of it when the
+	// parameter is declared at a type stored in a narrow signed slot — see `bindParameters` for why the
+	// callee's entry is the only place the third door can be. The extension lands in the ENTRY block, which
+	// is current at both call sites and dominates every use of the parameter.
+	function narrowSignedParamValue(slot ValueId, paramType MaxonType, range SourceRange) returns ValueId
+		if not self.buildsBodies 'noBodyToReadIt'
+			return slot
+		end 'noBodyToReadIt'
+
+		return self.emitNarrowSignedSlotRead(slot, valueType: paramType, range: range)
+	end 'narrowSignedParamValue'
+
+	function emitNarrowSignedSlotRead(value ValueId, valueType MaxonType, range SourceRange) returns ValueId
+		match self.narrowSignedSlotOfLocalType(valueType) 'slot'
+			fromBytes(slotBytes) then return self.emitSignExtendFromSlot(value, slotBytes: slotBytes, valueType: valueType, range: range)
+			notASignExtension then return value
+		end 'slot'
+	end 'emitNarrowSignedSlotRead'
+
+	// ⭐⭐ **THE NARROW SIGNED SLOT `valueType`'s VALUES OCCUPY — asked of a type interned in THIS FILE's
+	// table, which is why the NAME crosses and the id does not.** `ProgramSignatures` classifiers must be
+	// asked in the INDEX's space (`slotTypeThroughReceiver`'s ⚠ block, OPEN #56); both callers here hold a
+	// type the parser re-interned (`containerSlotValueType`, `slotTypeThroughReceiver`), so the id is this
+	// file's and only the name means the same thing on both sides.
+	//
+	// ⚠ **MEASURED — the id form of this call was a WRONG ANSWER that depended on an unrelated declaration.**
+	// `let o = [Offset.behind, Offset.here, Offset.ahead]` then `o.first()` over a three-case enum at
+	// `-200 … 200` answered `-200` in a program that also declared `typealias Offsets = Array with Offset`
+	// and **65336** in one that did not — the extra declaration only changed which order the two interners
+	// assigned ids in.
+	function narrowSignedSlotOfLocalType(valueType MaxonType) returns SignExtendSlot
+		if maxonTypeTag(valueType) != ValueTypeTag.named 'onlyANamedLeafCanBeNarrowAndSigned'
+			return SignExtendSlot.notASignExtension
+		end 'onlyANamedLeafCanBeNarrowAndSigned'
+
+		return self.signatures.narrowSignedSlotOf(self.localTypeName(valueType, asker: "narrowSignedSlotOfLocalType"))
+	end 'narrowSignedSlotOfLocalType'
+
+	// ⭐ **THE NAME BEHIND A LEAF TYPE'S ID, READ THROUGH THIS FILE'S INTERNER** — the one spelling of a
+	// lookup that had grown three verbatim copies whose `otherwise` clauses said the same thing three ways.
+	// A MISS is an invariant break and not a case: every id reaching a caller of this was minted by
+	// `intern` against this same table or adopted into it (`adoptType`), so the panic names the ASKER rather
+	// than guessing at which of those two routes failed.
+	//
+	// ⚠ Sites whose `otherwise` carries a REAL derivation — `fieldStorageType`, `readTypeAliasDeclaration`,
+	// `requireThrownTypeFitsEnclosing`, `boxedUnionDisplay` — deliberately keep their own message: the
+	// explanation is the value there, and collapsing four different invariants onto one sentence would be
+	// deduplication that loses the thing being deduplicated.
+	function localTypeName(t MaxonType, asker String) returns ByteArray
+		return try self.artifact.typeNames.nameOf(typeNameIdOf(t)) otherwise panic("{asker}: a leaf type's id ({typeNameIdOf(t)}) is not in this file's interner — every id reaching here was interned into that table or adopted into it")
+	end 'localTypeName'
+
+	// ⭐⭐ **IS THIS ARGUMENT AN ENUM VALUE? — the gate that keeps `enum-narrow-storage`'s constant enum tags
+	// out of the range-check ARG SITES.** Recording a case's tag as a known constant (`emitEnumTagLiteral`)
+	// was needed so a constant enum literal could become a `.rdata` blob, and it had a second reacher:
+	// `recordConstantArgRangeChecks` admits on `constIsKnown`, so EVERY enum-valued argument in EVERY
+	// program would have started allocating a `RangeCheckArgSite`.
+	//
+	// ⚠ **THE SITE COULD NEVER PRODUCE A CHECK, which is why this is a gate and not a trade.**
+	// `InsertRangeChecks.paramAliasOf` resolves an arg site against the CALLEE's ranged PARAMETERS, and a
+	// parameter declared at an enum type is never among them (an enum has no `int(lo to hi)` declaration for
+	// `paramSites` to hold). So the site was a parse-time allocation per call site with a structurally
+	// guaranteed `ParamAliasLookup.none` at the other end — the `+N per call site, parse only` shape
+	// `docs/optimization-log.md` has caught three times. This restores the pre-tick reach exactly.
+	//
+	// ⚠ It asks whether the name is a DECLARED ENUM and not merely whether the tag is `named`, because a
+	// ranged-alias value is `named` too (`7 as Byte`) and its site is the one this door exists for.
+	function argIsAnEnumValue(argValue ValueId) returns bool
+		let argType = self.typeOf(argValue)
+		if maxonTypeTag(argType) != ValueTypeTag.named 'notANamedLeaf'
+			return false
+		end 'notANamedLeaf'
+
+		return self.signatures.containsEnum(self.localTypeName(argType, asker: "argIsAnEnumValue"))
+	end 'argIsAnEnumValue'
+
+	// ⭐⭐ **SIGN-EXTEND A VALUE READ OUT OF A NARROW SIGNED SLOT — ONE compiler-only unary op.** The width
+	// comes from the slot the storage ladder chose, mapped by `signExtendFromSlotBytes`, so the op and the
+	// stride are one derivation; the expansion into shifts is the Std tier's
+	// (`LowerMaxonToStd.lowerSignExtend`), and `MaxonUnaryOp`'s header carries why it may not be shifts here.
+	//
+	// ⚠ **THE RESULT KEEPS THE VALUE'S OWN TYPE, not `integer`.** It IS the element — `v.rawValue` and
+	// `match v` are what happens next — and typing it `integer` would be the same lost identity
+	// `emitContainerElementAccessor`'s trivial arm already measured for a `Byte` (`E3005 requires a
+	// Array with Byte`, a false reject of a program both references accept). That is why it does not go
+	// through `emitUnaryOp`, which mints at a bare TAG and would drop the enum's interned name.
+	function emitSignExtendFromSlot(value ValueId, slotBytes ByteOffset, valueType MaxonType, range SourceRange) returns ValueId
+		let result = self.mintValueOfType(valueType)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.unaryOp(result, operand: value, op: signExtendFromSlotBytes(slotBytes)), range: range)
+		return result
+	end 'emitSignExtendFromSlot'
 
 	// ⭐ **AN ELEMENT READ OFF AN ARRAY OF BUFFERS IS A BUFFER (A2m).** Placed at the accessor's ONE mint
 	// rather than at the five arms that reach it (`get`, `first`, `last`, `pop`, `remove` — plus the `for … in`
@@ -48982,7 +49254,7 @@ export type Parser
 			// two lookups cannot disagree: `adoptType` re-interns by the SAME name string, so the artifact table's
 			// spelling and the index's are one. A live-looking copy of an arm the shared door owns is what A4k was
 			// about; it may not survive one door down from the door that fixed it.
-			let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("containerSlotValueType: an adopted `named` slot type's id is not in this file's interner")
+			let name = self.localTypeName(declared, asker: "containerSlotValueType")
 			// ⭐⭐ **A RANGED-ALIAS ELEMENT KEEPS ITS NAME, AND THAT IS A TYPE-IDENTITY FIX, NOT A REFINEMENT
 			// (P1.8 Slice E).** `classifyUnionPayload` below answers a STORAGE question — what width does this
 			// payload occupy — and its answer for a ranged int alias is the bare `integer` the alias erases
@@ -55600,7 +55872,7 @@ export type Parser
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
-		let readsAsFloatOutOfTheOpaqueWord = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
+		let opaqueWordReading = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
 		// in the mint's own tail, where the tag was still the opaque `T` — and an opaque tag ALWAYS answers "owns
 		// nothing" (`valueIsManagedHeap` tests byte-record and aggregate tags, and `typeParameter` is neither).
@@ -55652,13 +55924,15 @@ export type Parser
 		// ⚠ **THE `try` DOOR ALREADY KNOWS THIS SHAPE, WHICH IS WHY THIS IS SAFE FOR A THROWING CALLEE.**
 		// `rewriteLastCallToTryCall` steps back over exactly one trailing reinterpretation whose operand is the
 		// preceding op's result (`tryTargetCallOpIndex`) — built for `emitContainerElementAccessor`'s float
-		// element, and true of this one for the same reason: the reinterpretation is part of the call's RESULT
-		// PRODUCTION, not a second expression the `try` was applied to.
-		if not readsAsFloatOutOfTheOpaqueWord 'theResultIsAlreadyWhatItSeems'
-			return result
-		end 'theResultIsAlreadyWhatItSeems'
-
-		return self.emitUnaryOp(result, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: SourceRange.between(anchor, last: rparenTok))
+		// element, and true of BOTH readings below for the same reason: the reinterpretation is part of the
+		// call's RESULT PRODUCTION, not a second expression the `try` was applied to. Both members are in
+		// `unaryOpProducesACallResult`, which is that door's membership list.
+		let callRange = SourceRange.between(anchor, last: rparenTok)
+		match opaqueWordReading 'reading'
+			asItStands then return result
+			aFloatsBits then return self.emitUnaryOp(result, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: callRange)
+			aNarrowSignedSlot(slotBytes) then return self.emitSignExtendFromSlot(result, slotBytes: slotBytes, valueType: self.typeOf(result), range: callRange)
+		end 'reading'
 	end 'emitCall'
 
 	// ⭐ **SUPPLY EVERY ARGUMENT THE CALL OMITTED AND THE DECLARATION DEFAULTS** (BATCH2 slice 4) — each one
@@ -55770,32 +56044,32 @@ export type Parser
 	// RETURNED VALUE, so the two could disagree — and did, for every body that returned a value it already
 	// owned. The callee now discharges the hand-off for every shape (`emitOwnedValueReturn`), so there is one
 	// convention, no bit, and nothing here for a caller to read back.
-	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray) returns bool
+	function retypeOpaqueMethodResult(result ValueId, callee ByteArray, args ValueIdArray) returns OpaqueWordReading
 		if args.isEmpty() 'noReceiver'
-			return false
+			return OpaqueWordReading.asItStands
 		end 'noReceiver'
 
 		let receiver = try args.get(0) otherwise panic("retypeOpaqueMethodResult: args.get(0) failed on a non-empty list")
 		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'concreteReceiverOnly'
-			return false
+			return OpaqueWordReading.asItStands
 		end 'concreteReceiverOnly'
 
 		// The callee must be a method OF the receiver's own generic base, or `T` names a different type's
 		// parameter and the substitution would be against the wrong binding.
 		if not isQualifiedUnderTypeName(callee, typeName: self.signatures.genericInstanceBaseName(self.valueNameId(receiver))) 'notItsOwnMethod'
-			return false
+			return OpaqueWordReading.asItStands
 		end 'notItsOwnMethod'
 
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'declared'
 			declared(returnType) then return self.retypeOpaqueReturn(result, receiver: receiver, returnType: returnType)
-			undeclared then return false
+			undeclared then return OpaqueWordReading.asItStands
 		end 'declared'
 	end 'retypeOpaqueMethodResult'
 
-	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType) returns bool
+	function retypeOpaqueReturn(result ValueId, receiver ValueId, returnType MaxonReturnType) returns OpaqueWordReading
 		match returnType 'r'
 			value(inner) then return self.retypeOpaqueReturnValue(result, receiver: receiver, inner: inner)
-			void then return false
+			void then return OpaqueWordReading.asItStands
 		end 'r'
 	end 'retypeOpaqueReturn'
 
@@ -55839,7 +56113,7 @@ export type Parser
 	// GPR-defined value into the XMM file, which is `X64Backend`'s cross-register-file assertion verbatim.
 	// So this door reports the case and `emitCall` reinterprets, exactly as `emitContainerElementAccessor`
 	// does at the element boundary: the same sentence, the other kind of slot.
-	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType) returns bool
+	function retypeOpaqueReturnValue(result ValueId, receiver ValueId, inner MaxonType) returns OpaqueWordReading
 		// ⭐ **THE SURFACE CROSSES THE INSTANCE WITH THE TYPE** — `emitFieldLoad`'s pairing at the method-RESULT
 		// position, and it sits ABOVE the "fixes nothing" return deliberately: which roster the result serves is
 		// a fact about the receiver's ARGUMENT SPELLING, and the substitution below can leave a type untouched
@@ -55850,7 +56124,7 @@ export type Parser
 
 		let fixedByTheInstance = self.slotTypeThroughReceiver(receiver, declared: inner)
 		if maxonTypesDenoteSame(fixedByTheInstance, b: inner) 'theInstanceFixesNothingHere'
-			return false
+			return OpaqueWordReading.asItStands
 		end 'theInstanceFixesNothingHere'
 
 		// ⚠ **THE GATE READS THE DECLARED SIDE AS WELL AS THE SUBSTITUTED ONE.** A `returns Items` fixes to a
@@ -55862,11 +56136,30 @@ export type Parser
 			// `enrolOwnedCallTemp` decline it correctly: a float owns no heap, so the descriptor-gated drop an
 			// opaque tag would have enrolled is work with no effect on every trip of every loop.
 			self.retypeValue(result, valueType: MaxonType.integer)
-			return true
+			return OpaqueWordReading.aFloatsBits
 		end 'aFloatRidingTheOpaqueWord'
 
 		self.retypeValue(result, valueType: fixedByTheInstance)
-		return false
+
+		// ⭐⭐ **A NARROW SIGNED VALUE COMES BACK ZERO-EXTENDED THROUGH THE OPAQUE WORD, FOR THE FLOAT ARM'S
+		// REASON ONE STEP FURTHER ON (`enum-narrow-storage`).** A shared corpus body — `Array.pop`,
+		// `Array.last`, `Array.remove`, `ArrayCursor.current` — is compiled ONCE against an opaque `Element`,
+		// so it reads the slot with the zero-extending shared load and cannot know the element is signed.
+		// Only the CALLER knows, because only the caller has the instance, which is precisely the situation
+		// this whole function exists for. MEASURED before this arm, on a three-case `Signal { minus = -1 }`:
+		// `for s in a` (the cursor's `current()`) summed to **256** where 0 is correct and `a.pop()` answered
+		// **255** for `-1`, while the compiler-emitted `get`/`first` were already right.
+		//
+		// ⚠ It asks the SUBSTITUTED type, not the declared one, and it does NOT require `inner` to be a bare
+		// type parameter the way the float arm does. A float can only ride the opaque word as an ABI
+		// accident of a bare `T`; a narrow signed slot is a property of the VALUE's own type wherever it came
+		// from, and `narrowSignedSlotOf`'s header carries why re-extending an already-correct value is the
+		// identity rather than a risk. `fixedByTheInstance` is in THIS FILE's interner, so the question goes
+		// through `narrowSignedSlotOfLocalType` — see there for the measured wrong answer the id form gave.
+		match self.narrowSignedSlotOfLocalType(fixedByTheInstance) 'slot'
+			fromBytes(slotBytes) then return OpaqueWordReading.aNarrowSignedSlot(slotBytes)
+			notASignExtension then return OpaqueWordReading.asItStands
+		end 'slot'
 	end 'retypeOpaqueReturnValue'
 
 	// ⭐ **A CALL ARGUMENT MEETS THE PARAMETER'S DECLARED RANGE (P1.9), and this is the door that used to
@@ -55928,6 +56221,12 @@ export type Parser
 			if not (self.constIsKnown(argValue) or tagIsFloat(self.tagOf(argValue))) 'cannotBeALiteral'
 				continue
 			end 'cannotBeALiteral'
+			// An ENUM value is a known constant since `enum-narrow-storage` and can never be checked against
+			// a ranged parameter — see `argIsAnEnumValue` for why the site would be a guaranteed dead
+			// allocation at every call site in every program that passes one.
+			if self.argIsAnEnumValue(argValue) 'noRangedParameterCanDeclareIt'
+				continue
+			end 'noRangedParameterCanDeclareIt'
 			let label = try argLabels.get(i) otherwise EmptySourceText
 			self.rangeCheckArgSites.push(RangeCheckArgSite.create(argValue, callee: callee, argIndex: i, label: label, block: self.currentBlock.id, line: anchor.line, column: anchor.column))
 		end 'eachArg'

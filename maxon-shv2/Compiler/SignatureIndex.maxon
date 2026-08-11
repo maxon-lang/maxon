@@ -3199,26 +3199,50 @@ let ManagedArrayElementBytes = 8 as ByteOffset
 // reads as one of that ladder's rungs, which it is not: those are derived from bounds, this is definitional.
 let BooleanPackedBits = 1 as PackedBitWidth
 
-// ⭐ **THE STORAGE WIDTH OF A `named` ARRAY ELEMENT NO FILE DECLARES AS A RANGED ALIAS** — the MISS arm of
-// `trivialElementStorageBytes`'s registry probe. It is a function and not a bare fallback because a miss
-// means TWO different things, and only one of them is the machine word:
+// ⭐⭐ **THE SLOT A PAYLOAD-FREE ENUM'S VALUE OCCUPIES — the narrowest width holding every declared TAG
+// (`specs/enum-narrow-storage.md`).** A payload-free enum's value IS its tag (`Parser.emitEnumTagOf`), so
+// the set the slot must hold is exactly `caseTags`, and the min/max of that set is what the ladder is asked.
 //
-//   • **`Byte`** — the `Array with Byte` instance a `b"…"` literal MINTS FOR ITSELF
-//     (`internArrayByteInstance`) in a program that declares no such alias. No user type can name that
-//     instance (`Array with Byte` over an undeclared `Byte` does not resolve), so the literal's own record
-//     is the only one there is — and it is stamped byte-PACKED by construction (`ByteStringElementSize`).
-//     Answering the machine word here would leave this door and that record disagreeing about ONE
-//     instance's stride, which is the two-producer shape `arrayElementSize` exists to end.
-//   • **anything else** — an enum or a boxed union's ordinal. Its range is not an `int(lo to hi)`
-//     declaration, so it misses the same probe, and it deliberately keeps the machine word
-//     (`specs-shv2/array-enum-element-size.md` pins that stride; narrowing it is its own rung).
-function undeclaredNamedElementStorageBytes(name ByteArray) returns ByteOffset
-	if isByteElementName(name) 'bytePacked'
-		return ByteStringElementSize as ByteOffset
-	end 'bytePacked'
+// ⭐⭐ **THE TAG SET IS THE RIGHT QUESTION AT EVERY BACKING, AND THAT IS WHY THERE IS NO `EnumBacking`
+// DISPATCH HERE — the general sentence, not a case list.** The ladder is asked about what is STORED, and
+// what is stored is the tag (`Parser.emitEnumTagOf`: an unboxed enum's value IS its tag). So the answer is
+// right whatever the tag MEANS, at every backing there is and at every backing there will be — which is a
+// property this function has, where an enumeration of backings would be a claim it maintains by hand.
+//
+// The spec's ladder is written over "raw values"; for the INTEGER backing the tag IS the raw value, so the
+// two readings coincide on every case the spec pins. Where they part it is still the tag that occupies the
+// slot: a `character` tag is a codepoint, a `string`/`functionRef` tag is a declaration index (the value
+// lives in `.rdata`, reached by a select over the tag), a `structRecord` tag likewise, and a `float` tag is
+// an IEEE-754 bit pattern.
+//
+// ⛔ **DO NOT REPLACE THIS WITH A PER-BACKING ARGUMENT — THE ONE THAT STOOD HERE WAS FALSE.** It claimed a
+// float backing lands on the machine word "because a double's pattern does not fit four bytes", and
+// `enum Zero: float { z = 0.0 }` has `caseTags = [0]` ⇒ a **ONE-byte** slot. The answer was still correct —
+// one byte holds that tag and the tag is what is stored — but for a reason the comment did not give, which
+// is how a per-case argument here rots while the code stays right. (A narrow SIGNED float slot needs a tag
+// in `[-2³¹, -1]`, i.e. a NEGATIVE NaN or a large-magnitude negative double's pattern; `-1.0` is
+// `0xBFF0000000000000`, far outside it, so it is reachable in principle and by nothing anyone writes.)
+//
+// A declaration with NO cases has an empty value set, so every width holds it; the machine word is the
+// answer because there is nothing to gain from narrowing a type no value inhabits, and it is what the
+// walk below would otherwise have to invent a first bound out of.
+function payloadFreeEnumTagSlot(layout EnumLayout) returns StorageSlot
+	if layout.caseCount() == 0 'noValuesToHold'
+		return StorageSlot.machineWord()
+	end 'noValuesToHold'
 
-	return primitiveTypeByteSize(ValueTypeTag.named)
-end 'undeclaredNamedElementStorageBytes'
+	// ONE walk for both bounds: they are the two ends of a single value set, and `valueRangeStorageSlot`'s
+	// precondition (`low <= high`) is structural only because they are derived together.
+	var low = layout.tagOfIndex(0)
+	var high = low
+	for i in 1 upto layout.caseCount() 'eachCase'
+		let tag = layout.tagOfIndex(i)
+		low = tag if tag < low else low
+		high = tag if tag > high else high
+	end 'eachCase'
+
+	return valueRangeStorageSlot(low, high: high)
+end 'payloadFreeEnumTagSlot'
 
 // ⭐⭐ **THE TWO NAMES shv2 GIVES A BYTE — the ROSTER, in one place (R4.7 review).** `Byte` is the
 // user-visible element a `b"…"` literal, a `ByteArray` and `__ManagedMemory` all share; `__ManagedByte` is
@@ -3399,7 +3423,7 @@ end 'rangeHoldsEverySlotValue'
 // `Parser.requireBytePackedRecordStridesLikeThisFilesByte`, so the split above is what the code does rather
 // than what it intended.
 //
-// It is `__`-RESERVED, so no program can declare it and `undeclaredNamedElementStorageBytes` is the only
+// It is `__`-RESERVED, so no program can declare it and `undeclaredNamedElementSlot` is the only
 // answer for its width — the same reason `StringIndexTypeName` wears one. The rule is that a
 // compiler-synthesized buffer's stride is the COMPILER's to state, never a function of which aliases the
 // program happens to declare.
@@ -13022,7 +13046,7 @@ export type ProgramSignatures
 	// struct / union / instance / nested Array) is a heap box stored as an 8-byte POINTER
 	// (`ManagedArrayElementBytes`), so its slot is the pointer, NOT the element's full logical size — the
 	// drop walk destroys the pointer, the accessors load/store it. A TRIVIAL element is stored inline, at
-	// the width `trivialElementStorageBytes` gives it.
+	// the width `trivialElementSlot` gives it.
 	//
 	// ⚠ **IT IS NOT THE SOURCE `sizeof`, AND NO LONGER ROUTES THROUGH THE LOGICAL-SIZE DOOR.** Both of the
 	// storage rules above diverge from `sizeof`: a `String` element's slot is 8 where its `sizeof` is the
@@ -13043,8 +13067,60 @@ export type ProgramSignatures
 		end 'managed'
 
 		let element = self.containerElementType(id)
-		return elementStrideOf(self.arrayElementPackedBits(id), storageBytes: self.trivialElementStorageBytes(element))
+		return elementStrideOf(self.arrayElementPackedBits(id), storageBytes: self.trivialElementSlot(element).bytes)
 	end 'arrayElementSize'
+
+	// ⭐⭐ **IS THIS TYPE STORED IN A NARROW SIGNED SLOT, AND HOW WIDE? (`enum-narrow-storage`.)** The shared
+	// element load is ONE compiled byte loop shared by every array in the program, strided by the record's
+	// runtime `element_size@24`, and it ZERO-EXTENDS (`ArrayRuntime.emitLoadElemAt` ends in a shift and a
+	// width mask). There is no signedness in the record for it to consult and there could not be — the stamp
+	// is one signed field already carrying two ladders — so a narrow SIGNED value's sign has to reach the read
+	// from the COMPILER. This is that fact, asked where the width was decided.
+	//
+	// ⭐⭐ **IT IS A QUESTION ABOUT THE TYPE AND NOT ABOUT THE CONTAINER, WHICH IS WHAT LETS TWO DOORS SHARE
+	// IT — AND THE REASON IS THAT THE EXTENSION IS THE IDENTITY ON A CORRECT VALUE.** The slot was chosen to
+	// hold every value the type admits, so every legitimate value already sits inside the signed range the
+	// extension maps onto itself; applying it to a value that was never truncated cannot change it. So a
+	// reader does not have to establish that its value CAME from a narrow slot — only that it COULD have —
+	// and `Parser.emitContainerElementAccessor` (the direct element read) and
+	// `Parser.retypeOpaqueReturnValue` (a value handed back through the opaque word by a shared corpus body,
+	// which is how `pop`/`last`/`remove` and a cursor's `current()` read one) ask the identical question.
+	//
+	// ⛔⛔ **IT TAKES A NAME AND NOT A `MaxonType`, AND THAT IS THE WHOLE POINT: IDS DO NOT TRAVEL BETWEEN
+	// INTERNERS, NAMES DO.** There are two interners — this index's, and the per-FILE table each parser holds
+	// — and they assign ids in their own insertion orders. Every caller of this query holds a type the PARSER
+	// re-interned (`containerSlotValueType`, `slotTypeThroughReceiver`), so handing its id to an index-space
+	// lookup is right exactly while the two orderings coincide and silently wrong the moment they drift. That
+	// is OPEN #56, `slotTypeThroughReceiver` documents three measured faces of it, and this is the third
+	// consecutive rung it has appeared in — so the signature is what refuses it here, not a comment.
+	//
+	// ⚠ **MEASURED IN THIS RUNG'S OWN NEW CODE, before the signature changed:** `[Offset.behind, …].first()`
+	// over a three-case enum at `-200 … 200` answered `-200` in a program that also declared
+	// `typealias Offsets = Array with Offset` and **65336** in one that did not. Same source, same slot, same
+	// ladder — the extra declaration only changed which order the two interners assigned ids in.
+	//
+	// ⚠ **ONLY A `named` LEAF CAN ANSWER YES, which is why the callers guard on the tag before spelling a
+	// name.** Every other trivial tag is unsigned or a full word (`trivialElementSlot`'s own arm says so), and a
+	// managed value's slot is a pointer, which is never read as a small negative number. A sub-byte PACKED
+	// element answers no through the same route: packing exists only for a ZERO-BASED range
+	// (`rangedAliasPackedBits` refuses any other), so its masked read IS its value.
+	export function narrowSignedSlotOf(name ByteArray) returns SignExtendSlot
+		let slot = self.namedTypeStorageSlot(name)
+		return SignExtendSlot.fromBytes(slot.bytes) if slot.signExtends else SignExtendSlot.notASignExtension
+	end 'narrowSignedSlotOf'
+
+	// ⭐ **DOES THIS INSTANCE'S ELEMENT OCCUPY LESS THAN A MACHINE WORD?** — the question the constant array
+	// literal's `.rdata` blob path turns on (`Parser.parseArrayLiteral`). ONE comparison covers both ladders,
+	// because the stamp's own encoding puts every narrow answer below the word: a sub-byte element is
+	// NEGATIVE, a narrow byte-strided one is 1/2/4, and a machine-word or MANAGED element is exactly 8.
+	//
+	// ⚠ It compares against `MachineWordBytes` and NOT against `ManagedArrayElementBytes`, which is the same
+	// 8 for a different reason: the question here is "is this narrower than a REGISTER", and a managed
+	// element answers no by being a pointer that happens to be one. Two constants agreeing with nothing
+	// making them agree is how a width stops meaning what a door assumed.
+	export function arrayElementIsNarrow(id GenericInstanceId) returns bool
+		return self.arrayElementSize(id) < MachineWordBytes
+	end 'arrayElementIsNarrow'
 
 	// ⭐⭐ **IS THIS INSTANCE'S ELEMENT SUB-BYTE PACKED, AND HOW WIDE — THE ONE HOME OF THE PACKING RULE.**
 	// `NotSubBytePacked` for every element a byte or wider. The stamp above is derived from it, and so is
@@ -13346,7 +13422,7 @@ export type ProgramSignatures
 	end 'columnsDenoteOneSlot'
 
 	// The BOUNDS half of the declared side, over a name the roster has already accepted. The registry MISS
-	// arm is the same split `undeclaredNamedElementStorageBytes` makes and for the same reason: the two
+	// arm is the same split `undeclaredNamedElementSlot` makes and for the same reason: the two
 	// roster names are exactly the ones NO file declares in the general case — `__ManagedByte` is
 	// compiler-owned and unspellable, and `Byte` is undeclared in a program whose only `Array with Byte` is
 	// the one a `b"…"` literal minted for itself — so what they hold is the COMPILER's to state, and a
@@ -13530,7 +13606,7 @@ export type ProgramSignatures
 	end 'elementAdmitsEverySlotValue'
 
 	// The ONE element with no value set that still admits every pattern of its slot: the `Byte` a `b"…"`
-	// literal MINTS FOR ITSELF in a program that declares no such alias. `undeclaredNamedElementStorageBytes`
+	// literal MINTS FOR ITSELF in a program that declares no such alias. `undeclaredNamedElementSlot`
 	// gives it a one-byte slot by construction and there is no declared range for a raw byte to fall outside
 	// of — exactly the case `Parser.requireRawByteFillFitsItsElement` returns on, asked here of the slot
 	// instead of the byte.
@@ -13544,7 +13620,7 @@ export type ProgramSignatures
 	// own `Byte` alone.
 	//
 	// ⚠ The declaration is asked WHOLE-PROGRAM rather than of a reading file, and that is the quantifier the
-	// SLOT has: `undeclaredNamedElementStorageBytes` is reached exactly when `storageBytesInEveryFile` misses,
+	// SLOT has: `undeclaredNamedElementSlot` is reached exactly when `storageBytesInEveryFile` misses,
 	// and it is the only thing that makes this element's slot one byte. Asking a file instead would accept a
 	// name some OTHER file declares wide, whose slot is then that file's width and not a byte.
 	function elementIsAByteNoFileDeclares(giid GenericInstanceId) returns bool
@@ -13562,18 +13638,90 @@ export type ProgramSignatures
 	// by the `containerElementIsManaged` arm above — so this has no aggregate arms to carry and needs no
 	// interner walk past the element's own name.
 	//
-	// ⚠ A `named` element that the registry MISSES is not one case but two, and they do not share an answer
-	// — `undeclaredNamedElementStorageBytes` is where that split is written down. An enum keeps the machine
-	// word; the byte-string literal's own `Array with Byte` is one byte.
-	function trivialElementStorageBytes(t MaxonType) returns ByteOffset
+	// ⚠ A `named` element that the registry MISSES is not one case but three, and they do not share an answer
+	// — `undeclaredNamedElementSlot` is where that split is written down. A payload-free enum takes the slot
+	// its tags need; a boxed union keeps the machine word its pointer needs; the byte-string literal's own
+	// `Array with Byte` is one byte.
+	//
+	// ⭐⭐ **IT ANSWERS A SLOT AND NOT A WIDTH, BECAUSE A NARROW SLOT IS TWO FACTS.** `enum-narrow-storage`
+	// puts SIGNED values in narrow slots (`i8[] -1, 0, 1` is three bytes), and a reader of such a slot has to
+	// sign-extend or it reads `255` for `-1`. Deriving the width here and the signedness somewhere else would
+	// be one decision made twice over the same bounds, free to disagree precisely where it matters — so both
+	// readers (`arrayElementSize` for the stamp, `narrowSignedSlotOf` for the read) come through this.
+	function trivialElementSlot(t MaxonType) returns StorageSlot
 		let tag = maxonTypeTag(t)
 		if tag != ValueTypeTag.named 'notAName'
-			return primitiveTypeByteSize(tag)
+			// Every non-`named` trivial tag is an UNSIGNED-or-full-word slot: `bool` (1), `ExitCode` (4, whose
+			// domain is `0 to u32.max` at widest), and `integer`/`float`/function at the machine word. None can
+			// be negative in a narrow slot, so none extends.
+			//
+			// ⚠ **AN `ExitCode` ARRAY ELEMENT REACHES THIS ARM ONLY WHEN NOTHING DECLARES THE NAME — and when
+			// something does, it is a `named` LEAF and goes below.** E3118's registry doc records the measured
+			// consequence of the two answers being read as one: a raw byte at offset 3 of an element compared
+			// against an EIGHT-byte slot it does not occupy read back **3741319169**, and `stdlib/Process.maxon`
+			// being a listed module is what made the alias registry the single answer. This arm is the tag-only
+			// fallback, not the door that sizes a declared `ExitCode`.
+			return StorageSlot.create(primitiveTypeByteSize(tag), signExtends: false)
 		end 'notAName'
 
-		let name = self.nameOfId(typeNameIdOf(t))
-		return try self.typeAliases.storageBytesInEveryFile(name) otherwise undeclaredNamedElementStorageBytes(name)
-	end 'trivialElementStorageBytes'
+		return self.namedTypeStorageSlot(self.nameOfId(typeNameIdOf(t)))
+	end 'trivialElementSlot'
+
+	// ⭐⭐ **THE SLOT A `named` LEAF'S VALUES OCCUPY, KEYED BY NAME — and the NAME is the currency on purpose.**
+	// A `MaxonType` carries an interned id, and there are TWO interners: this index's, and the per-FILE table a
+	// parser holds. They assign ids in their own insertion orders, so an id crossed between them is right
+	// exactly while the two coincide and silently wrong when they drift (OPEN #56, and `slotTypeThroughReceiver`
+	// carries the three measured faces of it). A NAME cannot drift, which is what lets a caller holding a
+	// FILE-space type ask this the same way `trivialElementSlot` asks it of an INDEX-space one.
+	//
+	// ⚠ **MEASURED, and it is exactly the hazard that header describes.** `narrowSignedSlotOf` first took a
+	// `MaxonType` and was handed the parser's re-interned element type: `[Offset.behind, …].first()` over a
+	// three-case enum at `-200 … 200` answered **65336** in a program with no `typealias Offsets` and `-200`
+	// in one with it — the same source, the same slot, two interner orderings.
+	export function namedTypeStorageSlot(name ByteArray) returns StorageSlot
+		let declaredBytes = try self.typeAliases.storageBytesInEveryFile(name) otherwise 'noSuchAlias'
+			return self.undeclaredNamedElementSlot(name)
+		end 'noSuchAlias'
+
+		// A ranged alias takes the UNSIGNED half of the ladder only — `rangedAliasStorageBytes` carries the two
+		// reasons, and both are about that door rather than about the load.
+		return StorageSlot.create(declaredBytes, signExtends: false)
+	end 'namedTypeStorageSlot'
+
+	// ⭐ **THE STORAGE SLOT OF A `named` ARRAY ELEMENT NO FILE DECLARES AS A RANGED ALIAS** — the MISS arm of
+	// `trivialElementSlot`'s registry probe. It is a function and not a bare fallback because a miss means
+	// THREE different things, and only one of them is the machine word:
+	//
+	//   • **`Byte`** — the `Array with Byte` instance a `b"…"` literal MINTS FOR ITSELF
+	//     (`internArrayByteInstance`) in a program that declares no such alias. No user type can name that
+	//     instance (`Array with Byte` over an undeclared `Byte` does not resolve), so the literal's own record
+	//     is the only one there is — and it is stamped byte-PACKED by construction (`ByteStringElementSize`).
+	//     Answering the machine word here would leave this door and that record disagreeing about ONE
+	//     instance's stride, which is the two-producer shape `arrayElementSize` exists to end.
+	//   • **a PAYLOAD-FREE enum or union** — its value is a bare tag, and `enum-narrow-storage` narrows it to
+	//     the slot that tag set needs.
+	//   • **anything else** — a BOXED union, whose value is a heap POINTER and not a tag at all
+	//     (`specs-shv2/array-enum-element-size.md` pins that stride at 8 for exactly such a union), or a name
+	//     no declaration binds. `isBoxed` is asked and not assumed: it is the classifier that decides whether
+	//     the slot holds a tag or an address, and reading a pointer out of a one-byte slot is not a narrower
+	//     answer, it is a wrong one.
+	function undeclaredNamedElementSlot(name ByteArray) returns StorageSlot
+		if isByteElementName(name) 'bytePacked'
+			return StorageSlot.create(ByteStringElementSize as ByteOffset, signExtends: false)
+		end 'bytePacked'
+
+		// ⚠ Gated on the NON-ALLOCATING `contains` twin, for `typeNameVisibleHere`'s measured reason: `enumOf`
+		// boxes a `DeclaredEnum` even to say `undeclared`, and this door is on `arrayElementSize`'s path —
+		// asked for every `named` element in the program, nearly none of which is an enum.
+		if not self.containsEnum(name) 'notANominalDeclaration'
+			return StorageSlot.machineWord()
+		end 'notANominalDeclaration'
+
+		match self.enumOf(name) 'declaration'
+			declared(layout) then return StorageSlot.machineWord() if layout.isBoxed() else payloadFreeEnumTagSlot(layout)
+			undeclared then panic("undeclaredNamedElementSlot: containsEnum answered yes for '{String.from(name)}' but enumOf answered undeclared — the two read one registry under one key")
+		end 'declaration'
+	end 'undeclaredNamedElementSlot'
 
 	// The element DESTRUCTOR callee for a managed-element `Array with T` (P1.7 slice 3) — the runtime entry the
 	// drop walk calls on each live slot: a String → `__str_decref`, a struct/union that owns managed heap → its
@@ -14634,9 +14782,9 @@ export type ProgramSignatures
 	//
 	// ⚠ **THE SPLIT IS `1 ⇒ Byte, ANYTHING ELSE ⇒ WORD`, WHICH IS v1's RULE VERBATIM** — its own layout comment
 	// says so of the field this size lands in: *"element_size i64 (sizeof(Element); 1 for Byte, 8 otherwise)"*
-	// (`Compiler/Runtime/runtime.std:4262`). It is the same two-way answer `trivialElementStorageBytes` already
-	// gives for every element type shv2 has: byte-PACKED, or a machine WORD (which is also every managed
-	// element's pointer, `ManagedArrayElementBytes`).
+	// (`Compiler/Runtime/runtime.std:4262`). ⚠ It is NOT the whole of what `trivialElementSlot` can answer —
+	// since `enum-narrow-storage` that ladder also hands out 2 and 4 for a narrow enum element — it is the
+	// whole of what a source `elementSize` may NAME here, and the paragraph below is why.
 	//
 	// ⚠ **IT DELIBERATELY REFUSES NOTHING, INCLUDING A NON-POSITIVE SIZE.** `managed-memory-methods`'s
 	// `managed-memory-error-variants` requires `__ManagedMemory.create(4, 0)` to COMPILE and report
@@ -14679,10 +14827,13 @@ export type ProgramSignatures
 	// `mm.get(0)` read back **705032704**. The two facts about one buffer disagreed, quietly, at run time.
 	// R4.2 had no such hole only because it typed every buffer as bytes, so that program was refused by the
 	// element's range.
-	// ⇒ shv2 has exactly TWO trivial element widths (`trivialElementStorageBytes`: byte-PACKED or a machine
-	// WORD), so those are the two a source `elementSize` may name. The reference can carry others because its
-	// `__ManagedMemory with Element` names a real 2- or 4-byte type shv2 does not have — the gap is an element
-	// TYPE, and a diagnostic saying so is the honest answer until one exists.
+	// ⇒ a source `elementSize` may name exactly the two widths this door can TYPE — a byte or a machine word —
+	// because the width it names has to become a `MaxonType` for `get`/`set` to be typed off, and those are the
+	// two shv2 has a binding for (`Byte`, `int`). ⚠ **THAT IS A BINDING GAP AND NOT A WIDTH GAP, AND SINCE
+	// `enum-narrow-storage` THE DIFFERENCE IS REAL**: the element ladder now produces 2 and 4 for a narrow enum
+	// element, so a 2- or 4-byte element TYPE exists — what does not exist is a way for `__ManagedMemory.create`
+	// to name one, since a bare `elementSize: 2` says a width and never which type wears it. A diagnostic saying
+	// so stays the honest answer until this door takes an element type rather than a number.
 	//
 	// ⚠ A NON-POSITIVE size is admitted, for the reason above: `create(4, 0)` must compile and throw
 	// `invalidAllocation` at run time, and which instance a doomed `create` wore is unobservable.

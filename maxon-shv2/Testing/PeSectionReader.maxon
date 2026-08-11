@@ -88,7 +88,12 @@ export union TypedValueError implements Error
 	export function displayReason() returns String
 		return match self 'k'
 			missingValue(line) gives "line '{line}' is not `<type> <value>`"
-			unknownType(typeName) gives "unknown type '{typeName}' (expected i8/i16/i32/i64/f64)"
+			// ⚠ **THE ROSTER IS BUILT FROM THE TABLE, NOT TRANSCRIBED BESIDE IT.** A spec author reading this
+			// message needs to know which names exist, and it said `i8/i16/i32/i64/f64` for as long as `u8`
+			// had been accepted — a stale list is worse than none, because it reads as an authority. So the
+			// sentence is joined from `TypedValueTypes`, the same rows `typedValueByteCount` walks: add a
+			// width there and this message says so, which a second hand-kept list could not promise.
+			unknownType(typeName) gives "unknown type '{typeName}' (expected {typedValueTypeRoster()}, each also as an array: `u8[] 1, 2, 3`)"
 			badNumber(typeName, text) gives "'{text}' is not a valid {typeName}"
 		end 'k'
 	end 'displayReason'
@@ -144,11 +149,15 @@ end 'readPeSectionData'
 //
 // Blank lines are skipped, exactly as the reference's `StringSplitOptions.RemoveEmptyEntries` does.
 //
-// It covers `i8`/`i16`/`i32`/`i64` and `f64` — the reference additionally parses `f32`, `u16` and
-// `i64[]`, and those are DELIBERATELY absent rather than stubbed: an array global needs P1.7 and
-// Maxon's `float` is f64 so nothing produces an f32, which makes a spec using either a spec shv2
-// cannot compile anyway. An unknown type THROWS (naming it), which is what keeps this honest — the
-// failure of the block this gate replaces was precisely that an unhandled thing passed silently.
+// It covers both signs at every integer width and `f64` (see `typedValueByteCount` for the roster).
+// `f32` is the one type the reference parses and this does not, DELIBERATELY rather than stubbed: Maxon's
+// `float` IS f64, so nothing this compiler emits produces an f32 and a spec pinning one could not be
+// compiled anyway. An unknown type THROWS (naming it), which is what keeps this honest — the failure of the
+// block this gate replaces was precisely that an unhandled thing passed silently.
+//
+// ⚠ **`u16`/`u32` ARRIVED WITH `enum-narrow-storage`, whose ladder writes them** (`u16[] 100, 1000, 10000`).
+// Before it, an unpinnable width was reported as a MALFORMED PIN rather than as a byte mismatch — which is
+// the right failure, and is why the two cases needing them failed differently from the four that did not.
 //
 // ⭐ `f64` ARRIVED WITH P1.0d.4, WHICH IS WHAT THIS COMMENT SAID IT WAS WAITING FOR. It was shelved
 // because a float global could not be compiled at all; it can now, and the two `data-section-f64-*`
@@ -237,30 +246,67 @@ function parseTypedValueBits(typeName String, text String) returns ParsedInt thr
 	return try int.fromString(text) otherwise throw TypedValueError.badNumber(typeName, text: text)
 end 'parseTypedValueBits'
 
-// The byte width of a `RequiredData` type name.
+// ⭐⭐ **THE TYPE ROSTER — ONE ROW PER SPELLING A `RequiredData`/`RequiredRdata` LINE MAY USE, AND THE ONLY
+// PLACE EITHER THE NAMES OR THE WIDTHS ARE WRITTEN DOWN.** Two readers walk it: `typedValueByteCount`, which
+// answers the width, and `typedValueTypeRoster`, which joins the names into the `unknownType` message. It
+// existed as two hand-kept lists for one tick and the message was already stale when it was written — it
+// promised `i8/i16/i32/i64/f64` while `u8` had been accepted for a rung — which is the shape a table removes.
+//
+// ⭐ **THE SIGNED AND UNSIGNED SPELLINGS OF ONE WIDTH ARE TWO ROWS, because the width is all this answers.**
+// `appendLittleEndian` masks to `byteCount` either way, so `i8 -1` and `u8 255` lay down the same byte —
+// what the two names buy is a spelling a spec author can write without lying about the sign of the value
+// being pinned. `specs/enum-narrow-storage.md` writes both halves of the ladder (`u8[] 0, 1, 2` beside
+// `i8[] -1, 0, 1`), which is what makes the pair a notation rather than a preference.
+//
+// ⚠ `f64` is a row like any other here — its width is 8 — and only its VALUE parse differs, which
+// `parseTypedValueBits` decides by name against `F64TypeName`. `f32` is absent DELIBERATELY: Maxon's `float`
+// IS f64, so nothing this compiler emits produces one.
+type TypedValueType
+	export let name as String
+	export let byteCount as ByteCount
+
+	export static function create(name String, byteCount ByteCount) returns TypedValueType
+		return Self{name: name, byteCount: byteCount}
+	end 'create'
+end 'TypedValueType'
+
+export typealias TypedValueTypeArray = Array with TypedValueType
+
+// The roster itself, in the order the message lists it: narrowest first, signed before unsigned.
+function typedValueTypes() returns TypedValueTypeArray
+	var rows = TypedValueTypeArray.create()
+	rows.push(TypedValueType.create("i8", byteCount: 1))
+	rows.push(TypedValueType.create("u8", byteCount: 1))
+	rows.push(TypedValueType.create("i16", byteCount: 2))
+	rows.push(TypedValueType.create("u16", byteCount: 2))
+	rows.push(TypedValueType.create("i32", byteCount: 4))
+	rows.push(TypedValueType.create("u32", byteCount: 4))
+	rows.push(TypedValueType.create("i64", byteCount: 8))
+	rows.push(TypedValueType.create("u64", byteCount: 8))
+	rows.push(TypedValueType.create(F64TypeName, byteCount: 8))
+	return rows
+end 'typedValueTypes'
+
+// The roster's names as the `unknownType` message lists them — the SECOND reader of the table, and the
+// reason the table exists at all.
+function typedValueTypeRoster() returns String
+	var out = StringBuilder.create()
+	for (iter, row) in typedValueTypes().withIterator() 'eachRow'
+		if iter.index() > 0 'separator'
+			out.append("/")
+		end 'separator'
+		out.append(row.name)
+	end 'eachRow'
+	return out.build()
+end 'typedValueTypeRoster'
+
+// The byte width of a `RequiredData` type name — the FIRST reader of the table.
 function typedValueByteCount(typeName String) returns ByteCount throws TypedValueError
-	if typeName == "i8" 'i8'
-		return 1
-	end 'i8'
-	// `u8` exists for the ARRAY form alone (`u8[]`): a packed `.rdata` blob is a run of unsigned bytes, and
-	// a spec writing `243` means the byte 243 rather than the `i8` that value overflows. The width is the
-	// same 1 either way — `appendLittleEndian` masks to the byte — so what the name buys is a spelling a
-	// spec author can write without lying about the sign.
-	if typeName == "u8" 'u8'
-		return 1
-	end 'u8'
-	if typeName == "i16" 'i16'
-		return 2
-	end 'i16'
-	if typeName == "i32" 'i32'
-		return 4
-	end 'i32'
-	if typeName == "i64" 'i64'
-		return 8
-	end 'i64'
-	if typeName == F64TypeName 'f64'
-		return 8
-	end 'f64'
+	for row in typedValueTypes() 'eachRow'
+		if row.name == typeName 'thisOne'
+			return row.byteCount
+		end 'thisOne'
+	end 'eachRow'
 
 	throw TypedValueError.unknownType(typeName)
 end 'typedValueByteCount'

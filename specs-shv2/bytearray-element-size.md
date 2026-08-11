@@ -1946,9 +1946,16 @@ error E3118: <fragment>:7:16: 'setByte' writes a RAW BYTE at a byte OFFSET, and 
 
 <!-- test: error.a-raw-byte-write-is-refused-on-an-enum-element -->
 ### An ENUM element stores an ORDINAL, and a raw byte is not one
-`array-enum-element-size.md` pins an enum element at the machine word, and its value set is the ordinals the
-declaration lists. Measured before the rule: the program compiled and then **hung**, matching an ordinal no
-arm names.
+An enum's value set is the ordinals its declaration lists, which is never every pattern of the slot holding
+them. Measured before the rule: the program compiled and then **hung**, matching an ordinal no arm names.
+
+⚠ **THE SLOT IN THE MESSAGE IS DERIVED, AND IT MOVED WITH `enum-narrow-storage`.** This case pinned an
+`8-byte slot` until a payload-free enum's array element was narrowed to the width its raw values need
+(`u8` for `red`/`green`), so the sentence now says `1-byte slot` — the SAME verdict, code, line and column,
+over two numbers the diagnostic reads off the element's storage. ⚠ Its own prose used to cite
+`array-enum-element-size.md` as pinning "an enum element at the machine word", and that was a misreading
+worth removing: that spec's `element_size = 8` is for a union WITH ASSOCIATED VALUES, whose element is a
+heap POINTER — a different door, and one this narrowing deliberately leaves alone.
 ```maxon
 enum Color
 	red
@@ -1968,7 +1975,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 8-byte slot — every value of int(0 to 18446744073709551615). The element 'Color' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
+error E3118: <fragment>:12:16: 'setByte' writes a RAW BYTE at a byte OFFSET, so what the element's own accessors read back is any bit pattern of its 1-byte slot — every value of int(0 to 255). The element 'Color' does not admit all of them. Widen the element's declared range to cover its whole slot, or store through the `Array` surface's `set`, which range-checks each value against the element
 ```
 
 <!-- test: an-exit-code-element-fills-its-own-slot-and-takes-a-raw-byte-write -->

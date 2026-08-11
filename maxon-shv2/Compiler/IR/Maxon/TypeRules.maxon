@@ -1993,6 +1993,12 @@ export function foldIntUnaryOp(op MaxonUnaryOp, operand ParsedInt) returns Folde
 		// other side of the same ambiguity: the answer it would hand back is a bit pattern this column
 		// would go on carrying as a number.
 		trunc to bitsToFloat gives FoldedInt.notFoldable
+		// The SIGN-EXTENSION family is unreachable here for a STRUCTURAL reason, and its fold would be a real
+		// answer rather than an ambiguous one: `Parser.emitSignExtendFromSlot` is the only emit site, its
+		// operand is the result of a runtime element-load CALL, and a call result is never a value this
+		// compiler holds a constant for. It is `notFoldable` because there is nothing to fold, not because
+		// folding it would be wrong — which is why it does not join the range above.
+		signExtendI8 to signExtendI32 gives FoldedInt.notFoldable
 	end 'o'
 end 'foldIntUnaryOp'
 

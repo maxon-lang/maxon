@@ -156,32 +156,77 @@ export let LAYOUT_NO_SOLE_ELEMENT = 0 as MachineWord
 // than as the size of any particular thing, and a bare `8` there would read as one of the ladder's rungs.
 export let MachineWordBytes = 8 as ByteOffset
 
-// ⭐ **THE STORAGE WIDTH OF A RANGED-INT ALIAS — the smallest slot that holds every value its declared
-// range admits**, and the SINGLE producer of a narrow element stride. `Byte = int(0 to u8.max)` ⇒ 1;
-// `HashValue = int(0 to u32.max)` ⇒ 4; `int(i64.min to i64.max)` ⇒ 8. Both reference compilers draw the
-// same ladder — `MlirType.cs:472 ComputeOptimalIntType`, `maxon-selfhosted/Compiler/Parser.maxon:21227
-// computeOptimalIntType` — and this is where shv2 draws it.
+// ⭐⭐ **A STORAGE SLOT: HOW WIDE IT IS, AND WHETHER A READ OF IT HAS TO SIGN-EXTEND.** The two facts
+// travel together because they are decided together — the width is chosen BY the value set, and the same
+// choice settles whether the top of that set is a sign bit — and because a reader that has one without the
+// other cannot use it: a 1-byte slot is read correctly only if the reader knows whether the byte `0xFF`
+// means 255 or -1. Splitting them into two functions over the same bounds would be one decision written
+// twice, free to disagree exactly on the values where it matters.
 //
-// `high` rides as the raw 64-bit pattern `ParsedInt` holds (`RangedTypeAlias`'s header), so a `u64.max`
-// upper bound arrives NEGATIVE. That is tested first, ahead of the ladder, exactly as v1's `wrappedU64`
-// arm is: read as a signed number it would look like the narrowest rung and truncate the widest range
-// there is.
+// `signExtends` is false whenever `bytes` is the machine word: nothing is extended into a slot that is
+// already the register, so every reader can guard on this one flag rather than on a width AND a sign.
+export type StorageSlot
+	export let bytes as ByteOffset
+	export let signExtends as bool
+
+	export static function create(bytes ByteOffset, signExtends bool) returns StorageSlot
+		return Self{bytes: bytes, signExtends: signExtends}
+	end 'create'
+
+	// The slot every value with no narrower home occupies. Named rather than spelled `create(MachineWordBytes,
+	// signExtends: false)` at each of its several answer sites, where the `false` would read as a claim about
+	// signedness instead of as "there is nothing to extend".
+	export static function machineWord() returns StorageSlot
+		return Self{bytes: MachineWordBytes, signExtends: false}
+	end 'machineWord'
+end 'StorageSlot'
+
+// ⭐⭐ **THE SMALLEST SLOT HOLDING EVERY VALUE IN `[low, high]` — the whole ladder, both halves.** A
+// non-negative `low` takes the UNSIGNED rungs (u8/u16/u32); a negative one takes the SIGNED rungs
+// (i8/i16/i32) and the slot's reads sign-extend. `specs/enum-narrow-storage.md` states exactly this ladder,
+// and `specs-shv2/enum-narrow-storage.md`'s six `RequiredRdata` cases pin its bytes.
 //
-// ⚠⚠ **IT IS THE UNSIGNED LADDER ONLY. A NEGATIVE LOWER BOUND KEEPS THE MACHINE WORD — a DELIBERATE
-// divergence from both references, forced by shv2's own storage and not by taste.** The references
-// narrow `int(-5 to 5)` to a SIGNED byte (i8) because they carry a static, signed element type into the
-// load: the bootstrap monomorphizes the accessor, and v1 stamps a `StoreWidth` + signedness. shv2 does
-// neither — `ArrayRuntime.emitLoadElem` is ONE compiled byte loop shared by every array instance, strided
-// by the record's runtime `element_size@24` and **zero-extending** (`loadIndirect … StdType.u8`,
-// shift-and-OR), with no signedness anywhere in the record to consult. Narrow a signed element under it
-// and the value does not survive the round trip: measured, `int(-5 to 5)` storing `-5` reads back `251`.
-// So the honest question here is *"what is the smallest slot whose UNSIGNED value set contains this
-// range?"*, and for a negative lower bound the answer is the full word. Narrow signed storage needs the
-// element's signedness to reach the load — a runtime/ABI slice, not a stamp — and is its own rung.
-export function rangedAliasStorageBytes(low ParsedInt, high ParsedInt) returns ByteOffset
-	if low < 0 or high < 0 'noNarrowUnsignedSlotHoldsIt'
+// ⚠ **PRECONDITION `low <= high`, AND IT IS NOT A CONVENIENCE**: the two bounds are compared against
+// different rungs (a signed slot's floor and its ceiling are not the same magnitude), so a swapped pair
+// would pick a slot that holds neither. Its one caller derives the pair as the min and max of a value set
+// in one walk, which is what makes the precondition structural.
+export function valueRangeStorageSlot(low ParsedInt, high ParsedInt) returns StorageSlot
+	if low < 0 'signed'
+		let bytes = signedSlotBytes(low, high: high)
+		return StorageSlot.create(bytes, signExtends: bytes != MachineWordBytes)
+	end 'signed'
+
+	return StorageSlot.create(unsignedSlotBytes(high), signExtends: false)
+end 'valueRangeStorageSlot'
+
+// The smallest slot whose SIGNED value set contains `[low, high]`. Both ends are asked, because a signed
+// slot is not symmetric: `-128` fits an i8 and `128` does not.
+function signedSlotBytes(low ParsedInt, high ParsedInt) returns ByteOffset
+	if low >= i8.min and high <= i8.max 'oneByte'
+		return 1
+	end 'oneByte'
+
+	if low >= i16.min and high <= i16.max 'twoBytes'
+		return 2
+	end 'twoBytes'
+
+	if low >= i32.min and high <= i32.max 'fourBytes'
+		return 4
+	end 'fourBytes'
+
+	return MachineWordBytes
+end 'signedSlotBytes'
+
+// The smallest slot whose UNSIGNED value set contains `[0, high]`.
+//
+// `high` may arrive as the raw 64-bit pattern `ParsedInt` holds (`RangedTypeAlias`'s header), so a
+// `u64.max` upper bound is NEGATIVE. That is tested first, ahead of the ladder, exactly as v1's
+// `wrappedU64` arm is: read as a signed number it would look like the narrowest rung and truncate the
+// widest range there is.
+function unsignedSlotBytes(high ParsedInt) returns ByteOffset
+	if high < 0 'aWrappedU64BoundIsTheWidestThereIs'
 		return MachineWordBytes
-	end 'noNarrowUnsignedSlotHoldsIt'
+	end 'aWrappedU64BoundIsTheWidestThereIs'
 
 	if high <= u8.max 'oneByte'
 		return 1
@@ -196,6 +241,37 @@ export function rangedAliasStorageBytes(low ParsedInt, high ParsedInt) returns B
 	end 'fourBytes'
 
 	return MachineWordBytes
+end 'unsignedSlotBytes'
+
+// ⭐ **THE STORAGE WIDTH OF A RANGED-INT ALIAS — the smallest slot that holds every value its declared
+// range admits**, and the SINGLE producer of a narrow element stride for an alias. `Byte = int(0 to u8.max)`
+// ⇒ 1; `HashValue = int(0 to u32.max)` ⇒ 4; `int(i64.min to i64.max)` ⇒ 8. Both reference compilers draw
+// the same ladder — `MlirType.cs:472 ComputeOptimalIntType`, `maxon-selfhosted/Compiler/Parser.maxon:21227
+// computeOptimalIntType` — and this is where shv2 draws it.
+//
+// ⚠⚠ **AN ALIAS TAKES THE UNSIGNED HALF OF THE LADDER ONLY, AND SINCE `enum-narrow-storage` THAT IS A
+// SCOPE FACT AND NO LONGER A CAPABILITY ONE.** This function used to carry the whole argument for why a
+// negative lower bound cannot narrow — the shared element load ZERO-EXTENDS, so `int(-5 to 5)` storing
+// `-5` read back `251` (measured) — and that argument is now answered: a signed narrow slot's reads are
+// sign-extended at the ONE element-read door (`Parser.emitContainerElementAccessor`, off
+// `ProgramSignatures.narrowSignedSlotOf`), which is how a narrow signed ENUM survives its round
+// trip. Two things still hold an alias back, and neither is the load:
+//
+//   • **`ProgramSignatures.elementAdmitsEverySlotValue` (E3118) rests on the slot's value set being
+//     UNSIGNED** — it is what makes a raw-byte write into a declared element comparable at all. A signed
+//     alias slot would falsify that premise silently, in the accepting direction. An enum is REFUSED at
+//     that door whatever its slot (it has no integer value set to compare), which is why the enum ladder
+//     could land without touching it.
+//   • **`element_size@24` IS LANGUAGE-VISIBLE** (`arr.managed.elementSize()`), so moving every negative-
+//     ranged alias's array from 8 to 1 is a corpus-wide representation change, not an internal one.
+//
+// ⇒ narrowing an alias is a rung with those two as its work, and it is deliberately not this one's.
+export function rangedAliasStorageBytes(low ParsedInt, high ParsedInt) returns ByteOffset
+	if low < 0 'anAliasDoesNotTakeTheSignedHalf'
+		return MachineWordBytes
+	end 'anAliasDoesNotTakeTheSignedHalf'
+
+	return unsignedSlotBytes(high)
 end 'rangedAliasStorageBytes'
 
 // ⭐ **THE WIDTH OF A SUB-BYTE-PACKED ELEMENT, IN BITS** — 1, 2 or 4, the widths that DIVIDE a byte so a
@@ -288,6 +364,54 @@ end 'elementsByteLen'
 // here rather than in the runtime because the layout tier is the lower of the two.
 export let BitsPerByte = 8 as ParsedInt
 
+// ⭐⭐ **THE `.rdata` IMAGE OF A RUN OF CONSTANT ELEMENTS, AT EITHER LADDER — the one door
+// `Parser.emitNarrowArrayBlob` hands a constant array literal through.** It dispatches on the SIGN of the
+// stride for `elementsByteLen`'s reason, and the two must agree to the byte: that function sizes the buffer
+// this fills, and a byte-strided run sized as though its stride were a bit width (or the reverse) is a blob
+// whose length and whose contents disagree.
+//
+// A byte-strided element is little-endian, `stride` bytes each, exactly as `GlobalDataTable`'s `.data` image
+// writes a scalar global — one serializer for both, so a `u16` enum element in `.rdata` and a `u16` global in
+// `.data` cannot come to lay their two bytes down differently.
+export function constantElementsImage(values ParsedIntArray, stride ElementStride) returns ByteArray
+	if stride < 0 'subBytePacked'
+		return packConstantElements(values, packedBits: (0 - stride) as PackedBitWidth)
+	end 'subBytePacked'
+
+	var out = ByteArray.create()
+	for value in values 'eachElement'
+		appendLittleEndianScalar(out, value: value, byteCount: stride as ByteCount)
+	end 'eachElement'
+
+	return out
+end 'constantElementsImage'
+
+// ⭐ **APPEND `value` AS `byteCount` LITTLE-ENDIAN BYTES — the compiler's ONE integer serializer.** Every
+// image this compiler lays an integer into goes through it: a `.data` global's initializer and a float
+// island (`GlobalDataTable.dataSectionImage` / `scalarImage`), and a constant array literal's byte-strided
+// blob above.
+//
+// It lives at the LAYOUT tier rather than beside the `.data` image, for the reason `BitsPerByte` does: this
+// is the lower of the two tiers, and the alternative was the higher tier owning a fact the lower one needs —
+// which is how a second copy gets written. A second copy is not hypothetical here: `Testing/PeSectionReader`
+// carries one DELIBERATELY, as the independent oracle a `RequiredRdata` pin is checked by, and that is the
+// only other spelling this compiler may have.
+//
+// The value is SIGNED (a `ParsedInt`) and the shift-and-mask is defined on the unsigned word, so it crosses
+// once, explicitly, here. Truncation to `byteCount` is the CONTRACT and not a loss: a `-1` in a one-byte
+// slot is the byte `0xFF`, which is what the sign-extending read turns back into `-1`.
+export function appendLittleEndianScalar(image ByteArray, value ParsedInt, byteCount ByteCount)
+	let bits = value as MachineWord
+	for i in 0 upto byteCount 'eachByte'
+		image.push((bits shr (i * BitsPerByte)) and ByteMask)
+	end 'eachByte'
+end 'appendLittleEndianScalar'
+
+// Every bit of one byte set — the mask that keeps a shifted word to the byte being appended. Named beside
+// `BitsPerByte` because the two are one fact read two ways, and a bare `0xFF` a shift away from a bare `8`
+// is how a serializer comes to disagree with the width it is serializing at.
+let ByteMask = 0xFF as MachineWord
+
 // ⭐⭐ **THE BIT IMAGE OF A RUN OF CONSTANT ELEMENTS — LSB-FIRST WITHIN EACH BYTE.** Element `i` occupies
 // bits `[i·bits, i·bits + bits)` counted from bit 0 of byte 0, so the FIRST element sits in the LOW bits of
 // the first byte. `[0, 1, 2, 3]` at 2 bits is therefore `0b11_10_01_00` = **228** — the single byte
@@ -302,7 +426,10 @@ export let BitsPerByte = 8 as ParsedInt
 //
 // The buffer is exactly `elementsByteLen` long, so a trailing partial byte keeps its unused high bits zero —
 // which is what makes the pinned `u8[] 33, 243, 8` a complete description of the blob rather than a prefix.
-export function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) returns ByteArray
+//
+// It is PRIVATE: `constantElementsImage` above is the only caller, because the choice between this and the
+// byte-strided run is the stride's to make and not a caller's.
+function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) returns ByteArray
 	var out = ByteArray.create()
 	out.resize(elementsByteLen(values.count() as ParsedInt, stride: 0 - packedBits) as ElementCount)
 
@@ -371,11 +498,18 @@ end 'slotUnsignedMax'
 // (int/float/function) is 8; a `bool` is 1; an `ExitCode` (`u32`) is 4.
 //
 // ⚠ The `named` arm is the FALLBACK for a name this compiler cannot size from a range — an enum or a union.
-// A ranged ARRAY ELEMENT never reaches it: `ProgramSignatures.trivialElementStorageBytes` answers those from
+// A ranged ARRAY ELEMENT never reaches it: `ProgramSignatures.trivialElementSlot` answers those from
 // `rangedAliasStorageBytes` above, because sizing one needs the declared bounds a tag-only helper cannot see,
-// and `undeclaredNamedElementStorageBytes` owns the rest of that door's miss arm. A ranged alias DOES reach
+// and `undeclaredNamedElementSlot` owns the rest of that door's miss arm. A ranged alias DOES reach
 // it as a LOGICAL size (`typeLogicalByteSize`), where a machine word is the right answer and the two
 // questions deliberately part ways.
+//
+// ⚠⚠ **AND SINCE `enum-narrow-storage` A PAYLOAD-FREE ENUM PARTS FROM IT THE SAME WAY, DELIBERATELY.** Its
+// array element is one, two or four bytes (`undeclaredNamedElementSlot` → `valueRangeStorageSlot`), while
+// `sizeof(Color)` stays the machine word this arm gives. That is the spec read as written: its ladder is about
+// "memory representation … struct fields, array elements, `.rdata` constants", contrasted in its own sentence
+// with "the typealias range printed at the type-system level" — and `specs-shv2/sizeof.md:sizeof.enum` pins the
+// 8. The two doors are the two questions, exactly as they are for a ranged alias.
 //
 // ⭐ A managed `String` is its FULL 48-byte record, NOT its 8-byte pointer — the oracle's rule
 // (`sizeof(managed T)` = the value record), which B2's managed args inherit unchanged.

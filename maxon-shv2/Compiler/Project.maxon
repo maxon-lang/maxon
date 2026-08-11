@@ -1477,7 +1477,7 @@ export type RangedAliasRegistry
 		// pair is not a disagreement at all. The genuine coupling runs the other way: RANGE and WIDTH must
 		// name one declaration, and only the fallback keeps them together for BOTH shapes (a declared
 		// `ExitCode` ⇒ the user's range and the user's width; an undeclared one ⇒ `0 to u32.max` and the
-		// machine word `undeclaredNamedElementStorageBytes` gives).
+		// machine word `undeclaredNamedElementSlot` gives).
 		//
 		// ⚠ It asks the TABLE (`builtinTypeNameTag`) rather than comparing bytes, for the reason
 		// `ExitCodeBuiltinName`'s file-private header gives. Being last, that table's compares are paid
@@ -1589,7 +1589,7 @@ export type RangedAliasRegistry
 	// ranged alias is an enum, a boxed union's ordinal, or the `Byte` a `b"…"` literal mints for itself —
 	// and NOT ONE OF THEM PACKS. So `NotSubBytePacked` is complete and correct for the whole miss arm,
 	// where the width door has to throw because its miss splits two ways
-	// (`ProgramSignatures.undeclaredNamedElementStorageBytes`).
+	// (`ProgramSignatures.undeclaredNamedElementSlot`).
 	//
 	// ⭐⭐ **THAT IS ALSO WHERE ENUMS ARE EXCLUDED, AND IT COSTS NOTHING TO STATE.** v1 needs an explicit
 	// `project.enumTypes.contains(name)` guard in its classifier, because its enums DO register an ordinal
@@ -1603,7 +1603,7 @@ export type RangedAliasRegistry
 	// ⭐ **DOES ANY FILE DECLARE `name` AS A RANGED ALIAS AT ALL? (A4c)** The door above's `throws` channel as
 	// a plain bool, for the one reader that wants whether a declaration EXISTS and never what it says:
 	// `ProgramSignatures.elementIsAByteNoFileDeclares` is asking whether an element's slot comes from
-	// `undeclaredNamedElementStorageBytes` — the miss arm — and therefore has no declared range for a raw byte
+	// `undeclaredNamedElementSlot` — the miss arm — and therefore has no declared range for a raw byte
 	// to fall outside of. It reads the SAME index for the same reason `storageBytesInEveryFile` does:
 	// `widenElementWidthFor` is the only entry that writes it and runs on every declaration before any
 	// branching, so "present here" and "some file declares it" are one fact.
@@ -1751,7 +1751,7 @@ export type RangedAliasRegistry
 	// whole-program width (`storageBytesInEveryFile`, which now folds ONE range and so reads 1 for the
 	// stdlib's element and 2 for the user's), the erasure (`underlyingInAnyFile`), the scoped `lookup` a
 	// range check resolves through. A bare synthesized STRING would miss all of them — measured in the
-	// design: `undeclaredNamedElementStorageBytes` would stride the stdlib's byte array at 8.
+	// design: `undeclaredNamedElementSlot` would stride the stdlib's byte array at 8.
 	//
 	// ⚠ **A NAME ONLY ONE FILE DECLARES CANNOT REACH HERE AT ALL**, because `multiplyDeclared` holds only
 	// the names two or more files declare — and a name every declaration of which agrees about the range
@@ -1782,7 +1782,7 @@ export type RangedAliasRegistry
 	// `anyRangeContest()` — hence `fileScopedInstance`, hence every qualified element name in the compiler —
 	// is exactly the test `self.rangeContested.count() > 0`. The moment that answers true, a reader may ask
 	// for `Byte$0_1000`, and a `Byte$0_1000` the registry does not hold answers the WIDTH FALLBACK
-	// (`undeclaredNamedElementStorageBytes`), which — since `isByteElementName` asks about the BASE name —
+	// (`undeclaredNamedElementSlot`), which — since `isByteElementName` asks about the BASE name —
 	// hands a 2-byte element a ONE-BYTE stride with no diagnostic. Building into a LOCAL and assigning at the
 	// end makes "the mints exist before anything can name them" a property of the code rather than of the
 	// fact that nothing currently runs between the two loops.
@@ -2616,6 +2616,27 @@ export typealias CaseIndex = int(0 to 65535)
 // (`fieldSlotCount` below) — a strictly weaker question, and one the Maxon tier can answer from the
 // declared type alone: *is this declared at an interface type?* Every field but that one takes one slot,
 // so every struct that compiled before the existential slice landed is byte-identical.
+//
+// ⭐⭐ **`specs/enum-narrow-storage.md` ASKS FOR NARROW STRUCT FIELDS AND shv2 DELIBERATELY DOES NOT GIVE
+// THEM — READ THIS BEFORE "FIXING" IT.** That spec says an enum's narrowest width applies to "memory
+// representation everywhere — struct fields, array elements, `.rdata` constants". shv2 narrows the last
+// two (`ProgramSignatures.trivialElementSlot`, and the constant blob `Parser.emitNarrowArrayBlob` lays
+// down) and leaves FIELDS at the slot above. That is a partial implementation, taken on purpose, for two
+// reasons that are about this line rather than about enums:
+//
+//   • **NO FIELD IS NARROW HERE — not `bool`, not `ExitCode`, not a ranged alias.** Every one of them gets
+//     the same 8 bytes, for the paragraph above. Narrowing an enum field ALONE would make it the only
+//     narrow field in the language, which is an inconsistency wearing a spec's clothes; narrowing all of
+//     them is a layout change to every struct in the corpus and is not one enum's rung.
+//   • **NO TARGET CAN LOAD OR STORE ONE.** `Targets/Shared/StdLoweringShared.accessWidthFor` PANICS for
+//     `i8` through `i32`, and `X64AccessWidth` has exactly two members (`byte`, `word64`); arm64 has
+//     `ldrb`/`ldr` and wasm gates `i8` behind P1.9. So this is three new access widths in three backends —
+//     and the array half needed NONE of that, because the element load is byte-granular and strides the
+//     record at run time (`ArrayRuntime.emitLoadElemAt`). A field read has no such indirection.
+//
+// ⇒ it is a CROSS-TARGET CODEGEN rung with a cross-target gate, and two of its three lanes cannot be
+// executed on the host that would write it (arm64 needs the Mac, wasm needs the vendored wasmtime sweep).
+// The spec's own sentence is the record of what is owed; it is deliberately filed nowhere else.
 let FieldSlotBytes = 8 as ByteOffset
 
 // ⭐ **AN INTERFACE-TYPED FIELD IS THE ONE FIELD THAT TAKES TWO SLOTS (P1.7a-existentials slice 2).** A

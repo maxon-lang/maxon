@@ -223,3 +223,74 @@ end 'main'
 ```exitcode
 10
 ```
+
+<!-- test: narrow-signed-enum-element-reaches-user-code-through-the-corpus -->
+### A narrow SIGNED enum element keeps its sign when the CORPUS hands it to user code
+
+⭐ **THE THIRD SIGN-EXTENSION DOOR (`enum-narrow-storage`).** A payload-free enum's array element occupies
+the narrowest slot its raw values need, so `Signal` — whose `minus` is `-1` — rides ONE SIGNED BYTE. The
+shared element load zero-extends (one compiled byte loop, strided by the record's `element_size@24`, with no
+signedness in the record to consult), so the compiler has to put the sign back. Two of the three places it
+does that are reads at a call site: `arr.get(0)` and a value a corpus body RETURNS. This case pins the
+third, which neither of those stands in front of: **a corpus body reads a slot and passes the raw word INTO
+user code as an ARGUMENT.**
+
+`stdlib/Array.maxon`'s `sort(cmp)` and `map(transform)` are the two cheapest reaches — `sort`'s comparator
+overload carries no conformance constraint at all — and `stdlib/helpers/sort/*` reads the slot at five sites
+(`driftQuicksort.maxon:69-70`, `driftsort.maxon:143-160`, `mergeSort.maxon:52`, `pdqsort.maxon:36-128`).
+Each body is compiled ONCE against an opaque `Element` and cannot know what the instance fixed, so the
+extension has to happen at the CALLEE's entry — the one place every such arrival passes through.
+
+⚠ **MEASURED before the parameter door existed**: the comparator was handed `-1` as **255**, so it saw a
+value no case of its own type has, and the resulting ORDER was wrong — `Signal.minus` sorted LAST. The exit
+code below carries all three facts at once, so either half failing changes it: the sorted first element
+(`103` → `2xx`), the sorted last element, and whether `map`'s transform ever saw a negative (`1` → `0`).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+enum Signal
+	minus = -1
+	zero = 0
+	plus = 1
+end 'Signal'
+
+typealias Signals = Array with Signal
+
+function bySignal(x Signal, y Signal) returns Ordering
+	if (x.rawValue as Integer) < (y.rawValue as Integer) 'less'
+		return Ordering.lessThan
+	end 'less'
+	if (x.rawValue as Integer) > (y.rawValue as Integer) 'greater'
+		return Ordering.greaterThan
+	end 'greater'
+	return Ordering.equalTo
+end 'bySignal'
+
+function markNegative(s Signal) returns Signal
+	if (s.rawValue as Integer) < 0 'wasNegative'
+		return Signal.plus
+	end 'wasNegative'
+	return Signal.zero
+end 'markNegative'
+
+function main() returns ExitCode
+	var a = Signals.create()
+	a.push(Signal.plus)
+	a.push(Signal.zero)
+	a.push(Signal.minus)
+	a.sort(bySignal)
+
+	let first = try a.first() otherwise Signal.zero
+	let last = try a.last() otherwise Signal.zero
+
+	var seenNegative = 0 as Integer
+	for v in a.map(markNegative) 'each'
+		seenNegative = seenNegative + (v.rawValue as Integer)
+	end 'each'
+
+	return ((((first.rawValue as Integer) + 2) * 100) + (((last.rawValue as Integer) + 2) * 10) + seenNegative) as ExitCode
+end 'main'
+```
+```exitcode
+131
+```

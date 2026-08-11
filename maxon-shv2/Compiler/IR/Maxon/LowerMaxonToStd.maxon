@@ -241,28 +241,33 @@ end 'maxonBinOpToStdOpcode'
 // the parser (see MaxonUnaryOp), so nothing is re-derived here. Exhaustive by
 // construction.
 export function maxonUnaryOpToStdOpcode(op MaxonUnaryOp) returns StdUnaryOpcode
-	return match op 'map'
-		neg gives StdUnaryOpcode.neg
-		bitNot gives StdUnaryOpcode.bitNot
-		logicalNot gives StdUnaryOpcode.logicalNot
+	match op 'map'
+		neg then return StdUnaryOpcode.neg
+		bitNot then return StdUnaryOpcode.bitNot
+		logicalNot then return StdUnaryOpcode.logicalNot
 		// The conversion pair — still a 1:1 rename, and still no decision made here: the parser
 		// chose the DIRECTION (it is the tier that knows the operand is a float), and the Std
 		// opcode only renames it. `trunc` is the source builtin; `promoteToFloat` is inserted.
-		trunc gives StdUnaryOpcode.fpToSi
-		promoteToFloat gives StdUnaryOpcode.siToFp
+		trunc then return StdUnaryOpcode.fpToSi
+		promoteToFloat then return StdUnaryOpcode.siToFp
 		// The math intrinsics — a 1:1 rename like the rest, and the only reason they are spelled
 		// separately from the conversions above is that they are NOT conversions: they stay inside
 		// the float domain, so `assertConversionCrossesDomain` must not be asked about them.
-		floor gives StdUnaryOpcode.floor
-		ceil gives StdUnaryOpcode.ceil
-		round gives StdUnaryOpcode.round
-		sqrt gives StdUnaryOpcode.sqrt
-		abs gives StdUnaryOpcode.abs
+		floor then return StdUnaryOpcode.floor
+		ceil then return StdUnaryOpcode.ceil
+		round then return StdUnaryOpcode.round
+		sqrt then return StdUnaryOpcode.sqrt
+		abs then return StdUnaryOpcode.abs
 		// The reinterpretation — still a 1:1 rename. It is spelled separately from BOTH bands above
 		// for the reason `stdUnaryOperandIsFloat` gives it its own arm: it leaves the float domain
 		// (so it is not an intrinsic) without converting (so it is not a conversion).
-		floatToBits gives StdUnaryOpcode.bitcastF64ToI64
-		bitsToFloat gives StdUnaryOpcode.bitcastI64ToF64
+		floatToBits then return StdUnaryOpcode.bitcastF64ToI64
+		bitsToFloat then return StdUnaryOpcode.bitcastI64ToF64
+		// ⚠ The SIGN-EXTENSION family is the ONE member with no 1:1 rename — it EXPANDS to a shift pair —
+		// which is why this map is written as statements rather than as a `gives` expression: the honest
+		// answer for that band is a panic, and there is no opcode to hand back. `lowerUnaryOp` routes it to
+		// `lowerSignExtend` before ever asking, so reaching here is a routing bug in that function.
+		signExtendI8 to signExtendI32 then panic("maxonUnaryOpToStdOpcode: {op.name} has no 1:1 Std opcode — it EXPANDS to a shift pair, and `lowerUnaryOp` routes it to `lowerSignExtend` before reaching this map")
 	end 'map'
 end 'maxonUnaryOpToStdOpcode'
 
@@ -3221,11 +3226,42 @@ type MaxonToStdLowering
 	// an i64, `promoteToFloat` the reverse. Taking it from `operand` rather than from `result` is
 	// therefore correct for every opcode at once, and is the only spelling that is.
 	function lowerUnaryOp(result ValueId, operand ValueId, op MaxonUnaryOp, dstBlock IrBlock)
+		match signExtendSlotOf(op) 'aSignExtension'
+			fromBytes(slotBytes) then return self.lowerSignExtend(result, operand: operand, slotBytes: slotBytes, dstBlock: dstBlock)
+			notASignExtension then break 'aSignExtension'
+		end 'aSignExtension'
+
 		let opcode = maxonUnaryOpToStdOpcode(op)
 		let operandType = self.stdTypeOf(operand)
 		assertUnaryOperandDomain(opcode, operandType: operandType)
 		self.stdModule.appendOp(dstBlock, op: StdOp.unaryOp(result, operand: operand, opcode: opcode, operandType: operandType))
 	end 'lowerUnaryOp'
+
+	// ⭐⭐ **A SIGN EXTENSION BECOMES `shl` THEN ARITHMETIC `shr` BY THE SAME COUNT** — the slot's top bit
+	// walked up to bit 63 and back down with the sign fill. `StdBinOpcode.shr` IS the arithmetic shift (its
+	// logical twin is a separate opcode, `shrLogical`), which is the whole of what makes the pair a sign
+	// extension rather than a mask.
+	//
+	// ⭐⭐ **AND IT IS AN EXPANSION RATHER THAN A NEW `StdUnaryOpcode`, ON A MEASURABILITY ARGUMENT.** Every
+	// target has a single instruction for this — x64 `movsx`/`movsxd`, arm64 `sxtb`/`sxth`/`sxtw`, wasm
+	// `i64.extend8_s`/`16_s`/`32_s` — so a Std opcode with three per-target lowerings is the better CODE and
+	// was the first design. What stopped it is that those are three new hand-written ENCODINGS in three
+	// backends, and this tree can execute exactly one of them: arm64 needs the Mac and the wasm lane is the
+	// cross-target sweep's. A wrong bit in an encoder is a silently wrong NUMBER, so three unrunnable
+	// encodings would be three unverifiable claims. `shl`/`shr` are already emitted by every program in the
+	// corpus on all three targets, so this expansion is correct on each of them by the same evidence that
+	// says a shift is. ⇒ the native instruction is a codegen rung with a cross-target gate, not this one.
+	//
+	// The count is `(8 - slotBytes) * 8`, a `const` the Std-tier `foldConstOperands` then folds into both
+	// shifts' immediate forms, so the emitted code is two shift-immediates and no register for the count.
+	function lowerSignExtend(result ValueId, operand ValueId, slotBytes ByteOffset, dstBlock IrBlock)
+		let count = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(count, value: (MachineWordBytes - slotBytes) * BitsPerByte, valueType: StdType.i64))
+
+		let raised = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(raised, lhs: operand, rhs: count, opcode: StdBinOpcode.shl, operandType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: raised, rhs: count, opcode: StdBinOpcode.shr, operandType: StdType.i64))
+	end 'lowerSignExtend'
 
 	// Lower a Maxon comparison to `StdOp.cmp`. Operand/result ValueIds pass through
 	// verbatim; only the source-level comparison operator maps to a Std predicate.

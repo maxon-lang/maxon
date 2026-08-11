@@ -804,7 +804,8 @@ export enum ErrorCode
 	// read back 57089; `setByte(0, 223)` under `int(-5 to 5)`, which keeps the machine word because
 	// `rangedAliasStorageBytes` is the unsigned ladder, read back 223; `setByte(0, 223)` on a `bool`
 	// element made a value for which both it and its negation were true while `v == true` was false;
-	// and on an ENUM element -- an ordinal in a machine word -- the program compiled and then HUNG,
+	// and on an ENUM element -- a tag in the narrowest slot its raw values need, one byte for a
+	// two-case enum since enum-narrow-storage -- the program compiled and then HUNG,
 	// matching an ordinal no arm names.
 	// It is deliberately NOT a widening of E3117. That code asks whether the element admits every
 	// BYTE, which is this question's answer at a ONE-byte slot and at no other width: asked at a wider
@@ -818,13 +819,13 @@ export enum ErrorCode
 	// function pointer -- is refused rather than guessed at. That is `rangeHoldsEveryByte`'s own
 	// conservative argument, one quantifier out.
 	// `ExitCode` looked like the closest call and is not: it reaches an `Array` instance as a NAMED
-	// leaf, so `undeclaredNamedElementStorageBytes` gives it the MACHINE WORD, and a domain of at
+	// leaf, so `undeclaredNamedElementSlot` gives it the MACHINE WORD, and a domain of at
 	// widest 0 to u32.max (PLATFORM-DEPENDENT below that -- 0 to 255 on Linux, macOS and WASI)
 	// cannot cover an eight-byte slot on any reading. The measured 3741319169 is 223 at byte 3 of
 	// that word.
 	// The one element with NO value set that is still admitted is the `Byte` a `b"..."` literal mints
 	// for itself in a program declaring no such alias: its slot is one byte by construction
-	// (`undeclaredNamedElementStorageBytes`) and there is no declared range for a raw byte to fall
+	// (`undeclaredNamedElementSlot`) and there is no declared range for a raw byte to fall
 	// outside of, which is exactly the case E3117 returns on.
 	// `byteAt` is untouched for E3117's reason: it yields a plain unranged `int`, never the element.
 	rawByteWriteSlotDomain = "E3118"

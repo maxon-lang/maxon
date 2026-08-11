@@ -448,7 +448,7 @@ export type GlobalDataTable
 			if image.count() != entry.offset 'drift'
 				panic("GlobalDataTable.dataSectionImage: '{entry.label}' is laid out at offset {entry.offset} but the image has reached {image.count()} — layOut's ordering and this rendering disagree")
 			end 'drift'
-			appendScalar(image, value: entry.value, byteCount: stdTypeStorageBytes(entry.valueType))
+			appendLittleEndianScalar(image, value: entry.value, byteCount: stdTypeStorageBytes(entry.valueType))
 		end 'each'
 		return image
 	end 'dataSectionImage'
@@ -515,25 +515,13 @@ end 'sortBySizeDescendingStable'
 // `value` rendered as a standalone `byteCount`-byte little-endian payload — what
 // `registerRdataConstant` is handed for a float island.
 //
-// ⭐ It goes through `appendScalar`, the SAME serializer the `.data` image uses, which is the
-// point: an f64 constant in `.rdata` and an f64 global in `.data` are the same 8 bytes of IEEE
-// pattern, and there is exactly one piece of code that decides what those bytes are. A second
-// renderer here would be this project's signature bug — one fact written twice — with the two
-// free to disagree about what `3.14` is.
+// ⭐ It goes through `LayoutDescriptor.appendLittleEndianScalar`, the SAME serializer the `.data` image
+// above and a constant array literal's `.rdata` blob both use, which is the point: an f64 constant in
+// `.rdata` and an f64 global in `.data` are the same 8 bytes of IEEE pattern, and there is exactly one piece
+// of code that decides what those bytes are. A second renderer here would be this project's signature bug —
+// one fact written twice — with the two free to disagree about what `3.14` is.
 export function scalarImage(value ParsedInt, byteCount ByteCount) returns ByteArray
 	var bytes = ByteArray.create()
-	appendScalar(bytes, value: value, byteCount: byteCount)
+	appendLittleEndianScalar(bytes, value: value, byteCount: byteCount)
 	return bytes
 end 'scalarImage'
-
-// Append `value` as `byteCount` little-endian bytes. The `.data` image's one serializer: a
-// global's initial value is a scalar of 1, 2, 4 or 8 bytes, and the width is the type's
-// (`StdTypeInfo.storageBytes`), never guessed from the value.
-function appendScalar(image ByteArray, value ParsedInt, byteCount ByteCount)
-	// The value is SIGNED (a `ParsedInt`) and the shift-and-mask below is defined on the
-	// unsigned word, so it crosses once, explicitly, here.
-	let bits = value as MachineWord
-	for i in 0 upto byteCount 'eachByte'
-		image.push((bits shr (i * 8)) and 0xFF)
-	end 'eachByte'
-end 'appendScalar'

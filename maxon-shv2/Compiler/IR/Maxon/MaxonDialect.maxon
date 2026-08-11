@@ -792,7 +792,92 @@ export enum MaxonUnaryOp
 	// answers BITS. Without this arm `float.fromString` could not be the same conversion as a float
 	// literal's, and the tree carried two readers that disagreed (`Parser.BuiltinsBitsToFloatName`).
 	bitsToFloat
+	// ⭐⭐ **THE SIGN-EXTENSION FAMILY — RESTORE A VALUE JUST READ OUT OF A NARROW SIGNED SLOT
+	// (`enum-narrow-storage`).** `signExtendI8` reads a word whose low 8 bits are an i8 and answers the i64
+	// that i8 denotes; the other two do the same at 16 and 32 bits. Compiler-inserted, never written by a
+	// user: `Parser.emitSignExtendFromSlot` is the only emit site, reached only for an array element the
+	// storage ladder put in a narrow SIGNED slot (`ProgramSignatures.narrowSignedSlotOf`). The
+	// shared element load zero-extends and the record has no signedness to consult, so this is where the
+	// sign the COMPILER knows about reaches the value.
+	//
+	// ⭐⭐ **THREE ARMS AND NOT ONE OP CARRYING A WIDTH, BECAUSE THIS IS A BARE ENUM — the same forcing
+	// `MaxonBinOp`'s `divUnsigned`/`modUnsigned` pair states.** There is nowhere for a width to live here.
+	// The three are exactly the three narrow rungs `LayoutDescriptor.signedSlotBytes` hands out, and
+	// `signExtendFromSlotBytes` is the ONE map between the two so the ladder is not transcribed.
+	//
+	// ⚠⚠ **IT HAD TO BE ONE OP, AND THAT IS A DERIVATION RATHER THAN A PREFERENCE.** The obvious spelling
+	// is `shl` then arithmetic `shr` by the same count — two ordinary `binOp`s — and it is unusable HERE:
+	// `Parser.rewriteLastCallToTryCall` decides what a `try` was applied to by looking at the last op the
+	// target emitted, and it steps back over exactly ONE trailing op, only when that op is a
+	// REINTERPRETATION the compiler inserted. That test cannot be widened to a chain of `binOp`s, because
+	// `try f() + 1` has the identical structure and is a different program — the discriminator is that a
+	// user cannot spell the op at all. So `try arr.get(0) otherwise …` over a narrow signed element
+	// (MEASURED: E2015 *"`try` must be applied to a call"* on three of `enum-narrow-storage`'s six cases)
+	// forces the extension to be one op nobody can write. The `shl`/`shr` pair is still what it BECOMES —
+	// one tier down, where the `try` question has already been settled (`LowerMaxonToStd.lowerUnaryOp`).
+	signExtendI8
+	signExtendI16
+	signExtendI32
 end 'MaxonUnaryOp'
+
+// The SLOT WIDTH a sign-extending unary op restores from, or `notASignExtension` for every other member.
+// A union rather than a `0` sentinel, because "this op extends nothing" is an ANSWER — `lowerUnaryOp` asks
+// it of every unary op it meets — and a width of 0 would be a number the expansion could arithmetic on.
+export union SignExtendSlot
+	notASignExtension
+	fromBytes(slotBytes ByteOffset)
+end 'SignExtendSlot'
+
+// ⭐⭐ **THE ONE PLACE A SIGN-EXTENSION OP'S WIDTH IS WRITTEN DOWN.** `lowerUnaryOp` routes on it, and
+// `signExtendFromSlotBytes` below DERIVES the opposite direction from it rather than restating the widths —
+// see there for why that asymmetry is the whole point. Exhaustive over the enum, so a new unary op has to be
+// classified here rather than falling silently into the 1:1 opcode rename that cannot serve this family.
+export function signExtendSlotOf(op MaxonUnaryOp) returns SignExtendSlot
+	return match op 'o'
+		neg to bitsToFloat gives SignExtendSlot.notASignExtension
+		signExtendI8 gives SignExtendSlot.fromBytes(1)
+		signExtendI16 gives SignExtendSlot.fromBytes(2)
+		signExtendI32 gives SignExtendSlot.fromBytes(4)
+	end 'o'
+end 'signExtendSlotOf'
+
+// ⭐⭐ **FROM A NARROW SIGNED SLOT'S WIDTH TO THE OP THAT RESTORES ITS SIGN — AND IT CARRIES NO WIDTHS OF ITS
+// OWN.** It names the three OPS (it has to; they are what it returns) and asks `signExtendSlotOf` what each
+// one extends from, so the numbers 1/2/4 exist in exactly one place. That asymmetry is deliberate: the two
+// directions were briefly two `1/2/4 ↔ I8/I16/I32` tables under a header claiming to be "the ONE map", and
+// only one of them was exhaustive by construction — so a divergence between them would not have been a
+// compile error, it would have been a sign extension from the WRONG BIT, which is a silently wrong NUMBER
+// and the exact failure this family exists to prevent. An op roster written twice cannot do that; a width
+// roster written twice can.
+//
+// It PANICS on any other width for `slotUnsignedMax`'s reason: reaching one means a caller sized a slot from
+// something other than `LayoutDescriptor.signedSlotBytes`'s ladder.
+export function signExtendFromSlotBytes(slotBytes ByteOffset) returns MaxonUnaryOp
+	if signExtendsFromSlot(MaxonUnaryOp.signExtendI8, slotBytes: slotBytes) 'oneByte'
+		return MaxonUnaryOp.signExtendI8
+	end 'oneByte'
+
+	if signExtendsFromSlot(MaxonUnaryOp.signExtendI16, slotBytes: slotBytes) 'twoBytes'
+		return MaxonUnaryOp.signExtendI16
+	end 'twoBytes'
+
+	if signExtendsFromSlot(MaxonUnaryOp.signExtendI32, slotBytes: slotBytes) 'fourBytes'
+		return MaxonUnaryOp.signExtendI32
+	end 'fourBytes'
+
+	panic("signExtendFromSlotBytes: {slotBytes} is not a narrow signed slot width — the ladder hands out 1, 2 and 4, and a machine-word slot has nothing to extend (`StorageSlot.signExtends` is false for it)")
+end 'signExtendFromSlotBytes'
+
+// Does `op` restore the sign of a `slotBytes`-wide slot? The one question the derivation above asks, and it
+// PANICS rather than answering false for a non-member: every op it is handed is one this file just named, so
+// a `notASignExtension` here means the roster above and the classifier have come apart — which is precisely
+// the divergence the derivation exists to make impossible, and it may not be swallowed as a `false`.
+function signExtendsFromSlot(op MaxonUnaryOp, slotBytes ByteOffset) returns bool
+	match signExtendSlotOf(op) 'slot'
+		fromBytes(bytes) then return bytes == slotBytes
+		notASignExtension then panic("signExtendsFromSlot: {op.name} is not in the sign-extension family, but `signExtendFromSlotBytes` names it as one — the op roster there and `signExtendSlotOf`'s classification disagree")
+	end 'slot'
+end 'signExtendsFromSlot'
 
 // The comparison operators the Maxon tier represents (M4). A comparison SPLITS OUT
 // of `MaxonBinOp` — even though it also takes two operands — because it produces a

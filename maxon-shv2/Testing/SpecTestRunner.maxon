@@ -2848,14 +2848,30 @@ function compareLinkedSection(pin SpecSectionPin, exePath FilePath, effectiveTar
 		return TestOutcome.fail("could not read the {sectionName} section of {exePath.toString()}: {e.displayReason()}")
 	end 'noSection'
 
-	// ⚠ **A PREFIX, NOT AN EQUALITY**, and the reference draws the line in the same place and says
-	// why: "the data section may contain additional runtime globals (e.g. green thread scheduler
+	// ⚠ **A PREFIX FROM BYTE 0, NOT AN EQUALITY**, and the reference draws the line in the same place and
+	// says why: "the data section may contain additional runtime globals (e.g. green thread scheduler
 	// state) after the user data". shv2's `.data` holds only user globals TODAY, so a prefix check
 	// and an equality check agree on every current case — but the runtime that grows into this
 	// section (P1.5's scheduler) would break equality on every one of these six specs at once,
-	// for a change that says nothing about the property they pin. The read-only section makes the
-	// same argument twice over: a program's literals, jump tables and descriptors all land there,
-	// and a spec pins the payload it is about rather than everything that shares the section.
+	// for a change that says nothing about the property they pin.
+	//
+	// ⛔⛔ **AND FOR `.rdata` A PREFIX IS NOT WHAT IT SOUNDS LIKE: IT PINS THE FIRST PAYLOAD REGISTERED, NOT
+	// THE ONE THE SPEC IS ABOUT.** This block used to end "a spec pins the payload it is about rather than
+	// everything that shares the section", which describes a LABEL-ANCHORED read — and there is no label
+	// lookup here. `.rdata` is a concatenation in REGISTRATION order (`GlobalDataTable.appendRdataPayload`),
+	// several producers register during one `lowerMaxonToStd` walk in op order (a string literal's blob AND
+	// its 48-byte record, a witness table, a `__layout_*` descriptor, another constant array blob), and
+	// `insertRangeChecks`'s panic messages follow them. ⇒ **a `RequiredRdata` pin passes only while the blob
+	// it means is FIRST IN THE WHOLE SECTION**, so adding one `print("x")` above the array literal in an
+	// existing case breaks that case's pin, and the message points at the blob rather than at the string
+	// that displaced it. Every case pinning `.rdata` today (`ranged-int-bit-packing`'s three,
+	// `enum-narrow-storage`'s six) is written with no string literal, no `print` and no generic-body call
+	// for exactly this reason — a property of those programs, held by nothing.
+	//
+	// ⇒ **THE FIX IS A LABEL-ANCHORED READ** — `readLinkedSection` already has `rdataOffsetOf(label)` to
+	// build one on — and it is deliberately NOT taken here: it moves what those nine existing pins mean, so
+	// it is a harness rung with its own goldens rather than a line in whichever spec next trips over this.
+	// Until then this comment, and the note beside each `RequiredRdata` block, are the warning.
 	if actual.count() < expected.count() 'tooShort'
 		return TestOutcome.fail("{sectionName} is shorter than the pin claims\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
 	end 'tooShort'
