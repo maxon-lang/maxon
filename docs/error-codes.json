@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "72c0a73ee8e597b6",
+  "sourceHash": "34151af6fc3fe493",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -891,9 +891,9 @@
       "tag": "E3067",
       "name": "SemanticSelfAssignment",
       "stage": "semantic",
-      "doc": "a textual self-assignment (`x = x`, `p.x = p.x`) or a\ndiscard-assignment whose RHS isn't a function call (`_ = 42`). The\nformer has no effect; the latter is the historic shape for opting out\nof a \"discarded result\" warning, but a non-call RHS makes the discard\nnonsensical. Emitted from `parseVarAssignment`,\n`parseLocalFieldAssignment`, and `parseDiscardAssignment`.",
-      "emittedBy": {"csharp": "SemanticSelfAssignment", "selfhosted": "semanticSelfAssignment"},
-      "notEmittedBy": ["shv2"]
+      "doc": "a textual self-assignment (`x = x`, `p.x = p.x`) or a\ndiscard-assignment whose RHS isn't a function call (`_ = 42`). The\nformer has no effect; the latter is the historic shape for opting out\nof a \"discarded result\" warning, but a non-call RHS makes the discard\nnonsensical. csharp and selfhosted raise it from `parseVarAssignment`,\n`parseLocalFieldAssignment`, and `parseDiscardAssignment`.\nshv2 raises both shapes from the one door `Parser.rejectDegenerateAssignment`,\nand its rule is textual for BOTH halves: it refuses a place chain assigned\nto itself token for token, and a discard whose RHS is a bare LITERAL.\nThat makes it LOOSER than csharp in two places and STRICTER in two others,\nand the strict direction is the one that can refuse a program csharp accepts:\nLOOSER -- shv2 admits `x = (x)` (parenthesized: different tokens) and\n`_ = someBinding` (the discard-a-binding idiom the corpus uses to satisfy\nE3012), both of which csharp's semantic rule refuses. \"LITERAL\" also\nexcludes `_ = true` / `_ = false`, which shv2 lexes as KEYWORDS rather than\nliteral kinds; no program in the tree writes either, and a second literal\nlist spelled out for two token kinds would duplicate the one list\n(`tokenIsLiteralKind`) that `tokenCanBeAName` already shares.\nSTRICTER -- shv2 refuses `self.n = self.n` and `a.b.c = a.b.c`, which csharp\ncompiles clean (its `IsFieldSelfAssignment` matches one field name behind a\nstruct var-ref, so it sees neither a `self` receiver nor a multi-hop chain).\nshv2 also decides BEFORE name resolution and the mutability check, so an\nimmutable or undeclared target reports this code where csharp reports\n\"cannot assign to immutable variable\" or undefined-variable -- a difference\nof precedence between two true complaints, not of what is legal.",
+      "emittedBy": {"csharp": "SemanticSelfAssignment", "selfhosted": "semanticSelfAssignment", "shv2": "semanticSelfAssignment"},
+      "notEmittedBy": []
     },
     {
       "code": 3068,

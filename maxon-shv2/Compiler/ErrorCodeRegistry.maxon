@@ -427,6 +427,32 @@ export enum ErrorCode
 	// exempt (trusted). Emitted from `maybeRewriteCmpToEquals` in TypeResolution;
 	// mirrors the C# bootstrap's `SemanticEnumNotComparable`.
 	semanticEnumNotComparable = "E3066"
+	// a textual self-assignment (`x = x`, `p.x = p.x`) or a
+	// discard-assignment whose RHS isn't a function call (`_ = 42`). The
+	// former has no effect; the latter is the historic shape for opting out
+	// of a "discarded result" warning, but a non-call RHS makes the discard
+	// nonsensical. csharp and selfhosted raise it from `parseVarAssignment`,
+	// `parseLocalFieldAssignment`, and `parseDiscardAssignment`.
+	// shv2 raises both shapes from the one door `Parser.rejectDegenerateAssignment`,
+	// and its rule is textual for BOTH halves: it refuses a place chain assigned
+	// to itself token for token, and a discard whose RHS is a bare LITERAL.
+	// That makes it LOOSER than csharp in two places and STRICTER in two others,
+	// and the strict direction is the one that can refuse a program csharp accepts:
+	// LOOSER -- shv2 admits `x = (x)` (parenthesized: different tokens) and
+	// `_ = someBinding` (the discard-a-binding idiom the corpus uses to satisfy
+	// E3012), both of which csharp's semantic rule refuses. "LITERAL" also
+	// excludes `_ = true` / `_ = false`, which shv2 lexes as KEYWORDS rather than
+	// literal kinds; no program in the tree writes either, and a second literal
+	// list spelled out for two token kinds would duplicate the one list
+	// (`tokenIsLiteralKind`) that `tokenCanBeAName` already shares.
+	// STRICTER -- shv2 refuses `self.n = self.n` and `a.b.c = a.b.c`, which csharp
+	// compiles clean (its `IsFieldSelfAssignment` matches one field name behind a
+	// struct var-ref, so it sees neither a `self` receiver nor a multi-hop chain).
+	// shv2 also decides BEFORE name resolution and the mutability check, so an
+	// immutable or undeclared target reports this code where csharp reports
+	// "cannot assign to immutable variable" or undefined-variable -- a difference
+	// of precedence between two true complaints, not of what is legal.
+	semanticSelfAssignment = "E3067"
 	// borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)
 	// while a reference into its backing buffer is still live (e.g.
 	// `let s = try arr.get(0) ...`). A growth could reallocate the buffer

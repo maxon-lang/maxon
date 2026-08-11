@@ -275,10 +275,18 @@ end 'main'
 ```stdout
 ```
 
-### Self-Assign Is a No-Op
+### Rebinding a Value to Itself Is a No-Op
 
-`s = s` rebinds the value to itself: nothing is dropped and the ownership is unchanged. The
-`oldValue == value` guard prevents a drop-then-keep (which would decref a value still bound).
+Reassigning a binding to the value it already holds rebinds it to itself: nothing is dropped and the
+ownership is unchanged. The `oldValue == value` guard prevents a drop-then-keep (which would decref a
+value still bound).
+
+⚠ The textual spelling `s = s` **cannot** be used to reach that guard, because it is a compile error —
+`E3067`, see `self-assignment.md`. This case aliases through a second binding instead, which is the
+better pin regardless: the guard compares **value identity** (`ValueId`), not spelling, so `let t = s`
+followed by `s = t` reaches it by the property it actually tests and would keep reaching it if the
+E3067 rule ever became semantic. The surviving read is `t` rather than `s` because `let t = s` MOVES a
+managed binding's ownership to `t` (E3102 on a later `s`).
 
 <!-- test: self-assign -->
 ```maxon
@@ -290,8 +298,9 @@ end 'build'
 
 function main() returns ExitCode
 	var s = build(1)
-	s = s
-	print(s)
+	let t = s
+	s = t
+	print(t)
 	return 0
 end 'main'
 ```

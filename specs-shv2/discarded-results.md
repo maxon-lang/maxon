@@ -285,8 +285,7 @@ end 'main'
 error E3012: specs/fragments/discarded-results/underscore-not-prefix-suppression.test:4:6: unused variable: 'x'
 ```
 
-<!-- disabled-test: underscore-exact-discard -->
-<!-- E3067 + the `_ =` discard binding -->
+<!-- test: underscore-exact-discard -->
 ```maxon
 
 function main() returns ExitCode

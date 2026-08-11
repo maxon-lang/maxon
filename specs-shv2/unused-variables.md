@@ -93,8 +93,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: underscore-discard -->
-<!-- E3067 "expected a function call" — shv2 does not yet REFUSE `_ = <non-call>`. A discard-STATEMENT rule, not an unused-binding one, and one of the two refusals `unused-var` above is waiting on. Its own rung -->
+<!-- test: underscore-discard -->
 ```maxon
 
 function main() returns ExitCode

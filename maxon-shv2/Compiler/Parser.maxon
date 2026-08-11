@@ -1255,6 +1255,16 @@ export union ParseError implements Error
 	// The TIER rides because it picks the code and the sentence, and the parser has it in hand from the
 	// sweep's own column — re-deriving it in the renderer would need the index the renderer has no handle to.
 	calleeNotVisible(callee String, tier Visibility, line LineNumber, column ColumnNumber)
+	// ⭐ **A PLACE ASSIGNED TO ITSELF, TEXTUALLY** — `x = x`, `p.x = p.x`, `self.n = self.n`. Renders as
+	// **E3067**, positioned at the statement's FIRST token. `place` is the chain as written, which the
+	// message prints on BOTH sides of the `=` (the reference's exact wording). Raised by
+	// `Parser.rejectDegenerateAssignment`, which is where the rule and its false-reject surface are stated.
+	selfAssignmentHasNoEffect(place String, line LineNumber, column ColumnNumber)
+	// ⭐ **A DISCARD OF A BARE LITERAL** — `_ = 42`. Renders as **E3067** too: one code, a second message,
+	// exactly as `tryOnNonThrowingBuiltin` is a second message on E3055. The two shapes share the code
+	// because they are one mistake — a statement that computes nothing — and NOT a raiser, because a place
+	// chain compared against itself and a literal in RHS position have no shape in common to share.
+	discardOfALiteral(line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -17151,8 +17161,7 @@ export type Parser
 			return false
 		end 'notAName'
 
-		let next = self.peekKind()
-		return next == TokenKind.newline or next == TokenKind.end or next == TokenKind.eof
+		return self.statementEndsAt(self.pos + 1)
 	end 'atEnumFunctionRawValue'
 
 	// ⭐⭐ **A FUNCTION-BACKED CASE (`doubleOp = doubleFn`) — the DECLARATION half, which records a NAME and
@@ -20789,6 +20798,11 @@ export type Parser
 		// token spawns a drop). Captured before parsing advances the cursor.
 		let stmtTok = self.current()
 
+		// E3067, before the dispatch and before any op is emitted: this statement's TOKENS may already say
+		// it does nothing. See `rejectDegenerateAssignment` for the rule and for what it deliberately lets
+		// through — it is asked here, once, rather than by each of the three assignment arms it spans.
+		try self.rejectDegenerateAssignment(self.pos)
+
 		if self.at(TokenKind.return) 'ret'
 			try self.parseReturnStatement(func, block: block)
 		end 'ret' else if self.at(TokenKind.let) 'letDecl'
@@ -21920,10 +21934,15 @@ export type Parser
 	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
 		let oldValue = binding.boundValue
 
-		// `s = s` (a self-rebind): the value and its ownership are unchanged, so there is nothing to drop
-		// and nothing to reclassify. Guarding here is also what keeps a loop self-assign — where
-		// `oldValue` is a provenance-free phi — from being misread and re-tracked, and prevents a
-		// drop-then-keep (decref'ing a value the binding still holds).
+		// A SELF-REBIND — the binding is assigned the value it already holds: the value and its ownership
+		// are unchanged, so there is nothing to drop and nothing to reclassify. Guarding here is also what
+		// keeps a loop self-assign — where `oldValue` is a provenance-free phi — from being misread and
+		// re-tracked, and prevents a drop-then-keep (decref'ing a value the binding still holds).
+		//
+		// ⚠ **THE TEST IS VALUE IDENTITY, NOT SPELLING, AND THE SPELLING `s = s` NO LONGER REACHES IT** —
+		// it is refused at the door as E3067 (see `rejectDegenerateAssignment`). The shape that arrives
+		// here is an ALIAS handed back, `let t = s` then `s = t`, which is what `var-reassign-drops.md`'s
+		// `self-assign` case pins it with.
 		if oldValue == value 'selfAssign'
 			self.scope.setValue(nameTok.value, value: value)
 			return
@@ -23188,7 +23207,7 @@ export type Parser
 	// still exists — instead of reaching a tier that can only panic or emit the wrong op.
 	function parseReturnStatement(func IrFunction, block IrBlock) throws ParseError
 		let retTok = try self.consume(TokenKind.return)
-		let bare = self.at(TokenKind.newline) or self.at(TokenKind.end) or self.isEof()
+		let bare = self.statementEndsAt(self.pos)
 
 		if maxonReturnTypeIsVoid(func.maxonReturnType) 'voidFunction'
 			if not bare 'valueFromVoid'
@@ -57215,6 +57234,26 @@ export type Parser
 		return self.tokenAt(index).kind
 	end 'kindAt'
 
+	// **WHERE A STATEMENT STOPS, ASKED AT AN ABSOLUTE INDEX** — the `newline` that separates it from the
+	// next one, the `end` that closes the enclosing block when it is that block's last statement, or EOF.
+	// Comments are not tokens (the lexer drops them), so a trailing `// …` does not have to be listed here.
+	//
+	// ONE predicate because three readers ask it and a divergence between them is a WRONG DIAGNOSTIC
+	// rather than a crash: `atEnumFunctionRawValue` decides that a name IS the whole raw value,
+	// `parseReturnStatement` decides that a `return` is BARE, and `rejectDegenerateAssignment` decides
+	// that a chain IS the whole right-hand side. Written out three times — which it was — a fourth
+	// terminator taught to one reader leaves the other two reading a complete statement as an unfinished
+	// one, each with its own unrelated-looking error.
+	//
+	// ⛔ **`requireSignatureLineEnd` IS NOT A FOURTH READER AND MUST NOT BE "FINISHED" INTO ONE.** It asks
+	// `newline or eof` deliberately, WITHOUT `end`: it guards a DECLARATION HEADER, and a header line can
+	// never legitimately be closed by the token that closes the body it introduces. Routed through here it
+	// would accept `function f() end` — a signature with no newline after it — as a complete header.
+	function statementEndsAt(index TokenIndex) returns bool
+		let kind = self.kindAt(index)
+		return kind == TokenKind.newline or kind == TokenKind.end or kind == TokenKind.eof
+	end 'statementEndsAt'
+
 	// The IDENTIFIER text at an ABSOLUTE index, or the empty source text when that token is anything else
 	// (a malformed header, or past the end). The tolerant read a SWEEP needs: it must not throw, because a
 	// declaration it cannot read is the real parse's to report with a position.
@@ -57269,6 +57308,140 @@ export type Parser
 	function assignsAt(index TokenIndex) returns bool
 		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.equals
 	end 'assignsAt'
+
+	// ⭐⭐ **E3067 — THE TWO DEGENERATE ASSIGNMENT STATEMENTS, REFUSED AT ONE DOOR, PURELY TEXTUALLY.**
+	//
+	// THE RULE, STATED SO THAT ITS FALSE-REJECT SURFACE IS OBVIOUS. The statement beginning at `index` is
+	// refused when it is EITHER of:
+	//
+	//   1. `<chain> = <chain> <statement end>` where the two chains are THE SAME TOKENS — equal kind AND
+	//      equal spelling, position by position. A chain is `fieldChainEndAfter`'s: a base (an identifier,
+	//      or a keyword the same walk admits as a name — `self` among them) followed by zero or more
+	//      `.member` hops. So `x = x`, `p.x = p.x`, `self.n = self.n` and `a.b.c = a.b.c` are refused.
+	//   2. `_ = <literal> <statement end>` — a discard whose right-hand side is a single literal token.
+	//      The discard form exists to say "this call's result is deliberately unused"; a literal was never
+	//      a call, so the statement computes nothing and discards nothing.
+	//
+	// ⚠ **TEXTUAL IS THE WHOLE OF IT** — the registry's own doc for E3067 says "a *textual* self-assignment",
+	// and nothing here asks what a name MEANS. Everything below is therefore LEGAL and measured to stay so:
+	//
+	//   • `x = y` and `x = x + 1` — `self-assignment.md`'s own false-reject controls.
+	//   • `x = (x)` — parenthesized: different tokens, so not refused. ⚠ **THE RUNNABLE ORACLE DOES REFUSE
+	//     IT** (measured: `error E3067: … self-assignment has no effect: 'x = x'`), because its rule is
+	//     SEMANTIC — it asks whether the parsed RHS resolved to the same variable. shv2 takes the reference
+	//     v1 compiler's textual rule instead, the one the registry describes and the one that cannot be
+	//     wrong about what a program MEANS: it can only ever miss, never mis-refuse.
+	//
+	// ⚠⚠ **AND IT IS STRICTER THAN THE ORACLE IN TWO DIRECTIONS, WHICH IS THE HALF THAT CAN BREAK A
+	// PROGRAM THE ORACLE COMPILES.** A looser rule only lets a bad program through; a stricter one refuses
+	// a good one, so these are the divergences worth writing down:
+	//
+	//   • `self.n = self.n` and `a.b.c = a.b.c` — **both COMPILE CLEAN on the bootstrap** (measured). Its
+	//     `IsFieldSelfAssignment` (`2-Parser.cs:11823`) matches a `MaxonStructVarRefOp` plus ONE field
+	//     name, so it sees neither the `self` receiver nor a chain of more than one hop. shv2 refuses both,
+	//     because they are the same mistake and the chain walk costs nothing to ask uniformly; carving
+	//     `self` back out would be more code for a worse rule.
+	//   • **PRECEDENCE, not scope**: this runs before name resolution and before the mutability check, so
+	//     `let x = 1` / `x = x` is E3067 here where the oracle says "cannot assign to immutable variable",
+	//     and an undeclared `x = x` is E3067 here where the oracle says undefined-variable. The refusal is
+	//     correct in every case; only which of two true complaints is reported first differs. Nothing pins
+	//     either, and moving the check later would cost it the one property that makes it cheap — it reads
+	//     TOKENS, at a point where no op has been emitted and nothing has to be unwound.
+	//   • `arr[i] = arr[i]`, `m.get(k) = …` — an index or a call is not a chain hop, so the walk stops at
+	//     the `[` / `(`, the LHS never reaches an `=`, and this rule never looks at the statement at all.
+	//   • `_ = f()`, `_ = try stack.pop() otherwise 0` — the discard's whole purpose.
+	//   • `_ = someBinding` — the DISCARD-A-BINDING idiom, which satisfies E3012 for a value a build
+	//     configuration leaves unused. It is LIVE in the corpus (`stdlib/Internals.maxon`'s
+	//     `__leak_count_dec`, plus four committed `specs-shv2` cases), so only a bare LITERAL is refused
+	//     here, never "anything that is not a call". ⚠ The oracle refuses `_ = someBinding`; shv2 does not,
+	//     and that gap is deliberate — closing it would falsify five programs this tree already compiles.
+	//   • `_ = true` — `true`/`false` lex as KEYWORDS, not as literal kinds, so `tokenIsLiteralKind` (THE
+	//     one literal list, shared with `tokenCanBeAName`) does not admit them and this does not fire. A
+	//     second literal list written out here to catch two token kinds no corpus program writes would be
+	//     the duplication that list exists to prevent.
+	//
+	// ⚠ **THE STATEMENT-END TEST IS LOAD-BEARING, NOT DEFENSIVE.** Drop it and `x = x + 1` — the spec's own
+	// control — fires: its RHS chain IS `x` and matches the LHS token for token. What makes it a different
+	// program is only the `+ 1` that follows, so "the chain is the WHOLE right-hand side" is the rule.
+	//
+	// Asked once, from `parseStatement`, before the dispatch — rather than from each of the three
+	// assignment arms — because the shape it refuses spans all of them (`assignsAt`, `fieldAssignsAt` and
+	// `selfFieldAssignsAt` each own one spelling of it) and a fourth write form would otherwise have to
+	// remember to ask. A statement that opens with something the chain walk refuses costs one predicate.
+	function rejectDegenerateAssignment(index TokenIndex) throws ParseError
+		let lhsEnd = self.fieldChainEndAfter(index, minHops: AnyFieldHops)
+		if lhsEnd == index or self.kindAt(lhsEnd) != TokenKind.equals 'notAnAssignmentStatement'
+			return
+		end 'notAnAssignmentStatement'
+
+		let anchor = self.tokenAt(index)
+		let rhsStart = lhsEnd + 1
+
+		// Rule 2 first, because it is the one rule keyed on WHICH name the target is. The discard is the
+		// BARE `_` and only that — `lhsEnd == index + 1` is the zero-hop chain — so `_.field = 42` (which
+		// binds nothing and is not a legal program by any route) is not told "expected a function call",
+		// a sentence about a rule it is not breaking.
+		//
+		// ⚠ It does NOT `return` when the RHS is not a literal, so `_ = _` still falls through to rule 1
+		// and is refused as the self-assignment it textually is. An early return here would have made the
+		// header's "rule 1 has no exceptions" false for exactly one spelling.
+		if anchor.value.equals(DiscardBindingName) and lhsEnd == index + 1 and tokenIsLiteralKind(self.kindAt(rhsStart)) and self.statementEndsAt(rhsStart + 1) 'discardOfALiteral'
+			throw ParseError.discardOfALiteral(anchor.line, column: anchor.column)
+		end 'discardOfALiteral'
+
+		// The RHS must be the SAME LENGTH as the LHS and nothing more, which is one question rather than
+		// two: read the same span of tokens after the `=`, and require the statement to stop right there.
+		let chainLength = lhsEnd - index
+		if not self.statementEndsAt(rhsStart + chainLength) 'rhsIsNotJustTheChain'
+			return
+		end 'rhsIsNotJustTheChain'
+
+		if not self.tokenSpansAreIdentical(index, other: rhsStart, length: chainLength) 'notTheSameChain'
+			return
+		end 'notTheSameChain'
+
+		throw ParseError.selfAssignmentHasNoEffect(self.renderChain(index, length: chainLength), line: anchor.line, column: anchor.column)
+	end 'rejectDegenerateAssignment'
+
+	// ⭐ **THE COMPARE ALLOCATES NOTHING, AND THAT IS THE POINT — IT RUNS ON EVERY ASSIGNMENT IN THE
+	// PROGRAM.** `x = y`, `p.x = q.y` and `self.a = self.b` all reach it and all differ; only the refused
+	// program ever reaches `renderChain`. Fused with the rendering — which is how it was first written —
+	// every one of them paid an empty `String` plus one interpolation and one `String.from` PER MATCHED
+	// TOKEN before finding the difference, and `self.a = self.b` paid two of each on every compile.
+	//
+	// ⚠ **THIS PROJECT HAS ALREADY BOUGHT THIS LESSON ONCE**: `NamePosition` exists because handing a
+	// rendered `String` down a per-token path measured **+5,495 allocations at rung 0, doubling per rung**.
+	// A diagnostic's text is owed only by the program that gets the diagnostic.
+	function tokenSpansAreIdentical(index TokenIndex, other TokenIndex, length TokenIndex) returns bool
+		var offset = 0
+		while offset < length 'eachToken'
+			let left = self.tokenAt(index + offset)
+			let right = self.tokenAt(other + offset)
+			if left.kind != right.kind or not left.value.equals(right.value) 'differs'
+				return false
+			end 'differs'
+
+			offset = offset + 1
+		end 'eachToken'
+
+		return true
+	end 'tokenSpansAreIdentical'
+
+	// A field chain spelled back as the author wrote it, for a diagnostic that must quote it. A chain
+	// token is either a name — whose `value` carries the spelling — or the `.`, which is punctuation and
+	// whose `value` is EMPTY by `Token.value`'s rule, so its spelling is its kind. That emptiness test is
+	// the same one `tokenCanBeAName` tells the two apart by, rather than a second rule about dots.
+	function renderChain(index TokenIndex, length TokenIndex) returns String
+		var rendered = ""
+		var offset = 0
+		while offset < length 'eachToken'
+			let tok = self.tokenAt(index + offset)
+			rendered = "{rendered}{tok.kind.rawValue}" if tok.value.isEmpty() else "{rendered}{String.from(tok.value)}"
+			offset = offset + 1
+		end 'eachToken'
+
+		return rendered
+	end 'renderChain'
 
 	// **The token shape of a FIELD STORE** — `<base> . <field> =`, asked at an ABSOLUTE index.
 	//
