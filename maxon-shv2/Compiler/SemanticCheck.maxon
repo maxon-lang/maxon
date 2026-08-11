@@ -2664,8 +2664,10 @@ function functionValueGoverningName(project Project, func IrFunction, value Valu
 end 'functionValueGoverningName'
 
 // ⭐ **DRAIN THE FUNCTION-TYPE DOORS — the whole-program half of a rule the parser can only record.** Each
-// entry is a function VALUE that met a function-typed place (a cast, a `return`, an assignment); the two
-// shapes must agree, and until this drained, only the `function` TAG was compared. See
+// entry is a function VALUE that met a function TYPE the program fixed somewhere else — a place it is stored
+// in or passed through, and (since function-backed enums and container columns) a DECLARATION that fixes one
+// without any value flowing at all. The two shapes must agree, and until this drained, only the `function`
+// TAG was compared. `FunctionTypeDoor` is the roster and is deliberately not re-listed here; see
 // `PendingFunctionTypeDoor` and `Parser.recordFunctionTypeDoor`.
 function checkFunctionTypeDoors(project Project)
 	for door in project.pendingFunctionTypeDoors 'eachDoor'
@@ -2685,8 +2687,8 @@ function checkOneFunctionTypeDoor(project Project, door PendingFunctionTypeDoor)
 	let actual = formatFunctionShapeDisplay(got, typeNames: project.typeNames)
 	// A cast is a CAST rejection and takes E3009, the sibling of the cross-kind refusal
 	// `castHasNoLegalConversion` makes; every other door is a type mismatch and takes E3005, the sibling of
-	// what a bool meeting a declared int earns there. One sentence for all three, because one RULE decided
-	// all three — only the site phrase differs.
+	// what a bool meeting a declared int earns there. ONE sentence for every door, because one RULE decides
+	// them all — the site phrase is the whole of what varies.
 	let code = ErrorCode.semanticUnsafeCast if door.door == FunctionTypeDoor.cast else ErrorCode.typeMismatch
 	reportPositioned(project, code: code, message: "function type mismatch {functionTypeDoorSite(door)}: expected '{expected}', got '{actual}'", line: door.line, column: door.column, filePath: door.filePath)
 end 'checkOneFunctionTypeDoor'
@@ -2759,16 +2761,24 @@ function checkTransformParamType(project Project, transform PendingTransformArit
 	reportPositioned(project, code: ErrorCode.typeMismatch, message: "`{method}` calls its transform with the container's own element, which is '{displayNameOfAggregate(transform.elementTag, aggregate: transform.elementIdentity)}' — but this transform declares its parameter as '{displayNameOfAggregate(paramTag, aggregate: paramIdentity)}'; a transform is `function(Element) returns Element`, so its parameter IS the element", line: transform.line, column: transform.column, filePath: transform.filePath)
 end 'checkTransformParamType'
 
-// Where the door was, as the diagnostic says it. An assignment names its place (`assigning to variable
-// 'g'`); a cast and a `return` are the construct itself and name nothing, which is why the record's
-// `placeName` is empty for them and why the three assignment arms are covered by ONE range arm. A PAYLOAD
-// names its field without a place word — it is a union CONSTRUCTION, not an assignment — which is why it has
-// an arm of its own rather than joining the range.
+// Where the door was, as the diagnostic says it — ONE arm per `FunctionTypeDoor`, and a new door cannot be
+// declared without being given its sentence here. The shapes the arms fall into, rather than a list of them:
+// an ASSIGNMENT names its place with a place word (`assigning to variable 'g'`), and those arms differ in
+// nothing else, which is why one range arm covers them and `functionTypeDoorNoun` supplies the word. Every
+// other door words itself, because each names something that is not a place: a cast and a `return` ARE the
+// construct and name nothing (their `placeName` is empty), a payload and an enum case name their own
+// DECLARATION, and a container column names neither.
 function functionTypeDoorSite(door PendingFunctionTypeDoor) returns String
 	return match door.door 'd'
 		cast gives "in cast"
 		returned gives "in return"
 		payload gives "storing into union payload '{String.from(door.placeName)}'"
+		enumCaseBacking gives "backing enum case '{String.from(door.placeName)}'"
+		// ⚠ It names the ELEMENT and not the literal, because the literal is not what is wrong: the element
+		// disagrees with the one the container's instance was fixed to. (An earlier wording said "in a
+		// container literal" while the door was also recorded from `m.upsert(…)` — a sentence about syntax,
+		// on a method call. That second site turned out to be redundant and is gone; the noun stayed.)
+		containerElement gives "in a container element"
 		variable to field gives "assigning to {functionTypeDoorNoun(door.door)} '{String.from(door.placeName)}'"
 	end 'd'
 end 'functionTypeDoorSite'
@@ -3215,9 +3225,41 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// body on a `self` receiver (tagged with the base `structRef`) never substitutes and keeps the P1.6-A
 		// deferral it must have: inside the body `T` is genuinely opaque and `tagIsIntegral(typeParameter)`
 		// stays `false`.
+
 		if not expected.isEmpty() 'nominalArgumentAlreadyMatched'
 			continue
 		end 'nominalArgumentAlreadyMatched'
+
+		// ⭐⭐ **A `function` TYPE ARGUMENT FALLS BETWEEN THE TWO HALVES ABOVE, AND NOTHING ELSE CATCHES IT.**
+		// It carries no nominal identity — `typeArgAggregateName` answers empty, which is right, because a
+		// function type's identity IS its shape and not a name — so the nominal half cannot judge it; and the
+		// tag half below compares `function` against `function` and agrees with every signature in the program.
+		//
+		// ⭐ **WHAT REACHES HERE IS ANY CALL WITH A REAL `FuncSignature` WHOSE PARAMETER IS A BARE `T`** — and
+		// every route below was RUN before it was written down, because the first two attempts at this
+		// paragraph were each partly wrong:
+		//
+		//   • a user generic's method — `Box with UnaryOp` accepting `OpBox.create(floatFn)`, the measured
+		//     miscompile this arm closes (`.held()` then called a float function through an int convention);
+		//   • `generic-type-parameter-slots`' `Holder with UnaryOp`, whose committed `function-value-element`
+		//     case is what proves this line EXECUTES at all — verified by sabotage, not assumed;
+		//   • `Map.upsert`/`insert`, whose corpus `Map` methods are ordinary signatured calls, **including the
+		//     ones a `["k": v]` literal desugars to** (`Parser.emitMapLiteralUpsert`). So the map literal and
+		//     the hand-written mutator are one route, and it is this one.
+		//
+		// ⚠ **THE ARRAY LITERAL IS NOT HERE, AND THAT IS WHY ITS OWN DOOR EXISTS.** `Array` is
+		// parser-intrinsic: `[a, b]` builds through `__arr_create`/`__arr_push` runtime entries carrying no
+		// signature, so nothing in this pass sees its elements. `Parser.requireArrayLiteralElementMatches`
+		// records a `containerElement` door for exactly that gap — MEASURED both ways, by deleting each and
+		// watching which programs went quiet. `Array.push` and `List.append` are a third route again (the
+		// parser's `field` door), which is the asymmetry that hid all of this: one rule, covered on some
+		// containers and not their siblings.
+		if maxonTypeTag(substituted) == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionTypeArgument'
+			if checkFunctionArgShape(project, func: func, declaredShape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: signatures.indexFunctionTypeName(substituted), side: "declared"), argId: argId, paramName: paramName, position: i, callRange: callRange, filePath: filePath) 'signatureMismatch'
+				return
+			end 'signatureMismatch'
+			continue
+		end 'functionTypeArgument'
 
 		// The substituted type argument carries no pre-erasure carrier of either kind: it is the INSTANCE's own
 		// argument type, read live out of the signature index rather than off a declaration this pass ever saw.
@@ -4417,17 +4459,53 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 	// two shapes must be compared whole-program and RESOLVED, and this pass already is both. `checkDeclaredType`
 	// below answers `ok` for it (two `function` tags agree), which is how `use(intish)` reached the backend
 	// with a callee returning an integer where the call site read the float return register.
+	//
+	// ⚠ **THE NAME IS READ IN THIS PASS'S OWN SPACE HERE, AND ITS SIBLING DOOR MUST NOT COPY THAT.**
+	// `paramType` is a DECLARED type that `resolveTypes` already crossed into `project.typeNames`, so
+	// `functionTypeNameOf` is the right reader for it. The substituted door
+	// (`checkTypeParameterArgsAt`) holds an INDEX-space type instead and reads its name through the index —
+	// see there. The two are one line apart in shape and a different interner apart in meaning.
 	if paramTag == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionArg'
-		let declaredShape = functionShapeThroughCallInstance(project, func: func, subject: callInstanceSubject, shape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionTypeNameOf(functionTypeRegistryOf(project), nameId: typeNameIdOf(paramType)), side: "declared"))
-		let gotShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: argId), side: "arriving")
-		if not functionShapesAgree(functionTypeRegistryOf(project), declared: declaredShape, got: gotShape) 'signatureMismatch'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames), got: formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames)), line: callRange.line, column: callRange.column, filePath: filePath)
+		if checkFunctionArgShape(project, func: func, declaredShape: functionShapeThroughCallInstance(project, func: func, subject: callInstanceSubject, shape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionTypeNameOf(functionTypeRegistryOf(project), nameId: typeNameIdOf(paramType)), side: "declared")), argId: argId, paramName: paramName, position: position, callRange: callRange, filePath: filePath) 'signatureMismatch'
 			return
 		end 'signatureMismatch'
 	end 'functionArg'
 
 	_ = checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: paramType, declaredAggregate: expectedAggregate, declaredName: declaredParamName, paramName: paramName, position: position, callRange: callRange, filePath: filePath)
 end 'checkOneArgType'
+
+// ⭐⭐ **A FUNCTION VALUE MEETING A FUNCTION-TYPED ARGUMENT POSITION — the comparison and its sentence, for
+// BOTH doors that reach one.** Answers whether it REPORTED, so each caller stops on a refusal exactly as it
+// already did.
+//
+// ⚠ **IT TAKES THE DECLARED SHAPE ALREADY RESOLVED, AND THAT IS THE WHOLE OF WHY IT IS NOT `(project,
+// declaredType)`.** Its two callers hold that type in DIFFERENT INTERNERS — a concrete parameter's is
+// project-space, a substituted type argument's is index-space — so a shared `id → name → shape` chain here
+// would be exactly the door that hides a cross-space read. Each caller crosses on the side that owns its ids
+// and hands over the answer; names travel between interners, ids never do
+// (`ProgramSignatures.indexFunctionTypeName`).
+//
+// ⛔⛔ **THE SECOND CALLER IS WHY THIS IS SHARED, AND IT WAS A LIVE SILENT MISCOMPILE.** A generic instance's
+// method takes its parameter as an opaque `T`, so `checkOneArgType`'s own arm — which keys on the PARAMETER
+// being `function`-tagged — never sees it; the substituted route (`checkTypeParameterArgsAt`) judges a type
+// argument by its NOMINAL identity, and a function type has none (`typeArgAggregateName` answers empty,
+// deliberately and correctly — a function type's identity is its SHAPE, not a name). Both halves passed and
+// the value fell through to the tag rule, where two `function` tags agree. MEASURED on a user generic:
+// `Box with UnaryOp` accepting `OpBox.create(floatFn)`, whose `.held()` then called a float function through
+// an int calling convention.
+//
+// ⚠ **`Project.maxon`'s door census recorded this position as REFUTED — *"the nominal half FIRES"* — and
+// that is now corrected there.** It fires for every type argument that HAS a nominal identity, which is
+// exactly the group a function type is not in.
+function checkFunctionArgShape(project Project, func IrFunction, declaredShape FunctionShape, argId ValueId, paramName ByteArray, position ParamCount, callRange SourceRange, filePath FilePath) returns bool
+	let gotShape = requireFunctionShapeOf(functionTypeRegistryOf(project), name: functionValueGoverningName(project, func: func, value: argId), side: "arriving")
+	if functionShapesAgree(functionTypeRegistryOf(project), declared: declaredShape, got: gotShape) 'agree'
+		return false
+	end 'agree'
+
+	reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: formatFunctionShapeDisplay(declaredShape, typeNames: project.typeNames), got: formatFunctionShapeDisplay(gotShape, typeNames: project.typeNames)), line: callRange.line, column: callRange.column, filePath: filePath)
+	return true
+end 'checkFunctionArgShape'
 
 // ⭐ **THE COERCION RULE ON ONE ARGUMENT, AND ITS FOUR WORDINGS — STATED ONCE FOR THE THREE SITES THAT
 // ASK IT.** A concrete parameter asks it through `checkOneArgType` (a direct call's slotted argument, an

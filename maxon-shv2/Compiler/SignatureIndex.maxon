@@ -101,6 +101,7 @@ let EnumBackingInteger = 68 as ContentHash
 let EnumBackingFloat = 69 as ContentHash
 let EnumBackingString = 79 as ContentHash
 let EnumBackingCharacter = 80 as ContentHash
+let EnumBackingFunctionRef = 81 as ContentHash
 
 // The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
 // without being given a hash constant here — which is exactly how the string and character ones arrived.
@@ -111,6 +112,7 @@ function enumBackingDiscriminator(backing EnumBacking) returns ContentHash
 		float gives EnumBackingFloat
 		string gives EnumBackingString
 		character gives EnumBackingCharacter
+		functionRef gives EnumBackingFunctionRef
 	end 'b'
 end 'enumBackingDiscriminator'
 
@@ -14531,6 +14533,45 @@ export type ProgramSignatures
 		let elementId = self.typeNames.intern(element)
 		return MaxonType.structRef(elementId) if isTupleTypeName(element) else MaxonType.named(elementId)
 	end 'namedElementType'
+
+	// ⭐⭐ **THE FUNCTION-VALUED TWIN OF `namedElementType`, AND IT EXISTS FOR THAT ONE'S STATED REASON: THE
+	// INTERNER.** A container instance's type arguments live in THIS index's interner, and a `function` element
+	// carries a `TypeNameId` like every other named type — so a caller holding only the parser's FILE-LOCAL id
+	// cannot build the argument itself. It must hand over the NAME and let the registry that owns the ids do
+	// the interning, exactly as the `named`/`structRef` arm above does.
+	//
+	// ⛔ **MEASURED, not defensive.** `Parser.literalColumnTypeFor` first built `MaxonType.function(<the
+	// parser's own id>)` directly. The id was a valid id in the WRONG interner, so `[double, triple]` interned
+	// an instance whose element named whatever that number meant here — and reading an element back out of it
+	// (`ops.get(1)` then calling it) reported the governing name as **'Array'** and PANICKED
+	// `functionValueReturnType`. It compiled and parsed cleanly right up to the call; nothing but running it
+	// says which interner an id came from.
+	export function functionElementType(element ByteArray) returns MaxonType
+		return MaxonType.function(self.typeNames.intern(element))
+	end 'functionElementType'
+
+	// ⭐⭐ **THE NAME BEHIND A `function` TYPE THAT LIVES IN *THIS INDEX'S* SPACE — the read side of the door
+	// above, and the crossing point for every caller holding an index-space type.** A function type is
+	// governed by a NAME (see `MaxonType`'s `function` arm), the whole-program shape lookups are keyed by that
+	// name, and `ProgramSignatures.typeNames` is a different table from `project.typeNames` with its own
+	// insertion order — so an id from here means whatever name happens to sit at that number THERE. The rule
+	// this states, once, for both readers: **names travel between interners; ids never do.**
+	//
+	// ⛔⛔ **BOTH READERS WERE CAUGHT BY IT, ONE LOUDLY AND ONE SILENTLY, WHICH IS WHY IT IS ONE DOOR.**
+	//   • The CONTAINER COLUMN read a parser file-local id here and reported the governing name as `'Array'`,
+	//     panicking `requireFunctionShapeOf` — a crash, so it was found immediately.
+	//   • `SemanticCheck.checkTypeParameterArgsAt`'s SUBSTITUTED type argument read an index-space id through
+	//     the PROJECT registry and worked, because the two tables happened to agree at that number. PROVEN by
+	//     sabotage rather than by the passing case: `generic-type-parameter-slots.function-value-element`
+	//     reaches the line with `id=3`, and id 3 is `UnaryOp` in both tables for that program. A read that is
+	//     correct only while two independent insertion orders coincide is a wrong answer waiting for a third
+	//     declaration, and no green case can tell the two apart.
+	//
+	// It is named for the SPACE and not for a caller ("container column" was its first name, and the second
+	// caller is not a column) because the space is the whole of what it settles.
+	export function indexFunctionTypeName(indexSpaceType MaxonType) returns ByteArray
+		return try self.typeNames.nameOf(typeNameIdOf(indexSpaceType)) otherwise panic("ProgramSignatures.indexFunctionTypeName: type-name id {typeNameIdOf(indexSpaceType)} is not in this index's interner — a container column's type argument and an instance's substituted argument are both interned HERE, so an id that misses came from another table and every name it could answer would be the wrong one")
+	end 'indexFunctionTypeName'
 
 	// Over-intern `<base> with <T>` for the possible element types of an array literal whose elements the
 	// sweep's tokens cannot name (P1.7 slice 3): a local identifier's type is unknowable there, so

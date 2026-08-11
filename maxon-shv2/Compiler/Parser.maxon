@@ -1455,12 +1455,18 @@ enum EnumCaseConstant
 	// `.rawValue` of a STRING-backed enum — `EnumLayout.caseRawValues[i]`, the declared string, as an
 	// immortal `.rdata` String. The three NUMERIC backings never reach the sum: their tag IS the raw value.
 	declaredRawValue
+	// ⭐ `.rawValue` of a FUNCTION-backed enum — `EnumLayout.caseRawValues[i]` read as the NAME of a declared
+	// function, materialized as that function's `__fnref_` thunk address (`Parser.emitFunctionRef`). It is
+	// a machine word that is constant per case, exactly as the two `.rdata` addresses above are, which is
+	// the whole reason a function backing needed a COLUMN here and not a mechanism of its own.
+	caseFunctionRef
 end 'EnumCaseConstant'
 
 // ⭐ **WHERE THE SUM STARTS, WHICH IS A PROPERTY OF THE COLUMN AND NOT OF THE ENUM.** A declaration index's
 // first term is `0 × (tag == tag₀)` — identically zero whichever case the value is — so it is folded into
-// the seed and the chain begins at case 1. Both string columns select a `.rdata` ADDRESS, which is never
-// zero, so their case 0 carries real information and must be summed like any other.
+// the seed and the chain begins at case 1. Both string columns select a `.rdata` ADDRESS and the function
+// column a `.text` one, none of which is ever zero, so their case 0 carries real information and must be
+// summed like any other.
 //
 // A full match rather than a `default`: a column appended to `EnumCaseConstant` whose first constant is not
 // provably zero would otherwise silently inherit the skip and answer the SECOND case's constant for the
@@ -1470,6 +1476,7 @@ function firstSummedCaseIndex(column EnumCaseConstant) returns CaseIndex
 		declarationIndex gives FirstSummedCaseIndex
 		caseName gives FirstCaseIndex
 		declaredRawValue gives FirstCaseIndex
+		caseFunctionRef gives FirstCaseIndex
 	end 'c'
 end 'firstSummedCaseIndex'
 
@@ -16662,7 +16669,11 @@ export type Parser
 				continue
 			end 'method'
 
+			// The member's first token is the case's NAME token, which is where the reference anchors every
+			// per-case diagnostic. Read before the case rather than after, because reading it moves the cursor.
+			let caseTok = self.current()
 			try self.readEnumCaseInto(layout, counter: counter)
+			try self.checkFunctionBackedCase(layout, caseTok: caseTok)
 		end 'members'
 
 		try self.consume(TokenKind.end)
@@ -16833,6 +16844,13 @@ export type Parser
 			return
 		end 'literalRawValue'
 
+		// A FUNCTION raw value (`doubleOp = doubleFn`) — the case is backed by a reference to a declared
+		// function, and `Op.doubleOp.rawValue` hands that function back as a callable value.
+		if self.atEnumFunctionRawValue() 'functionValue'
+			try self.appendFunctionBackedEnumCase(layout, caseName: caseName, counter: counter, caseTok: nameTok)
+			return
+		end 'functionValue'
+
 		// An INTEGER raw value (possibly negated). It resets the auto-increment counter to value + 1,
 		// which is what makes `enum E { a = 5  b }` give `b` the tag 6.
 		let intValue = try self.readEnumIntRawValue()
@@ -16891,6 +16909,106 @@ export type Parser
 		let tag = self.nextAutoEnumTag(counter)
 		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(bytes), caseTok: caseTok, payloads: PayloadFieldArray.create())
 	end 'appendLiteralBackedEnumCase'
+
+	// ⭐ **IS THE CURSOR ON A FUNCTION RAW VALUE — `= doubleFn` — RATHER THAN ON A STRUCT ONE?** Both are
+	// written as a bare identifier after the `=`, and the ONE token behind it is what separates them: a
+	// struct backing continues into a construction (`Point{…}`) or a static call (`Point.origin`), a function
+	// reference stops at the name. This is the same one-token lookahead the reference disambiguates them with
+	// (`maxon-selfhosted/Compiler/Parser.maxon:5484-5495`), so a struct raw value keeps reaching
+	// `readEnumIntRawValue`'s refusal instead of being silently read as a function no file declares.
+	//
+	// ⚠ **STATED POSITIVELY — WHAT MAY FOLLOW — AND NOT AS A BLACKLIST OF `{` AND `.`.** A function raw value
+	// IS the whole raw value, so the next token must end the case: the newline before the next member, or the
+	// `end` that closes the body. Written as "anything but `{` or `.`", `= someFn(3)` was admitted, the name
+	// taken as the backing, and the leftover `(3)` surfaced from the members loop as a malformed CASE NAME —
+	// a diagnostic at the wrong token saying nothing about raw values. A blacklist also has to be re-audited
+	// by every construct that ever puts a new token after a name; this cannot be widened wrongly.
+	function atEnumFunctionRawValue() returns bool
+		if not self.at(TokenKind.identifier) 'notAName'
+			return false
+		end 'notAName'
+
+		let next = self.peekKind()
+		return next == TokenKind.newline or next == TokenKind.end or next == TokenKind.eof
+	end 'atEnumFunctionRawValue'
+
+	// ⭐⭐ **A FUNCTION-BACKED CASE (`doubleOp = doubleFn`) — the DECLARATION half, which records a NAME and
+	// nothing else.** The address is not knowable here and deliberately is not looked for: the function may
+	// be declared later in the file or in another file entirely (`function-backing.forward-reference`,
+	// `.cross-file`), and this same reader runs inside the tolerant declaration SWEEP, which has no
+	// whole-program index to ask. So the case carries the function's NAME on `caseRawValues` and the
+	// callable value is materialized per read (`Parser.emitEnumCaseConstant`), which is also what makes the
+	// binding whole-program rather than file-ordered.
+	//
+	// ⭐ **THE TAG IS THE AUTO-INCREMENT DECLARATION INDEX**, for the STRING backing's reason exactly: a
+	// function reference is not a number, so it cannot be one. E3031 then compares the recorded NAMES
+	// (`EnumLayout.rawValueCollidesAt` past `tagCarriesRawValue`), which is what refuses `a = f  b = f` —
+	// the reference keys its duplicate check on the same column.
+	function appendFunctionBackedEnumCase(layout EnumLayout, caseName ByteArray, counter EnumTagCounter, caseTok Token) throws ParseError
+		let functionTok = try self.consume(TokenKind.identifier)
+		try self.requireEnumBacking(layout, kind: EnumBacking.functionRef, caseTok: caseTok)
+		let tag = self.nextAutoEnumTag(counter)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(functionTok.value), caseTok: caseTok, payloads: PayloadFieldArray.create())
+	end 'appendFunctionBackedEnumCase'
+
+	// ⭐⭐ **THE NAME OF CASE `index`'S BACKING FUNCTION — the ONE reader of the convention that, for this
+	// backing, `caseRawValues` holds a function's name.** Four sites want it (the declaration check's two
+	// sides, the token minted below, and `enumFunctionBackingGoverningName`), and it was spelled out at each;
+	// a convention restated four times is one nobody can change.
+	//
+	// ⚠ **`FirstCaseIndex` IS A LEGAL ARGUMENT FOR ANY FUNCTION-BACKED LAYOUT, and that is a property of the
+	// backing rather than of the caller.** The backing is fixed BY a case (`requireEnumBacking` runs from
+	// inside the case reader), so `EnumBacking.functionRef` implies at least one case exists — which is what
+	// lets `enumFunctionBackingGoverningName` index case 0 without asking, and what the panic below says if
+	// the implication is ever broken.
+	function enumCaseFunctionName(layout EnumLayout, index CaseIndex) returns ByteArray
+		if index >= layout.caseCount() 'noSuchCase'
+			panic("Parser.enumCaseFunctionName: `{layout.kindWord()} {String.from(layout.name)}` is function-backed but has no case {index} — a backing is fixed BY a case, so a function-backed layout has at least one and `FirstCaseIndex` is always in range")
+		end 'noSuchCase'
+
+		return layout.rawValueAt(index).toByteArray()
+	end 'enumCaseFunctionName'
+
+	// ⭐ **THAT NAME AS A TOKEN**, positioned at `anchor` — what the two gates that take one need, since a
+	// function-backed case records a name and no token (the declaration is read by the tolerant sweep too,
+	// whose tokens are gone by the time anything asks).
+	function enumCaseFunctionToken(layout EnumLayout, index CaseIndex, anchor Token) returns Token
+		return Token.create(TokenKind.identifier, line: anchor.line, column: anchor.column, value: self.enumCaseFunctionName(layout, index: index))
+	end 'enumCaseFunctionToken'
+
+	// ⭐⭐ **THE TWO THINGS A FUNCTION-BACKED CASE OWES, ASKED AT THE DECLARATION — where every one of them is
+	// asked exactly once, whether or not any program ever reads the enum.**
+	//
+	//   1. **The name must stand as a function VALUE at all** — declared, non-throwing, and returning
+	//      something a single result register can carry. Asked through `requireNameIsUsableAsFunctionValue`,
+	//      the very gate `emitFunctionRef` applies to `let f = doubleFn`, because it is the same claim: the
+	//      case IS a function reference, written in a declaration instead of an expression.
+	//   2. **Its signature must be the one the enum already fixed.** `/specs/enum-function-backing.md` states
+	//      it — *"All cases must share the same function signature"* — and shv2 additionally DEPENDS on it:
+	//      `.rawValue` hands back ONE value whose governing name is the FIRST case's function, so a second
+	//      case with a different shape would be called through a promise it does not keep. The parser cannot
+	//      decide it (a shape lives in the whole-program `funcSignatures` and is compared RESOLVED), so it is
+	//      recorded as a `PendingFunctionTypeDoor` like every other function-shape question and
+	//      `SemanticCheck.checkFunctionTypeDoors` answers it.
+	//
+	// ⚠ **REAL PARSE ONLY, and that is why it is HERE and not in `readEnumCaseInto`.** The tolerant sweep
+	// shares that reader and swallows its throws, which truncates the layout and misassigns every later
+	// case's tag (see there) — and it runs before the whole-program index this asks even exists.
+	function checkFunctionBackedCase(layout EnumLayout, caseTok Token) throws ParseError
+		if layout.backing != EnumBacking.functionRef 'notFunctionBacked'
+			return
+		end 'notFunctionBacked'
+
+		let index = layout.caseCount() - 1
+		try self.requireNameIsUsableAsFunctionValue(self.enumCaseFunctionToken(layout, index: index, anchor: caseTok))
+
+		// The FIRST case fixes the signature, so it has nothing to be compared against.
+		if index == FirstCaseIndex 'fixesTheSignature'
+			return
+		end 'fixesTheSignature'
+
+		self.recordFunctionTypeDoorByName(self.enumCaseFunctionName(layout, index: FirstCaseIndex), gotName: self.enumCaseFunctionName(layout, index: index), door: FunctionTypeDoor.enumCaseBacking, placeName: layout.caseNameAt(index), anchor: caseTok)
+	end 'checkFunctionBackedCase'
 
 	// The codepoint a CHARACTER raw value denotes.
 	//
@@ -16978,8 +17096,9 @@ export type Parser
 
 	// Parse an INTEGER raw value (`= 200`, `= -1`) — the same literal reading `parseRangeBound` does,
 	// minus the type-qualified bounds a raw value cannot be. The string and char raw values are read by
-	// `appendLiteralBackedEnumCase` before this is reached; a struct/function/identifier raw value is a
-	// backing shv2 does not have, named rather than silently mapped onto the int path.
+	// `appendLiteralBackedEnumCase` before this is reached and a function reference by
+	// `appendFunctionBackedEnumCase`; a STRUCT raw value is a backing shv2 does not have, named rather than
+	// silently mapped onto the int path.
 	function readEnumIntRawValue() returns ParsedInt throws ParseError
 		if self.at(TokenKind.minus) 'negative'
 			try self.consume(TokenKind.minus)
@@ -16993,7 +17112,7 @@ export type Parser
 		end 'literal'
 
 		let tok = self.current()
-		throw ParseError.unsupported("a raw value of kind '{tok.kind.rawValue}' (an integer, float, string or character raw value is parsed; struct and function backings arrive with later rungs)", line: tok.line, column: tok.column)
+		throw ParseError.unsupported("a raw value of kind '{tok.kind.rawValue}' (an integer, float, string, character or function raw value is parsed; a struct backing arrives with a later rung)", line: tok.line, column: tok.column)
 	end 'readEnumIntRawValue'
 
 	// ⭐ **FIX THE LAYOUT'S BACKING TO `kind`, OR RAISE E3032 IF A DIFFERENT ONE WAS ALREADY FIXED.** The
@@ -20836,7 +20955,7 @@ export type Parser
 		// AFTER the rebind, deliberately: the box takes its reference to the value the BINDING ended up
 		// holding, which for a borrowed RHS is the owned copy `reassignBindingValue` promoted it to.
 		if binding.isPayloadBinding 'writeBackIntoTheBox'
-			self.writeBackPayload(binding, nameTok: nameTok)
+			try self.writeBackPayload(binding, nameTok: nameTok)
 		end 'writeBackIntoTheBox'
 	end 'parseAssignment'
 
@@ -20863,10 +20982,29 @@ export type Parser
 	// a reassignment cannot change the answer — a scalar binding's declared type refuses a heap RHS), so
 	// membership IS the fact, already single-homed in `bindingIsOwned`. A second column would be free to
 	// disagree with the set that actually emits the drop.
-	function writeBackPayload(binding VarInfo, nameTok Token)
+	function writeBackPayload(binding VarInfo, nameTok Token) throws ParseError
 		let range = SourceRange.ofToken(nameTok)
 		let value = binding.boundValue
 		let managed = self.bindingIsOwned(binding)
+
+		// ⭐⭐ **AN ESCAPE ROUTE OF ITS OWN, GUARDED HERE BECAUSE IT IS *THIS STORE* THAT ESCAPES.** A
+		// payload binding looks like a plain local — assigning a capturing closure to a real local is legal and
+		// must stay legal — so the refusal cannot live at the assignment. What makes this one an escape is the
+		// line below: the environment block lives in THIS frame and the box outlives it. Sitting on the emitter,
+		// the guard cannot be routed around by a second assignment path.
+		//
+		// ⚠ **THE SHELVED CASE'S DIVERGENCE ARGUMENT DIED WHEN THE WRITE-BACK WAS BUILT.** It read *"shv2
+		// payload bindings are IMMUTABLE frame-local COPIES … shv2 never writes back through a payload binding,
+		// so the E3099 escape route does not exist here"*, and E2013 was doing the refusing. `31c4435de` built
+		// mutable payload bindings with exactly that write-back (`specs/mutable-enums.md`), which made the
+		// premise false and the route real — the store this function emits IS the alias into the heap box the
+		// note said shv2 has not got.
+		//
+		// It is anchored at the BINDING, not at the closure literal: SemanticCheck's whole-program backstop
+		// already catches the raw `storeIndirect` and words it *"into memory that outlives this frame"* at the
+		// RHS, which names nothing the author can act on. This is the same relationship every other route has
+		// with that backstop — the specific voice first, the generic one only for stores no parser door owns.
+		try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in payload binding '{String.from(binding.name)}': {CapturingClosureEscapeSuffix}", tok: nameTok)
 
 		// ⛔ **THE PREMISE, STATED LOUDLY: A MANAGED PAYLOAD REACHING A WRITE-BACK WAS MOVED OUT.** The store
 		// below overwrites the slot without releasing what it held, which is sound ONLY because a move-out
@@ -21910,8 +22048,21 @@ export type Parser
 	// takes is now a scalar or a shared reference, which is why `phase:parse` is allocation-identical to
 	// the parent.
 	function recordFunctionTypeDoor(declaredNameId TypeNameId, gotNameId TypeNameId, door FunctionTypeDoor, placeName ByteArray, anchor Token)
-		self.artifact.recordFunctionTypeDoor(PendingFunctionTypeDoor.create(self.internedName(gotNameId), declaredName: self.internedName(declaredNameId), door: door, placeName: placeName, line: anchor.line, column: anchor.column, filePath: self.filePath))
+		self.recordFunctionTypeDoorByName(self.internedName(declaredNameId), gotName: self.internedName(gotNameId), door: door, placeName: placeName, anchor: anchor)
 	end 'recordFunctionTypeDoor'
+
+	// ⭐ **THE RECORD ITSELF — the door sites that already hold NAMES rather than ids.** A
+	// `PendingFunctionTypeDoor` travels as two names (see there: interner-free, so the record survives the
+	// merge unremapped), so the id-taking entry point above is a convenience for the sites whose two sides
+	// are SSA/type-column ids, and this is the same fact with the un-interning already done.
+	//
+	// ⚠ **SPLIT RATHER THAN COPIED, and the copy is what it replaced.** A function-backed enum case holds its
+	// two sides as `ByteArray` (a case's raw value is bytes on the layout), so it hand-built the
+	// `PendingFunctionTypeDoor` — becoming the one site that knew `filePath` belongs on the record and how an
+	// anchor decomposes. Two sites spelling one record is how the two come to disagree about it.
+	function recordFunctionTypeDoorByName(declaredName ByteArray, gotName ByteArray, door FunctionTypeDoor, placeName ByteArray, anchor Token)
+		self.artifact.recordFunctionTypeDoor(PendingFunctionTypeDoor.create(gotName, declaredName: declaredName, door: door, placeName: placeName, line: anchor.line, column: anchor.column, filePath: self.filePath))
+	end 'recordFunctionTypeDoorByName'
 
 	// ⭐⭐ **THE IDENTITY `resolveTypes` IS ABOUT TO DESTROY — the ONE extraction EVERY pre-erasure column
 	// fills through (OPEN #54 Slice B2, widened to the function-TYPE tier by BATCH18-b).** The interned name
@@ -25026,9 +25177,10 @@ export type Parser
 		try self.valueClosureEnv.set(closureValue, value: env) otherwise panic("markCapturingClosure: v{closureValue} has no closure-env slot — the two closure columns are filled in lockstep")
 	end 'markCapturingClosure'
 
-	// Is `value` a closure that CAPTURES its enclosing frame? The escape checks (return / field / payload /
-	// payload-binding) and the in-frame call threading both ask this ONE predicate, keyed on the VALUE — so
-	// an unrelated binding of the same NAME in another function is never flagged (`-name-not-leaked`).
+	// Is `value` a closure that CAPTURES its enclosing frame? Every escape check (through
+	// `rejectEscapingClosure`, which is where the routes are enumerated) and the in-frame call threading both
+	// ask this ONE predicate, keyed on the VALUE — so an unrelated binding of the same NAME in another
+	// function is never flagged (`-name-not-leaked`).
 	function isCapturingClosure(value ValueId) returns bool
 		return try self.valueIsCapturingClosure.get(value) otherwise panic("isCapturingClosure: v{value} has no closure-mark slot — every SSA value is minted through mintValue, which seeds the column")
 	end 'isCapturingClosure'
@@ -25064,11 +25216,18 @@ export type Parser
 	end 'emitClosureEnvArg'
 
 	// ⭐ **REFUSE A CAPTURING CLOSURE THAT ESCAPES ITS FRAME (E3099).** The ONE gate every escape route funnels
-	// through — a return, a struct-field store, a union payload, a payload-binding store — so the "is this a
-	// capturing closure?" question is answered once (keyed on the VALUE), and only the route-specific message
-	// and position differ at each site. A non-capturing closure and a plain function reference pass freely, so
-	// this never fires for the values A2a already handles. In-frame USES (a call, a pass DOWN to a callee that
-	// only calls it) are NOT stores and never reach here — over-rejecting them would be the worse failure.
+	// through, so the "is this a capturing closure?" question is answered once (keyed on the VALUE), and only
+	// the route-specific message and position differ at each site. A non-capturing closure and a plain function
+	// reference pass freely, so this never fires for the values A2a already handles. In-frame USES (a call, a
+	// pass DOWN to a callee that only calls it) are NOT stores and never reach here — over-rejecting them
+	// would be the worse failure.
+	//
+	// ⚠ **THE ROUTES ARE ITS CALL SITES AND ARE DELIBERATELY NOT TALLIED HERE.** This header carried a census
+	// ("a return, a struct-field store, a union payload, a payload-binding store") that was already wrong
+	// twice over — the payload-binding store did not exist yet, and the container literal was missing — so the
+	// list is now the caller set, which a grep answers and a comment cannot get stale about. What the census
+	// was really claiming is the part worth keeping: **this is the only door, and a value sink that does not
+	// call it is refused only by `SemanticCheck.checkCapturingClosureUses`, in generic words.**
 	function rejectEscapingClosure(value ValueId, message String, tok Token) throws ParseError
 		if self.isCapturingClosure(value) 'escapes'
 			throw ParseError.capturingClosureEscapes(message, line: tok.line, column: tok.column)
@@ -38790,8 +38949,54 @@ export type Parser
 			throw ParseError.unsupported("a payload on case '{String.from(caseTok.value)}' of `{layout.kindWord()} {String.from(layout.name)}`, which declares no payload on any case", line: parenTok.line, column: parenTok.column)
 		end 'unexpectedPayload'
 
-		return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: range)
+		let value = self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: range)
+
+		// ⭐⭐ **`Op.doubleOp.rawValue` — THE THIRD HOP, WHICH IS AN ACCESSOR ON THE VALUE JUST BUILT.** A
+		// type-qualified case is the ONE enum value that reaches an accessor without ever being bound to a
+		// name, so nothing upstream can route it: `parseDottedPrimary`'s accessor arm tests a base that is a
+		// BINDING, and the postfix loop reads `. <name>` as a method call and demanded a `(`
+		// (*"Expected '(' but got 'newline'"* — MEASURED on `Mime.json.rawValue`, which the oracle compiles).
+		// So the hop is claimed here, where the value exists, and answered by the SAME emitter a binding's
+		// accessor uses — one dispatch over `EnumInstanceAccessor`, not a second one free to disagree.
+		//
+		// ⚠ **A TRAILING `(` LEAVES IT ALONE, which is how a binding's accessor is separated from a same-named
+		// METHOD too** — there by `parseDottedPrimary` asking `methodCallsAt` first, here by
+		// `atEnumInstanceAccessor` stating it, because no earlier arm claims the type-qualified call shape.
+		//
+		// ⛔ **IT IS THE SCALAR SPELLING ONLY, AND A BOXED UNION DOES NOT REACH THIS LINE.** `layout.isBoxed()`
+		// returns above, so `Shape.circle(1).rawValue` keeps the older *"Expected '('"* routing while
+		// `sh.rawValue` on a BINDING of one works — the accessor emitter handles both (`emitEnumTagOf` loads a
+		// boxed tag), so what is missing is only this hop. It is left missing deliberately rather than
+		// extended: the boxed construct is an OWNED heap box enrolled as a temporary, and reading one field
+		// out of an rvalue box asks who drops the box and when — a lifetime question no case in `/specs` puts,
+		// and the wrong answer to it is a leak or a double free rather than a diagnostic. Whoever puts that
+		// question builds the hop; until then this header claims exactly the two spellings it serves.
+		if not self.atEnumInstanceAccessor(self.pos) 'noAccessorHop'
+			return value
+		end 'noAccessorHop'
+
+		try self.consume(TokenKind.dot)
+		let memberTok = try self.consumeMemberNameToken()
+		return try self.emitEnumInstanceAccessor(layout, receiver: value, memberTok: memberTok, range: SourceRange.between(typeTok, last: memberTok))
 	end 'parseEnumLiteral'
+
+	// ⭐⭐ **`. <accessor>` — THE TWO-TOKEN SHAPE ITSELF, WRITTEN ONCE FOR BOTH SPELLINGS OF AN ENUM ACCESSOR.**
+	// A binding's (`op.rawValue`, `enumAccessorFieldAt`) and a type-qualified case's (`Op.doubleOp.rawValue`,
+	// `atEnumInstanceAccessor`) read the identical dot-then-classified-member test at two different offsets,
+	// and they must admit exactly the same member set: `emitEnumInstanceAccessor`'s `notAnAccessor` panic is an
+	// assertion that they do, so a copy of this test drifting on either side turns a routing difference into a
+	// compiler crash rather than a compile error. Asking the shared CLASSIFIER was not enough — the composed
+	// test is what was duplicated.
+	function enumInstanceAccessorMemberAt(index TokenIndex) returns bool
+		return self.kindAt(index) == TokenKind.dot and namesAnEnumInstanceAccessor(enumInstanceAccessorOf(self.tokenAt(index + 1).value))
+	end 'enumInstanceAccessorMemberAt'
+
+	// Is the cursor at `index` on such a hop and NOT on a call — the tail of `Op.doubleOp.rawValue`? The `(`
+	// exclusion is genuinely this door's own: a BINDING's accessor gets it from `parseDottedPrimary` asking
+	// `methodCallsAt` first, while nothing upstream claims the type-qualified `Color.red.name()` shape.
+	function atEnumInstanceAccessor(index TokenIndex) returns bool
+		return self.enumInstanceAccessorMemberAt(index) and self.kindAt(index + 2) != TokenKind.leftParen
+	end 'atEnumInstanceAccessor'
 
 	// ⭐ **CONSUME A `unionCases .` HOP AND ANSWER WITH THE COMPANION'S LAYOUT** — or hand back the layout that
 	// was named, unchanged, when the cursor is on anything else.
@@ -38874,14 +39079,17 @@ export type Parser
 	// SILENT WRONG ANSWER.** The helper searches the layout's TAG column, which is the raw-value column only
 	// for an `integer` backing and for an unnumbered enum (whose raw value IS its declaration index). A
 	// STRING backing's tags are declaration indices and its raw values are text; a FLOAT or CHARACTER raw
-	// value is not an i64 argument at all. Each of those needs a differently-typed parameter and a different
-	// comparison, and no committed case exercises one — so they are named and refused here, which is
-	// strictly better than the `unknown enum case: 'fromRawValue'` they got before this rung.
+	// value is not an i64 argument at all; and a FUNCTION raw value has no literal spelling to look up by at
+	// all — a code address is not something a program can write down, which is why the reference refuses that
+	// backing here too (`maxon-selfhosted/Compiler/Parser.maxon:19889`). Each of those needs a
+	// differently-typed parameter and a different comparison, and no committed case exercises one — so they
+	// are named and refused here, which is strictly better than the `unknown enum case: 'fromRawValue'` they
+	// got before this rung.
 	function requireFromRawValueBacking(layout EnumLayout, memberTok Token) throws ParseError
 		match layout.backing 'backing'
 			integer then break 'backing'
 			unresolved then break 'backing'
-			float to string then throw ParseError.unsupported("`{String.from(EnumFromRawValueMemberName)}` on `{layout.kindWord()} {String.from(layout.name)}`, which is {enumBackingNoun(layout.backing)}-backed — shv2's lookup searches the case TAGS, which carry the declared raw values only for an int-backed or unnumbered enum", line: memberTok.line, column: memberTok.column)
+			float to functionRef then throw ParseError.unsupported("`{String.from(EnumFromRawValueMemberName)}` on `{layout.kindWord()} {String.from(layout.name)}`, which is {enumBackingNoun(layout.backing)}-backed — shv2's lookup searches the case TAGS, which carry the declared raw values only for an int-backed or unnumbered enum", line: memberTok.line, column: memberTok.column)
 		end 'backing'
 	end 'requireFromRawValueBacking'
 
@@ -42939,7 +43147,7 @@ export type Parser
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
 
-		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
+		return try self.finishArrayLiteral(func, arr: arr, giid: giid, first: first, range: range)
 	end 'parseArrayLiteral'
 
 	// ⭐⭐ **A PACKED LITERAL'S BODY — COLLECTED FIRST, EMITTED ONCE.** Every element is parsed and held, and
@@ -43034,7 +43242,7 @@ export type Parser
 		let first = try self.parseExpression(func, block: self.currentBlock)
 		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
 
-		return try self.finishArrayLiteral(func, arr: arr, giid: giid, range: range)
+		return try self.finishArrayLiteral(func, arr: arr, giid: giid, first: first, range: range)
 	end 'parseIntArrayLiteralBody'
 
 	// The tail every array literal shares once its record exists and its first element is pushed: the `, e`
@@ -43045,14 +43253,42 @@ export type Parser
 	// the same two rules `parseStructLiteralFields` states for `{…}`. A skip before the push would widen the
 	// `[valueStart, self.pos)` window `moveElementIntoContainer` reads to decide whether the element was a bare
 	// local, and silently mis-decide a managed element's move-in.
-	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, first ValueId, range SourceRange) returns ValueId throws ParseError
+		// ⭐ **ONE ELEMENT ANYWHERE IN THE LITERAL CONDEMNS THE WHOLE CONTAINER**, so the element to blame is
+		// carried across the loop rather than decided at any single one. Seeded with `first` — which is the
+		// right answer whether or not it captures: the gate below tests the value it is given, so a literal
+		// where nothing captures hands it a non-capturing element and passes.
+		var offender = first
+
 		self.skipNewlines()
 		while self.at(TokenKind.comma) 'moreElements'
 			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
 			try self.pushArrayLiteralElement(arr, elem: parsed.value, giid: giid, valueStart: parsed.start, range: range)
+			if self.isCapturingClosure(parsed.value) 'thisElementCaptures'
+				offender = parsed.value
+			end 'thisElementCaptures'
 			self.skipNewlines()
 		end 'moreElements'
 		try self.consume(TokenKind.rightBracket)
+
+		// ⭐⭐ **THE CONTAINER ESCAPE ROUTE (E3099) — an array's element block is heap memory that outlives the
+		// frame and stores the code pointer alone, so a capturing closure put into one loses its environment.**
+		// Asked through the SAME `rejectEscapingClosure` every other route funnels through, which is why there
+		// is no predicate here: that gate answers "does this value capture?" once, for all five routes.
+		//
+		// ⚠ **IT BLAMES THE CONTAINER, NOT THE ELEMENT, AND THAT IS THE REFERENCE'S ANCHOR — MEASURED.** The
+		// sentence says *"in a container"* and the position agrees with it: the bootstrap reports at the token
+		// FOLLOWING the closing `]`, wherever the offending element sits — `[double, <closure>]` and
+		// `[<closure>, double]` are byte-identical diagnostics at the identical column, and a one-element
+		// literal moves it only by the line's own length. So the anchor is the cursor past the literal, which is
+		// exactly where this runs; anchoring at the element would be a different, unpinned diagnostic.
+		//
+		// ⚠ **THE PACKED TAIL DOES NOT ASK, AND CANNOT NEED TO.** `parsePackedArrayLiteralBody` is reached only
+		// for a SUB-BYTE-PACKED element (`arrayElementPackedBits`), which answers `NotSubBytePacked` for every
+		// element that is not a narrow ranged int or a bool — so no function value, and therefore no closure,
+		// can reach it. A structural exclusion rather than an omission; the day an element is both packed and
+		// heap-referencing, this call is what that path owes.
+		try self.rejectEscapingClosure(offender, message: "cannot put a closure that captures in a container: {CapturingClosureEscapeSuffix}", tok: self.current())
 
 		self.trackOwnedTemp(arr)
 		return arr
@@ -43160,12 +43396,62 @@ export type Parser
 		if self.signatures.tagMayNameAggregate(tag) 'aggregate'
 			return self.signatures.namedElementType(self.internedName(self.valueNameId(value)))
 		end 'aggregate'
+		// ⭐⭐ **A FUNCTION VALUE, WHOSE COLUMN TYPE IS ITS OWN GOVERNING NAME.** `Array with UnaryOp` has always
+		// been buildable through `.create()`/`.push()` — the sibling case
+		// `capturing-closure-into-container-errors` is written against one — so the runtime side of a
+		// function-element container is not new; what was missing is that a bare `[…]` had no way to NAME the
+		// element type, because a literal writes no alias. It takes the first element's governing name, which is
+		// the same answer `enumFunctionBackingGoverningName` gives for a function-backed enum's `.rawValue` and
+		// for the same reason: shv2 names a function type by something that declares it, and the first value is
+		// a name that already resolves whole-program.
+		//
+		// ⚠ **WITHOUT THIS ARM THE ESCAPE RULE WAS UNREACHABLE ON THIS ROUTE AND THE ADVICE WAS FALSE.**
+		// `[double, <capturing closure>]` was refused E2015 at `double` — before the closure was even parsed —
+		// so `/specs`' pinned E3099 never fired, and its advice (*"use a function reference"*) named a program
+		// this compiler also refused. The refusal has to be about the closure for the advice to be worth giving.
+		//
+		// ⚠ **THE NAME CROSSES INTERNERS, SO IT TRAVELS AS BYTES** — `signatures.functionElementType` does the
+		// interning, for the reason its own header records with the measurement: a container instance's type
+		// arguments are ids in the SIGNATURE index's interner, and the parser's `valueNameId` is an id in this
+		// FILE's. Handing the raw id over compiled, parsed and then panicked at the call.
+		if tag == ValueTypeTag.function 'functionValue'
+			return self.signatures.functionElementType(self.internedName(self.valueNameId(value)))
+		end 'functionValue'
 		throw ParseError.unsupported("{literalKind} {columnNoun} of type '{typeTagName(tag)}' — a literal's {columnNoun}s are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first {columnNoun})", line: valueTok.line, column: valueTok.column)
 	end 'literalColumnTypeFor'
 
 	// Every element after the first must have the SAME element type — its inferred instance must equal the
 	// first's. A mismatch is an array literal with mixed element types (E2015).
+	//
+	// ⭐⭐ **TWO FUNCTION VALUES DO NOT ANSWER THE GID QUESTION, SO THEY ARE ASKED THE SHAPE QUESTION INSTEAD.**
+	// A function element's instance is keyed on its governing NAME (`literalColumnTypeFor`), so `[double,
+	// triple]` is two names for what may well be one type, and a gid compare refused it *"mixed element
+	// types"* with both spellings naming the same shape. What the instance genuinely asks of an element —
+	// *what does this cost to store* — has one answer for every function value: one machine word, trivially
+	// copied, no destructor.
+	//
+	// ⛔⛔ **BUT RETURNING BARE HERE WAS A WRONG ANSWER, AND THIS IS THE ONLY CHECK ON THE ROUTE.** A literal
+	// reaches `requireContainerElementType` from NO path — that door's own header says so ("THE ARRAY LITERAL
+	// IS NOT A CALLER … every later one is compared against it by `requireArrayLiteralElementMatches`") — and
+	// nothing downstream sees it either, because `Array` is parser-intrinsic: `[a, b]` builds through
+	// `__arr_create`/`__arr_push`, runtime entries carrying no `FuncSignature`, so `SemanticCheck`'s argument
+	// doors have nothing to check. MEASURED: `[oneArg, twoArg]` then `try ops.get(1)` compiled and CALLED
+	// `twoArg` with an argument nobody passed. The shape comparison itself still cannot happen here (it is
+	// over RESOLVED parameter lists, and `ProgramSignatures` holds return types and no parameter types), so it
+	// is RECORDED — the same `PendingFunctionTypeDoor` every other cross-shape question uses.
+	//
+	// ⚠ **THE MAP LITERAL NEEDS NO SUCH DOOR, AND ONE WAS BUILT HERE AND THEN MEASURED AWAY.** `["k": v]`
+	// desugars to real `Map.upsert` CALLS (`emitMapLiteralUpsert`), so its columns are already judged by
+	// `SemanticCheck.checkTypeParameterArgsAt`'s substituted arm — a second door in `parseHashTableColumnArg`
+	// reported the same mistake twice. Deleting it left the mismatch refused exactly once and every legal map
+	// working, which is what identified it as redundant rather than load-bearing.
 	function requireArrayLiteralElementMatches(elem ValueId, giid GenericInstanceId, elemTok Token) throws ParseError
+		let declaredElement = self.signatures.containerElementType(giid)
+		if self.tagOf(elem) == ValueTypeTag.function and maxonTypeTag(declaredElement) == ValueTypeTag.function 'bothAreFunctionValues'
+			self.recordFunctionTypeDoorByName(self.signatures.indexFunctionTypeName(declaredElement), gotName: self.internedName(self.valueNameId(elem)), door: FunctionTypeDoor.containerElement, placeName: EmptySourceText, anchor: elemTok)
+			return
+		end 'bothAreFunctionValues'
+
 		if (try self.arrayLiteralInstanceFor(elem, elemTok: elemTok)) != giid 'mismatch'
 			throw ParseError.unsupported(MixedArrayLiteralElementsMessage, line: elemTok.line, column: elemTok.column)
 		end 'mismatch'
@@ -51047,7 +51333,12 @@ export type Parser
 		end 'declaredReturn'
 	end 'requireFunctionValueReturnHasRoom'
 
-	function emitFunctionRef(tok Token) returns ValueId throws ParseError
+	// ⭐ **MAY THE NAME `tok` SPELLS STAND AS A FUNCTION VALUE? — the whole of what separates a function
+	// reference from an undefined variable, asked in one place.** Split out of `emitFunctionRef` because a
+	// SECOND site asks the identical question about a name it will not immediately emit: a function-backed
+	// enum case (`Parser.checkFunctionBackedCase`), which must refuse an unusable target at the DECLARATION
+	// even in a program that never reads the enum. The gates are the header's, unchanged.
+	function requireNameIsUsableAsFunctionValue(tok Token) throws ParseError
 		match self.signatures.returnTypeOf(tok.value, into: self.artifact.typeNames) 'callee'
 			// ⭐ **A FUNCTION VALUE CARRIES ONE RESULT, SO A FUNCTION THAT USES THE SECONDARY RETURN SLOT CANNOT
 			// BE ONE** — both disjuncts of `functionUsesSecondaryReturnSlot`, refused here at the one door a
@@ -51062,6 +51353,10 @@ export type Parser
 			throwing(errorType) then throw ParseError.throwingFunctionAsValue(String.from(tok.value), errorType: errorType, line: tok.line, column: tok.column)
 			none then break 'throwsClause'
 		end 'throwsClause'
+	end 'requireNameIsUsableAsFunctionValue'
+
+	function emitFunctionRef(tok Token) returns ValueId throws ParseError
+		try self.requireNameIsUsableAsFunctionValue(tok)
 
 		let result = self.mintValue(ValueTypeTag.function, nameId: self.artifact.typeNames.intern(tok.value))
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.functionRef(result, funcName: tok.value), range: SourceRange.ofToken(tok))
@@ -55703,7 +55998,7 @@ export type Parser
 		if not tokenCanBeAName(self.tokenAt(index)) 'notABase'
 			return false
 		end 'notABase'
-		if self.kindAt(index + 1) != TokenKind.dot or not namesAnEnumInstanceAccessor(enumInstanceAccessorOf(self.tokenAt(index + 2).value)) 'notAnAccessorMember'
+		if not self.enumInstanceAccessorMemberAt(index + 1) 'notAnAccessorMember'
 			return false
 		end 'notAnAccessorMember'
 
@@ -55789,21 +56084,28 @@ export type Parser
 		// name takes — a moved-from enum binding is dead here exactly as it is at `requireStructBase`.
 		try self.requireBindingLive(baseBinding, nameTok: baseTok)
 
-		let layout = requireEnumLayout(self.enumMatchFor(baseBinding.boundValue))
-		let range = SourceRange.between(baseTok, last: memberTok)
+		return try self.emitEnumInstanceAccessor(requireEnumLayout(self.enumMatchFor(baseBinding.boundValue)), receiver: baseBinding.boundValue, memberTok: memberTok, range: SourceRange.between(baseTok, last: memberTok))
+	end 'parseEnumAccessor'
 
+	// ⭐⭐ **THE ANSWER ITSELF, ONCE THE RECEIVER IS IN HAND — shared by the two SPELLINGS of an enum-value
+	// accessor.** A BINDING's (`op.rawValue`, above) and a type-qualified CASE's (`Op.doubleOp.rawValue`,
+	// `parseEnumLiteral`) differ only in how the receiving value was obtained; past that they are the same
+	// three questions of the same layout, so they are asked here once. Written separately, the case spelling
+	// would have been a second `.ordinal`/`.name`/`.rawValue` dispatch free to answer differently from the
+	// binding one — the shape this file has paid for before.
+	function emitEnumInstanceAccessor(layout EnumLayout, receiver ValueId, memberTok Token, range SourceRange) returns ValueId throws ParseError
 		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through. Asked
 		// ONCE for all three members: which of them was written cannot change where a union keeps its tag.
-		let tag = self.emitEnumTagOf(baseBinding.boundValue, layout: layout, range: range)
+		let tag = self.emitEnumTagOf(receiver, layout: layout, range: range)
 
 		// The dispatch is EXHAUSTIVE over `EnumInstanceAccessor`, which is what makes the door's cursor test and
 		// this answer one rule: a member added to the classifier stops this function compiling until it is
 		// answered here. `notAnAccessor` survives as the unreachable arm the guard already excluded.
 		match enumInstanceAccessorOf(memberTok.value) 'member'
-			caseName then return try self.emitEnumCaseStringSelect(layout, tag: tag, column: EnumCaseConstant.caseName, anchor: memberTok, range: range)
+			caseName then return try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.caseName, valueType: MaxonType.string, anchor: memberTok, range: range)
 			rawValue then return try self.emitEnumRawValue(layout, tag: tag, anchor: memberTok, range: range)
 			ordinal then break 'member'
-			notAnAccessor then panic("parseEnumAccessor: member '{String.from(memberTok.value)}' reached the accessor and classifies as no accessor at all — `enumAccessorFieldAt` guards this door with the SAME classifier, so a member it admitted cannot be one this refuses")
+			notAnAccessor then panic("emitEnumInstanceAccessor: member '{String.from(memberTok.value)}' reached the accessor and classifies as no accessor at all — `enumAccessorFieldAt` and `atEnumInstanceAccessor` guard both doors with the SAME classifier, so a member they admitted cannot be one this refuses")
 		end 'member'
 
 		// QUESTION 2 — whether that tag is already the answer. The lookup reads the tag as a bare i64, which
@@ -55813,7 +56115,7 @@ export type Parser
 		end 'renumberedCases'
 
 		return try self.enumTagAsANumber(tag, anchor: memberTok, range: range)
-	end 'parseEnumAccessor'
+	end 'emitEnumInstanceAccessor'
 
 	// ⭐ **QUESTION 3 — HAND A TAG BACK AS A NUMBER RATHER THAN AS A VALUE OF THE ENUM'S TYPE**, and it is a
 	// third question rather than question 1 re-read. It asks what the tag value is TYPED, which is the
@@ -55866,6 +56168,10 @@ export type Parser
 	//     end like any other minted record.
 	//   • `string` — the tag is only a declaration index (`EnumLayout.tagCarriesRawValue`), so the value rides
 	//     `caseRawValues` and is selected the same way `.name` selects `caseNames`.
+	//   • `functionRef` — the tag is only a declaration index too, and `caseRawValues` holds the backing
+	//     FUNCTION's name; the constant selected is that function's `__fnref_` thunk address, and the sum is
+	//     handed back typed `function(<first case's function>)` so it is CALLABLE. See
+	//     `enumFunctionBackingGoverningName` for why the first case's name is the whole enum's answer.
 	function emitEnumRawValue(layout EnumLayout, tag ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		match layout.backing 'backing'
 			integer then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
@@ -55889,7 +56195,8 @@ export type Parser
 			unresolved then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
 			float then return self.emitUnaryOp(tag, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
 			character then break 'backing'
-			string then return try self.emitEnumCaseStringSelect(layout, tag: tag, column: EnumCaseConstant.declaredRawValue, anchor: anchor, range: range)
+			string then return try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.declaredRawValue, valueType: MaxonType.string, anchor: anchor, range: range)
+			functionRef then return try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.caseFunctionRef, valueType: MaxonType.function(self.enumFunctionBackingGoverningName(layout)), anchor: anchor, range: range)
 		end 'backing'
 
 		let character = self.emitRuntimeCall(CharFromCodepointName, args: singletonArgs(tag), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
@@ -55897,20 +56204,46 @@ export type Parser
 		return character
 	end 'emitEnumRawValue'
 
-	// ⭐ **A `String`-VALUED ACCESSOR — the selection, then the ONE line that says what was selected.** The
-	// sum below is arithmetic and types itself `integer`; the selected words are `.rdata` record ADDRESSES,
-	// so the result IS a String and this is where it is recorded as one. Written once because `.name` and a
-	// string backing's `.rawValue` differ only in the column.
+	// ⭐ **AN ADDRESS-VALUED ACCESSOR — the selection, then the ONE line that says what was selected.** The
+	// sum below is arithmetic and types itself `integer`; the selected words are ADDRESSES — a `.rdata`
+	// String record for the two string columns, a `.text` `__fnref_` thunk for the function one — so the
+	// result IS a String or a function and this is where it is recorded as one. Written once because `.name`,
+	// a string backing's `.rawValue` and a function backing's differ only in the column and in that claim.
 	//
 	// ⚠ **NOTHING OWNS THE RESULT, AND THAT IS A PROPERTY OF WHAT WAS SELECTED.** Every candidate is an
-	// IMMORTAL literal record (`capacity = -2`, never allocated, refcounted or dropped), so the selected one
-	// is too — which is what lets `return sh.name` hand it straight out of the function, exactly as
-	// `return "circle"` does.
-	function emitEnumCaseStringSelect(layout EnumLayout, tag ValueId, column EnumCaseConstant, anchor Token, range SourceRange) returns ValueId throws ParseError
+	// IMMORTAL literal record (`capacity = -2`, never allocated, refcounted or dropped) or a code address,
+	// so the selected one is too — which is what lets `return sh.name` hand it straight out of the function,
+	// exactly as `return "circle"` does.
+	function emitEnumCaseTypedSelect(layout EnumLayout, tag ValueId, column EnumCaseConstant, valueType MaxonType, anchor Token, range SourceRange) returns ValueId throws ParseError
 		let selected = try self.emitEnumCaseConstantSelect(layout, tag: tag, column: column, anchor: anchor, range: range)
-		self.retypeValue(selected, valueType: MaxonType.string)
+		self.retypeValue(selected, valueType: valueType)
 		return selected
-	end 'emitEnumCaseStringSelect'
+	end 'emitEnumCaseTypedSelect'
+
+	// ⭐⭐ **THE NAME THAT GOVERNS A FUNCTION-BACKED ENUM'S `.rawValue` — THE FIRST CASE'S FUNCTION, AND THAT
+	// IS A TYPE CLAIM RATHER THAN AN IDENTITY ONE.** A function value's `MaxonType.function(id)` names
+	// whatever DECLARES its signature (see MaxonType's `function` arm) — the function it refers to, or the
+	// typealias the place was written with — and every reader of it asks exactly one question: what shape may
+	// this be called at? `.rawValue` yields ONE value for n cases, so it needs ONE such name, and the first
+	// case's function is a name that already resolves in `funcSignatures` whole-program, in every file, for a
+	// forward reference as much as a backward one.
+	//
+	// ⚠ **IT IS ONLY TRUE BECAUSE THE CASES ARE MADE TO AGREE, AND THAT PREMISE IS ENFORCED, NOT ASSUMED** —
+	// `Parser.checkFunctionBackedCase` records every later case against this one as a `PendingFunctionTypeDoor`
+	// and `SemanticCheck.checkFunctionTypeDoors` refuses a disagreement. Without that check this would be a
+	// lossy key standing in for an identity: `Op.tripleOp.rawValue` would be called at `doubleFn`'s shape.
+	//
+	// ⭐ **A DEPARTURE FROM v1, WHICH INTERNS A STRUCTURAL SIGNATURE ID** (`EnumType.functionBackingTypeId`,
+	// `TypeResolution.resolveFunctionBackedEnumRefs`). shv2 has no signature-id registry — a function type is
+	// carried by the NAME of something that declares it — so minting a synthetic alias would have meant
+	// writing that name into two registries (the parse-time `ProgramSignatures` and the post-merge
+	// `functionAliasShapes`) to say what a name already in both says.
+	//
+	// That case 0 exists at all is the backing's own property, argued and enforced once in
+	// `enumCaseFunctionName` rather than assumed here.
+	function enumFunctionBackingGoverningName(layout EnumLayout) returns TypeNameId
+		return self.artifact.typeNames.intern(self.enumCaseFunctionName(layout, index: FirstCaseIndex))
+	end 'enumFunctionBackingGoverningName'
 
 	// ⭐⭐ **THE TAG→CONSTANT MAPPING EVERY ENUM ACCESSOR NEEDS — `Σᵢ constantᵢ × (tag == tagᵢ)`, BRANCHLESS.**
 	// `enum Code { ok = 5 }` has ordinal 0 and tag 5, so on that route the tag is NOT the answer and the
@@ -55971,7 +56304,7 @@ export type Parser
 			let isThisCase = self.emitCompareAgainstLiteral(tag, literal: layout.tagOfIndex(i), op: MaxonCmpOp.eq, opTok: anchor)
 			self.retypeValue(isThisCase, valueType: MaxonType.integer)
 
-			let caseConstant = self.emitEnumCaseConstant(layout, index: i, column: column, range: range)
+			let caseConstant = try self.emitEnumCaseConstant(layout, index: i, column: column, anchor: anchor, range: range)
 			let contribution = try self.emitBinOp(isThisCase, rhs: caseConstant, op: MaxonBinOp.mul, opTok: anchor)
 
 			selected = try self.emitBinOp(selected, rhs: contribution, op: MaxonBinOp.add, opTok: anchor)
@@ -55981,33 +56314,65 @@ export type Parser
 	end 'emitEnumCaseConstantSelect'
 
 	// ⭐ **ONE CASE'S CONSTANT, AS AN `integer`-TYPED OPERAND THE SUM ABOVE CAN MULTIPLY.** A declaration
-	// index already is a number; a `.rdata` String record is an ADDRESS, which is a number too — so the only
-	// thing the two string columns need is for the value's TYPE COLUMN to say so, which is the `retypeValue`
-	// below.
+	// index already is a number; a `.rdata` String record and a `.text` function address are ADDRESSES, which
+	// are numbers too — so the only thing the three ADDRESS columns need is for the value's TYPE COLUMN to
+	// say so, which is the `retypeValue` below.
 	//
 	// ⚠ **RETYPING THE LITERAL IS SAFE HERE AND NOWHERE ELSE**: the value was minted one line above, names no
 	// binding and has no other reader, so the claim cannot be stale for anybody. The op it defines is
-	// untouched — a `stringLiteral` still lowers to the record's address — and both claims agree at the Std
-	// tier, where a String and an `integer` are the same i64. `emitEnumCaseStringSelect` restores the `string`
-	// claim on the SUM, which is the value a program actually reads.
+	// untouched — a `stringLiteral` still lowers to the record's address and a `functionRef` to the thunk's —
+	// and both claims agree at the Std tier, where a String, a code pointer and an `integer` are the same
+	// i64. `emitEnumCaseTypedSelect` restores the real claim on the SUM, which is the value a program
+	// actually reads.
+	//
+	// ⭐⭐ **THE FUNCTION COLUMN EMITS A REAL `functionRef` OP, AND THAT IS LOAD-BEARING TWICE OVER.** A
+	// hand-built address constant would be the same 64 bits and would still be wrong: `collectFnRefThunkTargets`
+	// scans for exactly this op to decide which `__fnref_` thunks to synthesize, and `DeadFunctionElimination`
+	// roots the target off the `funcAddr` it lowers to. Emitted as a constant instead, the thunk would never
+	// exist and the function would be stripped. It goes through `emitFunctionRef` rather than around it so the
+	// case's target meets the same three gates `let f = doubleFn` meets, at a token positioned on the accessor.
 	//
 	// ⚠ **A FULL MATCH, FOR `firstSummedCaseIndex`'s STATED REASON AND NOT MERELY FOR SYMMETRY.** These are
 	// the TWO per-column deciders `EnumCaseConstant` has, and they must refuse an unclassified column
-	// ALIKE — an `if` chain ending in an `else` over `caseRawValues` would hand a fourth column the raw-value
+	// ALIKE — an `if` chain ending in an `else` over `caseRawValues` would hand a fifth column the raw-value
 	// bytes silently, which is a wrong answer where the sibling gives a compile error, and nothing routes an
 	// author from that compile error to this function.
-	function emitEnumCaseConstant(layout EnumLayout, index CaseIndex, column EnumCaseConstant, range SourceRange) returns ValueId
-		var bytes = ByteArray.create()
+	function emitEnumCaseConstant(layout EnumLayout, index CaseIndex, column EnumCaseConstant, anchor Token, range SourceRange) returns ValueId throws ParseError
+		// ⚠ **EVERY ARM RETURNS, AND THE `var bytes` IT REPLACES WAS A PER-CASE ALLOCATION TWO ARMS NEVER
+		// READ.** The seed `ByteArray.create()` sat above the match, so an empty array was allocated and
+		// discarded ONCE PER CASE IN THE SUM for every `.ordinal` and every function-backed `.rawValue` — in a
+		// file that prices allocations at exactly this granularity, on a path the fourth column had just
+		// widened. Each column now names its own producer instead, which costs the exhaustive match nothing:
+		// all four arms are still named here, so a fifth still fails to compile.
 		match column 'c'
 			declarationIndex then return self.emitLiteral(index, valueType: MaxonType.integer, range: range)
-			caseName then bytes = layout.caseNameAt(index)
-			declaredRawValue then bytes = layout.rawValueAt(index).toByteArray()
+			caseName then return self.emitEnumCaseStringConstant(layout.caseNameAt(index), range: range)
+			declaredRawValue then return self.emitEnumCaseStringConstant(layout.rawValueAt(index).toByteArray(), range: range)
+			caseFunctionRef then return try self.emitEnumCaseFunctionConstant(layout, index: index, anchor: anchor)
 		end 'c'
+	end 'emitEnumCaseConstant'
 
+	// The `.rdata` record address of `bytes`, as an `integer`-typed word the sum can multiply — the two STRING
+	// columns' half of the retype `emitEnumCaseConstant`'s header argues for, and the twin of
+	// `emitEnumCaseFunctionConstant` below. Two producers rather than one shared tail because the columns mint
+	// their word through different emitters, and the retype's safety argument is about the value each one has
+	// just minted.
+	function emitEnumCaseStringConstant(bytes ByteArray, range SourceRange) returns ValueId
 		let literal = self.emitStringLiteral(bytes, range: range)
 		self.retypeValue(literal, valueType: MaxonType.integer)
 		return literal
-	end 'emitEnumCaseConstant'
+	end 'emitEnumCaseStringConstant'
+
+	// Case `index`'s backing function as an `integer`-typed word the sum can multiply — its `__fnref_` thunk
+	// address, minted by the ONE producer of a function value (see `emitEnumCaseConstant`'s header for why it
+	// must be that producer and not a constant). It is the function column's half of the retype above rather
+	// than a share of it, because the two columns mint their word through different emitters and the retype's
+	// safety argument is about the value each one just minted.
+	function emitEnumCaseFunctionConstant(layout EnumLayout, index CaseIndex, anchor Token) returns ValueId throws ParseError
+		let reference = try self.emitFunctionRef(self.enumCaseFunctionToken(layout, index: index, anchor: anchor))
+		self.retypeValue(reference, valueType: MaxonType.integer)
+		return reference
+	end 'emitEnumCaseFunctionConstant'
 
 	// ⭐ **`<arrayBinding> . managed . <member>(` — the CHAINED spelling, for the two positions where a bare
 	// `arr.managed` denotes nothing a program can want.** A STATEMENT of it would build a buffer reference and

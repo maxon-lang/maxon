@@ -91,10 +91,12 @@ end 'installEnumLookupHelpers'
 //
 // ⚠ **IT COMPARES AGAINST THE *TAG*, WHICH IS THE RAW VALUE ONLY FOR THE TWO BACKINGS THAT REACH HERE.** An
 // `integer`-backed case's tag IS its declared raw value, and an unnumbered enum's tag is the declaration index
-// its raw value is defined to be — for both, one column answers both questions. The other three backings do
-// NOT have that property (a string backing's tag is only an index; a float or character raw value is not an
-// i64 argument at all), and `Parser.requireFromRawValueBacking` refuses them at the call site rather than
-// letting a helper be built that would compare the wrong column. The panic below is that refusal's backstop.
+// its raw value is defined to be — for both, one column answers both questions. Every OTHER backing lacks that
+// property (a string or function backing's tag is only an index; a float or character raw value is not an i64
+// argument at all), and `Parser.requireFromRawValueBacking` refuses them at the call site rather than letting
+// a helper be built that would compare the wrong column. The panic below is that refusal's backstop, and its
+// `match` is what keeps a newly declared backing from reaching here unclassified — which is why the set is
+// stated as a rule rather than counted.
 //
 // A branch chain rather than the branchless sum the parser-tier accessors use: this one has to DISTINGUISH
 // "no case matched" from "case 0 matched", which a sum of products cannot express — an unmatched lookup and a
@@ -103,7 +105,7 @@ function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout)
 	match layout.backing 'backing'
 		integer then break 'backing'
 		unresolved then break 'backing'
-		float to string then panic("synthesizeEnumFromRawValue: `{layout.kindWord()} {String.from(layout.name)}` is {enumBackingNoun(layout.backing)}-backed, whose tag column is not its raw values — `Parser.requireFromRawValueBacking` refuses `fromRawValue` on such a declaration, so no call to this helper can exist for it")
+		float to functionRef then panic("synthesizeEnumFromRawValue: `{layout.kindWord()} {String.from(layout.name)}` is {enumBackingNoun(layout.backing)}-backed, whose tag column is not its raw values — `Parser.requireFromRawValueBacking` refuses `fromRawValue` on such a declaration, so no call to this helper can exist for it")
 	end 'backing'
 
 	let func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())

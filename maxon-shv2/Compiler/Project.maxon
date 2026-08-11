@@ -3596,19 +3596,31 @@ export let EnumAllCaseNamesMemberName = b"allCaseNames"
 // answer. A backing added later belongs beside the group it joins, and it must be added to BOTH exhaustive
 // matches over this enum (here via that predicate, and `enumBackingDiscriminator`).
 //
-// ⛔ **APPEND IT, OR PUT IT BEFORE `integer` — DO NOT INSERT ONE INSIDE THE `integer to character` RUN.**
+// ⛔ **APPEND IT, OR PUT IT BEFORE `integer` — DO NOT INSERT ONE INSIDE EITHER RUN.**
 // `enumBackingDiscriminator` names every arm and so cannot build without the new one; `tagCarriesRawValue`
-// spells the group as a RANGE, and a range is the one arm shape that can absorb a member silently. At
-// either END of this enum it stops building, which is what is wanted. Inserted mid-run it compiles and
-// answers `true` — i.e. *"the tag is the raw value"* — for a backing nobody classified, which is a wrong
-// answer (a duplicate-raw-value scan comparing declaration indices) rather than the compile error the
-// `match` is here to force.
+// spells BOTH groups as RANGES (`integer to character` true, `string to function` false), and a range is
+// the one arm shape that can absorb a member silently. At either END of this enum it stops building, which
+// is what is wanted. Inserted mid-run it compiles and answers whichever group swallowed it for a backing
+// nobody classified, which is a wrong answer (a duplicate-raw-value scan comparing declaration indices)
+// rather than the compile error the `match` is here to force.
+//
+// ⭐ **`functionRef` JOINS `string` ON THE "the tag is only an index" SIDE**, and is appended past it for
+// that reason: a case backed by a function REFERENCE (`doubleOp = doubleFn`) has no number to be a tag, so
+// it takes the auto-increment declaration index and the function's NAME rides `caseRawValues` exactly as a
+// string raw value does. The address itself is materialized per case at the read
+// (`Parser.emitEnumCaseConstant`), which is the one thing a declaration cannot carry.
+//
+// ⚠ It is spelled `functionRef` and not `function` because `function` is a keyword: an arm of that name
+// would have to be written in every `match` over this enum in a position the grammar reads as a
+// declaration. The word a DIAGNOSTIC uses is still "function" — see `enumBackingNoun`, which is the one
+// place the spelling a reader sees is decided.
 export enum EnumBacking
 	unresolved
 	integer
 	float
 	character
 	string
+	functionRef
 end 'EnumBacking'
 
 // The word a diagnostic calls each backing — the bootstrap's spelling, which `E3032`'s
@@ -3623,6 +3635,10 @@ export function enumBackingNoun(backing EnumBacking) returns String
 		float then return "float"
 		character then return "char"
 		string then return "String"
+		// The word the REFERENCE uses for this backing in exactly this sentence
+		// (`maxon-selfhosted/Compiler/Parser.maxon:5544` — *"expected int, got function"*), which is why the
+		// noun and the arm's own spelling differ; see `EnumBacking.functionRef`.
+		functionRef then return "function"
 		unresolved then panic("enumBackingNoun: `unresolved` names no backing — it is the state an enum with no cases yet is in, and `Parser.requireEnumBacking` never reports it as either side of a mismatch")
 	end 'backing'
 end 'enumBackingNoun'
@@ -3770,20 +3786,22 @@ export type EnumLayout
 	//
 	// An `integer`, `float` or `character` raw value IS a number — a raw int, an IEEE-754 bit pattern, a
 	// Unicode codepoint — so for those the tag is the value and both readers need nothing else. A `string`
-	// raw value is not a number, so its case takes the auto-increment declaration index and the value itself
-	// rides `caseRawValues`.
+	// raw value is not a number, and neither is a FUNCTION reference, so those cases take the auto-increment
+	// declaration index and the value itself rides `caseRawValues` (the declared text, or the function's
+	// name).
 	//
 	// ⛔ **EXHAUSTIVE ON PURPOSE, exactly as `enumBackingDiscriminator` is and for the identical reason.** It
 	// replaced an `if backing == string` written out at BOTH readers, each falling through silently to the
-	// tag path — and `Parser.readEnumIntRawValue`'s own message still promises struct and function backings
-	// "arrive with later rungs". Either of those added to an `if` takes the tag compare at both sites and
-	// produces a WRONG ANSWER, not a compile error: two distinct struct raw values reading as a duplicate,
-	// and two distinct enums folding to one hash. Written as a `match`, such a backing cannot be declared
-	// without being classified here.
+	// tag path — and `Parser.readEnumIntRawValue`'s own message still promises a struct backing "arrives with
+	// a later rung". Such a backing added to an `if` takes the tag compare at both sites and produces a WRONG
+	// ANSWER, not a compile error: two distinct struct raw values reading as a duplicate, and two distinct
+	// enums folding to one hash. Written as a `match`, it cannot be declared without being classified here.
+	// (The FUNCTION backing is exactly the case this argument predicted: two cases naming two different
+	// functions carry declaration indices 0 and 1, so a tag compare would have admitted `a = f  b = f`.)
 	export function tagCarriesRawValue() returns bool
 		match self.backing 'backing'
 			integer to character then return true
-			string then return false
+			string to functionRef then return false
 			unresolved then panic("EnumLayout.tagCarriesRawValue: `{self.kindWord()} {String.from(self.name)}` has no backing yet — both readers ask this about a case already read, and reading a case is what fixes the backing (`Parser.requireEnumBacking`)")
 		end 'backing'
 	end 'tagCarriesRawValue'
@@ -4780,6 +4798,28 @@ export enum FunctionTypeDoor
 	// the program could assign to on its own. So it sits ahead of the contiguous assignment band rather than
 	// being appended to it, exactly as this enum's own band rule below directs.
 	payload
+	// ⭐ **A FUNCTION-BACKED ENUM CASE (`tripleOp = tripleFn`) MEETING THE SIGNATURE ITS ENUM ALREADY FIXED.**
+	// The declaration is not a place at all — no value flows through it — but the RULE is identical to every
+	// door above: two function shapes that must agree, neither of which the parser can resolve. What the
+	// enum's `.rawValue` hands back is ONE value carrying ONE governing name (the first case's function), so
+	// a second case whose signature differs would be called through a promise it does not keep — the very
+	// wrong answer this record exists to close, reached from a declaration rather than from an expression.
+	// It names the CASE, so it is not assignment-shaped and sits ahead of the contiguous band below.
+	enumCaseBacking
+	// ⭐ **AN ARRAY LITERAL'S ELEMENT PAST THE FIRST.** The instance is keyed on ONE element type, so every
+	// later element is read back at the FIRST one's shape; two function values differing in arity or return
+	// type is the same wrong answer every door above closes, reached through `[a, b]`.
+	//
+	// ⛔ **MEASURED:** `[oneArg, twoArg]` then `.get(1)` compiled and ran, calling `twoArg` with an argument
+	// nobody passed (E3122's own words). It has no later door — `Array` is parser-intrinsic, so a literal's
+	// elements travel through runtime entries carrying no `FuncSignature` and `SemanticCheck`'s argument
+	// doors never see them.
+	//
+	// ⚠ **THE MAP LITERAL IS NOT THIS DOOR, THOUGH IT LOOKS LIKE ITS TWIN.** `["k": v]` desugars to real
+	// `Map.upsert` calls, so its columns are judged by `SemanticCheck.checkTypeParameterArgsAt` like any other
+	// signatured call. A second door for them was built here and then measured away: it reported the same
+	// mistake twice.
+	containerElement
 	// The ASSIGNMENT-shaped doors, which differ from each other only in what the place is CALLED. They are
 	// arms of this enum rather than one `assigned` arm beside a noun STRING, and that is MEASURED, not
 	// tidiness: a `String` noun threaded on from `Parser.assignableValue` into the door cost ONE ALLOCATION
@@ -4806,11 +4846,11 @@ export function functionTypeDoorNoun(door FunctionTypeDoor) returns String
 		variable then return "variable"
 		global then return "global"
 		field then return "field"
-		// None of these takes a noun: a cast and a `return` ARE the construct, and a payload names its field
-		// directly ("union payload 'f'") rather than through a place word. All three are worded by
-		// `functionTypeDoorSite` without asking here, so reaching this arm means a caller asked the wrong
-		// question of the door.
-		cast to payload then panic("functionTypeDoorNoun: a cast/return/payload door names no place word — only the assignment doors have a noun")
+		// None of the rest takes a noun: a cast and a `return` ARE the construct, a payload and an enum case
+		// name their own declaration ("union payload 'f'", "enum case 'tripleOp'"), and a container column
+		// names no place at all. Every one of them is worded by `functionTypeDoorSite` without asking here, so
+		// reaching this arm means a caller asked the wrong question of the door.
+		cast to containerElement then panic("functionTypeDoorNoun: only the assignment-shaped doors name a place with a word — every other door words itself in `functionTypeDoorSite`")
 	end 'd'
 end 'functionTypeDoorNoun'
 
@@ -4850,8 +4890,12 @@ export typealias PendingFunctionTypeDoorArray = Array with PendingFunctionTypeDo
 // ⭐⭐ **A FUNCTION VALUE BOUND AT A COMPILER-OWNED POSITION WHOSE CONTRACT FIXES ITS ARITY (E3122).** The
 // container `map`'s transform is the one such position: `map` is not an `Iterable` extension in shv2 but a
 // hand-synthesized builtin (`Parser.parseContainerMap`), so its transform meets no DECLARED function type
-// and passes through none of the five doors that already compare two function shapes — the four
-// `PendingFunctionTypeDoor` sites and `SemanticCheck.checkOneArgType`'s function-argument arm. Until this
+// and passes through none of the THREE families that already compare two function shapes — every arm of
+// `FunctionTypeDoor` (drained by `SemanticCheck.checkFunctionTypeDoors`), `SemanticCheck.checkOneArgType`'s
+// function-argument arm for a DECLARED function-typed parameter, and `checkTypeParameterArgsAt`'s arm for a
+// generic instance's SUBSTITUTED type argument. Each family is named by where it lives rather than by how
+// many members it has: the count was written here as "five"/"four" and both numbers were stale within two
+// ticks, which is this project's signature bug wearing a census. Until this
 // record existed nothing checked it at all, and `nums.map(function(a Integer, b Integer) gives a + b)`
 // compiled on every target and READ AN ARGUMENT NOBODY PASSED (see E3122's registry entry for the
 // measurement, and `Parser.requireElementTransform` for the rule).
@@ -4874,11 +4918,23 @@ export typealias PendingFunctionTypeDoorArray = Array with PendingFunctionTypeDo
 //     at a `run(n Integer)` requirement compiled while the identical DIRECT call was already E3005;
 //     `SemanticCheck.checkWitnessArgTypes` now routes those arguments through the shared `checkOneArgType`.
 //   • a generic type PARAMETER bound to a function type (`SemanticCheck.checkTypeParameterArgsAt`) —
-//     **FALSE.** The nominal half FIRES (`bx.echo(Beta.create())` on a `Box with Alpha` is
-//     *"E3005: argument type mismatch for 'v': expected 'Alpha', got 'Beta'"*), and the function-shape half
-//     is UNREACHABLE — a function value cannot bind to a type parameter at all, which is itself an E3005.
-//     Left recorded rather than deleted, because an unverified claim that a later reader re-derives is worth
-//     less than the measurement that retired it.
+//     reported **FALSE** on the reasoning that *"the nominal half FIRES … and a function value cannot bind to
+//     a type parameter at all"*. ⛔ **THE REFUTATION WAS ITSELF WRONG, AND RE-MEASURING IT COST A LIVE
+//     MISCOMPILE.** The nominal half fires for every type argument that HAS a nominal identity, which is
+//     exactly the group a function type is NOT in: `typeArgAggregateName` answers empty for it, correctly,
+//     because a function type's identity is its SHAPE. And a function value binds to a type parameter
+//     routinely — `generic-type-parameter-slots.function-value-element` is a committed case that does it
+//     (`Holder with UnaryOp`, then `h.add(double)`), and a user `Box with UnaryOp` is the same shape.
+//     MEASURED on that `Box`: `OpBox.create(floatFn)` compiled clean and `.held()` then called a float
+//     function through an int calling convention. **CLOSED** — the substituted door now asks
+//     `SemanticCheck.checkFunctionArgShape`, the same comparison `checkOneArgType`'s concrete arm makes.
+//
+//     ⛔ **IT DOES NOT COVER THE ARRAY LITERAL, WHICH IS PARSER-INTRINSIC** — `[a, b]` builds through
+//     runtime entries with no `FuncSignature`, so its elements reach no argument door here and are checked by
+//     `FunctionTypeDoor.containerElement` instead. ⚠ This entry has now been wrong three times: refuted by
+//     reasoning, then re-claimed by reasoning (as "Map/Set never reach here", which is false — the corpus
+//     `Map`'s methods are ordinary signatured calls), before each route was actually RUN. That is worth more
+//     than any of the three facts: a position argued is not a position measured, in either direction.
 //
 // It is a SEPARATE record from `PendingFunctionTypeDoor` and not a sixth arm of it, because the two carry
 // different facts. That one names a declared function TYPE and its whole shape must agree; this one has no

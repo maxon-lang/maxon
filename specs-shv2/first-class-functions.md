@@ -794,17 +794,7 @@ end 'main'
 error E3005: <fragment>:33:21: argument type mismatch for 'f': expected 'fn(type parameter) returns type parameter', got 'fn(int) returns int'
 ```
 
-<!-- disabled-test: first-class-function.alias-over-a-type-parameter-returning-a-MANAGED-element -->
-<!-- BLOCKED by the OPAQUE-OWNED-RETURN slice (P1.7 slice 3b-vi-a), NOT by the function alias. A `returns
-Element` boundary hands the caller a BORROW — the shared body cannot classify `T`, so it emits no retain,
-and `Parser.retypeOpaqueMethodResult`/`coOwnSubstitutedCallResult` make the CALLER take its own reference.
-An OWNED managed value crossing that boundary is therefore never released: `shout`'s `+1` String leaks
-(exit 101). It is NOT this alias's doing and reproduces with no function alias anywhere in the program — a
-plain `function remade() returns Element / return fresh()` on `Holder with String` exits 101 on the merge
-base too. `Parser.emitOwnedValueReturn` already refuses ONE provenance of this (an element `pop`ped out of
-an opaque array) and its own comment defers the general case. Enable when that slice lands; the sibling
-cases above cover every element type the boundary can carry today, String INCLUDED (as a borrowed argument
-at `Predicate`). -->
+<!-- test: first-class-function.alias-over-a-type-parameter-returning-a-MANAGED-element -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1655,7 +1645,7 @@ end 'main'
 error E3005: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-global-errors.test:9:2: cannot assign a value of type 'function' to global 'handler', which holds 'int': a function value is only usable where a function type declared with 'typealias' is expected
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-in-container-errors -->
+<!-- test: first-class-function.capturing-closure-in-container-errors -->
 <!-- P1.5-A2 (closures + escape) -->
 A CONTAINER's element block is heap memory that outlives the frame, so a capturing closure
 put into an array or map literal is refused at the element that carries the environment.
@@ -1707,8 +1697,7 @@ end 'main'
 error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-in-union-payload-errors.test:12:54: cannot store a closure that captures in payload 'op' of case 'run': captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-in-payload-binding-errors -->
-<!-- shv2 payload bindings are IMMUTABLE frame-local COPIES, not the reference's mutable heap ALIASES. `run(op) then op = …` is refused E2013 ("cannot assign to immutable variable") — a STRONGER rejection that already forbids the store; shv2 never writes back through a payload binding, so the E3099 escape route (an alias into the heap box) does not exist here. Emitting E3099 would require reintroducing mutable payload bindings — the exact write-back unsafety the reference's check guards. shv2's model is safer; the store is refused either way. Its own rung (a payload-binding-mutability decision), NOT A2b. -->
+<!-- test: first-class-function.capturing-closure-in-payload-binding-errors -->
 A payload binding LOOKS like a plain local, but it is an alias INTO the enum's heap box:
 assigning through it writes back. So it is a heap store outliving the frame, not the
 frame-local assignment it resembles — and without this check it compiles, runs, and leaves
@@ -2065,8 +2054,7 @@ end 'main'
 35
 ```
 
-<!-- disabled-test: first-class-function.capturing-closure-passed-to-try-call -->
-<!-- BLOCKED by STRING-BACKED error-enum raw values, NOT by env threading. `enum ApplyError implements Error / negative = "n must not be negative"` needs a string-backed enum case, which shv2 does not parse yet (E2015 "only integer and float raw values are parsed; string/char/struct/function backings arrive with later rungs") — an orthogonal later rung. The try-call env threading THIS case exists to test IS implemented and verified (lowerTryCall → finalizeCallArgs → appendCalleeEnvArgs; probed green with an int-backed error enum). Enable when string-backed enum raw values land. -->
+<!-- test: first-class-function.capturing-closure-passed-to-try-call -->
 A capturing closure handed to a THROWING callee, through `try`. A try-call flattens its arguments
 exactly as a plain call does, but it was never given the maps that say what environment a function
 value carries, so it could only answer 0 — and this failed in ANY block, including the one that
@@ -2895,8 +2883,9 @@ error E3099: specs/fragments/first-class-functions/first-class-function.capturin
 ```
 
 <!-- test: first-class-function.capturing-closure-into-container-errors -->
-A capturing closure pushed into a heap container. The array literal route is refused by an unrelated
-element-type rule, but `.push()` is a call to a compiler runtime entry — and a runtime entry is in no
+A capturing closure pushed into a heap container. The array literal route is refused by this same
+escape rule (see `capturing-closure-in-container-errors`), but `.push()` is a call to a compiler
+runtime entry — and a runtime entry is in no
 signature registry, so the escape summary the call-site check consults cannot be built for it. Rather
 than delegate the decision to a check that structurally cannot run, the derived rule refuses it: the
 Array outlives the frame and takes the code pointer alone.
