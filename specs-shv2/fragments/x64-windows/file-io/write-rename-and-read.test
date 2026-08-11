@@ -359,6 +359,64 @@ func @main {
     x64.ret
 }
 
+func @Array.reserve {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __arr_capacity
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __arr_decref
+    x64.cmpRegReg r12, r14
+    x64.jcc greater, grow
+    x64.jmp ifcont
+  grow:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __arr_mem_grow
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.leaRegRdata rcx, [rip + __str_blob_47]
+    x64.callDirect mrt_panic
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.jmp ifcont
+  ifcont:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @Character.equals {
   entry:
     x64.pushReg rbp
@@ -412,7 +470,7 @@ func @Character.equals {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_51]
+    x64.leaRegRdata rcx, [rip + __str_blob_52]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -437,7 +495,7 @@ func @Character.equals {
   tryerr:
     x64.movRegReg rcx, r15
     x64.callDirect __arr_decref
-    x64.leaRegRdata rcx, [rip + __str_blob_52]
+    x64.leaRegRdata rcx, [rip + __str_blob_53]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -512,7 +570,7 @@ func @Character.hash {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_55]
+    x64.leaRegRdata rcx, [rip + __str_blob_56]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -543,7 +601,7 @@ func @Character.hash {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_108]
+    x64.leaRegRdata rcx, [rip + __str_blob_109]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -639,7 +697,7 @@ func @FileReader.readAll {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_56]
+    x64.leaRegRdata rcx, [rip + __str_blob_57]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -680,7 +738,7 @@ func @FileReader.readAll {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_57]
+    x64.leaRegRdata rcx, [rip + __str_blob_58]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -1054,7 +1112,7 @@ func @FilePath.init {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_58]
+    x64.leaRegRdata rcx, [rip + __str_blob_59]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -1352,8 +1410,8 @@ func @FilePath.normalizeSeparators {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.leaRegRdata rdx, [rip + __str_rec_59]
-    x64.leaRegRdata rax, [rip + __str_rec_60]
+    x64.leaRegRdata rdx, [rip + __str_rec_60]
+    x64.leaRegRdata rax, [rip + __str_rec_61]
     x64.movRegReg rcx, rbx
     x64.callDirect String.replace
     x64.epilogue 32
@@ -1496,7 +1554,7 @@ func @FilePath.resolveFileURL {
     x64.movRegReg rcx, r12
     x64.callDirect URL.scheme
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rdx, [rip + __str_rec_61]
+    x64.leaRegRdata rdx, [rip + __str_rec_62]
     x64.movRegReg rcx, rbx
     x64.callDirect __str_eq
     x64.movRegReg r13, r8
@@ -1596,7 +1654,7 @@ func @FilePath.resolveFileURL {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_62]
+    x64.leaRegRdata rcx, [rip + __str_blob_63]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -1706,7 +1764,7 @@ func @findGraphemeEnd {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_63]
+    x64.leaRegRdata rcx, [rip + __str_blob_64]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -1738,7 +1796,7 @@ func @findGraphemeEnd {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_64]
+    x64.leaRegRdata rcx, [rip + __str_blob_65]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -1780,7 +1838,7 @@ func @findGraphemeEnd {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_65]
+    x64.leaRegRdata rcx, [rip + __str_blob_66]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -1961,7 +2019,7 @@ func @findPrevCodepointStart {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_66]
+    x64.leaRegRdata rcx, [rip + __str_blob_67]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -2640,7 +2698,7 @@ func @graphemeBreakProperty {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_109]
+    x64.leaRegRdata rcx, [rip + __str_blob_110]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -2955,7 +3013,7 @@ func @isExtendedPictographic {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_110]
+    x64.leaRegRdata rcx, [rip + __str_blob_111]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -3159,7 +3217,7 @@ func @isGraphemeBreak {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_111]
+    x64.leaRegRdata rcx, [rip + __str_blob_112]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3177,7 +3235,7 @@ func @isGraphemeBreak {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_111]
+    x64.leaRegRdata rcx, [rip + __str_blob_112]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3195,7 +3253,7 @@ func @isGraphemeBreak {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_112]
+    x64.leaRegRdata rcx, [rip + __str_blob_113]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3557,7 +3615,7 @@ func @graphemeStateUpdate {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_113]
+    x64.leaRegRdata rcx, [rip + __str_blob_114]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -3576,7 +3634,7 @@ func @graphemeStateUpdate {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_114]
+    x64.leaRegRdata rcx, [rip + __str_blob_115]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -3683,7 +3741,7 @@ func @utf8IsContinuation {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_116]
+    x64.leaRegRdata rcx, [rip + __str_blob_117]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -3720,7 +3778,7 @@ func @utf8WidthFits {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_117]
+    x64.leaRegRdata rcx, [rip + __str_blob_118]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3754,7 +3812,7 @@ func @utf8ByteLengthAt {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_68]
+    x64.leaRegRdata rcx, [rip + __str_blob_69]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -3869,7 +3927,7 @@ func @utf8DecodeAt {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_69]
+    x64.leaRegRdata rcx, [rip + __str_blob_70]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3925,7 +3983,7 @@ func @utf8DecodeAt {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_70]
+    x64.leaRegRdata rcx, [rip + __str_blob_71]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -3949,7 +4007,7 @@ func @utf8DecodeAt {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_118]
+    x64.leaRegRdata rcx, [rip + __str_blob_119]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4002,7 +4060,7 @@ func @utf8DecodeAt {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_71]
+    x64.leaRegRdata rcx, [rip + __str_blob_72]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4021,7 +4079,7 @@ func @utf8DecodeAt {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_72]
+    x64.leaRegRdata rcx, [rip + __str_blob_73]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4050,7 +4108,7 @@ func @utf8DecodeAt {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_119]
+    x64.leaRegRdata rcx, [rip + __str_blob_120]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4099,7 +4157,7 @@ func @utf8DecodeAt {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_73]
+    x64.leaRegRdata rcx, [rip + __str_blob_74]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4119,7 +4177,7 @@ func @utf8DecodeAt {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_74]
+    x64.leaRegRdata rcx, [rip + __str_blob_75]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4138,7 +4196,7 @@ func @utf8DecodeAt {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_75]
+    x64.leaRegRdata rcx, [rip + __str_blob_76]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4173,7 +4231,7 @@ func @utf8DecodeAt {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_120]
+    x64.leaRegRdata rcx, [rip + __str_blob_121]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4209,7 +4267,7 @@ func @urlIsAlpha {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_121]
+    x64.leaRegRdata rcx, [rip + __str_blob_122]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -4275,7 +4333,7 @@ func @urlIsDigit {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_122]
+    x64.leaRegRdata rcx, [rip + __str_blob_123]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -4321,7 +4379,7 @@ func @urlIsHexDigit {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_123]
+    x64.leaRegRdata rcx, [rip + __str_blob_124]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -4409,7 +4467,7 @@ func @urlIsSchemeChar {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_124]
+    x64.leaRegRdata rcx, [rip + __str_blob_125]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -4730,7 +4788,7 @@ func @String.byteAt {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_125]
+    x64.leaRegRdata rcx, [rip + __str_blob_126]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -4753,7 +4811,7 @@ func @String.byteAtOrPanic {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_76]
+    x64.leaRegRdata rcx, [rip + __str_blob_77]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -4790,7 +4848,7 @@ func @String.setByte {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_126]
+    x64.leaRegRdata rcx, [rip + __str_blob_127]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -4840,7 +4898,7 @@ func @String.sliceBytes {
   tryerr:
     x64.movRegReg rcx, r14
     x64.callDirect __arr_decref
-    x64.leaRegRdata rcx, [rip + __str_blob_77]
+    x64.leaRegRdata rcx, [rip + __str_blob_78]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -5017,7 +5075,7 @@ func @String.replace {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_78]
+    x64.leaRegRdata rcx, [rip + __str_blob_79]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -5064,7 +5122,7 @@ func @String.replace {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_79]
+    x64.leaRegRdata rcx, [rip + __str_blob_80]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 104
@@ -5125,7 +5183,7 @@ func @String.mapAsciiCase {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_127]
+    x64.leaRegRdata rcx, [rip + __str_blob_128]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -5145,7 +5203,7 @@ func @String.mapAsciiCase {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_127]
+    x64.leaRegRdata rcx, [rip + __str_blob_128]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -5165,7 +5223,7 @@ func @String.mapAsciiCase {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_128]
+    x64.leaRegRdata rcx, [rip + __str_blob_129]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -5216,7 +5274,7 @@ func @String.mapAsciiCase {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_80]
+    x64.leaRegRdata rcx, [rip + __str_blob_81]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -5252,7 +5310,7 @@ func @String.mapAsciiCase {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_81]
+    x64.leaRegRdata rcx, [rip + __str_blob_82]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -5508,30 +5566,6 @@ func @String.trim# {
     x64.leaRegFunc rcx, [rip + __str_decref]
     x64.callDirect __set_create
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_82]
-    x64.loadRegBaseDisp.word64 r12, [rax + 0]
-    x64.loadRegBaseDisp.word64 r13, [rax + 8]
-    x64.leaRegRegImm32 rcx, r13, 49
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.movRegReg r14, r8
-    x64.leaRegRegImm32 r15, r14, 48
-    x64.movRegReg rcx, r15
-    x64.movRegReg rdx, r12
-    x64.movRegReg rax, r13
-    x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r15, r13
-    x64.storeBaseDispReg.word64 [r14 + 0], r15
-    x64.storeBaseDispReg.word64 [r14 + 8], r13
-    x64.movRegImm rax, -3
-    x64.storeBaseDispReg.word64 [r14 + 16], rax
-    x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.leaRegRdata rax, [rip + __witness_Character.Hashable]
-    x64.leaRegRdata r9, [rip + __witness_Character.Equatable]
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r14
-    x64.callDirect __set_insert
     x64.leaRegRdata rax, [rip + __str_rec_83]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -5676,6 +5710,30 @@ func @String.trim# {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect __set_insert
+    x64.leaRegRdata rax, [rip + __str_rec_89]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.leaRegRdata rax, [rip + __witness_Character.Hashable]
+    x64.leaRegRdata r9, [rip + __witness_Character.Equatable]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __set_insert
     x64.movRegImm32 rdx, 58720256
     x64.movRegReg rcx, rbx
     x64.callDirect __cs_make
@@ -5727,7 +5785,7 @@ func @StringBuilder.reserve {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.callDirect __arr_reserve
+    x64.callDirect Array.reserve
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -5851,7 +5909,7 @@ func @bytesEqual {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_89]
+    x64.leaRegRdata rcx, [rip + __str_blob_90]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -5870,7 +5928,7 @@ func @bytesEqual {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_90]
+    x64.leaRegRdata rcx, [rip + __str_blob_91]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 56
@@ -5973,7 +6031,7 @@ func @findIn {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_91]
+    x64.leaRegRdata rcx, [rip + __str_blob_92]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -6003,7 +6061,7 @@ func @findIn {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_92]
+    x64.leaRegRdata rcx, [rip + __str_blob_93]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -6089,7 +6147,7 @@ func @scanSingleByteGraphemes {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_93]
+    x64.leaRegRdata rcx, [rip + __str_blob_94]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -6270,7 +6328,7 @@ func @URL.parse {
     x64.storeSlotReg slot18, r8
     x64.movRegImm32 rax, 0
     x64.storeSlotReg slot0, rax
-    x64.leaRegRdata rax, [rip + __str_rec_94]
+    x64.leaRegRdata rax, [rip + __str_rec_95]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.leaRegRegImm32 rcx, r13, 49
@@ -6290,7 +6348,7 @@ func @URL.parse {
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
-    x64.leaRegRdata rax, [rip + __str_rec_94]
+    x64.leaRegRdata rax, [rip + __str_rec_95]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot58, rax
@@ -6312,7 +6370,7 @@ func @URL.parse {
     x64.storeBaseDispReg.word64 [r13 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r13 + 24], rax
-    x64.leaRegRdata rax, [rip + __str_rec_94]
+    x64.leaRegRdata rax, [rip + __str_rec_95]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot42, rax
@@ -6335,7 +6393,7 @@ func @URL.parse {
     x64.storeBaseDispReg.word64 [r15 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r15 + 24], rax
-    x64.leaRegRdata rax, [rip + __str_rec_94]
+    x64.leaRegRdata rax, [rip + __str_rec_95]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot43, rax
@@ -6360,7 +6418,7 @@ func @URL.parse {
     x64.storeBaseDispReg.word64 [r15 + 24], rax
     x64.movRegImm32 rax, 0
     x64.storeSlotReg slot1, rax
-    x64.leaRegRdata rax, [rip + __str_rec_94]
+    x64.leaRegRdata rax, [rip + __str_rec_95]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot59, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -6384,7 +6442,7 @@ func @URL.parse {
     x64.storeBaseDispReg.word64 [r12 + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r12 + 24], rax
-    x64.leaRegRdata rax, [rip + __str_rec_94]
+    x64.leaRegRdata rax, [rip + __str_rec_95]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
     x64.storeSlotReg slot44, rax
@@ -6625,7 +6683,7 @@ func @URL.parse {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_95]
+    x64.leaRegRdata rcx, [rip + __str_blob_96]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -6766,7 +6824,7 @@ func @URL.parse {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_96]
+    x64.leaRegRdata rcx, [rip + __str_blob_97]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -6878,7 +6936,7 @@ func @URL.parse {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_97]
+    x64.leaRegRdata rcx, [rip + __str_blob_98]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -6932,7 +6990,7 @@ func @URL.parse {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_98]
+    x64.leaRegRdata rcx, [rip + __str_blob_99]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -7202,7 +7260,7 @@ func @URL.parse {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_99]
+    x64.leaRegRdata rcx, [rip + __str_blob_100]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -7272,7 +7330,7 @@ func @URL.parse {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_100]
+    x64.leaRegRdata rcx, [rip + __str_blob_101]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -7335,7 +7393,7 @@ func @URL.parse {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_101]
+    x64.leaRegRdata rcx, [rip + __str_blob_102]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
@@ -7381,7 +7439,7 @@ func @URL.parse {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_129]
+    x64.leaRegRdata rcx, [rip + __str_blob_130]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.movRegImm32 r10, 0
