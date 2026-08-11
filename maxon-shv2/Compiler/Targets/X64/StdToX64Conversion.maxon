@@ -839,17 +839,17 @@ type StdToX64Lowering
 			errorReturn to funcAddr gives 0
 			// The two VALUE-callee calls carry their own per-argument mask (there is no callee name to look one
 			// up by), and overflow through the identical shared rule.
-			callIndirect(_, _, _, argFloatMask, _, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			callIndirect(_, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPanic to osSleepMs gives 0
 			// The four ≤4-argument subprocess ops (spawn is named above) reserve no outgoing stack space.
 			// `osFreePages`'s `VirtualFree(addr, 0, MEM_RELEASE)` is three register args, so it reserves none either.
 			osProcessExitCode to osFreePages gives 0
 			// The jump table makes no call — it reserves no outgoing argument stack.
 			switch gives 0
-			witnessCall(_, _, _, _, argFloatMask, _, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			witnessCall(_, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			// The throwing witness call marshals its arguments identically (its extra result is a REGISTER
 			// capture, not an outgoing argument), so it reserves the same outgoing space.
-			witnessTryCall(_, _, _, _, _, argFloatMask, _, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			// P1.5 dogfood slice 1a: the three >4-argument IOCP calls reserve their stack-arg region (osPipeCreate the
 			// max across CreateNamedPipeW/CreateFileW; osThreadCreate CreateThread's 2; osReadOverlapped ReadFile's 1);
 			// osProcessSpawnInherit is CreateProcessA, the same six as osProcessSpawn. The rest are ≤4-argument (register
@@ -1240,7 +1240,7 @@ type StdToX64Lowering
 			osExit(codeId) then self.lowerOsExit(codeId, dstBlock: dstBlock)
 			// P1.5-A1: a function's address (`lea dest, [rip+func]`), and a call THROUGH a function value.
 			funcAddr(resultId, funcName) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegFunc(TargetVReg.virtual(resultId), funcName: funcName))
-			callIndirect(resultId, calleeReg, resultType, argFloatMask, _, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
+			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 			osPanic(label) then self.lowerPanic(label, dstBlock: dstBlock)
 			// P1.5 mid-body-yield: the green-thread sleep substrate's clock read and OS wait.
 			osReadClock(ticksPtrId, freqPtrId) then self.lowerOsReadClock(ticksPtrId, freqPtrId: freqPtrId, dstBlock: dstBlock)
@@ -1256,8 +1256,8 @@ type StdToX64Lowering
 			// The dense-match jump table is ALWAYS a block terminator, never a body op — see `lowerTerminatorOp`.
 			switch then panic("lowerStdToX64: a `switch` op appeared as a body op (lowering bug — the jump table is always a block terminator)")
 			// P1.7a slice 2a: the fused witness call — arg moves then a memory-indirect `call [witnessAddr + off]`.
-			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, _, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
-			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, _, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
+			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
+			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstBlock: dstBlock)
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import ops.
 			osPipeCreate(namePtrId, saPtrId, iocpId, readPtrId, writePtrId) then self.lowerOsPipeCreate(namePtrId, saPtrId: saPtrId, iocpId: iocpId, readPtrId: readPtrId, writePtrId: writePtrId, dstBlock: dstBlock)
 			osIocpCreate(resultId) then self.lowerOsIocpCreate(resultId, dstBlock: dstBlock)

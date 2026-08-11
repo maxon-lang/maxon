@@ -335,33 +335,6 @@ function paramFloatMask(paramTypes MaxonTypeArray) returns ArgFloatMask
 	return mask
 end 'paramFloatMask'
 
-// Bit k set iff DECLARED parameter k occupies less than the machine word — the WIDTH half of the pair above,
-// read off the SAME `maxonTypeToStdType(paramType)` collapse so the two masks cannot come to describe
-// different parameter lists. Two folds rather than one returning a pair, because this tier has no VALUE
-// struct: a `type` holding the pair would be a heap object minted per indirect-call op, on a path whose whole
-// design (see `callIndirect`'s header) is about not allocating.
-//
-// ⭐ **THE UNIFORM `(userargs, env)` INDIRECT ABI DECLARES EVERY PARAMETER AT ITS OWN WIDTH, AND THE
-// `__fnref_` THUNK IS THE OTHER HALF OF THAT SENTENCE.** A function value's callee is either a LIFTED
-// CLOSURE — an ordinary function whose parameters are its declared types — or, for a plain named function, the
-// synthesized `__fnref_` thunk, whose parameter types `FnRefThunk.synthesizeFnRefThunk` declares. Both must
-// agree with this mask or wasm's `call_indirect` type check rejects the call, so that routine declares them
-// through the identical `maxonTypeToStdType` collapse. It did NOT — it had a widen-everything-non-float rule of
-// its own — and the disagreement was a MEASURED `wasm trap: indirect call type mismatch` on
-// `function(loud bool) gives …` called through a typealias, where a lifted CLOSURE has no thunk to lose the
-// width symmetrically. Pinned by `specs-shv2/first-class-functions.md`'s `bool-param-through-closure` and its
-// `bool-param-through-fnref-thunk` twin.
-function paramNarrowMask(paramTypes MaxonTypeArray) returns ArgNarrowMask
-	var mask = 0 as ArgNarrowMask
-	for k in 0 upto paramTypes.count() 'eachParam'
-		let paramType = try paramTypes.get(k) otherwise panic("paramNarrowMask: paramTypes.get OOB at {k}")
-		if stdTypeIsNarrow(maxonTypeToStdType(paramType)) 'narrowParam'
-			mask = mask or (1 shl k)
-		end 'narrowParam'
-	end 'eachParam'
-	return mask
-end 'paramNarrowMask'
-
 // Does any parameter of `sig` have `function` type — the ONLY thing that forces a companion environment
 // argument to be threaded at the call (see `MaxonToStdLowering.appendCalleeEnvArgs`). Bounded scan (the same
 // shape as `signatureHasFloatParam`), so the overwhelmingly common no-function call returns its slotted
@@ -404,6 +377,39 @@ export typealias LayoutNeedingFuncSet = Map with (ByteArray, bool)
 // remedy is the separator and NOT a second, pair-keyed memo beside this one: two keys for one fact is the
 // shape that drifts, and with an injective label there is nothing the pair knows that the label does not.
 export typealias WitnessTableLabelSet = Set with String
+
+// The set of witness-slot ABI adapters already REQUESTED (WASM3) — keyed on the adapter's symbol, which is
+// the `(conformer, interface, method)` triple by construction (`witnessSlotAdapterSymbol`). One conformer's
+// slot can be reached from several tables — a requirement inherited through `extends` sits in the derived
+// interface's table AND in the base's — and each table stamps its own relocation, so the dedup has to be on
+// the SLOT rather than on the table.
+typealias WitnessAdapterNameSet = Set with ByteArray
+
+// ⭐ **ONE DEFERRED WITNESS-SLOT ABI ADAPTER — recorded while a table is stamped, built after the function
+// walk (WASM3).** A table is stamped from inside a BODY's lowering, and the body walk iterates
+// `stdModule.functions`; pushing the adapter there would be appending to the array being iterated. So the
+// stamp records what it needs and `installWitnessSlotAdapters` drains the list once the walk is done —
+// the same "synthesize after, not during" shape `Runtime/FnRefThunk.installFnRefThunks` uses, one phase
+// earlier because an adapter's own dictionary may request further tables (and hence further adapters).
+type WitnessAdapterRequest
+	// The conforming type, as the table label spells it — carried for the diagnostic
+	// `requireWitnessSlotImplIgnoresDictionary` may raise, which has to name the conformance whose shared
+	// table cannot supply a dictionary.
+	export let conformerType as ByteArray
+	// The impl the adapter forwards to — `witnessSlotImpl`'s answer, so the adapter calls exactly the member
+	// the conformance accepted.
+	export let implName as ByteArray
+	// The adapter's own symbol, already stamped into the slot's relocation by the time this is drained.
+	export let adapterName as ByteArray
+	// How many arguments a `witnessCall` through this slot passes — the adapter's whole parameter list.
+	export let slotArity as ParamCount
+
+	export static function create(conformerType ByteArray, implName ByteArray, adapterName ByteArray, slotArity ParamCount) returns WitnessAdapterRequest
+		return Self{conformerType: conformerType, implName: implName, adapterName: adapterName, slotArity: slotArity}
+	end 'create'
+end 'WitnessAdapterRequest'
+
+typealias WitnessAdapterRequestArray = Array with WitnessAdapterRequest
 
 // An index into ONE function's `FunctionRangeChecks.sites`. Distinct from `BlockOpPos` (a position
 // WITHIN a block) and from `OpIndex` (a position in the module's flat ops array) — the three are all
@@ -545,7 +551,7 @@ function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteInd
 end 'requireSiteOrdinalsAscend'
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule
-	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower()
+	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower(project)
 end 'lowerMaxonToStd'
 
 // The label guard shared by `lowerRuntimeCall` (a plain `call`) and the compiler-internal arm of
@@ -642,6 +648,11 @@ type MaxonToStdLowering
 	var witnessSlotMemo as WitnessSlotListMemo
 	// The witness tables already emitted (P1.7a slice 2a) — the dedup gate for the blob's relocations + root.
 	var emittedWitnessTables as WitnessTableLabelSet
+	// The witness-slot ABI adapters already requested (WASM3) — see `WitnessAdapterNameSet`.
+	var emittedWitnessAdapters as WitnessAdapterNameSet
+	// The adapters whose bodies are still to be built — see `WitnessAdapterRequest`. Drained ONCE, after the
+	// function walk, by `installWitnessSlotAdapters`.
+	var pendingWitnessAdapters as WitnessAdapterRequestArray
 	// Which member `checkConformance` accepted for each witness slot (R10), from `project.witnessSlotImpls` —
 	// what `ensureWitnessTable` stamps a slot's relocation FROM, instead of re-deriving the impl symbol by a
 	// second un-suffixed join of the same two names. See `witnessSlotImpl`.
@@ -759,7 +770,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -776,7 +787,7 @@ type MaxonToStdLowering
 		return valueTagToStdType(self.valueTagOf(value))
 	end 'stdTypeOf'
 
-	function lower() returns StdModule
+	function lower(project Project) returns StdModule
 		// Which functions carry a hidden layout-descriptor parameter (P1.6-B1) — computed ONCE, up front,
 		// so both directions of the ABI (a callee binding its slot, a caller appending the argument) read
 		// one whole-program answer. An op-scan over the Maxon module; O(total ops), linear.
@@ -920,6 +931,10 @@ type MaxonToStdLowering
 				end 'noTermOp'
 			end 'eachBlock'
 		end 'eachFunc'
+
+		// AFTER the walk, never inside it: the loop above iterates `stdModule.functions`, and an adapter is a
+		// new entry in that very array (see `WitnessAdapterRequest`).
+		self.installWitnessSlotAdapters(project)
 
 		return self.stdModule
 	end 'lower'
@@ -1536,12 +1551,213 @@ type MaxonToStdLowering
 			// The DECLARING interface, never this table's — `ConformanceCheck.recordWitnessSlotImpl` files its
 			// selection under the interface the requirement was declared on, so an inherited slot's key is the
 			// PARENT's. Passing `interfaceName` here would miss every projected slot's selection and panic.
-			self.globalData.recordFuncAbs64InRdata(self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
+			self.globalData.recordFuncAbs64InRdata(self.witnessSlotCallee(typeName, slot: slot), rdataLabel: label, offsetInLabel: witnessMethodSlotOffset(i))
 		end 'eachMethod'
 
 		self.stampAssociatedWitnessSlots(typeName, interfaceName: interfaceName, label: label, methodCount: methodCount, associatedCount: associatedCount)
 		return label
 	end 'ensureWitnessTable'
+
+	// ⭐⭐ **WHAT A WITNESS SLOT ACTUALLY POINTS AT — the impl, or an ABI ADAPTER over it (WASM3).**
+	//
+	// A `witnessCall` passes exactly what the REQUIREMENT declares: a receiver plus one argument per formal
+	// (`witnessFormalTypes`). An impl reached through that slot may declare MORE, because dictionary-passing
+	// gives a generic method hidden trailing parameters the caller normally supplies from what it statically
+	// knows — the enclosing instance's LAYOUT DESCRIPTOR (P1.6-B1) and one WITNESS TABLE per `where`
+	// constraint (P1.7a slice 2a). A witness dispatch knows neither: it holds a table address and a slot
+	// index, and the number of hidden parameters varies per conformer, so the arity cannot be folded into the
+	// call site. An ADAPTER can bridge it, because the arity is fixed once the table is: it is a real function
+	// of the requirement's own shape, and the slot points at it instead of at the impl.
+	//
+	// ⚠ What the adapter PASSES for those parameters is a null dictionary, and why that is the only available
+	// answer — and what makes it sound — is `appendWitnessAdapterDictionary`'s to state, not this one's.
+	//
+	// ⚠ **WITHOUT IT THE SLOT HELD A FUNCTION OF THE WRONG ARITY, AND x64 ANSWERED CORRECTLY BY ACCIDENT.**
+	// The impl read its hidden parameters out of whatever the ABI registers happened to hold; the two impls
+	// the corpus reaches this way (`Array.hash`/`Array.equals`, whose conditional conformance
+	// `where Element is Hashable and Equatable` reserves two witnesses unconditionally, and
+	// `UpCursor.current`, whose `returns Element` reserves a descriptor) never READ them, so nothing showed.
+	// MEASURED on wasm, where `call_indirect` checks the declared functype against the target's own:
+	// `wasm trap: indirect call type mismatch` in `Map.insert` and in `total`, on two programs x64 runs
+	// correctly. A body that DID read one would have been a wild dispatch on every target.
+	//
+	// ⭐ **AN IMPL WHOSE ABI ALREADY IS THE SLOT'S GETS NO ADAPTER**, which is almost all of them — the extra
+	// call and the extra symbol are paid only where the shapes genuinely differ, so no existing dispatch and
+	// no existing golden moves for a conformer that never needed one. This is `maxon-selfhosted`'s
+	// `__witness_thunk_<instance>_<iface>_<method>` (`Passes/BuildWitnessTables.maxon:258`,
+	// `LowerMaxonToStd.synthesizeOneWitnessThunk`) with that one difference: v1 routes EVERY per-instance slot
+	// through a thunk, which costs a call on every generic dispatch in the program.
+	//
+	// A COMPILER-SYNTHESIZED impl (`int.hash`, an `__` runtime entry) is in no signature registry and is built
+	// to the requirement's shape by construction — it has no `where` clause and no type parameter to describe
+	// — so it is returned unchanged rather than measured against a signature that does not exist.
+	function witnessSlotCallee(typeName ByteArray, slot CollectedInterfaceMethod) returns ByteArray
+		let implName = self.witnessSlotImpl(typeName, interfaceName: slot.sourceInterfaceName, method: slot.method)
+		if not self.funcSignatures.contains(implName) 'compilerSynthesizedImpl'
+			return implName
+		end 'compilerSynthesizedImpl'
+
+		let impl = try self.funcNames.funcNamed(implName) otherwise panic("witnessSlotCallee: '{String.from(implName)}' has a declared signature but is in no function of this module — `witnessSlotImpl` names the member a conformance ACCEPTED, and a check accepts only a declaration the merge carried")
+		let slotArity = self.witnessSlotAbiArity(slot.method)
+		if impl.paramCount == slotArity 'theImplIsAlreadySlotShaped'
+			return implName
+		end 'theImplIsAlreadySlotShaped'
+
+		let adapterName = witnessSlotAdapterSymbol(typeName, interfaceName: slot.sourceInterfaceName, methodName: slot.method.name)
+		if self.emittedWitnessAdapters.contains(adapterName) 'anotherTableAlreadyRequestedIt'
+			return adapterName
+		end 'anotherTableAlreadyRequestedIt'
+
+		self.emittedWitnessAdapters.insert(adapterName)
+		self.pendingWitnessAdapters.push(WitnessAdapterRequest.create(typeName, implName: implName, adapterName: adapterName, slotArity: slotArity))
+		return adapterName
+	end 'witnessSlotCallee'
+
+	// ⭐ **THE ARITY OF ONE WITNESS SLOT'S ABI** — a receiver, then one argument per declared formal. It is
+	// the COUNT of the list `witnessFormalTypes` builds, stated here because the adapter side needs the number
+	// without a receiver value to build that list from; `witnessFormalTypes` asserts its own list against it,
+	// so the two cannot drift into an adapter of the wrong arity.
+	//
+	// ⚠ **A `static` REQUIREMENT HAS NO RECEIVER, AND ITS SLOT IS THE ONE PLACE THAT SHOWS.** A static impl
+	// takes exactly its declared formals (`Point.tag()` is a 0-parameter function), so counting a receiver
+	// here made its slot look one argument WIDER than the impl and demanded an adapter for a shape that
+	// already matched — MEASURED, four cases across `interface-conformance` and `where-clauses`. Nothing ever
+	// DISPATCHES through such a slot (`SemanticCheck` refuses that with E3116), which is why
+	// `witnessFormalTypes` can seed a receiver unconditionally and still agree with this: it is asked only
+	// about the requirements a dispatch reached.
+	function witnessSlotAbiArity(method InterfaceMethodSig) returns ParamCount
+		return method.paramTypeNames.count() if method.isStatic else 1 + method.paramTypeNames.count()
+	end 'witnessSlotAbiArity'
+
+	// Build the bodies of every requested witness-slot adapter, after the function walk (see
+	// `WitnessAdapterRequest`). An adapter's own dictionary may request a further table, whose slots may
+	// request further adapters, so the list is drained by INDEX over a growing array rather than by `for..in`.
+	function installWitnessSlotAdapters(project Project)
+		var next = 0 as ElementCount
+		while next < self.pendingWitnessAdapters.count() 'drain'
+			let request = try self.pendingWitnessAdapters.get(next) otherwise panic("installWitnessSlotAdapters: pendingWitnessAdapters.get OOB at {next} below count {self.pendingWitnessAdapters.count()}")
+			next = next + 1
+			self.synthesizeWitnessSlotAdapter(request, project: project)
+		end 'drain'
+	end 'installWitnessSlotAdapters'
+
+	// Emit ONE adapter: `__adapt___witness_<Type>.<Iface>.<method>(slot args…)` → the impl, called with those
+	// same arguments plus the conformer's dictionary. Its declared parameter types are the impl's OWN first
+	// `slotArity` types, so the forwarding is a straight copy and the adapter's register/valtype classes are
+	// the impl's by construction rather than by a second derivation of the requirement's formals.
+	//
+	// The return side is forwarded WHOLE: `maxonReturnType` and `throwsTypeName` are copied from the impl, so
+	// `functionUsesSecondaryReturnSlot` answers the same for both and the adapter declares exactly the result
+	// words the impl produces — the error flag of a throwing requirement among them, which a dropped second
+	// word would turn into a `for` loop that never terminates.
+	function synthesizeWitnessSlotAdapter(request WitnessAdapterRequest, project Project)
+		let impl = try self.funcNames.funcNamed(request.implName) otherwise panic("synthesizeWitnessSlotAdapter: '{String.from(request.implName)}' is in no function of this module — `witnessSlotCallee` resolved it there one phase earlier")
+
+		var paramTypes = StdTypeArray.create()
+		for k in 0 upto request.slotArity 'eachSlotParam'
+			paramTypes.push(try impl.paramTypes.get(k) otherwise panic("synthesizeWitnessSlotAdapter: '{String.from(request.implName)}' declares {impl.paramTypes.count()} Std parameter types but its slot passes {request.slotArity} — a witness slot's arity can only be SHORTER than its impl's"))
+		end 'eachSlotParam'
+
+		var adapter = IrFunction.createFromStd(request.adapterName, returnType: impl.returnType, paramCount: request.slotArity, paramTypes: paramTypes, returnLine: 0, throwsTypeName: impl.throwsTypeName)
+		adapter.maxonReturnType = impl.maxonReturnType
+		var entry = self.stdModule.addBlock(adapter, label: b"entry")
+		emitTypedParams(self.stdModule, block: entry, paramTypes: paramTypes)
+
+		var args = ValueIdArray.create()
+		for k in 0 upto request.slotArity 'eachForwardedArg'
+			args.push(k as ValueId)
+		end 'eachForwardedArg'
+		self.appendWitnessAdapterDictionary(args, request: request, impl: impl, entry: entry, project: project)
+
+		// Every id below `args.count()` is a parameter or a dictionary address, so the call's own result is
+		// the next one — and the error flag, when the impl produces one, the one after that.
+		let resultId = args.count()
+		if functionUsesSecondaryReturnSlot(impl.maxonReturnType, throws: impl.throwsTypeName) 'aSecondReturnWord'
+			let errorFlagId = (resultId + 1) as ValueId
+			self.stdModule.appendOp(entry, op: StdOp.tryCall(resultId, errorFlagId: errorFlagId, callee: request.implName, args: args))
+			self.stdModule.setTerminator(entry, op: StdOp.errorReturn(resultId, errorFlagId: errorFlagId))
+		end 'aSecondReturnWord' else 'oneReturnWord'
+			self.stdModule.appendOp(entry, op: StdOp.call(resultId, callee: request.implName, args: args))
+			self.stdModule.setTerminator(entry, op: StdOp.retVoid if stdReturnTypeIsVoid(impl.returnType) else StdOp.ret(resultId))
+		end 'oneReturnWord'
+
+		self.stdModule.functions.push(adapter)
+	end 'synthesizeWitnessSlotAdapter'
+
+	// ⭐⭐ **THE DICTIONARY AN ADAPTER PASSES IS NULL, AND THAT IS THE CONFORMANCE MODEL'S OWN PREMISE MADE
+	// INTO A CHECK (WASM3) — not a shortcut.**
+	//
+	// A hidden dictionary parameter describes the conformer's TYPE ARGUMENT: the layout descriptor of the
+	// instance (P1.6-B1) and one witness table per `where` constraint (P1.7a slice 2a). A witness table has
+	// no type argument to describe, because **shv2 keys a generic conformer's table by its BASE name**:
+	// `Array with Int` and `Array with String` both reduce to the one conformer `Array` and share
+	// `__witness_Array.Hashable` (`ProgramSignatures.conformerNameOfType`, whose header states the rule and
+	// the reason — *"the impls it names are ELEMENT-INDEPENDENT"*). One table, one impl, every element type;
+	// so there is no per-instance value for an adapter to pass, and a zero is not a guess but the only
+	// consistent answer.
+	//
+	// ⭐ **WHAT MAKES IT SOUND IS THE SENTENCE THAT REDUCTION ALREADY RESTS ON, AND HERE IT IS ENFORCED.**
+	// `requireWitnessSlotImplIgnoresDictionary` proves the impl READS none of these parameters; an impl that
+	// does is not element-independent, cannot be dispatched through a shared table, and is refused with a
+	// position rather than handed a null table to jump through. Before adapters existed the same parameters
+	// read whatever the ABI registers held — the identical unsoundness, with no check and no diagnostic.
+	//
+	// ⇒ **WHEN A CONFORMER'S TABLE BECOMES PER-INSTANCE, THIS IS WHERE THE REAL DICTIONARY GOES** —
+	// `maxon-selfhosted` emits one table per `genericInstance` (`Passes/BuildWitnessTables.maxon:196-305`)
+	// and its thunk loads `__layout_<instance>` and each constraint's `__witness_<boundArg>.<Iface>`
+	// (`LowerMaxonToStd.synthesizeOneWitnessThunk`). shv2 cannot today: the slot's own label names no
+	// instance.
+	//
+	// ⛔ **THE OTHER TWO HIDDEN BLOCKS ARE NOT NULLABLE, AND THE PANIC SAYS SO RATHER THAN GUESSING.** A
+	// `function`-typed parameter carries a companion ENVIRONMENT and an interface-typed one carries a WITNESS
+	// half; both are facts about the ARGUMENT, which only the caller has, and both are READ. A requirement
+	// declaring such a formal has no ABI a witness dispatch can satisfy — the call site passes one word where
+	// the impl reads two — and it was already broken before an adapter existed, silently.
+	function appendWitnessAdapterDictionary(args ValueIdArray, request WitnessAdapterRequest, impl IrFunction, entry IrBlock, project Project)
+		let sig = try self.funcSignatures.get(request.implName) otherwise panic("appendWitnessAdapterDictionary: '{String.from(request.implName)}' has no signature — `witnessSlotCallee` returned the impl unchanged for exactly that case")
+		let companionCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.function) + countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
+		if companionCount > 0 'aPerArgumentCompanion'
+			panic("appendWitnessAdapterDictionary: witness slot impl '{String.from(request.implName)}' declares a `function`- or interface-typed parameter, whose hidden companion word is a fact about the ARGUMENT — a witness dispatch passes one word per formal and cannot supply it")
+		end 'aPerArgumentCompanion'
+
+		self.requireWitnessSlotImplIgnoresDictionary(request, impl: impl, project: project)
+
+		// One zero per hidden parameter, so the adapter's call has exactly the impl's declared arity. The ids
+		// continue the adapter's own dense space, which is why they are minted from the running count rather
+		// than through `mintStdValueId` (that counter belongs to the function being LOWERED, and a foreign id
+		// would leave the backend declaring locals up to it).
+		for _ in request.slotArity upto impl.paramCount 'eachHiddenParam'
+			let zeroId = args.count()
+			self.stdModule.appendOp(entry, op: StdOp.const(zeroId, value: 0, valueType: StdType.i64))
+			args.push(zeroId)
+		end 'eachHiddenParam'
+	end 'appendWitnessAdapterDictionary'
+
+	// ⭐⭐ **PROVE THE IMPL NEVER READS THE NULL DICTIONARY — the premise the base-keyed conformer name rests
+	// on, asked of the one impl that is about to be handed a null one (WASM3).**
+	//
+	// The test is USE, not read-of-a-particular-kind: a hidden parameter that is dispatched through, forwarded
+	// to another dictionary-passing callee, or merely stored is equally a value the adapter cannot supply.
+	// It runs over the impl's LOWERED body — adapters are built after the function walk, so every hidden
+	// parameter's uses are already Std ops — through `liveOpIndices`, never the flat array, which retains the
+	// orphans of every earlier pass.
+	//
+	// The hidden block is the tail `[slotArity, paramCount)`: the ABI is `[user][env][existential][layout]
+	// [witness]`, and `appendWitnessAdapterDictionary` has already refused the two middle blocks, so what
+	// remains past the slot's own arguments is exactly the descriptor and the witnesses.
+	function requireWitnessSlotImplIgnoresDictionary(request WitnessAdapterRequest, impl IrFunction, project Project)
+		var referenced = StdValueUseSet.create()
+		for opIdx in self.stdModule.liveOpIndices(impl) 'eachOp'
+			collectStdOpUses(try self.stdModule.ops.get(opIdx) otherwise panic("requireWitnessSlotImplIgnoresDictionary: opIdx {opIdx} from liveOpIndices is not in stdModule.ops"), referenced: referenced)
+		end 'eachOp'
+
+		for hidden in request.slotArity upto impl.paramCount 'eachHiddenParam'
+			if referenced.contains(hidden) 'theBodyReadsIt'
+				reportPositioned(project, code: ErrorCode.semanticSharedConformanceReadsDictionary, message: "'{String.from(request.implName)}' satisfies a requirement of `{String.from(request.conformerType)}` and reads the hidden dictionary parameter its generic declaration reserves (its type parameter's layout descriptor, or a `where` constraint's witness table). A conforming generic type shares ONE witness table across every instantiation, so a dispatch through that table has no instantiation to take the dictionary from — the impls it holds must be independent of the type argument", line: impl.nameLine, column: impl.nameColumn, filePath: impl.sourceFilePath)
+				return
+			end 'theBodyReadsIt'
+		end 'eachHiddenParam'
+	end 'requireWitnessSlotImplIgnoresDictionary'
 
 	// How many slots this table's ASSOCIATED block occupies — the interface's full associated-type count when
 	// the program holds any of its positions at an interface, and 0 otherwise.
@@ -2298,7 +2514,7 @@ type MaxonToStdLowering
 	// A helper because `lowerIndirectCall`'s arm must hand `args` to a function and touch it no other way.
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
 		let declaredParams = self.indirectCalleeParamTypes(callee)
-		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendCallIndirect'
 
 	// ⭐ **THE DECLARED PARAMETER TYPES OF THE FUNCTION VALUE BEING CALLED — the one fact an indirect call's
@@ -2381,6 +2597,18 @@ type MaxonToStdLowering
 			let formalName = try formals.get(j) otherwise panic("witnessFormalTypes: formals.get OOB at {j} below count {formals.count()}")
 			types.push(self.witnessFormalType(formalName, interfaceDeclIndex: interfaceDeclIndex, receiver: receiver))
 		end 'eachFormal'
+
+		// The CHECK between the two copies of one number: this list's length IS the slot's ABI arity, and
+		// `witnessSlotAbiArity` — which an adapter's parameter list is cut to, without a receiver value to
+		// build this list from — states it separately. An adapter one argument short of what the call site
+		// pushes is a run-time trap on wasm and a wrong register on x64, neither of them diagnosable.
+		//
+		// It also catches the ONE way the two can legitimately differ: a `static` requirement, which has no
+		// receiver to seed and which `SemanticCheck` refuses to dispatch through (E3116). Reaching here with
+		// one means that refusal did not fire.
+		if types.count() != self.witnessSlotAbiArity(slot.method) 'theTwoArityStatementsDisagree'
+			panic("witnessFormalTypes: slot '{String.from(slot.method.name)}' passes {types.count()} argument(s) here and `witnessSlotAbiArity` says {self.witnessSlotAbiArity(slot.method)} — the call site and the adapter builder must cut the same list, and a `static` requirement (which has no receiver) must not have reached a dispatch at all")
+		end 'theTwoArityStatementsDisagree'
 
 		return types
 	end 'witnessFormalTypes'
@@ -2573,7 +2801,7 @@ type MaxonToStdLowering
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendWitnessCall'
 
 	// The throwing twin of `appendWitnessCall`, sharing its result typing (`witnessCallResultType`) verbatim —
@@ -2583,7 +2811,7 @@ type MaxonToStdLowering
 	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), argNarrowMask: paramNarrowMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
 	end 'appendWitnessTryCall'
 
 	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for

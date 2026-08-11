@@ -78,8 +78,8 @@ typealias CalleeParamTypesMap = Map with (ByteArray, WasmValTypeArray)
 // that signature. Keyed by the SIGNATURE, not the arg count, because a function value now carries floats
 // (P1.5 #78): `(f64) -> f64` and `(i64) -> i64` are distinct functypes of the same arity, and
 // `call_indirect` runtime-checks the funcref against exactly the declared type. Each call's signature comes
-// from the `resultType`/`argFloatMask`/`argNarrowMask` the Std op carries (`indirectCallArgValType` reads
-// the two per-argument bits; the trailing uniform-ABI env pointer is a plain i64), plus the trailing i64
+// from the `resultType`/`argFloatMask` the Std op carries (`indirectCallArgValType` reads the one
+// per-argument bit; the trailing uniform-ABI env pointer is a plain i64), plus the trailing i64
 // error flag for a THROWING one. THREE ops
 // populate it: `callIndirect`, and the two fused witness calls (P1.7a slice 2b-iv-B), whose callee is a
 // table index loaded out of a witness-table method slot. Built once per module — pre-interned into the
@@ -592,7 +592,7 @@ function mainReturnValueType(module StdModule) returns WasmValType
 		if func.name == WasmMainFunctionName 'isMain'
 			match func.returnType 'rt'
 				void then panic("buildWasmCoreModule: `main` returns void, but the wasm `run` entry needs an ExitCode to pass to exit-with-code")
-				value(inner) then return wasmValTypeOf(inner)
+				value(inner) then return wasmMachineValTypeOf(inner)
 			end 'rt'
 		end 'isMain'
 	end 'eachFunc'
@@ -661,7 +661,7 @@ end 'buildIndirectCallTypeIdxMap'
 function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder WasmModuleBuilder)
 	match op 'k'
 		const to funcAddr then break 'k'
-		callIndirect(_, _, resultType, argFloatMask, argNarrowMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, argCount: args.count(), isThrowing: false)
+		callIndirect(_, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
 		osPanic to osFreePages then break 'k'
 		// The jump table makes no indirect call — it branches on an integer index.
 		switch then break 'k'
@@ -670,8 +670,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// `callIndirect` does — through the SAME door, so the interned type and the call-site immediate cannot
 		// disagree. The THROWING form differs in ONE respect: its callee's wasm signature carries the trailing
 		// i64 error flag as a second result (`funcSignatureResultValTypes`), which `isThrowing` adds.
-		witnessCall(_, _, _, resultType, argFloatMask, argNarrowMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, argCount: args.count(), isThrowing: false)
-		witnessTryCall(_, _, _, _, resultType, argFloatMask, argNarrowMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, argCount: args.count(), isThrowing: true)
+		witnessCall(_, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false)
+		witnessTryCall(_, _, _, _, resultType, argFloatMask, args) then internIndirectCallType(map, builder: builder, resultType: resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: true)
 		// P1.5 dogfood slice 1a: the IOCP ops are x64-windows only and pull in no wasm import.
 		osPipeCreate to osWriteFile then break 'k'
 		// The wall clock is x64-windows only and makes no indirect call.
@@ -699,25 +699,25 @@ end 'internIndirectCallTypeFor'
 // signature uses: a VOID indirect callee (a raw element destructor) interns ZERO results, a value one its
 // single valtype. `emitCallIndirect` rebuilds the sig key through the same helper, so intern and call-site
 // cannot disagree on the void case either.
-function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBuilder, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, argCount ParamCount, isThrowing bool)
-	let params = indirectCallParamValTypes(argFloatMask, argNarrowMask: argNarrowMask, argCount: argCount)
+function internIndirectCallType(map IndirectCallTypeIdxMap, builder WasmModuleBuilder, resultType StdReturnType, argFloatMask ArgFloatMask, argCount ParamCount, isThrowing bool)
+	let params = indirectCallParamValTypes(argFloatMask, argCount: argCount)
 	let results = indirectCallResultValTypes(resultType, usesSecondarySlot: isThrowing)
 	let typeIdx = builder.internFuncType(params, results: results)
 	map.upsert(encodeFuncType(params, results: results), value: typeIdx)
 end 'internIndirectCallType'
 
 // The wasm parameter valtypes of an indirect call, one per argument in order (P1.5 #78).
-function indirectCallParamValTypes(argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, argCount ParamCount) returns WasmValTypeArray
+function indirectCallParamValTypes(argFloatMask ArgFloatMask, argCount ParamCount) returns WasmValTypeArray
 	var params = WasmValTypeArray.create()
 	for k in 0 upto argCount 'each'
-		params.push(indirectCallArgValType(argFloatMask, argNarrowMask: argNarrowMask, argIndex: k))
+		params.push(indirectCallArgValType(argFloatMask, argIndex: k))
 	end 'each'
 	return params
 end 'indirectCallParamValTypes'
 
-// ⭐⭐ **THE ONE DOOR from an indirect call's per-argument ABI bits to a wasm valtype — the two-bit table
-// `StdDialect.ArgNarrowMask` states, read here and nowhere else.** The float bit picks the register FILE and
-// the narrow bit the WIDTH, so `(0,0)` is an i64, `(0,1)` an i32, `(1,0)` an f64 and `(1,1)` an f32.
+// ⭐⭐ **THE ONE DOOR from an indirect call's per-argument ABI bit to a wasm valtype.** The float bit picks
+// the register FILE, and that is the whole of it: an integer argument is a MACHINE WORD, exactly as it is in
+// the CALLEE's own declared signature (`funcParamValTypes`, the same `wasmMachineValTypeOf`).
 //
 // ⚠ **BOTH THE DECLARED FUNCTYPE AND THE PUSHED ARGUMENT COME THROUGH HERE, AND THAT IS THE PROPERTY.**
 // `indirectCallParamValTypes` builds the type `call_indirect` names; `pushIndirectArgs` coerces each operand to
@@ -725,30 +725,36 @@ end 'indirectCallParamValTypes'
 // `indirectCallResultValTypes` exists to prevent on the RESULT half — and a disagreement between them is not a
 // compile error at either site, it is a `wasm trap: indirect call type mismatch` at run time.
 //
-// ⭐ **THE NARROW BIT IS WHY THERE IS NO LONGER A REFUSAL ABOVE IT.** `call_indirect` checks the declared
-// functype against the target's own EXACTLY, and the target's is derived at REAL widths (`funcParamValTypes` →
-// an `i1` or a `u32` is a wasm `i32`). While the call site had only the float mask it declared every non-float
-// argument an i64, so an indirectly reachable function with a `bool` or `ExitCode` parameter could not be
-// called at all — and `requireIndirectlyReachableParamsAreMachineWords` refused those programs at compile time
-// rather than shipping a module that trapped with no source context. The width reaches this tier now, so that
-// guard is DELETED; removing a refusal only ADMITS programs, so nothing that compiled can regress.
+// ⭐⭐ **THERE WAS A SECOND, PER-ARGUMENT *WIDTH* BIT HERE, AND ERASURE IS WHY IT COULD NOT WORK (WASM3).**
+// `ArgNarrowMask` declared argument k an `i32` when the DECLARED parameter type was an `i1`/`u32`, so that the
+// call site would name the same functype the target's real widths give. That is exact only while both ends read
+// the SAME declaration — and a shared generic body does not. `Holder.apply(f Transform)` with
+// `typealias Transform = function(Element) returns Element` is compiled ONCE for `Holder with Integer`,
+// `Holder with bool` and `Holder with String`: inside it `Element` is opaque, so the call site declares a
+// machine word, while `__fnref_flip` — minted from `flip(b bool) returns bool`'s own declaration — was typed
+// `(i32, i64) -> i32`. MEASURED: `wasm trap: indirect call type mismatch`, on a program x64 answers correctly.
+// A per-site width cannot be reconciled with an ABI that erases; a MACHINE WORD can, because it is what
+// erasure already assumes and what the register targets already do. So the width bit is DELETED and the whole
+// wasm ABI is the machine word — which is `maxon-selfhosted`'s wasm backend verbatim
+// (`MirToWasm.stdTypeToWasmType`: `f64` for a float, `i64` for everything else, for every param, result and
+// local it declares).
 //
-// ⚠ **THE GUARD ALSO COVERED LESS THAN IT LOOKED LIKE IT DID.** It walked `globalData.pendingRdataRelocs` —
-// witness-table method slots and `Array` descriptor `destroyFunc@40`/`copyFunc@32`, i.e. every indirect callee
-// reached through DATA. A function VALUE is not one: its address is a `.text` `funcAddr` in no `.rdata` slot,
-// so a lifted CLOSURE `function(loud bool) gives …` called through a `function(bool) returns int` typealias
-// walked straight past the guard, compiled clean, answered correctly on x64 and trapped
-// `wasm trap: indirect call type mismatch` under wasmtime (MEASURED). Both halves close on this one fact,
-// which is why the fix is a mask and never was a wider guard.
+// ⚠ **THE REFUSAL THE WIDTH BIT REPLACED IS STILL GONE, AND MUST STAY GONE.**
+// `requireIndirectlyReachableParamsAreMachineWords` used to reject any program with a `bool`/`ExitCode`
+// parameter reachable through a `.rdata` function slot. It covered less than it looked like it did — a lifted
+// CLOSURE's address is a `.text` `funcAddr` in no `.rdata` slot, so `function(loud bool) gives …` called
+// through a `function(bool) returns int` typealias walked straight past it and trapped anyway — and the
+// machine-word ABI closes both halves at once, because now NO function's wasm signature carries a narrow
+// integer for a caller to disagree with.
 //
-// ⚠ **IT STATES NO valtype TABLE OF ITS OWN, AND THAT IS THE POINT.** The two bits become the ABI class's
-// canonical `StdType` (`stdTypeOfAbiClass`) and that goes through `wasmValTypeOf` — the SAME door the CALLEE's
-// own functype comes through (`funcParamValTypes`). It used to answer with a second float/narrow → valtype
-// table written out here: the two agreed for all eleven `StdType`s and nothing made them, so an edit to
-// either would have diverged silently into a run-time `indirect call type mismatch` — the one failure mode
-// neither end of a `call_indirect` can report at compile time.
-function indirectCallArgValType(argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, argIndex ParamCount) returns WasmValType
-	return wasmValTypeOf(stdTypeOfAbiClass(argMaskBit(argFloatMask, argIndex: argIndex), isNarrow: argMaskBit(argNarrowMask, argIndex: argIndex)))
+// ⚠ **IT STATES NO valtype TABLE OF ITS OWN, AND THAT IS THE POINT.** The bit becomes the ABI class's
+// canonical `StdType` (`stdTypeOfAbiClass`) and that goes through `wasmMachineValTypeOf` — the SAME door the
+// CALLEE's own functype comes through (`funcParamValTypes`). It used to answer with a second float → valtype
+// table written out here: the two agreed for every `StdType` and nothing made them, so an edit to either would
+// have diverged silently into a run-time `indirect call type mismatch` — the one failure mode neither end of a
+// `call_indirect` can report at compile time.
+function indirectCallArgValType(argFloatMask ArgFloatMask, argIndex ParamCount) returns WasmValType
+	return wasmMachineValTypeOf(stdTypeOfAbiClass(argMaskBit(argFloatMask, argIndex: argIndex)))
 end 'indirectCallArgValType'
 
 // ==========================================================================
@@ -778,7 +784,7 @@ end 'wasmValTypeOf'
 
 // True when a value of type `t` OCCUPIES a full machine word rather than an i32 local. A STORAGE
 // question, and no longer an arithmetic one: which instruction family an integer OPERATION selects is
-// `opComputeValType`'s answer and is always i64. The two callers left are the ones genuinely asking
+// `wasmMachineValTypeOf`'s answer and is always i64. The two callers left are the ones genuinely asking
 // about storage — a `const`'s encoded width, and `bitcastI64ToF64`'s refusal of a source that has no
 // top half to reinterpret. A float `t` reaching here is a lowering bug, so it panics naming `what`.
 function isWideInt(t StdType, what String) returns bool
@@ -814,9 +820,31 @@ end 'isWideInt'
 // disagree about a value's width (a disagreement is a `local.set` of an i64 into an i32 local, which
 // is a wasm VALIDATION failure rather than a wrong answer — but the point is that neither can drift).
 // A FLOAT op keeps its own valtype: the float path is already exact at its declared width.
-function opComputeValType(operandType StdType) returns WasmValType
-	return wasmValTypeOf(operandType) if stdTypeIsFloat(operandType) else WasmValType.i64
-end 'opComputeValType'
+//
+// ⭐⭐ **AND THE SAME SENTENCE IS THE WHOLE OF THE wasm CALLING CONVENTION (WASM3), WHICH IS WHY THIS IS
+// ALSO THE ABI DOOR AND NOT A SECOND FUNCTION SPELLING THE SAME TABLE.** Every wasm signature this backend
+// declares — a function's params (`funcParamValTypes`) and results (`funcResultValTypes`), and the functype a
+// `call_indirect` names (`indirectCallArgValType` / `indirectCallResultValTypes`) — is built from THIS
+// answer, so an integer crosses every call boundary as a machine word and a float as an f64. Narrow
+// valtypes remain, but only INSIDE a body, on locals nothing outside the function can see: a compare's i32,
+// a byte load's i32. `wasmValTypeOf` still answers where such a value LIVES; this answers both where a value
+// is COMPUTED and how it TRAVELS, which the register targets have never been able to tell apart.
+//
+// ⚠ **A PER-SITE WIDTH AT A CALL BOUNDARY IS UNSOUND UNDER ERASURE, MEASURED** — see
+// `indirectCallArgValType` for the shared generic body that declared one width while its callee's own
+// declaration gave another, and for why `ArgNarrowMask` was deleted rather than repaired.
+//
+// ⛔⛔ **AND IT TAKES AN INSTRUMENT WITH IT: a Std-tier WIDTH disagreement is now invisible on every target.**
+// Several fixes in this tree were FOUND because a wrong `StdType` on one end of a call surfaced as
+// `wasm trap: indirect call type mismatch` while x64 went on answering correctly — `witnessCallResultType`
+// reading an unresolved `named` as `i64` against a `u32` impl, `buildStrEq` declaring an `i64` result into an
+// `i1` witness slot, `emitEquatableWitnessEquals`' reinterpretation. Every one of those rules is still
+// correct and still enforced by the code; what is gone is the ONLY gate that reported the wrong answer. A
+// change that gets a Std width wrong from here on will be silent on all four targets, so the width has to be
+// argued at its declaration rather than caught at a call.
+function wasmMachineValTypeOf(t StdType) returns WasmValType
+	return wasmValTypeOf(t) if stdTypeIsFloat(t) else WasmValType.i64
+end 'wasmMachineValTypeOf'
 
 // Refuse a FLOAT operand type reaching an INTEGER-op emitter — a lowering bug (the float emitters are
 // dispatched before this point, or, for the immediate forms, `foldConstOperands` never builds one),
@@ -839,19 +867,25 @@ function requireF64(t StdType, what String)
 	end 'notDouble'
 end 'requireF64'
 
+// A function's declared wasm PARAMETER list — one MACHINE WORD per Std parameter (`wasmMachineValTypeOf`),
+// which is also the local a `param` op defines, because in wasm a parameter IS local `k`. The two are one
+// answer for the same reason `emitBinOp`'s width and `recordDefValtype`'s are: a `local.set` of an i64 into
+// an i32 local is a validation failure, and here it would be a signature the body contradicts.
 function funcParamValTypes(func IrFunction) returns WasmValTypeArray
 	var params = WasmValTypeArray.create()
 	for pt in func.paramTypes 'each'
-		params.push(wasmValTypeOf(pt))
+		params.push(wasmMachineValTypeOf(pt))
 	end 'each'
 	return params
 end 'funcParamValTypes'
 
+// A function's declared wasm RESULT list — the machine-word image of its Std return type, and the width
+// `emitRet`/`emitErrorReturn` coerce the returned value to. A void return declares no result at all.
 function funcResultValTypes(returnType StdReturnType) returns WasmValTypeArray
 	var results = WasmValTypeArray.create()
 	match returnType 'r'
 		void then break 'r'
-		value(inner) then results.push(wasmValTypeOf(inner))
+		value(inner) then results.push(wasmMachineValTypeOf(inner))
 	end 'r'
 	return results
 end 'funcResultValTypes'
@@ -986,7 +1020,7 @@ end 'singletonValTypes'
 // at X6, and the range work found it rather than caused it.**
 //
 // ⇒ What this function relies on is unchanged, and now has a guard standing behind it rather than a hope:
-// `opComputeValType`'s and `emitDivMod`'s "computing at i64 is EXACT" is exact for every value inside the
+// `wasmMachineValTypeOf`'s and `emitDivMod`'s "computing at i64 is EXACT" is exact for every value inside the
 // SLOT's domain — verified across `[0, u32.max]` including 2^31 and u32.max, host and wasm byte-identical
 // on 14 readings — and the range checks are what stop a value outside it from ever arriving here.
 //
@@ -1056,8 +1090,8 @@ function unaryResultValType(opcode StdUnaryOpcode, operandType StdType) returns 
 		// and so ALWAYS defines an i32, while its `operandType` is the bool's — and a bool-returning
 		// function lowers to an i64 return in this tier, so an `operandType` that is not `i1` would
 		// declare the local i64 and fail wasm validation. `neg`/`bitNot` compute what they consume, at
-		// the machine word (`opComputeValType`, which keeps a float `neg`'s f64 unchanged).
-		neg to bitNot gives opComputeValType(operandType)
+		// the machine word (`wasmMachineValTypeOf`, which keeps a float `neg`'s f64 unchanged).
+		neg to bitNot gives wasmMachineValTypeOf(operandType)
 		logicalNot gives WasmValType.i32
 		siToFp gives WasmValType.f64
 		fpToSi gives WasmValType.i64
@@ -1085,7 +1119,7 @@ function callResultValType(callee ByteArray, funcNames FunctionNameIndex) return
 	let rt = (try funcNames.funcNamed(callee) otherwise panic("callResultValType: no Std function named '{String.from(callee)}'")).returnType
 	return match rt 'r'
 		void gives WasmValType.i64
-		value(inner) gives wasmValTypeOf(inner)
+		value(inner) gives wasmMachineValTypeOf(inner)
 	end 'r'
 end 'callResultValType'
 
@@ -1102,13 +1136,15 @@ end 'callResultValType'
 // compare result feeding the `mod` overflow guard's `add`, made the operation narrow. The two
 // immediate forms now CARRY `operandType` (see StdDialect), and every integer op — `div`/`mod`
 // included, which have no operand type at all — is computed at MACHINE WIDTH, which is what the
-// native backends do with their 64-bit registers and what `opComputeValType` states in full.
+// native backends do with their 64-bit registers and what `wasmMachineValTypeOf` states in full.
 function buildValtypeTable(module StdModule, func IrFunction, funcNames FunctionNameIndex) returns WasmValTypeArray
 	var valtypes = WasmValTypeArray.create()
 
+	// A parameter's local IS the wasm parameter, so its valtype is the SIGNATURE's — the machine word
+	// `funcParamValTypes` declares, never the narrower storage class the Std type would give.
 	for i in 0 upto func.paramCount 'eachParam'
 		let pt = try func.paramTypes.get(i) otherwise panic("buildValtypeTable: paramTypes.get OOB at {i} (paramCount={func.paramCount})")
-		setValtype(valtypes, v: i, vt: wasmValTypeOf(pt))
+		setValtype(valtypes, v: i, vt: wasmMachineValTypeOf(pt))
 	end 'eachParam'
 
 	for blockRef in func.blockRefs 'eachBlock'
@@ -1138,13 +1174,13 @@ end 'buildValtypeTable'
 function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames FunctionNameIndex)
 	match op 'def'
 		const(resultId, _, valueType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(valueType))
-		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: opComputeValType(operandType))
+		binOp(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
 		unaryOp(resultId, _, opcode, operandType) then setValtype(valtypes, v: resultId, vt: unaryResultValType(opcode, operandType: operandType))
 		cmp(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		// ⭐ The immediate forms carry their own width (X5), so a fold cannot change a value's
-		// class: `binOpImm`'s result is `opComputeValType(operandType)`, exactly as `binOp`'s is, and
+		// class: `binOpImm`'s result is `wasmMachineValTypeOf(operandType)`, exactly as `binOp`'s is, and
 		// it is NOT dependent on `lhs` — which a fold does not promise agrees (see `emitBinOpImm`).
-		binOpImm(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: opComputeValType(operandType))
+		binOpImm(resultId, _, _, _, operandType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(operandType))
 		cmpImm(resultId, _, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i32)
 		// ⚠ The two ops with NO width of their own. They are computed at machine width and so define
 		// an i64, whatever their operands' storage widths are — `emitDivMod` holds the argument.
@@ -1153,7 +1189,10 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		condBranch then break 'def'
 		branch then break 'def'
 		ret then break 'def'
-		param(resultId, _, paramType) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(paramType))
+		// A parameter's local is the wasm PARAMETER, so it takes the signature's machine word — the same
+		// answer the `func.paramTypes` sweep above already recorded for this id, and the same one
+		// `funcParamValTypes` declares.
+		param(resultId, _, paramType) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(paramType))
 		call(resultId, callee, _) then setValtype(valtypes, v: resultId, vt: callResultValType(callee, funcNames: funcNames))
 		retVoid then break 'def'
 		// ⚠ A wasm linear-memory ADDRESS IS AN i32, not the i64 pointer width the native backends
@@ -1186,15 +1225,15 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// A VOID indirect callee (a raw element destructor) leaves NOTHING on the stack, so its `resultId` is a
 		// dead slot with no def — record no valtype (an unread i64-fill local, like any DCE gap). A value one
 		// takes the function value's own return width (f64 for a float-returning value, else i64).
-		callIndirect(resultId, _, resultType, _, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
+		callIndirect(resultId, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
 		osPanic to osFreePages then break 'def'
 		// The jump table defines no value — a terminator has no result valtype to record.
 		switch then break 'def'
 		// A witness call defines exactly what a `callIndirect` does — the op-carried `resultType`'s width, and
 		// nothing at all for a VOID interface method. Its THROWING form defines the second `errorFlagId` too,
 		// always i64, exactly as a direct `tryCall`'s flag is.
-		witnessCall(resultId, _, _, resultType, _, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
-		witnessTryCall(resultId, errorFlagId, _, _, resultType, _, _, _) then recordWitnessTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, resultType: resultType)
+		witnessCall(resultId, _, _, resultType, _, _) then recordIndirectCallDefValtype(valtypes, resultId: resultId, resultType: resultType)
+		witnessTryCall(resultId, errorFlagId, _, _, resultType, _, _) then recordWitnessTryCallDefs(valtypes, resultId: resultId, errorFlagId: errorFlagId, resultType: resultType)
 		// P1.5 dogfood slice 1a: the IOCP ops are x64-windows only — no wasm valtype to record.
 		osPipeCreate to osWriteFile then break 'def'
 		// The wall clock is x64-windows only and defines no value — no wasm valtype to record.
@@ -1237,7 +1276,7 @@ end 'recordWitnessTryCallDefs'
 function recordIndirectCallDefValtype(valtypes WasmValTypeArray, resultId ValueId, resultType StdReturnType)
 	match resultType 'r'
 		void then break 'r'
-		value(inner) then setValtype(valtypes, v: resultId, vt: wasmValTypeOf(inner))
+		value(inner) then setValtype(valtypes, v: resultId, vt: wasmMachineValTypeOf(inner))
 	end 'r'
 end 'recordIndirectCallDefValtype'
 
@@ -1544,7 +1583,7 @@ type WasmFuncEmitter
 			// P1.5-A1 non-capturing function values: materialize a function's table index (`funcAddr`) and
 			// call THROUGH one (`callIndirect`). See the two emitters for the funcref-table lowering.
 			funcAddr(resultId, funcName) then self.emitFuncAddr(resultId, funcName: funcName)
-			callIndirect(resultId, calleeReg, resultType, argFloatMask, argNarrowMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask)
+			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.emitCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			osPanic(label) then self.emitPanicLabel(label)
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only — its QueryPerformanceCounter clock and Windows `Sleep` have no wasm primitive, and a
@@ -1563,8 +1602,8 @@ type WasmFuncEmitter
 			// P1.7a slice 2b-iv-B: constrained-type-parameter dispatch. The witness table's method slot holds a
 			// funcref-TABLE INDEX on wasm (`bakeFuncTableIndexRelocs`) where the x64 writers bake a `.text` VA, so
 			// the fused call is a `call_indirect` through a loaded slot. See `emitWitnessCall`.
-			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, argNarrowMask, args) then self.emitWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask)
-			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, argNarrowMask, args) then self.emitWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask)
+			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
+			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.emitWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask)
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — wasm rejects rather
 			// than inventing an untested lowering (it is emitted only inside the x64-windows-gated IOCP runtime).
 			osPipeCreate to osWriteFile then panic("emitBodyOp: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")
@@ -1642,7 +1681,7 @@ type WasmFuncEmitter
 
 	// Push both operands of a binary op (binOp/cmp/div/mod, integer AND float) at the op's chosen
 	// width, in lhs-then-rhs order — the shape every wasm binary ALU/compare op wants on the stack.
-	// The width choice is the caller's (`opComputeValType` for the ALU and compare ops, f64 for the
+	// The width choice is the caller's (`wasmMachineValTypeOf` for the ALU and compare ops, f64 for the
 	// float path, the machine word for div/mod); this only guarantees BOTH operands are coerced to the
 	// SAME `opVt` the opcode pops, so a new binary emitter cannot forget to coerce one side (the gap
 	// `pushOperandAt`'s header names).
@@ -1657,7 +1696,7 @@ type WasmFuncEmitter
 			return
 		end 'float'
 
-		self.pushBinaryOperands(lhs, rhs: rhs, opVt: opComputeValType(operandType))
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: wasmMachineValTypeOf(operandType))
 		self.emitBinOpcode(opcode)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOp'
@@ -1738,7 +1777,7 @@ type WasmFuncEmitter
 	// a mask recorded i32, and — through `coerceOnStack`'s zero-extend — an `and` that cleared the top
 	// half of every dividend. X5 made the op CARRY `operandType` so the width would stop being guessed;
 	// the review found the other half, that a narrow `operandType` is a STORAGE class and not an
-	// arithmetic one, and `opComputeValType` is where that is now decided. `lhs` is COERCED like any
+	// arithmetic one, and `wasmMachineValTypeOf` is where that is now decided. `lhs` is COERCED like any
 	// other binary operand, which is exactly what the unfolded `binOp` next door already did.
 	function emitBinOpImm(resultId ValueId, lhs ValueId, imm Imm32, opcode StdBinOpcode, operandType StdType)
 		// The immediate is pushed as a same-width const so wasm's typed ALU op is balanced
@@ -1746,14 +1785,14 @@ type WasmFuncEmitter
 		// so `foldConstOperands` never makes one — and the guard says so rather than letting an f64
 		// operand type ride the integer ALU.
 		requireIntegerOperand(operandType, what: "binOpImm")
-		self.pushOperandAt(lhs, targetVt: opComputeValType(operandType))
+		self.pushOperandAt(lhs, targetVt: wasmMachineValTypeOf(operandType))
 		self.body.i64Const(imm)
 		self.emitBinOpcode(opcode)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitBinOpImm'
 
 	// The integer ALU opcode. ONE family, because an integer op is computed at the machine word
-	// (`opComputeValType`) — there is no width left to select on. `div` (StdBinOpcode) is FLOAT
+	// (`wasmMachineValTypeOf`) — there is no width left to select on. `div` (StdBinOpcode) is FLOAT
 	// division and out of the scalar slice; integer division is the separate `StdOp.div`, so a
 	// `binOp(div)` here is a lowering bug.
 	function emitBinOpcode(opcode StdBinOpcode)
@@ -1871,7 +1910,7 @@ type WasmFuncEmitter
 	function emitNegExpr(operand ValueId, operandType StdType)
 		requireIntegerOperand(operandType, what: "neg")
 		self.body.i64Const(0)
-		self.pushOperandAt(operand, targetVt: opComputeValType(operandType))
+		self.pushOperandAt(operand, targetVt: wasmMachineValTypeOf(operandType))
 		self.body.i64Sub()
 	end 'emitNegExpr'
 
@@ -1881,7 +1920,7 @@ type WasmFuncEmitter
 	// exactly what a narrow op drops.
 	function emitBitNotExpr(operand ValueId, operandType StdType)
 		requireIntegerOperand(operandType, what: "bitNot")
-		self.pushOperandAt(operand, targetVt: opComputeValType(operandType))
+		self.pushOperandAt(operand, targetVt: wasmMachineValTypeOf(operandType))
 		self.body.i64Const(-1)
 		self.body.i64Xor()
 	end 'emitBitNotExpr'
@@ -1905,7 +1944,7 @@ type WasmFuncEmitter
 			return
 		end 'float'
 
-		self.pushBinaryOperands(lhs, rhs: rhs, opVt: opComputeValType(operandType))
+		self.pushBinaryOperands(lhs, rhs: rhs, opVt: wasmMachineValTypeOf(operandType))
 		self.emitCmpPred(pred)
 		self.body.localSet(resultId as Wasm32Index)
 	end 'emitCmp'
@@ -1944,7 +1983,7 @@ type WasmFuncEmitter
 	// what makes the three targets answer one question.
 	function emitCmpImm(resultId ValueId, lhs ValueId, imm Imm32, pred StdCmpPred, operandType StdType)
 		requireIntegerOperand(operandType, what: "cmpImm")
-		self.pushOperandAt(lhs, targetVt: opComputeValType(operandType))
+		self.pushOperandAt(lhs, targetVt: wasmMachineValTypeOf(operandType))
 		self.body.i64Const(imm)
 		self.emitCmpPred(pred)
 		self.body.localSet(resultId as Wasm32Index)
@@ -1990,7 +2029,7 @@ type WasmFuncEmitter
 	// two registers — the three targets agree by construction instead of by coincidence. A narrow
 	// CONSUMER of the quotient wraps it back at its own operand push, as any other i64 value would be.
 	//
-	// ⭐ THAT ARGUMENT IS NO LONGER THIS PAIR'S ALONE (X5 review): it is `opComputeValType`, and every
+	// ⭐ THAT ARGUMENT IS NO LONGER THIS PAIR'S ALONE (X5 review): it is `wasmMachineValTypeOf`, and every
 	// integer op obeys it. `div`/`mod` were merely the two that could not have done otherwise, having
 	// no operand type to be misled by — the ops that HAVE one were being misled by it.
 	function emitDivMod(resultId ValueId, lhs ValueId, rhs ValueId, isRemainder bool, signedness DivideSignedness)
@@ -2098,17 +2137,16 @@ type WasmFuncEmitter
 	// `(i64) -> i64` are distinct wasm functypes of the same arity, and pushing a float arg as i64 or
 	// declaring the result i64 would mismatch the funcref's real type at the `call_indirect` type check. The
 	// Std `callIndirect` therefore carries `resultType`/`argFloatMask`, the SAME facts x64/arm64 use to pick
-	// the result's and each arg's register file — plus `argNarrowMask`, which the register targets never read
-	// because every value there rides a whole 64-bit register, and which this one cannot do without: a `bool`
-	// or `ExitCode` parameter is a wasm i32 on the callee's side whatever the float bit says. Both masks are
-	// recovered by the front end from the callee's DECLARED parameter types (`LowerMaxonToStd.paramFloatMask`
-	// / `paramNarrowMask`), which is the same collapse the `__fnref_` thunk declares its own parameters
-	// through. `pushIndirectArgs` coerces each value to the declared arg valtype exactly as a direct `call`
-	// does; a value already at its declared width coerces to a no-op.
-	function emitCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask)
-		self.pushIndirectArgs(args, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask)
+	// the result's and each arg's register file, recovered by the front end from the callee's DECLARED
+	// parameter types (`LowerMaxonToStd.paramFloatMask`). It carries no WIDTH: every wasm signature this
+	// backend declares is at the machine word (`wasmMachineValTypeOf`), so an integer argument's width is not
+	// a per-site fact and cannot disagree with the target's own. `pushIndirectArgs` coerces each value to the
+	// declared arg valtype exactly as a direct `call` does; a value already at that width coerces to a
+	// no-op.
+	function emitCallIndirect(resultId ValueId, calleeReg ValueId, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask)
+		self.pushIndirectArgs(args, argFloatMask: argFloatMask)
 		self.pushOperandAt(calleeReg, targetVt: WasmValType.i32)
-		self.emitIndirectCallOp(resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, argCount: args.count(), isThrowing: false, what: "emitCallIndirect")
+		self.emitIndirectCallOp(resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: false, what: "emitCallIndirect")
 		self.captureIndirectResult(resultId, resultType: resultType)
 	end 'emitCallIndirect'
 
@@ -2116,10 +2154,10 @@ type WasmFuncEmitter
 	// the SAME door `indirectCallParamValTypes` builds the interned functype's parameter list from, so an
 	// operand can never be pushed at a width the declared type will then be checked against. Shared by the
 	// function-value and witness call emitters, so those two cannot drift from each other either.
-	function pushIndirectArgs(args ValueIdArray, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask)
+	function pushIndirectArgs(args ValueIdArray, argFloatMask ArgFloatMask)
 		for argIdx in 0 upto args.count() 'eachArg'
 			let arg = try args.get(argIdx) otherwise panic("pushIndirectArgs: args.get OOB at {argIdx}")
-			self.pushOperandAt(arg, targetVt: indirectCallArgValType(argFloatMask, argNarrowMask: argNarrowMask, argIndex: argIdx))
+			self.pushOperandAt(arg, targetVt: indirectCallArgValType(argFloatMask, argIndex: argIdx))
 		end 'eachArg'
 	end 'pushIndirectArgs'
 
@@ -2127,8 +2165,8 @@ type WasmFuncEmitter
 	// through the same two helpers `internIndirectCallType` built it with — the invariant that keeps the
 	// call-site immediate and the interned type from disagreeing. The table index must already be on top of
 	// the stack. `what` names the calling emitter so a missing intern reports against the op that has one.
-	function emitIndirectCallOp(resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, argCount ParamCount, isThrowing bool, what String)
-		let params = indirectCallParamValTypes(argFloatMask, argNarrowMask: argNarrowMask, argCount: argCount)
+	function emitIndirectCallOp(resultType StdReturnType, argFloatMask ArgFloatMask, argCount ParamCount, isThrowing bool, what String)
+		let params = indirectCallParamValTypes(argFloatMask, argCount: argCount)
 		let sigKey = encodeFuncType(params, results: indirectCallResultValTypes(resultType, usesSecondarySlot: isThrowing))
 		let typeIdx = try self.indirectCallTypeIdx.get(sigKey) otherwise panic("{what}: no interned functype for this {argCount}-argument indirect call signature — buildIndirectCallTypeIdxMap missed it")
 		self.body.callIndirect(typeIdx)
@@ -2153,8 +2191,8 @@ type WasmFuncEmitter
 	// The slot is 8 bytes wide on every target (`WitnessSlotBytes`), so it is read with an `i64.load` and
 	// narrowed to the i32 table-index operand — the same i64-flow/i32-operand split `emitFuncAddr` documents
 	// for a function VALUE.
-	function emitWitnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask)
-		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, isThrowing: false, what: "emitWitnessCall")
+	function emitWitnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask)
+		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, isThrowing: false, what: "emitWitnessCall")
 		self.captureIndirectResult(resultId, resultType: resultType)
 	end 'emitWitnessCall'
 
@@ -2162,8 +2200,8 @@ type WasmFuncEmitter
 	// `emitCall`: the callee's SECOND multi-value result, the i64 error flag. It sits on TOP of the primary
 	// (`errorReturn` pushes value-then-flag), and `local.set` pops top-first, so the flag is captured FIRST.
 	// A VOID throwing interface method returns the flag alone, and `captureIndirectResult` stores nothing.
-	function emitWitnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask)
-		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, isThrowing: true, what: "emitWitnessTryCall")
+	function emitWitnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask)
+		self.emitWitnessCallSequence(witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, isThrowing: true, what: "emitWitnessTryCall")
 		self.body.localSet(errorFlagId as Wasm32Index)
 		self.captureIndirectResult(resultId, resultType: resultType)
 	end 'emitWitnessTryCall'
@@ -2173,8 +2211,8 @@ type WasmFuncEmitter
 	// the two cannot drift on the slot offset or on argument slotting, mirroring x64's
 	// `emitWitnessCallSequence` (a divergence there would be a silently mis-dispatched method, not a compile
 	// error).
-	function emitWitnessCallSequence(witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, isThrowing bool, what String)
-		self.pushIndirectArgs(args, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask)
+	function emitWitnessCallSequence(witnessAddr ValueId, methodIndex WitnessMethodIndex, args ValueIdArray, resultType StdReturnType, argFloatMask ArgFloatMask, isThrowing bool, what String)
+		self.pushIndirectArgs(args, argFloatMask: argFloatMask)
 
 		// The witness table's linear-memory address: an i32 whether it arrived as an `rdataAddr` (already i32)
 		// or as a threaded witness PARAMETER (an i64 machine word, wrapped here).
@@ -2182,7 +2220,7 @@ type WasmFuncEmitter
 		self.body.i64Load(witnessMethodSlotOffset(methodIndex) as Wasm32Index)
 		self.body.i32WrapI64()
 
-		self.emitIndirectCallOp(resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, argCount: args.count(), isThrowing: isThrowing, what: what)
+		self.emitIndirectCallOp(resultType, argFloatMask: argFloatMask, argCount: args.count(), isThrowing: isThrowing, what: what)
 	end 'emitWitnessCallSequence'
 
 	// Value return: push the return value and `return`. A `void` return type here means a value
@@ -2453,7 +2491,7 @@ type WasmFuncEmitter
 		// table for itself and wrapped by hand; the copy agreed with the door but nothing made it, and it
 		// was the weaker one (an f64 condition passed through UNTOUCHED where `coerceOnStack` panics
 		// naming the lowering bug). A condition CAN legitimately be i64 — an integer `binOp` over `i1`
-		// operands is computed at the machine word like every other integer op (`opComputeValType`).
+		// operands is computed at the machine word like every other integer op (`wasmMachineValTypeOf`).
 		self.pushOperandAt(condId, targetVt: WasmValType.i32)
 		self.body.beginIf()
 

@@ -251,22 +251,23 @@ end 'emitHtMask'
 // The fused `callMem [hashWitness + 24]`; for an int key the slot holds `int.hash`, so this is
 // `key & 0xFFFFFFFF`.
 //
-// ⚠ **BOTH PER-ARGUMENT ABI MASKS ARE 0, AND WHAT MAKES THAT TRUE IS THE KEY-TYPE WHITELIST.** The receiver is
-// the sole argument, and it is the KEY's type — so this is a claim about which key types a `Map`/`Set` admits,
-// and the load-bearing guard is the one that decides that. MEASURED: `Map with (ExitCode, Integer)` and
-// `Set with ExitCode` are BOTH refused (E2015). That matters more than it looks: `ExitCode` is the only
-// narrow (`u32`) type a Maxon signature can name, so it is the one type whose `hash` receiver would be a wasm
-// `i32` against a call site declaring `i64` — a `wasm trap: indirect call type mismatch`, exactly the defect
-// `LowerMaxonToStd.witnessFormalTypes` records for a user interface. Every key type the whitelist DOES admit
-// declares its `hash` receiver as a whole machine word: `int.hash` an i64, `String.hash`/`Character.hash` the
-// record POINTER, a user type its box pointer. (`float.hash`'s f64 receiver is out for a second, independent
-// reason — E2062 refuses a float TYPE ARGUMENT — and `bool` declares no `Hashable` at all.)
+// ⚠ **THE FLOAT MASK IS 0, AND WHAT MAKES THAT TRUE IS THE KEY-TYPE WHITELIST.** The receiver is the sole
+// argument, and it is the KEY's type — so this is a claim about which key types a `Map`/`Set` admits, and the
+// load-bearing guard is the one that decides that. `float.hash`'s f64 receiver is out because E2062 refuses a
+// float TYPE ARGUMENT, and `bool` declares no `Hashable` at all; every key type the whitelist DOES admit takes
+// its receiver in a GPR — `int.hash` an i64, `String.hash`/`Character.hash` the record POINTER, a user type its
+// box pointer.
 //
-// ⇒ **WIDENING THE WHITELIST TO `ExitCode` MUST COME BACK HERE**, and would be silent on x64 and a run-time
-// trap on wasm if it did not.
+// ⚠ **THERE WAS A SECOND, WIDTH MASK HERE AND THIS COMMENT'S ARGUMENT FOR IT IS NOW MOOT (WASM3).** It read:
+// `ExitCode` is the only narrow (`u32`) type a Maxon signature can name, so a `Map with (ExitCode, …)` key
+// would declare its `hash` receiver a wasm `i32` against a call site saying `i64` and trap — which is why
+// `Map with (ExitCode, Integer)` and `Set with ExitCode` being refused (E2015, MEASURED) mattered here. Every
+// wasm signature is emitted at the MACHINE WORD now (`StdToWasm.wasmMachineValTypeOf`), so a narrow receiver
+// is no longer a width to disagree about and widening the whitelist to `ExitCode` would not reopen a trap.
+// The whitelist's OTHER reasons for refusing it are untouched and are not this function's to state.
 function emitHtKeyHash(module StdModule, block IrBlock, hashWitness ValueId, key ValueId, ids ValueMinter) returns ValueId
 	let hash = ids.mint()
-	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: BuiltinProtocolSoleMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0, argNarrowMask: 0, args: argsOf(key)))
+	module.appendOp(block, op: StdOp.witnessCall(hash, witnessAddr: hashWitness, methodIndex: BuiltinProtocolSoleMethodIndex, resultType: StdReturnType.value(builtinProtocolResultStdType(HashValueTypeName)), argFloatMask: 0, args: argsOf(key)))
 	return hash
 end 'emitHtKeyHash'
 

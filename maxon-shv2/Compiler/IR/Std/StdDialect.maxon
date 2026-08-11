@@ -111,50 +111,34 @@ export enum DivideSignedness
 	unsigned
 end 'DivideSignedness'
 
-// ⭐ **DOES `t` OCCUPY LESS THAN THE MACHINE WORD?** The other half of a Std type's ABI class, beside
-// `stdTypeIsFloat`: the float bit picks the register FILE, this one picks the WIDTH. The register targets
-// never ask — every value there rides a whole 64-bit register or an 8-byte stack slot — but wasm's typed
-// operand stack has a distinct `i32`/`f32`, and a `call_indirect` type-checks its declared functype against
-// the callee's EXACTLY, so a `bool` (i1) or an `ExitCode` (u32) parameter has to be declared at its own
-// width or the call traps (see `ArgNarrowMask`).
-//
-// Stated as a RELATION to `i64`'s footprint rather than as a literal 8, so the `StdTypeInfo` table above
-// stays the only place a Std type's size is written down.
-export function stdTypeIsNarrow(t StdType) returns bool
-	return stdTypeStorageBytes(t) < stdTypeStorageBytes(StdType.i64)
-end 'stdTypeIsNarrow'
-
-// ⭐⭐ **THE INVERSE OF THE TWO PREDICATES ABOVE — the canonical `StdType` of an ABI class, so that a backend
-// which holds only the two BITS can rejoin the one type→valtype door instead of restating it.**
-// `stdTypeOfAbiClass(stdTypeIsFloat(t), isNarrow: stdTypeIsNarrow(t))` is `t`'s class representative, and
-// every `StdType` in a class maps to one valtype by construction, so
-// `wasmValTypeOf(stdTypeOfAbiClass(…)) == wasmValTypeOf(t)` for all eleven of them.
+// ⭐⭐ **THE CANONICAL `StdType` OF AN ABI CLASS — so that a backend which holds only the float BIT can
+// rejoin the one type→valtype door instead of restating it.** `stdTypeOfAbiClass(stdTypeIsFloat(t))` is `t`'s
+// class representative, and every `StdType` in a class maps to one ABI valtype by construction, so
+// `wasmMachineValTypeOf(stdTypeOfAbiClass(stdTypeIsFloat(t))) == wasmMachineValTypeOf(t)` for all eleven.
 //
 // ⚠ **IT EXISTS BECAUSE THE TWO ENDS OF A `call_indirect` WERE TWO STATEMENTS OF ONE RULE.** The CALLEE's
-// wasm functype is derived from its declared `StdType`s (`funcParamValTypes` → `wasmValTypeOf`); the CALL
-// SITE's was derived from the op's `ArgFloatMask`/`ArgNarrowMask` by a second, independent float/narrow →
-// valtype table. The two agreed across every `StdType`, and nothing made them: an edit to either would have
-// diverged silently into a run-time `indirect call type mismatch`, which is the one failure mode neither end
-// can report at compile time. Now the bits become a type here and the type becomes a valtype there.
+// wasm functype is derived from its declared `StdType`s (`funcParamValTypes`); the CALL SITE's was derived
+// from the op's `ArgFloatMask` by a second, independent float → valtype table. The two agreed across every
+// `StdType`, and nothing made them: an edit to either would have diverged silently into a run-time
+// `indirect call type mismatch`, which is the one failure mode neither end can report at compile time. Now
+// the bit becomes a type here and the type becomes a valtype there.
 //
-// The f32 row is unreachable (nothing in the tree constructs a `StdType.f32`, see `StdToWasm.requireF64`)
-// and is still written: the two bits are orthogonal, and a silent `else` on the float half would be exactly
-// the fallthrough this project forbids.
-export function stdTypeOfAbiClass(isFloat bool, isNarrow bool) returns StdType
-	if isFloat 'floatClass'
-		return StdType.f32 if isNarrow else StdType.f64
-	end 'floatClass'
-
-	return StdType.u32 if isNarrow else StdType.i64
+// ⚠ **THERE WAS A SECOND, WIDTH BIT, AND IT IS DELETED (WASM3).** `stdTypeIsNarrow` picked `u32`/`f32` for a
+// sub-word argument so a `call_indirect` could name a `bool` parameter's real `i32`. A per-site width cannot
+// survive ERASURE — a shared generic body declares an opaque `Element` where the callee's own declaration
+// says `bool` — so the wasm ABI is the MACHINE WORD throughout, which is what the register targets always
+// did and what `maxon-selfhosted`'s wasm backend does. See `StdToWasm.indirectCallArgValType`.
+export function stdTypeOfAbiClass(isFloat bool) returns StdType
+	return StdType.f64 if isFloat else StdType.i64
 end 'stdTypeOfAbiClass'
 
-// ⭐ **THE SHAPE BOTH PER-ARGUMENT ABI MASKS ARE** — one bit per argument, low `argCount` bits meaningful,
-// stored in a full machine word, ceiling `MaxAbiArgs`. It exists so that `argMaskBit`'s signature can be TRUE
-// of either mask: `ArgFloatMask` and `ArgNarrowMask` below say WHICH FACT a mask carries, and a reader that
-// takes "an ABI mask" should say that rather than naming one of them and being handed the other. The three
-// are spelled over the same range rather than derived from this one because a typealias of a typealias is
-// not a type this language admits (E2003) — so what makes them one shape is this paragraph and the identical
-// bound, and a change to the bound belongs to all three at once.
+// ⭐ **THE SHAPE A PER-ARGUMENT ABI MASK IS** — one bit per argument, low `argCount` bits meaningful,
+// stored in a full machine word, ceiling `MaxAbiArgs`. It exists so that `argMaskBit`'s signature can name
+// the SHAPE rather than the one mask that wears it: `ArgFloatMask` below says WHICH FACT its bits carry, and
+// a reader that takes "an ABI mask" should say that. (It had a sibling, `ArgNarrowMask`; WASM3 deleted it —
+// see `stdTypeOfAbiClass`.) The two are spelled over the same range rather than derived from one another
+// because a typealias of a typealias is not a type this language admits (E2003) — so what makes them one
+// shape is this paragraph and the identical bound, and a change to the bound belongs to both at once.
 export typealias ArgAbiMask = int(0 to u64.max)
 
 // A per-ARGUMENT float bitmask carried by the three indirect-call ops (`callIndirect`, `witnessCall`,
@@ -173,39 +157,6 @@ export typealias ArgAbiMask = int(0 to u64.max)
 // lowering may name a Std typealias, and every one of them now does.
 export typealias ArgFloatMask = int(0 to u64.max)
 
-// ⭐⭐ **THE SIBLING WIDTH MASK — bit k set iff argument k occupies LESS than the machine word**
-// (`stdTypeIsNarrow`). Carried beside `ArgFloatMask` by the same three indirect-call ops, over the same
-// argument list, with the same `MaxAbiArgs` ceiling. The two bits together name the argument's ABI class,
-// and a backend reads whichever half it needs:
-//
-// | float bit | narrow bit | wasm valtype |
-// |---|---|---|
-// | 0 | 0 | `i64` |
-// | 0 | 1 | `i32` |
-// | 1 | 0 | `f64` |
-// | 1 | 1 | `f32` |
-//
-// ⚠ The `f32` row is the encoding's natural reading and nothing produces it: `wasmValTypeOf` maps `StdType.f32`
-// to a wasm `f32`, but shv2's `float` IS an f64 throughout and NOTHING in the tree constructs a `StdType.f32`
-// (see `requireF64`). It is written down because the two bits are orthogonal, not because a path reaches it.
-//
-// ⭐ **WHY IT EXISTS: a `call_indirect` type-checks its declared functype against the callee's EXACTLY.** The
-// callee's is derived at REAL widths (`StdToWasm.funcParamValTypes` → `wasmValTypeOf`, so an `i1` or a `u32`
-// is a wasm `i32`), while the call site had only the float mask and declared every non-float argument an
-// i64 — so an indirectly-reached function with a `bool` or `ExitCode` parameter could not be called at all.
-// MEASURED, twice, on the SAME missing fact: an interface method `greet(loud bool)` reached through a
-// witness table (`specs-shv2/interface-conformance.md`'s `interface-impl-ignore-param-name`), and a lifted
-// CLOSURE `function(loud bool) gives …` called through a function typealias — the first refused at compile
-// time by a wasm-tier guard that has since been deleted, the second compiling clean and trapping
-// `indirect call type mismatch` under wasmtime while x64 answered correctly.
-//
-// ⚠ **IT IS A SECOND SCALAR AND NOT A PER-ARGUMENT `StdTypeArray`, DELIBERATELY** — the constraint
-// `callIndirect`'s header states: a SECOND MANAGED field on the variant is mishandled by the bootstrap's
-// synthesized destructor (a wild free surfacing as an unrelated `mm_decref` underflow at teardown, on EVERY
-// indirect call). A scalar also preserves all `MaxAbiArgs` slots, which re-encoding the pair as two bits per
-// argument inside one word would halve.
-export typealias ArgNarrowMask = int(0 to u64.max)
-
 // ⛔ **THE STATED CEILING ON A SIGNATURE'S ARGUMENTS — and it is THIS MASK'S OWN WIDTH.** `1 shl k` must
 // land inside the machine word the mask is, so a call cannot carry more than 64 arguments: bit 64 does not
 // exist, and an argument past it would be classed GPR whatever its type, silently routing an f64 through
@@ -220,9 +171,8 @@ export typealias ArgNarrowMask = int(0 to u64.max)
 export let MaxAbiArgs = 64 as ParamCount
 
 // Bit k of a per-argument ABI mask — the one door the four backends read an indirect call's per-argument
-// register file (`ArgFloatMask`) and per-argument width (`ArgNarrowMask`) through. ONE reader for both,
-// rather than a named predicate each: the masks are the same shape over the same argument list and differ
-// only in which fact they carry, so the bit test is stated once and the CALL SITE names the mask it means.
+// register file (`ArgFloatMask`) through. It takes the SHAPE (`ArgAbiMask`) rather than the one mask that
+// wears it, so a second per-argument fact can be added without a second bit test being written.
 export function argMaskBit(mask ArgAbiMask, argIndex ParamCount) returns bool
 	return ((mask shr argIndex) and 1) != 0
 end 'argMaskBit'
@@ -1068,21 +1018,23 @@ export union StdOp
 	// wasm functype interns ZERO results and the native backends capture no result register. Making the whole
 	// wasm signature (not just the width) exact is what stops the `call_indirect` type check from trapping.
 	//
-	// ⭐ `argNarrowMask` IS THE SIBLING WIDTH MASK — bit k set iff argument k occupies less than the machine
-	// word — and it is what makes an indirect call to a `bool`/`ExitCode` parameter legal on wasm at all. See
-	// `ArgNarrowMask` for the two-bit encoding and for the two measured traps that paid for it.
+	// ⭐ **THERE WAS A SIBLING WIDTH MASK AND IT IS GONE (WASM3).** `argNarrowMask` declared argument k
+	// narrower than the machine word when its DECLARED type was an `i1`/`u32`. That is exact only while both
+	// ends of the call read the same declaration, and a SHARED GENERIC BODY does not — see
+	// `StdToWasm.indirectCallArgValType` for the measured trap. An indirect call's arguments travel at the
+	// MACHINE WORD on every target now, which is what the register targets always did.
 	//
-	// ⚠ `resultType`/`argFloatMask`/`argNarrowMask` ARE SCALARS, DELIBERATELY. A per-arg `StdTypeArray` here
+	// ⚠ `resultType`/`argFloatMask` ARE SCALARS, DELIBERATELY. A per-arg `StdTypeArray` here
 	// would be a SECOND
 	// managed field on the variant, which the bootstrap that compiles shv2 mishandles in the union's
 	// synthesized destructor — a wild free surfacing as an unrelated `mm_decref` underflow at teardown, on
 	// EVERY indirect call. `StdReturnType` is a VALUE union (its `value` arm wraps the enum `StdType`, no
-	// heap), so it adds no managed field: the two masks and it keep `callIndirect` at ONE managed field
+	// heap), so it adds no managed field: the mask and it keep `callIndirect` at ONE managed field
 	// (`args`) exactly like its original shape — the same allocation-flat idiom `CalleeParamClassMap` uses to
 	// answer the identical question for a call by NAME. `args` stays LAST (the one managed field),
-	// scalars first. All three are METADATA, not value operands: `collectStdOpUses`/`remapStdOpUses` leave them
+	// scalars first. Both are METADATA, not value operands: `collectStdOpUses`/`remapStdOpUses` leave them
 	// untouched.
-	callIndirect(resultId ValueId, calleeReg ValueId, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	callIndirect(resultId ValueId, calleeReg ValueId, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// A SOFTWARE PANIC: abort with the interned message at `.rdata` label `label`, printing it plus a
 	// symbolized backtrace and exiting `PanicExitCode`.
 	//
@@ -1230,7 +1182,7 @@ export union StdOp
 	// generic collection has.
 	//
 	// It is `callIndirect` with the callee expressed as a MEMORY ADDRESS (base + offset) rather than a
-	// register: identical `resultType`/`argFloatMask`/`argNarrowMask`/`args` shape and identical full-call-barrier metadata,
+	// register: identical `resultType`/`argFloatMask`/`args` shape and identical full-call-barrier metadata,
 	// so it shares that op's argument-marshaling and result-capture lowering verbatim. `witnessAddr` is a
 	// VALUE USE (the table address must be live at the call); `methodIndex` is metadata (the slot). `args`
 	// stays LAST (the ONE managed field, receiver at index 0), scalars first — the same allocation-flat shape
@@ -1238,7 +1190,7 @@ export union StdOp
 	// Lowered by ALL FOUR backends as of P1.7a slice 2b-iv-C — the witness blob's `funcAbs64InRdata` slots
 	// are baked as a `.text` VA by the fixed-base writers, as a funcref-table index by wasm, and as a dyld
 	// chained-fixup rebase by the always-PIE arm64-macOS.
-	witnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	witnessCall(resultId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// --- P1.5 dogfood slice 1a: the IOCP overlapped-read substrate's OS-import primitives ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `switch` (a `control`-band op physically at the tail), per the
@@ -1359,7 +1311,7 @@ export union StdOp
 	// load-and-call whose callee is a MEMORY OPERAND, `(*[witnessAddr + 24 + 8*methodIndex])(args…)`, so the
 	// loaded function pointer never occupies a virtual register — plus the ONE thing `tryCall` adds to
 	// `call`: a second result, `errorFlagId`, captured from the dual-register error ABI (R10 / x9). Every
-	// other field (`resultType`, `argFloatMask`, `argNarrowMask`, `args`) and every metadata bit is `witnessCall`'s verbatim,
+	// other field (`resultType`, `argFloatMask`, `args`) and every metadata bit is `witnessCall`'s verbatim,
 	// so it shares that op's argument marshalling and result capture rather than re-deriving them.
 	//
 	// `resultId` and `errorFlagId` are DEFS; `witnessAddr` and `args` are USES. `args` stays LAST (the ONE
@@ -1367,7 +1319,7 @@ export union StdOp
 	// bootstrap's synthesized destructor — and `errorFlagId` is a scalar `ValueId`, so the shape is
 	// unchanged in that respect. Lowered by ALL FOUR backends as of P1.7a slice 2b-iv-C, exactly as
 	// `witnessCall` is; each fills the witness blob's slots in the form its image format can carry.
-	witnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, argNarrowMask ArgNarrowMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	witnessTryCall(resultId ValueId, errorFlagId ValueId, witnessAddr ValueId, methodIndex WitnessMethodIndex, resultType StdReturnType, argFloatMask ArgFloatMask, args ValueIdArray) = StdOpMeta{category: StdOpCategory.call, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// --- R4.1: the file-IO runtime's OPEN primitive ---
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `witnessTryCall`, per the band-append invariant: every
@@ -1705,8 +1657,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// like `globalAddr`/`rdataAddr`.
 		funcAddr then break 'u'
 		// An indirect call reads the callee register AND its arguments; `resultId` is a def, and
-		// `resultType`/`argFloatMask`/`argNarrowMask` are metadata (not value operands).
-		callIndirect(_, calleeReg, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: calleeReg, args: args)
+		// `resultType`/`argFloatMask` are metadata (not value operands).
+		callIndirect(_, calleeReg, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: calleeReg, args: args)
 		// A range panic reads nothing — its `label` is a NAME (an `.rdata` symbol), not a value, and it
 		// defines nothing.
 		osPanic then break 'u'
@@ -1735,8 +1687,8 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		switch(subjectId, _, _) then referenced.insert(subjectId)
 		// A witness call reads the WITNESS-TABLE ADDRESS and its arguments — the exact shape of `callIndirect`
 		// (`witnessAddr` in place of the callee register), so it reports uses the same way. `resultId` is a def;
-		// `methodIndex`/`resultType`/`argFloatMask`/`argNarrowMask` are metadata (not value operands).
-		witnessCall(_, witnessAddr, _, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
+		// `methodIndex`/`resultType`/`argFloatMask` are metadata (not value operands).
+		witnessCall(_, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
 		// P1.5 dogfood slice 1a: each IOCP op reports its VALUE operands; its `resultId` (where present) is a DEF,
 		// skipped here exactly as `osWaitHandle`'s is. `osIocpCreate`/`osEventCreate`/`osLastError` read nothing (a
 		// pure result def, like `osAllocPages`'s but with no size operand).
@@ -1763,7 +1715,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// P1.7a slice 2b-v: the THROWING witness call reads exactly what `witnessCall` reads — the witness-table
 		// address and its arguments — through the SAME helper. Both its results (`resultId`, `errorFlagId`) are
 		// defs, exactly as `tryCall`'s two are.
-		witnessTryCall(_, _, witnessAddr, _, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
+		witnessTryCall(_, _, witnessAddr, _, _, _, args) then insertUseCalleeAndArgs(referenced, calleeReg: witnessAddr, args: args)
 		// R4.1: the file OPEN reads its path BUFFER address; `resultId` is a def and is skipped here.
 		osFileOpenRead(_, pathPtr) then referenced.insert(pathPtr)
 		// The close reads its HANDLE and defines nothing.
@@ -1893,7 +1845,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		funcAddr gives op
 		// The exact mirror of `collectStdOpUses`: `callIndirect` rewrites its callee register and its args
 		// (its result is a def); `resultType`/`argFloatMask` are metadata carried through unchanged.
-		callIndirect(resultId, calleeReg, resultType, argFloatMask, argNarrowMask, args) gives StdOp.callIndirect(resultId, calleeReg: remappedValue(calleeReg, subst: subst), resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, args: remappedArgs(args, subst: subst))
+		callIndirect(resultId, calleeReg, resultType, argFloatMask, args) gives StdOp.callIndirect(resultId, calleeReg: remappedValue(calleeReg, subst: subst), resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
 		// `osPanic` reads no value (its `label` is a name), so it rewrites nothing and is handed back
 		// unchanged — the mirror of `funcAddr`/`rdataAddr`.
 		osPanic gives op
@@ -1919,7 +1871,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		switch(subjectId, denseTargetBlockIds, defaultBlockId) gives StdOp.switch(remappedValue(subjectId, subst: subst), denseTargetBlockIds: denseTargetBlockIds, defaultBlockId: defaultBlockId)
 		// The exact mirror of `collectStdOpUses`'s `witnessCall` arm: rewrite the witness-table address and the
 		// args (its result is a def; `methodIndex`/`resultType`/`argFloatMask` are metadata carried through).
-		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, argNarrowMask, args) gives StdOp.witnessCall(resultId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, args: remappedArgs(args, subst: subst))
+		witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessCall(resultId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
 		// The exact mirror of `collectStdOpUses`'s P1.5 IOCP arms: rewrite exactly the value operands they read;
 		// the result-only ops (`osIocpCreate`/`osEventCreate`/`osLastError`) rewrite nothing.
 		osPipeCreate(namePtr, saPtr, iocp, readPtr, writePtr) gives StdOp.osPipeCreate(remappedValue(namePtr, subst: subst), saPtrId: remappedValue(saPtr, subst: subst), iocpId: remappedValue(iocp, subst: subst), readPtrId: remappedValue(readPtr, subst: subst), writePtrId: remappedValue(writePtr, subst: subst))
@@ -1942,7 +1894,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osReadWallClock(ftPtr) gives StdOp.osReadWallClock(remappedValue(ftPtr, subst: subst))
 		// The exact mirror of `collectStdOpUses`'s `witnessTryCall` arm: rewrite the witness-table address and the
 		// args; both results are defs and every remaining field is metadata carried through.
-		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, argNarrowMask, args) gives StdOp.witnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, argNarrowMask: argNarrowMask, args: remappedArgs(args, subst: subst))
+		witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) gives StdOp.witnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: remappedValue(witnessAddr, subst: subst), methodIndex: methodIndex, resultType: resultType, argFloatMask: argFloatMask, args: remappedArgs(args, subst: subst))
 		// R4.1: rewrite the path buffer; `resultId` is a def and is carried through unremapped, exactly as
 		// every other defining system op's is.
 		osFileOpenRead(resultId, pathPtr) gives StdOp.osFileOpenRead(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))

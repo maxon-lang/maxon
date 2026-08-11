@@ -460,10 +460,10 @@ type StdToArm64Lowering
 			retVoid to rdataAddr gives 0
 			tryCall(_, _, callee, args) gives self.callOutgoingArgBytes(calleeArgFloatMask(self.calleeParamClasses, callee: callee, argCount: args.count(), registerCapacity: arm64RegisterArgCapacity()), argCount: args.count())
 			errorReturn to funcAddr gives 0
-			callIndirect(_, _, _, argFloatMask, _, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			callIndirect(_, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPanic to switch gives 0
-			witnessCall(_, _, _, _, argFloatMask, _, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
-			witnessTryCall(_, _, _, _, _, argFloatMask, _, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			witnessCall(_, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
+			witnessTryCall(_, _, _, _, _, argFloatMask, args) gives self.callOutgoingArgBytes(argFloatMask, argCount: args.count())
 			osPipeCreate to osReadWallClock gives 0
 			// R4.1 + R4.2: x64-windows only — refused at the CALL SITE by E3104, so none reaches this backend.
 			osFileOpenRead to osFileAttributes gives 0
@@ -574,7 +574,7 @@ type StdToArm64Lowering
 			// a function value and a capturing closure both execute natively, so those cases carry no target
 			// marker and are pinned by arm64 goldens like every other target's.
 			funcAddr(resultId, funcName) then self.emit(dstRef, op: TargetOp.arm64LeaFuncAddr(TargetVReg.virtual(resultId), funcName: funcName))
-			callIndirect(resultId, calleeReg, resultType, argFloatMask, _, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
+			callIndirect(resultId, calleeReg, resultType, argFloatMask, args) then self.lowerCallIndirect(resultId, calleeReg: calleeReg, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
 			osPanic(label) then self.lowerPanic(label, dstRef: dstRef)
 			// P1.5 mid-body-yield: the green-thread sleep substrate (`osReadClock`/`osSleepMs`) is x64-windows
 			// only at this rung — its QueryPerformanceCounter clock and Windows `Sleep` have no arm64 primitive
@@ -594,8 +594,8 @@ type StdToArm64Lowering
 			// Both writers now fill the witness table's `funcAbs64InRdata` slots — ELF bakes an absolute `.text`
 			// VA (the image is static/ET_EXEC, so the x64 bake is CPU-invariant) and Mach-O threads each slot
 			// into its dyld chained-fixup chain as a PIE rebase, the same channel a String `buffer@0` rides.
-			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, _, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
-			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, _, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
+			witnessCall(resultId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessCall(resultId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
+			witnessTryCall(resultId, errorFlagId, witnessAddr, methodIndex, resultType, argFloatMask, args) then self.lowerWitnessTryCall(resultId, errorFlagId: errorFlagId, witnessAddr: witnessAddr, methodIndex: methodIndex, args: args, resultType: resultType, argFloatMask: argFloatMask, dstRef: dstRef)
 			// P1.5 dogfood slice 1a: the IOCP overlapped-read substrate is x64-windows only — it is emitted only
 			// inside the x64-windows-gated IOCP runtime, so arm64 rejects rather than inventing an untested lowering.
 			osPipeCreate to osWriteFile then panic("lowerStdToArm64: the P1.5 IOCP ops are x64-windows only — the async-subprocess-stdio substrate is x64-windows-gated at this rung")

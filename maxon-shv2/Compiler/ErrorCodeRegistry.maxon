@@ -995,6 +995,27 @@ export enum ErrorCode
 	// the same code refuses and names the position that CAN be resolved -- the same cure E3120 offers for
 	// the same reason one door over.
 	existentialWideningBindingDisagreement = "E3127"
+	// A method that satisfies an interface requirement for a GENERIC conforming type reads one of the
+	// hidden dictionary parameters its declaration reserves -- its type parameter's layout descriptor
+	// (`sizeof(T)`, an opaque `Array` build, a borrowed `T` returned or stored), or the witness table of a
+	// `where` constraint it dispatches through.
+	// A generic conformer shares ONE witness table across every instantiation: `Array with Int` and
+	// `Array with String` both reduce to the conformer `Array` and both dispatch through
+	// `__witness_Array.Hashable` (`ProgramSignatures.conformerNameOfType`). That reduction is what lets one
+	// compiled impl and one table serve every element type, and its premise is that the impls are
+	// INDEPENDENT of the type argument -- `Array.hash`/`Array.equals` hash and compare the backing buffer's
+	// raw bytes and never touch an element.
+	// A dispatch through such a table therefore has no instantiation to take a dictionary from: the caller
+	// holds a table address and a slot index, and the two conformers sharing the slot disagree about what
+	// the dictionary would even say. The adapter that adjusts the impl's arity for the slot
+	// (`LowerMaxonToStd.appendWitnessAdapterDictionary`) therefore passes a NULL dictionary, and this check
+	// is what makes that sound instead of a wild jump through a null table.
+	// Before the adapter existed the same parameters read whatever the ABI registers happened to hold --
+	// the identical unsoundness with no check, silent on x64 and a `wasm trap: indirect call type mismatch`
+	// on wasm.
+	// The cure for a program this refuses is a per-INSTANCE witness table, which `maxon-selfhosted` emits
+	// (`Passes/BuildWitnessTables.emitPerInstanceWitnessTables`) and shv2 does not yet.
+	semanticSharedConformanceReadsDictionary = "E3128"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

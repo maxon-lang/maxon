@@ -1348,7 +1348,7 @@ end 'emitRecordGatedDestroyTail'
 // phi the backend would only coalesce away.
 function emitRecordGatedRetainTail(module StdModule, doAct IrBlock, done IrBlock, word ValueId, value ValueId, ids ValueMinter)
 	let taken = ids.mint()
-	module.appendOp(doAct, op: StdOp.callIndirect(taken, calleeReg: word, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, argNarrowMask: 0, args: argsOf(value)))
+	module.appendOp(doAct, op: StdOp.callIndirect(taken, calleeReg: word, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(value)))
 	module.setTerminator(doAct, op: StdOp.ret(taken))
 	module.setTerminator(done, op: StdOp.ret(value))
 end 'emitRecordGatedRetainTail'
@@ -1513,7 +1513,7 @@ end 'emitElementDestroyRange'
 // ⭐ **CALL AN ELEMENT/KEY DESTRUCTOR on `elem` through the `destroy` function pointer (P1.7 / P1.7b).** THE one
 // home of the element-destructor register-file ABI: an element destructor is `(i64) -> void`, so its result slot
 // is an unused i64 (matching every scalar indirect call) and its single element-pointer argument is a whole
-// machine word — never a float (float mask 0) and never sub-word (narrow mask 0). Both masks are 0 because the
+// machine word — never a float (float mask 0). The mask is 0 because the
 // callee is a POINTER-taking function whichever destructor is stamped in the slot: `__str_decref`,
 // `__mm_decref`, `__arr_decref` and every synthesized `__destruct_<T>` declare one `i64`. Shared by the array's
 // per-slot destroy walk (`emitElementDestroyRange`), the single-value
@@ -1523,7 +1523,7 @@ end 'emitElementDestroyRange'
 // this only emits the indirect call.
 export function emitElementDestructorCall(module StdModule, block IrBlock, destroy ValueId, elem ValueId, ids ValueMinter)
 	let dropped = ids.mint()
-	module.appendOp(block, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdReturnType.void, argFloatMask: 0, argNarrowMask: 0, args: argsOf(elem)))
+	module.appendOp(block, op: StdOp.callIndirect(dropped, calleeReg: destroy, resultType: StdReturnType.void, argFloatMask: 0, args: argsOf(elem)))
 end 'emitElementDestructorCall'
 
 // ⭐ **GATE THE MANAGED-ELEMENT DESTROY WALK on `element_destroy@40` (P1.7 slice 3a).** Load the array's stamped
@@ -3371,7 +3371,7 @@ end 'buildArrAppend'
 // parser stamped with the element's destructor. One owner each, so neither leaks nor double-frees.
 export function emitMappedElementPush(module StdModule, block IrBlock, transform ValueId, env ValueId, elem ValueId, dest ValueId, ids ValueMinter)
 	let mapped = ids.mint()
-	module.appendOp(block, op: StdOp.callIndirect(mapped, calleeReg: transform, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, argNarrowMask: 0, args: twoArgs(elem, second: env)))
+	module.appendOp(block, op: StdOp.callIndirect(mapped, calleeReg: transform, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: twoArgs(elem, second: env)))
 	let pushed = ids.mint()
 	module.appendOp(block, op: StdOp.call(pushed, callee: ArrPushName, args: twoArgs(dest, second: mapped)))
 end 'emitMappedElementPush'
@@ -4596,7 +4596,7 @@ function emitElementCloneRange(module StdModule, func IrFunction, cur IrBlock, s
 	let cloned = ids.mint()
 	// Both ABI masks are 0 for the reason `emitElementDestructorCall`'s are: a stamped `copyFunc@32` is a
 	// `(box) -> newBox`, so its one argument is a whole-machine-word POINTER — never a float, never sub-word.
-	module.appendOp(doClone, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, argNarrowMask: 0, args: argsOf(elem)))
+	module.appendOp(doClone, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(elem)))
 	let destSlot = emitSlotAddr(module, block: doClone, buffer: destBase, index: i, elementSize: elementSize, ids: ids)
 	module.appendOp(doClone, op: StdOp.storeIndirect(destSlot, offset: 0, valueId: cloned, valueType: StdType.i64))
 	module.setTerminator(doClone, op: StdOp.branch(step.id))

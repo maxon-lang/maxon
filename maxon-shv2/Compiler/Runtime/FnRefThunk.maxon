@@ -9,9 +9,9 @@
 // the parameter: its DIRECT calls `triple(10)` must stay `(userargs) -> R` (unchurned — and on wasm a
 // direct `call`'s arity is checked too). So `functionRef(triple)` materializes the address of a thunk
 // `__fnref_triple(n, __env)` whose signature IS `(userargs, env) -> R` — it ignores `__env` and forwards to
-// `triple`. On wasm the `call_indirect` functype is SIGNATURE-derived (P1.5 #78: per-argument register file,
-// and since `argNarrowMask` per-argument WIDTH), so the table element's own functype must match exactly; on register targets the extra arg would be harmless, but ONE thunk keeps a single
-// cross-target lowering. This is v1's `__fnref_` design (LowerMaxonToStd.maxon:11408) — its knowledge, not
+// `triple`. On wasm the `call_indirect` functype is SIGNATURE-derived (P1.5 #78: per-argument register
+// file), so the table element's own ARITY must match exactly; on register targets the extra arg would be
+// harmless, but ONE thunk keeps a single cross-target lowering. This is v1's `__fnref_` design (LowerMaxonToStd.maxon:11408) — its knowledge, not
 // its cost curve: the thunk is synthesized once per referenced plain function, not per reference.
 //
 // ⚠ HIGHER-ORDER FUNCTION VALUES ARE OUT OF SCOPE. Binding a function that ITSELF takes a function
@@ -144,14 +144,13 @@ end 'installFnRefThunks'
 // ⭐ EACH USER PARAMETER TAKES THE TARGET'S REAL TYPE, the trailing `__env` an i64 (P1.5 #78). A FLOAT
 // parameter is an f64: the thunk must capture it from a float argument register and forward it to the
 // target — which reads it from a float register too — so a float user param typed i64 here would forward
-// a GPR value into the target's XMM parameter (a cross-register-file move). A `bool` is an `i1` and an
-// `ExitCode` a `u32` for the WIDTH half of the same argument: see the loop's own header for the trap that
-// cost. Everything else — int, String, a struct pointer, a type parameter — is an i64 machine word, and a
-// `named` residue PANICS rather than being widened to one. The caller's indirect-call argument routing is
-// derived from the identical `maxonTypeToStdType` collapse (the `argFloatMask`/`argNarrowMask` the
-// `callIndirect` carries), so caller, thunk and target agree on every argument's register file AND width. The forwarded call is a DIRECT `call` to the target by name (a
-// wasm `call`, arity- and type-checked against the target's OWN `(userargs) -> R` functype), so the thunk
-// is precisely what bridges the uniform indirect signature to the target's direct one.
+// a GPR value into the target's XMM parameter (a cross-register-file move). Everything else — int, String,
+// a struct pointer, a type parameter — is an i64 machine word, and a `named` residue PANICS rather than
+// being widened to one. The caller's indirect-call argument routing is derived from the identical
+// `maxonTypeToStdType` collapse (the `argFloatMask` the `callIndirect` carries), so caller, thunk and
+// target agree on every argument's register file. The forwarded call is a DIRECT `call` to the target by
+// name (a wasm `call`, arity- and type-checked against the target's OWN `(userargs) -> R` functype), so the
+// thunk is precisely what bridges the uniform indirect signature to the target's direct one.
 function synthesizeFnRefThunk(module StdModule, project Project, targetName ByteArray)
 	let sig = try project.funcSignatures.get(targetName) otherwise panic("synthesizeFnRefThunk: no signature for '{String.from(targetName)}' — a functionRef must name a registered function")
 	let ret = try project.funcReturnTypes.get(targetName) otherwise panic("synthesizeFnRefThunk: no return type for '{String.from(targetName)}'")
@@ -160,20 +159,22 @@ function synthesizeFnRefThunk(module StdModule, project Project, targetName Byte
 	let targetReturn = maxonReturnTypeToStdReturnType(ret)
 
 	// ⭐⭐ **EACH FORWARDED USER PARAMETER IS DECLARED THROUGH `maxonTypeToStdType` — THE SAME COLLAPSE THE CALL
-	// SITE'S ABI MASKS ASK, AND THAT IDENTITY IS THE POINT.** A `callIndirect`'s per-argument register file and
-	// width come from the DECLARED parameter types (`LowerMaxonToStd.paramFloatMask`/`paramNarrowMask`, both
-	// through that one function); this thunk IS the callee those masks describe whenever the function value
-	// names a plain function. Two collapses would be one fact written twice, and wasm's `call_indirect` —
-	// which type-checks the declared functype against the funcref's own EXACTLY — is the only thing that would
-	// ever report the drift, at RUN time.
+	// SITE'S ABI MASK ASKS, AND THAT IDENTITY IS THE POINT.** A `callIndirect`'s per-argument register file
+	// comes from the DECLARED parameter types (`LowerMaxonToStd.paramFloatMask`, through that one function);
+	// this thunk IS the callee that mask describes whenever the function value names a plain function. Two
+	// collapses would be one fact written twice, and wasm's `call_indirect` — which type-checks the declared
+	// functype against the funcref's own EXACTLY — is the only thing that would ever report the drift, at RUN
+	// time.
 	//
-	// ⚠ **IT USED TO BE ITS OWN RULE (`f64` for a float TAG, `i64` for absolutely everything else), AND THAT
-	// COST A TRAP.** Widening a `bool` parameter to an i64 here was invisible while the call site declared every
-	// non-float argument an i64 too — but a LIFTED CLOSURE is called with NO thunk, at its own declared widths,
-	// so the two callable shapes of one function VALUE already disagreed: `function(loud bool) gives …` passed
-	// through a `function(bool) returns int` typealias compiled clean, answered correctly on x64 and trapped
-	// `wasm trap: indirect call type mismatch` under wasmtime. One collapse makes thunk and closure the same
-	// shape by construction. (`maxonTypeToStdType` is total over every type a RESOLVED signature can hold — a
+	// ⚠⚠ **WIDTH IS NOT PART OF THAT AGREEMENT, AND TWO ATTEMPTS TO MAKE IT ONE EACH COST A TRAP (WASM3).**
+	// Widening a `bool` parameter to an i64 HERE trapped while the callee kept its declared `i1`; declaring it
+	// `i1` here and giving the call site a matching per-argument width mask trapped the moment the call site
+	// sat in a SHARED GENERIC BODY, where the declared type is an opaque `Element`. Neither is repairable,
+	// because the two ends do not read one declaration. What is: every wasm signature — this thunk's, a lifted
+	// CLOSURE's (which has no thunk at all), and every `call_indirect`'s — is emitted at the MACHINE WORD by
+	// `StdToWasm.wasmMachineValTypeOf`, so there is no width for them to disagree about. The `i1` declared here
+	// is therefore a STD-tier fact the wasm ABI does not carry, and the register targets never did.
+	// (`maxonTypeToStdType` is total over every type a RESOLVED signature can hold — a
 	// struct/String/function/type-parameter is an i64 pointer or opaque word by its own arm there — and panics
 	// only on the `named`/`unresolved` residues TypeResolution is required to have eliminated.)
 	var paramTypes = StdTypeArray.create()

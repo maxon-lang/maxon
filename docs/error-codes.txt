@@ -1893,6 +1893,29 @@ E6002 BinaryOutputNotReplaceable
 	doc deadline it quotes is `WedgeWatchdogMs` (maxon-shv2/Testing/SpecWorkerPool.maxon), read from
 	doc the constant so the message and the watchdog cannot disagree.
 
+E3128 SemanticSharedConformanceReadsDictionary
+	shv2 semanticSharedConformanceReadsDictionary
+	doc A method that satisfies an interface requirement for a GENERIC conforming type reads one of the
+	doc hidden dictionary parameters its declaration reserves -- its type parameter's layout descriptor
+	doc (`sizeof(T)`, an opaque `Array` build, a borrowed `T` returned or stored), or the witness table of a
+	doc `where` constraint it dispatches through.
+	doc A generic conformer shares ONE witness table across every instantiation: `Array with Int` and
+	doc `Array with String` both reduce to the conformer `Array` and both dispatch through
+	doc `__witness_Array.Hashable` (`ProgramSignatures.conformerNameOfType`). That reduction is what lets one
+	doc compiled impl and one table serve every element type, and its premise is that the impls are
+	doc INDEPENDENT of the type argument -- `Array.hash`/`Array.equals` hash and compare the backing buffer's
+	doc raw bytes and never touch an element.
+	doc A dispatch through such a table therefore has no instantiation to take a dictionary from: the caller
+	doc holds a table address and a slot index, and the two conformers sharing the slot disagree about what
+	doc the dictionary would even say. The adapter that adjusts the impl's arity for the slot
+	doc (`LowerMaxonToStd.appendWitnessAdapterDictionary`) therefore passes a NULL dictionary, and this check
+	doc is what makes that sound instead of a wild jump through a null table.
+	doc Before the adapter existed the same parameters read whatever the ABI registers happened to hold --
+	doc the identical unsoundness with no check, silent on x64 and a `wasm trap: indirect call type mismatch`
+	doc on wasm.
+	doc The cure for a program this refuses is a per-INSTANCE witness table, which `maxon-selfhosted` emits
+	doc (`Passes/BuildWitnessTables.emitPerInstanceWitnessTables`) and shv2 does not yet.
+
 E6003 BinaryOutputNotWritten
 	shv2 binaryOutputNotWritten
 	doc The backend reported no failure, yet nothing exists at the output path after the write. The

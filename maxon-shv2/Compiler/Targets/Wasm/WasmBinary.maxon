@@ -189,7 +189,7 @@ let opI64GeS = 0x59
 // ⚠ NO `i32.div_s`/`i32.rem_s`, and no i32 multiply, bitwise-and/or or shift either — the absence is
 // DELIBERATE (X5 and its review). `div`/`mod` are the two Std ops with no operand type, and the rest
 // were selected by an operand type whose narrowness describes STORAGE, not arithmetic; this backend
-// computes every integer op at MACHINE WIDTH (`StdToWasm.opComputeValType`), so no 32-bit arithmetic
+// computes every integer op at MACHINE WIDTH (`StdToWasm.wasmMachineValTypeOf`), so no 32-bit arithmetic
 // is ever emitted. The file's rule is that an opcode is here because the slice needs it; these
 // stopped being needed when the width stopped being guessed. What is left is address arithmetic
 // (`add`/`sub` over an i32 linear-memory address) and `logicalNot`'s bit flip (`xor`).
@@ -566,7 +566,7 @@ export type WasmBody
 
 	// ⚠ **THE i32 SET IS NOT THE i64 SET'S TWIN — it is only what LINEAR-MEMORY ADDRESS arithmetic and
 	// the 0/1 bool need** (X5 review). An integer OPERATION is emitted at the machine word whatever its
-	// Std operand type says (`StdToWasm.opComputeValType`), so there is no width to pick between: the
+	// Std operand type says (`StdToWasm.wasmMachineValTypeOf`), so there is no width to pick between: the
 	// i32 ALU that remains is `add`/`sub` for an address computed from a base, `xor` for `logicalNot`'s
 	// bit flip, and `eqz`. The multiply, the bitwise pair, the three shifts and the six compares were
 	// selectable only by a NARROW operand type, and a narrow operand type is a storage class rather

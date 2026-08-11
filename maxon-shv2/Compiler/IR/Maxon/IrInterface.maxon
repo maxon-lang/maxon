@@ -218,6 +218,20 @@ export function witnessSlotImplKey(typeName ByteArray, interfaceName ByteArray, 
 	return "{witnessTableLabel(typeName, interfaceName: interfaceName)}{WitnessLabelSeparator}{String.from(methodName)}".toByteArray()
 end 'witnessSlotImplKey'
 
+// ⭐⭐ **THE `.text` NAME OF THE ABI ADAPTER A WITNESS SLOT MAY NEED (WASM3)** — a real function, one per
+// `(conformer, interface, method)` triple, whose signature IS the requirement's and whose body forwards to
+// the impl with the impl's hidden dictionary arguments supplied. See
+// `LowerMaxonToStd.witnessSlotAdapterCallee` for when a slot needs one and what it passes.
+//
+// It is BUILT ON `witnessSlotImplKey` rather than joining the triple a third time, for that function's own
+// stated reason: the triple's injectivity is a property of ONE join, and a second join free to drift from it
+// would put two distinct slots' adapters under one symbol — a silently mis-dispatched method, which is the
+// exact failure the separator exists to prevent. The prefix keeps the adapter's symbol out of the `.rdata`
+// label space the key it is built on belongs to, so a function and a blob can never contest a name.
+export function witnessSlotAdapterSymbol(typeName ByteArray, interfaceName ByteArray, methodName ByteArray) returns ByteArray
+	return "__adapt_{String.from(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: methodName))}".toByteArray()
+end 'witnessSlotAdapterSymbol'
+
 // ⭐ **THE INJECTIVITY ARGUMENT, ENFORCED AT THE JOIN THAT RELIES ON IT INSTEAD OF ONLY ARGUED ABOVE IT.**
 // The property lives three files away — an interface name and a method name are each a single token, so the
 // lexer keeps the separator out of both — and a join whose correctness rests on a fact stated only in
@@ -682,8 +696,8 @@ end 'renderedTypeNameAbiType'
 
 export union AssociatedAbiBinding
 	// Every conformer binds the SAME type. `binding` is the rendered name they all wrote, `declaredType` the
-	// resolved formal type that name denotes (ready for the same `paramFloatMask` / `paramNarrowMask` collapse
-	// a function value's declared parameters go through), and `conformer` the declaration that settled it —
+	// resolved formal type that name denotes (ready for the same `paramFloatMask` collapse a function value's
+	// declared parameters go through), and `conformer` the declaration that settled it —
 	// carried so a reporter has a POSITION without re-walking the store this fold just walked.
 	agreed(conformer ConformanceDecl, binding ByteArray, declaredType MaxonType)
 	// Two conformers bind DIFFERENT types. Both claimants ride WITH their declarations, so the diagnostic can

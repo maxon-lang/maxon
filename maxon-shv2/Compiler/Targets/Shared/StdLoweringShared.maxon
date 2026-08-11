@@ -544,7 +544,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		// float-returning function value is XMM-classed and captured from xmm0/d0, everything else GPR from
 		// R8/x0. There is no callee NAME to look a return type up against as `call`/`tryCall` do, so the front
 		// end's own type for the result value rides on the op (`LowerMaxonToStd.lowerIndirectCall`).
-		callIndirect(resultId, _, resultType, _, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+		callIndirect(resultId, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 		// The ops that define NOTHING. Named individually rather than collapsed into a range: `StdOp`'s
 		// declaration order interleaves value-defining ops (`param`, `call`) between the non-defining
 		// ones, so a tempting range would span them. Naming each keeps the band-append rule enforcing it.
@@ -570,11 +570,11 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		switch then break 'result'
 		// A witness call classes its result by the `resultType` the op carries — the same register-file
 		// question as `callIndirect` (there is no callee NAME to look a return type up against).
-		witnessCall(resultId, _, _, resultType, _, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+		witnessCall(resultId, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 		// A THROWING witness call classes its primary result exactly as `witnessCall` does (off the `resultType`
 		// the op carries); its error-flag second result is an i64, which the column's `gpr` default already
 		// covers — the same split `tryCall`'s two results take.
-		witnessTryCall(resultId, _, _, _, resultType, _, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
+		witnessTryCall(resultId, _, _, _, resultType, _, _) then classifyIndirectResult(column, resultId: resultId, resultType: resultType)
 		// P1.5 dogfood slice 1a: the five value-defining IOCP ops define GPR i64 results (kernel handles, the
 		// ReadFile BOOL, the GetLastError DWORD — all integers); the rest define nothing.
 		osPipeCreate then break 'result'
