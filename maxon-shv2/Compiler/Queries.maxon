@@ -1442,7 +1442,13 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		rawByteWriteSlotDomain(member, elementDisplay, slotBytes, line, column) then reportPositioned(project, code: ErrorCode.rawByteWriteSlotDomain, message: rawByteWriteSlotDomainMessage(member, elementDisplay: elementDisplay, slotBytes: slotBytes), line: line, column: column, filePath: path)
 		// The struct arms (P1.0r, plus `assignToImmutableField` at P1.1a wave 2). Each carries the
 		// code its meaning is registered under in `docs/error-codes.txt` — never a number spelled here.
-		constructorRestricted(typeName, line, column) then reportPositioned(project, code: ErrorCode.semanticConstructorRestriction, message: "'{typeName}' can only be constructed inside its own methods; use a static factory such as '{typeName}.create(...)'", line: line, column: column, filePath: path)
+		// ⚠ **BYTE-FOR-BYTE BOTH REFERENCE COMPILERS' E3076 SENTENCE** (`maxon-sharp/Compiler/2-Parser.cs:21047`
+		// and `maxon-selfhosted/Compiler/Parser.maxon:15858`, which agree with each other to the character), and
+		// it is the one `specs/struct-construction-restriction.md` gates exactly, in every suite that reads
+		// that file. shv2 had been answering a sentence of its own that named a CONCRETE cure
+		// (`'Box.create(...)'`) — it reads better, and reading better is not an argument for diverging from
+		// the sentence the spec gates and the other two compilers both emit.
+		constructorRestricted(typeName, line, column) then reportPositioned(project, code: ErrorCode.semanticConstructorRestriction, message: "type '{typeName}' can only be constructed from within its own methods; use a static factory method instead", line: line, column: column, filePath: path)
 		builtinTypeConstruction(typeName, line, column) then reportPositioned(project, code: ErrorCode.semanticBuiltinTypeConstruction, message: "'{typeName}' is a compiler builtin type and cannot be constructed directly", line: line, column: column, filePath: path)
 		unknownField(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.semanticUnknownField, message: "type '{typeName}' has no field named '{fieldName}'", line: line, column: column, filePath: path)
 		// ⭐ The conditional-extension refusal (see the union arm for why it is not the E3004 above it). The

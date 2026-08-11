@@ -297,7 +297,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3076: <fragment>:6:10: 'Nums' can only be constructed inside its own methods; use a static factory such as 'Nums.create(...)'
+error E3076: <fragment>:6:15: type 'Nums' can only be constructed from within its own methods; use a static factory method instead
 ```
 
 ### Another type's inner alias is still restricted
@@ -336,7 +336,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3076: <fragment>:16:11: 'Nums' can only be constructed inside its own methods; use a static factory such as 'Nums.create(...)'
+error E3076: <fragment>:16:16: type 'Nums' can only be constructed from within its own methods; use a static factory method instead
 ```
 
 ### A free function may not construct another type's inner alias
@@ -368,14 +368,14 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3076: <fragment>:15:10: 'Nums' can only be constructed inside its own methods; use a static factory such as 'Nums.create(...)'
+error E3076: <fragment>:15:15: type 'Nums' can only be constructed from within its own methods; use a static factory method instead
 ```
 
 ### An inner alias naming a USER type's generic instance keeps E3076
 
 `IntPair` denotes `Pair with ExitCode`, and `Pair`'s invariants are `Pair`'s own to establish — so writing
-its literal inside `Plain` is exactly what E3076 restricts, and the cure it names (`IntPair.create(…)`) is
-real. The widening does not reach it: only the containers this compiler OWNS have an empty value a body
+its literal inside `Plain` is exactly what E3076 restricts, and the cure it prescribes — a static factory,
+here `IntPair.create(…)` — is real. The widening does not reach it: only the containers this compiler OWNS have an empty value a body
 outside the declaring type may mint.
 
 <!-- test: user-generic-inner-alias-keeps-e3076 -->
@@ -404,10 +404,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3076: <fragment>:16:11: 'IntPair' can only be constructed inside its own methods; use a static factory such as 'IntPair.create(...)'
+error E3076: <fragment>:16:19: type 'IntPair' can only be constructed from within its own methods; use a static factory method instead
 ```
 
-### ⭐ …and the CURE THAT DIAGNOSTIC NAMES ACTUALLY WORKS — the half that was missing (W7)
+### ⭐ …and the CURE THAT DIAGNOSTIC PRESCRIBES ACTUALLY WORKS — the half that was missing (W7)
 
 The SAME program as `user-generic-inner-alias-keeps-e3076`, written the way its message tells the author to
 write it. Until W7 this answered `E2015 … a field access on 'p', which is declared 'unknown'` — the cure

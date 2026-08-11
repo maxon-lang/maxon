@@ -704,16 +704,18 @@ export union ParseError implements Error
 	// --- The struct arms (P1.0r) ---
 	//
 	// A struct literal (`Point{…}`) written outside the type's OWN methods. Renders as E3076,
-	// positioned at the type name. Construction is restricted to the type's own methods and static
-	// factories so a type's invariants have a SINGLE enforcement point — an external caller goes
+	// positioned INSIDE THE BRACE — see `structLiteralBraceInteriorToken`, which is where both this and the
+	// E3072 below take their position from and why. Construction is restricted to the type's own methods and
+	// static factories so a type's invariants have a SINGLE enforcement point — an external caller goes
 	// through `Point.create(…)`. Both reference compilers impose the identical restriction under
-	// the identical code.
+	// the identical code, in the identical sentence (see the render arm in `Queries.maxon`).
 	constructorRestricted(typeName String, line LineNumber, column ColumnNumber)
 	// A struct literal naming a COMPILER BUILTIN managed type (`__ManagedFile`, …). Renders as E3072,
-	// positioned at the type name. Distinct from `constructorRestricted` above, and it must be: that one
-	// says "not HERE" and names a static factory the user could write, whereas this type has no source
-	// body for a literal to be legal in and no user-reachable constructor at all — its handle comes from
-	// the OS. Reporting E3076 for it would name `__ManagedFile.create(...)`, which does not exist.
+	// positioned inside the brace like the arm above — the two SHARE the oracle's anchor and differ in what
+	// they say. Distinct from `constructorRestricted` above, and it must be: that one says "not HERE" and
+	// prescribes a static factory THE USER COULD WRITE, whereas this type has no source body for a literal
+	// to be legal in and no user-writable static at all — its handle comes from the OS. E3076's cure is
+	// unwritable for it, so E3076 would be advice its reader cannot take.
 	builtinTypeConstruction(typeName String, line LineNumber, column ColumnNumber)
 	// A field access (`p.x`) naming a field the struct does not declare. Renders as E3018,
 	// positioned at the FIELD name — the token that is wrong, not the value it is read from.
@@ -38544,7 +38546,7 @@ export type Parser
 			return try self.parseInnerAliasLiteral(typeTok)
 		end 'innerAliasLiteral'
 
-		let layout = try self.requireConstructible(typeTok.value, anchor: typeTok)
+		let layout = try self.requireConstructible(typeTok)
 
 		try self.consume(TokenKind.leftBrace)
 		// Parallel to the LAYOUT, not to the source: `fieldValues[i]` is the value for the field the
@@ -38641,8 +38643,8 @@ export type Parser
 		// walks are tolerant by design (`recordScannedType`, `foldExtensionDeclarationInto`), and a malformed
 		// member earlier in the body ends the sweep's walk while `enclosingInnerAliases` is filled by the parse
 		// that reaches this literal. That program is being refused for its real fault a moment later; this arm
-		// exists so the refusal it gets HERE is not E3076's, whose cure (`{alias}.create()`) has nothing to
-		// resolve either when the sweep never keyed the alias.
+		// exists so the refusal it gets HERE is not E3076's: that one prescribes a static factory, and the
+		// factory an unkeyed alias would need (`{alias}.create()`) has nothing to resolve to either.
 		if not self.signatures.isGenericAlias(qualified) 'notKeyedWholeProgram'
 			throw ParseError.unsupported("a struct literal naming `{String.from(aliasTok.value)}`, an inner typealias of `{String.from(self.enclosingType)}` that the whole-program declaration sweep did not key — so there is no container instance for the literal to build. A sweep stops early at a member it cannot read, so the declaration this one shares a body with is the fault to look for", line: aliasTok.line, column: aliasTok.column)
 		end 'notKeyedWholeProgram'
@@ -38652,13 +38654,17 @@ export type Parser
 		// ⛔ A USER TYPE'S GENERIC INSTANCE KEEPS E3076, and that is the ONE inner-alias form the widening
 		// deliberately does not reach. `typealias IntPair = Pair with Count` denotes `Pair`, whose invariants
 		// are `Pair`'s own to establish — writing its literal here is exactly what the restriction is for, and
-		// the cure it names (`IntPair.create(…)`) is real: it resolves through `genericAliasKeyFor` and is
-		// pinned by `user-generic-inner-alias-create-is-the-cure`, which is the half W7 built after this
+		// the static factory it prescribes IS WRITABLE HERE (`IntPair.create(…)`): it resolves through
+		// `genericAliasKeyFor` and is pinned by `user-generic-inner-alias-create-is-the-cure`, the half W7
+		// built after this
 		// sentence had claimed it for a while without a case. (The oracle ACCEPTS it, which voids its own E3076 for
-		// any type willing to declare an alias; that divergence is deliberate.) Anchored at the alias token,
-		// which is where `requireConstructible` anchors it, so the diagnostic does not move.
+		// any type willing to declare an alias; that divergence is deliberate — and it is why no oracle pin
+		// covers this anchor.) Anchored inside the brace, which is where `requireConstructible` anchors the
+		// same refusal, so ONE rule places E3076 wherever it is raised from rather than two arms each
+		// matching their own pins.
 		if not self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(giid)) 'userType'
-			throw ParseError.constructorRestricted(String.from(aliasTok.value), line: aliasTok.line, column: aliasTok.column)
+			let insideBrace = self.structLiteralBraceInteriorToken()
+			throw ParseError.constructorRestricted(String.from(aliasTok.value), line: insideBrace.line, column: insideBrace.column)
 		end 'userType'
 
 		try self.consume(TokenKind.leftBrace)
@@ -38676,6 +38682,47 @@ export type Parser
 		return try self.emitOwnedContainerCreate(giid, aliasTok: aliasTok, aliasName: qualified, range: SourceRange.between(aliasTok, last: rbraceTok))
 	end 'parseInnerAliasLiteral'
 
+	// ⭐⭐ **WHERE AN INADMISSIBLE STRUCT LITERAL IS BLAMED: THE TOKEN FOLLOWING THE `{`, NOT THE TYPE NAME.**
+	// Read off the oracle's emitter rather than chosen here — `2-Parser.cs:21017-21048` captures the line at
+	// the `{`, then `Advance()`s past it and takes `Current().Column`, for E3072 and E3076 alike. MEASURED on
+	// three programs: `let b = Box{v: 5}` blames column 14 (`v`) where `Box` is 10, `let bb = Box{v: 5, w: 6}`
+	// blames 15, and `let e = Empty{}` blames the `}` — which is what says the rule is *the token after the
+	// brace* rather than *the first field label*. `specs/struct-construction-restriction.md` and
+	// `specs/managed-file.md` pin those columns, so it is the acceptance criterion and not a preference;
+	// anchoring at the type name would read better to me, and that is not an argument.
+	//
+	// ⚠ **IT IS THE RAW NEXT TOKEN, AND FOR A MULTI-LINE LITERAL THAT IS THE END-OF-LINE NEWLINE — WHICH IS
+	// THE TOKEN THE ORACLE BLAMES TOO, SO THERE IS NO DIVERGENCE HERE TO REPAIR.** The oracle reads the LINE
+	// off the `{` and the COLUMN off the token after it, where this reads both off that token; the two are
+	// nonetheless the same position on every input, because a newline is a TOKEN in both lexers and carries
+	// the PRECEDING line's number with the newline character's own column (`Lexer.newline`, and the
+	// bootstrap's `1-Lexer.cs:301-307` — identical shape), and neither parser's advance skips it.
+	//
+	// ⛔ **SO DO NOT "ALIGN WITH THE ORACLE" BY SKIPPING TO THE FIRST FIELD ON THE NEXT LINE.**
+	// `indexPastNewlines(self.pos + 1)` is the shape that suggests itself, and it would CREATE the divergence
+	// this paragraph used to claim already existed — on `Point{` at end of line, the commonest spelling of a
+	// multi-line literal, which the corpus writes everywhere.
+	//
+	// ⚠ One unaudited edge, PRE-EXISTING and deliberately not chased here: on CRLF shv2's newline token
+	// starts at the `\r` (`Action.skipCr`), which is the one column at which these two lexers could disagree.
+	// No pinned case reaches it.
+	function structLiteralBraceInteriorToken() returns Token
+		// ⛔ **THE PREMISE IS THE ROUTE, NOT THE PAIR OF CALL SITES.** Every caller reached its literal
+		// through `parsePrimary`'s `{`-LOOKAHEAD arm (`peekKind() == leftBrace`), which is what puts the
+		// cursor on the brace. Being "a refusal raised between `consumeTypeBaseToken` and the literal's own
+		// `consume(leftBrace)`" does NOT imply it and must not be read as implying it: the `enumBody` arm
+		// below is exactly such a refusal and is reachable with the cursor on ANY token, through the
+		// braceless `Self` route — see the reason recorded there for why it keeps its own anchor.
+		//
+		// Asserted rather than asserted-in-prose: a future arm moved onto this reader from the braceless
+		// route would otherwise silently blame a token from the middle of an unrelated construct.
+		if not self.at(TokenKind.leftBrace) 'cursorNotOnBrace'
+			panic("Parser.structLiteralBraceInteriorToken: the cursor is on '{tokenDisplayText(self.current())}', not the '\{' of a struct literal — this reader is only meaningful between `consumeTypeBaseToken` and the brace's own `consume`")
+		end 'cursorNotOnBrace'
+
+		return self.tokenAt(self.pos + 1)
+	end 'structLiteralBraceInteriorToken'
+
 	// ⭐ **E3076 — CONSTRUCTION IS RESTRICTED TO THE TYPE'S OWN BODY.** `Self{…}` and `Point{…}`
 	// inside `type Point`; nothing anywhere else. An external caller goes through
 	// `Point.create(…)`.
@@ -38686,33 +38733,50 @@ export type Parser
 	//
 	// The order of the two rejections is the decision: a name that is not a struct AT ALL is not a
 	// constructor-restriction violation, so it reports what it actually is.
-	function requireConstructible(typeName ByteArray, anchor Token) returns StructLayout throws ParseError
+	// ⚠ It takes the TOKEN and reads the name off it, rather than taking both: the name and the position are
+	// one fact about one token, and a second parameter is a licence for a later caller to make a diagnostic
+	// NAME one token while POINTING AT another.
+	function requireConstructible(typeTok Token) returns StructLayout throws ParseError
+		let typeName = typeTok.value
+
 		// The RESTRICTION is checked before the LOOKUP, and the order is the decision: `Foo{…}`
 		// outside `type Foo` is E3076 whether or not `Foo` exists, because the restriction is about
 		// WHERE the literal is written, not about what it names. Asking the registry first would
 		// report "no such type" for a `Point{…}` written in `main` — naming a type that is right
 		// there in the file, which is a confusing answer to a question the user did not ask.
 		// ⭐ **A COMPILER BUILTIN MANAGED TYPE IS REFUSED BEFORE THE LOCATION CHECK (E3072, R4.1).** The
-		// order is the decision, exactly as the paragraph above makes one: E3076 says "not HERE" and points
-		// at a static factory the user could write, but `__ManagedFile` has NO source body for a literal to
-		// be legal in and no user-reachable constructor at all — its handle comes from the OS. So the
+		// order is the decision, exactly as the paragraph above makes one: E3076 says "not HERE" and
+		// prescribes a static factory THE USER COULD WRITE, but `__ManagedFile` has NO source body for a
+		// literal to be legal in and no user-writable static at all — its handle comes from the OS. So the
 		// location question never applies to it, and asking it first would answer a program's
-		// `__ManagedFile{_handle: 0}` by recommending `__ManagedFile.create(...)`, which does not exist.
-		// ⚠ **ANCHORED INSIDE THE BRACE, NOT AT THE TYPE NAME, AND THAT IS THE ORACLE'S CHOICE RATHER THAN
-		// THIS COMPILER'S.** `specs/managed-file.md` pins column 24 of `let f = __ManagedFile{_handle: 0}`,
-		// which is `_handle` — the first token after the `{` — where the type name is column 10. Anchoring at
-		// the type would read better to me, and that is not a reason: the spec is the acceptance criterion and
-		// a divergence needs an argument stronger than preference.
-		// The cursor sits ON the `{` here (`consumeTypeBaseToken` consumed the name and the brace is
-		// consumed by the caller), so the token after it is the one the oracle blames. An EMPTY literal
-		// anchors at the `}`, which is still the brace interior and still inside the construct.
+		// `__ManagedFile{_handle: 0}` with a cure that cannot be written for that type at all.
+		// ⚠ **BOTH REFUSALS ARE ANCHORED INSIDE THE BRACE, NOT AT THE TYPE NAME** — the oracle's choice, read
+		// off its emitter once and written down once in `structLiteralBraceInteriorToken`. The reader is asked
+		// INSIDE each arm and not once above them, because this routine is ALSO reached with no brace in
+		// sight: `parsePrimary`'s `selfPrimary` arm routes a bare `Self` here on the token alone, and the
+		// missing brace is the E2010 from the `consume` below. Hoisting the read would turn that program's
+		// diagnostic into this file's panic. Which arms are safe on that route is a question per arm:
+		//
+		//   • **E3076 (`outsideItsOwnBody`) — STRUCTURALLY unreachable there.** `typeBaseTokenAt` mints a
+		//     bare `Self`'s token from `requireEnclosingTypeName`, so the name it carries IS the enclosing
+		//     declaration and `namesEnclosingType` cannot be false.
+		//   • **E3072 (`builtinManagedType`) — unreachable only CONTINGENTLY, and the premise is scheduled to
+		//     weaken.** It rests on no `__`-prefixed type being declarable outside `stdlib/Builtins.maxon`
+		//     (`requireUnreservedName`) and on Builtins declaring none of these names — while
+		//     `isBuiltinManagedTypeName`'s own header (`SignatureIndex.maxon`) says the list grows as those
+		//     types arrive in the corpus. ⇒ **The day one is declared as a `type`, a bare `Self` in its body
+		//     panics here.** The durable fix is `selfPrimary` gating on `peekKind() == leftBrace`, which is
+		//     NOT a ride-along: it moves a bare `Self` in an enum body off the `enumBody` sentence below and
+		//     onto E2010, and that needs a pin sweep first.
+		//   • **The `enumBody` arm keeps its own anchor for this reason** — see it below.
 		if isBuiltinManagedTypeName(typeName) 'builtinManagedType'
-			let insideBrace = self.tokenAt(self.pos + 1)
+			let insideBrace = self.structLiteralBraceInteriorToken()
 			throw ParseError.builtinTypeConstruction(String.from(typeName), line: insideBrace.line, column: insideBrace.column)
 		end 'builtinManagedType'
 
 		if not self.namesEnclosingType(typeName) 'outsideItsOwnBody'
-			throw ParseError.constructorRestricted(String.from(typeName), line: anchor.line, column: anchor.column)
+			let insideBrace = self.structLiteralBraceInteriorToken()
+			throw ParseError.constructorRestricted(String.from(typeName), line: insideBrace.line, column: insideBrace.column)
 		end 'outsideItsOwnBody'
 
 		// ⛔ **AN `enum`/`union` HAS NO FIELDS TO WRITE, SO A STRUCT LITERAL CANNOT CONSTRUCT ONE (D9)** — the
@@ -38726,8 +38790,16 @@ export type Parser
 		// compilers CRASH on it** — the bootstrap with an unhandled `IrEnumType`→`IrStructType` cast inside
 		// `ParseStructLiteral`, reported as an internal `E9001`; so there is no oracle spelling to match here
 		// and the message names the cure instead).
+		//
+		// ⛔⛔ **THIS ARM ANCHORS AT THE TYPE TOKEN AND MUST NOT BE MOVED ONTO `structLiteralBraceInteriorToken`
+		// — IT IS THE ONE ARM DEMONSTRABLY REACHED WITH NO BRACE AT ALL.** A bare `Self` inside an enum body
+		// arrives through `parsePrimary`'s `selfPrimary` route, which routes on the token alone with no `{`
+		// lookahead, and lands here: MEASURED, `let x = Self` in `enum Color`'s own method answers
+		// `E2015 …:6:11: Unsupported: a struct literal naming `enum`/`union` `Color` …`. Routing it through
+		// the brace reader would turn that program into a compiler panic. The anchor differing from E3076's
+		// two arms above is therefore a consequence of the ROUTE, not a spec pin this arm happens to match.
 		if self.enclosingTypeIsEnum 'enumBody'
-			throw ParseError.unsupported("a struct literal naming `enum`/`union` `{String.from(typeName)}` — an enum/union declares no fields to write; a value of it is a CASE (`{String.from(typeName)}.<case>`, or `Self.<case>` from inside its own body)", line: anchor.line, column: anchor.column)
+			throw ParseError.unsupported("a struct literal naming `enum`/`union` `{String.from(typeName)}` — an enum/union declares no fields to write; a value of it is a CASE (`{String.from(typeName)}.<case>`, or `Self.<case>` from inside its own body)", line: typeTok.line, column: typeTok.column)
 		end 'enumBody'
 
 		match self.signatures.structOf(typeName) 'declared'
