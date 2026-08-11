@@ -12549,6 +12549,27 @@ export type ProgramSignatures
 		return name.equals(self.stdlibShadowRenameOf(ArrayBuiltinBaseName))
 	end 'isArrayBaseName'
 
+	// ⭐⭐ **THE NAME(S) AN `Array` DECLARATION GOES BY IN THIS COMPILE — the ENUMERATION behind the predicate
+	// above (ARR2).** One normally. TWO when a user program declares its own container: the user's under the
+	// bare `Array` and `stdlib/Array.maxon`'s under this compile's mint.
+	//
+	// ⚠ **IT IS FOR THE ASKER THAT HAS NO RECEIVER TO ASK.** A door holding a resolved receiver reads the
+	// declaration off the instance (`genericInstanceBaseName`, which is exact); this serves the descriptor
+	// pre-scan, which runs before any body is parsed and resolves nothing, so it takes the union and lets the
+	// fixpoint's own name→index filter drop the name no function bears. That is the direction
+	// `Parser.corpusServesArrayMember`'s header requires it to err in: an edge too many reserves a parameter
+	// nothing reads, a missing one aborts the compiler.
+	export function arrayDeclarationNames() returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		names.push(ArrayBuiltinBaseName)
+		let corpus = self.stdlibShadowRenameOf(ArrayBuiltinBaseName)
+		if not corpus.equals(ArrayBuiltinBaseName) 'theCorpusDeclarationMoved'
+			names.push(corpus)
+		end 'theCorpusDeclarationMoved'
+
+		return names
+	end 'arrayDeclarationNames'
+
 	// Is generic instance `id` an `Array with T`? (Reads the base NAME, which needs no base struct.)
 	export function isArrayInstance(id GenericInstanceId) returns bool
 		return self.isArrayBaseName(self.genericInstanceBaseName(id))
@@ -13473,11 +13494,24 @@ export type ProgramSignatures
 	// as the literal's array is (`Parser.parseMapLiteralBody` reads both column types off the first pair), so
 	// the LICENCE is unchanged and only the ARITY is: every column must independently denote one slot.
 	//
-	// A column pair that is simply IDENTICAL denotes one slot too. For a single-column `Array` that clause can
-	// never fire — identical columns mean identical instances, which `namedAggregatesConflict` already
-	// admitted — but for a two-column `Map` it is what keeps `["a": 1]` reaching a
-	// `Map with (String, Integer)`: one column inferred, one written by the author, and refusing the pair
-	// because of the half that AGREES would be arbitrary.
+	// A column pair that is simply IDENTICAL denotes one slot too. For a two-column `Map` that is what keeps
+	// `["a": 1]` reaching a `Map with (String, Integer)`: one column inferred, one written by the author, and
+	// refusing the pair because of the half that AGREES would be arbitrary.
+	//
+	// ⛔ **THIS PARAGRAPH USED TO ADD *"for a single-column `Array` that clause can never fire — identical
+	// columns mean identical instances"*, AND THAT PREMISE IS FALSE SINCE `stdlib/Array.maxon` WAS LISTED
+	// (ARR2).** A program declaring its own `type Array` leaves TWO `Array` declarations live — its own under
+	// the bare name and the corpus's under this compile's mint (`contestStdlibTypeName`) — so
+	// `Array with String` and `__Array with String` are DIFFERENT instances with IDENTICAL columns, and the
+	// clause fires for a single-column container after all.
+	//
+	// ⚠ **IT IS ADMITTING THE RIGHT THING, WHICH IS WHY THE CURE IS THIS CORRECTION AND NOT A NARROWING.**
+	// `arrayNameIsItsOwnRecord` admits an `Array` declaration ONLY in the sole-field-and-that-field-the-buffer
+	// shape, so two such declarations over one element denote one record to the byte — same stride, same drop,
+	// same clone — which is the very question this door exists to answer. Refusing the pair would leave a
+	// program with its own container unable to call `String.from`, `String.split` or `toByteArray` at all,
+	// for a nominal distinction with nothing behind it. `specs-shv2/array-declared-record.md` pins both
+	// crossings, beside the two refusals that show the MEMBER surfaces staying apart.
 	function inferredIntColumnBoundaryAdmits(declaredTag ValueTypeTag, declaredNameId TypeNameId, gotTag ValueTypeTag, gotNameId TypeNameId) returns bool
 		if self.isArrayInstanceAt(gotTag, nameId: gotNameId) and self.isArrayInstanceAt(declaredTag, nameId: declaredNameId) 'bothAreArrayInstances'
 			return self.columnsDenoteOneSlot(self.containerElementType(declaredNameId), gotColumn: self.containerElementType(gotNameId))

@@ -95,6 +95,35 @@ once the member walls fell, and reached identically by the `self.push(borrowed)`
 has always served), and an extension method OWNING an opaque type-parameter parameter with no
 descriptor reserved (`contains`).
 
+### ⭐⭐ TWO `Array` DECLARATIONS IN ONE COMPILE — what is scoped, and what deliberately is not
+
+`stdlib/Array.maxon` is now listed, so declaring a `type Array` does not replace the corpus's: it
+CONTESTS it. `SignatureIndex.contestStdlibTypeName` moves the library's declaration into the reserved
+space, and the compile then holds **two** `Array`s at once — the program's under the bare name, the
+library's under a name this compile minted and no author may write. ⚖ **The rule is module-scoped
+resolution: a stdlib body resolves `Array` to the STDLIB declaration, and the program's `Array` wins in
+the program's own code.**
+
+The two consequences point in opposite directions, and neither is an accident:
+
+- **MEMBER RESOLUTION IS SCOPED — to the RECEIVER, not to whoever holds the six bytes `Array`.**
+  `Parser.memberBelongsToTheCorpus` reads the declaration off the receiver's own instance, so a member
+  only the program declares is not served on a value the library produced, and a member only the
+  library declares is not served on the program's own. Both are refused, and the refusal says which
+  side of the split the value is on rather than reciting the synthesized roster at a reader whose own
+  declaration plainly has the member (`Parser.refuseArrayMemberTheOtherDeclarationCarries`).
+- **A VALUE IS *NOT* SCOPED, AND THAT IS THE `Array`-IS-ITS-BUFFER THESIS RATHER THAN A HOLE.**
+  `arrayNameIsItsOwnRecord` admits a declaration only in the SOLE-FIELD-AND-THAT-FIELD-THE-BUFFER
+  shape, so any two admitted `Array` declarations over one element denote ONE record — same bytes, same
+  stride, same drop, same clone, because there is nothing else in either of them. So an `Array with T`
+  is accepted at the other declaration's `Array with T` position, which is what lets a program with its
+  own container go on calling `String.from`, `String.split` and `toByteArray` at all.
+
+⚠ **The two do not contradict each other: the RECORD is shared and the SURFACE is not.** Each side
+reaches the value through its own declaration's members, and there is nothing IN the value for the
+other side's members to be missing from. A member is a compile-time question about a declaration; a
+value is a run-time record, and here the record is one thing under two names.
+
 ## Tests
 
 <!-- test: the-empty-literal-is-the-empty-container -->
@@ -641,7 +670,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — P1.7 provides managed/get/set/first/count/isEmpty/push/reserve/resize/clear/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — P1.7 provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-corpus-served-managed-element-balances-across-a-loop -->
@@ -878,4 +907,193 @@ alpha gamma beta delta 4
 ```
 ```exitcode
 0
+```
+
+<!-- test: a-library-array-value-reaches-a-declared-own-array-parameter -->
+⭐⭐ **A VALUE CROSSES THE SPLIT, AND THE ELEMENT IS MANAGED SO THE CROSSING IS AN OWNERSHIP CLAIM AND
+NOT ONLY A TYPE ONE.** `String.split` hands back the LIBRARY's `Array with String`; `takesMine` declares
+the PROGRAM's. They are two declarations, and the argument is admitted because both are the
+sole-field-buffer shape over one element and therefore one record — see the section above. The exit code
+is the count, and the three `String` records are freed by the same `__arr_decref` walk whichever
+declaration named the array (a leak exits 101).
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+typealias MyStrings = Array with String
+
+function takesMine(parts MyStrings) returns int
+	return parts.count()
+end 'takesMine'
+
+function main() returns ExitCode
+	let s = "a,b,c"
+	return takesMine(s.split(",")) as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: a-declared-own-array-value-reaches-a-library-parameter -->
+⭐ **THE SAME CROSSING THE OTHER WAY, INTO `stdlib/` ITSELF.** `String.from(bytes ByteArray)` is
+declared over the library's `Array with Byte`; the argument is the program's own. It is the direction
+that matters most, because the library body then goes on to call `reserve`, `count` and `appendMemory`
+on it — members served from the library's declaration, on a record the program built.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+typealias MyBytes = Array with Byte
+
+function main() returns ExitCode
+	var mine = MyBytes.create()
+	mine.push(72 as Byte)
+	mine.push(105 as Byte)
+	mine.push(33 as Byte)
+	let s = String.from(mine)
+	print(s)
+	return s.byteLength() as ExitCode
+end 'main'
+```
+```stdout
+Hi!
+```
+```exitcode
+3
+```
+
+<!-- test: for-in-walks-both-arrays-in-one-program -->
+⭐ **`for … in` ADMITS BOTH, AND BY DIFFERENT ROUTES.** The library's array declares `createIterator()`,
+so it is rewritten to its `ArrayIterator` and walked as a cursor; the program's own declares none, so it
+takes the COUNTED form off `count`/`get` (`Parser.requireIterableSource`'s array arm exists for exactly
+this declaration). One program, one loop keyword, two lowerings.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+typealias NumArray = Array with Num
+
+function main() returns ExitCode
+	var mine = NumArray.create()
+	mine.push(4 as Num)
+	mine.push(5 as Num)
+
+	var total = 0
+	for n in mine 'ownLoop'
+		total = total + n
+	end 'ownLoop'
+
+	for part in "a,bb,ccc".split(",") 'librarysLoop'
+		total = total + part.byteLength()
+	end 'librarysLoop'
+
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: error.a-library-only-member-is-not-served-on-the-programs-own-array -->
+⛔ **THE SCOPING, SEEN FROM THE PROGRAM'S SIDE.** `truncate` is declared on `stdlib/Array.maxon`'s
+`Array` and on nothing else in this program, so it is not served on a value of the program's own
+container. The refusal names the split rather than reciting the synthesized roster at a reader who can
+see a `truncate` in the library source: *"that list IS the surface"* is true of the surface and useless
+here.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+typealias MyBytes = Array with Byte
+
+function main() returns ExitCode
+	var mine = MyBytes.create()
+	mine.push(72 as Byte)
+	mine.truncate(0)
+	return mine.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:7: Unsupported: `Array` member 'truncate' — this value's type is the `type Array` this program declares, and 'truncate' is declared on the `Array` the standard library declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory
+```
+
+<!-- test: error.a-program-only-member-is-not-served-on-a-library-array -->
+⛔ **AND FROM THE LIBRARY'S SIDE, WHICH IS THE HALF A READER MEETS BY SURPRISE.** `at` is declared two
+lines up, in this program's own `type Array`, and `s.split(",")` is not a value of it. Before the
+receiver-scoped lookup this program was refused by the roster sentence alone, about a method the reader
+was looking straight at.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function at(i int) returns Element
+		return try managed.get(i) otherwise panic("at: the caller checked the bound")
+	end 'at'
+end 'Array'
+
+function main() returns ExitCode
+	let parts = "a,b,c".split(",")
+	print(parts.at(1))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:22:14: Unsupported: `Array` member 'at' — this value's type is the `Array` the standard library declares, and 'at' is declared on the `type Array` this program declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory
 ```

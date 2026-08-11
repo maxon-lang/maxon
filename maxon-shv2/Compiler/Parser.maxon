@@ -4678,7 +4678,6 @@ end 'quadArgs'
 export let CreateMethod = b"create"
 let ArrayPushMethod = b"push"
 let ArrayCapacityMethod = b"capacity"
-let ArrayReserveMethod = b"reserve"
 let ArrayResizeMethod = b"resize"
 
 // ⚠ `clear` was `ArrayClearMethod` until the `__ManagedList` surface spelled it too (spec-port `ownership`),
@@ -4836,7 +4835,10 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	// what R4.2 moved the buffer-only mutators out of this list to stop. A corpus-served `insert` gets E3019
 	// and E3070 from its own declaration's write masks instead, which is what `arrays.error.insert-on-a-let-array`
 	// and `.insert-through-a-live-borrow` now pin.
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod)
+	// ⚠ **`reserve` LEFT THE SAME WAY AT ARR2**, and its two are `arrays.error.reserve-on-a-let-array` and
+	// `.reserve-through-a-live-borrow` — both codes and both COLUMNS predicted from `insert`'s pair and
+	// written down BEFORE the strike ran, so the run could contradict them. It did not.
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod)
 end 'arrayMethodMutatesReceiver'
 
 // ⭐ **WHICH PARAMETER THE APPEND REFUSAL NAMES — READ OFF THE SPELLING THE AUTHOR WROTE.** One operation, two
@@ -5023,8 +5025,26 @@ end 'cursorSurfaceMemberNames'
 //     `first` and `get` are BORROW SOURCES for E3070 (`borrow-liveness.first-is-a-borrow-source`), and `clear`
 //     carries the receiver-write mask that answers *"does `Bag.wipe()` free what the caller borrowed?"* —
 //     MEASURED, five `borrow-liveness` cases stop being refused when `clear` goes, and the rest move column.
-//   • **A DECLARED-OWN-`Array` DEPENDS ON IT** — `reserve`, `count`, `isEmpty`, `clear`, `appendMemory`; see
-//     `reserve`'s line, and ARR3a's line below for `appendMemory`, which joined this class by measurement.
+//     ⭐ **RE-MEASURED AT ARR2 AND `clear` HOLDS EXACTLY AS FILED**: struck alone against the ARR2 tip, the
+//     same five (`receiver-method-writing-its-own-field`, `-explicit-self-spelling`, `-writes-transitively`,
+//     `sibling-call-on-the-enclosing-self`, `sibling-call-explicit-self-spelling`) report *"expected a
+//     compile error but compilation succeeded"*. It is on BOTH this bullet and the next, and this one is
+//     the binding half.
+//   • **A DECLARED-OWN-`Array` DEPENDS ON IT** — `count`, `isEmpty`, `clear`, `appendMemory`; see ARR3a's
+//     line below for `appendMemory`, which joined this class by measurement.
+//     ⭐⭐⭐ **ARR2 SPLIT THIS BULLET IN TWO AND CLOSED THE HALF IT WAS NAMED FOR.** It said one thing —
+//     *"a declaration of the user's REPLACES the corpus's for the whole compile INCLUDING stdlib"* — and
+//     that half is simply no longer true: the corpus declaration is RENAMED, not replaced, and a member call
+//     now resolves against the RECEIVER's own declaration, so a stdlib body reaches `stdlib/Array.maxon`
+//     wherever the roster gives a name up. `reserve` retired on exactly that (see its line above).
+//     ⚠ **WHAT IS LEFT IS A DIFFERENT QUESTION WEARING THE SAME WORDS, AND IT IS `ARR4`'S**: this roster is
+//     the ENTIRE surface of a program's own bare `type Array`, which declares nothing but its buffer. Struck
+//     ALONE against this tip, `isEmpty` costs ONE case and `count` costs ELEVEN — every one of them a
+//     program declaring its own container and calling a member only the roster ever gave it — plus, for
+//     `count`, `array-declared-record.a-bare-call-to-a-roster-member-takes-the-roster` reading **99 for an
+//     expected 3**, which is that case's own discriminator saying the roster stopped winning. Neither is a
+//     stdlib-reachability failure any more, and neither is a defect: they are the language question
+//     `ARR4` exists to decide.
 //   • **THE CORPUS BODY IS WRONG OR THE CALL TO IT IS** — `contains` (see its line, a fault), `push` and
 //     `append`; ARR3a's block below records what each one measured, because that third bullet
 //     used to name all eight of the members it was briefed on under ONE diagnosis, and the diagnosis was
@@ -5154,14 +5174,17 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(CountMethod)
 	names.push(IsEmptyMethod)
 	names.push(ArrayPushMethod)
-	// ⚠ **`reserve` STAYED, AND THE REASON IS `stdlib/String.maxon:807` RATHER THAN THIS SURFACE
-	// (X-array-retire).** A program may declare its OWN `type Array` (`array-declared-record.md`), and that
-	// declaration REPLACES the corpus's for the whole compile INCLUDING stdlib — so a stdlib body calling
-	// `arr.reserve(…)` has no provider but this roster. MEASURED: struck, three cases
-	// (`array-declared-record.a-corpus-served-managed-element-balances-across-a-loop` and
-	// `stable-partition-managed-pivot`'s two) stopped compiling inside `stdlib/String.maxon`, not inside the
-	// program. The same holds of `count`, `isEmpty` and `clear`; those have losses of their own as well.
-	names.push(ArrayReserveMethod)
+	// ⭐⭐⭐ **`reserve` LEFT AT ARR2, AND THE CLAIM IT WAS HELD BY WAS TRUE AND HAS BEEN CLOSED.**
+	// X-array-retire recorded: *"a program may declare its OWN `type Array`, and that declaration REPLACES the
+	// corpus's for the whole compile INCLUDING stdlib — so a stdlib body calling `arr.reserve(…)` has no
+	// provider but this roster"*, MEASURED as three cases dying INSIDE `stdlib/String.maxon:807`. Reproduced
+	// exactly, then cured: the corpus declaration was never replaced, only RENAMED
+	// (`contestStdlibTypeName`), and `memberBelongsToTheCorpus` was asking for it under the six bytes
+	// `Array` — which under a contest name the USER's container. It now asks the RECEIVER which declaration
+	// it is of, so `stdlib/String.maxon`'s `bytes` reaches `stdlib/Array.maxon`'s own `reserve`. Re-measured
+	// with the strike: **27 failures → 24, and every one of the 24 is an expectation TEXT** — 23 this roster
+	// rendering its own list, one the `Function 'reserve'` → `Function 'Array.reserve'` qualification that
+	// `insert` already set the precedent for (`void-call-result.error.array-insert-in-value-position`).
 	names.push(ArrayResizeMethod)
 	names.push(ClearMethod)
 	names.push(AppendMethod)
@@ -5591,6 +5614,28 @@ end 'rosterList'
 function rosterRefusalSentence(typeName ByteArray, member ByteArray, roster ByteArrayArray, noun String, provider String) returns String
 	return "`{String.from(typeName)}` {noun} '{String.from(member)}' — {provider} provides {rosterList(roster)}; that list IS the surface, so nothing else is served here"
 end 'rosterRefusalSentence'
+
+// ⭐⭐ **THE TWO `Array` DECLARATIONS A CONTESTED COMPILE HAS, IN WORDS A READER CAN ACT ON (ARR2).** Neither
+// is ever spelled by its compiled name: the library's goes by this compile's own MINT (`__Array`), which is a
+// name no author wrote and one `Parser.requireUnreservedName` forbids them from writing, so quoting it would
+// send a reader to a spelling they cannot use.
+let ProgramsOwnArrayPhrase = "the `type Array` this program declares"
+let LibrarysOwnArrayPhrase = "the `Array` the standard library declares"
+
+// ⭐⭐ **WHY A MEMBER THAT PLAINLY EXISTS IS NOT SERVED ON THIS VALUE — the refusal `rosterRefusalSentence`
+// cannot word (ARR2).** A program declaring its own `type Array` makes the compile hold TWO of them
+// (`SignatureIndex.contestStdlibTypeName`), and a member call resolves against the RECEIVER's own declaration
+// (`Parser.memberBelongsToTheCorpus`). The roster sentence alone then says *"that list IS the surface"* about
+// a value whose OTHER `Array` has exactly the member asked for — true of the surface and useless to the
+// reader, who is looking at their own declaration two lines up.
+//
+// ⚠ It states the RULE and not only the fact, because the fact on its own reads as a compiler defect: the
+// reader has to be told that the split is deliberate and which side of it they are standing on.
+function twoArrayDeclarationsRefusal(member ByteArray, roster ByteArrayArray, receiverIsTheProgramsOwn bool) returns String
+	let receiversOwn = ProgramsOwnArrayPhrase if receiverIsTheProgramsOwn else LibrarysOwnArrayPhrase
+	let theOther = LibrarysOwnArrayPhrase if receiverIsTheProgramsOwn else ProgramsOwnArrayPhrase
+	return "`{String.from(ArrayBuiltinBaseName)}` {SurfaceMemberNoun} '{String.from(member)}' — this value's type is {receiversOwn}, and '{String.from(member)}' is declared on {theOther}. Declaring an `{String.from(ArrayBuiltinBaseName)}` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides {rosterList(roster)}"
+end 'twoArrayDeclarationsRefusal'
 
 // The noun `surfaceRosterRefusal` names a surface's entries by. Named rather than spelled at each arm
 // because all six arms share it: a literal repeated six times is six chances for one of them to be reworded
@@ -9565,6 +9610,12 @@ export type Parser
 	var stringIndexSurfaceRoster as ByteArrayArray
 	var mapSurfaceRoster as ByteArrayArray
 	var cursorSurfaceRoster as ByteArrayArray
+	// ⭐ **THE `Array` DECLARATION NAMES, memoized off the SAME anchor and for the same measurement (ARR2)** —
+	// `ProgramSignatures.arrayDeclarationNames` mints an array, and its two askers sit on the descriptor
+	// pre-scan's per-member-name miss path, which is exactly where `sharedEmptySurfaceRoster`'s note says an
+	// unconditional allocation cost the ladder thousands. It is a roster in every sense the seven above are:
+	// a small whole-program list a file reads and never writes.
+	var arrayDeclarationRoster as ByteArrayArray
 	// ⭐⭐ **ONE VERDICT PER MEMBER NAME, memoized beside the rosters and for their reason (ARRG).** "Does the
 	// corpus serve `Array.<m>` off the roster?" is a function of the NAME, the roster and the whole-program
 	// declaration index — none of which move while a file is scanned — but answering it has to JOIN
@@ -9767,6 +9818,7 @@ export type Parser
 			stringIndexSurfaceRoster: sharedEmptySurfaceRoster,
 			mapSurfaceRoster: sharedEmptySurfaceRoster,
 			cursorSurfaceRoster: sharedEmptySurfaceRoster,
+			arrayDeclarationRoster: sharedEmptySurfaceRoster,
 			corpusServedArrayMembers: sharedEmptyCorpusMemberVerdicts
 		}
 	end 'create'
@@ -11532,7 +11584,15 @@ export type Parser
 					corpusContainerCallees = ByteArrayArray.create()
 				end 'firstEdgeInThisRegion'
 
-				corpusContainerCallees.push(qualifiedMethodName(ArrayBuiltinBaseName, methodName: self.tokenAt(q + 1).value))
+				// ONE edge per `Array` DECLARATION that serves the name (ARR2) — normally one, and two only
+				// while a user program's own `type Array` has the corpus declaration in the reserved space. The
+				// gate above says SOME declaration serves it; the callee name has to say WHICH, because that is
+				// what the fixpoint indexes by.
+				for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
+					if self.corpusArrayDeclarationServes(declaration, member: self.tokenAt(q + 1).value) 'thisDeclarationServesIt'
+						corpusContainerCallees.push(qualifiedMethodName(declaration, methodName: self.tokenAt(q + 1).value))
+					end 'thisDeclarationServesIt'
+				end 'eachArrayDeclaration'
 			end 'aCorpusContainerCall'
 			if kind == TokenKind.selfType and self.kindAt(q + 1) == TokenKind.leftBrace 'selfLiteral'
 				constructsSelfLiteral = true
@@ -11626,10 +11686,13 @@ export type Parser
 			return remembered
 		end 'askedBefore'
 
-		// The first two clauses are the DISPATCH's own (`corpusServesNamedMemberOffRoster`), so the call this
-		// edge is drawn for and the call the parser will actually route to a corpus body are one decision. The
-		// receiver clause is this asker's alone — the ⛔⛔ paragraph above carries what admitting a static cost.
-		let served = self.corpusServesNamedMemberOffRoster(member, surface: MemberSurface.array, typeName: ArrayBuiltinBaseName) and self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(ArrayBuiltinBaseName, methodName: member))
+		// ⭐ **ASKED OF EVERY `Array` DECLARATION THIS COMPILE HAS (ARR2)**, which is exactly one for every
+		// program that does not declare a container of its own. The `or` stops at the first that serves it.
+		var served = false
+		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
+			served = served or self.corpusArrayDeclarationServes(declaration, member: member)
+		end 'eachArrayDeclaration'
+
 		if self.corpusServedArrayMembers is sharedEmptyCorpusMemberVerdicts 'firstQuestionThisFileAsks'
 			self.corpusServedArrayMembers = DescriptorNeedMap.create()
 		end 'firstQuestionThisFileAsks'
@@ -11637,6 +11700,25 @@ export type Parser
 		self.corpusServedArrayMembers.upsert(member, value: served)
 		return served
 	end 'corpusServesArrayMember'
+
+	// Does ONE named `Array` declaration serve `member` through a corpus body a caller may have to supply a
+	// layout descriptor for? The first two clauses are the DISPATCH's own (`corpusServesNamedMemberOffRoster`),
+	// so the call this edge is drawn for and the call the parser will actually route to a corpus body are one
+	// decision. The receiver clause is this asker's alone — the ⛔⛔ paragraph above carries what admitting a
+	// static cost. Written once because the memo above and the callee-NAME loop in the scan both ask it, and a
+	// second copy is how the edge would come to be recorded for a member the dispatch does not route.
+	function corpusArrayDeclarationServes(declaration ByteArray, member ByteArray) returns bool
+		return self.corpusServesNamedMemberOffRoster(member, surface: MemberSurface.array, typeName: declaration) and self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(declaration, methodName: member))
+	end 'corpusArrayDeclarationServes'
+
+	// The `Array` declaration names, memoized per file off the roster anchor — see `arrayDeclarationRoster`.
+	function arrayDeclarationNames() returns ByteArrayArray
+		if self.arrayDeclarationRoster is sharedEmptySurfaceRoster 'firstAskInThisFile'
+			self.arrayDeclarationRoster = self.signatures.arrayDeclarationNames()
+		end 'firstAskInThisFile'
+
+		return self.arrayDeclarationRoster
+	end 'arrayDeclarationNames'
 
 	// ⭐ **DOES THE TOKEN AT `q` END A PRIMARY EXPRESSION — i.e. does a `(` after it open a CALL rather than a
 	// GROUPING (W41-opaque)?** The whole of how the signal walk tells `f(a, b)` from `(a, b)`. An identifier, a
@@ -48435,6 +48517,44 @@ export type Parser
 		return roster
 	end 'requireSurfaceMember'
 
+	// ⭐⭐ **THE `Array` ROSTER REFUSAL IS A WRONG ANSWER IN EXACTLY ONE PROGRAM, AND THIS IS IT (ARR2).** When a
+	// user program declares its own `type Array` the compile holds TWO `Array` declarations — the user's under
+	// the bare name, `stdlib/Array.maxon`'s under this compile's mint — and a member call resolves against the
+	// RECEIVER's own (`memberBelongsToTheCorpus`). So `s.toByteArray().at(0)`, in a program whose own `type
+	// Array` declares `at`, met *"`Array` member 'at' — P1.7 provides managed/get/…; that list IS the surface,
+	// so nothing else is served here"*: every clause of it TRUE about the synthesized surface, and every clause
+	// of it unhelpful to a reader whose declaration two lines up plainly has `at`.
+	//
+	// ⚠ **IT IS A SECOND GATE AND NOT A CLAUSE ON THE FIRST, because the two ask different questions of
+	// different subjects.** `requireSurfaceMember` is keyed on a SURFACE and holds no receiver — deliberately,
+	// and that is what lets five surfaces share it. This one is about which DECLARATION a value has, which only
+	// an `Array` receiver can be asked. Threading a receiver through the shared gate to serve one surface is how
+	// the shared gate stops being shared.
+	//
+	// It is DEAD for every program in the corpus: `hasStdlibShadowRenames` is false unless something is
+	// contested, which is the one gate every cost of that mechanism sits behind.
+	function refuseArrayMemberTheOtherDeclarationCarries(giid GenericInstanceId, methodTok Token, isManagedMemory bool) throws ParseError
+		// A BUFFER receiver is refused in the buffer's own words and has no second declaration to be confused
+		// with — `__ManagedMemory` is the compiler's own name and no file declares a member on it.
+		if isManagedMemory or not self.signatures.hasStdlibShadowRenames() 'oneArrayDeclarationInThisCompile'
+			return
+		end 'oneArrayDeclarationInThisCompile'
+
+		let roster = self.surfaceMemberNames(MemberSurface.array)
+		if namesInclude(roster, name: methodTok.value) 'theSynthesizedSurfaceServesIt'
+			return
+		end 'theSynthesizedSurfaceServesIt'
+
+		// The receiver's own declaration has already been asked and declined (`memberBelongsToTheCorpus` runs
+		// ahead of this dispatcher), so any declaration that carries the name here is by construction the other.
+		let receiversOwn = self.signatures.genericInstanceBaseName(giid)
+		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
+			if not declaration.equals(receiversOwn) and self.signatures.declaresCallee(qualifiedMethodName(declaration, methodName: methodTok.value)) 'theOtherDeclarationCarriesIt'
+				throw ParseError.unsupported(twoArrayDeclarationsRefusal(methodTok.value, roster: roster, receiverIsTheProgramsOwn: receiversOwn.equals(ArrayBuiltinBaseName)), line: methodTok.line, column: methodTok.column)
+			end 'theOtherDeclarationCarriesIt'
+		end 'eachArrayDeclaration'
+	end 'refuseArrayMemberTheOtherDeclarationCarries'
+
 	// ⭐⭐⭐ **DOES THE CORPUS DECLARE THIS MEMBER? — THE DOOR THAT MAKES A LISTED `stdlib/String.maxon` MEAN
 	// SOMETHING (W17).** A roster is shv2's statement of what its SYNTHESIZED surface serves; it was the whole
 	// answer while the corpus was unreadable, and it stopped being one the moment `type String` and
@@ -48510,6 +48630,23 @@ export type Parser
 	// or `try`-TARGET `<base>.managed.<m>(…)` is claimed ahead of this by `arrayManagedMemberCallAt` and was
 	// always right, so `try arr.managed.swap(…)` worked while the bare `managed.swap(…)` two lines away did
 	// not. A defect reachable by three routes and masked on a fourth reads as a spelling quirk.
+	//
+	// ⭐⭐⭐ **AND THE `Array` ARM ASKS THE RECEIVER WHICH DECLARATION IT IS OF, RATHER THAN SPELLING ONE
+	// (ARR2).** A user program declaring its own `type Array` moves the CORPUS declaration into the reserved
+	// space (`SignatureIndex.contestStdlibTypeName`), so TWO `Array` declarations are live in one compile: the
+	// user's under the bare name, `stdlib/Array.maxon`'s under this compile's mint. Both clauses below were
+	// keyed on the CONSTANT, which asks about the user's declaration whatever the receiver is:
+	//   • **MEASURED with `reserve` struck from the roster** — `stdlib/String.maxon:807`'s `bytes.reserve(…)`,
+	//     whose receiver is the corpus's own `__Array with Byte`, looked for `Array.reserve` on the USER's
+	//     container, found nothing and was refused **`E2015 … stdlib/String.maxon:807:9 … 'Array' member
+	//     'reserve'`** — the compiler refusing a library line no user wrote, in a program whose only offence
+	//     was declaring a container of its own. Three cases; the ⭐ block at `arraySurfaceMemberNames` records
+	//     it as the reason four names could not leave the roster.
+	//   • The SHAPE clause was wrong the same way, and in the more dangerous direction: it read the user
+	//     declaration's field list to decide whether the CORPUS's record is the compiler's.
+	// The receiver's instance carries the answer already — `Array with T` and `__ManagedMemory with T` intern
+	// to one id under the name the declaring FILE spells (`canonicalGenericBaseNameInThisFile`, F31) — so this
+	// is a read of a fact the type already holds and not a second scoping rule.
 	function memberBelongsToTheCorpus(recv MethodReceiver) returns bool
 		if tagIsByteRecord(recv.tag) 'aByteRecord'
 			return self.corpusServesMemberOffRoster(byteRecordSurface(recv.tag), typeName: self.byteRecordLayoutName(recv.tag))
@@ -48517,9 +48654,14 @@ export type Parser
 		if self.isStringIndexType(recv.tag, nameId: recv.nameId) 'aStringIndex'
 			return self.corpusServesMemberOffRoster(MemberSurface.stringIndex, typeName: StringIndexTypeName)
 		end 'aStringIndex'
-		if self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) and not self.valueIsBufferSurface(recv.value) and self.signatures.arrayNameIsItsOwnRecord(ArrayBuiltinBaseName) 'anArraySurfaceThatIsItsOwnRecord'
-			return self.corpusServesMemberOffRoster(MemberSurface.array, typeName: ArrayBuiltinBaseName)
-		end 'anArraySurfaceThatIsItsOwnRecord'
+		if self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) and not self.valueIsBufferSurface(recv.value) 'anArraySurface'
+			let declaration = self.signatures.genericInstanceBaseName(recv.nameId)
+			if not self.signatures.arrayNameIsItsOwnRecord(declaration) 'notTheOwnRecordArray'
+				return false
+			end 'notTheOwnRecordArray'
+
+			return self.corpusServesMemberOffRoster(MemberSurface.array, typeName: declaration)
+		end 'anArraySurface'
 
 		return false
 	end 'memberBelongsToTheCorpus'
@@ -48729,6 +48871,12 @@ export type Parser
 		// every name off the `Array` roster reached the fall-through refusal before and is refused here now,
 		// with the same E2015 at the same token — only the sentence moved. Nothing on the roster can be
 		// refused, because every entry matches an arm (the panic at the end of this function is what says so).
+		// ⭐⭐ **AND AHEAD OF THAT GATE, THE ONE THING IT CANNOT SAY (ARR2).** With two `Array` declarations live
+		// the roster's *"that list IS the surface"* is a wrong answer about the reader's own program — see
+		// `refuseArrayMemberTheOtherDeclarationCarries`. Placed HERE for the paragraph above's own reason: it is
+		// still the question *"does this member exist?"*, answered more precisely for the one compile that can
+		// tell two answers apart.
+		try self.refuseArrayMemberTheOtherDeclarationCarries(giid, methodTok: methodTok, isManagedMemory: isManagedMemory)
 		let roster = try self.requireSurfaceMember(MemberSurface.buffer if isManagedMemory else MemberSurface.array, methodTok: methodTok)
 
 		// ⚠ **THE BUFFER-ONLY MEMBERS ARE GATED ON THAT ANSWER HERE TOO, or the E3019 rule names methods the
@@ -48975,11 +49123,6 @@ export type Parser
 			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
 			return self.emitArrayVoidCall(ArrPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
 		end 'push'
-		if methodTok.value.equals(ArrayReserveMethod) 'reserve'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			let n = try self.parseArrayOneArg(func)
-			return self.emitArrayVoidCall(ArrReserveName, args: pairArgs(arr, second: n), receiver: arr, range: range)
-		end 'reserve'
 		if methodTok.value.equals(ArrayResizeMethod) 'resize'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireArrayResizeHasZeroElement(giid, methodTok: methodTok)

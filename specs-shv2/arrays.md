@@ -1035,6 +1035,42 @@ end 'main'
 error E3070: <fragment>:5:10: cannot mutate 'arr' via 'set' while it is borrowed by 's' (borrowed at line 4)
 ```
 
+<!-- test: error.reserve-on-a-let-array -->
+### … and `reserve` is the FOURTH, pinned before the strike rather than after it
+⚠ ARR2 retired `reserve` from the synthesized roster, and the three members above are the standing record
+of what a retirement can lose in silence: `reserve` was on the same `arrayMethodMutatesReceiver` answer and
+had NEITHER of these two cases. Both codes and both COLUMNS were written down from `insert`'s already-moved
+pair BEFORE the strike was run, so the run could disagree with them; it did not, which is what says the
+corpus declaration's own write mask carries the rule the deleted arm used to. `reserve` allocates capacity
+and rewrites `buffer@0`/`capacity@16`, so an immutable binding must refuse it exactly as `push` and `set`
+do.
+```maxon
+function main() returns ExitCode
+	let arr = [1, 2, 3]
+	arr.reserve(16)
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:4:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: error.reserve-through-a-live-borrow -->
+The borrow half of the same pair. `reserve` REALLOCATES, so a live borrow of an element is looking at the
+old buffer — the one hazard on this list that is a dangling read rather than a bookkeeping slip.
+```maxon
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	let s = try arr.first() otherwise ""
+	arr.reserve(64)
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:5:6: cannot mutate 'arr' via 'reserve' while it is borrowed by 's' (borrowed at line 4)
+```
+
 ### Set is bounded by the LIVE LENGTH, not by the capacity
 
 `set` refuses every index at or past `count()`, and the bound is the array's own rather than the storage
