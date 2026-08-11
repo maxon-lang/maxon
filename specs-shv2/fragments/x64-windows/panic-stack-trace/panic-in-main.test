@@ -1,0 +1,50 @@
+// Test: panic-in-main
+typealias Integer = int(i64.min to i64.max)
+typealias Bounded = int(10 to 20)
+
+function getVal() returns Integer
+	return 5
+end
+
+function main() returns ExitCode
+	let b = getVal() as Bounded
+	return b
+end
+---
+ExitCode: 1
+---
+func @getVal {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 5
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect getVal
+    x64.cmpRegImm32 r8, 10
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 20
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r8, r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
