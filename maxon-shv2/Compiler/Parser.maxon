@@ -4704,21 +4704,93 @@ end 'cursorSurfaceMemberNames'
 // ⚠⚠ **WHAT STAYED, STAYED FOR A MEASURED REASON, AND EACH IS RECORDED AT ITS OWN LINE OR HERE.** Three
 // classes, and only the first is about this file:
 //   • **A COMPILE-TIME RULE THE CORPUS CANNOT STATE** — `resize` is E3106 (a managed element has no zero),
-//     `first` is a BORROW SOURCE for E3070 (`borrow-liveness.first-is-a-borrow-source`), and `clear` carries
-//     the receiver-write mask that answers *"does `Bag.wipe()` free what the caller borrowed?"* — MEASURED,
-//     five `borrow-liveness` cases stop being refused when it goes, and the rest move column.
-//   • **A DECLARED-OWN-`Array` DEPENDS ON IT** — `reserve`, `count`, `isEmpty`, `clear`; see `reserve`'s line.
-//   • **THE CORPUS BODY IS WRONG OR THE CALL TO IT IS** — `contains` (see its line, a fault), and
-//     `get`/`set`/`slice`/`clone`/`push`/`insert`/`append`/`appendMemory`, whose corpus route MEASURED a
-//     `type parameter` return that never substitutes (`try arr.get(i) otherwise 0` ⇒ E3059) and a
-//     typealias-nominal `append` that refuses the value-set rule `arrayAppendArgAdmits` states.
+//     `first` and `get` are BORROW SOURCES for E3070 (`borrow-liveness.first-is-a-borrow-source`), `set` is
+//     where a RANGED element gets its runtime range check, and `clear` carries the receiver-write mask that
+//     answers *"does `Bag.wipe()` free what the caller borrowed?"* — MEASURED, five `borrow-liveness` cases
+//     stop being refused when `clear` goes, and the rest move column.
+//   • **A DECLARED-OWN-`Array` DEPENDS ON IT** — `reserve`, `count`, `isEmpty`, `clear`, `appendMemory`; see
+//     `reserve`'s line, and ARR3a's line below for `appendMemory`, which joined this class by measurement.
+//   • **THE CORPUS BODY IS WRONG OR THE CALL TO IT IS** — `contains` (see its line, a fault), `push`,
+//     `insert` and `append`; ARR3a's block below records what each one measured, because that third bullet
+//     used to name all eight of the members it was briefed on under ONE diagnosis, and the diagnosis was
+//     wrong about seven — including which BULLET two of them belong to (`get` and `set` are the first).
+//
+// ⭐⭐⭐ **ARR3a STRUCK ONE MORE — `slice` — AND ITS MEASUREMENT RETIRED THE SENTENCE ABOVE AS MUCH AS THE
+// MEMBER.** It was briefed to strike EIGHT (`get`, `set`, `slice`, `clone`, `push`, `insert`, `append`,
+// `appendMemory`) on the third bullet's one diagnosis. So each of the eight was struck ALONE, built and run
+// against the `array` filter, and the union struck too — and the diagnosis is wrong about seven of them.
+// They are not one blocked class; they are seven different ones, listed below.
+//
+// What the third bullet claimed of all eight — *"a `type parameter` return that never substitutes
+// (`try arr.get(i) otherwise 0` ⇒ E3059)"* — is FALSE of `get`, which retires cleanly on that axis (struck
+// alone: `try a.get(i) otherwise 0` compiles and runs, no E3059 anywhere). The E3059 it describes was the
+// DOWNSTREAM symptom of a different defect belonging to the two `returns Self` members: a **`Self`** return,
+// not a type-parameter one, DECAYING to the base `structRef(Array)` whenever the receiver carried no instance
+// ALIAS SPELLING — `Parser.retypeInstanceMethodResult`, where the arm sat below an alias gate it never needed.
+// Fixed there; `stdlib/Log.maxon:50`'s own `return captured.clone()` was `E3005 Cannot return 'Array' from
+// function declared to return 'TraceKeyArray'` until it was.
+//
+// ⚠ **AND THAT FIX EXPOSED A SECOND ONE BEHIND IT — a DOUBLE FREE, not a diagnostic.** A corpus body is a
+// SHARED generic body over an opaque `Element`, so `slice`/`clone`/`append` there emit `__arr_*_opaque`, which
+// branch on the layout descriptor's `copyFunc@32`; and `ProgramSignatures.managedOpaqueArrayElementOf` — the
+// walk that stamps it — opened with `genericInstanceHasBaseLayout`, which is FALSE for every builtin generic
+// base, `Array` included. So an `Array with String` carried a ZERO cloner, the wrapper took its trivial COW
+// branch, and view and parent both cascaded `__str_decref` over the same records: **0xC0000005 at teardown,
+// 25 cases**. An `Array` IS its own column, and that walk now says so.
+//
+// ⚠⚠ **THE SEVEN THAT DID NOT GO, AND WHAT EACH ONE MEASURED** — no two of them for the same reason. Both
+// compiler defects above are FIXED, so several of these are one named mechanism away rather than open-ended;
+// each says which:
+//   • **`get`** — it is a BORROW SOURCE, exactly as `first` is, so it belongs to the FIRST bullet above and
+//     not the third. Struck alone, the three `array-realloc-dangling-ref` cases stopped being refused at all
+//     (*"expected a compile error but compilation succeeded"*): the arm mints the E3070 borrow through
+//     `emitContainerElementAccessor` and a corpus body cannot, because a borrow does not COMPOSE through a
+//     call. That is the transitive-liveness rung `dispatchArrayMethod`'s `createCursor` arm already names (v1
+//     does it as a per-value `baseOf` chain, `StdLiveness.maxon:236-267`), and it is not a line here.
+//   • **`set`** — first bullet as well, and for a rule NOTHING in the language can state at the callee: the
+//     arm is where a RANGED element's stored value gets its runtime range check, and the corpus declaration
+//     takes the opaque `Element`, so the shared callee knows no range and the call site has no site kind for
+//     the substituted one. MEASURED struck: `ranged-typealias.array-set-runtime-panic` stored **505** into an
+//     `int(0 to 100)` array, exited 0 with an EMPTY stderr, where it pins `Range check failed`. The hole is
+//     GENERAL and PRE-EXISTING — the same 505 lands silently through a plain `type Box uses T`'s `put(value
+//     T)`, no `Array` member retired — so it is a rung of its own; see the `set` arm, which carries it.
+//     Its OTHER half is easy and is written down HERE rather than in the body, because
+//     `stdlib/Array.maxon`'s LINE NUMBERS are pinned by four `/specs` cases through `Array.resize`'s panic
+//     message — an eight-line note above `set` moved that panic from `:382` to `:390` and turned the C#
+//     suite red, which is the second copy of one fact costing more than the fact is worth. The half:
+//     `:217`'s body forwards to a CAPACITY-bounded `managed.set` where the `Array` owes a LENGTH bound, so
+//     `set`'s retirement adds a `index >= managed.length()` throw there and shares it with `accessFailure`.
+//   • **`push`** — three separate faults at once, measured: `arrays/slice-parent-grows-while-view-lives`
+//     stopped detaching a COW view (exit 1 against 0); a `byte-enum-comparison` case lost the arm's
+//     enum→element coercion (`expected 'Byte', got 'Ascii'`); and both `bytearray-element-size`
+//     contested-alias cases lost their refusal. Plus the declared-record class below.
+//   • **`insert`** — `arrays/insert-negative-index-clamps-to-front` pins `__arr_insert`'s CLAMP of a negative
+//     index to the front; the corpus parameter is `ElementIndex = int(0 to u64.max)`, so through the corpus a
+//     `-1` is a RANGE-CHECK failure rather than a clamp (exit 1 against 159). Which of the two the language
+//     owes is a question for whoever retires it, not a bound this rung may quietly move: no `/specs` file has
+//     an `insert` case at all, so the pin is shv2's own.
+//   • **`append`** — the ONE half of the old sentence that survived contact, and it hid something worse. Its
+//     `other Self` parameter meets the ORDINARY nominal argument agreement, which refuses what
+//     `ProgramSignatures.arrayAppendArgAdmits` admits by VALUE SET: three cases, `expected 'Array_int', got
+//     'IntArray'`. Behind that refusal sat four SEGFAULTS in `array-append-managed-elements` — the
+//     `copyFunc@32` defect above, which this rung fixed, so `append`'s remaining blocker is only the argument
+//     rule.
+//   • **`clone`** — the one that got all the way to a green run and was put back anyway, for a reason that is
+//     not about the code: its REFUSALS move into `stdlib/Array.maxon` and a `maxoncstderr` block cannot pin an
+//     absolute path. The `clone` arm carries the whole argument, and it is the same wall every later
+//     retirement meets.
+//   • **`appendMemory`** — the CLEANEST of the eight (struck alone: 19 of its 21 failures were this list
+//     rendering itself) and blocked by the SECOND bullet rather than by anything of its own:
+//     `stdlib/String.maxon:823` calls it, and a program that declares its OWN `type Array`
+//     (`array-declared-record.md`) replaces the corpus's for stdlib too, so that call has no provider but
+//     this roster. **That single question — what a declared-own `Array` is owed — now gates `ARR4`, because
+//     the roster cannot go away while it is unanswered.**
 function arraySurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryFieldName)
 	names.push(GetMethod)
 	names.push(ArraySetMethod)
 	names.push(ArrayFirstMethod)
-	names.push(SliceMethod)
 	names.push(CountMethod)
 	names.push(IsEmptyMethod)
 	names.push(CloneMethodName)
@@ -40284,15 +40356,16 @@ export type Parser
 		return ConstructorInstance.none
 	end 'receiverConstructorInstance'
 
-	// ⭐ **RETYPE A METHOD RESULT TO CARRY PER-INSTANCE IDENTITY (P1.6-C).** When the receiver has a
-	// statically-known instance alias, two shapes gain it:
-	//   • an INNER-ALIAS return (`getTag() returns Idx`, resolved to `named("Wrapper.Idx")`) is re-qualified
-	//     to `named("{alias}.Idx")` — so `a.getTag()` is a `WrapperA.Idx` value the arg check compares by name;
+	// ⭐ **RETYPE A METHOD RESULT TO CARRY PER-INSTANCE IDENTITY (P1.6-C).** Two shapes gain it from the
+	// receiver, and they need DIFFERENT things off it:
 	//   • a `Self` return (`withTag() returns Self`, resolved to the base `structRef`) is re-tagged to the
-	//     receiver's OWN `genericInstance` and its alias propagated — so `w = w.withTag(7)` stays the same
-	//     instance and type-checks (the assignment would else reject `Wrapper` into a `genericInstance` var).
-	// A receiver with NO alias (a `self` receiver, a value merged across branches) leaves the result plain — it
-	// DECAYS, matching the oracle. `receiver` is BORROWED; only the result's type moves.
+	//     receiver's OWN `genericInstance` — so `w = w.withTag(7)` stays the same instance and type-checks
+	//     (the assignment would else reject `Wrapper` into a `genericInstance` var). It needs the receiver's
+	//     GID and nothing else; the alias is propagated when the receiver has one (ARR3a — see the arm);
+	//   • an INNER-ALIAS return (`getTag() returns Idx`, resolved to `named("Wrapper.Idx")`) is re-qualified
+	//     to `named("{alias}.Idx")` — so `a.getTag()` is a `WrapperA.Idx` value the arg check compares by
+	//     name. That one IS the alias, so a receiver with no alias leaves it plain.
+	// `receiver` is BORROWED; only the result's type moves.
 	//
 	// ⭐⭐ **AND A THIRD SHAPE NEEDS NO ALIAS AT ALL: A RETURN THAT IS ITSELF WRITTEN IN THE SHARED BODY'S
 	// DECLARATION VIEW.** `Outer.wrap() returns Inner` resolves, inside `type Outer uses T`, to
@@ -40330,6 +40403,53 @@ export type Parser
 		end 'declarationViewReturn'
 
 		let receiverAlias = self.instanceAliasNameOfValue(receiver)
+
+		// ⭐⭐ **A `Self` RETURN IS FIXED BY THE RECEIVER'S *INSTANCE*, AND THE ALIAS IS ONLY A SPELLING IT MAY
+		// ALSO CARRY — so this arm sits ABOVE the alias gate (ARR3a).** It used to sit below it, which made an
+		// aliasless receiver DECAY its `Self` result to the base `structRef`, and that is not the harmless
+		// widening the header's "matching the oracle" note assumed: `Array with T` and `Array` are different
+		// types to every later check, so the decayed value was refused by the very declaration that produced
+		// it. It only ever showed on a receiver nothing SPELLS — an array literal, a `static` field, a value
+		// merged across branches — which is why a synthesized surface hid it completely.
+		//
+		// ⚠ **MEASURED, on this tree, by striking `slice`/`clone` from `arraySurfaceMemberNames` so
+		// `stdlib/Array.maxon`'s own `returns Self` bodies served the calls**: `stdlib/Log.maxon:50`'s
+		// `return captured.clone()` was `E3005 Cannot return 'Array' from function declared to return
+		// 'TraceKeyArray'` — a stdlib body refused for returning exactly what it declared — and every
+		// downstream read of a `slice` result was `E3059 … 'int' does not match expected type 'type
+		// parameter'`, because the base `Array` fixes no element. 78 cases under `clone` alone, 55 under
+		// `slice`.
+		//
+		// ⚠ **THE ALIAS IS STILL PROPAGATED WHEN THERE IS ONE, AND IT IS THE ALIAS THAT IS OPTIONAL RATHER
+		// THAN THE INSTANCE.** `recordValueInstanceAlias` names the SPELLING a diagnostic quotes back
+		// (`bytearray-element-size`'s contested-alias family lives on it); an empty one is a value no source
+		// text names, not a value with no type.
+		if self.tagOf(result) == ValueTypeTag.structRef and self.tagOf(receiver) == ValueTypeTag.genericInstance 'selfReturn'
+			let gid = self.valueNameId(receiver)
+			let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
+			if self.valueNameId(result) == baseId 'sameBase'
+				self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
+				if not receiverAlias.isEmpty() 'receiverSpellsItsInstance'
+					self.recordValueInstanceAlias(result, aliasName: receiverAlias)
+				end 'receiverSpellsItsInstance'
+				// ⭐ **AND THE ELEMENT SURFACE RIDES WITH IT, for the reason `inheritArrayElementSurface`
+				// states one door over**: a `Self` result IS a value of the receiver's own instance, and
+				// `Array with __ManagedMemory` / `Array with ByteArray` are ONE `GenericInstanceId` — so the
+				// element spelling cannot ride the gid and has to ride the value. The synthesized `clone` /
+				// `slice` arms carry it explicitly; a corpus body returning `Self` is the same operation
+				// reached from source, so it may not lose it. (MEASURED with `slice`/`clone` struck:
+				// `b.get(0).length()` after `let b = a.clone()` on an `Array with __ManagedMemory` was
+				// *"`Array` member 'length'"* — the exact sentence A2m added that helper to retire.)
+				// A receiver holding no buffer-surface elements carries no mark, so this is a bit-test that
+				// answers no for every other container and every plain struct.
+				_ = self.inheritArrayElementSurface(result, source: receiver)
+				return
+			end 'sameBase'
+		end 'selfReturn'
+
+		// An INNER-ALIAS return is re-qualified through the receiver's alias SPELLING and has nothing to fall
+		// back on without one — `named("{alias}.Idx")` cannot be built from a gid — so this arm keeps the gate
+		// the arm above shed.
 		if receiverAlias.isEmpty() 'noReceiverAlias'
 			return
 		end 'noReceiverAlias'
@@ -40338,18 +40458,8 @@ export type Parser
 			let member = self.signatures.innerAliasMember(self.internedName(self.valueNameId(result)))
 			if not member.isEmpty() 'innerAliasReturn'
 				self.retypeValue(result, valueType: MaxonType.named(self.artifact.typeNames.intern(joinQualifiedName(receiverAlias, member: member))))
-				return
 			end 'innerAliasReturn'
 		end 'namedReturn'
-
-		if self.tagOf(result) == ValueTypeTag.structRef and self.tagOf(receiver) == ValueTypeTag.genericInstance 'selfReturn'
-			let gid = self.valueNameId(receiver)
-			let baseId = self.artifact.typeNames.intern(self.signatures.genericInstanceBaseName(gid))
-			if self.valueNameId(result) == baseId 'sameBase'
-				self.retypeValue(result, valueType: MaxonType.genericInstance(gid))
-				self.recordValueInstanceAlias(result, aliasName: receiverAlias)
-			end 'sameBase'
-		end 'selfReturn'
 	end 'retypeInstanceMethodResult'
 
 	// ⭐ **IS THIS VALUE'S TYPE STILL WRITTEN IN THE SHARED GENERIC BODY'S DECLARATION VIEW?** — the
@@ -45905,6 +46015,19 @@ export type Parser
 		// bound, and the record is shared — so the surface answer that already decides this call's LABEL rule
 		// decides its CALLEE too, and there is no second discriminator.
 		//
+		// ⛔⛔ **ARR3a TRIED TO RETIRE THE `Array` HALF AND PUT IT BACK, FOR A REASON THAT IS NOT ABOUT `set`.**
+		// The corpus body is one guard short of the length bound (`stdlib/Array.maxon:217`, which now says so),
+		// and that half was easy. What is not: the arm's `parseArraySetOrInsert` is where a RANGED element's
+		// stored value gets its runtime range check, and the corpus declaration cannot host one — its parameter
+		// is the opaque `Element`, so the callee is compiled once and knows no range, while the CALL SITE, which
+		// does know the substitution, has no site kind for it (`rangeCheckParamSites` is the callee's own
+		// declared list). **MEASURED with `set` struck: `ranged-typealias.array-set-runtime-panic` stored 505
+		// into an `int(0 to 100)` array and exited 0 with an EMPTY stderr, where it pins
+		// `Range check failed: value outside typealias 'Percent'`.** The hole is GENERAL and PRE-EXISTING, not
+		// `set`'s — the same 505 lands silently through a plain `type Box uses T`'s `put(value T)` with no
+		// `Array` member retired anywhere — so it is a rung of its own, and until it is closed this arm is what
+		// enforces a ranged element's domain.
+		//
 		// ⚠ **THE CALLEE IS PICKED INTO A `var` BECAUSE THE BOOTSTRAP CANNOT LOWER IT AS A CONDITIONAL
 		// EXPRESSION HERE.** Written `callee: ArrMemSetName if isManagedMemory else ArrSetName` — the shape
 		// `noteReceiverWrite`'s call above already uses — the bootstrap fails the whole build with
@@ -45951,9 +46074,15 @@ export type Parser
 			let index = try self.parseArrayOneArg(func)
 			return self.emitContainerElementAccessor(func, callee: ArrRemoveName, container: arr, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
-		if methodTok.value.equals(SliceMethod) 'slice'
+		// ⭐ **`slice` IS BUFFER-SURFACE ONLY SINCE ARR3a**, for `remove`'s reason above and by its gate. The
+		// `Array` spelling is `stdlib/Array.maxon:229`'s, whose body is this same `managed.slice(…)` wrapped in
+		// a `Self{managed: …}` — one runtime, reached from source. Its RESULT keeps everything the arm gave it:
+		// the receiver's instance and the receiver's element surface both ride the `Self` return
+		// (`retypeInstanceMethodResult`), which is where a corpus body gets what `inheritArrayElementSurface`
+		// hands the arm below.
+		if isManagedMemory and methodTok.value.equals(SliceMethod) 'slice'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
-			return try self.parseArraySlice(func, arr: arr, giid: giid, bufferSurface: isManagedMemory, range: range)
+			return try self.parseArraySlice(func, arr: arr, giid: giid, range: range)
 		end 'slice'
 
 		// ⭐ **`byteAt(index)` — THE BUFFER'S BYTE READER (R4.4)**, sitting with the throwing accessors because
@@ -46032,6 +46161,21 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
+		// ⛔⛔ **`clone` WAS STRUCK AT ARR3a AND PUT BACK, AND THE REASON IS THE SPEC HARNESS RATHER THAN THE
+		// CODE.** Everything `slice` needed, `clone` had: the `Self`-return retype and the `copyFunc@32` stamp
+		// carry `stdlib/Array.maxon:143`'s body (`managed.slice(0, len)`) correctly, and with both fixes in
+		// place the whole `array` filter was green on it but for diagnostics. **The two it could not keep are
+		// REFUSALS that move house**: `requireArrayCopyMethodSupported` fires where the `managed.slice` IS, so
+		// `array-clone-managed-elements.error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused` and
+		// `generic-type-nested-array-typealias.opaque-copy-uncopyable-instantiation-rejected` stop reading
+		// `<fragment>:12:12 … 'clone'` and start reading `<abs>/stdlib/Array.maxon:145:32 … 'slice'`.
+		// ⇒ **A `maxoncstderr` block cannot pin that**: only a STAGED fragment path is normalized to
+		// `<fragment>` (`SpecTestRunner.normalizeCompilerOutput`), so the expectation would carry this
+		// worktree's absolute path and go red on any other checkout — including the one it merges into.
+		// The refusal itself is intact and correct; what a corpus body cannot yet do is report it at the CALL
+		// that instantiated it. That is one rung (diagnostic attribution through a stdlib body, which every
+		// later retirement needs too), and normalizing a stdlib path in the harness would hide the regression
+		// rather than fix it.
 		if methodTok.value.equals(CloneMethodName) 'clone'
 			try self.requireArrayCopyMethodSupported(giid, methodTok: methodTok)
 			try self.consumeEmptyArgList()
@@ -47011,35 +47155,29 @@ export type Parser
 		return result
 	end 'emitOwnedRuntimeResult'
 
-	// `slice(start, endIndex: end)` — the index positional, the end labelled `endIndex:` (mirroring `set`'s
-	// `value:`, and OPTIONAL on the buffer surface — see `consumeArrayArgLabel`). Emits the throwing
-	// `__arr_slice(arr, start, end)` as the LAST op so the enclosing `try` rewrites it; returns the fresh owned
-	// array. Neither argument is a managed move-in (both are plain indices).
+	// `slice(start, end)` — both positional; the `endIndex:` label the `Array` spelling required is OPTIONAL on
+	// this surface (see `consumeArrayArgLabel`), and since ARR3a this surface is the only one that reaches
+	// here. Emits the throwing `__arr_slice(arr, start, end)` as the LAST op so the enclosing `try` rewrites
+	// it; returns the fresh owned array. Neither argument is a managed move-in (both are plain indices).
 	//
-	// ⭐ **A SLICE OF A BUFFER IS A BUFFER, WHICH IS WHY `bufferSurface` REACHES THE RESULT AND NOT ONLY THE
-	// LABEL (R4.4).** `specs/managed-memory-builtin.md:slice` reads `s.length()` off the result and
+	// ⭐ **A SLICE OF A BUFFER IS A BUFFER, WHICH IS WHY THE MARK REACHES THE RESULT AND NOT ONLY THE LABEL
+	// (R4.4).** `specs/managed-memory-builtin.md:slice` reads `s.length()` off the result and
 	// `managed-memory-methods.bounds-slice-oob` does the same, so the surface must survive the operation — which
 	// it does by riding the VALUE (`markBufferSurface`), the only carrier available when both surfaces share one
 	// `GenericInstanceId` (see `Parser.bufferSurfaceValues`).
-	function parseArraySlice(func IrFunction, arr ValueId, giid GenericInstanceId, bufferSurface bool, range SourceRange) returns ValueId throws ParseError
+	function parseArraySlice(func IrFunction, arr ValueId, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let start = try self.parseExpression(func, block: self.currentBlock)
-		try self.consumeArrayArgLabel(EndIndexArgLabel, required: not bufferSurface)
+		try self.consumeArrayArgLabel(EndIndexArgLabel, required: false)
 		let endIndex = try self.parseExpression(func, block: self.currentBlock)
 		try self.consume(TokenKind.rightParen)
 		let sliced = self.emitArraySliceCall(giid, arr: arr, start: start, endIndex: endIndex, range: range)
-		if bufferSurface 'sliceOfABuffer'
-			self.markBufferSurface(sliced)
-		end 'sliceOfABuffer'
+		self.markBufferSurface(sliced)
 		// And a slice of an array OF buffers is an array of buffers — the same rule one container out, which is
 		// why the two live side by side rather than in one test: a value can be either, and never both.
 		return self.inheritArrayElementSurface(sliced, source: arr)
 	end 'parseArraySlice'
 
-	// Which of the three `slice` runtimes this instance's element takes — the trivial COW view, the per-element
-	// DEEP CLONE, or the descriptor-gated opaque wrapper. Split out of `parseArraySlice` so the buffer-surface
-	// mark has ONE value to name rather than one per arm; the three-way choice is `clone`'s and `append`'s
-	// verbatim.
 	// Which of the three `clone` runtimes this instance's element takes — `emitArraySliceCall`'s three-way
 	// choice verbatim, split out of the `clone` arm for the identical reason: the element-surface inheritance
 	// needs ONE value to name rather than one per arm.
@@ -47053,12 +47191,16 @@ export type Parser
 		return self.emitOwnedRuntimeResult(ArrCloneName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitArrayCloneCall'
 
-	// ⭐ **A COPY OF AN ARRAY OF BUFFERS HOLDS BUFFERS (A2m).** `clone` and the `Array`-surface `slice` are the
-	// only two members that hand back a WHOLE array of the receiver's own instance, and the element spelling
-	// cannot ride that instance (`Array with __ManagedMemory` and `Array with ByteArray` are one id) — so it
-	// rides the value here, exactly as `parseArraySlice` carries the receiver's OWN buffer surface across the
-	// same operation. MEASURED before this line: `bufs.clone().get(0).length()` was refused as an unknown
-	// `Array` method while `bufs.get(0).length()` answered.
+	// ⭐ **A COPY OF AN ARRAY OF BUFFERS HOLDS BUFFERS (A2m).** A whole-array producer hands back a value of the
+	// receiver's own instance, and the element spelling cannot ride that instance (`Array with __ManagedMemory`
+	// and `Array with ByteArray` are one id) — so it rides the value here. MEASURED before this line:
+	// `bufs.clone().get(0).length()` was refused as an unknown `Array` method while `bufs.get(0).length()`
+	// answered.
+	//
+	// ⚠ **ITS CALLERS WERE THE `clone` AND `slice` ARMS; SINCE ARR3a IT IS ALSO EVERY CORPUS `Self` RETURN**
+	// (`retypeInstanceMethodResult`), because the `Array`-surface `slice` is `stdlib/Array.maxon`'s declaration
+	// now and the same fact has to reach it. One helper, asked from the synthesized side and from the corpus
+	// side, rather than a second answer on each.
 	function inheritArrayElementSurface(result ValueId, source ValueId) returns ValueId
 		if self.valueElementIsBufferSurface(source) 'sourceHoldsBuffers'
 			self.markBufferSurfaceElements(result)
@@ -52590,10 +52732,11 @@ export type Parser
 		//
 		// ⚠ **THE MARK IS THE WHOLE POINT, AND ITS ABSENCE IS A WRONG ANSWER RATHER THAN A SLOWER ONE.**
 		// `String.replace` writes `let selfBytes = addressableBytes()` and then `selfBytes.slice(pos, matchPos)`;
-		// unmarked, `dispatchArrayMethod` reads `selfBytes` as an `Array`, `parseArraySlice`'s
-		// `required: not bufferSurface` then DEMANDS the `endIndex:` label the buffer surface makes optional, and
-		// the corpus is refused inside its own file — `E2010 Expected ':' but got ')'` at `String.maxon:542`,
-		// which is 1002 of the 1158 failures listing the module produced.
+		// unmarked, `dispatchArrayMethod` read `selfBytes` as an `Array`, and the `Array`-surface `slice` — which
+		// DEMANDED the `endIndex:` label the buffer surface makes optional — refused the corpus inside its own
+		// file: `E2010 Expected ':' but got ')'` at `String.maxon:542`, 1002 of the 1158 failures listing the
+		// module produced. ⚠ The mark still decides the SURFACE (ARR3a made `slice` buffer-only, so an unmarked
+		// value is now refused outright rather than mis-labelled); what it decides is unchanged.
 		//
 		// ⇒ Asked BEFORE the implicit-self arm and gated to the roster, so it can only ever catch a member the
 		// arm below would have sent to a corpus body that duplicates one. A member the roster does NOT serve

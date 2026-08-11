@@ -641,7 +641,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — P1.7 provides managed/get/set/first/slice/count/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/contains; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — P1.7 provides managed/get/set/first/count/isEmpty/clone/push/reserve/resize/clear/insert/append/appendMemory/contains; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-corpus-served-managed-element-balances-across-a-loop -->

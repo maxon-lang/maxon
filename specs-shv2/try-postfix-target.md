@@ -376,7 +376,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: specs/fragments/try-postfix-target/error.two-throwing-calls-in-one-chain.test:14:21: throwing array accessor requires try: wrap it as `try …(…) otherwise …` — a bare call drops the out-of-bounds error
+error E3057: specs/fragments/try-postfix-target/error.two-throwing-calls-in-one-chain.test:14:21: throwing function requires try: 'Array.slice'
 ```
 
 <!-- test: error.chained-non-throwing-method -->
