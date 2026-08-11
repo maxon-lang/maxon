@@ -294,27 +294,27 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		return try managed.remove(len - 1) otherwise throw ArrayError.indexOutOfBounds
 	end 'pop'
 
-	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
+	/// Insert element at index, shifting elements to the right (clamps index to [0, count], BOTH ends)
 	export function insert(at ElementIndex, value Element)
 		let len = managed.length()
-		var index = at
 
-		// Clamp index to valid range
-		if index > len 'clamp_high'
+		// ⚠ **THE LOW CLAMP IS LIVE CODE THOUGH `ElementIndex` STARTS AT 0**, because nothing range-checks
+		// an argument at a ranged parameter in either compiler — a `-1` arrives intact. MEASURED before this
+		// line existed: `shiftRight(-1, len)` read the slot BEFORE the buffer and stored it at 0, turning
+		// `[10, 20, 30]` into `[0, 10, 20]`, and only then did `set` panic asserting the clamp it lacked.
+		var index = 0 if at < 0 else at
+		if index > len 'clampHigh'
 			index = len
-		end 'clamp_high'
+		end 'clampHigh'
 
-		// Ensure capacity
 		ensureCapacity(len + 1)
 
-		// Shift elements right to make room
 		if index < len 'shift'
 			try managed.shiftRight(index, len - index) otherwise 'shiftErr'
 				panic("Array.insert: shiftRight OOB — index and count are within ensured capacity")
 			end 'shiftErr'
 		end 'shift'
 
-		// Insert element and update length
 		try managed.set(index, value) otherwise 'setErr'
 			panic("Array.insert: set OOB — index clamped to [0, len] and capacity ensured")
 		end 'setErr'

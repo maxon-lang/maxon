@@ -968,6 +968,36 @@ end 'main'
 error E2004: <fragment>:5:12: Function 'appendMemory' does not return a value
 ```
 
+<!-- test: error.insert-on-a-let-array -->
+### `insert` owes the same two answers, and nothing asked it for either
+`appendMemory`'s twins above exist because the omission would have been a silent write. `insert` is on
+the same `arrayMethodMutatesReceiver` answer and had neither case — which is coverage, not agreement,
+and ARR3c hit exactly that gap one door over (see `ranged-typealias.error.array-insert-out-of-range`).
+```maxon
+function main() returns ExitCode
+	let arr = [1, 2, 3]
+	arr.insert(0, value: 9)
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:4:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: error.insert-through-a-live-borrow -->
+```maxon
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	let s = try arr.first() otherwise ""
+	arr.insert(0, value: "a second long string that also lives on the heap")
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:5:6: cannot mutate 'arr' via 'insert' while it is borrowed by 's' (borrowed at line 4)
+```
+
 ### Copy-on-Write
 
 <!-- test: slice-cow-modify-slice -->

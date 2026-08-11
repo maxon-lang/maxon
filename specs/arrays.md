@@ -763,6 +763,30 @@ end 'main'
 7
 ```
 
+### Insert
+
+`insert` clamps its index into `[0, count]` at BOTH ends, so it is the one index-taking member that never
+refuses. The high end is `stdlib-array.insert-index-clamps-high`'s. The LOW end is pinned here because a
+negative index is not stopped by `at`'s `int(0 to u64.max)` — nothing range-checks an argument at a ranged
+parameter — and an unclamped `-1` made the tail shift read the slot BEFORE the buffer and store it at 0,
+turning `[10, 20, 30]` into `[0, 10, 20]` before the store finally failed.
+
+<!-- test: insert-negative-index-clamps-to-front -->
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	arr.insert(-1, value: 99)
+	let a = try arr.get(0) otherwise 0
+	let b = try arr.get(1) otherwise 0
+	let c = try arr.get(2) otherwise 0
+	let d = try arr.get(3) otherwise 0
+	return a + b + c + d
+end 'main'
+```
+```exitcode
+159
+```
+
 ### Copy-on-Write
 
 <!-- test: slice-cow-modify-slice -->

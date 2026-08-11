@@ -1848,6 +1848,62 @@ Stack trace:
   in mrt_start
 ```
 
+### Array `insert`: the third spelling, and the one the prose above claimed without testing
+
+⚠ The paragraph above says all three spellings owe the same two halves, and until ARR3c only `push`
+and `set` had cases — a prose invariant with no case for its third member. **MEASURED (ARR3c): with
+`insert` struck from `Parser.arraySurfaceMemberNames` and served from `stdlib/Array.maxon` instead,
+BOTH halves vanish and the suite stays GREEN.** `insert(0, value: 300)` into an `Array with
+int(0 to 255)` compiles, runs, and reads back **44**; a runtime-computed 300 exits 0 reading 44 too.
+That is the corpus declaring `value Element`, so the shared callee knows no range and the call site has
+no site kind for the substituted one — `set`'s blocker, on a second member. These two cases are what
+would have said so.
+
+<!-- test: error.array-insert-out-of-range -->
+```maxon
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(3)
+	a.insert(0, value: 500)
+	return a.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:4: Value 500 is outside the range of 'Percent' (int(0 to 100))
+```
+
+<!-- test: array-insert-runtime-panic -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for the reason above. -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function grow(n Wide) returns Wide
+	return n * 101
+end 'grow'
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(3)
+	a.insert(0, value: grow(5))
+	return a.count()
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at array-insert-runtime-panic.test:13: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
 ### Error: a call argument is checked against the CALLEE's declaration of the alias
 
 Two files each declare `Limit`, over different ranges — which

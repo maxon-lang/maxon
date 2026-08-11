@@ -4831,23 +4831,37 @@ end 'cursorSurfaceMemberNames'
 //     stopped detaching a COW view (exit 1 against 0); a `byte-enum-comparison` case lost the arm's
 //     enum→element coercion (`expected 'Byte', got 'Ascii'`); and both `bytearray-element-size`
 //     contested-alias cases lost their refusal. Plus the declared-record class below.
-//   • **`insert`** — `arrays/insert-negative-index-clamps-to-front` pins `__arr_insert`'s CLAMP of a negative
-//     index to the front; the corpus parameter is `ElementIndex = int(0 to u64.max)`, so through the corpus a
-//     `-1` is a RANGE-CHECK failure rather than a clamp (exit 1 against 159). Which of the two the language
-//     owes is a question for whoever retires it, not a bound this rung may quietly move: no `/specs` file has
-//     an `insert` case at all, so the pin is shv2's own.
+//   • **`insert`** — ⛔ **BOTH HALVES OF THIS BULLET WERE WRONG, AND ARR3c MEASURED BOTH.** Its filed blocker
+//     (the negative index) was real but is CLOSED, in the corpus rather than here; and the reason it does not
+//     retire is one this bullet never named. It has moved to the FIRST bullet, beside `set`. See its own line
+//     on the roster below.
 //   • **`append`** — the ONE half of the old sentence that survived contact, and it hid something worse. Its
 //     `other Self` parameter meets the ORDINARY nominal argument agreement, which refuses what
 //     `ProgramSignatures.arrayAppendArgAdmits` admits by VALUE SET: three cases, `expected 'Array_int', got
 //     'IntArray'`. Behind that refusal sat four SEGFAULTS in `array-append-managed-elements` — the
 //     `copyFunc@32` defect above, which this rung fixed, so `append`'s remaining blocker is only the argument
-//     rule.
+//     rule. ⭐ **RE-MEASURED AT ARR3c AND THE FOUR FAULTS ARE GONE** (27 → 23, zero 0xC0000005): the
+//     `managedOpaqueArrayElementOf` repair is what accounts for them, so that half of this bullet is now
+//     HISTORY rather than a blocker. What is left is the rule, and it is not a defect on either side — the
+//     admission is sound *because append COPIES*, which is a fact about the operation that no nominal
+//     parameter type can carry. `append-wider-element-array-takes-a-narrower-one` (a `Bytes` into a `Smalls`)
+//     and `append-reads-the-value-set-never-the-alias-name` (two aliases over one range) are the programs.
 //   • **`appendMemory`** — the CLEANEST of the eight (struck alone: 19 of its 21 failures were this list
 //     rendering itself) and blocked by the SECOND bullet rather than by anything of its own:
 //     `stdlib/String.maxon:823` calls it, and a program that declares its OWN `type Array`
 //     (`array-declared-record.md`) replaces the corpus's for stdlib too, so that call has no provider but
 //     this roster. **That single question — what a declared-own `Array` is owed — now gates `ARR4`, because
-//     the roster cannot go away while it is unanswered.**
+//     the roster cannot go away while it is unanswered.** ⭐ **RE-MEASURED AT ARR3c: 21 failures, holding
+//     exactly as filed** — that one case, plus 18 roster sentences and two message shapes. It is the only one
+//     of the four whose diagnosis needed no correction.
+//
+// ⭐⭐ **AND ARR3c RE-MEASURED `push`, WHOSE 50 DID NOT MOVE AND WHOSE ONE BULLET IS FIVE.** It is not a
+// third-bullet member either: it is blocked simultaneously by the SECOND bullet (15 `array-declared-record`
+// cases), by the FIRST (`ranged-typealias.error.array-push-out-of-range` stops being refused and
+// `array-element-runtime-panic` loses its panic — `set`'s and `insert`'s rule, a third member), by the
+// argument's COERCION to the element type (`byte-enum-comparison` loses enum→`Byte`, and two `tuples` cases
+// hand a `__Tuple2.int.int` to a `__Tuple2.Num.Num`), by a lost COW detach, and by E3070. Five independent
+// mechanisms, no two of which one rung closes.
 function arraySurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(ManagedMemoryFieldName)
@@ -4867,6 +4881,30 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(ArrayReserveMethod)
 	names.push(ArrayResizeMethod)
 	names.push(ClearMethod)
+	// ⭐⭐ **`insert` IS A FIRST-BULLET MEMBER — A COMPILE-TIME RULE THE CORPUS CANNOT STATE — AND ARR3c FOUND
+	// THAT ONLY BY PROBING, BECAUSE NO CASE IN THE CORPUS ASKS.** Struck alone it measured 22 failures of which
+	// 18 were this list rendering itself, and the four that remained all looked like expectation TEXT. The
+	// suite was GREEN on the retirement. It is a SILENT WRONG ANSWER: `Array with int(0 to 255)` taking
+	// `insert(0, value: 300)` is `E3005 Value 300 is outside the range of 'Byte'` at this arm, and through the
+	// corpus it COMPILES, RUNS and stores **44**. Both halves go — the literal refusal AND the runtime check —
+	// and a runtime-computed 300 exits 0 having read back 44 as well.
+	//
+	// ⚠ **THAT IS `set`'S BLOCKER, ON A SECOND MEMBER**: the corpus declares `value Element`, so the shared
+	// callee is compiled once and knows no range, while the CALL SITE, which does know the substitution, has no
+	// site kind for it. ARR3a filed it as a general pre-existing hole measured on a plain `type Box uses T`;
+	// this is its second member and its second HALF (ARR3a's was the runtime check alone). One rung closes
+	// `set`, `insert` and one of `push`'s five blockers together, and until it lands `insert` stays here.
+	//
+	// ⚠ **THE NEGATIVE INDEX — the bound this bullet used to hold — IS SETTLED AND IS NOT WHY IT STAYED.**
+	// Asked of the runnable reference: the bootstrap serves `insert` from `stdlib/Array.maxon`, does NOT
+	// range-check the `-1` (nothing range-checks an argument at a ranged parameter in EITHER compiler — a plain
+	// `int(0 to u64.max)` parameter printed `18446744073709551615`), and the corpus body clamped only the HIGH
+	// end. So it ran `managed.shiftRight(-1, len)`, whose buffer has no negative guard there, and READ THE SLOT
+	// BEFORE THE BUFFER INTO SLOT 0: `[10, 20, 30]` came back `[0, 10, 20]`, then `set` panicked quoting the
+	// clamp it had just failed to keep. `buildArrInsert`'s header below already carried that whole hazard and
+	// clamped both ends — one operation written twice, and only this copy had been fixed. The corpus body has
+	// the clamp now (`stdlib/Array.maxon`'s `insert`, `0 if at < 0 else at`), which repairs the BOOTSTRAP as
+	// much as shv2 and is gated by `specs/arrays.md`'s `insert-negative-index-clamps-to-front`.
 	names.push(InsertMethod)
 	names.push(AppendMethod)
 	// ⚠ **THE `Array` SURFACE'S OWN, AND THE ONE THE CORPUS ACTUALLY DECLARES** (`stdlib/Array.maxon:272`).
