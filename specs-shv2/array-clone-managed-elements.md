@@ -9,7 +9,7 @@ category: memory
 ## Documentation
 
 `Array.clone` on a MANAGED-element array (String / struct / boxed union) produces an INDEPENDENT copy by
-deep-cloning each element (`__arr_clone_managed` + the element's `__clone_<E>`), not a COW view. shv2 is
+deep-cloning each element (`__managed_clone_managed` + the element's `__clone_<E>`), not a COW view. shv2 is
 move-only, so an independent copy is a per-element deep clone rather than the reference compilers' incref.
 When the source array is later freed, the clone's elements survive because they are separate allocations.
 

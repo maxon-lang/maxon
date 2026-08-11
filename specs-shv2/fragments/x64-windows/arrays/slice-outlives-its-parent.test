@@ -39,20 +39,20 @@ func @makeParent {
     x64.prologue 40
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 10
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 20
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 30
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 40
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg rbx
@@ -75,7 +75,7 @@ func @tail {
   tryerr:
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.jmp trycont
   tryok:
     x64.jmp trycont
@@ -99,10 +99,10 @@ func @main {
     x64.callDirect tail
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -115,7 +115,7 @@ func @main {
   trycont:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -128,7 +128,7 @@ func @main {
   trycont:
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -142,7 +142,7 @@ func @main {
     x64.leaRegRegReg rcx, rbx, r13
     x64.leaRegRegReg rbx, rcx, rax
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -189,14 +189,14 @@ func @Array.slice {
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
     x64.movRegReg r9, r13
-    x64.callDirect __arr_slice_opaque
+    x64.callDirect __managed_slice_opaque
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
@@ -209,12 +209,12 @@ func @Array.slice {
     x64.ret
   tryok:
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, r12
     x64.epilogue 32

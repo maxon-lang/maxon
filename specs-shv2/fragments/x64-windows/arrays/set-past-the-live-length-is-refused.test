@@ -29,7 +29,7 @@ func @main {
     x64.leaRegRdata rbx, [rip + __str_rec_17]
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg r12, r8
     x64.loadRegBaseDisp.word64 r13, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
@@ -51,7 +51,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 8
     x64.movRegReg rcx, r12
     x64.callDirect Array.reserve
@@ -77,14 +77,14 @@ func @main {
     x64.movRegReg rcx, r12
     x64.movRegImm32 rdx, 2
     x64.movRegReg rax, r14
-    x64.callDirect __arr_set
+    x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegImm32 rbx, 42
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15
@@ -96,10 +96,10 @@ func @main {
     x64.ret
   tryok:
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegImm32 rbx, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -147,10 +147,10 @@ func @Array.reserve {
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_capacity
+    x64.callDirect __managed_capacity
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegReg r12, r14
     x64.jcc greater, grow
     x64.jmp ifcont
@@ -160,13 +160,13 @@ func @Array.reserve {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_mem_grow
+    x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_20]
     x64.callDirect mrt_panic
     x64.epilogue 32
@@ -178,7 +178,7 @@ func @Array.reserve {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.jmp ifcont
   ifcont:
     x64.epilogue 32

@@ -675,7 +675,7 @@ export enum ErrorCode
 	// write into `[length, capacity)` -- slots no length has published yet. For a TRIVIAL element
 	// that is the whole point: it is the stage-then-`setLength`-to-publish idiom the buffer surface
 	// exists to support. For a MANAGED element it opens a hole, because that region carries no
-	// OWNERSHIP: `__arr_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT
+	// OWNERSHIP: `__managed_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT
 	// `length` without destroying the occupant, and a grow or a copy-on-write detach copies only
 	// the live bytes and abandons the rest. A staged element is therefore owned by NOBODY until a
 	// `setLength` publishes it, and is leaked outright if one never comes.
@@ -838,7 +838,7 @@ export enum ErrorCode
 	// `setByte` addresses a byte OFFSET, so on a record that strides more than one byte it writes a
 	// FRAGMENT of an element -- and what the ARRAY surface reads back afterwards is an arbitrary
 	// unsigned value of the element's whole slot, because the shared element load zero-extends
-	// (`ArrayRuntime.emitLoadElem`). The only honest question is therefore whether the element admits
+	// (`ManagedMemoryRuntime.emitLoadElem`). The only honest question is therefore whether the element admits
 	// every one of those, and it is the SAME question at every stride.
 	// MEASURED before the rule existed, each a value read back through an accessor whose declared type
 	// cannot hold it: `setByte(1, 223)` under `typealias Wide = int(0 to 1000)` -- a TWO-byte slot --
@@ -965,11 +965,11 @@ export enum ErrorCode
 	// shape: a transform declaring a further parameter reads a value nobody passed. MEASURED --
 	// `nums.map(function(a Integer, b Integer) gives b)` prints `sum=0` on arm64-macOS, `b` being whatever
 	// the second argument slot held, while on `wasm32-wasi` the program does not run at all: `call_indirect`
-	// type-checks the callee's signature and `__arr_map` traps with "indirect call type mismatch". One
+	// type-checks the callee's signature and `__managed_map` traps with "indirect call type mismatch". One
 	// target of four could see it, which is what makes the shape undefined rather than unspecified.
 	// NOT E3036, which states that "a call passes a different number of arguments than the callee declares
 	// parameters": there is NO call at this span. The author bound a function VALUE to a position, and the
-	// call that would go wrong is one the compiler makes inside `__arr_map`, over a source line the author
+	// call that would go wrong is one the compiler makes inside `__managed_map`, over a source line the author
 	// never wrote -- so E3036's sentence would be false about the program in front of them.
 	// NOT E3005 either, which is what the four DECLARED function-typed places (a cast, a `return`, an
 	// assignment, an ordinary function-typed argument) earn when their whole SHAPE disagrees. This position

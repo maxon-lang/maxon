@@ -327,7 +327,7 @@ let TrailingNulBytes = 1  // the one extra byte for the cmdline's NUL terminator
 //     and `__gt_process_run` propagates it as a throw rather than writing past the 64-slot parallel arrays. A safe,
 //     RECOVERABLE response to the seed's documented concurrency ceiling; real >64-way fan-in is the later IOCP rung.
 //
-// The throws-type NAME is a bare label on the clause (like `ArrayRuntime.ArrayErrorTypeName`) — the compiler
+// The throws-type NAME is a bare label on the clause (like `ManagedMemoryRuntime.ArrayErrorTypeName`) — the compiler
 // recognizes `__gt_process_run` as a throwing runtime callee by CALLEE name (not by this label), and recovery
 // today is via `otherwise <value>` (any nonzero flag routes to the handler). Binding `otherwise (e)` to a case
 // and `match e`ing it is deferred exactly as it is for `ArrayError` (a P1.7 enum-case-pattern feature).
@@ -606,10 +606,10 @@ end 'isGtRuntimeCallee'
 // The THROWING GT runtime callees (P1.5 #93). `__gt_process_run` returns via the dual-register `errorReturn` ABI
 // and can throw `RunProcessError` (`spawnFailed`/`storeOverflow`), so a `runProcess` call MUST become a `tryCall`
 // (under a `try`, which `rewriteLastCallToTryCall` converts). The GT-side twin of
-// `ArrayRuntime.isThrowingArrayRuntimeCallee`: the two are composed by `isThrowingRuntimeCallee`, read at the ONE
+// `ManagedMemoryRuntime.isThrowingManagedMemoryRuntimeCallee`: the two are composed by `isThrowingRuntimeCallee`, read at the ONE
 // call site in the parser (E3055 accept) and the ONE in SemanticCheck (E3057 reject) so those two cannot drift.
 // ⚠ This names `__gt_process_run` as throwing; `buildGtProcessRun` stamps its `throws` clause. Those two facts
-// must agree, and — unlike `ArrayRuntime.verifyThrowingAccessorsMatchPredicate` — there is no install-time guard
+// must agree, and — unlike `ManagedMemoryRuntime.verifyThrowingAccessorsMatchPredicate` — there is no install-time guard
 // tying them. That is deliberate and proportionate: there is exactly ONE throwing GT callee, both sides key on
 // the SAME `GtProcessRunName` constant (not a copied literal), and subprocess is x64-only, so the wasm-signature
 // drift the array guard protects against cannot arise here (E3074 rejects subprocess on wasm). If a SECOND
@@ -633,11 +633,11 @@ end 'isThrowingGtRuntimeCallee'
 // `isThrowingStringRuntimeCallee`'s only term was `__str_byte_at`, minted only by `dispatchStringMethod`'s
 // `byteAt` arm; that member retired onto `stdlib/String.maxon:266`, so nothing can emit the callee and the
 // predicate could only ever answer `false`. The corpus body's `try managed.byteAt(index)` reaches
-// `isThrowingArrayRuntimeCallee` — the FIRST disjunct here — which is where a buffer byte read always
+// `isThrowingManagedMemoryRuntimeCallee` — the FIRST disjunct here — which is where a buffer byte read always
 // belonged: `managedMemorySourceMethodName` names `__ManagedMemory.byteAt`, and after the retirement that
 // IS the construct the author wrote.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
+	return isThrowingManagedMemoryRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -677,7 +677,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return managedDirectoryThrows()
 	end 'directoryFamily'
 
-	if isManagedMemoryRuntimeCallee(callee) 'memoryFamily'
+	if isManagedMemoryMemberCallee(callee) 'memoryFamily'
 		return managedMemoryThrows()
 	end 'memoryFamily'
 
@@ -686,7 +686,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	// are that surface's — v1 declares its `createCursor` `throws __ManagedMemoryError` for the same reason.
 	//
 	// ⚠ **IT MUST STAY ABOVE THE ARRAY ARM, for the memory family's reason one line up**: the cursor entries
-	// are `__arr_`-prefixed and `isThrowingArrayRuntimeCallee` COMPOSES this predicate in, so asking the wide
+	// are `__managed_`-prefixed and `isThrowingManagedMemoryRuntimeCallee` COMPOSES this predicate in, so asking the wide
 	// test first would type every cursor failure as `ArrayError`.
 	if isThrowingCursorRuntimeCallee(callee) 'cursorFamily'
 		return managedMemoryThrows()
@@ -705,11 +705,11 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	// `ArrayError.indexOutOfBounds` on an `arr.get` failure, so this family's ordinals are now a checked claim
 	// rather than an untested one.
 	//
-	// ⚠ **IT MUST STAY BELOW THE MEMORY ARM**: `isThrowingArrayRuntimeCallee` INCLUDES
-	// `isManagedMemoryRuntimeCallee` (the buffer members are `__arr_`-prefixed — one record, one runtime), so
+	// ⚠ **IT MUST STAY BELOW THE MEMORY ARM**: `isThrowingManagedMemoryRuntimeCallee` INCLUDES
+	// `isManagedMemoryMemberCallee` (the buffer members are `__managed_`-prefixed — one record, one runtime), so
 	// asking it first would type every `__ManagedMemory` member's error as `ArrayError` and reroute the six
 	// cases `managed-memory-error-variants` pins.
-	if isThrowingArrayRuntimeCallee(callee) 'arrayFamily'
+	if isThrowingManagedMemoryRuntimeCallee(callee) 'arrayFamily'
 		return arrayErrorThrows()
 	end 'arrayFamily'
 
@@ -766,7 +766,7 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 end 'runtimeThrowsClause'
 
 // The outcome of asking a runtime callee what the AUTHOR called it. `found` carries the source method name;
-// `notFound` says this callee has no user-written spelling to quote — a `__arr_get` is reached by writing
+// `notFound` says this callee has no user-written spelling to quote — a `__managed_get` is reached by writing
 // `get`, but through an accessor family whose diagnostic words itself differently, and a family added
 // tomorrow has no map at all. A union rather than an empty `ByteArray`, so the absent state is structurally
 // distinct instead of a sentinel.
@@ -807,7 +807,7 @@ end 'RuntimeCalleeSourceMethod'
 //
 // ⇒ **Each family's install-time drift guard now ASKS ITS OWN MAP for every throwing callee it installed**
 // (`installManagedFileRuntime`, `installManagedDirectoryRuntime`, and
-// `ArrayRuntime.verifyThrowingAccessorsMatchPredicate` for the buffer members). A missing arm is the map's
+// `ManagedMemoryRuntime.verifyThrowingAccessorsMatchPredicate` for the buffer members). A missing arm is the map's
 // own `panic`, fired at INSTALL of any program that uses the family — which the spec suite does on every
 // run — instead of at a user's missing `try`. The builder set is already held equal to the predicate in
 // those same loops, so the chain is builders ≡ predicate ≡ map, checked in ONE traversal.
@@ -825,18 +825,18 @@ end 'RuntimeCalleeSourceMethod'
 // non-throwing callee is unreachable rather than wrong.
 //
 // ⭐⭐ **AND AS OF D11c THE FORWARD ARM IS TOTAL — file (8), directory (4), string-search (2), buffer (7) AND
-// the nine genuine `Arr*` accessors.** D12 left the array family out and recorded it as a design fact: those
+// the nine genuine `Array`-surface accessors.** D12 left the array family out and recorded it as a design fact: those
 // nine are worded AS A FAMILY by E3057, so its composer never wanted a per-method noun. But that is a
 // SENTENCE's policy, and this function answers a different question — *"what did the author write?"*, which
 // has an answer for all nine. **The gap was paid for by the only OTHER consumer**: E3059 needs a NOUN
 // (*"'array accessor' does not return a value"* is not a sentence), found `notFound`, and printed
-// `''__arr_set' does not return a value'` at authors — a symbol E2051 forbids them to type. The family
+// `''__managed_set' does not return a value'` at authors — a symbol E2051 forbids them to type. The family
 // wording now lives where the policy belongs, in `SemanticCheck.throwingRuntimeCalleeMessage`, which asks
 // `isThrowingArrayAccessorCallee` for its own sentence before reaching this map.
 //
 // ⭐ **THE ARMS ARE NOW ORDER-INDEPENDENT, AND THE PREVIOUS NOTE HERE DEMANDED AN ORDER.** It read *"the
-// memory arm must stay above any array test"*, because `isThrowingArrayRuntimeCallee` COMPOSES
-// `isManagedMemoryRuntimeCallee` — so a wide array test swallowed all seven buffer members and answered
+// memory arm must stay above any array test"*, because `isThrowingManagedMemoryRuntimeCallee` COMPOSES
+// `isManagedMemoryMemberCallee` — so a wide array test swallowed all seven buffer members and answered
 // them with the array family's word. The array arm below asks `isThrowingArrayAccessorCallee`, the narrow
 // factoring, so the two domains are disjoint BY CONSTRUCTION and swapping any two `if`s here changes no
 // answer. A comment demanding an order is a test nobody wrote; disjointness is the test.
@@ -861,7 +861,7 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	// `stdlib/String.maxon`'s now: an E3057 against one is raised against an ordinary DECLARED function,
 	// whose name the diagnostic already has, so the map that translated a synthesized callee back into a
 	// source spelling has nothing left to translate.
-	if isManagedMemoryRuntimeCallee(callee) 'memoryFamily'
+	if isManagedMemoryMemberCallee(callee) 'memoryFamily'
 		return RuntimeCalleeSourceMethod.found(managedMemorySourceMethodName(callee))
 	end 'memoryFamily'
 

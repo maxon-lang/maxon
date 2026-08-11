@@ -27,7 +27,7 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rcx, 4
     x64.movRegImm32 rdx, 8
-    x64.callDirect __arr_mem_create
+    x64.callDirect __managed_mem_create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -41,14 +41,14 @@ func @main {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, badLen
     x64.jmp ifcont
   badLen:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
@@ -57,14 +57,14 @@ func @main {
     x64.ret
   ifcont:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_capacity
+    x64.callDirect __managed_capacity
     x64.cmpRegImm32 r8, 4
     x64.jcc less, badCap
     x64.jmp ifcont
   badCap:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
@@ -74,7 +74,7 @@ func @main {
   ifcont:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12

@@ -1177,9 +1177,9 @@ type MaxonToStdLowering
 	// ⭐ **A CONSTANT ARRAY LITERAL OVER AN IMMORTAL `.rdata` BLOB** — the Array analogue of
 	// `lowerStringLiteral`, and it DIVERGES from it in exactly one place: a String literal is a FULLY rdata
 	// record (immortal, never dropped), while this is a first-class OWNED array — so the RECORD is
-	// `__mm_alloc`'d (giving it the MM header + refcount the ownership model drops through `__arr_decref`)
+	// `__mm_alloc`'d (giving it the MM header + refcount the ownership model drops through `__managed_decref`)
 	// while only the element BUFFER stays in immortal `.rdata`. `capacity@16` is the negative rdata sentinel
-	// `__arr_decref` reads to skip freeing that buffer. `bytes` is pure payload by the time it arrives — a
+	// `__managed_decref` reads to skip freeing that buffer. `bytes` is pure payload by the time it arrives — a
 	// `b"…"` is already Latin-1-decoded (`Parser.decodeByteStringLiteral`) and a packed literal is already
 	// bit-packed (`Parser.packConstantElements`) — so this is emission and nothing else.
 	//
@@ -1189,13 +1189,13 @@ type MaxonToStdLowering
 	// elements share one byte. Hardcoding either here is what would fork this into two lowerings.
 	//
 	// Only the FOUR non-zero fields are stamped: `parent@32` and `element_destroy@40` come pre-zeroed from
-	// `__mm_alloc`'s zeroing contract (the same one `__arr_create` relies on to leave them unwritten).
+	// `__mm_alloc`'s zeroing contract (the same one `__managed_create` relies on to leave them unwritten).
 	function lowerConstArrayLiteral(result ValueId, elementSize ParsedInt, elementCount ParsedInt, bytes ByteArray, dstBlock IrBlock)
 		let blobLabel = registerByteArrayLiteralBlob(self.globalData, bytes: bytes)
 
-		// result = __mm_alloc(ArrRecordBytes, 0) — the owned heap 48-byte record (MM header + refcount before it).
+		// result = __mm_alloc(ManagedRecordBytes, 0) — the owned heap 48-byte record (MM header + refcount before it).
 		let recordSize = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(recordSize, value: ArrRecordBytes as ParsedInt, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(recordSize, value: ManagedRecordBytes as ParsedInt, valueType: StdType.i64))
 		let recordDtor = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(recordDtor, value: 0, valueType: StdType.i64))
 		var allocArgs = ValueIdArray.create()
@@ -1206,23 +1206,23 @@ type MaxonToStdLowering
 		// buffer@0 = &blob (immortal `.rdata`, materialized by a RIP-relative lea — never freed).
 		let blobAddr = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(blobAddr, label: blobLabel.toByteArray()))
-		self.emitConstArrayField(result, offset: ArrBufferOffset, value: blobAddr, dstBlock: dstBlock)
+		self.emitConstArrayField(result, offset: ManagedRecordBufferOffset, value: blobAddr, dstBlock: dstBlock)
 
 		// length@8 = the ELEMENT count, which equals the byte count only when an element is a byte.
 		let lengthId = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(lengthId, value: elementCount, valueType: StdType.i64))
-		self.emitConstArrayField(result, offset: ArrLengthOffset, value: lengthId, dstBlock: dstBlock)
+		self.emitConstArrayField(result, offset: ManagedRecordLengthOffset, value: lengthId, dstBlock: dstBlock)
 
-		// capacity@16 = the rdata sentinel (< 0) — tells `__arr_decref` the buffer is immortal.
+		// capacity@16 = the rdata sentinel (< 0) — tells `__managed_decref` the buffer is immortal.
 		let capacityId = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(capacityId, value: RdataBufferCapacity, valueType: StdType.i64))
-		self.emitConstArrayField(result, offset: ArrCapacityOffset, value: capacityId, dstBlock: dstBlock)
+		self.emitConstArrayField(result, offset: ManagedRecordCapacityOffset, value: capacityId, dstBlock: dstBlock)
 
 		// element_size@24 — 1 for a `b"…"` (a byte is one byte, so `.get(i)` strides by 1), a NEGATIVE bit
 		// width for a packed literal (`.get(i)` then reads its field out of a byte it shares).
 		let elementSizeId = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.const(elementSizeId, value: elementSize, valueType: StdType.i64))
-		self.emitConstArrayField(result, offset: ArrElementSizeOffset, value: elementSizeId, dstBlock: dstBlock)
+		self.emitConstArrayField(result, offset: ManagedRecordElementSizeOffset, value: elementSizeId, dstBlock: dstBlock)
 	end 'lowerConstArrayLiteral'
 
 	// Store `value` into the constant array record's `offset` field (an 8-byte slot). The one store shape the
@@ -2081,7 +2081,7 @@ type MaxonToStdLowering
 	// `sizeof(T)` reads. Every function-pointer slot is 0 on disk; when `gid` holds an opaque-`T` `Array` or
 	// bare field whose SUBSTITUTED argument owns a record (`Container with String`, P1.7 slice 3b-ii), a
 	// `funcAbs64InRdata` relocation is recorded so the x64 writer patches `destroyFunc@40` with that
-	// argument's destructor `.text` VA — the value the shared opaque `__arr_create` reads back into its
+	// argument's destructor `.text` VA — the value the shared opaque `__managed_create` reads back into its
 	// record's `element_destroy@40`. An argument owning NO record (a scalar, a ranged alias, a payload-free
 	// enum) records nothing and the slot stays 0, so its walk is skipped. Idempotent: a gid referenced at
 	// several call sites registers one blob and one reloc and shares the label.
@@ -2258,7 +2258,7 @@ type MaxonToStdLowering
 			quotient to remainder then panic("lowerRuntimeCall: the THROWING '{String.from(callee)}' reached the plain call path — `isThrowingRuntimeCallee` names it, so `Parser.emitDivOrMod` must have emitted it without the `try` that E3057 requires")
 			notCheckedDivision then break 'guardedDivision'
 		end 'guardedDivision'
-		// An OPAQUE-`T` `__arr_create` (P1.7 slice 3b-i) arrives with ONE argument (element_size); its
+		// An OPAQUE-`T` `__managed_create` (P1.7 slice 3b-i) arrives with ONE argument (element_size); its
 		// `element_destroy@40` is not known statically, so it is READ from the enclosing instance's threaded
 		// layout descriptor (`destroyFunc@40`) HERE — the tier that owns the descriptor's ValueId — and appended
 		// as the second argument, mirroring how `sizeof(T)` reads `elementLogicalSize@56`.
@@ -2323,7 +2323,7 @@ type MaxonToStdLowering
 	// is handed are one fact, and a second family adds a list rather than a second copy of this loop.
 	//
 	// ⚠ **IT IS DOWN TO ONE FAMILY, AND THAT IS A RETIREMENT AND NOT A SIMPLIFICATION (ARR3b).** An `Array`'s
-	// ELEMENT was the second, `Equatable` alone, threaded into the compiler-owned `__arr_contains`; the corpus
+	// ELEMENT was the second, `Equatable` alone, threaded into the compiler-owned `__managed_contains`; the corpus
 	// `stdlib/Array.maxon:534` extension serves `contains` now and carries the element's witness as an ordinary
 	// dictionary parameter of its own, filled by `appendWitnessArgs`.
 	//
@@ -2390,8 +2390,8 @@ type MaxonToStdLowering
 	end 'materializeWitnessTableAddr'
 
 	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments (P1.7 slice
-	// 3b-vi-b-β) — the LAST argument the `__arr_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,
-	// exactly as `appendOpaqueArrayCreate` appends the `destroyFunc@40` read for an opaque `__arr_create`. A
+	// 3b-vi-b-β) — the LAST argument the `__managed_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,
+	// exactly as `appendOpaqueArrayCreate` appends the `destroyFunc@40` read for an opaque `__managed_create`. A
 	// non-opaque-copy callee passes through UNCHANGED, so this is a safe wrapper over every runtime call's args.
 	// Shared by the non-throwing (`lowerRuntimeCall`) and throwing (`lowerTryCall`, the throwing `slice`) paths so
 	// they cannot drift on whether — or where — the descriptor is appended. The descriptor is guaranteed by the
@@ -2399,7 +2399,7 @@ type MaxonToStdLowering
 	// `X.create()` or a `sizeof(T)` method does), so its absence here is a parser/lowering divergence — a loud
 	// bug, not a silent wrong load, matching `appendOpaqueArrayCreate`.
 	function opaqueCopyArgsWithDescriptor(callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
-		if not isOpaqueArrayCopyCallee(callee) 'notOpaqueCopy'
+		if not isOpaqueElementCopyCallee(callee) 'notOpaqueCopy'
 			return args
 		end 'notOpaqueCopy'
 		if not self.hasImplicitLayout 'noLayout'
@@ -2447,22 +2447,22 @@ type MaxonToStdLowering
 		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token)))
 	end 'typeParamValueBlockOffset'
 
-	// Is this runtime call an OPAQUE-`T` `Array.create()` — an `__arr_create` whose result instance's element
+	// Is this runtime call an OPAQUE-`T` `Array.create()` — an `__managed_create` whose result instance's element
 	// is a type parameter (P1.7 slice 3b-i)? The parser emits such a create with only `element_size`; the
-	// `element_destroy@40` argument is supplied by `appendOpaqueArrayCreate`. A concrete `__arr_create` (its
+	// `element_destroy@40` argument is supplied by `appendOpaqueArrayCreate`. A concrete `__managed_create` (its
 	// element known) already carries both arguments and takes the plain path.
 	function isOpaqueArrayCreateCall(callee ByteArray, result ValueId) returns bool
-		if not callee.equals(ArrCreateName) 'notCreate'
+		if not callee.equals(ManagedCreateName) 'notCreate'
 			return false
 		end 'notCreate'
 		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notInstance'
 			return false
 		end 'notInstance'
-		return self.signatures.containerElementIsOpaque(try self.valueNameIds.get(result) otherwise panic("isOpaqueArrayCreateCall: genericInstance __arr_create result v{result} has no name-id (its GenericInstanceId)"))
+		return self.signatures.containerElementIsOpaque(try self.valueNameIds.get(result) otherwise panic("isOpaqueArrayCreateCall: genericInstance __managed_create result v{result} has no name-id (its GenericInstanceId)"))
 	end 'isOpaqueArrayCreateCall'
 
-	// Emit an opaque-`T` `__arr_create` (P1.7 slice 3b-i): load the element destructor from the enclosing
-	// instance's layout descriptor `destroyFunc@40` slot, then call `__arr_create(element_size, element_destroy)`.
+	// Emit an opaque-`T` `__managed_create` (P1.7 slice 3b-i): load the element destructor from the enclosing
+	// instance's layout descriptor `destroyFunc@40` slot, then call `__managed_create(element_size, element_destroy)`.
 	// The reserved descriptor param is guaranteed by the parser's descriptor-need seed (an opaque `X.create()`
 	// seeds it exactly as `sizeof(T)` does), so its absence here is a parser/lowering divergence — a loud bug,
 	// not a silent wrong load, matching `lowerSizeofType`.
@@ -2486,7 +2486,7 @@ type MaxonToStdLowering
 	// the type parameter its ELEMENT names. Read off the array instance's own element type, which is the same
 	// `typeParameter` token `managedOpaqueArrayElementOf` matched positions against when it stamped the slot,
 	// so the write side and this read side name one block by construction. A concrete-element array never
-	// reaches here (its callers gate on `containerElementIsOpaque` / `isOpaqueArrayCopyCallee`).
+	// reaches here (its callers gate on `containerElementIsOpaque` / `isOpaqueElementCopyCallee`).
 	function opaqueArrayBlockOffset(arrayInstance ValueId, callee ByteArray) returns ByteOffset
 		let gid = try self.valueNameIds.get(arrayInstance) otherwise panic("opaqueArrayBlockOffset: opaque array value v{arrayInstance} of '{String.from(callee)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
 		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(gid)))
@@ -2494,7 +2494,7 @@ type MaxonToStdLowering
 
 	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor
 	// (W43b)** — what a runtime graph that takes a descriptor POINTER and reads a FIXED field offset from it
-	// (`__drop_type_param`'s `destroyFunc@40`, the `__arr_*_opaque` wrappers' `copyFunc@32`) must be handed,
+	// (`__drop_type_param`'s `destroyFunc@40`, the `__managed_*_opaque` wrappers' `copyFunc@32`) must be handed,
 	// so that those graphs need no second offset argument and no signature change: the caller knows the
 	// parameter statically and the callee keeps reading field 0 of whatever block it was given.
 	//
@@ -3475,7 +3475,7 @@ type MaxonToStdLowering
 	// A throwing free call `try callee(args…)` — the arg slotting is `lowerCall`'s exactly (it IS a call),
 	// plus the `errorFlag` second result. The parser has already rejected a non-throwing USER callee (E3055).
 	//
-	// ⭐ **A COMPILER-EMITTED THROWING CALLEE (`__arr_get`/`__arr_set`/`__arr_first`/…) HAS NO SIGNATURE TO
+	// ⭐ **A COMPILER-EMITTED THROWING CALLEE (`__managed_get`/`__managed_set`/`__managed_first`/…) HAS NO SIGNATURE TO
 	// SLOT AGAINST** — the parser wrote its arguments positionally (`emitRuntimeCall`), so they pass verbatim,
 	// exactly as `lowerCall` routes a non-throwing runtime call through `lowerRuntimeCall`. The array
 	// accessors are the first throwing builtins (P1.7 slice 1); before them no builtin threw, which is why
@@ -3513,7 +3513,7 @@ type MaxonToStdLowering
 				self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.withKeyWitnessArgs(result, callee: callee, args: args, dstBlock: dstBlock)))
 				return
 			end 'witnessTryCall'
-			// The throwing OPAQUE-`T` `slice` (`__arr_slice_opaque`) takes the enclosing instance's descriptor as
+			// The throwing OPAQUE-`T` `slice` (`__managed_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
 			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
 			return

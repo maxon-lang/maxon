@@ -1442,10 +1442,10 @@ Here the `let`-bound array is that twice-spilled value: it is live across BOTH l
 single interpolation reading both accumulators at the end is what raises the second peak. The
 emitted `entry` block read
 
-	callDirect  __arr_create      ; the array, in r8
+	callDirect  __managed_create      ; the array, in r8
 	loadRegSlot  rcx, slot0       ; <- reload of a slot NOTHING has written
 	storeSlotReg slot0, r8        ; <- the store it was spliced ahead of
-	callDirect  __arr_push        ; receiver rcx = uninitialised frame slot
+	callDirect  __managed_push        ; receiver rcx = uninitialised frame slot
 
 which faults. ALL FOUR of these are required and dropping any ONE hides it (see the near
 misses below): a `let`-bound array, TWO `for..in` loops, self-referencing accumulation in

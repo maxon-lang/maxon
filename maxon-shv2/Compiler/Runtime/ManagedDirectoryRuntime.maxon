@@ -334,8 +334,8 @@ end 'emitStoreByte'
 // R4.4 and `String.init(dir.filename())` reads its `length@8`/`buffer@0`, which a cstring pointer does not
 // have. Copying is both the safe answer and the only one that types.
 //
-// The record and its buffer come from `ArrayRuntime.emitManagedByteBuffer`, which is where the
-// `__arr_create` + `__arr_reserve` pair and the reason for it now live — `__con_read_stdin` (W5) fills the
+// The record and its buffer come from `ManagedMemoryRuntime.emitManagedByteBuffer`, which is where the
+// `__managed_create` + `__managed_reserve` pair and the reason for it now live — `__con_read_stdin` (W5) fills the
 // same kind of record from an OS read instead of from a copy, and the two must not grow two answers to
 // "how is a byte-element `Array` record made?".
 //
@@ -351,10 +351,10 @@ export function emitCStringToManaged(module StdModule, func IrFunction, cur IrBl
 
 	let buffer = emitManagedByteBuffer(module, block: build, record: record, byteCount: i, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: build, dest: buffer, src: cstr, byteCount: i, ids: ids)
-	// PUBLISH the bytes. `__arr_reserve` sets the capacity and leaves the length 0 (that is its contract, and
-	// `__arr_mem_create`'s comment states it); `String.init` reads `length@8`, so an unpublished record would
+	// PUBLISH the bytes. `__managed_reserve` sets the capacity and leaves the length 0 (that is its contract, and
+	// `__managed_mem_create`'s comment states it); `String.init` reads `length@8`, so an unpublished record would
 	// answer with the empty string.
-	emitStoreField(module, block: afterCopy, record: record, offset: ArrLengthOffset, value: i)
+	emitStoreField(module, block: afterCopy, record: record, offset: ManagedRecordLengthOffset, value: i)
 	return afterCopy
 end 'emitCStringToManaged'
 
@@ -630,7 +630,7 @@ end 'buildManagedDirectoryDestruct'
 // bitwise complement) — and `specs/managed-directory.md:205` writes `if not __ManagedDirectory.exists(…)`,
 // which settles it. v1 is right; the bootstrap is loose. The RUNTIME still answers a 0/1 i64 (this tier has
 // no `setcc`); it is the PARSER that tags the result `ValueTypeTag.boolean`, which is exactly the arrangement
-// `__arr_is_empty` already has.
+// `__managed_is_empty` already has.
 //
 // ⭐ **IT ASKS `GetFileAttributesA`, NOT `FindFirstFileA`**, which is the opposite of the choice
 // `__mf_exists` makes — see the `osFileAttributes` op's comment for why the argument that forbids a second

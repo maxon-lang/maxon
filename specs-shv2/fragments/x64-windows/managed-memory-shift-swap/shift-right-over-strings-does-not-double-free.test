@@ -37,7 +37,7 @@ func @main {
     x64.prologue 104
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.leaRegRdata rax, [rip + __str_rec_19]
@@ -61,7 +61,7 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.leaRegRdata rax, [rip + __str_rec_20]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -83,21 +83,21 @@ func @main {
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect Array.reserve
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 2
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_mem_shift_right
+    x64.callDirect __managed_mem_shift_right
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegImm32 r12, 98
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 104
     x64.popReg r15
@@ -110,14 +110,14 @@ func @main {
   tryok:
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_set_length
+    x64.callDirect __managed_set_length
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegImm32 r12, 97
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 104
     x64.popReg r15
@@ -130,7 +130,7 @@ func @main {
   tryok:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -143,7 +143,7 @@ func @main {
   trycont:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -157,7 +157,7 @@ func @main {
     x64.storeSlotReg slot2, rax
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -275,10 +275,10 @@ func @main {
     x64.callDirect __str_decref
     x64.loadRegSlot rbx, slot0
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -326,10 +326,10 @@ func @Array.reserve {
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_capacity
+    x64.callDirect __managed_capacity
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegReg r12, r14
     x64.jcc greater, grow
     x64.jmp ifcont
@@ -339,13 +339,13 @@ func @Array.reserve {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_mem_grow
+    x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_25]
     x64.callDirect mrt_panic
     x64.epilogue 32
@@ -357,7 +357,7 @@ func @Array.reserve {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.jmp ifcont
   ifcont:
     x64.epilogue 32

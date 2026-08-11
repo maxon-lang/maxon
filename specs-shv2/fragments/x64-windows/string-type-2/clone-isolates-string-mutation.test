@@ -157,7 +157,7 @@ func @String.byteLength {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.epilogue 32
     x64.popReg rbp
     x64.ret
@@ -168,7 +168,7 @@ func @String.byteAt {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect __arr_byte_at
+    x64.callDirect __managed_byte_at
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -221,7 +221,7 @@ func @String.setByte {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.callDirect __arr_set_byte
+    x64.callDirect __managed_set_byte
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -255,14 +255,14 @@ func @String.sliceBytes {
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, rbx
     x64.movRegReg rax, r12
-    x64.callDirect __arr_slice
+    x64.callDirect __managed_slice
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_22]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -275,13 +275,13 @@ func @String.sliceBytes {
     x64.ret
   tryok:
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
     x64.callDirect __str_of_buffer
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14

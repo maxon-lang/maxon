@@ -29,11 +29,11 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x1, 10
     arm64.movRegReg x0, x19
-    arm64.bl __arr_resize
+    arm64.bl __managed_resize
     arm64.movImm x20, 0
     arm64.b whilehdr
   whilehdr:
@@ -46,7 +46,7 @@ func @main {
     arm64.mul x2, x20, x16
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
-    arm64.bl __arr_set
+    arm64.bl __managed_set
     arm64.cmp x9, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
@@ -65,7 +65,7 @@ func @main {
   whileexit:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -79,7 +79,7 @@ func @main {
   trycont:
     arm64.movImm x1, 9
     arm64.movRegReg x0, x19
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -92,7 +92,7 @@ func @main {
   trycont:
     arm64.add x20, x20, x0
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.cmp x20, 0
     arm64.cset x0, lt
     arm64.cbnz x0, __rc_panic

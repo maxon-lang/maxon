@@ -212,7 +212,7 @@ end 'refuseCompile'
 // — because the IR sidecar is diagnostic, never a build gate.
 //
 // The emitted runtime — the entry stub `mrt_start`, the allocator, the `__str_*`/
-// `__arr_*` families — is invariant scaffolding, so it is excluded and both the
+// `__managed_*` families — is invariant scaffolding, so it is excluded and both the
 // fragment and `--emit-ir` show the program's own functions. `runtimeIrNames`
 // (`--emit-ir-runtime=`) is how a caller asks for a NAMED one of those bodies
 // anyway: it is the only route an emitted body has to a golden, and it is per-build
@@ -375,7 +375,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	//
 	// ⇒ **THE RULE, WHICH DOES NOT ROT:** one call per family that TRANSCRIBES its enum's ordinals as
 	// literals, except that a family whose runtime shares another's claims through it (`ArrayError` and
-	// `__ManagedMemoryError` are both `verifyArrayRuntimeOrdinals`' — see its header) is one call for two.
+	// `__ManagedMemoryError` are both `verifyManagedMemoryRuntimeOrdinals`' — see its header) is one call for two.
 	// A family that stops transcribing loses its call and keeps a note saying why, as `StringError` did.
 	//
 	// Each family's runtime transcribes its enum's ordinals as literals, and each holds them to the
@@ -396,7 +396,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	if not projectHasErrors(project) 'wellFormedSoFar'
 		verifyManagedFileOrdinals(project)
 		verifyManagedDirectoryOrdinals(project)
-		verifyArrayRuntimeOrdinals(project)
+		verifyManagedMemoryRuntimeOrdinals(project)
 		verifyDivisionByZeroOrdinals(project)
 		// ⚠ **`StringError` WAS THE SIXTH AND IS NO LONGER CHECKED, BECAUSE NOTHING TRANSCRIBES ITS ORDINALS
 		// ANY MORE (W49 wave 3).** A check here holds a runtime's LITERAL error flag against the enum's case
@@ -475,7 +475,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// ⭐ **SYNTHESIZE `__module_init` / `__maxon_global_cleanup` — HERE, and the position is the whole
 	// wiring** (P1.7 slice 2a, see `ModuleInit`). They are Maxon-tier functions appended to the merged
 	// module, so everything below this line treats them as ordinary program code: `scanRuntimeUsage` sees
-	// their `__str_clone`/`__str_decref`/`__arr_decref` calls and installs the runtime floor they need,
+	// their `__str_clone`/`__str_decref`/`__managed_decref` calls and installs the runtime floor they need,
 	// `declaredGlobals` (below) reserves the pointer slots they write, and the pipeline lowers them through
 	// the SAME `lowerMaxonToStd` that turns a `stringLiteral` op into an rdata record and a
 	// `constArrayLiteral` into an owned `Array`. Appending them after any of those would need a second copy
@@ -526,8 +526,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `installStringRuntime` reads `usesStrDecref`.
 	noteDestructorUsage(usage, project: project, signatures: signatures)
 	// A managed-element array/struct/union DEEP-CLONE (P1.7 slice 3b-vi-b) synthesizes `__clone_<T>` cascades
-	// that call `__str_clone`/`__arr_clone`/nested `__clone_<T>` inside bodies this scan cannot see. Close the
-	// needed-cloner set over that nesting and declare its transitive `usesStrClone`/`usesArray`/`usesHeap` needs
+	// that call `__str_clone`/`__managed_clone`/nested `__clone_<T>` inside bodies this scan cannot see. Close the
+	// needed-cloner set over that nesting and declare its transitive `usesStrClone`/`usesManagedMemory`/`usesHeap` needs
 	// now — before `.data` layout reads `usesHeap` and `installStringRuntime` reads `usesStrClone` — exactly as
 	// `noteDestructorUsage` does for the drop cascades.
 	noteClonerUsage(usage, project: project, signatures: signatures)
@@ -640,7 +640,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// The GRAPHEME runtime (`__gbp`/`__ext_pict`/`__utf8_*`/`__gr_*`/`__char_at`/`__str_to_bytes`, P1.8
 	// slice B) — installed the same already-lowered way, keyed on its OWN per-entry-point bits so a
 	// program that never segments a String carries none of it. It sits BEFORE the array install because
-	// `__str_to_bytes` sets `usesArray` transitively (`closeGraphemeNeeds`) — but that bit was already
+	// `__str_to_bytes` sets `usesManagedMemory` transitively (`closeGraphemeNeeds`) — but that bit was already
 	// settled by `scanRuntimeUsage`, which runs before any install, so the order is readability, not a
 	// dependency. It sits AFTER the String install for the same reason `__char_at` needs no ordering: the
 	// functions are appended to one module and the backend resolves calls by name.
@@ -664,22 +664,22 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// The file-IO runtime (`__mf_open_read`, R4.1) — installed the same already-lowered way, on its own
 	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency
 	// on it: it calls `__mm_alloc`/`__mm_free` (carried by the `usesHeap` bit it sets alongside its own) and
-	// `ArrayRuntime.emitForwardCopy`, which is a BUILDER it inlines rather than a callee it references.
+	// `ManagedMemoryRuntime.emitForwardCopy`, which is a BUILDER it inlines rather than a callee it references.
 	installManagedFileRuntime(pipeline.stdModule, usage: usage)
 
 	// The directory runtime (`__md_open_search`/`__md_next`/…, R4.3) — installed the same already-lowered
 	// way, on its own `usesManagedDirectory` bit. It sits beside the file install because the two share this
 	// family's helpers (the path scratch copy, the errno classification, the raw alloc/free); it needs no
-	// ordering against the ARRAY install below even though `__md_filename` CALLS `__arr_create`, because the
-	// functions are appended to one module and the backend resolves calls by name — and the `usesArray` bit
-	// that makes the array runtime present was settled by `scanRuntimeUsage` before any install ran.
+	// ordering against the ARRAY install below even though `__md_filename` CALLS `__managed_create`, because the
+	// functions are appended to one module and the backend resolves calls by name — and the `usesManagedMemory` bit
+	// that makes the managed-memory runtime present was settled by `scanRuntimeUsage` before any install ran.
 	installManagedDirectoryRuntime(pipeline.stdModule, usage: usage)
 
 	// The command-line runtime (`__cl_count`/`__cl_arg`/`__cl_scan_one`) — installed the same already-lowered
 	// way, on its own `usesCommandLine` bit. It sits beside the two families above because it shares their
 	// helpers (the raw alloc/free, the cstring walk and the cstring-to-`__ManagedMemory` copy), and it needs
-	// no ordering against the Array install below even though `__cl_arg` CALLS `__arr_create`, for the reason
-	// stated there: one module, name-resolved calls, and the `usesArray` bit was settled before any install ran.
+	// no ordering against the Array install below even though `__cl_arg` CALLS `__managed_create`, for the reason
+	// stated there: one module, name-resolved calls, and the `usesManagedMemory` bit was settled before any install ran.
 	installCommandLineRuntime(pipeline.stdModule, usage: usage)
 
 	// The console and process-introspection runtimes (`__con_read_stdin`, `__proc_exe_path`, W5) — the same
@@ -690,13 +690,13 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	installConsoleRuntime(pipeline.stdModule, usage: usage)
 	installProcessRuntime(pipeline.stdModule, usage: usage)
 
-	// The Array runtime (`__arr_create`/`__arr_push`/`__arr_get`/…) — installed the same way and for the
+	// The managed-memory runtime (`__managed_create`/`__managed_push`/`__managed_get`/…) — installed the same way and for the
 	// same reason: already-lowered Std, appended after the pipeline so it is never re-optimized. Keyed on
-	// its own `usesArray` bit (any `__arr_*` reference), which also implied `usesHeap` above (the helpers
-	// `__mm_alloc`/`__mm_free` the record and its element buffer). It installs the WHOLE array runtime as
+	// its own `usesManagedMemory` bit (any `__managed_*` reference), which also implied `usesHeap` above (the helpers
+	// `__mm_alloc`/`__mm_free` the record and its element buffer). It installs the WHOLE managed-memory runtime as
 	// one closure — the helpers call each other, and `__`-prefixed functions are excluded from the goldens,
 	// so an all-or-nothing install is golden-neutral and needs no per-helper dependency tracking (P1.7).
-	installArrayRuntime(pipeline.stdModule, usage: usage)
+	installManagedMemoryRuntime(pipeline.stdModule, usage: usage)
 
 	// The Set runtime (`__set_create`/`__set_insert`/`__set_contains`/…) — installed the same already-lowered
 	// way, keyed on its own `usesSet` bit (any `__set_*` reference, which also set `usesHeap` above). Its
@@ -720,7 +720,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	installListRuntime(pipeline.stdModule, usage: usage)
 
 	// The single-value descriptor-gated drop (`__drop_type_param`, P1.7 slice 3b-v / Finding A) — installed on
-	// its OWN `usesDropTypeParam` bit, DECOUPLED from `usesArray`, so a bare opaque `T` field reassignment in an
+	// its OWN `usesDropTypeParam` bit, DECOUPLED from `usesManagedMemory`, so a bare opaque `T` field reassignment in an
 	// array-free generic struct links its drop. An opaque-array program sets the bit too, so this installs the
 	// one `__drop_type_param` for either case, exactly once (its sole install site).
 	installDropTypeParamRuntime(pipeline.stdModule, usage: usage)

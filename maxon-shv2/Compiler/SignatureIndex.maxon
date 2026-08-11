@@ -841,7 +841,7 @@ export union ManagedGlobalRecord
 	// arriving is what made the duplication visible.
 	constArrayRecord(elementSize ElementStride, elementCount ParsedInt, bytes ByteArray)
 	// ⭐ A CONTAINER (P1.7 slice 2b, widened by spec-port `map-struct-bytearray`, and to DECLARED generics at
-	// W41) has no literal record at all: it is BUILT, `create` then one `__arr_push` per element. `create`
+	// W41) has no literal record at all: it is BUILT, `create` then one `__managed_push` per element. `create`
 	// carries which callee and which stamps this instance fixes, resolved HERE (where the instance registry is)
 	// rather than re-derived by the synthesis — the same discipline `ManagedGlobal.dropCallee` follows. An
 	// array LITERAL has elements and every other container global has none, which is the same fact the
@@ -1006,7 +1006,7 @@ export union GlobalFactoryReturn
 end 'GlobalFactoryReturn'
 
 // Is the record `create` hands back already the size it will always be? A `Vector with N T` is — its
-// elements are addressable from birth, so its create is followed by one `__arr_resize` — and every other
+// elements are addressable from birth, so its create is followed by one `__managed_resize` — and every other
 // builtin container GROWS. Read off `ProgramSignatures.genericInstanceFixedSize`, so the count a global
 // vector is born with and the count `Vector.create()` gives one in a body are the same fact.
 export union ContainerSizing
@@ -2627,7 +2627,7 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 	// `project.structTypes` and a synthesized type is in no file's declarations. A link failure rather than a
 	// wrong answer, but the honest fix is to say which drop each type takes:
 	//
-	//   • **`CharacterSet`** (P1.8 Slice D) — `__cs_decref`, exactly as an `Array` takes `__arr_decref` and a
+	//   • **`CharacterSet`** (P1.8 Slice D) — `__cs_decref`, exactly as an `Array` takes `__managed_decref` and a
 	//     `Set` takes `__set_decref`.
 	//   • **`__ManagedFile` OWNS AN OS HANDLE, WHICH IS NOT MEMORY — SO ITS DROP MUST CLOSE, NOT JUST FREE**
 	//     (R4.2, and this arm IS the RAII destructor). It could not be the cascade, and that was measured
@@ -2692,7 +2692,7 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 		rangedAlias then panic("managedNameDropCallee: '{String.from(declaredName)}' is a ranged typealias — a scalar, which `typeIsManaged` never classifies managed")
 		functionAlias then panic("managedNameDropCallee: '{String.from(declaredName)}' is a function typealias — a bare code pointer, which `typeIsManaged` never classifies managed")
 		// ⭐ A GENERIC-INSTANCE-alias field (an `Array`, a `Box`) arrives as a `named` — the sweep recorded
-		// the layout before the alias interned — and takes the instance box drop callee (`__arr_decref` for
+		// the layout before the alias interned — and takes the instance box drop callee (`__managed_decref` for
 		// an `Array`, `__mm_decref`/`__destruct_<T>` for a struct box), exactly as a re-tagged
 		// `genericInstance` field does. The gid is `signatures`' own, needing no interner.
 		genericAlias then return signatures.genericInstanceBoxDropCallee(signatures.genericAliasInstance(declaredName))
@@ -2724,10 +2724,10 @@ export union ManagedCloneStrategy
 	// A `(box) -> newBox` clone callee invocable by a plain 1-arg call OR through `callIndirect(fn, box)` (a
 	// `funcAddr`): a String → `__str_clone`; a struct / boxed union → its `__clone_<T>` (managed OR scalar-only
 	// — a fresh box is needed either way, where the drop side takes `__mm_decref` for a scalar-only box); a
-	// TRIVIAL-element Array → `__arr_clone` (its COW clone is an independently-droppable copy). This is the ONLY
+	// TRIVIAL-element Array → `__managed_clone` (its COW clone is an independently-droppable copy). This is the ONLY
 	// strategy an ARRAY ELEMENT may carry, because an element cloner is invoked through `callIndirect(fn, elem)`.
 	direct(callee ByteArray)
-	// A MANAGED-element Array FIELD: `__arr_clone_managed(field, funcAddr(elementClone))`, where `elementClone`
+	// A MANAGED-element Array FIELD: `__managed_clone_managed(field, funcAddr(elementClone))`, where `elementClone`
 	// is the element's own `direct` clone callee. A 2-arg call, so it is reachable only as a struct/union FIELD
 	// (the synthesizer emits the funcAddr), never as a top-level array element (which must be `direct`).
 	managedArray(elementClone ByteArray)
@@ -2863,8 +2863,8 @@ export function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAg
 	return CompilerOwnedAggregate.userDeclared
 end 'compilerOwnedAggregateOf'
 
-// The clone strategy for a generic-INSTANCE field — an `Array` (`__arr_clone` for a trivial element,
-// `__arr_clone_managed` for a managed one) or, for any other instance (`Box with String`), `unsupported` (its
+// The clone strategy for a generic-INSTANCE field — an `Array` (`__managed_clone` for a trivial element,
+// `__managed_clone_managed` for a managed one) or, for any other instance (`Box with String`), `unsupported` (its
 // per-instance cloner is a later slice). The managed element's own strategy comes back through the METHOD
 // `arrayElementCloneStrategy` (which resolves the element in the index's own interner), so this free function
 // never has to reach the index's private `typeNames`.
@@ -2873,7 +2873,7 @@ function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceI
 		return ManagedCloneStrategy.unsupported
 	end 'notArray'
 	if not signatures.containerElementIsManaged(id) 'trivialElement'
-		return ManagedCloneStrategy.direct(ArrCloneName)
+		return ManagedCloneStrategy.direct(ManagedCloneName)
 	end 'trivialElement'
 	// A managed-element array field clones each element through the element's OWN `(box) -> newBox` callee; if
 	// that element is not itself `direct` (an array-of-managed-arrays), the whole field is unsupported here.
@@ -3076,7 +3076,7 @@ export let ManagedListNodeTypeParamCount = 1 as FieldIndex
 //
 // ⭐ **UNLIKE A NODE HANDLE, IT IS OWNED AND IT IS DROPPED.** A node is a borrow into a chain the list frees;
 // a cursor is its own 16-byte `__mm_alloc` box holding a RETAINED source, so it has a real box size and a
-// real drop callee — see `ArrayRuntime.ArrCursorCreateName` for why the retain exists and why the record
+// real drop callee — see `ManagedMemoryRuntime.ManagedCursorCreateName` for why the retain exists and why the record
 // holds the source rather than a snapshot of its fields.
 export let ManagedMemoryCursorBuiltinBaseName = b"__ManagedMemoryCursor"
 
@@ -3095,11 +3095,11 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 // element's managed-ness and access-violates at teardown. So `Vector` is synthesized here like the other
 // four.
 //
-// ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ArrRecordBytes` fused record, the
-// `__arr_*` helpers, `__arr_decref`.** A fixed-size buffer and a growable one differ in what may be DONE to
+// ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ManagedRecordBytes` fused record, the
+// `__managed_*` helpers, `__managed_decref`.** A fixed-size buffer and a growable one differ in what may be DONE to
 // them, not in how the bytes sit, so a second record would have been the same six slots under a second
 // name: `genericInstanceBoxSize` and `genericInstanceBoxDropCallee` answer a Vector with the `Array` row,
-// and `Vector.create()` is one `__arr_mem_create(N, elementSize)` — the entry that PUBLISHES `N`
+// and `Vector.create()` is one `__managed_mem_create(N, elementSize)` — the entry that PUBLISHES `N`
 // zero-initialized elements, which is precisely the spec's *"zero-initialized, N elements"*.
 //
 // ⭐⭐ **WHAT IS `Vector`'s ALONE IS THE SIZE, AND IT LIVES IN THE INSTANCE'S IDENTITY** —
@@ -3370,7 +3370,7 @@ end 'inclusiveRangeContains'
 // `ProgramSignatures.elementAdmitsEverySlotValue`, spelled apart from it because it is a statement about a
 // RANGE and not about an instance — `Project.rangeHoldsEveryByte`'s own arrangement, which this is the
 // general form of, and whose ONE-BYTE rung it therefore asks rather than re-spelling. The slot's value set
-// is UNSIGNED because the shared element load zero-extends (`ArrayRuntime.emitLoadElem`).
+// is UNSIGNED because the shared element load zero-extends (`ManagedMemoryRuntime.emitLoadElem`).
 //
 // ⚠⚠ **THE WHOLE MACHINE WORD IS THE ONE SLOT TWO DIFFERENT DECLARATIONS FILL, AND NEITHER CAN BE ORDERED
 // AGAINST IT.** `int(i64.min to i64.max)` fills it from the signed side and `int(0 to u64.max)` from the
@@ -3903,7 +3903,7 @@ export let ManagedMemoryElementSizeMethod = b"elementSize"
 // ⭐⭐ **THE THREE RELOCATORS' SPELLINGS.** `swap` is what every sort moves elements with
 // (`stdlib/helpers/sort/smallSort.maxon:31`) and the two shifts are what `stdlib/Array.maxon`'s
 // `insert`/`remove` open and close a hole with (`:312`) — so all three are corpus spellings read back, never
-// invented, and the roster, the dispatch, the refusal and `ArrayRuntime.managedMemorySourceMethodName` all
+// invented, and the roster, the dispatch, the refusal and `ManagedMemoryRuntime.managedMemorySourceMethodName` all
 // read these.
 export let ManagedMemorySwapMethod = b"swap"
 export let ManagedMemoryShiftRightMethod = b"shiftRight"
@@ -3943,13 +3943,13 @@ export let CursorPeekParamName = b"ahead"
 // source-method map had to answer with it: a map cannot name a constant its file cannot see, and the
 // alternative — a second `b"set"` beside the first — is exactly the drift these blocks exist to prevent.
 //
-// `set` and `append` came over at D12 for `ArrayRuntime.managedMemorySourceMethodName` (the buffer's two
-// shared spellings). **D11c brought the other six**, because `ArrayRuntime.arrayAccessorSourceMethodName`
+// `set` and `append` came over at D12 for `ManagedMemoryRuntime.managedMemorySourceMethodName` (the buffer's two
+// shared spellings). **D11c brought the other six**, because `ManagedMemoryRuntime.arrayAccessorSourceMethodName`
 // now answers for all nine throwing `Array` accessors rather than for the buffer subset alone — see that
 // map for why the array family stopped being the one family without a spelling.
 //
 // ⚠ **`append` NO LONGER HAS A SOURCE-METHOD ARM — the 2026-08-07 ruling made the buffer's `append`
-// NON-THROWING and folded `__arr_mem_append` away (`ArrayRuntime.ArrAppendName`) — AND IT STAYS HERE ON THE
+// NON-THROWING and folded `__managed_mem_append` away (`ManagedMemoryRuntime.ManagedAppendName`) — AND IT STAYS HERE ON THE
 // BLOCK'S OWN RULE RATHER THAN ON THE ONE THAT BROUGHT IT.** A source-method map is only ever the FIRST
 // reason a spelling has to be visible outside `Parser.maxon`; the standing one is below, and it is why
 // `AppendMemoryMethod`, `ArrayPopMethod` and `ListPrependMethod` — none of which any map names — sit here too.
@@ -4940,7 +4940,7 @@ typealias DeclaredTypeNameSet = Set with ByteArray
 typealias StdlibShadowRenameMap = Map with (ByteArray, ByteArray)
 
 // ⭐ **HOW MANY ELEMENTS A SIZED CONTAINER INSTANCE HOLDS** — `Vector with 3 Int`'s 3. It is a COUNT of
-// elements the compiler must be able to fold into a `__arr_mem_create` argument and into a `count()`
+// elements the compiler must be able to fold into a `__managed_mem_create` argument and into a `count()`
 // constant, so it is bounded by what a buffer of machine words can address rather than by `u64.max`.
 export typealias FixedElementCount = int(0 to u32.max)
 export typealias FixedSizeArray = Array with FixedElementCount
@@ -12608,7 +12608,7 @@ export type ProgramSignatures
 	// and whose results are retyped at the call site (`retypeGenericAliasConstructorResult`). A container the
 	// compiler owns the RECORD of has no base box to be a `structRef` to: `Array with T` and
 	// `__ManagedMemory with T` are one `GenericInstanceId` (`canonicalGenericBaseName`), so a value of it
-	// inside the body is the buffer record, dropped by `__arr_decref` and not by any struct cascade. Answering
+	// inside the body is the buffer record, dropped by `__managed_decref` and not by any struct cascade. Answering
 	// `structRef` there would be the byte-record defect `Parser.requireFusedWrapperTag` documents, one
 	// genericity up: bytes of one record, identity of another.
 	//
@@ -12677,10 +12677,10 @@ export type ProgramSignatures
 	// --- The `Array` builtin generic (P1.7 slice 1) ---
 	//
 	// `Array` is a BUILTIN generic type with one type parameter `Element` — there is no `type Array uses
-	// Element` declaration (shv2 does not read stdlib; the array runtime is synthesized like String's). So
+	// Element` declaration (shv2 does not read stdlib; the managed-memory runtime is synthesized like String's). So
 	// its instances (`Array with Integer`) intern like any other, but they have no base `StructLayout`, and
 	// every `genericInstance*` method that would read one (`baseLayoutOf`, box size, per-instance drop) must
-	// special-case them. The box is a FIXED 48-byte record (`ArrRecordBytes`, see ArrayRuntime), not
+	// special-case them. The box is a FIXED 48-byte record (`ManagedRecordBytes`, see ManagedMemoryRuntime), not
 	// `fieldCount·8`. The one home of "is this instance an `Array`?" so no site respells the base name.
 
 	// Is `name` the builtin `Array` type — the base of every array instance.
@@ -12804,7 +12804,7 @@ export type ProgramSignatures
 	// One question, whatever the caller does with it: `arrayElementConstraintCheck` asks it to decide whether
 	// `Array`'s conditional conformance holds on this receiver at all — and through it the front end's
 	// withholding and the conformer-name reduction. `LowerMaxonToStd.appendArrayElementWitnessArgs` asked it
-	// to name the table a compiler-owned `__arr_contains` dispatched through, and retired with that family at
+	// to name the table a compiler-owned `__managed_contains` dispatched through, and retired with that family at
 	// ARR3b. The readers are deliberately NOT counted here: a number beside the thing it counts is one edit
 	// away from being wrong, and this one already was.
 	export function containerElementConformerName(id GenericInstanceId) returns String
@@ -13258,7 +13258,7 @@ export type ProgramSignatures
 	end 'isVectorInstanceAt'
 
 	// ⭐ **HOW MANY ELEMENTS INSTANCE `id` HOLDS** — the second coordinate of a sized instance's identity, and
-	// `NoFixedSize` for every unsized one. Read by `Vector.create()` (the `__arr_mem_create` count) and by
+	// `NoFixedSize` for every unsized one. Read by `Vector.create()` (the `__managed_mem_create` count) and by
 	// `count()`, which folds to this constant rather than reading `length@8`: a fixed size is a fact about the
 	// TYPE, so the value it publishes may not depend on the record.
 	export function genericInstanceFixedSize(id GenericInstanceId) returns FixedElementCount
@@ -13310,7 +13310,7 @@ export type ProgramSignatures
 		return maxonTypeName(self.containerElementType(id), typeNames: self.typeNames)
 	end 'arrayElementDisplayName'
 
-	// ⭐ **THE SOLE PRODUCER OF `element_size@24`** — the number every `__arr_create` is stamped with, every
+	// ⭐ **THE SOLE PRODUCER OF `element_size@24`** — the number every `__managed_create` is stamped with, every
 	// array helper strides by at run time, and every same-shape check compares. A MANAGED element (String /
 	// struct / union / instance / nested Array) is a heap box stored as an 8-byte POINTER
 	// (`ManagedArrayElementBytes`), so its slot is the pointer, NOT the element's full logical size — the
@@ -13341,7 +13341,7 @@ export type ProgramSignatures
 
 	// ⭐⭐ **IS THIS TYPE STORED IN A NARROW SIGNED SLOT, AND HOW WIDE? (`enum-narrow-storage`.)** The shared
 	// element load is ONE compiled byte loop shared by every array in the program, strided by the record's
-	// runtime `element_size@24`, and it ZERO-EXTENDS (`ArrayRuntime.emitLoadElemAt` ends in a shift and a
+	// runtime `element_size@24`, and it ZERO-EXTENDS (`ManagedMemoryRuntime.emitLoadElemAt` ends in a shift and a
 	// width mask). There is no signedness in the record for it to consult and there could not be — the stamp
 	// is one signed field already carrying two ladders — so a narrow SIGNED value's sign has to reach the read
 	// from the COMPILER. This is that fact, asked where the width was decided.
@@ -13392,13 +13392,13 @@ export type ProgramSignatures
 	// ⚠ **ANSWERING YES IS NOT THE SAME AS REACHING A BLOB, and `float` is the case that shows it.** This
 	// predicate admits a float or function element to the COLLECT path; whether that path then lays a blob
 	// down is `everyElementIsAKnownConstant`'s question, and that one is the integer domain only. So a
-	// `[1.5, 2.5]` literal collects and then builds through `__arr_create` + pushes like any other.
+	// `[1.5, 2.5]` literal collects and then builds through `__managed_create` + pushes like any other.
 	//
 	// ⚠⚠ **IT ASKED "IS THE ELEMENT NARROWER THAN A MACHINE WORD" UNTIL THIS SPEC, AND THAT EXCLUDED THE
 	// MACHINE WORD FOR A REASON NO PROGRAM COULD SEE — golden stability.** `specs/codegen-internals.md`
 	// states the rule with no width in it (*"Constant array literals (declared with `let`) are stored in
 	// the `.rdata` section"*) and pins `[10, 20, 30]` as `i64[] 10, 20, 30`; under the narrow gate that
-	// literal reached `__arr_create` + three `__arr_push` and the section held no such bytes AT ALL. The
+	// literal reached `__managed_create` + three `__managed_push` and the section held no such bytes AT ALL. The
 	// runnable oracle agrees with the spec — the bootstrap lays 24 bytes of `.rdata` for it. Width was
 	// never the question; whether the slot owns its own bytes is.
 	export function arrayElementMayBeConstantBlob(id GenericInstanceId) returns bool
@@ -13420,7 +13420,7 @@ export type ProgramSignatures
 	//     reason its byte twin is: the instance is interned on the NAME, so it has ONE stride.
 	// Every other trivial tag — `integer`, `float`, `ExitCode`, a function pointer — is a byte or wider.
 	//
-	// ⭐ **shv2 DECIDES THIS AT `__arr_create`, NOT AT FIRST `grow`, AND LEAVES `LayoutDescriptor`'s
+	// ⭐ **shv2 DECIDES THIS AT `__managed_create`, NOT AT FIRST `grow`, AND LEAVES `LayoutDescriptor`'s
 	// `bit1=bitPacked` FLAG RESERVED — a deliberate departure from v1.** v1 must stamp the packed width out
 	// of the layout descriptor when the buffer is first grown, because its packing decision is made in a
 	// LAYOUT pass over generic instances (`BuildLayoutDescriptors.computeLayoutDescriptor`) and the create
@@ -13747,7 +13747,7 @@ export type ProgramSignatures
 	// ⇒ **TWO QUESTIONS, BOTH ASKED, NEITHER STANDING IN FOR THE OTHER:**
 	//
 	//   • **REPRESENTATION** (`sameTrivialArrayShape`) — same managedness, same `element_size@24`. This is
-	//     what makes `__arr_append`'s byte copy legal at all, and it is the test that was here ALONE. A
+	//     what makes `__managed_append`'s byte copy legal at all, and it is the test that was here ALONE. A
 	//     width is not a type: it admits EVERY one-byte trivial element in the program, which is exactly
 	//     how a `Small` (and a `bool`) walked into a `Bytes` and how two enums walked into each other.
 	//   • **VALUE DOMAIN** (`trivialElementAdmitsEveryValueOf`) — every value the argument's element can
@@ -13877,7 +13877,7 @@ export type ProgramSignatures
 	// question the buffer surface's RAW-BYTE WRITER has to ask, and it is one question at every stride:
 	// `setByte` addresses a byte OFFSET, so on a record striding more than a byte it writes a FRAGMENT of an
 	// element, and what the ARRAY surface reads back afterwards is an arbitrary UNSIGNED value of the whole
-	// slot — the shared element load zero-extends (`ArrayRuntime.emitLoadElem`), which is what makes the
+	// slot — the shared element load zero-extends (`ManagedMemoryRuntime.emitLoadElem`), which is what makes the
 	// slot's value set unsigned and makes this comparable at all.
 	//
 	// ⚠⚠ **IT IS NOT `rangeHoldsEveryByte` WIDENED, AND THE DIFFERENCE IS A MEASURED WRONG ANSWER IN EACH
@@ -14021,7 +14021,7 @@ export type ProgramSignatures
 
 	// The element DESTRUCTOR callee for a managed-element `Array with T` (P1.7 slice 3) — the runtime entry the
 	// drop walk calls on each live slot: a String → `__str_decref`, a struct/union that owns managed heap → its
-	// `__destruct_<T>` (a scalar-only struct/union box → the trivial `__mm_decref`), a nested Array → `__arr_decref`.
+	// `__destruct_<T>` (a scalar-only struct/union box → the trivial `__mm_decref`), a nested Array → `__managed_decref`.
 	// Routed through the SHARED `managedFieldDropCallee` over the element type, so the stamped element destructor
 	// equals the drop callee any managed FIELD of the same type gets — the moved-in set and the dropped set agree
 	// by construction. Precondition: `containerElementIsManaged`.
@@ -14190,11 +14190,11 @@ export type ProgramSignatures
 			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — a DECLARED generic returned one arm above, and every builtin reaching here was admitted through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
 		end 'notACreatableContainer'
 
-		// `Array` and `Vector` share `__arr_create` and its two stamps; a `Vector`'s elements are addressable
+		// `Array` and `Vector` share `__managed_create` and its two stamps; a `Vector`'s elements are addressable
 		// from birth, so its record is then sized. That is the same pair of calls `emitVectorCreateOp` makes.
 		stamps.push(ContainerCreateStamp.inline(self.arrayElementSize(id)))
 		stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
-		return ContainerCreateCall.create(ArrCreateName, stamps: stamps, sizing: ContainerSizing.fixed(self.genericInstanceFixedSize(id)) if self.isVectorInstance(id) else ContainerSizing.grown)
+		return ContainerCreateCall.create(ManagedCreateName, stamps: stamps, sizing: ContainerSizing.fixed(self.genericInstanceFixedSize(id)) if self.isVectorInstance(id) else ContainerSizing.grown)
 	end 'containerCreateCall'
 
 	// The element CLONE strategy for a managed-element `Array with T` (P1.7 slice 3b-vi-b) — the DUAL of
@@ -15084,7 +15084,7 @@ export type ProgramSignatures
 	//
 	// ⚠ **IT DELIBERATELY REFUSES NOTHING, INCLUDING A NON-POSITIVE SIZE.** `managed-memory-methods`'s
 	// `managed-memory-error-variants` requires `__ManagedMemory.create(4, 0)` to COMPILE and report
-	// `invalidAllocation` at RUN TIME — the buffer's own guard (`__arr_mem_create`) is where a size the
+	// `invalidAllocation` at RUN TIME — the buffer's own guard (`__managed_mem_create`) is where a size the
 	// allocator cannot use is caught, and hoisting that into a parse-time refusal would turn a case the corpus
 	// pins as a caught throw into a compile error. Which instance a doomed `create` was typed as is unobservable.
 	//
@@ -15099,7 +15099,7 @@ export type ProgramSignatures
 	// mentions `File`.
 	//
 	// ⚠⚠ **AND WHERE THE SCOPING CANNOT SAVE IT, THE CALLER NOW REFUSES (A4c).** A file that declares its own
-	// wide `Byte` AND writes `create(n, 1)` asks for a byte-PACKED record — `__arr_mem_create` stamps
+	// wide `Byte` AND writes `create(n, 1)` asks for a byte-PACKED record — `__managed_mem_create` stamps
 	// `element_size@24` from that argument — under the `Array with Byte` this arm hands back, which strides
 	// what that same file declared. The two disagreed silently: `set(0, value: 300)` read back **44**. This
 	// arm still answers, because the refusal is about the DISAGREEMENT and must name the instance it is
@@ -15439,7 +15439,7 @@ export type ProgramSignatures
 	// the interner-owning door lowering computes it through.
 	export function genericInstanceBoxSize(id GenericInstanceId) returns ByteOffset
 		if self.isArrayInstance(id) 'array'
-			return ArrRecordBytes as ByteOffset
+			return ManagedRecordBytes as ByteOffset
 		end 'array'
 		// A `Set` instance's box is the fixed fused hash-table record (P1.7b slice A), no base struct — the
 		// `Array` twin above.
@@ -15461,7 +15461,7 @@ export type ProgramSignatures
 		// `VectorBuiltinBaseName`). It is a separate arm and not a widened `isArrayInstance` because the two
 		// are separate TYPES; only their layouts coincide.
 		if self.isVectorInstance(id) 'vector'
-			return ArrRecordBytes as ByteOffset
+			return ManagedRecordBytes as ByteOffset
 		end 'vector'
 		// A `__ManagedList` instance's box IS a `List`'s — the same chain header, allocated by the same
 		// `__list_create` (see `ManagedListBuiltinBaseName`). A separate arm and not a widened
@@ -15477,7 +15477,7 @@ export type ProgramSignatures
 			return ListNodeBytes as ByteOffset
 		end 'managedListNode'
 		// A cursor's box is its own 16-byte record — `source@0` plus `position@8`, and nothing else, because
-		// it reads the source's `buffer`/`length`/`element_size` LIVE (see `ArrayRuntime.CursorRecordBytes`).
+		// it reads the source's `buffer`/`length`/`element_size` LIVE (see `ManagedMemoryRuntime.CursorRecordBytes`).
 		if self.isManagedMemoryCursorInstance(id) 'managedMemoryCursor'
 			return CursorRecordBytes as ByteOffset
 		end 'managedMemoryCursor'
@@ -15607,7 +15607,7 @@ export type ProgramSignatures
 		// the alphabet holds no `.` and no `#`, so the token cannot disturb the tuple element join or the
 		// overload-registration join, and it is injective in the id, which is all a lookup key needs. It is
 		// only ever a LOOKUP key (the opaque array never gets a synthesized `__destruct_<mangled>` nor its own
-		// descriptor — it drops through `__arr_decref` and reads the enclosing instance's descriptor), and no
+		// descriptor — it drops through `__managed_decref` and reads the enclosing instance's descriptor), and no
 		// committed fragment on any target carries such a label today.
 		if tag == ValueTypeTag.typeParameter 'opaqueParam'
 			return "T{typeNameIdOf(t):x}"
@@ -17485,7 +17485,7 @@ export type ProgramSignatures
 	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
 	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
 		// A base-layout-less instance owns no field this cascade could drop. An `Array`/`Set` instance is
-		// dropped through its own box-drop callee (`__arr_decref` / `__set_decref`, routed by
+		// dropped through its own box-drop callee (`__managed_decref` / `__set_decref`, routed by
 		// `genericInstanceBoxDropCallee`), NOT a synthesized per-instance `__destruct_<mangled>`, so `false`
 		// is the ANSWER and not a dodge; an UNDECLARED base has no fields at all. Either way the walk below
 		// would read a layout that does not exist — see `genericInstanceHasBaseLayout`.
@@ -17522,13 +17522,13 @@ export type ProgramSignatures
 	// the door `decrefCalleeFor` (a scope-exit drop) and a nested-instance field drop route through — over
 	// this index's own interner, so a caller never misresolves the instance's substituted-field ids.
 	export function genericInstanceBoxDropCallee(id GenericInstanceId) returns ByteArray
-		// An `Array` drops through `__arr_decref` — which frees its external element buffer (the one thing a
+		// An `Array` drops through `__managed_decref` — which frees its external element buffer (the one thing a
 		// generic `__mm_decref` cannot reach) and then the record, mirroring how a String drops through
 		// `__str_decref`. Its elements are trivial at this slice, so there is no element walk.
 		if self.isArrayInstance(id) 'array'
-			return ArrDecrefName
+			return ManagedDecrefName
 		end 'array'
-		// A `Set` drops through `__set_decref` — the hash-table twin of `__arr_decref`: it frees the three
+		// A `Set` drops through `__set_decref` — the hash-table twin of `__managed_decref`: it frees the three
 		// external buffers (elements/states/hashes, none of which a generic `__mm_decref` can reach) and then
 		// the record. Its keys are scalar this slice, so there is no per-element walk.
 		if self.isSetInstance(id) 'set'
@@ -17545,10 +17545,10 @@ export type ProgramSignatures
 		if self.isListInstance(id) 'list'
 			return ListDecrefName
 		end 'list'
-		// A `Vector` drops through `__arr_decref` — its record IS an `Array`'s (see `genericInstanceBoxSize`'s
+		// A `Vector` drops through `__managed_decref` — its record IS an `Array`'s (see `genericInstanceBoxSize`'s
 		// vector arm), so the buffer it must free and the record it must reclaim are the ones that entry knows.
 		if self.isVectorInstance(id) 'vector'
-			return ArrDecrefName
+			return ManagedDecrefName
 		end 'vector'
 		// A `__ManagedList` drops through `__list_decref` — its record IS a `List`'s and the nodes it links
 		// are the same nodes, so the teardown that knows them is the one that already exists.
@@ -17562,13 +17562,13 @@ export type ProgramSignatures
 		// emitted through the element accessor's `owned: false` path and never enrolled as an owned temp. So
 		// reaching here means a node value was tracked as owned somewhere, which would be a DOUBLE FREE at
 		// the first scope exit — loud here, silent there.
-		// ⭐ **A CURSOR DROPS THROUGH `__arr_cursor_decref` — the one builtin whose box owns a RECORD rather
-		// than a buffer.** It releases the source it retained at creation (through `__arr_decref`, which is
+		// ⭐ **A CURSOR DROPS THROUGH `__managed_cursor_decref` — the one builtin whose box owns a RECORD rather
+		// than a buffer.** It releases the source it retained at creation (through `__managed_decref`, which is
 		// what frees that record's own element buffer and walks its managed elements) and then reclaims the
 		// 16-byte box. A generic `__mm_decref` here would free the cursor and strand the source's whole
 		// allocation — the leak this router's fall-through panic exists to prevent.
 		if self.isManagedMemoryCursorInstance(id) 'managedMemoryCursor'
-			return ArrCursorDecrefName
+			return ManagedCursorDecrefName
 		end 'managedMemoryCursor'
 
 		if self.isManagedListNodeInstance(id) 'nodeHandleIsABorrow'
@@ -18230,7 +18230,7 @@ export type ProgramSignatures
 	// which loaded a ZERO `destroyFunc@40` and did nothing.
 	//
 	// ⭐ It also fills a slot that was 0 for an opaque `Array with T` built as a LOCAL rather than held as a
-	// field — the shared body's `__arr_create` reads its `element_destroy@40` out of this same word, and a base
+	// field — the shared body's `__managed_create` reads its `element_destroy@40` out of this same word, and a base
 	// with no such field left it 0, so that array's elements were never walked.
 	//
 	// EMPTY is the ANSWER for an argument that owns no record, not a sentinel: `stampOwnershipWord` leaves the
@@ -18382,7 +18382,7 @@ export type ProgramSignatures
 	// instantiation is rejected at the front end off this identical classifier), so the 0 slot is never read. A
 	// DROP-only instance of a non-clonable shape (`Container with (Array with String)`, dropped but never copied)
 	// thus stamps `destroyFunc@40` but not `copyFunc@32`, exactly right — its element still DROPs through
-	// `__arr_decref`, which needs no single-function-pointer form. Reads the SAME `managedOpaqueArrayElementOf`
+	// `__managed_decref`, which needs no single-function-pointer form. Reads the SAME `managedOpaqueArrayElementOf`
 	// walk as the drop stamp, so the two agree on which element they mean.
 	export function genericInstanceOpaqueArrayElementIsCopyable(id GenericInstanceId, position TypeParamPosition) returns bool
 		var visited = ClonerSet.create()
@@ -18395,7 +18395,7 @@ export type ProgramSignatures
 	// ⭐ **THE `.text` ELEMENT CLONER to bake into a managed-opaque-array-holding instance's descriptor
 	// `copyFunc@32` (P1.7 slice 3b-vi-b-β)** — the CLONE analogue of `typeParamDropCallee`. The
 	// direct `(box) -> newBox` clone callee of the array's SUBSTITUTED element (a String → `__str_clone`, a
-	// managed struct/union → its `__clone_<T>`, a trivial-element nested Array → `__arr_clone`), which the shared
+	// managed struct/union → its `__clone_<T>`, a trivial-element nested Array → `__managed_clone`), which the shared
 	// opaque-copy wrapper reads back and `callIndirect`s per element. Routed through the SAME
 	// `managedFieldCloneStrategy` a concrete `Array with String` element uses (`arrayElementCloneStrategy`), so
 	// the opaque stamp and the concrete stamp name the identical cloner. Precondition:
@@ -18473,7 +18473,7 @@ export type ProgramSignatures
 		//
 		// ⚠ **MEASURED as a DOUBLE FREE the day `stdlib/Array.maxon`'s own bodies started serving the calls.**
 		// `slice`/`append` inside `type Array` are a SHARED generic body over an opaque `Element`, so they
-		// emit `__arr_slice_opaque`/`__arr_append_opaque`, each of which branches on `copyFunc@32`. With this walk answering absent, the slot stayed 0 for `Array with String` too, the
+		// emit `__managed_slice_opaque`/`__managed_append_opaque`, each of which branches on `copyFunc@32`. With this walk answering absent, the slot stayed 0 for `Array with String` too, the
 		// wrapper took its TRIVIAL branch — a COW view that retains no ELEMENT — and both the view and its
 		// parent then cascaded `__str_decref` over the same records: **0xC0000005 at teardown**, measured on
 		// `Array with String`, `Array with <struct>`, `Array with <enum>` and `Array with <union>` alike, and
@@ -18481,7 +18481,7 @@ export type ProgramSignatures
 		// had `clone` struck as well, which ARR3a put back and ARRH struck for good — since ARRH a corpus
 		// `Array.clone` reaches this walk through its own `managed.slice(0, len)`, so the same 25 ride
 		// `slice`). The concrete surface never showed any of it, because a concrete receiver picks
-		// `__arr_slice_managed` at the call site and never reads a descriptor.
+		// `__managed_slice_managed` at the call site and never reads a descriptor.
 		//
 		// ⚠ **POSITION 0 IS NOT AN ASSUMPTION**: an `Array` takes exactly one type parameter, so its element
 		// is its only argument, and a `position` past that finds nothing exactly as the field walk would.
@@ -18922,7 +18922,7 @@ export type ProgramSignatures
 		if not self.containerElementIsManaged(id) 'trivialElement'
 			return true
 		end 'trivialElement'
-		// A managed-element array clones its elements through `__arr_clone_managed(field, funcAddr(elementClone))`
+		// A managed-element array clones its elements through `__managed_clone_managed(field, funcAddr(elementClone))`
 		// — a 2-arg call, so it cannot itself be an outer array element (invoked through `callIndirect`).
 		if asElement 'nestedManagedArrayElement'
 			return false

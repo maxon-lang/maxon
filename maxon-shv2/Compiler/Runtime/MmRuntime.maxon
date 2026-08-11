@@ -26,6 +26,12 @@
 // ⚠ NO `__slab_alloc_raw`. It is Go's `needzero=false` escape hatch and it has NO CONSUMER here.
 // Shipping vocabulary before its consumer is this rung's own founding lesson — it is why P1.0r and
 // P1.1a co-land at all — so the hatch arrives with `realloc`, the caller that justifies it.
+//
+// ⭐ **AND THE FILE OWNS BOTH HALVES OF A MANAGED VALUE'S LIFECYCLE: the per-type DESTRUCTOR cascade
+// (`__destruct_<T>`) and, since ARR6, its DEEP-CLONE dual (`__clone_<T>`).** The two walk the same field
+// graph in opposite directions, close over the same `CascadeWorklist`, and `noteRelocatedFunctionUsage`
+// re-enters both — so a change to what "a managed field" means is one file, not two. The clone half lived
+// in the array runtime only because a managed-element array copy was the first thing that needed one.
 
 // The header sits IMMEDIATELY BEFORE the user pointer, so a managed pointer is usable as a plain
 // pointer: `p.x` is `[p+0]`, and nothing downstream needs to know a header exists. This is v1's
@@ -43,7 +49,7 @@ let HeaderDestructorOffset = 0 as ByteOffset
 let HeaderSizeOffset = 8 as ByteOffset
 
 // ⭐ **THE HEADER GEOMETRY IS PRIVATE TO THIS FILE, AND STAYS THAT WAY.** Every reader outside it —
-// `StringRuntime.__str_decref`, `ArrayRuntime.__arr_cow_detach`, the struct/union/instance destructor
+// `StringRuntime.__str_decref`, `ManagedMemoryRuntime.__managed_cow_detach`, the struct/union/instance destructor
 // cascades — reaches the refcount through the exported BUILDERS below (`emitRefcountCheckToLastOwner`,
 // `emitIsSharedAllocation`), never by respelling `ptr - HeaderBytes + HeaderRefcountOffset`. That is what
 // makes "where the refcount lives" one fact rather than one per caller: a header that grew a field would
@@ -82,8 +88,8 @@ export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
 export let MmLeakCheckName = b"__mm_leak_check"
 
-// ⭐ **THE COPY-ON-WRITE DETACH, SHARED BY THE STRING AND ARRAY RECORDS** — `__arr_cow_detach` and
-// `__arr_append` both reach it rather than each spelling the detach itself. Its NAME lives here, with the
+// ⭐ **THE COPY-ON-WRITE DETACH, SHARED BY THE STRING AND ARRAY RECORDS** — `__managed_cow_detach` and
+// `__managed_append` both reach it rather than each spelling the detach itself. Its NAME lives here, with the
 // other `__mm_*` names, because this is the one list of them and `isRuntimeCallee`'s prefix rule is stated
 // three lines below; its BODY is built in `BufferOwnership`, which owns the record layout it reads and the
 // ownership encoding it republishes. See `buildMmCowDetach` for why it is an `__mm_` operation at all.
@@ -98,6 +104,18 @@ export let DestructorPrefix = b"__destruct_"
 export function destructorSymbol(unionName ByteArray) returns ByteArray
 	return "{String.from(DestructorPrefix)}{String.from(unionName)}".toByteArray()
 end 'destructorSymbol'
+
+// ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`** (P1.7 slice 3b-vi-b), the
+// `(box) -> newBox` DUAL of `__destruct_<TypeName>`. `__`-prefixed, so `isCompilerInternalCallee` routes its
+// call/`funcAddr` past the user-function checks and no file declares it. ONE speller, so the STAMP site
+// (`Parser.arrayElementCloneValue` / the struct/union field cascade), the USAGE scan (`recordCallUsage`) and
+// the SYNTHESIS (`installStructCloners`/`installUnionCloners`) name it identically and cannot drift — exactly as
+// `DestructorPrefix`/`destructorSymbol` pair for the drop family.
+export let ClonerPrefix = b"__clone_"
+
+export function clonerSymbol(typeName ByteArray) returns ByteArray
+	return "{String.from(ClonerPrefix)}{String.from(typeName)}".toByteArray()
+end 'clonerSymbol'
 
 // The prefix every HEAP runtime entry point shares — the single test for "does this program touch the
 // heap at all?", which `StringRuntime.scanRuntimeUsage` reads for its `usesHeap` bit.
@@ -306,9 +324,9 @@ end 'ValueMinter'
 // every heap-using program (a drop calls `__mm_decref`, which calls `__mm_free`; the exit path calls the
 // leak check), so installing them together costs nothing dead. `__mm_incref` does NOT: a heap program
 // that never takes a SECOND owner never references it, and it would be 31 unreachable bytes there. It now
-// has TWO consumers — the array runtime's zero-copy view (`usesArray`) and the parser's `try … otherwise`
+// has TWO consumers — the managed-memory runtime's zero-copy view (`usesManagedMemory`) and the parser's `try … otherwise`
 // phi reconciliation (`usesIncref`, a `call __mm_incref` `scanRuntimeUsage` sees directly) — so it is
-// built here, under either bit, rather than by `installArrayRuntime` alone: the parser can emit it in a
+// built here, under either bit, rather than by `installManagedMemoryRuntime` alone: the parser can emit it in a
 // program that touches no array. Same "vocabulary ships with its consumer" rule, one home now that the
 // consumers are two files apart.
 //
@@ -324,24 +342,24 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	buildMmDecref(module)
 	buildMmFree(module)
 	buildMmLeakCheck(module, usage: usage)
-	if usage.usesIncref or usage.usesArray 'incref'
+	if usage.usesIncref or usage.usesManagedMemory 'incref'
 		buildMmIncref(module)
 	end 'incref'
 	if usage.usesRetain 'retain'
 		buildMmRetain(module)
 	end 'retain'
 
-	// ⚠ `__mm_cow_detach` IS CONDITIONAL under its ONE remaining caller's bit — `__arr_cow_detach`, under
-	// `usesArray` — so that a program reaching no array does not carry it dead. It is still built HERE
-	// rather than by the array runtime: installing it twice would emit two copies of one function, and the
+	// ⚠ `__mm_cow_detach` IS CONDITIONAL under its ONE remaining caller's bit — `__managed_cow_detach`, under
+	// `usesManagedMemory` — so that a program reaching no array does not carry it dead. It is still built HERE
+	// rather than by the managed-memory runtime: installing it twice would emit two copies of one function, and the
 	// home is what makes a SECOND caller one `or` rather than a second installation.
 	//
-	// ⚠ **IT WAS `usesArray or usesStrAppend` UNTIL W49 WAVE 8, AND THE TERM WENT ONLY BECAUSE THE PRODUCER
+	// ⚠ **IT WAS `usesManagedMemory or usesStrAppend` UNTIL W49 WAVE 8, AND THE TERM WENT ONLY BECAUSE THE PRODUCER
 	// DID.** `__str_append` retired whole with `String.append`; the corpus reaches this detach through
-	// `__arr_append` -> `__arr_reserve` -> `__arr_grow`, which is under `usesArray` already. Shedding a term
+	// `__managed_append` -> `__managed_reserve` -> `__managed_grow`, which is under `usesManagedMemory` already. Shedding a term
 	// whose producer still existed would leave a call unresolved in exactly the program that uses only that
 	// side, which is the failure this `or` was built to prevent.
-	if usage.usesArray 'cowDetach'
+	if usage.usesManagedMemory 'cowDetach'
 		buildMmCowDetach(module)
 	end 'cowDetach'
 end 'installMmRuntime'
@@ -384,8 +402,8 @@ export function twoF64Params() returns StdTypeArray
 	return types
 end 'twoF64Params'
 
-// Three i64 parameters — `__str_copy(dest, src, len)` and the Array runtime's `__arr_set(arr, index,
-// value)` / `__arr_mem_set(mem, index, value)`. Shared here so a runtime builder does not mint its own.
+// Three i64 parameters — `__str_copy(dest, src, len)` and the managed-memory runtime's `__managed_set(arr, index,
+// value)` / `__managed_mem_set(mem, index, value)`. Shared here so a runtime builder does not mint its own.
 export function threeI64Params() returns StdTypeArray
 	var types = StdTypeArray.create()
 	types.push(StdType.i64)
@@ -394,7 +412,7 @@ export function threeI64Params() returns StdTypeArray
 	return types
 end 'threeI64Params'
 
-// Four i64 parameters — the Array runtime's `__arr_slice_managed(arr, start, end, cloneFn)` and the Set
+// Four i64 parameters — the managed-memory runtime's `__managed_slice_managed(arr, start, end, cloneFn)` and the Set
 // runtime's witness-carrying `__set_insert(set, elem, hashWitness, eqWitness)` / `contains` / `remove`. It
 // joins the 1/2/3-param family here (rather than beside a single caller) now that two runtimes need it.
 export function fourI64Params() returns StdTypeArray
@@ -445,9 +463,9 @@ end 'emitTypedParams'
 //
 // Each is one `StdOp` over one block, minted into a fresh value. They live HERE, beside `emitParams`
 // and `argsOf`, because three files build Std graphs by hand (`MmRuntime`, `StringRuntime`,
-// `ArrayRuntime`) plus the two shared homes over them (`BufferOwnership`, `RuntimeAbort`), and a
+// `ManagedMemoryRuntime`) plus the two shared homes over them (`BufferOwnership`, `RuntimeAbort`), and a
 // `ids.mint()` + `module.appendOp` pair written out at each of a few hundred sites is the same four
-// tokens of noise every time. They were `ArrayRuntime`'s private helpers until `BufferOwnership` and the
+// tokens of noise every time. They were `ManagedMemoryRuntime`'s private helpers until `BufferOwnership` and the
 // String runtime needed the same four ops to ask the same questions of the same record slots.
 
 // Load `record`'s field at `offset` into a fresh value.
@@ -492,7 +510,7 @@ end 'emitWordSlotStore'
 
 // ⭐⭐ **NULL A SLOT WHOSE ELEMENT HAS BEEN MOVED OUT OF A BORROWED ARRAY — AND ONLY WHEN THE NULL MEANS
 // SOMETHING.** `__set_from` and `__list_from` both drain an array the caller still owns: each element is
-// handed to the new container, and the source slot is then nulled so the array's OWN `__arr_decref` walk
+// handed to the new container, and the source slot is then nulled so the array's OWN `__managed_decref` walk
 // does not drop a key the container now owns. This is that step, written once for both.
 //
 // ⛔⛔ **THE GUARD IS THE WHOLE POINT, AND WITHOUT IT THIS IS A WILD WRITE INTO READ-ONLY MEMORY.** The
@@ -574,7 +592,7 @@ end 'emitCmp'
 // ErrorFlagOrdinalBias` on the failure edge — and every family needs both spellings.
 //
 // ⚠ **THEY WERE COPIED, AND THE COPY IS EXACTLY THE PAIR THIS PROJECT KEEPS FINDING DRIFTED.**
-// `ArrayRuntime` had `emitErrorReturn`/`emitOkReturn` and `ManagedFileRuntime` had
+// `ManagedMemoryRuntime` had `emitErrorReturn`/`emitOkReturn` and `ManagedFileRuntime` had
 // `emitManagedFileThrow`/`emitManagedFileOk` — the same two three-line bodies under two names, and R4.3
 // would have made it three. They join the single-op emit helpers above for their reason: `MmRuntime` is the
 // runtime's base layer and every family already draws on it, so homing them here needs no new dependency.
@@ -595,7 +613,7 @@ end 'emitOkReturn'
 
 // ⭐ **THE SUCCESS EXIT OF A THROWING *VOID* FUNCTION — the ok return with the placeholder the ABI never
 // moves.** It is not a wrapper around `emitOkReturn`: what it adds is the 0, and that 0 is the whole of the
-// duplication it removes. `__arr_set_length`, `__arr_set_byte`, `__arr_mem_grow`,
+// duplication it removes. `__managed_set_length`, `__managed_set_byte`, `__managed_mem_grow`,
 // `__md_create`, `__mf_*`'s void pair and `__map_insert` all end this way, and each spelled the same two
 // statements out — one fact written down seven times, whose failure mode is a family that "returns void"
 // with a garbage flag register the day the placeholder is written differently.
@@ -607,7 +625,7 @@ end 'emitVoidOkReturn'
 // Terminate `block` with `ret <constant>` — the shape EVERY runtime PREDICATE ends in, because there is no
 // `setcc` at this tier: a verdict is a constant-returning block off a fused compare, one block per answer.
 // A predicate therefore returns a CONSTANT from its own block rather than the compare's flag value directly
-// — `buildArrIsEmpty`'s shape, and the one the backend has always been exercised on.
+// — `buildManagedIsEmpty`'s shape, and the one the backend has always been exercised on.
 //
 // ⚠ It was `HashTableRuntime.emitHtReturnConst` while a hash table was its only caller; the `Array`
 // surface's `contains` is the second family to answer a bool this way, and a helper about the STD TIER's
@@ -725,13 +743,13 @@ export let PredicateFalse = 0 as ParsedInt
 //
 // ⚠ **IT IS SHARED ACROSS A FILE BOUNDARY ON PURPOSE, WHICH IS WHY IT LIVES HERE IN THE BASE LAYER.** Two
 // call sites fill a contiguous byte range with a constant: `__mm_free`'s poison (fill `PoisonByte`) and the
-// array capacity-slot zeroer (`ArrayRuntime`'s `clear`/`resize`-shrink/`pop`/`remove`, fill 0, which restore
+// array capacity-slot zeroer (`ManagedMemoryRuntime`'s `clear`/`resize`-shrink/`pop`/`remove`, fill 0, which restore
 // the `[length, capacity)`-reads-zero invariant the element walk depends on). They were two independent copies
 // of the same loop in two files — nothing making them agree, so a future edit to one (a wider store, a changed
 // bound) would silently diverge from the other and corrupt exactly one of freed-payload poison / vacated-slot
 // zeroing. `MmRuntime` is the runtime's base layer — installed whenever the program touches the heap, and
-// already the home of the single-op emit helpers above that `ArrayRuntime` draws on — so homing the loop here
-// single-sources it without any new cross-layer dependency (the array runtime already depends on this file).
+// already the home of the single-op emit helpers above that `ManagedMemoryRuntime` draws on — so homing the loop here
+// single-sources it without any new cross-layer dependency (the managed-memory runtime already depends on this file).
 export function emitFillRange(module StdModule, func IrFunction, cur IrBlock, dest ValueId, byteCount ValueId, fillValue ParsedInt, ids ValueMinter) returns IrBlock
 	var header = module.addBlock(func, label: b"fillh")
 	var body = module.addBlock(func, label: b"fillb")
@@ -895,14 +913,14 @@ end 'buildMmAlloc'
 // executed, never proven right — under this file's founding rule: **vocabulary must not ship ahead of
 // its consumer.** The rule is unchanged; what changed is that the consumer now exists.
 //
-// ⭐ **THE CONSUMER IS `__arr_slice`'s ZERO-COPY VIEW (P1.7 COW slice B).** A view is a second owner of
+// ⭐ **THE CONSUMER IS `__managed_slice`'s ZERO-COPY VIEW (P1.7 COW slice B).** A view is a second owner of
 // the parent's ELEMENT BUFFER — a separate `__mm_alloc` allocation from either record — so taking a slice
 // increfs that buffer and dropping (or detaching) a view decrefs it. Note WHAT is counted: the buffer, not
 // the record. Both reference compilers refcount the RECORD, where a count of 2 cannot distinguish "two
 // owners of this array" from "someone is viewing my bytes", which is exactly why the bootstrap gives up and
 // eager-copies an owned slice (`MaxonToStandardConversion.Strings.cs:1480`). shv2 is MOVE-ONLY, so a
 // record never has two owners and the buffer's own count is unambiguous: non-zero means "someone is
-// viewing these bytes", which is precisely what `__arr_cow_detach` must ask before an in-place write.
+// viewing these bytes", which is precisely what `__managed_cow_detach` must ask before an in-place write.
 //
 // ⚠⚠ **NON-ATOMIC, DELIBERATELY** — the same decision the decref read-modify-write below carries, and it
 // becomes `LOCK`-prefixed on the same day for the same reason. See `emitRefcountCheckToLastOwner`.
@@ -978,11 +996,11 @@ end 'emitAdjustRefcount'
 // ⭐ **DOES ANYONE BESIDES THIS OWNER HOLD `ptr`?** — ⭐ **THE ONE HOME OF THE `owners - 1` CONVENTION.**
 // A box is born at refcount 0 meaning ONE owner (see `emitRefcountCheckToLastOwner` for why), so "shared"
 // is `rc != 0` and "sole owner" is its negation. Both readers of that convention derive from HERE:
-// `emitRefcountCheckToLastOwner` branches on it, and `ArrayRuntime.__arr_cow_detach` asks it of an array's
+// `emitRefcountCheckToLastOwner` branches on it, and `ManagedMemoryRuntime.__managed_cow_detach` asks it of an array's
 // element BUFFER to decide whether a view is reading the bytes it is about to write.
 //
 // ⚠ Those two live in different files, which is exactly why this is a function and not a comment: were the
-// convention ever to change to a plain owner count, a `rc != 0` open-coded in the array runtime would go on
+// convention ever to change to a plain owner count, a `rc != 0` open-coded in the managed-memory runtime would go on
 // compiling and start answering the opposite question — a shared buffer mutated in place, which is a wrong
 // answer and a corruption, not an error anything reports.
 //
@@ -1190,7 +1208,7 @@ end 'installUnionDestructors'
 // RELOCATED set, literally"* — and `ensureLayoutDescriptor`'s `destroyFunc@40` stamp is one of those slots
 // (`LowerMaxonToStd:1650`, the very `managedOpaqueArrayElementDropCallee` the prediction named). So the two
 // were one fact derived twice, one of them by guessing; the guess is what is deleted. Its clone twin
-// (`ArrayRuntime.rootManagedOpaqueArrayElementClones`) went with it for the identical reason.
+// (`ManagedMemoryRuntime.rootManagedOpaqueArrayElementClones`) went with it for the identical reason.
 export function noteDestructorUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
 	closeDestructorNeeds(usage, project: project, signatures: signatures)
 	declareDestructorCascadeNeeds(usage, project: project, signatures: signatures)
@@ -1339,7 +1357,7 @@ end 'declareInstanceFieldDropNeeds'
 // ⚠ **IT MUST RUN AFTER THE PIPELINE AND BEFORE THE INSTALLS, AND THE ONE THING IT CANNOT REACH IS THE
 // `.data` LAYOUT** (`globalData.layOut`, which reads `usesHeap` before lowering). That is sound rather than
 // lucky: every callee an `.rdata` slot can name releases a HEAP record — a `__destruct_<T>`, `__mm_decref`,
-// `__str_decref`, `__arr_decref` — so the program that named it allocated one, and `usesHeap` was already
+// `__str_decref`, `__managed_decref` — so the program that named it allocated one, and `usesHeap` was already
 // true when the layout was taken. The gate below says so rather than trusting it.
 //
 // Every name goes through `recordCallUsage`, the ONE callee→bit map, so each rooted symbol declares its own
@@ -1404,7 +1422,7 @@ end 'noteRelocatedFunctionUsage'
 // still gets the inner instance destructor synthesized.
 //
 // ⭐ Driven by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the CLONE
-// dual (`ArrayRuntime.noteClonerUsage`). Both used to be a `while changed` RE-SCAN of every declared type,
+// dual (`noteClonerUsage`, in this file). Both used to be a `while changed` RE-SCAN of every declared type,
 // which is one quadratic written down twice: a cascade chain of depth D cost D passes over all T types and
 // re-minted every type's `__destruct_` symbol on each. Registration walks the node space ONCE, the drain
 // expands each referenced node exactly once, and the loop no longer needs a growth flag at all — the queue
@@ -1513,7 +1531,7 @@ function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, 
 	// walk's precondition either way.)
 	//
 	// Nothing is lost by returning: an `Array`/`Set` instance synthesizes no cascade for its nesting to
-	// close over — its elements are dropped by `__arr_decref`/`__set_decref`, whose own element destructor is
+	// close over — its elements are dropped by `__managed_decref`/`__set_decref`, whose own element destructor is
 	// rooted by the descriptor reloc that names it (`noteRelocatedFunctionUsage`) — and an UNDECLARED base has no fields to
 	// nest through at all. See `ProgramSignatures.genericInstanceHasBaseLayout` for why those are one gate.
 	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'
@@ -1759,7 +1777,7 @@ end 'installGenericInstanceDestructors'
 // them ONCE, rather than each cascade builder deciding and then agreeing.
 union FieldDropKind
 	// The ordinary field: one machine word holding a managed pointer, released by a STATICALLY chosen
-	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__arr_decref`, a nested `__destruct_<T>`.
+	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__managed_decref`, a nested `__destruct_<T>`.
 	direct(callee ByteArray)
 	// ⭐ An INTERFACE-TYPED field (P1.7a-existentials slice 2): a two-slot fat pointer whose conformer — and
 	// therefore whose destructor — is a RUN-TIME fact, so no static callee exists to name. The witness half
@@ -1881,6 +1899,293 @@ function emitExistentialFieldDrop(module StdModule, block IrBlock, box ValueId, 
 	module.appendOp(block, op: StdOp.call(dropped, callee: DropExistentialName, args: twoArgs(witness, second: value)))
 end 'emitExistentialFieldDrop'
 
+// --- The per-type deep-cloner cascade (P1.7 slice 3b-vi-b): the DUAL of the destructor cascade ---
+//
+// ⭐ **IT LIVES BESIDE ITS DUAL, AND IT DID NOT USED TO (ARR6).** `__clone_<T>` synthesizes deep cloners for
+// STRUCTS and UNIONS; it has nothing to do with the element buffer, and it sat in `ArrayRuntime.maxon` only
+// because the managed-element array copy was the first thing that needed one. Everything it mirrors is in
+// this file — `DestructorPrefix`/`destructorSymbol`, `noteDestructorUsage`, `closeDestructorNeeds`,
+// `installStructDestructors`/`installUnionDestructors`, `synthesizeStructDestructor`/`synthesizeUnionDestructor`
+// — and `noteRelocatedFunctionUsage` (also here) already re-enters this closure, so the drop side and the
+// clone side of one field graph are now one file apart from nothing rather than one file apart from each other.
+
+// ⭐ **NOTE WHAT THE REFERENCED CLONERS TRANSITIVELY NEED**, the clone twin of `noteDestructorUsage`. A
+// `__clone_<Struct>` whose field is a String calls `__str_clone`, whose field is a nested struct/union calls
+// that field's OWN `__clone_<T>`, whose field is a trivial/managed Array calls `__managed_clone`/`__managed_clone_managed`
+// — all inside the SYNTHESIZED body the Maxon-module scan cannot see. So this closes `neededCloners` over that
+// nesting (a fixpoint, monotonic → terminates) and turns on the transitive `usesStrClone`/`usesManagedMemory`/
+// `usesManagedElementCopy`/`usesHeap` bits. Called after `scanRuntimeUsage` (which seeds `neededCloners` from the
+// `funcAddr(__clone_<T>)` element-cloner stamps), before `.data` layout reads `usesHeap` and `installStringRuntime`
+// reads `usesStrClone`.
+//
+// ⛔ **ITS OWN OPAQUE-ELEMENT ROOT IS GONE, WITH THE DROP TWIN IT MIRRORED (W17-c).** It rooted every instance
+// for which `genericInstanceOpaqueArrayElementIsCopyable` held — a PREDICTION of which `copyFunc@32` relocs
+// lowering would stamp, made before lowering, and true of instances no program reaches (the four
+// `WithIterIterator_*` the `String` cone puts in every registry). `noteRelocatedFunctionUsage` reads
+// the stamps themselves and now re-enters THIS closure when they grow `neededCloners`, so the measured set
+// replaces the predicted one on both sides at once. See `noteDestructorUsage` above for the measurement.
+export function noteClonerUsage(usage RuntimeUsage, project Project, signatures ProgramSignatures)
+	// The overwhelmingly common program (and the entire generic/managed-free scale corpus) references no cloner,
+	// so its `neededCloners` is empty and can only STAY empty (nothing seeds a nested need). Early-out then, so
+	// the per-type `clonerSymbol` allocations of the registration below are paid only by a program that deep-clones
+	// — a managed-copy-gated cost, not a per-compile one on every struct/enum in the program.
+	if usage.neededCloners.count() == 0 'noCloners'
+		return
+	end 'noCloners'
+
+	// ⭐ Closed by the SHARED `CascadeWorklist` (`CascadeNeeds.maxon`) — the same engine that closes the DROP
+	// dual (`closeDestructorNeeds` above). Both used to be a `while changed` RE-SCAN of every declared type,
+	// which is one quadratic written down twice: a cloner chain of depth D cost D passes over all T types and
+	// re-minted every type's `__clone_` symbol on each. Each referenced node is now expanded exactly once.
+	//
+	// NO generic-instance nodes are registered, and that asymmetry with the drop side is real rather than an
+	// omission: a generic instance has a `__destruct_<mangled>` but no `__clone_<mangled>` at this slice (an
+	// instance element is rejected as uncopyable by `genericTypeFieldUncopyableInstantiation`), so the drain's
+	// instance arm is unreachable here and says so.
+	var work = CascadeWorklist.create()
+
+	for (_, layout) in project.structTypes 'eachStruct'
+		work.register(clonerSymbol(layout.name), node: CascadeNode.declaredStruct(layout))
+	end 'eachStruct'
+
+	for (_, layout) in project.enumTypes 'eachUnion'
+		work.register(clonerSymbol(layout.name), node: CascadeNode.declaredUnion(layout))
+	end 'eachUnion'
+
+	work.seed(usage.neededCloners)
+
+	// Every cloner ALLOCATES a fresh box, so one referenced cloner anywhere means the program touches the
+	// heap — a fact about the queue being non-empty, not about any single node in it.
+	if work.hasPending() 'anyClonerReferenced'
+		usage.usesHeap = true
+	end 'anyClonerReferenced'
+
+	while work.hasPending() 'drain'
+		let node = work.take()
+		match node 'node'
+			declaredStruct(layout) then noteStructClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
+			declaredUnion(layout) then noteUnionClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
+			genericInstance(id) then panic("noteClonerUsage: generic instance {id} was queued as a CLONER node, but no `__clone_<mangled-instance>` exists at this slice and none is registered — the drop cascade's instance arm has no clone twin")
+		end 'node'
+	end 'drain'
+end 'noteClonerUsage'
+
+// Turn on the transitive bits (and grow `neededCloners`) for every managed field of struct `layout`'s cloner,
+// queueing each newly-needed cloner on `work` so its OWN nesting is closed in turn.
+function noteStructClonerNeeds(usage RuntimeUsage, layout StructLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
+			continue
+		end 'scalar'
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("noteStructClonerNeeds: fieldTypes.get OOB at {i}")
+		noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType), work: work)
+	end 'eachField'
+end 'noteStructClonerNeeds'
+
+// The union twin of `noteStructClonerNeeds` — over each managed payload of each case.
+function noteUnionClonerNeeds(usage RuntimeUsage, layout EnumLayout, project Project, signatures ProgramSignatures, work CascadeWorklist)
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		let payloads = layout.payloadsAt(ci)
+		for fi in 0 upto payloads.count() 'eachField'
+			let field = try payloads.get(fi) otherwise panic("noteUnionClonerNeeds: payloadsAt count disagrees with get at {fi}")
+			if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
+				continue
+			end 'scalar'
+			noteFieldCloneNeeds(usage, strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType), work: work)
+		end 'eachField'
+	end 'eachCase'
+end 'noteUnionClonerNeeds'
+
+// Turn on the bits a managed field's clone STRATEGY needs, inserting a nested cloner into `neededCloners`.
+function noteFieldCloneNeeds(usage RuntimeUsage, strategy ManagedCloneStrategy, work CascadeWorklist)
+	match strategy 'strategy'
+		direct(callee) then noteCloneCalleeNeeds(usage, callee: callee, work: work)
+		managedArray(elementClone) then noteManagedArrayFieldNeeds(usage, elementClone: elementClone, work: work)
+		unsupported then panic("noteFieldCloneNeeds: an unsupported managed field strategy reached the cloner-needs closure — arrayElementSupportsDeepClone gates the front end")
+	end 'strategy'
+end 'noteFieldCloneNeeds'
+
+// A managed-element array FIELD clones through `__managed_clone_managed(field, funcAddr(elementClone))` — route
+// BOTH callees the synthesized cloner body will emit through the ONE usage map, so their bits are exactly a
+// direct scan of those calls (no second spelling of "__managed_clone_managed → usesManagedElementCopy").
+function noteManagedArrayFieldNeeds(usage RuntimeUsage, elementClone ByteArray, work CascadeWorklist)
+	recordCallUsage(ManagedCloneManagedName, usage: usage)
+	noteCloneCalleeNeeds(usage, callee: elementClone, work: work)
+end 'noteManagedArrayFieldNeeds'
+
+// A single `(box) -> newBox` clone callee the synthesized cloner will CALL: its usage bits are exactly what a
+// direct scan of that call records, so route through `recordCallUsage` — THE ONE callee→bit map — rather than
+// restating "__str_clone → usesStrClone+copy, __managed_clone → usesManagedMemory, __clone_<T> → neededCloners". A nested
+// `__clone_<T>` that is NEWLY joined to `neededCloners` is announced to `work`, which queues the declaration
+// that symbol names; announcing exactly on the newly-added edge is what makes the closure O(types + fields).
+// The leaf callees (`__str_clone`, `__managed_clone`) name no cascade node and announce nothing.
+function noteCloneCalleeNeeds(usage RuntimeUsage, callee ByteArray, work CascadeWorklist)
+	let grew = bytesStartWith(callee, prefix: ClonerPrefix) and not usage.neededCloners.contains(callee)
+	recordCallUsage(callee, usage: usage)
+
+	if grew 'newlyNeeded'
+		work.discovered(callee)
+	end 'newlyNeeded'
+end 'noteCloneCalleeNeeds'
+
+// ⭐ **THE PER-STRUCT DEEP-CLONER INSTALLER (P1.7 slice 3b-vi-b)** — the clone twin of `installStructDestructors`.
+// Synthesize `__clone_<Struct>` for every struct whose cloner is REFERENCED (directly by an element-cloner
+// stamp, or through a nested cascade `noteClonerUsage` grew the set over). Unlike the destructor installer there
+// is NO managed-field gate: a scalar-only struct box still needs a fresh-box clone (the drop side's
+// `__mm_decref` has no clone analogue). Appended already-lowered after the pipeline, like the destructor cascades.
+export function installStructCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)
+	if needed.count() == 0 'noCloners'
+		return
+	end 'noCloners'
+	for (_, layout) in project.structTypes 'each'
+		if needed.contains(clonerSymbol(layout.name)) 'referenced'
+			synthesizeStructCloner(module, layout: layout, project: project, signatures: signatures)
+		end 'referenced'
+	end 'each'
+end 'installStructCloners'
+
+// The union twin of `installStructCloners`.
+export function installUnionCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)
+	if needed.count() == 0 'noCloners'
+		return
+	end 'noCloners'
+	for (_, layout) in project.enumTypes 'each'
+		if needed.contains(clonerSymbol(layout.name)) 'referenced'
+			synthesizeUnionCloner(module, layout: layout, project: project, signatures: signatures)
+		end 'referenced'
+	end 'each'
+end 'installUnionCloners'
+
+// Emit `__clone_<Struct>(src) -> newBox`: `__mm_alloc` a fresh box, BLIT the whole struct (every scalar field
+// copied for free), then DEEP-CLONE each managed field in place — the blit's shallow pointer is replaced by an
+// independent copy through the field's `managedFieldCloneStrategy`. A struct has no tag, so every field is
+// always present; the per-field null-guard (`emitManagedFieldClone`) skips a moved-out (null) slot exactly as
+// the destructor cascade's null-guard does.
+function synthesizeStructCloner(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let src = 0 as ValueId
+
+	let size = emitConst(module, block: entry, value: layout.sizeBytes() as ParsedInt, ids: ids)
+	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
+	let newBox = ids.mint()
+	module.appendOp(entry, op: StdOp.call(newBox, callee: MmAllocName, args: twoArgs(size, second: zeroDtor)))
+	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
+
+	for i in 0 upto layout.fieldCount() 'eachField'
+		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
+			continue
+		end 'scalar'
+		let fieldType = try layout.fieldTypes.get(i) otherwise panic("synthesizeStructCloner: fieldTypes.get OOB at {i}")
+		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType)
+		cur = emitManagedFieldClone(module, func: func, cur: cur, box: newBox, offset: layout.offsetOfField(i), strategy: strategy, ids: ids)
+	end 'eachField'
+
+	module.setTerminator(cur, op: StdOp.ret(newBox))
+	module.functions.push(func)
+end 'synthesizeStructCloner'
+
+// Emit `__clone_<Union>(src) -> newBox`: `__mm_alloc` a fresh box, BLIT the whole box (the tag and every payload
+// slot copied for free), then — behind a per-managed-case tag guard chain (the same shape
+// `synthesizeUnionDestructor` uses) — DEEP-CLONE the LIVE case's managed payloads in place. A scalar-only union
+// (no case owns a managed payload) is a pure blit, which is exactly the fresh independent box its element copy
+// needs.
+function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Project, signatures ProgramSignatures)
+	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	let done = module.addBlock(func, label: b"done")
+	emitParams(module, block: entry, count: 1)
+	let src = 0 as ValueId
+
+	let size = emitConst(module, block: entry, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
+	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
+	let newBox = ids.mint()
+	module.appendOp(entry, op: StdOp.call(newBox, callee: MmAllocName, args: twoArgs(size, second: zeroDtor)))
+	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
+
+	let tag = emitLoadField(module, block: cur, record: newBox, offset: UnionTagOffset, ids: ids)
+	for ci in 0 upto layout.caseCount() 'eachCase'
+		if not caseHasManagedField(signatures, typeNames: project.typeNames, layout: layout, ci: ci) 'scalarCase'
+			continue
+		end 'scalarCase'
+		let caseBlock = module.addBlock(func, label: b"case")
+		let nextTest = module.addBlock(func, label: b"casetest")
+		let tagConst = emitConst(module, block: cur, value: layout.tagOfIndex(ci), ids: ids)
+		let isCase = emitCmp(module, block: cur, a: tag, b: tagConst, pred: StdCmpPred.eq, ids: ids)
+		module.setTerminator(cur, op: StdOp.condBranch(isCase, thenBlockId: caseBlock.id, elseBlockId: nextTest.id))
+		emitManagedFieldClones(module, func: func, startBlock: caseBlock, box: newBox, layout: layout, ci: ci, dest: done, project: project, signatures: signatures, ids: ids)
+		cur = nextTest
+	end 'eachCase'
+
+	module.setTerminator(cur, op: StdOp.branch(done.id))
+	module.setTerminator(done, op: StdOp.ret(newBox))
+	module.functions.push(func)
+end 'synthesizeUnionCloner'
+
+// Deep-clone every MANAGED payload of case `ci` in place (its blit-copied shallow pointer replaced by an
+// independent copy), then branch to `dest`. The clone twin of `emitManagedFieldDrops`.
+function emitManagedFieldClones(module StdModule, func IrFunction, startBlock IrBlock, box ValueId, layout EnumLayout, ci CaseIndex, dest IrBlock, project Project, signatures ProgramSignatures, ids ValueMinter)
+	let payloads = layout.payloadsAt(ci)
+	var cur = startBlock
+	for fi in 0 upto payloads.count() 'eachField'
+		let field = try payloads.get(fi) otherwise panic("emitManagedFieldClones: payloadsAt count disagrees with get at {fi}")
+		if not payloadClassIsManaged(classifyUnionPayload(signatures, typeNames: project.typeNames, fieldType: field.declaredType, slotScopeFilePath: layout.declFilePath)) 'scalar'
+			continue
+		end 'scalar'
+		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: field.declaredType)
+		cur = emitManagedFieldClone(module, func: func, cur: cur, box: box, offset: layout.payloadSlotOffset(fi), strategy: strategy, ids: ids)
+	end 'eachField'
+	module.setTerminator(cur, op: StdOp.branch(dest.id))
+end 'emitManagedFieldClones'
+
+// Load the blit-copied shallow pointer at `box + offset` and, when it is NON-NULL, replace it with an
+// independent deep clone (via the field's `strategy`); a moved-out (null) slot is left as-is (the blit already
+// copied its 0). The one null-guarded field-clone shape both the struct cascade and the union tag-case cascade
+// emit, so the load/clone/store geometry lives in ONE place. Returns the CONTINUATION block.
+function emitManagedFieldClone(module StdModule, func IrFunction, cur IrBlock, box ValueId, offset ByteOffset, strategy ManagedCloneStrategy, ids ValueMinter) returns IrBlock
+	let oldPtr = emitLoadField(module, block: cur, record: box, offset: offset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let nonNull = emitCmp(module, block: cur, a: oldPtr, b: zero, pred: StdCmpPred.ne, ids: ids)
+	var cloneBlock = module.addBlock(func, label: b"clonefld")
+	let contBlock = module.addBlock(func, label: b"cont")
+	module.setTerminator(cur, op: StdOp.condBranch(nonNull, thenBlockId: cloneBlock.id, elseBlockId: contBlock.id))
+
+	let newPtr = emitCloneCall(module, block: cloneBlock, oldPtr: oldPtr, strategy: strategy, ids: ids)
+	emitStoreField(module, block: cloneBlock, record: box, offset: offset, value: newPtr)
+	module.setTerminator(cloneBlock, op: StdOp.branch(contBlock.id))
+
+	return contBlock
+end 'emitManagedFieldClone'
+
+// Emit the clone call for a managed field's `strategy` and return the fresh pointer. A `direct` callee is a
+// plain 1-arg call; a `managedArray` field takes the element's `funcAddr` and calls `__managed_clone_managed`.
+function emitCloneCall(module StdModule, block IrBlock, oldPtr ValueId, strategy ManagedCloneStrategy, ids ValueMinter) returns ValueId
+	match strategy 'strategy'
+		direct(callee) then return emitDirectClone(module, block: block, oldPtr: oldPtr, callee: callee, ids: ids)
+		managedArray(elementClone) then return emitManagedArrayFieldClone(module, block: block, oldPtr: oldPtr, elementClone: elementClone, ids: ids)
+		unsupported then panic("emitCloneCall: an unsupported managed field strategy reached the cloner synthesis — arrayElementSupportsDeepClone gates the front end")
+	end 'strategy'
+end 'emitCloneCall'
+
+function emitDirectClone(module StdModule, block IrBlock, oldPtr ValueId, callee ByteArray, ids ValueMinter) returns ValueId
+	let newPtr = ids.mint()
+	module.appendOp(block, op: StdOp.call(newPtr, callee: callee, args: argsOf(oldPtr)))
+	return newPtr
+end 'emitDirectClone'
+
+function emitManagedArrayFieldClone(module StdModule, block IrBlock, oldPtr ValueId, elementClone ByteArray, ids ValueMinter) returns ValueId
+	let elemFn = ids.mint()
+	module.appendOp(block, op: StdOp.funcAddr(elemFn, funcName: elementClone))
+	let newPtr = ids.mint()
+	module.appendOp(block, op: StdOp.call(newPtr, callee: ManagedCloneManagedName, args: twoArgs(oldPtr, second: elemFn)))
+	return newPtr
+end 'emitManagedArrayFieldClone'
+
 // `__mm_leak_check(exitCode) -> exitCode` — the gate.
 //
 // ⭐ IT TAKES AND RETURNS THE EXIT CODE, which is what lets it sit on the exit path as a plain
@@ -1999,7 +2304,7 @@ export function threeArgs(first ValueId, second ValueId, third ValueId) returns 
 	return args
 end 'threeArgs'
 
-// Four positional call arguments — `__arr_slice_managed`. Homed here beside its `argsOf`/`twoArgs`/`threeArgs`
+// Four positional call arguments — `__managed_slice_managed`. Homed here beside its `argsOf`/`twoArgs`/`threeArgs`
 // siblings.
 export function fourArgs(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()

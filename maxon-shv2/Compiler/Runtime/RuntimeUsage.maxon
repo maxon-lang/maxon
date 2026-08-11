@@ -27,7 +27,7 @@
 //      the membership probe. Where two near-identical graphs exist, they get two bits.
 //   2. **A SYNTHESIZED BODY'S CALLS ARE *DECLARED*, NEVER DISCOVERED.** This scan walks the MAXON module;
 //      a runtime function's body is a `StdOp` graph that no Maxon module contains. So `__str_decref`'s
-//      `__mm_free`, `__arr_create`'s `__mm_alloc` and `__cs_contains`'s `__ucd_cat` are stated in the
+//      `__mm_free`, `__managed_create`'s `__mm_alloc` and `__cs_contains`'s `__ucd_cat` are stated in the
 //      `close*Needs` closures. What a CORPUS body calls is the opposite case — an ordinary Maxon call
 //      edge the reachability walk FINDS — and a declared list of those could only go stale.
 //   3. **A CLOSURE RUNS AFTER EVERY RECORD, NOT INSIDE THE ARM THAT SET THE BIT**, so the answer cannot
@@ -101,13 +101,17 @@ export type RuntimeUsage
 	export var usesUIntToString as bool
 	export var usesBoolToString as bool
 	export var usesStrDecref as bool
-	// The program touches an `Array` (P1.7 slice 1). Any `__arr_*` runtime call turns this on — and, like
-	// the String helpers, turns on `usesHeap` too, because the array helpers `__mm_alloc`/`__mm_free` the
-	// backing record and its element buffer inside their Std bodies, which this Maxon-module scan cannot
-	// see. It drives `installArrayRuntime` (all the array helpers, appended already-lowered).
-	export var usesArray as bool
+	// The program touches the `__ManagedMemory` element buffer — as an `Array`, a `Vector`, or the buffer
+	// itself (P1.7 slice 1). Any `__managed_*` runtime call turns this on — and, like the String helpers,
+	// turns on `usesHeap` too, because those helpers `__mm_alloc`/`__mm_free` the backing record and its
+	// element buffer inside their Std bodies, which this Maxon-module scan cannot see. It drives
+	// `installManagedMemoryRuntime` (the whole buffer runtime, appended already-lowered).
+	// ⚠ Its test is the `__managed_` PREFIX, which is why that prefix may not be `__mm_`: the allocator's own
+	// prefix test (`MmRuntime.isRuntimeCallee`) decides `usesHeap`, and one spelling would make every
+	// heap-touching program carry this runtime too. See `ManagedMemoryRuntime`'s header.
+	export var usesManagedMemory as bool
 	// The program touches a `Set` (P1.7b slice A). Any `__set_*` runtime call turns this on — and, like
-	// `usesArray`, turns on `usesHeap` too, because the set helpers `__mm_alloc`/`__mm_free` the record and
+	// `usesManagedMemory`, turns on `usesHeap` too, because the set helpers `__mm_alloc`/`__mm_free` the record and
 	// its three external buffers inside their Std bodies, which this Maxon-module scan cannot see. It drives
 	// `installSetRuntime`. Its own bit so a set-free program stays golden-neutral (installs nothing).
 	export var usesSet as bool
@@ -127,9 +131,9 @@ export type RuntimeUsage
 	// The program DROPS a single opaque type-parameter value (`__drop_type_param`, P1.7 slice 3b-v /
 	// Finding A) — a consumed feed binding left live at a scope exit, an opaque array element moved out
 	// (`.pop()`), OR a bare opaque `T` field reassignment (`self.saved = next`). Its OWN bit, decoupled from
-	// `usesArray`: a bare-field reassign in an ARRAY-FREE generic struct emits `__drop_type_param` yet touches
-	// no `__arr_*`, so gating its install on `usesArray` would leave the call unlinked. `__drop_type_param` is
-	// `__`-prefixed but NOT `__mm_`/`__arr_`-prefixed, so a call to it sets no other usage bit; its body only
+	// `usesManagedMemory`: a bare-field reassign in an ARRAY-FREE generic struct emits `__drop_type_param` yet touches
+	// no `__managed_*`, so gating its install on `usesManagedMemory` would leave the call unlinked. `__drop_type_param` is
+	// `__`-prefixed but NOT `__mm_`/`__managed_`-prefixed, so a call to it sets no other usage bit; its body only
 	// reads the descriptor's `destroyFunc@40` and `callIndirect`s it (no direct alloc/free), so this bit alone
 	// drives `installDropTypeParamRuntime` and pulls in no transitive floor of its own.
 	export var usesDropTypeParam as bool
@@ -152,8 +156,8 @@ export type RuntimeUsage
 	// have independent callers, so folding either into the other installs an unreachable copy of the unused
 	// one. It DOES imply `__mm_incref`, which its body calls — declared through `recordCallUsage`.
 	export var usesRetainExistential as bool
-	// The program takes a SECOND owner of a heap box (`__mm_incref`). Two producers: the array runtime's
-	// zero-copy slice (a view increfs the parent's element buffer — implied by `usesArray`, since the call
+	// The program takes a SECOND owner of a heap box (`__mm_incref`). Two producers: the managed-memory runtime's
+	// zero-copy slice (a view increfs the parent's element buffer — implied by `usesManagedMemory`, since the call
 	// lives in a Std body this scan cannot see), and the PARSER's `try … otherwise` reconciliation, which
 	// increfs an ok-edge borrow or an aliased error-edge binding so both merge into one owned phi — a `call
 	// __mm_incref` this scan DOES see. Drives `installMmRuntime` to build `__mm_incref`; a program that never
@@ -173,7 +177,7 @@ export type RuntimeUsage
 	// same discipline the leak/GT gates follow (see `BackendDispatch.buildBackend`'s header): an entry stub
 	// asking the module "is `__module_init` still there?" would be asking a question dead-function
 	// elimination can change the answer to, where "was it installed?" is fixed. The RUNTIME floor those two
-	// functions need (`__mm_alloc`, `__str_clone`, `__str_decref`, `__arr_decref`) rides the ordinary bits:
+	// functions need (`__mm_alloc`, `__str_clone`, `__str_decref`, `__managed_decref`) rides the ordinary bits:
 	// they are appended to the Maxon module BEFORE `scanRuntimeUsage` walks it, so their calls are seen
 	// exactly as user code's are.
 	export var usesManagedGlobals as bool
@@ -215,7 +219,7 @@ export type RuntimeUsage
 	export var usesMmToCString as bool
 	// The byte-view door, with its OWN bit under this file's one-bit-per-entry-point discipline: a program
 	// that never reads a fused wrapper's inline `managed` must not carry the view builder. It declares
-	// `usesArray`/`usesHeap` in `closeStringMethodNeeds` — it calls `__arr_create` and `__mm_incref` inside
+	// `usesManagedMemory`/`usesHeap` in `closeStringMethodNeeds` — it calls `__managed_create` and `__mm_incref` inside
 	// its synthesized body, which this Maxon-module scan cannot see.
 	//
 	// ⚠ **`usesStrByteAt` AND `usesStrByteAtOrPanic` SAT BESIDE IT AND WENT WITH THEIR ENTRY POINTS (W49
@@ -223,17 +227,17 @@ export type RuntimeUsage
 	// for two near-identical graphs (so a program reaching only the throwing read did not carry the other's
 	// `mrt_panic` call site); with both members retired onto the corpus, neither bit had a writer.
 	export var usesStrBytesView as bool
-	// The program copies a MANAGED-element array (`__arr_slice_managed`/`__arr_clone_managed`/
-	// `__arr_append_managed`, P1.7 slice 3b-vi-b). Its OWN bit, DECOUPLED from `usesArray`, so a program that
-	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesArray`/
-	// `usesHeap` (the helpers are `__arr_`-prefixed). Drives the managed-copy install in `installArrayRuntime`.
-	export var usesManagedArrayCopy as bool
-	// The program copies an OPAQUE-`T` array (`__arr_slice_opaque`/`__arr_append_opaque`, P1.7 slice
+	// The program copies a MANAGED-element array (`__managed_slice_managed`/`__managed_clone_managed`/
+	// `__managed_append_managed`, P1.7 slice 3b-vi-b). Its OWN bit, DECOUPLED from `usesManagedMemory`, so a program that
+	// only uses TRIVIAL arrays does not carry the three managed-copy helpers. Set alongside `usesManagedMemory`/
+	// `usesHeap` (the helpers are `__managed_`-prefixed). Drives the managed-copy install in `installManagedMemoryRuntime`.
+	export var usesManagedElementCopy as bool
+	// The program copies an OPAQUE-`T` array (`__managed_slice_opaque`/`__managed_append_opaque`, P1.7 slice
 	// 3b-vi-b-β) — a `slice`/`append` on an `Array with <type parameter>` field in a generic body. Its OWN bit,
-	// DECOUPLED from `usesArray`, so a program that touches no opaque-array copy does not carry the wrappers.
-	// Set alongside `usesManagedArrayCopy` (`recordCallUsage`), because each wrapper's managed
-	// branch calls the α `__arr_*_managed` helpers. Drives the opaque-copy install in `installArrayRuntime`.
-	export var usesOpaqueArrayCopy as bool
+	// DECOUPLED from `usesManagedMemory`, so a program that touches no opaque-array copy does not carry the wrappers.
+	// Set alongside `usesManagedElementCopy` (`recordCallUsage`), because each wrapper's managed
+	// branch calls the α `__managed_*_managed` helpers. Drives the opaque-copy install in `installManagedMemoryRuntime`.
+	export var usesOpaqueElementCopy as bool
 	// The `__clone_<T>` symbols this module references (P1.7 slice 3b-vi-b) — the CLONE twin of
 	// `neededDestructors`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over
 	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the
@@ -268,7 +272,7 @@ export type RuntimeUsage
 	// `__char_ascii` reads two fields of a BORROWED record and calls nothing, so it declares no transitive
 	// floor at all — hence no arm in `closeGraphemeNeeds`. `usesCharCmp` above is the other such bit.
 	export var usesCharAsciiValue as bool
-	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the array runtime
+	// `__str_to_bytes` PUSHES into a caller-created `Array with Byte`, so it declares the managed-memory runtime
 	// (and the heap under it) in `closeGraphemeNeeds`. It is the LAST entry point that fills an array the
 	// parser built — `__str_split` was the other, and retired at W49 wave 5.
 	export var usesStrToBytes as bool
@@ -308,17 +312,17 @@ export type RuntimeUsage
 	// R4.3: the program searches, creates or asks about a DIRECTORY. Its own bit, so a file-only program
 	// carries none of the directory runtime. Like the file family it declares a transitive dependency on
 	// `usesHeap` (the find block, the box and the path scratch are all `__mm_alloc`'d) — and, unlike it,
-	// ALSO on `usesArray`: `__md_filename`/`__md_current_path` build their `__ManagedMemory` answer through
-	// `__arr_create`/`__arr_reserve`, calls that live in a Std body this Maxon-module scan cannot see.
+	// ALSO on `usesManagedMemory`: `__md_filename`/`__md_current_path` build their `__ManagedMemory` answer through
+	// `__managed_create`/`__managed_reserve`, calls that live in a Std body this Maxon-module scan cannot see.
 	export var usesManagedDirectory as bool
 	// The program reads its COMMAND LINE. Like the directory family it declares a transitive dependency on
-	// `usesHeap` (the scratch buffer is a raw alloc) AND on `usesArray`: `__cl_arg` builds its
-	// `__ManagedMemory` answer through `__arr_create`/`__arr_reserve` inside a Std body this Maxon-module
+	// `usesHeap` (the scratch buffer is a raw alloc) AND on `usesManagedMemory`: `__cl_arg` builds its
+	// `__ManagedMemory` answer through `__managed_create`/`__managed_reserve` inside a Std body this Maxon-module
 	// scan cannot see.
 	export var usesCommandLine as bool
 	// W5: the program reads STANDARD INPUT. It carries `usesHeap` (the out word is a raw alloc) AND
-	// `usesArray`: `__con_read_stdin` answers with an `Array` record it builds through
-	// `__arr_create`/`__arr_reserve` in a Std body this Maxon-module scan cannot see.
+	// `usesManagedMemory`: `__con_read_stdin` answers with an `Array` record it builds through
+	// `__managed_create`/`__managed_reserve` in a Std body this Maxon-module scan cannot see.
 	export var usesConsoleStdin as bool
 	// W5: the program asks for its own EXECUTABLE PATH. Its own bit rather than sharing the one above, under
 	// this file's one-bit-per-entry-point discipline: the two serve different stdlib modules and reach
@@ -328,7 +332,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -367,7 +371,7 @@ function classifyRuntimeCall(op MaxonOp, usage RuntimeUsage, funcSignatures Func
 		// nothing. A `functionRef` naming a USER function is likewise a bare `lea` of no runtime consequence —
 		// but one naming a COMPILER-EMITTED callee is the address of an array element destructor
 		// stamped into `element_destroy@40` (P1.7 slice 3), and THAT reference must install its target (a
-		// `__str_decref`/`__destruct_<T>`/`__mm_decref`/`__arr_decref`) exactly as a direct `call` to it would —
+		// `__str_decref`/`__destruct_<T>`/`__mm_decref`/`__managed_decref`) exactly as a direct `call` to it would —
 		// its transitive needs then close through `noteDestructorUsage`. Recorded through the same `recordCallUsage`.
 		functionRef(_, funcName) then recordFunctionRefUsage(funcName, usage: usage, funcSignatures: funcSignatures)
 		indirectCall then break 'op'
@@ -398,18 +402,18 @@ function recordGtUsage(usage RuntimeUsage)
 end 'recordGtUsage'
 
 // A CONSTANT array literal over an immortal `.rdata` blob — a `b"…"` byte string, or a packed
-// `[0 as Q, …]` — turns on both the Array runtime and the heap under it, the same pair any `__arr_*` call
+// `[0 as Q, …]` — turns on both the managed-memory runtime and the heap under it, the same pair any `__managed_*` call
 // declares (`recordCallUsage`'s array arm), because the literal IS an owned Array record (`__mm_alloc`)
-// whose `.count()`/`.get()`/drop go through the array runtime. Both producers of `constArrayLiteral` need
+// whose `.count()`/`.get()`/drop go through the managed-memory runtime. Both producers of `constArrayLiteral` need
 // exactly this pair, which is why one recorder still serves the op after it stopped being byte-string-only.
 function recordConstArrayLiteralUsage(usage RuntimeUsage)
-	usage.usesArray = true
+	usage.usesManagedMemory = true
 	usage.usesHeap = true
 end 'recordConstArrayLiteralUsage'
 
 // A `functionRef` whose target is a COMPILER-EMITTED callee is an array element destructor's address stamped
 // into `element_destroy@40` (P1.7 slice 3) — its target must be installed exactly as a direct `call` to it
-// would, so it routes through the SAME `recordCallUsage` (turning on the heap/`usesStrDecref`/`usesArray` bit
+// would, so it routes through the SAME `recordCallUsage` (turning on the heap/`usesStrDecref`/`usesManagedMemory` bit
 // or adding to `neededDestructors`, per the callee). A `functionRef` to a USER function is a plain
 // code-pointer `lea` of no runtime consequence and records nothing (the P1.5-A1 behaviour, unchanged).
 //
@@ -428,8 +432,8 @@ end 'recordFunctionRefUsage'
 
 // ⭐ **THE ONE CALLEE-NAME → RUNTIME-USAGE-BIT MAP.** Exported so `noteDestructorUsage` can root a
 // managed opaque-`T` `Array` element's destructor (P1.7 slice 3b-iii) through the IDENTICAL mapping the
-// module scan gives a callee named directly — a `__str_decref` turns on the String runtime, a `__arr_decref`
-// the array runtime, a `__destruct_<T>` joins `neededDestructors` — so the reloc-baked destructor is
+// module scan gives a callee named directly — a `__str_decref` turns on the String runtime, a `__managed_decref`
+// the managed-memory runtime, a `__destruct_<T>` joins `neededDestructors` — so the reloc-baked destructor is
 // installed for the writer to resolve exactly as if the module had called it.
 export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isRuntimeCallee(callee) 'heap'
@@ -478,20 +482,20 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'managedFile'
 	// R4.3: a `__md_*` call. It carries `usesHeap` (the find block, the box and the path scratch) AND
-	// `usesArray`, which the file family does not need: `__md_filename`/`__md_current_path` answer with an
-	// `Array` record they build through `__arr_create`/`__arr_reserve` inside their Std bodies, and this
+	// `usesManagedMemory`, which the file family does not need: `__md_filename`/`__md_current_path` answer with an
+	// `Array` record they build through `__managed_create`/`__managed_reserve` inside their Std bodies, and this
 	// Maxon-module scan cannot see a call one tier down. Left off, those two would link against nothing.
 	if isManagedDirectoryRuntimeCallee(callee) 'managedDirectory'
 		usage.usesManagedDirectory = true
 		usage.usesHeap = true
-		usage.usesArray = true
+		usage.usesManagedMemory = true
 	end 'managedDirectory'
 	// A `__cl_*` call. Same two transitive bits as the directory family and for the same reasons: the scratch
 	// buffer is a raw alloc, and `__cl_arg` answers with an `Array` record it builds one tier down.
 	if isCommandLineRuntimeCallee(callee) 'commandLine'
 		usage.usesCommandLine = true
 		usage.usesHeap = true
-		usage.usesArray = true
+		usage.usesManagedMemory = true
 	end 'commandLine'
 	// W5: a `__con_*` or a `__proc_*` call. Same two transitive bits as the command-line family and for the
 	// same two reasons — a raw-alloc scratch word (or buffer), and an `Array` record each answers with from a
@@ -499,12 +503,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if isConsoleRuntimeCallee(callee) 'consoleStdin'
 		usage.usesConsoleStdin = true
 		usage.usesHeap = true
-		usage.usesArray = true
+		usage.usesManagedMemory = true
 	end 'consoleStdin'
 	if isProcessRuntimeCallee(callee) 'processIntrospection'
 		usage.usesProcessIntrospection = true
 		usage.usesHeap = true
-		usage.usesArray = true
+		usage.usesManagedMemory = true
 	end 'processIntrospection'
 	if callee.equals(StreamWriteStdoutName) 'writestdout'
 		usage.usesWriteStdout = true
@@ -534,7 +538,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'strdecref'
 	// A `__mm_incref` the PARSER emitted (the `try … otherwise` phi reconciliation) — install the incref
-	// helper for it, not only for the array runtime's `usesArray`. `usesHeap` follows because the box it
+	// helper for it, not only for the managed-memory runtime's `usesManagedMemory`. `usesHeap` follows because the box it
 	// increfs was `__mm_alloc`'d (which set `usesHeap` at its own call site anyway).
 	if callee.equals(MmIncrefName) 'incref'
 		usage.usesIncref = true
@@ -547,18 +551,18 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesRetain = true
 		usage.usesHeap = true
 	end 'retain'
-	// Any `__arr_*` call carries the whole array runtime, and the heap under it: `__arr_create`/`__arr_grow`
-	// `__mm_alloc` the record and the element buffer, `__arr_decref` `__mm_free`s them — none of which this
+	// Any `__managed_*` call carries the whole managed-memory runtime, and the heap under it: `__managed_create`/`__managed_grow`
+	// `__mm_alloc` the record and the element buffer, `__managed_decref` `__mm_free`s them — none of which this
 	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference
 	// declares both bits, exactly as `__str_decref` does for its own transitive heap use.
-	if isArrayRuntimeCallee(callee) 'array'
-		usage.usesArray = true
+	if isManagedMemoryRuntimeCallee(callee) 'array'
+		usage.usesManagedMemory = true
 		usage.usesHeap = true
 	end 'array'
 	// Any `__set_*` call carries the whole set runtime, and the heap under it: `__set_create`/`__set_grow`
 	// `__mm_alloc` the record and its three buffers, `__set_decref` `__mm_free`s them — none of which this
 	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference
-	// declares both bits, exactly as the `__arr_*` arm above does (P1.7b slice A).
+	// declares both bits, exactly as the `__managed_*` arm above does (P1.7b slice A).
 	if isSetRuntimeCallee(callee) 'set'
 		usage.usesSet = true
 		usage.usesHeap = true
@@ -578,8 +582,8 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesList = true
 		usage.usesHeap = true
 	end 'list'
-	// The single-value descriptor-gated drop (P1.7 slice 3b-v / Finding A). Decoupled from `usesArray` so an
-	// array-free bare-field reassign links: it is `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so
+	// The single-value descriptor-gated drop (P1.7 slice 3b-v / Finding A). Decoupled from `usesManagedMemory` so an
+	// array-free bare-field reassign links: it is `__`-prefixed but neither `__mm_`- nor `__managed_`-prefixed, so
 	// none of the arms above sees it. Its body only reads the descriptor and `callIndirect`s the destructor
 	// (no direct `__mm_alloc`/`__mm_free`), so it declares no other bit — see `usesDropTypeParam`.
 	if callee.equals(DropTypeParamName) 'droptypeparam'
@@ -595,7 +599,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 	end 'retaintypeparam'
 	// The existential's drop (P1.7a-existentials slice 2) — the same shape as the line above and for the same
-	// reasons: `__`-prefixed but neither `__mm_`- nor `__arr_`-prefixed, so no arm above sees it, and its body
+	// reasons: `__`-prefixed but neither `__mm_`- nor `__managed_`-prefixed, so no arm above sees it, and its body
 	// only reads the witness table's `destroyFunc@8` and `callIndirect`s it, so it declares no other bit.
 	// ⚠ It does NOT set `usesHeap`: a struct DESTRUCTOR's cascade reaches it from a Std body this scan cannot
 	// see, and that destructor's own `__mm_free` already declares the heap (`noteDestructorUsage`).
@@ -665,23 +669,23 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	recordCharacterSetUsage(callee, usage: usage)
 	recordStringMethodUsage(callee, usage: usage)
 	recordGraphemeUsage(callee, usage: usage)
-	// The three MANAGED-element array copies (`__arr_slice_managed`/`__arr_clone_managed`/`__arr_append_managed`,
-	// P1.7 slice 3b-vi-b). `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
+	// The three MANAGED-element array copies (`__managed_slice_managed`/`__managed_clone_managed`/`__managed_append_managed`,
+	// P1.7 slice 3b-vi-b). `isManagedMemoryRuntimeCallee` above already set `usesManagedMemory`/`usesHeap` (they are `__managed_`-
 	// prefixed); THIS bit gates their install so a trivial-array program does not carry them.
-	if isManagedArrayCopyCallee(callee) 'managedcopy'
-		usage.usesManagedArrayCopy = true
+	if isManagedElementCopyCallee(callee) 'managedcopy'
+		usage.usesManagedElementCopy = true
 	end 'managedcopy'
-	// The OPAQUE-`T` array copies (`__arr_slice_opaque`/`__arr_append_opaque`, P1.7 slice 3b-vi-b-β).
-	// `isArrayRuntimeCallee` above already set `usesArray`/`usesHeap` (they are `__arr_`-
-	// prefixed); THIS turns on the opaque-copy install AND `usesManagedArrayCopy`, because each wrapper's managed
-	// branch calls the α `__arr_*_managed` helpers whose own install is gated on that bit.
-	if isOpaqueArrayCopyCallee(callee) 'opaquecopy'
-		usage.usesOpaqueArrayCopy = true
-		usage.usesManagedArrayCopy = true
+	// The OPAQUE-`T` array copies (`__managed_slice_opaque`/`__managed_append_opaque`, P1.7 slice 3b-vi-b-β).
+	// `isManagedMemoryRuntimeCallee` above already set `usesManagedMemory`/`usesHeap` (they are `__managed_`-
+	// prefixed); THIS turns on the opaque-copy install AND `usesManagedElementCopy`, because each wrapper's managed
+	// branch calls the α `__managed_*_managed` helpers whose own install is gated on that bit.
+	if isOpaqueElementCopyCallee(callee) 'opaquecopy'
+		usage.usesOpaqueElementCopy = true
+		usage.usesManagedElementCopy = true
 	end 'opaquecopy'
 	// A per-type CLONER (`__clone_<T>`, P1.7 slice 3b-vi-b) — the CLONE twin of the `__destruct_<T>` arm above,
 	// referenced through a `funcAddr(__clone_<T>)` element-cloner stamp. It frees no memory but ALLOCATES a box
-	// (`usesHeap`), and its transitive `__str_clone`/`__arr_clone`/nested-cloner needs close through
+	// (`usesHeap`), and its transitive `__str_clone`/`__managed_clone`/nested-cloner needs close through
 	// `noteClonerUsage` (which has the signatures/interner to classify the fields).
 	if bytesStartWith(callee, prefix: ClonerPrefix) 'structcloner'
 		usage.usesHeap = true
@@ -785,7 +789,7 @@ function closeGraphemeNeeds(usage RuntimeUsage)
 	// `CodepointView`/`UTF16View` reach `utf8DecodeAt`/`utf8ByteLengthAt` through ordinary Maxon call edges,
 	// which the query spine follows without being told.
 	if usage.usesStrToBytes 'pushesBytes'
-		usage.usesArray = true
+		usage.usesManagedMemory = true
 		usage.usesHeap = true
 	end 'pushesBytes'
 end 'closeGraphemeNeeds'
@@ -834,12 +838,12 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
-	// `__str_bytes_view` publishes an `Array` record through `__arr_create` and increfs the allocation the
+	// `__str_bytes_view` publishes an `Array` record through `__managed_create` and increfs the allocation the
 	// bytes live in through `__mm_incref` — both inside its synthesized body, which this scan cannot see.
-	// `usesArray` is what installs the array runtime AND (through `installMmRuntime`'s `usesIncref or
-	// usesArray`) the incref helper, so the two bits below are the whole of its transitive floor.
+	// `usesManagedMemory` is what installs the managed-memory runtime AND (through `installMmRuntime`'s `usesIncref or
+	// usesManagedMemory`) the incref helper, so the two bits below are the whole of its transitive floor.
 	if usage.usesStrBytesView 'publishesAView'
-		usage.usesArray = true
+		usage.usesManagedMemory = true
 		usage.usesHeap = true
 	end 'publishesAView'
 end 'closeStringMethodNeeds'

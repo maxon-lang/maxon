@@ -60,31 +60,31 @@ func @main {
     arm64.storeSlotReg slot4, x19
     arm64.movImm x0, 1
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot0, x19
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movImm x1, 2
     arm64.movRegReg x0, x19
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movImm x0, 8
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.storeSlotReg slot1, x0
     arm64.movImm x1, 9
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movRegReg x0, x19
-    arm64.bl __arr_clone
+    arm64.bl __managed_clone
     arm64.movRegReg x20, x0
     arm64.storeSlotReg slot2, x20
     arm64.movImm x1, 0
     arm64.movRegReg x0, x20
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -98,7 +98,7 @@ func @main {
   trycont:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x20
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -112,7 +112,7 @@ func @main {
   trycont:
     arm64.movImm x1, 2
     arm64.movRegReg x0, x20
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -127,7 +127,7 @@ func @main {
     arm64.movImm x1, 1
     arm64.movImm x2, 3
     arm64.movRegReg x0, x19
-    arm64.bl __arr_slice
+    arm64.bl __managed_slice
     arm64.movRegReg x19, x0
     arm64.storeSlotReg slot3, x19
     arm64.cmp x9, 0
@@ -154,7 +154,7 @@ func @main {
   tryok:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x19
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -168,7 +168,7 @@ func @main {
   trycont:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x19
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -182,13 +182,13 @@ func @main {
   trycont:
     arm64.movImm x0, 1
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x24, x0
     arm64.movImm x1, 65
     arm64.movRegReg x0, x24
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movRegReg x0, x24
-    arm64.bl __arr_clone
+    arm64.bl __managed_clone
     arm64.movRegReg x25, x0
     arm64.movImm x0, 48
     arm64.movImm x1, 0
@@ -204,12 +204,12 @@ func @main {
     arm64.storeBaseDispReg.word64 [x26 + 24], x0
     arm64.movRegReg x0, x25
     arm64.movRegReg x1, x26
-    arm64.bl __arr_append
+    arm64.bl __managed_append
     arm64.movRegReg x0, x26
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movImm x1, 0
     arm64.movRegReg x0, x25
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -223,7 +223,7 @@ func @main {
   trycont:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x25
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -237,7 +237,7 @@ func @main {
   trycont:
     arm64.movImm x1, 2
     arm64.movRegReg x0, x25
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -296,7 +296,7 @@ func @main {
     arm64.b scmerge
   scmerge:
     arm64.movRegReg x0, x25
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x0, 3
     arm64.cset x0, eq
     arm64.movImm x1, 0
@@ -337,7 +337,7 @@ func @main {
     arm64.b critsplit
   andrhs:
     arm64.movRegReg x0, x24
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x0, 1
     arm64.cset x0, eq
     arm64.b scmerge
@@ -364,17 +364,17 @@ func @main {
     arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x25
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x24
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.loadRegSlot x0, slot3
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.loadRegSlot x0, slot2
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.loadRegSlot x0, slot1
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.loadRegSlot x0, slot0
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot4
     arm64.loadRegSlot x20, slot5

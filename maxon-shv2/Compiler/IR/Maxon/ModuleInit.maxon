@@ -127,7 +127,7 @@ end 'initialRecordOf'
 //     (`byte-string-literal.push-grows-off-rdata`), which is what makes a MUTABLE one work.
 //   • a **container** with no constant image has no literal record at all (P1.7 slice 2b): the record is
 //     BUILT here, exactly as `Parser`'s body emitters build one — this instance's `create` with the stamps
-//     it fixes, then one `__arr_push` per folded element.
+//     it fixes, then one `__managed_push` per folded element.
 function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueType MaxonType, range SourceRange) returns ValueId
 	return match build 'build'
 		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
@@ -193,11 +193,11 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 	// reads it — the second call `Parser.emitVectorCreateOp` makes, for the same reason.
 	match create.sizing 'sizing'
 		grown then break 'sizing'
-		fixed(count) then _ = fn.emitPositionalCall(ArrResizeName, args: pairArgs(record, second: fn.emitTypedLiteral(count as ParsedInt, valueType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		fixed(count) then _ = fn.emitPositionalCall(ManagedResizeName, args: pairArgs(record, second: fn.emitTypedLiteral(count as ParsedInt, valueType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'sizing'
 
 	for element in elements 'eachElement'
-		_ = fn.emitPositionalCall(ArrPushName, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = fn.emitPositionalCall(ManagedPushName, args: pairArgs(record, second: elementRecordOf(fn, element: element, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'eachElement'
 
 	return record
@@ -285,7 +285,7 @@ function factoryArgumentValue(fn SynthesizedFunction, arg GlobalInitArgument, ca
 end 'factoryArgumentValue'
 
 // ONE element's value, ready to be pushed. An integer element is its number; a String element is the
-// immortal `.rdata` literal CLONED, because the array becomes the element's sole owner and `__arr_decref`'s
+// immortal `.rdata` literal CLONED, because the array becomes the element's sole owner and `__managed_decref`'s
 // walk `__str_decref`s every live slot — the same promotion `Parser.moveElementIntoContainer` applies to a
 // borrowed String literal at a body's `push`, reached through the same `__str_clone`.
 function elementRecordOf(fn SynthesizedFunction, element ConstArrayElement, range SourceRange) returns ValueId
@@ -462,7 +462,7 @@ type SynthesizedFunction
 	end 'emitTypedLiteral'
 
 	// The raw `.text` ADDRESS of a compiler-internal runtime function, as a value — `Parser.emitRuntimeFuncAddr`'s
-	// twin on this carrier, for the array element destructor `__arr_create` stamps into `element_destroy@40`.
+	// twin on this carrier, for the array element destructor `__managed_create` stamps into `element_destroy@40`.
 	//
 	// The value is typed `integer` for `emitSlotAddr`'s reason (an address is a machine word, and the Maxon
 	// tier has no pointer type) rather than the parser's `function` tag: the parser's result may be BOUND by
@@ -474,7 +474,7 @@ type SynthesizedFunction
 	end 'emitRuntimeFuncAddr'
 
 	// ⭐ **A CALL WHOSE ARGUMENTS ARE ALL POSITIONAL** — every runtime entry point (`__str_clone`,
-	// `__str_decref`, `__arr_create`, `__arr_push`), because the runtime has no parameter names for a label to
+	// `__str_decref`, `__managed_create`, `__managed_push`), because the runtime has no parameter names for a label to
 	// match, AND a DECLARED generic's `create()` (W41), because the door that admits one admits no arguments at
 	// all (`Parser.evalConstContainerCreate`). It is named for that property rather than for the runtime,
 	// because since W41 the runtime is no longer the only thing it serves: a user factory taking ARGUMENTS goes

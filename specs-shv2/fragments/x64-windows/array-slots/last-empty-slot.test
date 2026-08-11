@@ -54,19 +54,19 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __mm_decref]
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 1
     x64.callDirect Slot.create
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
     x64.callDirect Array.reserve
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_set_length
+    x64.callDirect __managed_set_length
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -98,7 +98,7 @@ func @main {
     x64.loadRegBaseDisp.word64 r12, [rcx + 0]
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -135,7 +135,7 @@ func @Array.last {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, empty
     x64.jmp ifcont
@@ -151,7 +151,7 @@ func @Array.last {
   ifcont:
     x64.leaRegRegImm32 rdx, r8, -1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -189,10 +189,10 @@ func @Array.reserve {
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_capacity
+    x64.callDirect __managed_capacity
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegReg r12, r14
     x64.jcc greater, grow
     x64.jmp ifcont
@@ -202,13 +202,13 @@ func @Array.reserve {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_mem_grow
+    x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_17]
     x64.callDirect mrt_panic
     x64.epilogue 32
@@ -220,7 +220,7 @@ func @Array.reserve {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.jmp ifcont
   ifcont:
     x64.epilogue 32

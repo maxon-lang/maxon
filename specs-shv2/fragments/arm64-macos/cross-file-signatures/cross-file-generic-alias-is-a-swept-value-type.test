@@ -48,11 +48,11 @@ func @Holder.create {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x1, 12
     arm64.movRegReg x0, x19
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -68,11 +68,11 @@ func @Holder.more {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x1, 14
     arm64.movRegReg x0, x19
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -85,11 +85,11 @@ func @make {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x1, 16
     arm64.movRegReg x0, x19
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movRegReg x0, x19
     arm64.loadRegSlot x19, slot0
     arm64.epilogue 32
@@ -108,7 +108,7 @@ func @main {
     arm64.movRegReg x19, x0
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.movImm x1, 0
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -132,7 +132,7 @@ func @main {
     arm64.movRegReg x21, x0
     arm64.movImm x1, 0
     arm64.movRegReg x0, x21
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.movRegReg x22, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -140,7 +140,7 @@ func @main {
     arm64.b tryok
   tryerr:
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Holder
@@ -154,12 +154,12 @@ func @main {
     arm64.ret
   tryok:
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.bl make
     arm64.movRegReg x21, x0
     arm64.movImm x1, 0
     arm64.movRegReg x0, x21
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.movRegReg x23, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -167,7 +167,7 @@ func @main {
     arm64.b tryok
   tryerr:
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
     arm64.bl __destruct_Holder
@@ -181,7 +181,7 @@ func @main {
     arm64.ret
   tryok:
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.add x0, x20, x22
     arm64.add x20, x0, x23
     arm64.cmp x20, 0

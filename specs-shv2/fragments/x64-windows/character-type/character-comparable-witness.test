@@ -219,19 +219,19 @@ func @Character.compare {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r12
     x64.callDirect __str_bytes_view
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg r14, r8
     x64.storeSlotReg slot1, r14
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.cmpRegReg r14, r8
     x64.jcc less, min_check
     x64.jmp critsplit
@@ -251,7 +251,7 @@ func @Character.compare {
   compare_loop:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r13
-    x64.callDirect __arr_byte_at
+    x64.callDirect __managed_byte_at
     x64.storeSlotReg slot3, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -274,14 +274,14 @@ func @Character.compare {
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r13
-    x64.callDirect __arr_byte_at
+    x64.callDirect __managed_byte_at
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_31]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -295,7 +295,7 @@ func @Character.compare {
     x64.ret
   tryok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.loadRegSlot rax, slot3
     x64.cmpRegReg rax, r13
     x64.jcc less, byte_lt

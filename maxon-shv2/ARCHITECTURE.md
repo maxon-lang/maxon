@@ -1132,7 +1132,7 @@ another file. So it is a whole-program summary, built once in `SemanticCheck` an
 
 | | |
 |---|---|
-| **the seed** | `IrFunction.writtenParamMask`, an i64 bit per parameter, set by the PARSER at `noteReceiverWrite` — the one site that already decides whether a receiver-writing method may be called at all. The summary never re-derives "which methods write their receiver" from the LOWERED callees (`__arr_push`, `__arr_append`, `__set_insert`); that would be a second list, three tiers from the first. |
+| **the seed** | `IrFunction.writtenParamMask`, an i64 bit per parameter, set by the PARSER at `noteReceiverWrite` — the one site that already decides whether a receiver-writing method may be called at all. The summary never re-derives "which methods write their receiver" from the LOWERED callees (`__managed_push`, `__managed_append`, `__set_insert`); that would be a second list, three tiers from the first. |
 | **the closure** | a worklist least-fixpoint over the reverse call graph (`buildParamMutationSummary`), the same shape `Parser.solveDescriptorNeeds` uses. A mask only ever GAINS bits and a function has at most `MaxAbiArgs` of them, so a caller is re-enqueued only on a real change — which is what makes a recursive and a mutually recursive graph terminate. |
 | **the adjacency** | a `CsrGraph` keyed by function INDEX, per `CsrGraph.maxon`'s own instruction. Written first as a `Map with (ByteArray, OpIndexArray)`, it cost one array per callee: on a maximal N-function chain, `phase:semanticCheck` allocations grew **+984 → +13,104** from N=400 to N=6,400. The CSR costs **+142 → +238**, and the drain loop hashes nothing. |
 | **the call site** | `checkImmutableArgToMutatingParam`, in `checkSlottedCall`. It reads the SOURCE-order `argImmutableNames` column and bridges to the callee's declaration-ordered mask through `argSlotPosition` — the same mapping `slotCallArgs` applied to produce the `argIds` its sibling checks read. |
@@ -1196,7 +1196,7 @@ because what they must build is a LITERAL'S RECORD, and `lowerMaxonToStd` alread
 `stringLiteral`/`byteStringLiteral` op into exactly that. Six op constructions instead of a second copy of
 `lowerByteStringLiteral`. The price is the dense per-value type columns a Maxon function carries, paid
 once by `ModuleInit.SynthesizedFunction`. Appending before the pipeline is also what makes
-`scanRuntimeUsage` see their `__str_clone`/`__str_decref`/`__arr_decref` calls and install the floor.
+`scanRuntimeUsage` see their `__str_clone`/`__str_decref`/`__managed_decref` calls and install the floor.
 
 | | `__module_init()` | `__maxon_global_cleanup(code) → code` |
 |---|---|---|
@@ -1263,9 +1263,9 @@ String literals**. It is the managed-`var` mechanism above with one thing change
 **The thing changed: the value is BUILT, not materialized.** A String literal is an immortal `.rdata` record
 and a `b"…"` is an owned record over an immortal blob, so both slots are filled from a literal the lowering
 already knows how to emit. An array has no literal record at all, so `__module_init` emits the ops
-`Parser.parseArrayLiteral` emits in a function body — `__arr_create(elementSize, elementDestroy)` then one
-`__arr_push` per element, with a String element **cloned** because the array becomes its sole owner and
-`__arr_decref`'s walk drops every live slot. The element values are folded by the SAME scalar constant
+`Parser.parseArrayLiteral` emits in a function body — `__managed_create(elementSize, elementDestroy)` then one
+`__managed_push` per element, with a String element **cloned** because the array becomes its sole owner and
+`__managed_decref`'s walk drops every live slot. The element values are folded by the SAME scalar constant
 evaluator every other initializer uses (`evalConstArrayLiteral` → `evalConstArrayElement`), so
 `[BASE, BASE + 2]` is as much a literal as `[1, 2]`; a String element is the one-token managed test applied
 between two separators, so an interpolation and every trailing form fall to the scalar walk and are rejected.
@@ -1324,7 +1324,7 @@ a factory ARGUMENT as well as a global's own slot — `var db = Database.create(
 **What `__module_init` needs is a CALLEE and a STAMP LIST** (`ProgramSignatures.containerCreateCall`), and
 the two kinds of container differ only in the second:
 
-- a **builtin** container's `create` is a runtime entry (`__arr_create`, `__set_create`, …) that cannot look
+- a **builtin** container's `create` is a runtime entry (`__managed_create`, `__set_create`, …) that cannot look
   up a stride or a column destructor and must be handed both;
 - a **declared** generic's is a real `create()` static the program wrote (`Map.create`, once
   `stdlib/Map.maxon` is listed and `Map` is an ordinary generic), which builds its own fields from its own

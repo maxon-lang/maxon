@@ -13,7 +13,7 @@ A `Vector` carries its SIZE in its type (`Vector with 3 Int` is a different type
 `Vector with 4 Int`, see [vector](vector.md)), so when the index is a compile-time
 constant the compiler can decide `0 <= index < size` itself. It does, and the emitted
 access then carries NO bounds check: `get` and `set` take a second runtime entry
-(`__arr_get_in_bounds` / `__arr_set_in_bounds`) whose body is the checked entry's minus
+(`__managed_get_in_bounds` / `__managed_set_in_bounds`) whose body is the checked entry's minus
 the `index < 0 or index >= length` test and its out-of-range return.
 
 Nothing about the SOURCE changes. `Array.get`/`Array.set` are declared throwing by
@@ -44,7 +44,7 @@ INSTANCE carries, which only a sized container has.
 ## Tests
 
 <!-- test: constant-index-get-has-no-bounds-check -->
-`__arr_get_in_bounds` is `__arr_get` without the `index < 0 or index >= length` test and
+`__managed_get_in_bounds` is `__managed_get` without the `index < 0 or index >= length` test and
 without the `oob` block that returns `ArrayError.indexOutOfBounds` — the element load, the
 element-destructor gate and the ok-return are shared with it verbatim.
 ```maxon
@@ -61,12 +61,12 @@ end 'main'
 33
 ```
 ```RequiredRuntime
-__arr_get_in_bounds
+__managed_get_in_bounds
 ```
 
 <!-- test: variable-index-get-keeps-the-bounds-check -->
 The CONTROL for the case above: the same vector, the same element, an index the compiler
-cannot see. `__arr_get`'s body still carries the negative test, the at-or-over-length test
+cannot see. `__managed_get`'s body still carries the negative test, the at-or-over-length test
 and the `oob` return.
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -92,13 +92,13 @@ end 'main'
 22
 ```
 ```RequiredRuntime
-__arr_get
+__managed_get
 ```
 
 <!-- test: constant-index-set-has-no-bounds-check -->
-`__arr_set_in_bounds` is `__arr_set` without the bounds test, without the `oob` block and
+`__managed_set_in_bounds` is `__managed_set` without the bounds test, without the `oob` block and
 without the rejected-element destroy that block owes — a write that cannot be rejected has
-no rejected element. The COW detach and the store are shared with `__arr_set` verbatim.
+no rejected element. The COW detach and the store are shared with `__managed_set` verbatim.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -113,7 +113,7 @@ end 'main'
 7
 ```
 ```RequiredRuntime
-__arr_set_in_bounds
+__managed_set_in_bounds
 ```
 
 <!-- test: variable-index-set-keeps-the-bounds-check -->
@@ -140,7 +140,7 @@ end 'main'
 12
 ```
 ```RequiredRuntime
-__arr_set
+__managed_set
 ```
 
 <!-- test: a-let-bound-literal-is-a-constant-index -->
@@ -251,7 +251,7 @@ end 'main'
 
 <!-- test: an-array-at-a-constant-index-keeps-its-check -->
 An `Array`'s length is a runtime field, not part of its type, so a constant index proves
-nothing about it. The emitted call is the checked `__arr_get`, and the empty array's
+nothing about it. The emitted call is the checked `__managed_get`, and the empty array's
 `get(0)` throws.
 ```maxon
 typealias Int = int(i64.min to i64.max)

@@ -9,7 +9,7 @@
 // ⭐ **The builtin types conform NATIVELY, the type-side twin of the synthesized
 // `Hashable`/`Equatable`/`Comparable` interfaces (`builtinInterface`).** shv2 reads no stdlib, so there is no
 // user `int.hash` / `float.compare` / `String.equals` to point a witness slot at — these are hand-built Std
-// bodies, exactly like `__str_eq` / the array runtime, installed after the pipeline so they are never
+// bodies, exactly like `__str_eq` / the managed-memory runtime, installed after the pipeline so they are never
 // re-optimized. They are NOT `__`-prefixed, so they carry a real `.text` symbol the witness-table reloc
 // (`recordFuncAbs64InRdata`) can name — the SAME funcAbs64 reloc that stamps `__witness_<Struct>.Digest`, only
 // here the target is synthesized rather than user-written. (`String` is a MANAGED concrete type, not a
@@ -60,7 +60,7 @@
 // **Measured, not inferred, on the base binary before a line of wave 7 was written:** `s.hash()` on a
 // `String` emits `call String.hash`, and the emitted `String.hash` is `call hashString` — the corpus's
 // `helpers/string/hash.maxon:22`. A `Set with String` reaches the same body through its witness slot, and a
-// `Set with Character` emits a `Character.hash` that calls `__str_bytes_view`/`__arr_count` — the corpus's
+// `Set with Character` emits a `Character.hash` that calls `__str_bytes_view`/`__managed_count` — the corpus's
 // `bytes()` walk, not the djb2 above. Three doors, one body, and the body is the CORPUS's.
 //
 // ⚠⚠ **DO NOT PRUNE THE FIVE.** The candidate list is DERIVED from `isIntrinsicBuiltinConformance` — one
@@ -277,15 +277,15 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 		buildByteRecordCompare(module, name: charCompare, ordering: ordering)
 	end 'charCompare'
 
-	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER, AND ITS TWO BODIES ARE `ArrayRuntime`'s (array-hashable)** — that
+	// ⭐⭐ **`Array` IS THE SIXTH CONFORMER, AND ITS TWO BODIES ARE `ManagedMemoryRuntime`'s (array-hashable)** — that
 	// file owns the 48-byte record and the packed-aware byte extent, exactly as `StringRuntime` owns
 	// `buildStrEq`'s. It joins by the same rule as every impl here: one symbol per (conformer, method), built
 	// iff the emitted module names it.
 	//
 	// ⭐ **AND IT IS THE `__str_eq` / `String.equals` ARRANGEMENT, NOT A THIRD SHAPE.** The very same graphs
-	// are ALSO installed under `__arr_hash`/`__arr_eq` by `installArrayRuntime`, which is what the DIRECT
+	// are ALSO installed under `__managed_hash`/`__managed_eq` by `installManagedMemoryRuntime`, which is what the DIRECT
 	// `arr.hash()` / `a == b` dispatch calls; the witness-visible pair is these. Two symbols, one builder
-	// each — see `ArrayRuntime.ArrHashName` for why the direct door may not name `Array.<method>` the way the
+	// each — see `ManagedMemoryRuntime.ManagedHashName` for why the direct door may not name `Array.<method>` the way the
 	// `String` and `int` doors name theirs.
 	if referenced.contains(arrayHash) 'arrayHash'
 		buildArrayHash(module, name: arrayHash)
@@ -812,7 +812,7 @@ end 'buildFloatCompare'
 // `qualifiedMethodName("Character", "compare")`. Two `.text` symbols, one graph, so `a < b` and a
 // `where T is Comparable` dispatch cannot come to order Characters differently.
 //
-// ⚠ **THE OPERATOR DOOR MAY NOT SIMPLY NAME `Character.compare`, AND THAT IS `ArrHashName`'s ARGUMENT WITH
+// ⚠ **THE OPERATOR DOOR MAY NOT SIMPLY NAME `Character.compare`, AND THAT IS `ManagedHashName`'s ARGUMENT WITH
 // ITS SECOND HALF MISSING.** `Character` IS reserved (`TypeResolution.isCompilerOwnedTypeName`), so no user
 // can mint that symbol — but unlike `String`, a source-written `Character.<member>(…)` reaches
 // `SemanticCheck.validateCall` rather than a parser interception (MEASURED: `Character.fromCodepoint(65)` is

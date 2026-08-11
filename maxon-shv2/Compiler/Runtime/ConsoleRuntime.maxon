@@ -50,7 +50,7 @@ export let ConsoleReadStdinName = b"__con_read_stdin"
 // the three outcomes coincide BY CONSTRUCTION. `osWriteStdout` discards `WriteFile`'s BOOL for a weaker
 // reason than this (nothing a caller could do); here the discard is what the documented contract asks for.
 //
-// ⚠ **`maxBytes` IS NOT VALIDATED HERE.** A negative or absurd count is `__arr_reserve`'s to refuse — it is
+// ⚠ **`maxBytes` IS NOT VALIDATED HERE.** A negative or absurd count is `__managed_reserve`'s to refuse — it is
 // the one allocator door and it already answers for every other reserve in the language — and duplicating
 // that judgement in a runtime builder would be a second allocation policy for one heap.
 function buildConsoleReadStdin(module StdModule)
@@ -80,9 +80,9 @@ function buildConsoleReadStdin(module StdModule)
 	let bytesRead = emitLoadField(module, block: entry, record: out, offset: 0 as ByteOffset, ids: ids)
 	emitRawFree(module, block: entry, ptr: out, ids: ids)
 
-	// PUBLISH the bytes. `__arr_reserve` set the capacity and left the length 0 (its contract), and
+	// PUBLISH the bytes. `__managed_reserve` set the capacity and left the length 0 (its contract), and
 	// `mm.length()` reads `length@8` — so an unpublished record would answer 0 for every read.
-	emitStoreField(module, block: entry, record: record, offset: ArrLengthOffset, value: bytesRead)
+	emitStoreField(module, block: entry, record: record, offset: ManagedRecordLengthOffset, value: bytesRead)
 	module.setTerminator(entry, op: StdOp.ret(record))
 
 	module.functions.push(func)

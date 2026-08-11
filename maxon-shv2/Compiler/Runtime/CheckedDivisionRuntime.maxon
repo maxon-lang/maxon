@@ -9,7 +9,7 @@
 // `divisionKindThrows` is the one place that difference is decided.
 //
 // ⭐ **WHY A "RUNTIME" FILE THAT INSTALLS NO RUNTIME FUNCTION.** Every other throwing builtin family here
-// is a set of BUILT Std functions (`__arr_get`, `__mf_open_read`, `__md_next`, `__gt_process_run`), and its
+// is a set of BUILT Std functions (`__managed_get`, `__mf_open_read`, `__md_next`, `__gt_process_run`), and its
 // file holds the builders. This one holds none, because a checked divide is EXPANDED IN PLACE at the point
 // of use (`LowerMaxonToStd.lowerDivisionExpansion`) rather than called: the whole body is a compare, the
 // `setcc` that materializes it, an `or`, and the divide the program asked for — so a `call`/`ret` around it
@@ -31,7 +31,7 @@
 //     declaration.
 //
 // ⭐ **THE PREDICATE AND THE LOWERING'S DISPATCH ARE ONE LIST, DERIVED, NOT TWO LISTS CHECKED.** The other
-// four families need a bidirectional install-time guard (`ArrayRuntime.verifyThrowingAccessorsMatchPredicate`)
+// four families need a bidirectional install-time guard (`ManagedMemoryRuntime.verifyThrowingAccessorsMatchPredicate`)
 // because a name-listing predicate and a set of builders that stamp a `throws` clause are genuinely two
 // copies of one fact, and only a check can hold them together. Here there is nothing to check: the two name
 // CONSTANTS below are the only place any name is WRITTEN, `divisionKindOf` and `divisionCalleeSignedness`
@@ -294,7 +294,7 @@ export function divisionKindThrows(kind CheckedDivisionKind) returns bool
 end 'divisionKindThrows'
 
 // What a checked divide throws — this family's speller, beside the four in `ManagedFileRuntime`,
-// `ManagedDirectoryRuntime` and `ArrayRuntime`, and read through the one `GtRuntime.runtimeThrowsClause`.
+// `ManagedDirectoryRuntime` and `ManagedMemoryRuntime`, and read through the one `GtRuntime.runtimeThrowsClause`.
 export function divisionByZeroThrows() returns ThrowsClause
 	return ThrowsClause.throwing(String.from(DivisionByZeroErrorTypeName))
 end 'divisionByZeroThrows'

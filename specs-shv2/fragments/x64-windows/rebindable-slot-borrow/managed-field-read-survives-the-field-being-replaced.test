@@ -51,7 +51,7 @@ func @Holder.create {
     x64.prologue 40
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -82,7 +82,7 @@ func @Holder.fill {
   each:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.movRegReg rdx, r13
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r13, r13, 1
@@ -111,18 +111,18 @@ func @Holder.swapAndRead {
     x64.movRegReg r12, r8
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 99
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.storeBaseDispReg.word64 [rbx + 0], r13
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r13, 0
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg r14, r8
     x64.jmp forhdr
   forhdr:
@@ -132,7 +132,7 @@ func @Holder.swapAndRead {
   walk:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -150,7 +150,7 @@ func @Holder.swapAndRead {
     x64.jmp forhdr
   forexit:
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 32
     x64.popReg r14

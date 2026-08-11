@@ -31,7 +31,7 @@ accepts `nums.map(function(a Integer, b Integer) gives a + b)`, and so did shv2 
 Both were reading an argument nobody passed. `map` calls its transform with ONE element plus the uniform
 `__env` slot, so `b` is whatever the second argument slot happened to hold: change the body to `gives b`
 and arm64-macOS prints `sum=0`, a value that is luck rather than an answer. On `wasm32-wasi` the same
-program does not run at all — `call_indirect` type-checks the callee's signature, so `__arr_map` traps with
+program does not run at all — `call_indirect` type-checks the callee's signature, so `__managed_map` traps with
 *"indirect call type mismatch"*. One target of four could see it, which is what makes the shape undefined
 rather than merely unspecified, and agreeing with the reference about an undefined program is not
 agreement worth keeping.

@@ -39,17 +39,17 @@ func @main {
     x64.prologue 88
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 11
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 22
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 33
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 0
     x64.leaRegRdata rax, [rip + __layout_Array_Int]
     x64.movRegReg rcx, rbx
@@ -67,7 +67,7 @@ func @main {
     x64.storeSlotReg slot0, rax
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_resize
+    x64.callDirect __managed_resize
     x64.movRegImm32 rdx, 0
     x64.jmp whilehdr
   whilehdr:
@@ -77,7 +77,7 @@ func @main {
     x64.jmp whileexit
   read:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -163,7 +163,7 @@ func @main {
     x64.loadRegSlot rax, slot0
     x64.leaRegRegImm32 r12, rax, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 88
     x64.popReg r15
@@ -187,14 +187,14 @@ func @Array.remove {
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
-    x64.callDirect __arr_remove
+    x64.callDirect __managed_remove
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
@@ -205,7 +205,7 @@ func @Array.remove {
     x64.ret
   tryok:
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, rbx
     x64.epilogue 32

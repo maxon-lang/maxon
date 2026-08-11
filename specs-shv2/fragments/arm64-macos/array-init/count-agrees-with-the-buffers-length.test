@@ -28,7 +28,7 @@ func @main {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 4
     arm64.movImm x1, 1
-    arm64.bl __arr_mem_create
+    arm64.bl __managed_mem_create
     arm64.movRegReg x19, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -44,7 +44,7 @@ func @main {
   tryok:
     arm64.movImm x1, 3
     arm64.movRegReg x0, x19
-    arm64.bl __arr_set_length
+    arm64.bl __managed_set_length
     arm64.cmp x9, 0
     arm64.cset x0, ne
     arm64.cbnz x0, tryerr
@@ -52,7 +52,7 @@ func @main {
   tryerr:
     arm64.movImm x20, 2
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -64,10 +64,10 @@ func @main {
     arm64.bl __mm_retain
     arm64.movRegReg x20, x0
     arm64.movRegReg x0, x20
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.movRegReg x21, x0
     arm64.movRegReg x0, x19
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x21, x0
     arm64.cset x0, ne
     arm64.cbnz x0, disagree
@@ -75,9 +75,9 @@ func @main {
   disagree:
     arm64.movImm x21, 4
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -86,7 +86,7 @@ func @main {
     arm64.ret
   ifcont:
     arm64.movRegReg x0, x20
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.movRegReg x21, x0
     arm64.cmp x21, 0
     arm64.cset x0, lt
@@ -109,9 +109,9 @@ func @main {
     arm64.ret
   __rc_ok:
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

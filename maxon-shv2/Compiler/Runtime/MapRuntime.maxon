@@ -61,7 +61,7 @@ export let MapDecrefName = b"__map_decref"
 // pair box per entry, cursor or no cursor. Materializing the entries costs the array's own buffer on top of
 // boxes that were always going to exist, and buys back the ARRAY form entire: the loop's counter, its live
 // length read, its borrow classification and its drop are all the ones `for x in <array>` already has, and
-// `map` is then literally `__arr_map` over the result.
+// `map` is then literally `__managed_map` over the result.
 //
 // ⚠ **THE PAIR OWNS ITS COLUMNS — IT DOES NOT BORROW THEM.** The map keeps every key and value it holds
 // (its `keyDrop@40`/`valueDrop@56` teardown walk destroys them), so a pair box holding the map's own pointers
@@ -108,7 +108,7 @@ end 'isMapWitnessCallee'
 // The THROWING map runtime callees — `__map_get` and `__map_insert`. Each returns via the dual-register
 // `errorReturn` ABI and can throw a `MapError` case, so a call to one MUST become a `tryCall` (it is under a
 // `try`, which `rewriteLastCallToTryCall` converts). The map-side twin of
-// `ArrayRuntime.isThrowingArrayRuntimeCallee`: the families are composed by
+// `ManagedMemoryRuntime.isThrowingManagedMemoryRuntimeCallee`: the families are composed by
 // `GtRuntime.isThrowingRuntimeCallee`, read at the ONE call site in the parser (E3055 accept) and the ONE in
 // SemanticCheck (E3057 reject), so the accept and the reject cannot name different sets.
 //
@@ -250,11 +250,11 @@ end 'installMapRuntime'
 // Occupied slot answers its `values@48` slot with `NoErrorFlag`, and a miss throws `MapError.keyNotFound`.
 // The `Map`'s READ failure, beside `__map_insert`'s write failure: the two reasons `Map` has an error enum.
 //
-// ⚠⚠ **THE RETURNED VALUE IS A BORROW — the map keeps owning it.** This is `__arr_get`'s contract exactly: no
+// ⚠⚠ **THE RETURNED VALUE IS A BORROW — the map keeps owning it.** This is `__managed_get`'s contract exactly: no
 // clone, no refcount bump, no transfer. A managed value handed out here is still the map's to drop at
 // teardown (through `valueDrop@56`), so a caller that stored it as an owner would double-free, and one that
 // dropped it would leave the map holding freed memory. The parser's borrow classification of the result is
-// what enforces that, and it must classify `__map_get` exactly as it classifies `__arr_get`.
+// what enforces that, and it must classify `__map_get` exactly as it classifies `__managed_get`.
 //
 // ⚠ **THE EMPTY-TABLE EDGE AND THE MISS EDGE ARE ONE BLOCK.** A capacity-0 map contains nothing, so its
 // answer IS the miss's answer — the same `errorReturn(0, keyNotFound)` — and a second block spelling it would
@@ -330,7 +330,7 @@ function buildMapEntries(module StdModule)
 	var afterValue = emitMapPairColumnPlace(module, func: func, cur: afterKey, box: box, fieldOffset: valueOffset, column: value, clone: valueClone, ids: ids)
 
 	let pushed = ids.mint()
-	module.appendOp(afterValue, op: StdOp.call(pushed, callee: ArrPushName, args: twoArgs(dest, second: box)))
+	module.appendOp(afterValue, op: StdOp.call(pushed, callee: ManagedPushName, args: twoArgs(dest, second: box)))
 	module.setTerminator(afterValue, op: StdOp.branch(step.id))
 
 	module.setTerminator(done, op: StdOp.retVoid)

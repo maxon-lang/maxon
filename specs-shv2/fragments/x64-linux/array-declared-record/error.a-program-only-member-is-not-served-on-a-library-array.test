@@ -1,0 +1,27 @@
+// Test: error.a-program-only-member-is-not-served-on-a-library-array
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function at(i int) returns Element
+		return try managed.get(i) otherwise panic("at: the caller checked the bound")
+	end 'at'
+end 'Array'
+
+function main() returns ExitCode
+	let parts = "a,b,c".split(",")
+	print(parts.at(1))
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:22:14: Unsupported: `Array` member 'at' — this value's type is the `Array` the standard library declares, and 'at' is declared on the `type Array` this program declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory

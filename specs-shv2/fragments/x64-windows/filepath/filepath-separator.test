@@ -84,16 +84,16 @@ func @Character.equals {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.callDirect __str_bytes_view
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegReg r13, r15
     x64.jcc notEqual, length_check
     x64.jmp ifcont
@@ -118,7 +118,7 @@ func @Character.equals {
   compare_loop:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.callDirect __arr_byte_at
+    x64.callDirect __managed_byte_at
     x64.storeSlotReg slot1, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -141,14 +141,14 @@ func @Character.equals {
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r14
-    x64.callDirect __arr_byte_at
+    x64.callDirect __managed_byte_at
     x64.movRegReg r14, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_32]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -162,7 +162,7 @@ func @Character.equals {
     x64.ret
   tryok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.loadRegSlot rax, slot1
     x64.cmpRegReg rax, r14
     x64.jcc notEqual, byte_check
@@ -208,7 +208,7 @@ func @Character.hash {
     x64.movRegReg rbx, rcx
     x64.movRegImm32 r12, 5381
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg r13, r8
     x64.movRegImm32 r14, 0
     x64.jmp forhdr
@@ -219,7 +219,7 @@ func @Character.hash {
   hash_loop:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.callDirect __arr_byte_at
+    x64.callDirect __managed_byte_at
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok

@@ -50,7 +50,7 @@ first must be named; shv2 enforces it (E2053) and the bootstrap does not — so 
 `value:` closed it, and the parser arm went in the same edit.
 
 ⇒ **The lowering did not change; it moved one frame down.** The arm handed the receiver's own RECORD to
-`__arr_set_byte`, and the corpus body's `managed.setByte(…)` on a fused record reaches the identical
+`__managed_set_byte`, and the corpus body's `managed.setByte(…)` on a fused record reaches the identical
 callee with the identical bound — a String record and an Array record agree on all five slots that
 entry reads, and it touches `@40` nowhere.
 

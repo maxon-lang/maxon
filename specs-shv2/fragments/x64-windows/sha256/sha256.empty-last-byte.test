@@ -28,17 +28,17 @@ func @main {
     x64.prologue 72
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect sha256
     x64.movRegReg r12, r8
     x64.storeSlotReg slot0, r12
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegImm32 rdx, 31
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -94,7 +94,7 @@ func @main {
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 72
     x64.popReg r15
@@ -121,10 +121,10 @@ func @Array.reserve {
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_capacity
+    x64.callDirect __managed_capacity
     x64.movRegReg r14, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegReg r12, r14
     x64.jcc greater, grow
     x64.jmp ifcont
@@ -134,13 +134,13 @@ func @Array.reserve {
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_mem_grow
+    x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_18]
     x64.callDirect mrt_panic
     x64.epilogue 32
@@ -152,7 +152,7 @@ func @Array.reserve {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.jmp ifcont
   ifcont:
     x64.epilogue 32
@@ -183,7 +183,7 @@ func @Array.createIterator {
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegImm32 r8, 0
     x64.movRegReg r10, r13
     x64.epilogue 40
@@ -194,7 +194,7 @@ func @Array.createIterator {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegImm32 r10, 0
     x64.movRegReg r8, r12
     x64.epilogue 40
@@ -211,7 +211,7 @@ func @ArrayIterator.create {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.callDirect __arr_cursor_create
+    x64.callDirect __managed_cursor_create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -244,7 +244,7 @@ func @ArrayIterator.current {
     x64.prologue 40
     x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.callDirect __arr_cursor_current
+    x64.callDirect __managed_cursor_current
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect __retain_type_param
@@ -260,7 +260,7 @@ func @ArrayIterator.advance {
     x64.movRegReg rbp, rsp
     x64.prologue 32
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.callDirect __arr_cursor_advance
+    x64.callDirect __managed_cursor_advance
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -503,7 +503,7 @@ func @sha256ReadBE32 {
     x64.movRegReg r12, rdx
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -516,7 +516,7 @@ func @sha256ReadBE32 {
   trycont:
     x64.leaRegRegImm32 rdx, r12, 1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -529,7 +529,7 @@ func @sha256ReadBE32 {
   trycont:
     x64.leaRegRegImm32 rdx, r12, 2
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -542,7 +542,7 @@ func @sha256ReadBE32 {
   trycont:
     x64.leaRegRegImm32 rdx, r12, 3
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -586,7 +586,7 @@ func @sha256Compress {
     x64.movRegReg r13, rax
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg r14, r8
     x64.storeSlotReg slot0, r14
     x64.movRegImm32 rdx, 64
@@ -605,7 +605,7 @@ func @sha256Compress {
     x64.callDirect sha256ReadBE32
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r8
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.leaRegRegImm32 r15, r15, 1
     x64.jmp whilehdr
   whileexit:
@@ -618,7 +618,7 @@ func @sha256Compress {
   extend:
     x64.leaRegRegImm32 rdx, r15, -2
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -637,7 +637,7 @@ func @sha256Compress {
   tryok:
     x64.leaRegRegImm32 rdx, r15, -7
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.storeSlotReg slot17, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -656,7 +656,7 @@ func @sha256Compress {
   tryok:
     x64.leaRegRegImm32 rdx, r15, -15
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -675,7 +675,7 @@ func @sha256Compress {
   tryok:
     x64.leaRegRegImm32 rdx, r15, -16
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -704,7 +704,7 @@ func @sha256Compress {
     x64.movRegImm32 rax, 4294967295
     x64.andRegReg rdx, rdx, rax
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.loadRegSlot rax, slot13
     x64.leaRegRegImm32 rax, rax, 1
     x64.movRegReg r15, rax
@@ -732,7 +732,7 @@ func @sha256Compress {
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -753,7 +753,7 @@ func @sha256Compress {
     x64.andRegReg rax, rax, rcx
     x64.movRegReg rcx, r14
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_set
+    x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -785,7 +785,7 @@ func @sha256Compress {
   forjoin:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.storeSlotReg slot5, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -804,7 +804,7 @@ func @sha256Compress {
   tryok:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.storeSlotReg slot8, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -823,7 +823,7 @@ func @sha256Compress {
   tryok:
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.storeSlotReg slot12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -842,7 +842,7 @@ func @sha256Compress {
   tryok:
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.storeSlotReg slot16, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -861,7 +861,7 @@ func @sha256Compress {
   tryok:
     x64.movRegImm32 rdx, 4
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -880,7 +880,7 @@ func @sha256Compress {
   tryok:
     x64.movRegImm32 rdx, 5
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -899,7 +899,7 @@ func @sha256Compress {
   tryok:
     x64.movRegImm32 rdx, 6
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -918,7 +918,7 @@ func @sha256Compress {
   tryok:
     x64.movRegImm32 rdx, 7
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -1069,7 +1069,7 @@ func @sha256Compress {
     x64.loadRegSlot rax, slot6
     x64.callDirect sha256AddIntoState
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.epilogue 184
     x64.popReg r15
     x64.popReg r14
@@ -1093,7 +1093,7 @@ func @sha256AddIntoState {
     x64.movRegReg r13, rax
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1112,7 +1112,7 @@ func @sha256AddIntoState {
     x64.andRegReg rax, rax, rcx
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_set
+    x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1147,15 +1147,15 @@ func @sha256 {
     x64.movRegReg rbx, rcx
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg r12, r8
     x64.movRegImm32 rdx, 8
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_resize
+    x64.callDirect __managed_resize
     x64.movRegImm32 rdx, 0
     x64.movRegImm32 rax, 1779033703
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_set_in_bounds
+    x64.callDirect __managed_set_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1175,7 +1175,7 @@ func @sha256 {
     x64.movRegImm32 rdx, 1
     x64.movRegImm32 rax, 3144134277
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_set_in_bounds
+    x64.callDirect __managed_set_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1195,7 +1195,7 @@ func @sha256 {
     x64.movRegImm32 rdx, 2
     x64.movRegImm32 rax, 1013904242
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_set_in_bounds
+    x64.callDirect __managed_set_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1215,7 +1215,7 @@ func @sha256 {
     x64.movRegImm32 rdx, 3
     x64.movRegImm32 rax, 2773480762
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_set_in_bounds
+    x64.callDirect __managed_set_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1235,7 +1235,7 @@ func @sha256 {
     x64.movRegImm32 rdx, 4
     x64.movRegImm32 rax, 1359893119
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_set_in_bounds
+    x64.callDirect __managed_set_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1255,7 +1255,7 @@ func @sha256 {
     x64.movRegImm32 rdx, 5
     x64.movRegImm32 rax, 2600822924
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_set_in_bounds
+    x64.callDirect __managed_set_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1275,7 +1275,7 @@ func @sha256 {
     x64.movRegImm32 rdx, 6
     x64.movRegImm32 rax, 528734635
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_set_in_bounds
+    x64.callDirect __managed_set_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1295,7 +1295,7 @@ func @sha256 {
     x64.movRegImm32 rdx, 7
     x64.movRegImm32 rax, 1541459225
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_set_in_bounds
+    x64.callDirect __managed_set_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1313,26 +1313,26 @@ func @sha256 {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg r13, r8
     x64.imulRegRegImm32 r14, r13, 8
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg r15, r8
     x64.leaRegRegImm32 rdx, r13, 72
     x64.movRegReg rcx, r15
     x64.callDirect Array.reserve
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
-    x64.callDirect __arr_append
+    x64.callDirect __managed_append
     x64.movRegImm32 rdx, 128
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.jmp whilehdr
   whilehdr:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegImm32 rcx, 64
     x64.movRegReg rax, r8
     x64.cqo
@@ -1343,7 +1343,7 @@ func @sha256 {
   pad:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.jmp whilehdr
   whileexit:
     x64.movRegReg rax, r14
@@ -1371,7 +1371,7 @@ func @sha256 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rax, r14
     x64.sarRegImm8 rax, r14, 48
     x64.movRegReg rdx, rax
@@ -1397,7 +1397,7 @@ func @sha256 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rax, r14
     x64.sarRegImm8 rax, r14, 40
     x64.movRegReg rdx, rax
@@ -1423,7 +1423,7 @@ func @sha256 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rax, r14
     x64.sarRegImm8 rax, r14, 32
     x64.movRegReg rdx, rax
@@ -1449,7 +1449,7 @@ func @sha256 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rax, r14
     x64.sarRegImm8 rax, r14, 24
     x64.movRegReg rdx, rax
@@ -1475,7 +1475,7 @@ func @sha256 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rax, r14
     x64.sarRegImm8 rax, r14, 16
     x64.movRegReg rdx, rax
@@ -1501,7 +1501,7 @@ func @sha256 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rax, r14
     x64.sarRegImm8 rax, r14, 8
     x64.movRegReg rdx, rax
@@ -1527,7 +1527,7 @@ func @sha256 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rdx, r14
     x64.andRegImm32 rdx, r14, 255
     x64.cmpRegImm32 rdx, 0
@@ -1551,12 +1551,12 @@ func @sha256 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rbx, 0
     x64.jmp whilehdr
   whilehdr:
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.cmpRegReg rbx, r8
     x64.jcc less, processBlocks
     x64.jmp whileexit
@@ -1570,14 +1570,14 @@ func @sha256 {
   whileexit:
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 32
     x64.movRegReg rcx, rbx
     x64.callDirect Array.reserve
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1599,7 +1599,7 @@ func @sha256 {
     x64.callDirect emitBE32
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1621,7 +1621,7 @@ func @sha256 {
     x64.callDirect emitBE32
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1643,7 +1643,7 @@ func @sha256 {
     x64.callDirect emitBE32
     x64.movRegImm32 rdx, 3
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1665,7 +1665,7 @@ func @sha256 {
     x64.callDirect emitBE32
     x64.movRegImm32 rdx, 4
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1687,7 +1687,7 @@ func @sha256 {
     x64.callDirect emitBE32
     x64.movRegImm32 rdx, 5
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1709,7 +1709,7 @@ func @sha256 {
     x64.callDirect emitBE32
     x64.movRegImm32 rdx, 6
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1731,7 +1731,7 @@ func @sha256 {
     x64.callDirect emitBE32
     x64.movRegImm32 rdx, 7
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get_in_bounds
+    x64.callDirect __managed_get_in_bounds
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1752,9 +1752,9 @@ func @sha256 {
     x64.movRegReg rdx, r8
     x64.callDirect emitBE32
     x64.movRegReg rcx, r15
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r15
@@ -1796,7 +1796,7 @@ func @emitBE32 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rax, r12
     x64.sarRegImm8 rax, r12, 16
     x64.movRegReg rdx, rax
@@ -1818,7 +1818,7 @@ func @emitBE32 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rax, r12
     x64.sarRegImm8 rax, r12, 8
     x64.movRegReg rdx, rax
@@ -1840,7 +1840,7 @@ func @emitBE32 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rdx, r12
     x64.andRegImm32 rdx, r12, 255
     x64.cmpRegImm32 rdx, 0
@@ -1860,7 +1860,7 @@ func @emitBE32 {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx

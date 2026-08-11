@@ -481,7 +481,7 @@ end 'main'
 
 <!-- test: top-level-var-array-string-elements -->
 A String-element array global owns its elements: each literal is CLONED into the record, and
-`__arr_decref`'s walk `__str_decref`s every live slot at exit. Leak-gated — a missed clone double-frees
+`__managed_decref`'s walk `__str_decref`s every live slot at exit. Leak-gated — a missed clone double-frees
 the immortal `.rdata` record and a missed stamp leaks all of them.
 ```maxon
 var names = ["ab", "cde"]
@@ -506,7 +506,7 @@ a fresh literal (the old record must be released, not leaked), one never touched
 immutable one only read. `3 + 4 + 6 + 2`.
 
 ⚠ **`untouched` NO LONGER REACHES THE BINARY** (P1.7 slice 3): nothing names it, so dead-global
-elimination drops its slot, the `__arr_create`/`__arr_push` run that built it and the `__arr_decref` that
+elimination drops its slot, the `__managed_create`/`__managed_push` run that built it and the `__managed_decref` that
 freed it — which is why the golden's `.data` holds `grow` and `fixed` alone. The answer is unmoved (the
 declaration never contributed to it), and what the case still pins is the pair that matters here: `grow`
 and `fixed` are TWO LIVE array globals sharing one `__module_init`, so the prune is per-global rather

@@ -57,7 +57,7 @@ let ErrorPathNotFound = 3 as ParsedInt
 let ErrorAccessDenied = 5 as ParsedInt
 
 // ⭐ **THE `__ManagedFileError` ORDINALS, AS ERROR FLAGS (`ordinal + ErrorFlagOrdinalBias`).** DERIVED from
-// the bias rather than spelled 1…11, exactly as `ArrayRuntime.ArrIndexOutOfBoundsFlag` is — and the ordinals
+// the bias rather than spelled 1…11, exactly as `ManagedMemoryRuntime.ArrayErrorIndexOutOfBoundsFlag` is — and the ordinals
 // themselves are positional facts about the case order of the enum DECLARED at `stdlib/Builtins.maxon:175`
 // (A1s). `verifyManagedFileOrdinals` below is what holds these literals to that declaration.
 //
@@ -193,8 +193,8 @@ export let ManagedFileStatFieldName = b"__mf_stat_field"
 export let ManagedFileStatFreeName = b"__mf_stat_free"
 
 // ⭐ **WHICH `__ManagedFile` CALLEES THROW** — the third composer behind `Parser.isThrowingRuntimeCallee`,
-// beside `isThrowingArrayRuntimeCallee` and `isThrowingGtRuntimeCallee`. Held to the builders by the
-// bidirectional drift guard in `installManagedFileRuntime`, which is copied from `installArrayRuntime`
+// beside `isThrowingManagedMemoryRuntimeCallee` and `isThrowingGtRuntimeCallee`. Held to the builders by the
+// bidirectional drift guard in `installManagedFileRuntime`, which is copied from `installManagedMemoryRuntime`
 // deliberately: a predicate and a `throws` stamp are one fact in two places, and this project keeps
 // finding that pair drifted.
 export function isThrowingManagedFileRuntimeCallee(callee ByteArray) returns bool
@@ -294,15 +294,15 @@ end 'managedFileThrows'
 // `StringRuntime.stringBlobBytes`), and `"…".toByteArray()` MATERIALIZES a fresh array whose buffer is
 // exactly `length` bytes. Writing a NUL at `buffer[length]` in place would be a one-byte heap overflow
 // whenever capacity equals length — which is precisely what a freshly materialized view has.
-// ⇒ allocate `length + 1`, copy, terminate. The copy reuses `ArrayRuntime.emitForwardCopy` rather than
+// ⇒ allocate `length + 1`, copy, terminate. The copy reuses `ManagedMemoryRuntime.emitForwardCopy` rather than
 // growing a second byte loop. **The caller owns the scratch and must `__mm_free` it on every path.**
 //
 // Emits into `cur`, routes the copy loop's exit into `join`, and writes the terminator in `join` — so the
 // caller carries on from `join` with the pointer this returns. `cur` dominates `join`, which is what lets
 // `len` be read in one and used in the other with no block argument.
 export function emitPathToCString(module StdModule, func IrFunction, cur IrBlock, join IrBlock, pathRec ValueId, ids ValueMinter) returns ValueId
-	let len = emitLoadField(module, block: cur, record: pathRec, offset: ArrLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: cur, record: pathRec, offset: ArrBufferOffset, ids: ids)
+	let len = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: cur, record: pathRec, offset: ManagedRecordBufferOffset, ids: ids)
 	let one = emitConst(module, block: cur, value: 1, ids: ids)
 	let size = emitBin(module, block: cur, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let scratch = emitRawAlloc(module, block: cur, byteCount: size, ids: ids)
@@ -427,7 +427,7 @@ function emitFileErrnoClassifiedThrow(module StdModule, func IrFunction, block I
 end 'emitFileErrnoClassifiedThrow'
 
 // ⚠ The two throwing exits this file used to spell for itself (`emitManagedFileThrow`/`emitManagedFileOk`)
-// are `MmRuntime.emitErrorReturn`/`emitOkReturn` — the identical three-line bodies `ArrayRuntime` also had.
+// are `MmRuntime.emitErrorReturn`/`emitOkReturn` — the identical three-line bodies `ManagedMemoryRuntime` also had.
 // R4.3 would have been the third copy; see their header in `MmRuntime` for why they now have one home.
 
 // ⭐⭐ **THE LIVE OS HANDLE OF A RECORD, OR THIS FAMILY'S `closed` THROW — ONE HOME FOR THE GUARD ITSELF.**
@@ -472,7 +472,7 @@ end 'emitOpenHandleOrThrow'
 // capacity, which is right only for the element size 1 its corpus always passes; this is the same answer
 // there and the correct one everywhere else.)
 //
-// ⚠⚠ **THE CONVERSION IS `ArrayRuntime.emitElementByteLen` AND NOT A MULTIPLY, BECAUSE `element_size@24` IS
+// ⚠⚠ **THE CONVERSION IS `ManagedMemoryRuntime.emitElementByteLen` AND NOT A MULTIPLY, BECAUSE `element_size@24` IS
 // SIGNED.** A sub-byte-packed element stamps a NEGATIVE bit width, so `count · es` is a negative extent —
 // and this one does not merely compute a wrong number, it becomes `osReadFile`/`osWriteFile`'s LENGTH, where
 // DWORD truncation reads it as an enormous unsigned count.
@@ -485,7 +485,7 @@ end 'emitOpenHandleOrThrow'
 // does not depend on a front-end predicate staying exactly as strict as it is now.
 function emitArrayByteExtent(module StdModule, block IrBlock, arrRec ValueId, offset ByteOffset, ids ValueMinter) returns ValueId
 	let count = emitLoadField(module, block: block, record: arrRec, offset: offset, ids: ids)
-	let es = emitLoadField(module, block: block, record: arrRec, offset: ArrElementSizeOffset, ids: ids)
+	let es = emitLoadField(module, block: block, record: arrRec, offset: ManagedRecordElementSizeOffset, ids: ids)
 	return emitElementByteLen(module, block: block, count: count, es: es, ids: ids)
 end 'emitArrayByteExtent'
 
@@ -677,13 +677,13 @@ function buildManagedFileRead(module StdModule)
 	let negative = emitCmp(module, block: checkLow, a: size, b: zero, pred: StdCmpPred.lt, ids: ids)
 	module.setTerminator(checkLow, op: StdOp.condBranch(negative, thenBlockId: tooBig.id, elseBlockId: checkCap.id))
 
-	let byteCapacity = emitArrayByteExtent(module, block: checkCap, arrRec: arrRec, offset: ArrCapacityOffset, ids: ids)
+	let byteCapacity = emitArrayByteExtent(module, block: checkCap, arrRec: arrRec, offset: ManagedRecordCapacityOffset, ids: ids)
 	let overCapacity = emitCmp(module, block: checkCap, a: size, b: byteCapacity, pred: StdCmpPred.gt, ids: ids)
 	module.setTerminator(checkCap, op: StdOp.condBranch(overCapacity, thenBlockId: tooBig.id, elseBlockId: doRead.id))
 
 	emitErrorReturn(module, block: tooBig, flag: ManagedFileReadFailedFlag, ids: ids)
 
-	let buffer = emitLoadField(module, block: doRead, record: arrRec, offset: ArrBufferOffset, ids: ids)
+	let buffer = emitLoadField(module, block: doRead, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
 	let out = emitWin32OutWord(module, block: doRead, ids: ids)
 	let verdict = ids.mint()
 	module.appendOp(doRead, op: StdOp.osReadFile(verdict, handleId: handle, bufId: buffer, lenId: size, bytesOutPtrId: out))
@@ -712,8 +712,8 @@ function buildManagedFileWrite(module StdModule)
 	let arrRec = 1 as ValueId
 	let handle = emitOpenHandleOrThrow(module, func: func, entry: entry, join: doWrite, box: box, ids: ids)
 
-	let buffer = emitLoadField(module, block: doWrite, record: arrRec, offset: ArrBufferOffset, ids: ids)
-	let byteLength = emitArrayByteExtent(module, block: doWrite, arrRec: arrRec, offset: ArrLengthOffset, ids: ids)
+	let buffer = emitLoadField(module, block: doWrite, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
+	let byteLength = emitArrayByteExtent(module, block: doWrite, arrRec: arrRec, offset: ManagedRecordLengthOffset, ids: ids)
 	let out = emitWin32OutWord(module, block: doWrite, ids: ids)
 	let verdict = ids.mint()
 	module.appendOp(doWrite, op: StdOp.osWriteFile(verdict, handleId: handle, bufId: buffer, lenId: byteLength, bytesOutPtrId: out))
@@ -942,7 +942,7 @@ function emitFileTimeToUnixSeconds(module StdModule, block IrBlock, findData Val
 end 'emitFileTimeToUnixSeconds'
 
 // Store `(attrs and mask) != 0` as 0 or 1 at `out + offset`, and return the block to carry on in. Two
-// return blocks because there is no `setcc` in this tier — the same shape `ArrayRuntime.buildArrIsEmpty`
+// return blocks because there is no `setcc` in this tier — the same shape `ManagedMemoryRuntime.buildManagedIsEmpty`
 // takes for the same reason.
 function emitStoreAttributeFlag(module StdModule, func IrFunction, cur IrBlock, out ValueId, offset ByteOffset, attrs ValueId, mask ParsedInt, ids ValueMinter) returns IrBlock
 	var setBlock = module.addBlock(func, label: b"mfattr1")
@@ -994,7 +994,7 @@ function buildManagedFileStatField(module StdModule)
 
 	// BOTH ENDS, in two compares: `StdCmpPred` is SIGNED throughout this tier (there is no unsigned
 	// predicate), so a lone `index >= fields` accepts a negative index and reads BELOW the buffer. This is
-	// `ArrayRuntime.emitIndexOutOfRange`'s shape and it is here for its reason.
+	// `ManagedMemoryRuntime.emitIndexOutOfRange`'s shape and it is here for its reason.
 	var checkHigh = module.addBlock(func, label: b"mfchkhi")
 	let zeroIndex = emitConst(module, block: checkIndex, value: 0, ids: ids)
 	let negativeIndex = emitCmp(module, block: checkIndex, a: index, b: zeroIndex, pred: StdCmpPred.lt, ids: ids)
@@ -1078,7 +1078,7 @@ function claimManagedFileOrdinals(project Project, declaration EnumLayout)
 	fileErrors.claim(ManagedFileClosedCaseName, ordinal: ManagedFileClosedOrdinal)
 end 'claimManagedFileOrdinals'
 
-// ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installArrayRuntime` for its stated reason:
+// ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installManagedMemoryRuntime` for its stated reason:
 // the predicate above and the `throws` clauses stamped by the builders are ONE fact in two places, and a
 // builder that gains or loses a clause without the predicate following is a `try` that silently stops
 // being required (or an E3057 on a call that cannot fail). Checked in BOTH directions.

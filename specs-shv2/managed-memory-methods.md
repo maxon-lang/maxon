@@ -1092,7 +1092,7 @@ end 'main'
 This case asserted the opposite until R4.6 review, and it was testing a capability that should not exist.
 
 The capacity bound is what makes `[length, capacity)` writable, and that region carries **no ownership**:
-`__arr_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT `length` without destroying the
+`__managed_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT `length` without destroying the
 occupant (before the ruling that slot was PROVABLY NULL), and a grow or a detach copies only the live bytes
 and abandons the rest. So a staged managed element is owned by nobody until `setLength` publishes it — and by
 nobody at all if one never does. MEASURED at exit **101** with the gate lifted, for a `String` element AND for
@@ -1154,7 +1154,7 @@ error E3109: <fragment>:18:17: 'managed.set' cannot store an element of 'Slot': 
 
 ⭐⭐ **THE FIVE LINES THAT DECIDED THE RULING (coordinator, 2026-07-30).** Nothing here looks like a contract
 violation — `reserve` then `set(0, …)` then return — and before R4.6 that `set` was simply refused, because
-`__arr_set` was length-bounded. The capacity ruling is what made it reachable, which is what put it under
+`__managed_set` was length-bounded. The capacity ruling is what made it reachable, which is what put it under
 "a reachable leak a rung ENABLES is fixed or the causing construct REJECTED before merge". MEASURED at exit
 **101** before the refusal landed. It is the shortest program in the family and the one to keep.
 ```maxon
@@ -1223,7 +1223,7 @@ end 'main'
 <!-- test: array-set-is-still-bounded-by-the-live-length -->
 
 ⭐ **THE NEGATIVE CONTROL, and the case that makes the six above trustworthy.** `Array.set` must NOT move:
-`specs/arrays.md` and the whole array corpus are written against a length bound, and `__arr_set` is shared.
+`specs/arrays.md` and the whole array corpus are written against a length bound, and `__managed_set` is shared.
 Without this case a change that made BOTH surfaces capacity-bounded would satisfy every other case here.
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -1281,15 +1281,15 @@ a managed element into `set` (`moveElementIntoArray`), so the callee owns it fro
 caller's scope-exit drop is suppressed. On the success path the array becomes the owner — and on the
 out-of-range path nothing did, so the element simply leaked. MEASURED before the fix: the first `try` below
 exited **101**, while the identical program over an `Array with Int` exited 0 (the control that says this is
-the managed move-in, not the throw). R4.6 fixes it because `__arr_mem_set` would otherwise have been written
+the managed move-in, not the throw). R4.6 fixes it because `__managed_mem_set` would otherwise have been written
 with the identical leak on its first day.
 
 ⚠ **IT ASSERTS ONLY THE ARRAY SURFACE, AND THE MISSING HALF IS NOT AN OMISSION.** It asserted both until R4.6
 review; the buffer half is now a COMPILE error (E3109 — a managed element cannot reach `managed.set` at all),
 which is a strictly stronger guarantee than "the refusal does not leak". The consequence is worth stating
-where a sabotage-runner will look: `__arr_mem_set`'s own `emitDestroyRejectedElement` call is now unreachable
+where a sabotage-runner will look: `__managed_mem_set`'s own `emitDestroyRejectedElement` call is now unreachable
 from any spelling the front end admits, so no test can redden it. It is kept deliberately — see
-`buildArrMemSet` — and this line is why breaking it is silent.
+`buildManagedMemSet` — and this line is why breaking it is silent.
 ```maxon
 typealias StrArray = Array with String
 
@@ -1315,12 +1315,12 @@ end 'main'
 
 <!-- test: set-byte-through-a-viewed-owner-detaches-first -->
 
-⭐⭐ **A BUG R4.6 FOUND AND FIXED IN R4.4's WRITE GUARD.** `__arr_cow_detach` has TWO arms — a buffer that is
+⭐⭐ **A BUG R4.6 FOUND AND FIXED IN R4.4's WRITE GUARD.** `__managed_cow_detach` has TWO arms — a buffer that is
 not this record's (`capacity < 0`), and one that IS but is being read by a view — and R4.4's guard called the
 detach only under a hand-written copy of the FIRST arm (`emitBufferNotOwned`). So a `setByte` through the
 OWNER of a viewed buffer wrote straight through the sharing. MEASURED before the fix: this program returned
-**198**, the view reading back the owner's 99. The guard now calls `__arr_cow_detach` unconditionally and lets
-it answer both arms, which is the gating rule `buildArrCowDetach`'s own header states.
+**198**, the view reading back the owner's 99. The guard now calls `__managed_cow_detach` unconditionally and lets
+it answer both arms, which is the gating rule `buildManagedCowDetach`'s own header states.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
@@ -1344,7 +1344,7 @@ end 'main'
 <!-- test: set-through-a-viewed-owner-detaches-first -->
 
 ⭐⭐ **THE SAME ARM-2 HOLE ON THE MEMBER R4.6 ADDED, WHICH THE `setByte` CASE ABOVE DOES NOT COVER (added in
-review).** `__arr_mem_set` and `__arr_set_byte` reach `__arr_cow_detach` through the one
+review).** `__managed_mem_set` and `__managed_set_byte` reach `__managed_cow_detach` through the one
 `emitBufferAccessGuard`, so it is tempting to read one case as covering both — it does not. MEASURED, by
 re-applying R4.6's own sabotage (restore R4.4's conditional `capacity < 0` detach and rebuild): the suite went
 **53 passed / 1 failed**, red on the `setByte` case ALONE, while this program — never committed — returned the
@@ -1462,7 +1462,7 @@ end 'main'
 
 ⭐ **THE SAME E3057 RULE, THE `__ManagedMemory` FAMILY'S NOUN (D12).** `byteAt` throws
 `__ManagedMemoryError.indexOutOfBounds`, so a bare call drops the flag and hands back a dummy 0 — a wrong
-answer. The family reaches the diagnostic THROUGH `isThrowingArrayRuntimeCallee`, which is why it used to
+answer. The family reaches the diagnostic THROUGH `isThrowingManagedMemoryRuntimeCallee`, which is why it used to
 inherit "throwing array accessor" although the receiver is a buffer and the method is the buffer's own.
 ```maxon
 typealias Int = int(i64.min to i64.max)
@@ -1602,7 +1602,7 @@ error E3055: <fragment>:5:2: try requires a throwing function: this builtin call
 <!-- test: buffer-append-deep-clones-a-managed-element -->
 
 ⭐⭐ **THE BUFFER'S `append` AND THE `Array`'s ARE ONE OPERATION, AND WHILE THEY WERE TWO THIS PROGRAM
-SEGFAULTED.** The buffer had its own callee (`__arr_mem_append`) whose only distinguishing property was a
+SEGFAULTED.** The buffer had its own callee (`__managed_mem_append`) whose only distinguishing property was a
 throwing-ness the ruling above removed — and that callee byte-blitted the receiver's elements whatever they
 were, so appending through the `.managed` surface of an `Array with String` duplicated every heap pointer and
 double-freed it at teardown. The `Array` spelling had always picked its emission by element kind; folding the
@@ -1638,7 +1638,7 @@ beta is also long enough to be heap allocated
 <!-- test: error.buffer-has-no-push -->
 
 ⭐ **THE PROGRAM THE D11 REVIEW RAN: it compiled, linked and exited 0.** `push` is an `Array` method and
-the buffer has no member of that name — the two grow differently (`__arr_push` raises the capacity by the
+the buffer has no member of that name — the two grow differently (`__managed_push` raises the capacity by the
 doubling policy and publishes a length; the buffer stages into capacity and publishes with `setLength`), so
 accepting it was not a convenience, it was a second length policy on a surface whose whole contract is that
 the author publishes the length.
@@ -1675,8 +1675,8 @@ error E2015: <fragment>:4:13: Unsupported: `__ManagedMemory` member 'push' — R
 
 ⭐⭐ **THE SECOND PROGRAM THE D11 REVIEW RAN, AND THE ONE THAT FLIPPED.** It was
 `error.buffer-has-no-remove`: the roster said `remove` "is not built" while the arm accepted it and emitted
-the `Array`'s length-bounded `__arr_remove`, so D11b made both halves say ABSENT. The Array-retirement rung
-that BUILDS the member makes both halves say PRESENT instead — the arm is the same `__arr_remove` it always
+the `Array`'s length-bounded `__managed_remove`, so D11b made both halves say ABSENT. The Array-retirement rung
+that BUILDS the member makes both halves say PRESENT instead — the arm is the same `__managed_remove` it always
 was (same `length` bound, same tail slide, same erase of the vacated slot), and what changed is that the
 roster now claims it.
 

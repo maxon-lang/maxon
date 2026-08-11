@@ -62,7 +62,7 @@ func @make {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x20, 0
     arm64.b whilehdr
@@ -74,7 +74,7 @@ func @make {
   fill:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x20
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.add x20, x20, 1
     arm64.b whilehdr
   whileexit:
@@ -103,7 +103,7 @@ func @main {
     arm64.movImm x1, 1
     arm64.movImm x2, 5
     arm64.movRegReg x0, x19
-    arm64.bl __arr_slice
+    arm64.bl __managed_slice
     arm64.movRegReg x20, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -112,7 +112,7 @@ func @main {
   tryerr:
     arm64.movImm x20, 1
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -128,11 +128,11 @@ func @main {
     arm64.ret
   tryok:
     arm64.movRegReg x0, x20
-    arm64.bl __arr_clear
+    arm64.bl __managed_clear
     arm64.movImm x1, 1
     arm64.movImm x2, 5
     arm64.movRegReg x0, x19
-    arm64.bl __arr_slice
+    arm64.bl __managed_slice
     arm64.movRegReg x21, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -141,9 +141,9 @@ func @main {
   tryerr:
     arm64.movImm x21, 2
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x21
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -159,7 +159,7 @@ func @main {
     arm64.ret
   tryok:
     arm64.movRegReg x0, x21
-    arm64.bl __arr_pop
+    arm64.bl __managed_pop
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -175,7 +175,7 @@ func @main {
     arm64.movImm x1, 2
     arm64.movImm x2, 6
     arm64.movRegReg x0, x19
-    arm64.bl __arr_slice
+    arm64.bl __managed_slice
     arm64.movRegReg x23, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -184,11 +184,11 @@ func @main {
   tryerr:
     arm64.movImm x22, 3
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -205,7 +205,7 @@ func @main {
   tryok:
     arm64.movImm x1, 0
     arm64.movRegReg x0, x23
-    arm64.bl __arr_remove
+    arm64.bl __managed_remove
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -221,7 +221,7 @@ func @main {
     arm64.movImm x1, 0
     arm64.movImm x2, 3
     arm64.movRegReg x0, x19
-    arm64.bl __arr_slice
+    arm64.bl __managed_slice
     arm64.movRegReg x25, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -230,13 +230,13 @@ func @main {
   tryerr:
     arm64.movImm x22, 4
     arm64.movRegReg x0, x23
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -254,11 +254,11 @@ func @main {
     arm64.movImm x1, 1
     arm64.movImm x2, 99
     arm64.movRegReg x0, x25
-    arm64.bl __arr_insert
+    arm64.bl __managed_insert
     arm64.movImm x1, 0
     arm64.movImm x2, 4
     arm64.movRegReg x0, x19
-    arm64.bl __arr_slice
+    arm64.bl __managed_slice
     arm64.movRegReg x26, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -267,15 +267,15 @@ func @main {
   tryerr:
     arm64.movImm x22, 5
     arm64.movRegReg x0, x25
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x23
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -292,11 +292,11 @@ func @main {
   tryok:
     arm64.movImm x1, 2
     arm64.movRegReg x0, x26
-    arm64.bl __arr_resize
+    arm64.bl __managed_resize
     arm64.movImm x1, 0
     arm64.movImm x2, 2
     arm64.movRegReg x0, x19
-    arm64.bl __arr_slice
+    arm64.bl __managed_slice
     arm64.movRegReg x27, x0
     arm64.cmp x9, 0
     arm64.cset x0, ne
@@ -305,17 +305,17 @@ func @main {
   tryerr:
     arm64.movImm x22, 6
     arm64.movRegReg x0, x26
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x25
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x23
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -332,10 +332,10 @@ func @main {
   tryok:
     arm64.movImm x1, 64
     arm64.movRegReg x0, x27
-    arm64.bl __arr_reserve
+    arm64.bl __managed_reserve
     arm64.movImm x1, 1000
     arm64.movRegReg x0, x27
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movImm x28, 0
     arm64.b whilehdr
   whilehdr:
@@ -346,7 +346,7 @@ func @main {
   check:
     arm64.movRegReg x0, x19
     arm64.movRegReg x1, x28
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -365,19 +365,19 @@ func @main {
   mismatch:
     arm64.movImm x22, 7
     arm64.movRegReg x0, x27
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x26
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x25
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x23
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1
@@ -396,7 +396,7 @@ func @main {
     arm64.b whilehdr
   whileexit:
     arm64.movRegReg x0, x20
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x0, 0
     arm64.cset x0, eq
     arm64.movImm x1, 0
@@ -415,7 +415,7 @@ func @main {
     arm64.b critsplit
   andrhs:
     arm64.movRegReg x0, x21
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x0, 3
     arm64.cset x0, eq
     arm64.b scmerge
@@ -439,7 +439,7 @@ func @main {
     arm64.b critsplit
   andrhs:
     arm64.movRegReg x0, x23
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x0, 3
     arm64.cset x0, eq
     arm64.b scmerge
@@ -453,7 +453,7 @@ func @main {
   andrhs:
     arm64.movImm x1, 1
     arm64.movRegReg x0, x25
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -476,7 +476,7 @@ func @main {
     arm64.b critsplit
   andrhs:
     arm64.movRegReg x0, x25
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x0, 4
     arm64.cset x0, eq
     arm64.b scmerge
@@ -489,7 +489,7 @@ func @main {
     arm64.b critsplit
   andrhs:
     arm64.movRegReg x0, x26
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x0, 2
     arm64.cset x0, eq
     arm64.b scmerge
@@ -502,7 +502,7 @@ func @main {
     arm64.b critsplit
   andrhs:
     arm64.movRegReg x0, x27
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x0, 3
     arm64.cset x0, eq
     arm64.b scmerge
@@ -516,7 +516,7 @@ func @main {
   andrhs:
     arm64.movImm x1, 2
     arm64.movRegReg x0, x27
-    arm64.bl __arr_get
+    arm64.bl __managed_get
     arm64.cmp x9, 0
     arm64.cset x1, ne
     arm64.cbnz x1, tryerr
@@ -544,19 +544,19 @@ func @main {
     arm64.b matchcont
   matchcont:
     arm64.movRegReg x0, x27
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x26
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x25
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x23
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x21
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x20
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x19
-    arm64.bl __arr_decref
+    arm64.bl __managed_decref
     arm64.movRegReg x0, x22
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

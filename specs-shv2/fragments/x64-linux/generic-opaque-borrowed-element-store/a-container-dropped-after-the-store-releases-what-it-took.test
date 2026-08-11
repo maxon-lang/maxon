@@ -51,7 +51,7 @@ func @Bag.create {
     x64.movRegImm32 rax, 8
     x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
     x64.movRegReg rcx, rax
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
@@ -75,11 +75,11 @@ func @Bag.scratchCountOf {
     x64.movRegReg r12, rax
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [r12 + 40]
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg r13, r8
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -99,12 +99,12 @@ func @Bag.scratchCountOf {
     x64.callDirect __retain_type_param
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
     x64.epilogue 40
     x64.popReg r13
@@ -130,7 +130,7 @@ func @main {
     x64.storeSlotReg slot0, rbx
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg r12, r8
     x64.storeSlotReg slot1, r12
     x64.leaRegRdata rax, [rip + __str_rec_2]
@@ -154,7 +154,7 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rdx + 24], rax
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.leaRegRdata rax, [rip + __layout_Bag_String]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
@@ -162,14 +162,14 @@ func @main {
     x64.storeSlotReg slot2, r8
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegImm32 r13, 1
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Bag_String
     x64.movRegReg r8, r13
@@ -239,7 +239,7 @@ func @main {
     x64.ret
   __rc_ok:
     x64.loadRegSlot rcx, slot1
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.loadRegSlot rcx, slot0
     x64.callDirect __destruct_Bag_String
     x64.loadRegSlot rax, slot2

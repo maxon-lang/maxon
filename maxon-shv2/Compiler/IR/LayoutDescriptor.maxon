@@ -67,7 +67,7 @@ export let LAYOUT_OFFSET_ELEMENT_LOGICAL_SIZE = 56 as ByteOffset
 // time and `callIndirect`s it per element, so the ONE compiled copy serves every concrete instance. The
 // slot is 0 on disk for a TRIVIAL type argument (no cloner — the opaque-copy wrapper then takes the
 // byte-blit/COW path, never `callIndirect(0)`); a `funcAbs64InRdata` relocation fills it with the element
-// cloner's `.text` VA for a MANAGED, direct-clonable argument (`__str_clone` / `__clone_<T>` / `__arr_clone`),
+// cloner's `.text` VA for a MANAGED, direct-clonable argument (`__str_clone` / `__clone_<T>` / `__managed_clone`),
 // exactly as the drop stamp fills `destroyFunc@40`. `encodeLayoutDescriptor` already zero-fills it.
 export let LAYOUT_OFFSET_COPY_FUNC = 32 as ByteOffset
 
@@ -319,7 +319,7 @@ end 'rangedAliasPackedBits'
 
 // ⭐⭐ **`element_size@24`, AND WHY ONE FIELD CARRIES TWO LADDERS.** The record has ONE stride slot and the
 // runtime helpers read it once, so the two ladders above have to arrive as one number: a POSITIVE value is a
-// byte stride, a NEGATIVE one is `-(bits per element)`. `0` is unset (`__arr_create` diverges on it), which
+// byte stride, a NEGATIVE one is `-(bits per element)`. `0` is unset (`__managed_create` diverges on it), which
 // is what leaves the sign free to mean this.
 //
 // ⚠ **THE ENCODING IS NOT shv2's TO CHOOSE** — `specs/ranged-int-bit-packing.md` and `specs/bool-bit-packing.md`
@@ -340,7 +340,7 @@ export function elementStrideOf(packedBits PackedBitWidth, storageBytes ByteOffs
 end 'elementStrideOf'
 
 // ⭐ **THE BUFFER BYTE LENGTH `count` ELEMENTS OF THIS STRIDE NEED — the COMPILE-TIME twin of the runtime
-// `ArrayRuntime.emitElementByteLen`, and they must agree to the byte.** A packed element is measured in BITS
+// `ManagedMemoryRuntime.emitElementByteLen`, and they must agree to the byte.** A packed element is measured in BITS
 // and rounded up to a whole byte (`ceil(count·bits/8)`); a byte-strided one is `count · stride`. The compiler
 // needs it wherever it sizes a buffer for a known element count without a record to read — the constant array
 // literal's `.rdata` blob — and a second, byte-only spelling there would size a packed blob as though its
@@ -357,7 +357,7 @@ end 'elementsByteLen'
 // ⭐ **THE BITS IN A BYTE — ONE DECLARATION FOR BOTH ENDS OF THE PACKED ARITHMETIC.** Named rather than an
 // `8` beside a `4` and a `1`, none of which mean the same thing.
 //
-// ⚠ **IT IS EXPORTED BECAUSE `ArrayRuntime` COUNTS THE SAME BITS**, and briefly did so from a second private
+// ⚠ **IT IS EXPORTED BECAUSE `ManagedMemoryRuntime` COUNTS THE SAME BITS**, and briefly did so from a second private
 // `let` of its own (found in review of this rung). That is the shape this file exists to remove: the
 // compile-time `elementsByteLen` above and the emitted `emitElementByteLen` are documented as having to
 // agree TO THE BYTE, and two declarations of the divisor is exactly how they would come not to. It lives
@@ -452,7 +452,7 @@ let ByteMask = 0xFF as MachineWord
 // `ranged-int-bit-packing.static-2bit-cast-packed` pins, and a claim about the ORDER that no round-tripped
 // value could make (every bit order reads the same values back out through its own accessors).
 //
-// ⚠⚠ **IT MUST AGREE WITH `ArrayRuntime.emitFieldPlacement` TO THE BIT.** This is where a constant array is
+// ⚠⚠ **IT MUST AGREE WITH `ManagedMemoryRuntime.emitFieldPlacement` TO THE BIT.** This is where a constant array is
 // WRITTEN and that is where every array is READ, and between them they are the only two statements of this
 // layout — a program builds its literal here and then reads it with the ordinary `get`. The two are kept
 // honest by the spec pins rather than by a shared expression, because one is compile-time arithmetic over
@@ -484,7 +484,7 @@ function packConstantElements(values ParsedIntArray, packedBits PackedBitWidth) 
 end 'packConstantElements'
 
 // The smallest value ANY slot holds, whatever its width: zero, because the shared element load
-// ZERO-EXTENDS (`ArrayRuntime.emitLoadElem` — one compiled byte loop with no signedness in the record to
+// ZERO-EXTENDS (`ManagedMemoryRuntime.emitLoadElem` — one compiled byte loop with no signedness in the record to
 // consult). Named beside the maximum below so a reader stating a slot's value set states both ends from one
 // place. It is deliberately NOT `Project.ByteValueSetLow`, which is the low bound of a BYTE's declared value
 // set: the two are the same number for different reasons, and a slot's reason is the loader's.
@@ -675,7 +675,7 @@ end 'encodeLayoutDescriptor'
 // ⭐ **THE BLOCK REPEATS RATHER THAN A TABLE BEING APPENDED, AND THAT IS WHAT KEEPS THE ABI STILL.**
 // Every reader addresses a dictionary by `descriptor + i * LAYOUT_DESCRIPTOR_BYTE_SIZE` and then uses
 // the SAME field offsets it always used — so the runtime graphs that take a descriptor POINTER
-// (`__drop_type_param`, `__retain_type_param`, the `__arr_*_opaque` copy wrappers) need no signature change
+// (`__drop_type_param`, `__retain_type_param`, the `__managed_*_opaque` copy wrappers) need no signature change
 // and no second offset argument; the caller, which knows `i` statically, hands them the right block. A
 // ONE-parameter instance has one block at offset 0.
 //

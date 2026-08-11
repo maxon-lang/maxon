@@ -1466,7 +1466,7 @@ Both sides write. The parent copies out first and gives up the shared buffer, le
 sole owner; the slice then copies out and reclaims it. This case reaches the path where a detach's release
 frees the bytes it just copied — but it cannot *catch* a detach that released BEFORE copying, because
 `__mm_free` reclaims nothing under the bump allocator, so freed bytes still read back intact (measured:
-reversing that order leaves the suite at 1197/0). The ordering is a rule `__arr_cow_detach` keeps on its
+reversing that order leaves the suite at 1197/0). The ordering is a rule `__managed_cow_detach` keeps on its
 own; it becomes testable the day the allocator reuses memory.
 ```maxon
 function main() returns ExitCode
@@ -2316,7 +2316,7 @@ end 'main'
 <!-- test: error.append-across-two-element-widths -->
 ### The REPRESENTATION half is live on its own
 Every `Byte` value is a `Wide` value, so the value-domain half says yes — and the two records stride
-1 and 4, so `__arr_append`'s byte copy would read the source at the wrong width. The two halves are
+1 and 4, so `__managed_append`'s byte copy would read the source at the wrong width. The two halves are
 INDEPENDENT: this one is refused by the shape test with the domain test agreeing, and
 `error.append-narrower-element-array` above is refused by the domain test with the shape test agreeing.
 ```maxon

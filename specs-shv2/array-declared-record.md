@@ -82,7 +82,7 @@ ordinary call to an ordinary declared function.
 SECTION USED TO SAY IT WAS.** The reasoning was that the gate also decides the FIELD WALK the drop
 cascade reads, so the two had to move together. **MEASURED on this tree by widening exactly that gate
 to admit a declared `Array` base: 551 `--filter=array` cases, 0 failures — INERT.** The walk it opens
-enumerates one field, the buffer, whose drop callee is `__arr_decref`, which is already the callee
+enumerates one field, the buffer, whose drop callee is `__managed_decref`, which is already the callee
 `genericInstanceBoxDropCallee` gives the record; both cascade readers filter a non-`__destruct_` leaf
 out. The door that was actually refusing the member is `Parser.structLayoutOfType`, which reads that
 gate as one of its inputs, so the admission is spent there — a layout to NAME a member is not a layout
@@ -914,7 +914,7 @@ alpha gamma beta delta 4
 NOT ONLY A TYPE ONE.** `String.split` hands back the LIBRARY's `Array with String`; `takesMine` declares
 the PROGRAM's. They are two declarations, and the argument is admitted because both are the
 sole-field-buffer shape over one element and therefore one record — see the section above. The exit code
-is the count, and the three `String` records are freed by the same `__arr_decref` walk whichever
+is the count, and the three `String` records are freed by the same `__managed_decref` walk whichever
 declaration named the array (a leak exits 101).
 ```maxon
 type Array uses Element implements BuiltinArrayLiteral

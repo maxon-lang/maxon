@@ -96,8 +96,8 @@ i64 42
 
 <!-- test: dead-array-let-leaves-no-data-slot -->
 An array global's slot is a POINTER that `__module_init` fills and `__maxon_global_cleanup`
-releases, so dropping it is three pieces at once — the slot, the `__arr_create`/`__arr_push` run
-that builds the record, and the `__arr_decref` that frees it. Dropping any two of the three is a
+releases, so dropping it is three pieces at once — the slot, the `__managed_create`/`__managed_push` run
+that builds the record, and the `__managed_decref` that frees it. Dropping any two of the three is a
 null store, a leak or a decref of a slot that no longer exists; the exit code plus the leak gate
 plus this pin are what say all three went together.
 

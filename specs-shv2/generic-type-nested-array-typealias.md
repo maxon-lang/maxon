@@ -393,7 +393,7 @@ end 'main'
 ### Move an opaque managed element OUT with `pop`
 
 `pop` MOVES the opaque type-parameter element out of `self.items`: the runtime nulls the vacated slot (so the
-array's `__arr_decref` walk skips it) and the caller becomes the sole owner of the returned opaque word. The
+array's `__managed_decref` walk skips it) and the caller becomes the sole owner of the returned opaque word. The
 shared body has no static type for the element, so the moved-out value is enrolled owned and dropped at scope
 exit through the descriptor-gated `__drop_type_param` (`computeTypeDescriptorNeeds` reserves the descriptor off
 the same `self.items.pop()` shape). Here `drainOne` pops one of two Strings and drops it; the container drops
@@ -1219,7 +1219,7 @@ end 'main'
 
 The descriptor `copyFunc@32` can hold only a SINGLE `(box) -> newBox` cloner, so an instantiation whose managed
 element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with
-String)`), whose clone needs the two-argument `__arr_clone_managed` — has no single `copyFunc`. Copying such an
+String)`), whose clone needs the two-argument `__managed_clone_managed` — has no single `copyFunc`. Copying such an
 opaque array in the shared body would byte-blit a managed pointer and double-free it, so the enclosing generic
 type's copy method is rejected with a positioned E2015 when SOME instantiation is not single-function-cloneable.
 (A DROP-only instantiation of the same shape is fine — it needs no `copyFunc` — and is covered above.)
@@ -1280,7 +1280,7 @@ full-graph classifier (`typeSupportsDeepClone(asElement: true)`) the copy-site r
 top-level clone strategy: `Item` is `direct` at the top but owns a non-clonable field, so a top-level-only gate
 would root a `__clone_Item` the cloner synthesizer cannot build and PANIC on this valid drop-only program
 (`noteFieldCloneNeeds`). Gating on the full-graph classifier leaves `Item`'s `copyFunc@32` at 0 (never read —
-the element is never copied) while its `destroyFunc@40` still drops it through `__arr_decref`, so the program
+the element is never copied) while its `destroyFunc@40` still drops it through `__managed_decref`, so the program
 compiles and exits 0. (Adding a copy method to this same type is rejected — see the uncopyable-instantiation
 test above.)
 

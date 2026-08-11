@@ -28,11 +28,11 @@ func @main {
     x64.prologue 40
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 65
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.callDirect __md_current_path
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
@@ -41,7 +41,7 @@ func @main {
   tryerr:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -52,9 +52,9 @@ func @main {
   tryok:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_append
+    x64.callDirect __managed_append
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 1
     x64.jcc greater, ternarytrue
     x64.jmp ternaryfalse
@@ -66,9 +66,9 @@ func @main {
     x64.jmp matchcont
   matchcont:
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk

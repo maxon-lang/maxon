@@ -1335,7 +1335,7 @@ E3109 SemanticBufferSetManagedElement
 	doc write into `[length, capacity)` -- slots no length has published yet. For a TRIVIAL element
 	doc that is the whole point: it is the stage-then-`setLength`-to-publish idiom the buffer surface
 	doc exists to support. For a MANAGED element it opens a hole, because that region carries no
-	doc OWNERSHIP: `__arr_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT
+	doc OWNERSHIP: `__managed_decref` destroys only `[0, length)`, `push`/`insert`/`append` store AT
 	doc `length` without destroying the occupant, and a grow or a copy-on-write detach copies only
 	doc the live bytes and abandons the rest. A staged element is therefore owned by NOBODY until a
 	doc `setLength` publishes it, and is leaked outright if one never comes.
@@ -1542,7 +1542,7 @@ E3118 SemanticRawByteWriteSlotDomain
 	doc `setByte` addresses a byte OFFSET, so on a record that strides more than one byte it writes a
 	doc FRAGMENT of an element -- and what the ARRAY surface reads back afterwards is an arbitrary
 	doc unsigned value of the element's whole slot, because the shared element load zero-extends
-	doc (`ArrayRuntime.emitLoadElem`). The only honest question is therefore whether the element admits
+	doc (`ManagedMemoryRuntime.emitLoadElem`). The only honest question is therefore whether the element admits
 	doc every one of those, and it is the SAME question at every stride.
 	doc MEASURED before the rule existed, each a value read back through an accessor whose declared type
 	doc cannot hold it: `setByte(1, 223)` under `typealias Wide = int(0 to 1000)` -- a TWO-byte slot --
@@ -1677,11 +1677,11 @@ E3122 SemanticTransformArityMismatch
 	doc shape: a transform declaring a further parameter reads a value nobody passed. MEASURED --
 	doc `nums.map(function(a Integer, b Integer) gives b)` prints `sum=0` on arm64-macOS, `b` being whatever
 	doc the second argument slot held, while on `wasm32-wasi` the program does not run at all: `call_indirect`
-	doc type-checks the callee's signature and `__arr_map` traps with "indirect call type mismatch". One
+	doc type-checks the callee's signature and `__managed_map` traps with "indirect call type mismatch". One
 	doc target of four could see it, which is what makes the shape undefined rather than unspecified.
 	doc NOT E3036, which states that "a call passes a different number of arguments than the callee declares
 	doc parameters": there is NO call at this span. The author bound a function VALUE to a position, and the
-	doc call that would go wrong is one the compiler makes inside `__arr_map`, over a source line the author
+	doc call that would go wrong is one the compiler makes inside `__managed_map`, over a source line the author
 	doc never wrote -- so E3036's sentence would be false about the program in front of them.
 	doc NOT E3005 either, which is what the four DECLARED function-typed places (a cast, a `return`, an
 	doc assignment, an ordinary function-typed argument) earn when their whole SHAPE disagrees. This position

@@ -1108,7 +1108,7 @@ export union ParseError implements Error
 	// `try s.append(t)`, `try arr.push(1)`. Renders as **E3055** at the `try` token, exactly as its
 	// user-function sibling above does; it is a second MESSAGE on one code, the same way `errorTypeMismatch`
 	// carries three. It names NO callee on purpose: what the parser holds here is the emitted runtime symbol
-	// (`__arr_count`), which the user never wrote and which the `__` reservation exists to keep out of user
+	// (`__managed_count`), which the user never wrote and which the `__` reservation exists to keep out of user
 	// space — the same reason `SemanticCheck`'s mirror E3057 for a bare throwing accessor describes the CLASS
 	// instead of naming the symbol.
 	tryOnNonThrowingBuiltin(line LineNumber, column ColumnNumber)
@@ -1162,7 +1162,7 @@ export union ParseError implements Error
 	// let this class of program through to the backend (see `requireCalleeIsNotReservedName`).
 	unknownCompilerIntrinsic(callee String, reason ReservedCalleeReason, line LineNumber, column ColumnNumber)
 	// ⭐ `resize` on an array whose element is MANAGED. Renders as **E3106**, positioned at the method
-	// name. `__arr_resize` grows by publishing a longer length over slots `__arr_grow` left zeroed, and
+	// name. `__managed_resize` grows by publishing a longer length over slots `__managed_grow` left zeroed, and
 	// a zero is an ELEMENT only while the element lives inline in the buffer; a managed element lives
 	// there as a POINTER, so those slots are NULL. Maxon has no default constructor, so there is nothing
 	// correct to put in them — the array that comes back answers `count()` = N while `get(0)` reports
@@ -1175,7 +1175,7 @@ export union ParseError implements Error
 	// exposes a slot with NOTHING in it, while this one puts something in a slot NOTHING OWNS. The buffer
 	// `set` is bounded by CAPACITY (the 2026-07-30 ruling), so it reaches `[length, capacity)` — which is
 	// the stage-then-publish region, and which carries no ownership. See the registry entry for why this is
-	// a refusal rather than a fix, and `ArrayRuntime.ArrMemSetName` for the five operations whose reliance
+	// a refusal rather than a fix, and `ManagedMemoryRuntime.ManagedMemSetName` for the five operations whose reliance
 	// on `[length, capacity)` reading ZERO is what makes the alternative expensive.
 	bufferSetManagedElement(elementType String, line LineNumber, column ColumnNumber)
 	// ⭐ RAW BYTE ACCESS — `arr.managed.setByte(o, value:)` / `arr.managed.byteAt(o)` — on a MANAGED element.
@@ -2048,7 +2048,7 @@ end 'materializedParamSites'
 // the field's old value through the descriptor-gated `__drop_type_param`, so the method needs the layout
 // descriptor — the same class as the array move-out, reached through a field STORE rather than a move-out call.
 // `hasArrayCopy` (P1.7 slice 3b-vi-b-β) records whether the body calls `.slice()`/`.clone()`/`.append()` on ANY
-// receiver: a copy of an OPAQUE array lowers to `__arr_{slice,clone,append}_opaque(arr, …, descriptor)`, which
+// receiver: a copy of an OPAQUE array lowers to `__managed_{slice,clone,append}_opaque(arr, …, descriptor)`, which
 // reads the enclosing instance's `copyFunc@32` — so, like the move-out, a receiver-blind copy in a generic body
 // reserves the layout descriptor (over-reserving for a concrete-array copy is sound). Returned by
 // `Parser.scanOneMethodDescriptorSignals`.
@@ -4543,7 +4543,7 @@ end 'corpusFindGraphemeEndLabels'
 // the open question was whether the ordinary generic-instance path decides them the same way. MEASURED at
 // wave 5, on the emitted x64 of the same program before and after, and it is the same three instructions
 // in the same order: `movRegImm32 rcx, 8` / `leaRegFunc rdx, [rip + __str_decref]` / `callDirect
-// __arr_create`. The corpus's `typealias StringArray = Array with String` (`stdlib/String.maxon:604`) and
+// __managed_create`. The corpus's `typealias StringArray = Array with String` (`stdlib/String.maxon:604`) and
 // a caller's own `Array with String` INTERN TO ONE `GenericInstanceId` — interning is keyed on
 // `(typeNameId, args)` over the whole program, so the two spellings cannot be two instances — which is why
 // a `["…"]` literal and a `split` result are assignable in both directions.
@@ -4604,7 +4604,7 @@ export function singletonArgs(value ValueId) returns ValueIdArray
 	return args
 end 'singletonArgs'
 
-// A two-element call argument list — `__arr_append(dest, src)`'s pair. `singletonArgs`' sibling.
+// A two-element call argument list — `__managed_append(dest, src)`'s pair. `singletonArgs`' sibling.
 export function pairArgs(first ValueId, second ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)
@@ -4659,7 +4659,7 @@ function renderWitnessRequirements(candidates WitnessDispatchTargetArray) return
 	return rendered
 end 'renderWitnessRequirements'
 
-// A three-element call argument list — `__arr_set(arr, index, value)`'s triple. `pairArgs`' sibling.
+// A three-element call argument list — `__managed_set(arr, index, value)`'s triple. `pairArgs`' sibling.
 function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
 	args.push(first)
@@ -4668,7 +4668,7 @@ function tripleArgs(first ValueId, second ValueId, third ValueId) returns ValueI
 	return args
 end 'tripleArgs'
 
-// A four-element call argument list — `__arr_slice_managed(arr, start, end, cloneFn)`'s quad (P1.7 slice
+// A four-element call argument list — `__managed_slice_managed(arr, start, end, cloneFn)`'s quad (P1.7 slice
 // 3b-vi-b). `tripleArgs`' sibling.
 function quadArgs(first ValueId, second ValueId, third ValueId, fourth ValueId) returns ValueIdArray
 	var args = ValueIdArray.create()
@@ -4687,7 +4687,7 @@ end 'quadArgs'
 // SAYS SO** (`set`/`append` moved at D12, `get`/`first`/`last`/`pop`/`remove`/`slice` at D11c, and `insert`
 // the day `Map.insert` became a `Map`'s second throwing entry point). Each names a throwing runtime callee
 // whose diagnostics must quote the AUTHOR's method rather than the emitted symbol, and the source-method maps
-// (`ArrayRuntime`'s, and now `MapRuntime`'s) do that quoting by answering with the constant THIS dispatch
+// (`ManagedMemoryRuntime`'s, and now `MapRuntime`'s) do that quoting by answering with the constant THIS dispatch
 // matches on — a map cannot name a constant its file cannot see, and a second `b"set"` beside the first is
 // the drift these blocks exist to prevent. Nothing about the dispatch changed: it still matches the same byte
 // strings.
@@ -4754,7 +4754,7 @@ let MapMethod = b"map"
 
 // ⭐ **HOW MANY PARAMETERS A TRANSFORM DECLARES — `function(Element) returns Element`, so ONE (E3122).** It
 // is the SOURCE-level count, and deliberately not the ABI one: the walk calls the transform with the element
-// plus the uniform `__env` slot (`ArrayRuntime.emitMappedElementPush`), and that slot is the compiler's, not
+// plus the uniform `__env` slot (`ManagedMemoryRuntime.emitMappedElementPush`), and that slot is the compiler's, not
 // the program's. `requireElementTransform` records it and `SemanticCheck.checkTransformArities` compares
 // against it, so the rule and its sentence read one number.
 let ElementTransformArity = 1 as ParamCount
@@ -4957,10 +4957,10 @@ function bufferSurfaceMemberNames() returns ByteArrayArray
 	names.push(SliceMethod)
 	names.push(ClearMethod)
 	// ⭐ **THE FOUR RELOCATORS, ARRIVING BY EXACTLY THE ROUTE THE HEADER ABOVE DESCRIBES.** `remove` shares
-	// the `Array`'s `__arr_remove` (same `length` bound, same tail slide, same erase); `swap`/`shiftRight`/
+	// the `Array`'s `__managed_remove` (same `length` bound, same tail slide, same erase); `swap`/`shiftRight`/
 	// `shiftLeft` have runtimes of their own. They sit together because they are ONE group — the operations
 	// that move elements the buffer already owns without producing or consuming one — and
-	// `ArrayRuntime.ArrMemSwapName`'s header carries why that group may not be built out of `get` + `set`.
+	// `ManagedMemoryRuntime.ManagedMemSwapName`'s header carries why that group may not be built out of `get` + `set`.
 	names.push(RemoveMethod)
 	names.push(ManagedMemorySwapMethod)
 	names.push(ManagedMemoryShiftRightMethod)
@@ -4985,7 +4985,7 @@ end 'bufferSurfaceMemberNames'
 // ⚠ **THE FIRST TWO ARE INFALLIBLE AND THE LAST FOUR THROW, and the split is the type's whole invariant
 // rather than a per-member choice**: a cursor that exists points at a live element, so reading needs no
 // check and every MOVE must refuse rather than land somewhere invalid. See
-// `ArrayRuntime.buildArrCursorCurrent`.
+// `ManagedMemoryRuntime.buildManagedCursorCurrent`.
 function cursorSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(CursorCurrentMethod)
@@ -5036,8 +5036,8 @@ end 'cursorSurfaceMemberNames'
 //
 // ⚠ **FOUR OF THOSE SEVEN DELETED NO CODE, AND THAT IS THE PARTITION SPEAKING RATHER THAN A HALF-JOB.**
 // `remove` and `capacity` are `__ManagedMemory` members too (`bufferSurfaceMemberNames`), so their arms and
-// their `__arr_remove`/`__arr_capacity` runtimes are FLOOR; `map`'s `__arr_map` is `Map.map`'s emission
-// (`parseContainerMap`, one caller over) and `hash`/`equals`' `__arr_hash`/`__arr_eq` are what a `Map` key's
+// their `__managed_remove`/`__managed_capacity` runtimes are FLOOR; `map`'s `__managed_map` is `Map.map`'s emission
+// (`parseContainerMap`, one caller over) and `hash`/`equals`' `__managed_hash`/`__managed_eq` are what a `Map` key's
 // WITNESS slot and the `==` OPERATOR name. What retired there is the `Array` SPELLING, which is exactly what
 // a roster is.
 //
@@ -5091,7 +5091,7 @@ end 'cursorSurfaceMemberNames'
 // function declared to return 'TraceKeyArray'` until it was.
 //
 // ⚠ **AND THAT FIX EXPOSED A SECOND ONE BEHIND IT — a DOUBLE FREE, not a diagnostic.** A corpus body is a
-// SHARED generic body over an opaque `Element`, so `slice`/`clone`/`append` there emit `__arr_*_opaque`, which
+// SHARED generic body over an opaque `Element`, so `slice`/`clone`/`append` there emit `__managed_*_opaque`, which
 // branch on the layout descriptor's `copyFunc@32`; and `ProgramSignatures.managedOpaqueArrayElementOf` — the
 // walk that stamps it — opened with `genericInstanceHasBaseLayout`, which is FALSE for every builtin generic
 // base, `Array` included. So an `Array with String` carried a ZERO cloner, the wrapper took its trivial COW
@@ -5105,7 +5105,7 @@ end 'cursorSurfaceMemberNames'
 // `SpecTestRunner.rewriteStdlibPaths` rewrites the compiler's library root to the repo-relative `stdlib/`
 // exactly as a staged fragment's path is rewritten to `<fragment>` — and the retirement then cost 27
 // expectation texts and NOTHING else: 21 of them this roster rendering itself, 4 the relocated refusals, and
-// the deletion took `emitArrayCloneCall` and the whole `__arr_clone_opaque` wrapper with it (its only emitter
+// the deletion took `emitArrayCloneCall` and the whole `__managed_clone_opaque` wrapper with it (its only emitter
 // was that arm). What it did NOT cure is that the relocated sentence names a line no user wrote; the blame
 // edge that would re-point a stdlib-body diagnostic at the construct that forced it still does not exist, and
 // `specs-shv2/array-conditional-conformance-withheld.md`'s disabled case is the standing record of it.
@@ -5159,7 +5159,7 @@ end 'cursorSurfaceMemberNames'
 //   • **`insert`** — ⭐ **RETIRED AT ARR1**, once ARRR gave the call site both range halves. It is the one of
 //     the eight whose blocker was genuinely only the range rule, and the one that never touches an
 //     opaque-element receiver in the corpus: nothing in `stdlib/` inserts into an `Array with <a parameter>`.
-//     The strike took `__arr_insert` and `parseArraySetOrInsert`'s `throwing` flag with it.
+//     The strike took `__managed_insert` and `parseArraySetOrInsert`'s `throwing` flag with it.
 //   • **`append`** — the ONE half of the old sentence that survived contact, and it hid something worse. Its
 //     `other Self` parameter meets the ORDINARY nominal argument agreement, which refuses what
 //     `ProgramSignatures.arrayAppendArgAdmits` admits by VALUE SET: three cases, `expected 'Array_int', got
@@ -5370,7 +5370,7 @@ end 'arrayWhereClause'
 // decided that array's element size and its `element_destroy@40` stamp, through `emitArrayCreateOp`. Wave 3
 // handed over a type shv2 DECLARED TWICE; wave 5 hands over a type shv2 STAMPED. Both were settled by
 // measurement rather than by reading, and this one three ways, all on the tree as it stood:
-//   * **The stamp is identical.** The emitted x64 for `__arr_create` is the same three instructions in the
+//   * **The stamp is identical.** The emitted x64 for `__managed_create` is the same three instructions in the
 //     same order on both sides — element size 8, `element_destroy@40` = `__str_decref`.
 //   * **The instance is ONE, not two.** The corpus's inner `typealias StringArray = Array with String`
 //     (`stdlib/String.maxon:604`) and a caller's own `Array with String` intern to one `GenericInstanceId`,
@@ -6516,7 +6516,7 @@ end 'requireByteCodepoint'
 //
 // ⚠⚠ **THERE ARE TWO PRODUCERS AND FOR ONE ROW ONLY ONE OF THEM WAS REFUSED (A4c).** A `b"…"` blob is
 // byte-packed by CONSTRUCTION; `__ManagedMemory.create(count, elementSize: 1)` is byte-packed by its own
-// ARGUMENT — `__arr_mem_create` stamps `element_size@24` from it while the front end types the result as
+// ARGUMENT — `__managed_mem_create` stamps `element_size@24` from it while the front end types the result as
 // this file's `Array with Byte` (`managedMemoryInstanceForElementSize`). The record and the incoherence are
 // identical, and the second was accepted: MEASURED under `typealias Byte = int(0 to 1000)`,
 // `create(8, 1)` then `set(0, value: 300)` type-checks against `int(0 to 1000)`, strides the stamped 1 and
@@ -6525,7 +6525,7 @@ end 'requireByteCodepoint'
 //
 // `LowerMaxonToStd.lowerConstArrayLiteral` lays the blob out one byte per element and stamps
 // `element_size@24 = ByteStringElementSize` to match it; every OTHER `Array with Byte` record — `.create()`,
-// a global's `__arr_create`, a `clone`/`slice` of either — is stamped from `ProgramSignatures.arrayElementSize`,
+// a global's `__managed_create`, a `clone`/`slice` of either — is stamped from `ProgramSignatures.arrayElementSize`,
 // which sizes the element from `Byte`'s DECLARED range. The two agree for the canonical `int(0 to u8.max)`
 // and for anything narrower, which is the whole of what a byte string is; they do not agree for a wider one.
 //
@@ -6536,7 +6536,7 @@ end 'requireByteCodepoint'
 // — but it is the ONE array operation that compares the strides.) There is no reference behaviour to match:
 // the bootstrap mis-answers the same program its own way, packing the blob and then TYPING the array u16, so
 // `b"CD".get(0)` reads **17475**. Emitting the blob WIDE is an element-wise widening emission — a real
-// mechanism and its own rung, exactly as the widening `__arr_append` across differing strides is — so until
+// mechanism and its own rung, exactly as the widening `__managed_append` across differing strides is — so until
 // that exists this is E2015 at the producer rather than a record that behaves unlike every other value of its
 // own type. The same holds of a byte-packed `create`: the alternative there is an element TYPE one byte wide
 // that THIS file can name, which is precisely what its `Byte` declaration says it does not have.
@@ -6898,7 +6898,7 @@ end 'ifConditionCatches'
 // ⚠ **AND THE `named` ARM CARRIES A DISPATCH KEY, NOT A DISPLAY NAME (D11c) — which is why the two accessors
 // are not symmetric.** `witness` already spells its two jobs apart, holding the source method for diagnostics
 // beside the clause; `named` holds ONE string doing both, and for a compiler-emitted callee the two answers
-// differ (`__arr_set` dispatches, `set` is what the author wrote). It is not widened to a pair, because the
+// differ (`__managed_set` dispatches, `set` is what the author wrote). It is not widened to a pair, because the
 // display name is DERIVABLE from the key (`tryTargetNamedNoun`) and a second field would be that derivation
 // stored — one fact in two places, filled in at every emission site, wrong at whichever one forgot.
 union TryTarget
@@ -6923,7 +6923,7 @@ end 'tryTargetNoun'
 // **E3059's NOUN for a `named` target, and the reason it is not just the callee (D11c).** A COMPILER-EMITTED
 // callee is not a name the author can type — `__` is the prefix E2051 bars every declaration from — so
 // quoting it produces the right code describing a construct the program does not contain: a program written
-// `mm.setLength(1)` was told about `'__arr_set_length'`. `GtRuntime.runtimeCalleeSourceMethod` is the ONE home
+// `mm.setLength(1)` was told about `'__managed_set_length'`. `GtRuntime.runtimeCalleeSourceMethod` is the ONE home
 // of "what did the author call this runtime callee?", built by D12 for E3057's sentence and asked here as its
 // second consumer rather than threaded down from every builtin emission site.
 //
@@ -6947,7 +6947,7 @@ function tryTargetNamedNoun(callee ByteArray, signatures ProgramSignatures) retu
 		// ⚠ **BOTH REFUSALS ARE DRIFT GUARDS, NOT USER-FACING PATHS — AND THE REACHABLE SET IS NINE, DERIVED
 		// RATHER THAN PROBED (D11c review).** A callee reaches E3059 iff it is THROWING (to pass E3055) and its
 		// emission site tags the result VOID (to fail the void check), so the set is `isThrowingRuntimeCallee`
-		// intersected with the `resultTag: ValueTypeTag.void` emission sites: `__arr_set` and the buffer's five
+		// intersected with the `resultTag: ValueTypeTag.void` emission sites: `__managed_set` and the buffer's five
 		// void mutators, PLUS `__mf_delete`, `__mf_rename` and `__md_create`. Every one is answered `found`.
 		//
 		// ⚠⚠ **THE FIRST WRITING OF THIS NOTE SAID "EXACTLY SIX", AND THE THREE IT MISSED WERE THE THREE
@@ -7246,7 +7246,7 @@ typealias CharLiteralOpMap = Map with (ValueId, OpIndex)
 // `Array` record so the value can be TYPED as one; `__Builtins.writeStdout`/`writeStderr` read `buffer@0`
 // and `length@8` and NOTHING else — the two slots a String record already carries, at the same offsets. So
 // when the view's sole consumer is the write, that record is minted and destroyed to satisfy a type nobody
-// reads: the allocator, the array runtime and the leak gate arrive in a hello-world for it (MEASURED at
+// reads: the allocator, the managed-memory runtime and the leak gate arrive in a hello-world for it (MEASURED at
 // 1,749 ⇒ 3,226 code bytes with the fold absent).
 //
 // ⚠⚠ **WHAT IT FILES CHANGED AT WAVE 7 AND THE FOLD DID NOT.** It used to hold the index of a
@@ -7615,7 +7615,7 @@ enum SlotMismatchVoice
 	// `cannot assign '<got>' to variable '<name>' of type '<expected>'`.
 	assignedPlace
 	// The element argument of a parser-intrinsic container mutator (`push` / `set` / `insert`). These emit
-	// `__arr_push`/`__arr_set` directly, so they have no `FuncSignature` and never reach
+	// `__managed_push`/`__managed_set` directly, so they have no `FuncSignature` and never reach
 	// `SemanticCheck.checkArgTypes` — but they are calls all the same, and their refusal takes the sentence
 	// every other argument position takes (`SemanticCheck.argTypeMismatchSentence`, through
 	// `ParseError.builtinArgumentType` — the SAME variant the sibling `append` doors already raise).
@@ -8946,7 +8946,7 @@ export type Parser
 	// MEASURED, both spellings, against the runnable oracle: `let old = items` + `items = fresh` inside a
 	// method, and `let old = G` + `G = fresh` at top level, each read back afterwards — the bootstrap prints
 	// `sum 10` / `sum 3` and exits 0, shv2 emitted a bare `loadIndirect` with no retain and died **0xC0000005**
-	// on the next read, because the field store's `__arr_decref` had freed the record. It is the one thing
+	// on the next read, because the field store's `__managed_decref` had freed the record. It is the one thing
 	// between here and a working corpus `Map`: `Map.grow()` is four `let old… = <field>` binds followed by
 	// four field stores.
 	//
@@ -11050,7 +11050,7 @@ export type Parser
 
 			// ⭐ **`items.push(item)` — AN OPAQUE-`T` `Array` MUTATOR IS A CALLEE-STORAGE FEED (P1.7 slice
 			// 3b-iii, W10).** A generic method that pushes/sets/inserts a type-parameter argument into an
-			// `Array` moves that argument into that array, whose element the array OWNS (its `__arr_decref` walk
+			// `Array` moves that argument into that array, whose element the array OWNS (its `__managed_decref` walk
 			// destroys it exactly once). The shared body cannot see the element's managed-ness — it is opaque
 			// here — so the parameter is recorded as a FEED of the type parameter it fills, and the CONCRETE call
 			// site consumes it iff that instance's argument owns managed heap (`Container with String`) and
@@ -11190,7 +11190,7 @@ export type Parser
 				// fixpoint gives every self-caller a descriptor to forward.
 				let movesOutArrayElement = scan.hasArrayMoveOut and not self.functionDeclIsStatic(q)
 				// ⭐ A method that COPIES an opaque array element (`.slice()`/`.clone()`/`.append()`) lowers to an
-				// `__arr_*_opaque(arr, …, descriptor)` wrapper reading `copyFunc@32`, so it needs the descriptor too
+				// `__managed_*_opaque(arr, …, descriptor)` wrapper reading `copyFunc@32`, so it needs the descriptor too
 				// (P1.7 slice 3b-vi-b-β). `not isStatic` mirrors the sibling opaque signals — a static generic method
 				// has no `self`-threaded instance descriptor to source. Over-reserving for a concrete-array copy in a
 				// generic body is sound; seeded like a direct `sizeof(T)` so the fixpoint forwards it to self-callers.
@@ -11533,7 +11533,7 @@ export type Parser
 				hasArrayMoveOut = true
 			end 'arrayMoveOut'
 			// A `.slice()`/`.clone()`/`.append()` array COPY lowers, on an OPAQUE array, to an
-			// `__arr_{slice,clone,append}_opaque(arr, …, descriptor)` wrapper that reads the enclosing instance's
+			// `__managed_{slice,clone,append}_opaque(arr, …, descriptor)` wrapper that reads the enclosing instance's
 			// `copyFunc@32` (P1.7 slice 3b-vi-b-β), so — like the move-out — the method needs the descriptor param.
 			// The receiver is NOT resolved here, so ANY copy is recorded and the caller decides; over-reserving an
 			// unused descriptor for a concrete-array copy is sound.
@@ -12108,7 +12108,7 @@ export type Parser
 	// nobody else, which is `0xC0000005` on an `.rdata` literal and a double free on a heap record.
 	//
 	// **What makes receiver-blindness SOUND is that the array owns its element wherever the array lives** — the
-	// `__arr_decref` walk destroys each element exactly once whether the array is a field of `self`, a local, or
+	// `__managed_decref` walk destroys each element exactly once whether the array is a field of `self`, a local, or
 	// a parameter — which is the same reason `arrayMoveOutMethodAt` and `arrayCopyMethodAt` (the two descriptor
 	// signals right above) resolve no receiver either.
 	//
@@ -24636,7 +24636,7 @@ export type Parser
 		// `try bag.items.get(0) otherwise …` / `try self.nodes.get(i) otherwise …` — a throwing method on an
 		// ARRAY reached through a 2+-hop field chain (P1.7 slice 3). Checked FIRST: a single-hop `self.m(…)` /
 		// `obj.m(…)` is not a field chain (`fieldChainMethodCallAt` needs 2+ hops) and falls to the arms below;
-		// a 2+-hop chain resolves to the array field and applies the method, leaving the `call __arr_get` as the
+		// a 2+-hop chain resolves to the array field and applies the method, leaving the `call __managed_get` as the
 		// last op for `rewriteLastCallToTryCall`.
 		// `try arr.managed.get(0) otherwise …` — asked BEFORE the field chain, which would otherwise claim the
 		// two-hop shape and resolve `.managed` as a field of a record that has none (see `arrayManagedFieldAt`).
@@ -24982,7 +24982,7 @@ export type Parser
 	// which is why it lives here and not in SemanticCheck (see `ParseError.tryOnNonThrowing`).
 	//
 	// ⭐ **THERE ARE TWO CALLEE CLASSES, AND ONLY ONE OF THEM WAS BEING ASKED.** A COMPILER-EMITTED callee
-	// (`__arr_count`, `__print_string`, `__arr_append`) is in no signature registry, so `declaresCallee`
+	// (`__managed_count`, `__print_string`, `__managed_append`) is in no signature registry, so `declaresCallee`
 	// answers `false` for it and the check used to wave every non-throwing builtin through: `try arr.count()`
 	// and `try print("x")` compiled, and the desugar then branched on an error-flag register the callee never
 	// wrote — a `try` that takes its error path on whatever the ABI left in R10. The reference compiler
@@ -25114,7 +25114,7 @@ export type Parser
 		// both edges there, so one drop in the merge is one drop too few on the other path.
 		//
 		// Dropping the receiver at the top of `okBlock` (rather than at statement end) is safe for a VIEW
-		// result: `__arr_slice` increfs the shared base allocation, so releasing the source RECORD leaves the
+		// result: `__managed_slice` increfs the shared base allocation, so releasing the source RECORD leaves the
 		// bytes the view reads alive — the same guarantee that already made the statement-end drop safe.
 		//
 		// Guarded on a non-empty list: almost no `try` has a pending temporary, and the guard keeps the common
@@ -25250,7 +25250,7 @@ export type Parser
 		end 'managedResultPhi' else 'borrowResult'
 			// ⭐ **A BORROW try-result merged with an OWNED fallback** (`try arr.get(i) otherwise Item.create(…)`,
 			// P1.7 slice 3). A managed-array `get`/`first`/`last` yields a BORROW — the array owns the element
-			// and its `__arr_decref` walk drops it — while the `otherwise` fallback is a FRESH OWNED box. The
+			// and its `__managed_decref` walk drops it — while the `otherwise` fallback is a FRESH OWNED box. The
 			// two edges merge into ONE binding, which has ONE drop discipline, so they MUST agree on ownership.
 			//
 			// ⚠ **THE OK BORROW IS INCREF'D SO THE PHI IS OWNED — do NOT compensate for the fallback with an
@@ -25260,7 +25260,7 @@ export type Parser
 			// `__mm_free` exposed it (four `array-slots` reads came back `0x3F3F…`). Instead the ok edge takes a
 			// SECOND owner of the borrowed element with `__mm_incref`, so the phi owns a reference on BOTH edges
 			// and is dropped exactly ONCE at the binding's scope exit — after the last read, on every path.
-			// incref and every managed drop (`__mm_decref`/`__str_decref`/`__arr_decref`/`__destruct_*`) share the
+			// incref and every managed drop (`__mm_decref`/`__str_decref`/`__managed_decref`/`__destruct_*`) share the
 			// one header-refcount protocol (`emitRefcountCheckToLastOwner`), so the array's own decref walk and
 			// this scope-exit drop balance regardless of which runs last: the element ends at refcount 0 with
 			// exactly one free. The incref goes into `okBlock` (single-threaded, before its branch to `cont`);
@@ -26407,7 +26407,7 @@ export type Parser
 	// them to already-live edge blocks. Routed, one would split the very block the router is building.
 	//
 	// ⚠ **IT IS INERT TODAY AND THAT IS EXACTLY WHY IT IS WRITTEN DOWN.** No drop or retain callee
-	// (`__mm_incref`, `__mm_decref`, `__str_decref`, `__arr_decref`, `__destruct_*`, `__drop_existential`)
+	// (`__mm_incref`, `__mm_decref`, `__str_decref`, `__managed_decref`, `__destruct_*`, `__drop_existential`)
 	// carries a throws clause, so the router already declines on the clause — an accident of which runtime
 	// families are typed, not a property of this code. The day one of them becomes throwing, a silent
 	// re-entry is not the failure anyone would want to debug.
@@ -28953,7 +28953,7 @@ export type Parser
 	// be the UNCHECKED one; a stale snapshot would let that read run off the end of the buffer.
 	//
 	// ⭐ **THE ELEMENT IS A BORROW** (`emitContainerElementAccessor(owned: false)`) — the array keeps
-	// ownership and its own `__arr_decref` walk destroys it, exactly as `get`/`first`/`last` already
+	// ownership and its own `__managed_decref` walk destroys it, exactly as `get`/`first`/`last` already
 	// yield (`dispatchArrayMethod`). The loop variable is therefore enrolled in NEITHER `ownedBindings`
 	// NOR `pendingTempDrops`, and the loop costs zero refcount traffic per iteration. The reference
 	// bootstrap RETAINS instead (`MaxonToStandardConversion.ManagedMemory.cs:309-358`); shv2 has exactly
@@ -29188,7 +29188,7 @@ export type Parser
 			//
 			// ⚠ The gate is `pendingTempsContain`, NOT `valueIsOwnedHeap`, and the difference is a
 			// DOUBLE FREE: `var arr = IntArray.create()` is an owned VALUE whose drop a binding already
-			// owes, so adopting it here too emitted two `__arr_decref`s into the exit block (measured —
+			// owes, so adopting it here too emitted two `__managed_decref`s into the exit block (measured —
 			// `for-in-iteration` segfaulted). The pending list is exactly the owned values NO binding
 			// owns (see `pendingTempsContain`), which is the question being asked — and it is asked
 			// inside `giveTemporaryScopeLifetime`, the ONE door this promotion has.
@@ -29262,7 +29262,7 @@ export type Parser
 
 		// The loop test, in the header. For a range it is the user's own comparison against the upper
 		// bound and goes through `emitCompare`, so `for i in 1 to "x"` is the ordinary comparison type
-		// error; for an array it is `idx < __arr_count(arr)`, both operands compiler-minted integers.
+		// error; for an array it is `idx < __managed_count(arr)`, both operands compiler-minted integers.
 		//
 		// ⭐ **A LIST'S TEST IS `cursor != 0`, WHICH IS A BOUND OF A DIFFERENT KIND AND NEEDS NO LENGTH READ.**
 		// The chain's own null terminator is the end condition, so the header reads nothing off the record —
@@ -29285,13 +29285,13 @@ export type Parser
 		end 'cursorStillPositioned'
 		if not isRange and not isList and not methodSurfaceExists(cursorSurface) 'lengthReadLive'
 			// ⭐ **THE LENGTH IS RE-READ LIVE IN THE HEADER for a String too** — `length@8` off the record,
-			// the same discipline the array form's live `__arr_count` follows and for the same reason: the
+			// the same discipline the array form's live `__managed_count` follows and for the same reason: the
 			// header comparison IS the bounds check that licenses the unchecked read below it.
 			//
 			// ⚠ The String's index is a BYTE position, not a cluster ordinal, so the header asks "is there
 			// a byte left?" — which is exactly the reference's `countGraphemes` loop condition
 			// (`while pos < len`). A cluster ordinal would need the count, which costs a whole extra scan.
-			bound = self.emitLoadStringField(source, offset: StringLengthOffset, range: SourceRange.ofToken(forTok)) if isString else self.emitRuntimeCall(ArrCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
+			bound = self.emitLoadStringField(source, offset: StringLengthOffset, range: SourceRange.ofToken(forTok)) if isString else self.emitRuntimeCall(ManagedCountName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
 		end 'lengthReadLive'
 		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(testAnchorIndex))
 
@@ -29349,7 +29349,7 @@ export type Parser
 		if isString or isCharacterRange 'ownsTheTripsCharacter'
 			// ⭐⭐ **THE OWNERSHIP RULING: A MINTED CHARACTER IS OWNED, WHERE AN ARRAY'S ELEMENT IS BORROWED — and
 			// the difference is not a preference, it is a fact about where the value lives.** Slice A could
-			// borrow because the ARRAY KEEPS the element and its own `__arr_decref` walk destroys it, so
+			// borrow because the ARRAY KEEPS the element and its own `__managed_decref` walk destroys it, so
 			// there was an owner to borrow from. A String's grapheme clusters are stored NOWHERE (the record
 			// holds bytes, and a Character is a record) and a character RANGE stores nothing at all — it has
 			// only a counter — so in both the value the body sees did not exist until `__char_at` /
@@ -29385,7 +29385,7 @@ export type Parser
 		// exactly the callee and its arguments.
 		if not isRange and not isString and not methodSurfaceExists(cursorSurface) 'readElement'
 			let elementArgs = singletonArgs(indexPhi) if isList else pairArgs(source, second: indexPhi)
-			loopValue = self.emitContainerElementAccessor(func, callee: ListNodeValueName if isList else ArrGetUncheckedName, container: source, args: elementArgs, giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(patternTok))
+			loopValue = self.emitContainerElementAccessor(func, callee: ListNodeValueName if isList else ManagedGetUncheckedName, container: source, args: elementArgs, giid: self.valueNameId(source), owned: false, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(patternTok))
 		end 'readElement'
 		// ⭐⭐ **A CURSOR'S ELEMENT IS WHATEVER `current()` RETURNS, AND ITS OWNERSHIP IS THAT CALL'S ANSWER —
 		// NOT A THIRD RULE HERE.** The other four forms each needed one: an array/list element is a BORROW the
@@ -29410,7 +29410,7 @@ export type Parser
 		//
 		// ⭐ **AND IT NEEDS NO HIDDEN BINDING, WHERE `let (x, y) = t` DOES.** That one binds the box to an
 		// unspellable name because the RHS is a freshly built tuple SOME binding has to drop. A loop element is
-		// a BORROW the container still owns (`emitContainerElementAccessor(owned: false)`) — its `__arr_decref`
+		// a BORROW the container still owns (`emitContainerElementAccessor(owned: false)`) — its `__managed_decref`
 		// walk destroys every pair — so there is no ownership obligation here to give a name to.
 		//
 		// ⚠ E3070 records no borrow for the destructured names, and that is the LOCK's doing rather than an
@@ -29856,7 +29856,7 @@ export type Parser
 		// `type Array … implements BuiltinArrayLiteral` that declares NO cursor and no factory: the name is
 		// still served by the compiler (`isArrayBaseName` — an `Array`'s record IS its buffer), so the
 		// counter lowering can read `count`/`get` off it, and this is the only door that admits it.
-		// MEASURED: such a program emits `__arr_count` / `__arr_get_unchecked`, where the corpus array emits
+		// MEASURED: such a program emits `__managed_count` / `__managed_get_unchecked`, where the corpus array emits
 		// `Array.createIterator` / `ArrayIterator.current`.
 		if self.signatures.isArrayInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'array'
 			return
@@ -30597,7 +30597,7 @@ export type Parser
 	//
 	//     The last use of `it` is at or before the write, so last-use liveness would call the borrow dead
 	//     and wave the program through — but the ITERATION keeps reading the record on every later trip
-	//     (`__arr_count` in the header, `__arr_get_unchecked` for the element), so the freed buffer is read
+	//     (`__managed_count` in the header, `__managed_get_unchecked` for the element), so the freed buffer is read
 	//     again. The body's extent IS that liveness, and it is exactly what P1.8 Slice A's lexical lock
 	//     already models, so the two halves of one `for` agree instead of one expiring under the other.
 	//
@@ -37797,21 +37797,21 @@ export type Parser
 	end 'arrayEqualityOperands'
 
 	// `a == b` / `a != b` on one `Array` instance, as the byte-compare `a.equals(b)` lowers to — the SAME
-	// `__arr_eq` entry the method door emits, so the operator and the method cannot answer differently.
+	// `__managed_eq` entry the method door emits, so the operator and the method cannot answer differently.
 	//
 	// ⚠ **THE AVAILABILITY RULE IS THE METHOD'S, ASKED AT THE OPERATOR'S SPAN.** `==` on an array means
 	// `Array.equals`, which exists only where the element satisfies the conditional conformance — so an
 	// array of a non-conforming element is E4006 here, naming `equals` and the clause, rather than the
 	// pointer compare it used to be.
 	//
-	// ⚠ Both operands are BORROWED (`__arr_eq` reads two records and frees nothing), so each stays whatever
+	// ⚠ Both operands are BORROWED (`__managed_eq` reads two records and frees nothing), so each stays whatever
 	// pending temporary the climber made it and drops at statement end, AFTER the compare —
 	// `emitBuiltinConformanceCall`'s contract for a managed receiver.
 	function emitArrayEqualityCall(lhs ValueId, rhs ValueId, op MaxonCmpOp, opTok Token) returns ValueId throws ParseError
 		try self.requireArrayConformanceAvailable(self.valueNameId(lhs), methodName: EqualsMethodName, anchor: opTok)
 
 		let range = SourceRange.ofToken(opTok)
-		let equal = self.emitRuntimeCall(ArrEqName, args: pairArgs(lhs, second: rhs), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		let equal = self.emitRuntimeCall(ManagedEqName, args: pairArgs(lhs, second: rhs), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 
 		return match op 'op'
 			eq gives equal
@@ -38283,7 +38283,7 @@ export type Parser
 		end 'byteStrLit'
 
 		// `[a, b, c]` — an ARRAY LITERAL (P1.7 slice 1). Its own arm because `[` is its own token. It
-		// desugars to `__arr_create` + a `__arr_push` per element, yielding an owned `Array with integer`.
+		// desugars to `__managed_create` + a `__managed_push` per element, yielding an owned `Array with integer`.
 		if self.at(TokenKind.leftBracket) 'arrayLiteral'
 			return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 		end 'arrayLiteral'
@@ -38979,7 +38979,7 @@ export type Parser
 	// Array record over an IMMORTAL rdata blob (see `LowerMaxonToStd.lowerConstArrayLiteral`). Its value type
 	// is pinned to the concrete `Array with Byte` gid so `.count()`/`.get()` dispatch through a real generic
 	// instance — a bare `named(Array)` would trip the generics machinery. Enrolled as an owned temp so a
-	// scope-exit / statement-end drop (`__arr_decref`) frees the record (the rdata buffer is left alone).
+	// scope-exit / statement-end drop (`__managed_decref`) frees the record (the rdata buffer is left alone).
 	//
 	// A codepoint above 0xFF (`b"Ā"`, a `\uNNNN` naming one, an emoji) has no single-byte encoding and is
 	// REJECTED with E1004 — the self-hosted oracle's behaviour, deliberately UNLIKE the C# bootstrap, which
@@ -39411,8 +39411,8 @@ export type Parser
 		// ⭐ **`capacity@16 = InlineBufferCapacity` — the buffer-ownership encoding's INLINE provenance**
 		// (`BufferOwnership`), and the one fact the whole record has to publish about its bytes: they are
 		// part of this box, so they are neither writable in place beyond their exact length nor separately
-		// releasable. `__arr_grow` reads it — the growth every String append now reaches through
-		// `String.append` -> `managed.append` -> `__arr_append` -> `__arr_reserve` — and any negative capacity
+		// releasable. `__managed_grow` reads it — the growth every String append now reaches through
+		// `String.append` -> `managed.append` -> `__managed_append` -> `__managed_reserve` — and any negative capacity
 		// is below every required length, so an inline String always detaches into a private buffer before it
 		// grows. (`__str_append` read it directly until W49 wave 8 retired it; the encoding is unchanged, and
 		// that it survived the change of reader is the point of putting it in `BufferOwnership`.) `__str_decref` reads it
@@ -39422,7 +39422,7 @@ export type Parser
 		// inline-ness in `parent@32` instead, which nothing read: the drop path was correct only because
 		// `__str_decref` carried a String-only branch that re-derived inline-ness from the layout.
 		// `parent@32` needs no store at all now: `NoOwedAllocation` is 0, which `__mm_alloc`'s zeroing
-		// contract already supplies (the same reason `__arr_create` leaves four of its six fields alone).
+		// contract already supplies (the same reason `__managed_create` leaves four of its six fields alone).
 		let capacity = self.emitLiteral(InlineBufferCapacity, valueType: MaxonType.integer, range: range)
 		self.emitStoreStringField(result, offset: StringCapacityOffset, value: capacity, range: range)
 		let elementSize = self.emitLiteral(ByteStringElementSize, valueType: MaxonType.integer, range: range)
@@ -41082,7 +41082,7 @@ export type Parser
 
 	// ⭐⭐ **MATERIALIZE `<Enum>.allCaseNames` — an OWNED `Array with String` of the case names, in
 	// declaration order.** It builds exactly what the source literal `["red", "green", "blue"]` builds, op
-	// for op: one `__arr_create` over the `Array with String` instance, then one promoted String per case
+	// for op: one `__managed_create` over the `Array with String` instance, then one promoted String per case
 	// pushed into it. That is the whole design decision — the member is a VALUE of a type the language
 	// already has, so it needs no representation, no accessor protocol and no runtime helper of its own, and
 	// `.count()` / `.get(0)` / `for name in …` reach it through the postfix loop like any other array.
@@ -42242,7 +42242,7 @@ export type Parser
 		// own `false` at the one impossible-state panic below rather than getting an arm of its own.
 		//
 		// ⭐ **A `var` RECEIVER IS THE SLOT'S CURRENT OCCUPANT, LOADED — AND IT IS NOT STORED BACK.** Every
-		// receiver-writing method rewrites the RECORD in place and never moves it: `__arr_append` grows a
+		// receiver-writing method rewrites the RECORD in place and never moves it: `__managed_append` grows a
 		// String's fused record through `buffer@0`/`length@8`, and an `Array`'s `push`/`set`/`clear` detach or rewrite the
 		// element buffer while the 48-byte record stays put (`dispatchArrayMethod` states the same
 		// invariant for a local receiver). So the pointer in the `.data` slot is still the right pointer
@@ -42491,7 +42491,7 @@ export type Parser
 			return try self.dispatchCharacterMethod(recv)
 		end 'characterMethod'
 
-		// An ARRAY RECEIVER (`arr.push(x)`, `[10,20].get(0)`) goes to the array runtime rather than through
+		// An ARRAY RECEIVER (`arr.push(x)`, `[10,20].get(0)`) goes to the managed-memory runtime rather than through
 		// the struct path (which would reject a generic instance as not a plain struct). The split is on the
 		// `genericInstance` tag being an `Array` instance — the parser's type oracle.
 		if self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) 'arrayMethod'
@@ -42721,7 +42721,7 @@ export type Parser
 	// ⚠ **BOTH HALVES OF THAT WERE MEASURED WRONG, and one of them silently.** With `var items as IntArray`
 	// inside `type Bag`:
 	//   • `items.count()` inside a method compiled clean and answered **0** for an array holding one
-	//     element — `__arr_count` was handed the Bag's box and read its second word. A wrong answer with no
+	//     element — `__managed_count` was handed the Bag's box and read its second word. A wrong answer with no
 	//     diagnostic anywhere, and the runnable oracle answers 1.
 	//   • `items.push(v)` was **E3019** — a false rejection of an ordinary struct-with-a-container method,
 	//     because the alias is neither `mutable` nor `isParameter`, so `immutableReceiverNameOf` blamed it.
@@ -43514,7 +43514,7 @@ export type Parser
 		// arm went in the same edit.
 		//
 		// ⭐ **THE LOWERING DID NOT CHANGE, IT MOVED ONE FRAME DOWN.** The arm handed the RECEIVER'S OWN
-		// RECORD to `__arr_set_byte`, which is exactly what the corpus body's `managed.setByte(…)` means on a
+		// RECORD to `__managed_set_byte`, which is exactly what the corpus body's `managed.setByte(…)` means on a
 		// FUSED record — a String record and an Array record agree on all five slots that entry reads
 		// (`BufferOwnership`'s shared prefix), and it touches `@40` nowhere. So the corpus body reaches the
 		// identical callee with the identical bound, and there was never a `__str_set_byte` to keep in step.
@@ -43522,7 +43522,7 @@ export type Parser
 		// ⛔⛔ **IT WROTE THROUGH `__str_bytes_view(self)` UNTIL W49 WAVE 2, AND THE WRITE LANDED NOWHERE** —
 		// the record-not-view fix that made this arm correct is what the corpus body now inherits, so the
 		// lesson survives the arm. That view is NON-OWNING (`capacity@16 = ViewBufferCapacity`), so
-		// `__arr_set_byte`'s guard sent it through `__arr_cow_detach` first: the view got a private copy, the
+		// `__managed_set_byte`'s guard sent it through `__managed_cow_detach` first: the view got a private copy, the
 		// byte was written into the copy, and the copy died with the owned temporary at statement end.
 		// `buildStrBytesView`'s own header called that safe on the grounds that *"nothing in `stdlib/` writes
 		// through this door"* — true only because the door's one corpus caller, `mapAsciiCase`, was
@@ -43687,7 +43687,7 @@ export type Parser
 	// is `ByteView.create(toString())`, and `toString()` mints a whole `String` record per call, where this
 	// emitter reads the Character's own bytes in place. `Character.bytes()` is on `characterSurfaceMemberNames`
 	// and off the `String` roster, so the wave that weighs that allocation is the wave that retires it.
-	// The result is an OWNED temp whose `__arr_decref` frees the record and its buffer.
+	// The result is an OWNED temp whose `__managed_decref` frees the record and its buffer.
 	//
 	// ⚠ **THE ELEMENT IS THE READING FILE'S OWN `Byte` ON PURPOSE, AND THAT IS WHY THE FILL HAS TO BE GATED
 	// (A4a).** `__str_to_bytes` writes the receiver's raw UTF-8 into the record — bytes that exist only at run
@@ -43726,12 +43726,12 @@ export type Parser
 	// owned temporary.
 	//
 	// ⚠ **`(source, dest, …)` IS THE ARGUMENT ORDER EVERY SUCH RUNTIME ENTRY TAKES, and it is stated once
-	// here.** Two callees now share it (`__str_to_bytes`, `__arr_map`/`__set_map`) where four did until W49
+	// here.** Two callees now share it (`__str_to_bytes`, `__managed_map`/`__set_map`) where four did until W49
 	// wave 6 retired the two decoding views; a caller that assembled its own list would be free to swap the
 	// two records, which reads as a valid call at every tier and writes into the source at run time.
 	//
 	// ⚠ The result is enrolled owned whatever the element is: `trackOwnedTemp` routes its scope-exit drop by
-	// TAG through `decrefCalleeFor` (`__arr_decref`), which destroys the elements the record's own
+	// TAG through `decrefCalleeFor` (`__managed_decref`), which destroys the elements the record's own
 	// `element_destroy@40` stamp names — so a managed-element fill needs nothing extra here.
 	function emitMaterializedFill(giid GenericInstanceId, callee ByteArray, source ValueId, extraArgs ValueIdArray, range SourceRange) returns ValueId throws ParseError
 		let filled = try self.emitArrayCreateOp(giid, range: range)
@@ -43797,7 +43797,7 @@ export type Parser
 	// throw. See `requireArrayKeyElementConforms`.)
 	//
 	// ⚠ **AN OPAQUE `T` ELEMENT IS REFUSED, AND THE REASON IS A STRIDE AND NOT A CONFORMANCE.** `Array with T`
-	// is opaque, so `element_size@24` — which `__arr_hash`/`__arr_eq` read to bound their byte walk — is not
+	// is opaque, so `element_size@24` — which `__managed_hash`/`__managed_eq` read to bound their byte walk — is not
 	// known here. Answering E4006 instead would claim the element does not conform, which is not what is
 	// known: nothing here knows what it binds to.
 	//
@@ -44301,7 +44301,7 @@ export type Parser
 		// rather than bitwise complement) and `specs/managed-directory.md:205` writes
 		// `if not __ManagedDirectory.exists(…)`, which settles it. The RUNTIME still answers a 0/1 i64 — this
 		// tier has no `setcc` — and it is this TAG that makes the value a bool to everything above, the same
-		// arrangement `__arr_is_empty` has.
+		// arrangement `__managed_is_empty` has.
 		if methodTok.value.equals(ManagedDirectoryExistsMethod) 'exists'
 			let path = try self.parseOneManagedMemoryArgList(func, paramName: ManagedFilePathParamName, methodTok: methodTok)
 			return self.emitRuntimeCall(ManagedDirectoryExistsName, args: singletonArgs(path), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
@@ -44488,7 +44488,7 @@ export type Parser
 	// proves its element survives through the buffer surface now rather than through this door.
 
 	// ⭐ **`__ManagedMemory.create(count, elementSize)` — THE ONE `__ManagedMemory` STATIC.** It yields an OWNED
-	// `Array` record, so its scope-exit drop routes through `__arr_decref` (which frees the record AND its
+	// `Array` record, so its scope-exit drop routes through `__managed_decref` (which frees the record AND its
 	// element buffer) exactly as a `.create()`d array's does, and the value is MARKED as the buffer surface
 	// (`markBufferSurface`) so its members are reachable through it — the one thing that makes it more than an
 	// array to the code that follows.
@@ -44514,7 +44514,7 @@ export type Parser
 		let elementSizeStart = self.pos
 		let args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCountParamName, secondParam: ManagedMemoryElementSizeParamName, methodTok: methodTok)
 		let elementSize = try args.get(1) otherwise panic("parseManagedMemoryStaticCall: the two-int arg list returned fewer than two values")
-		let created = self.emitOwnedRuntimeResult(ArrMemCreateName, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: try self.requireManagedMemoryElementSize(elementSize, argStart: elementSizeStart), range: range)
+		let created = self.emitOwnedRuntimeResult(ManagedMemCreateName, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: try self.requireManagedMemoryElementSize(elementSize, argStart: elementSizeStart), range: range)
 		self.markBufferSurface(created)
 		return created
 	end 'parseManagedMemoryStaticCall'
@@ -44556,7 +44556,7 @@ export type Parser
 
 		let instance = self.signatures.managedMemoryInstanceForElementSize(size, readerFilePath: self.filePath)
 
-		// ⭐⭐ **AND THE INSTANCE MUST STRIDE WHAT THE RECORD WILL BE STAMPED WITH (A4c).** `__arr_mem_create`
+		// ⭐⭐ **AND THE INSTANCE MUST STRIDE WHAT THE RECORD WILL BE STAMPED WITH (A4c).** `__managed_mem_create`
 		// stamps `element_size@24` from this very ARGUMENT, so a `create` whose instance strides something
 		// else is a record and a static type disagreeing about one buffer — the `b"…"` literal's incoherence
 		// through the other producer, and it was accepted for a row's length while the literal was refused
@@ -45023,8 +45023,8 @@ export type Parser
 	// (`stdlib/String.maxon:414-419`) has always carried the append itself — so retiring the member meant
 	// moving that refusal rather than deleting it: `receiverOwnerMask` derives the bit from the envelope
 	// collapse and `SemanticCheck.checkImmutableArgToMutatingParam` raises the same E3019 at the same token.
-	// `__str_append` and its usage bit went with it; the corpus reaches `__arr_append` through
-	// `managed.append(other.managed)`, whose growth is `__arr_grown_cap`'s and so stays geometric.
+	// `__str_append` and its usage bit went with it; the corpus reaches `__managed_append` through
+	// `managed.append(other.managed)`, whose growth is `__managed_grown_cap`'s and so stays geometric.
 
 	// ⚠ **`parseStringByteLength` STOOD HERE AND WENT WITH `String.byteLength` (W49 wave 7).** It was two
 	// lines — consume `()`, load `length@8` — and had exactly ONE caller, so retiring the member took the
@@ -45224,7 +45224,7 @@ export type Parser
 
 	// --- Builtin `Array` parsing (P1.7 slice 1) ---
 
-	// `[a, b, c]` — an array literal. Desugars to `__arr_create(elementSize, 0)` then one `__arr_push` per
+	// `[a, b, c]` — an array literal. Desugars to `__managed_create(elementSize, 0)` then one `__managed_push` per
 	// element, yielding an OWNED `Array with integer`. At this slice a literal's elements are all integer
 	// (a String / struct / bool / Byte element literal is a later slice, rejected E2015); an empty `[]`
 	// carries no element to infer a type from and is rejected (use `Array with T` + `.create()`).
@@ -45296,7 +45296,7 @@ export type Parser
 		//
 		// ⚠ **THE ADMITTED SET IS WIDER THAN "ENUMS AND PACKED ELEMENTS", AND SAYING SO MATTERS.** A literal
 		// whose first element FIXES a narrow ranged alias (`[1 as Percent, 2 as Percent]`) became a `.rdata`
-		// blob where it was `__arr_create` + pushes, and every machine-word constant literal has now joined
+		// blob where it was `__managed_create` + pushes, and every machine-word constant literal has now joined
 		// them. ⭐ That drops no CHECK: `pushArrayLiteralElement` applies none a blob would skip — a ranged
 		// element's runtime guard rides `parseArraySetOrInsert`, which a literal never goes through — and the
 		// values were already required to be compile-time constants. ⚠ A cast to a NON-packing alias still
@@ -45321,7 +45321,7 @@ export type Parser
 	//     2 as Q, 3 as Q]` at 2 bits is the single byte `0b11_10_01_00` — which is a claim about the bit
 	//     ORDER and the `ceil(count·bits/8)` sizing that no round-tripped value could make; and it is what
 	//     `enum-narrow-storage`'s six pin at the BYTE ladder (`u8[] 0, 1, 2`, `i16[] -200, 0, 200`).
-	//   • **any element non-constant** ⇒ the ordinary `__arr_create` + one `__arr_push` per element, over the
+	//   • **any element non-constant** ⇒ the ordinary `__managed_create` + one `__managed_push` per element, over the
 	//     values already parsed. `specs/bool-bit-packing.md` requires both spellings to reach the identical
 	//     representation ("whether built from a constant literal, a NON-CONSTANT literal, or dynamically"),
 	//     and they do: the stride is `arrayElementSize`'s single answer either way.
@@ -45558,7 +45558,7 @@ export type Parser
 		self.emitArrayPush(arr, element: try self.moveElementIntoContainer(elem, giid: giid, valueStart: valueStart), range: range)
 	end 'pushArrayLiteralElement'
 
-	// THE `__arr_push` of an array being BUILT, over an element whose ownership has already been settled.
+	// THE `__managed_push` of an array being BUILT, over an element whose ownership has already been settled.
 	// Its two callers settle that in different ways and so cannot share the step before it: a literal's
 	// element is decided from the SOURCE TOKENS it was written at (`moveElementIntoContainer`), while a
 	// synthesized case-name element (`emitEnumAllCaseNames`) was written at no tokens at all. The store
@@ -45567,7 +45567,7 @@ export type Parser
 	// ⚠ Distinct from the user's own `arr.push(x)`, which is `emitArrayVoidCall` — that form hands the
 	// RECEIVER back as "what the statement still denotes", where a build step's result is nobody's.
 	function emitArrayPush(arr ValueId, element ValueId, range SourceRange)
-		_ = self.emitRuntimeCall(ArrPushName, args: pairArgs(arr, second: element), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(ManagedPushName, args: pairArgs(arr, second: element), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'emitArrayPush'
 
 	// The `Array with T` instance a literal's FIRST element fixes (P1.7 slice 3) — an integer element → the
@@ -45579,7 +45579,7 @@ export type Parser
 	// mechanism behind it.** `/specs/vector.md` writes `Vector from [true, false, …]` and
 	// `Vector from [1.5, 2.5]`, and a `Vector from […]` builds its record through THIS literal — so the
 	// question was never "should a vector be special" but "why did a bare `[…]` refuse two element types the
-	// array runtime already strides correctly". Measured: `bool` needed nothing but this arm (its slot is one
+	// managed-memory runtime already strides correctly". Measured: `bool` needed nothing but this arm (its slot is one
 	// byte by `trivialElementSlot`, and `Array with bool` built through `BArr.create()` + `push` has
 	// always worked); `float` needed the element-word bitcast (`containerElementWord` /
 	// `containerSlotValueType`), which is the whole of what was missing and is now built.
@@ -45671,7 +45671,7 @@ export type Parser
 	// reaches `requireContainerElementType` from NO path — that door's own header says so ("THE ARRAY LITERAL
 	// IS NOT A CALLER … every later one is compared against it by `requireArrayLiteralElementMatches`") — and
 	// nothing downstream sees it either, because `Array` is parser-intrinsic: `[a, b]` builds through
-	// `__arr_create`/`__arr_push`, runtime entries carrying no `FuncSignature`, so `SemanticCheck`'s argument
+	// `__managed_create`/`__managed_push`, runtime entries carrying no `FuncSignature`, so `SemanticCheck`'s argument
 	// doors have nothing to check. MEASURED: `[oneArg, twoArg]` then `try ops.get(1)` compiled and CALLED
 	// `twoArg` with an argument nobody passed. The shape comparison itself still cannot happen here (it is
 	// over RESOLVED parameter lists, and `ProgramSignatures` holds return types and no parameter types), so it
@@ -45694,10 +45694,10 @@ export type Parser
 		end 'mismatch'
 	end 'requireArrayLiteralElementMatches'
 
-	// Emit `__arr_create(elementSize, elementDestroy)` for instance `giid`, yielding the array record — the
+	// Emit `__managed_create(elementSize, elementDestroy)` for instance `giid`, yielding the array record — the
 	// shared producer for a literal and an `IntArray.create()`. Element size is a compile-time constant here
 	// (a concrete instance). The element destructor is the ADDRESS of the element's drop callee for a MANAGED
-	// element (P1.7 slice 3), stamped into `element_destroy@40` before any element move (v1 trap #3: `__arr_create`
+	// element (P1.7 slice 3), stamped into `element_destroy@40` before any element move (v1 trap #3: `__managed_create`
 	// stores it inside its body, so it is set at birth); 0 for a trivial element. NOT tracked owned — the caller
 	// decides that (a literal tracks after its pushes, a `create()` immediately).
 	function emitArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
@@ -45706,7 +45706,7 @@ export type Parser
 		end 'opaque'
 		let sizeVal = self.emitLiteral(self.signatures.arrayElementSize(giid), valueType: MaxonType.integer, range: range)
 		let destroyVal = self.arrayElementDestroyValue(giid, range: range)
-		return self.emitRuntimeCall(ArrCreateName, args: pairArgs(sizeVal, second: destroyVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+		return self.emitRuntimeCall(ManagedCreateName, args: pairArgs(sizeVal, second: destroyVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitArrayCreateOp'
 
 	// ⭐ **CREATE AN OPAQUE-`T` ARRAY inside a shared generic body (P1.7 slice 3b-i).** `ElementArray.create()`
@@ -45716,7 +45716,7 @@ export type Parser
 	//   • element_size is the fixed machine-word slot every opaque `T` occupies (`LAYOUT_TYPE_PARAM_SLOT_BYTES`),
 	//     NOT a source-`sizeof` — a managed element is a pointer and a trivial one an inline word, both 8 bytes.
 	//   • element_destroy@40 is not known statically, so it is READ from the enclosing instance's threaded
-	//     layout descriptor at RUN TIME (`destroyFunc@40`). The parser emits a ONE-argument `__arr_create`
+	//     layout descriptor at RUN TIME (`destroyFunc@40`). The parser emits a ONE-argument `__managed_create`
 	//     (element_size only); LowerMaxonToStd supplies the descriptor-read second argument, so the tier that
 	//     owns the descriptor's ValueId (`implicitLayoutValueId`) is the tier that reads it — the same split
 	//     `sizeof(T)` uses. For a TRIVIAL instance the slot reads 0 and the array's drop walk is skipped.
@@ -45740,12 +45740,12 @@ export type Parser
 		end 'insideALiftedClosure'
 
 		let sizeVal = self.emitLiteral(LAYOUT_TYPE_PARAM_SLOT_BYTES as ParsedInt, valueType: MaxonType.integer, range: range)
-		return self.emitRuntimeCall(ArrCreateName, args: singletonArgs(sizeVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+		return self.emitRuntimeCall(ManagedCreateName, args: singletonArgs(sizeVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitOpaqueArrayCreateOp'
 
 	// ⭐ **THE `element_destroy@40` STAMP VALUE (P1.7 slice 3).** For a MANAGED-element array it is the RAW
 	// `.text` ADDRESS of the element's drop callee (`__str_decref` / `__destruct_<T>` / `__mm_decref` / nested
-	// `__arr_decref`), which `__arr_decref`'s last-owner walk calls through a `callIndirect` on each live slot;
+	// `__managed_decref`), which `__managed_decref`'s last-owner walk calls through a `callIndirect` on each live slot;
 	// for a trivial element it is 0 (an inline element owns nothing, so the walk is skipped). A CONCRETE site
 	// knows the element type, so the address is the existing P1.5-A1 `funcAddr` code→register path — no rdata
 	// reloc, no descriptor `destroyFunc@40` (those are the opaque-`T`-in-a-generic-body case, slice 3b).
@@ -45767,7 +45767,7 @@ export type Parser
 	end 'arrayElementDestroyValue'
 
 	// Emit the RAW `.text` address of a COMPILER-INTERNAL runtime function (`__str_decref`, `__destruct_<T>`,
-	// `__arr_decref`, `__mm_decref`) as a value (P1.7 slice 3). It rides P1.5-A1's `functionRef` → `funcAddr`
+	// `__managed_decref`, `__mm_decref`) as a value (P1.7 slice 3). It rides P1.5-A1's `functionRef` → `funcAddr`
 	// path, but names a `__`-prefixed runtime callee — which `LowerMaxonToStd.lowerFunctionRef` materializes as
 	// the BARE address (NOT the `__fnref_` env thunk: the destructor is invoked through a plain `callIndirect(ptr)`
 	// in the drop walk, not the uniform `(userargs, env)` closure ABI) and `scanRuntimeUsage` records so the named
@@ -45806,7 +45806,7 @@ export type Parser
 	//
 	// `create()`: a MANAGED opaque element is fully created here (`emitOpaqueArrayCreateOp` stamps its
 	// `element_destroy@40` from the threaded descriptor, P1.7 slice 3b-iii); the element READ (borrow),
-	// MOVE-OUT (`__drop_type_param`) and COPY (`__arr_*_opaque` via the descriptor `copyFunc@32`, P1.7 slice
+	// MOVE-OUT (`__drop_type_param`) and COPY (`__managed_*_opaque` via the descriptor `copyFunc@32`, P1.7 slice
 	// 3b-vi-b-β) are all served through the descriptor, never creation.
 	//
 	// ⚠ **THE REFUSAL BELOW NAMES BOTH, AND KEEPING IT CURRENT IS NOT COSMETIC.** It read *"P1.7 slice 1
@@ -45857,7 +45857,7 @@ export type Parser
 	//     `array-init.the-surface-flips` is the case that says so.
 	//   • **THE REFCOUNT BALANCES.** The source is still live and still drops at its own scope exit, so the
 	//     adopted array must be a SECOND owner, not a stolen one. `__mm_retain` raises the same refcount word
-	//     `__arr_decref` lowers — both go through `MmRuntime.emitRefcountCheckToLastOwner` — so
+	//     `__managed_decref` lowers — both go through `MmRuntime.emitRefcountCheckToLastOwner` — so
 	//     `let a = ByteArray.init(mm)` traces rc 0 → 1 → (`a` drops) 0 → (`mm` drops) freed.
 	//
 	// The retain and the statement-scoped drop obligation come as ONE call (`coOwnAggregateAsTemp`), shared
@@ -46973,7 +46973,7 @@ export type Parser
 		// `get` is a THROWING accessor: an ordinary `call` here, which the enclosing `try` rewrites into a
 		// `tryCall` (`rewriteLastCallToTryCall`) — the same shape every throwing `Array` accessor takes. Its
 		// result is a BORROW of the stored value: the map keeps owning it, so it is neither tracked owned nor
-		// dropped by the caller, exactly as `__arr_get`'s element read is.
+		// dropped by the caller, exactly as `__managed_get`'s element read is.
 		if methodTok.value.equals(GetMethod) 'get'
 			let key = try self.parseMapKeyArgList(func, giid: giid)
 			let resultType = self.containerSlotValueType(self.signatures.mapValueType(giid))
@@ -47004,7 +47004,7 @@ export type Parser
 		// `try` rewrites the call into a `tryCall` (`rewriteLastCallToTryCall`) exactly as it does for `get`.
 		//
 		// ⚠ **IT GOES THROUGH `emitRuntimeCall` AND DOES NOT RETURN THE RECEIVER, WHICH `upsert` DOES.** That
-		// is `buildArrSetLength`'s measured rule (see the `setLength`/`setByte` arms): a throwing call that
+		// is `buildManagedSetLength`'s measured rule (see the `setLength`/`setByte` arms): a throwing call that
 		// yields the receiver makes the TRY's value an owned managed record, which the ok/error reconciliation
 		// then acts on — an access violation, not a diagnostic.
 		if methodTok.value.equals(InsertMethod) 'insert'
@@ -47015,13 +47015,13 @@ export type Parser
 
 		// ⭐ **`map(transform)` YIELDS AN ARRAY OF `(Key, Value)` PAIRS** — `stdlib/Interfaces.maxon:187`'s
 		// `Array with Element` for every `Iterable`, where a `Map`'s Element IS its entry pair. So it is
-		// literally `__arr_map` over `emitMapEntriesArray`'s materialization: the entry walk is the one thing a
+		// literally `__managed_map` over `emitMapEntriesArray`'s materialization: the entry walk is the one thing a
 		// `Map` needs that an `Array` does not, and once it has run there is no second `map` to write. The
 		// intermediate entries array is this statement's owned temporary and drops at its end, having handed
 		// each pair a co-owner (the transform's own result) on the way through.
 		if methodTok.value.equals(MapMethod) 'map'
 			let entries = try self.emitMapEntriesArray(giid, map: map, anchor: methodTok, range: range)
-			return try self.parseContainerMap(func, container: entries, resultGiid: self.valueNameId(entries), callee: ArrMapName, range: range)
+			return try self.parseContainerMap(func, container: entries, resultGiid: self.valueNameId(entries), callee: ManagedMapName, range: range)
 		end 'map'
 
 		let drift = rosterDriftMessage("dispatchMapMethod", member: methodTok.value, roster: roster, rosterFuncs: "`mapSurfaceMemberNames`")
@@ -47347,11 +47347,11 @@ export type Parser
 		// nor released. `index()` yields a plain integer and is emitted as one.
 		if methodTok.value.equals(CursorCurrentMethod) 'current'
 			try self.consumeEmptyArgList()
-			return self.emitContainerElementAccessor(func, callee: ArrCursorCurrentName, container: cursor, args: singletonArgs(cursor), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ManagedCursorCurrentName, container: cursor, args: singletonArgs(cursor), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'current'
 		if methodTok.value.equals(CursorIndexMethod) 'index'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ArrCursorIndexName, args: singletonArgs(cursor), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedCursorIndexName, args: singletonArgs(cursor), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'index'
 
 		// ⭐ **THE THREE VOID NAVIGATORS, ONE ARM.** They differ only in the callee and in whether a target is
@@ -47360,20 +47360,20 @@ export type Parser
 		if methodTok.value.equals(CursorAdvanceMethod) or methodTok.value.equals(CursorRetreatMethod) 'step'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consumeEmptyArgList()
-			let stepCallee = ArrCursorAdvanceName if methodTok.value.equals(CursorAdvanceMethod) else ArrCursorRetreatName
+			let stepCallee = ManagedCursorAdvanceName if methodTok.value.equals(CursorAdvanceMethod) else ManagedCursorRetreatName
 			return self.emitRuntimeCall(stepCallee, args: singletonArgs(cursor), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'step'
 		if methodTok.value.equals(CursorSeekMethod) 'seek'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let target = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ArrCursorSeekName, args: pairArgs(cursor, second: target), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedCursorSeekName, args: pairArgs(cursor, second: target), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'seek'
 
 		// `peek(ahead)` reads WITHOUT moving, so it is the one member that both takes an argument and yields an
 		// element — the accessor door again, and a BORROW again, for `current`'s reason.
 		if methodTok.value.equals(CursorPeekMethod) 'peek'
 			let ahead = try self.parseOneBuiltinIntegerArgList(func, paramName: CursorPeekParamName, methodTok: methodTok)
-			return self.emitContainerElementAccessor(func, callee: ArrCursorPeekName, container: cursor, args: pairArgs(cursor, second: ahead), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ManagedCursorPeekName, container: cursor, args: pairArgs(cursor, second: ahead), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'peek'
 
 		// ⚠ Unreachable while the roster and these arms agree — `dispatchArrayMethod`'s drift panic, for its
@@ -47419,8 +47419,8 @@ export type Parser
 	// ==========================================================================================
 
 	// ⭐ **WHAT A VECTOR MAY HOLD.** Its slot is an inline word of the element's own stride, so any element the
-	// array runtime already strides fits — an integer of any declared range, a `bool`, a `float`. What it may
-	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__arr_resize`) while
+	// managed-memory runtime already strides fits — an integer of any declared range, a `bool`, a `float`. What it may
+	// NOT hold is anything MANAGED: `create()` PUBLISHES every slot (`__managed_resize`) while
 	// `element_destroy@40` stays 0, so a managed element would leak at teardown and every `set` would
 	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one.
 	//
@@ -47435,8 +47435,8 @@ export type Parser
 	// admitted `Vector with 2 IntArray` (`typealias IntArray = Array with Int`) and the vector published two
 	// NULL slots: `count()` answered **2** while `try v.get(0)` took the empty-slot branch — two elements it
 	// does not have, exit 0, no diagnostic — and `for a in v` with a read of `a` dereferenced those NULLs
-	// through `__arr_get_unchecked` and **ACCESS-VIOLATED (0xC0000005)**. `requireArrayResizeHasZeroElement`'s
-	// E3106 is the rule that normally holds this shut, and `emitVectorCreateOp` reaches `__arr_resize`
+	// through `__managed_get_unchecked` and **ACCESS-VIOLATED (0xC0000005)**. `requireArrayResizeHasZeroElement`'s
+	// E3106 is the rule that normally holds this shut, and `emitVectorCreateOp` reaches `__managed_resize`
 	// without passing it; that header predicted this exact failure in these words — *"If this refusal is ever
 	// relaxed, that read becomes a null deref in a function whose own text still looks correct."*
 	// ⇒ The question is asked of the ONE door that answers it (`requireListElementType` opens with the same
@@ -47471,19 +47471,19 @@ export type Parser
 		return "`{String.from(VectorBuiltinBaseName)}` holds its elements INLINE and publishes every slot at `{String.from(CreateMethod)}`, so it has no element destructor to stamp and a '{self.signatures.arrayElementDisplayName(giid)}' element would leak its storage and be read back as a null slot — a vector's element is an integer, a bool or a float"
 	end 'vectorElementRefusal'
 
-	// ⭐ **`Vec3.create()` — THE EMPTY RECORD, THEN ITS SLOTS PUBLISHED.** `__arr_create` yields a record with
-	// no slots (every index out of bounds), and `__arr_resize` grows it to `N` and ZEROES the new range — which
+	// ⭐ **`Vec3.create()` — THE EMPTY RECORD, THEN ITS SLOTS PUBLISHED.** `__managed_create` yields a record with
+	// no slots (every index out of bounds), and `__managed_resize` grows it to `N` and ZEROES the new range — which
 	// together are exactly *"zero-initialized, N elements"*. `element_destroy@40` stays 0, which
 	// `requireVectorElementType` is what makes correct.
 	//
-	// ⚠ **NOT `__arr_mem_create(N, elementSize)`, WHICH PUBLISHES `N` SLOTS IN ONE CALL AND WOULD OTHERWISE BE
-	// THE OBVIOUS FIT.** That entry is THROWING (`isManagedMemoryRuntimeCallee` — it reports
+	// ⚠ **NOT `__managed_mem_create(N, elementSize)`, WHICH PUBLISHES `N` SLOTS IN ONE CALL AND WOULD OTHERWISE BE
+	// THE OBVIOUS FIT.** That entry is THROWING (`isManagedMemoryMemberCallee` — it reports
 	// `invalidAllocation` for a size the allocator cannot use), so a `Vec3.create()` built on it is
 	// **E3057 throwing function requires try: 'create'** on every one of `/specs/vector.md`'s cases, which
 	// write a bare `create()`. Measured, on the first build of this port. The two-call form throws nothing:
-	// `__arr_resize` rejects only a NEGATIVE length, and a `FixedElementCount` cannot be one.
+	// `__managed_resize` rejects only a NEGATIVE length, and a `FixedElementCount` cannot be one.
 	//
-	// ⚠⚠ **IT REACHES `__arr_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS THE
+	// ⚠⚠ **IT REACHES `__managed_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS THE
 	// RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** `resize` grows a record by ZEROING the new
 	// range, so a published slot of a MANAGED element is a null pointer every accessor will dereference —
 	// which is why that door refuses a non-zero element for the source-level `resize`. The source-level rule
@@ -47494,7 +47494,7 @@ export type Parser
 	function emitVectorCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		let vec = try self.emitArrayCreateOp(giid, range: range)
 		let countVal = self.emitLiteral(self.signatures.genericInstanceFixedSize(giid), valueType: MaxonType.integer, range: range)
-		_ = self.emitRuntimeCall(ArrResizeName, args: pairArgs(vec, second: countVal), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		_ = self.emitRuntimeCall(ManagedResizeName, args: pairArgs(vec, second: countVal), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		return vec
 	end 'emitVectorCreateOp'
 
@@ -47533,12 +47533,12 @@ export type Parser
 
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitContainerElementAccessor(func, callee: self.elementAccessCallee(ArrGetName, index: index, giid: giid), container: vec, args: pairArgs(vec, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: self.elementAccessCallee(ManagedGetName, index: index, giid: giid), container: vec, args: pairArgs(vec, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 
 		if methodTok.value.equals(ArraySetMethod) 'set'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			return try self.parseArraySet(func, arr: vec, giid: giid, callee: ArrSetName, methodTok: methodTok, secondArgLabelled: true, range: range)
+			return try self.parseArraySet(func, arr: vec, giid: giid, callee: ManagedSetName, methodTok: methodTok, secondArgLabelled: true, range: range)
 		end 'set'
 
 		throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)}` method '{String.from(methodTok.value)}' — a vector provides `{String.from(CountMethod)}`/`{String.from(GetMethod)}`/`{String.from(ArraySetMethod)}` and `for … in`. It has no `push`/`pop`/`append`/`resize`/`clear`: its size is part of its type, and an operation that changed the length would change the value's type", line: methodTok.line, column: methodTok.column)
@@ -47560,7 +47560,7 @@ export type Parser
 	// ⭐⭐ **`Vector from [a, b, c]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN.** The source array literal
 	// already built exactly the record a vector is (`emitArrayCreateOp` + the pushes), so the construction is
 	// the array literal RETYPED: `Vector with 3 <elem>` names the same 48 bytes `Array with <elem>` does, and
-	// its drop callee is the same `__arr_decref` the literal's owned temp was already registered with. A
+	// its drop callee is the same `__managed_decref` the literal's owned temp was already registered with. A
 	// `__vec_from` would have been a copy of a record into an identical record.
 	//
 	// ⭐ **THE SIZE COMES FROM THE TOKENS, NOT FROM THE RECORD.** It is part of the TYPE, so it must be known
@@ -47600,7 +47600,7 @@ export type Parser
 
 		// The retype is the WHOLE construction: same record, same bytes, same owner. `arr` is already this
 		// statement's tracked owned temporary (`finishArrayLiteral`), and both instances drop through
-		// `__arr_decref` (`genericInstanceBoxDropCallee`), so the value's registered ownership stays true of it.
+		// `__managed_decref` (`genericInstanceBoxDropCallee`), so the value's registered ownership stays true of it.
 		self.retypeValue(arr, valueType: MaxonType.genericInstance(giid))
 		return arr
 	end 'parseVectorFromConstruction'
@@ -48528,7 +48528,7 @@ export type Parser
 	// field's indirect call (`o.inner.op()`, #97), an opaque `T` field's witness dispatch
 	// (`self.item.digest()`) or a builtin conformer's (`o.count.hash()`). Shared by the STATEMENT form
 	// (`resultUsed: false`) and the `try`-TARGET form (`try self.nodes.get(i) otherwise …`, P1.7 slice 3),
-	// which leaves the throwing `call __arr_get` as the last op for `rewriteLastCallToTryCall`.
+	// which leaves the throwing `call __managed_get` as the last op for `rewriteLastCallToTryCall`.
 	//
 	// ⭐ **IT ADDS EXACTLY ONE THING TO THE POSTFIX LOOP: THE CHAIN'S BASE NAME.** `resolveFieldChainFrom`
 	// stops before the `.member(`, so the receiver is an ordinary value and every dispatch decision is
@@ -48876,7 +48876,7 @@ export type Parser
 	//     BORROW (a `ByteArray` PARAMETER, owned in the caller's frame — `stdlib/File.maxon:147`). Whatever
 	//     this value is bound to or handed to drops independently, so it must become a SECOND owner through
 	//     `coOwnAggregateAsTemp` — the `__mm_retain` that mints the fresh id on the same refcount word
-	//     `__arr_decref` lowers, plus the statement-scoped drop an UNBOUND result needs. It is the one door
+	//     `__managed_decref` lowers, plus the statement-scoped drop an UNBOUND result needs. It is the one door
 	//     `parseArrayInitStatic` takes for the other direction, so the two inverses cannot drift on ownership.
 	//
 	// ⚠⚠ **HANDING BACK THE RECEIVER'S OWN `ValueId` IN THE SECOND CASE IS A DOUBLE FREE, NOT A COSMETIC
@@ -48898,7 +48898,7 @@ export type Parser
 	// INSTEAD OF A MINTED VIEW? (W49 wave 7 cure.)** A `String` record and an `Array` record agree on their
 	// first FIVE slots — `buffer@0`, `length@8`, `capacity@16`, `element_size@24`, `parent@32`, all five
 	// spelled from the SAME `ManagedRecord*Offset` constants (`StringRuntime:29-43` against
-	// `ArrayRuntime:47-51`) — and they DIVERGE at `@40`, where an `Array` holds `element_destroy` (a FUNCTION
+	// `ManagedMemoryRuntime:47-51`) — and they DIVERGE at `@40`, where an `Array` holds `element_destroy` (a FUNCTION
 	// POINTER) and a `String` holds `singleByteGraphemesFlag` (0/1). `BufferOwnership` declares that shared
 	// prefix, and its whole reason is one emitted function reading both records.
 	//
@@ -48911,16 +48911,16 @@ export type Parser
 	// two failure directions are not comparable, so a name joins only with its entry's call graph traced.
 	//
 	// **The census, traced through every helper each entry calls (W49 wave 7):**
-	//   • `length()` -> `__arr_count` (`buildArrCount`) — reads `@8`. Nothing else.
-	//   • `byteAt(i)` -> `__arr_byte_at` — reads `@0`, and `emitBufferAccessGuard` reads `@8`/`@16` and
+	//   • `length()` -> `__managed_count` (`buildManagedCount`) — reads `@8`. Nothing else.
+	//   • `byteAt(i)` -> `__managed_byte_at` — reads `@0`, and `emitBufferAccessGuard` reads `@8`/`@16` and
 	//     `@24`. A String's `@24` is `ByteStringElementSize = 1` on EVERY producer, so `length·es` is the byte
 	//     length, which is the bound that member means.
-	//   • `setByte(i, v)` -> `__arr_set_byte` — the guard plus `__arr_cow_detach` -> `__mm_cow_detach`,
+	//   • `setByte(i, v)` -> `__managed_set_byte` — the guard plus `__managed_cow_detach` -> `__mm_cow_detach`,
 	//     which reads `@8`/`@24`/`@0` and writes `@0`/`@16`/`@32`. **W49 wave 2 already established this
 	//     one and already passes the String's record for it** (`dispatchStringMethod`'s `setByte` arm); it
 	//     is listed so the two doors read one list.
-	//   • `append(other)` -> `__arr_append` — reads both records' `@24` and ABORTS on a mismatch, which two
-	//     String records pass (1 == 1); `__arr_move_elems` takes raw buffers and a stride as ARGUMENTS.
+	//   • `append(other)` -> `__managed_append` — reads both records' `@24` and ABORTS on a mismatch, which two
+	//     String records pass (1 == 1); `__managed_move_elems` takes raw buffers and a stride as ARGUMENTS.
 	//   • `toCString()` -> `__mm_to_cstring` — reads `@8` and `@0`. Not even `@24`.
 	//   • `makeCharFromBytes(pos, len)` -> `__char_at` — reads `@40`, and that is why it is SAFE rather than
 	//     unsafe: it reads it AS `singleByteGraphemes` (`GraphemeRuntime:230`) and stores it into the
@@ -48928,9 +48928,9 @@ export type Parser
 	//     because a view's `@40` is `TrivialDestructor` rather than the source's flag.
 	//
 	// ⛔ **`slice(start, end)` IS THE ONE THAT MAY NOT, AND ITS ABSENCE IS THE POINT.** It reaches
-	// `__arr_slice` -> `emitArrayView`, which LOADS `@40` (`ArrayRuntime:2080`) and STORES it into the fresh
-	// record `__arr_create` stamps (`:2494`). Given a String, that publishes `0`/`1` as the new view's
-	// `element_destroy`, and the first `__arr_decref` of it `callIndirect`s address 1. The view mint is not
+	// `__managed_slice` -> `emitRecordView`, which LOADS `@40` (`ManagedMemoryRuntime:2080`) and STORES it into the fresh
+	// record `__managed_create` stamps (`:2494`). Given a String, that publishes `0`/`1` as the new view's
+	// `element_destroy`, and the first `__managed_decref` of it `callIndirect`s address 1. The view mint is not
 	// overhead for this member — it is exactly what supplies a correct `TrivialDestructor`
 	// (`StringRuntime.buildStrBytesView`), which is what that function exists for. ⇒ `clone()`,
 	// `sliceBytes()` and `toByteArray()` keep their allocation, and this is the reason.
@@ -48946,7 +48946,7 @@ export type Parser
 	// for READING (`get`/`first`/`last` hand back a BORROW) and for MOVING OUT (`pop`/`remove` hand back an OWNED
 	// word dropped through the descriptor-gated `__drop_type_param`, P1.7 slice 3b-vi-a) — the word is only
 	// carried and dropped, never interpreted. A per-element COPY (`slice`/`clone`/`append`) is served too, through
-	// the descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β): `__arr_*_opaque` byte-blits a trivial element and
+	// the descriptor `copyFunc@32` (P1.7 slice 3b-vi-b-β): `__managed_*_opaque` byte-blits a trivial element and
 	// deep-clones a direct-clonable managed one, so it never duplicates a managed pointer and double-frees it —
 	// unless the instantiation's element is a managed type this rung cannot single-function-clone, which
 	// `requireOpaqueArrayCopyable` rejects.
@@ -49074,11 +49074,11 @@ export type Parser
 		// it); pop/remove MOVE the element OUT (the runtime nulls its slot), so their result is OWNED (P1.7 slice 3).
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitContainerElementAccessor(func, callee: ArrGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ManagedGetName, container: arr, args: pairArgs(arr, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'get'
 		// ⭐⭐ **ONE SPELLING, TWO ENTRIES — THE BUFFER'S `set` IS BOUNDED BY CAPACITY AND THE `Array`'s BY LENGTH
 		// (R4.6).** ⚖ The capacity bound is a USER RULING of 2026-07-30, taken after a measured three-way
-		// contradiction the runnable oracle could not arbitrate; `ArrayRuntime.ArrMemSetName` carries the ruling,
+		// contradiction the runnable oracle could not arbitrate; `ManagedMemoryRuntime.ManagedMemSetName` carries the ruling,
 		// its date and the argument that settles it (a length bound forbids the exact stage-then-publish idiom
 		// canonical `setLength`'s own contract prescribes). **`specs/managed-memory-methods.md:21` says LENGTH and
 		// is treated as stale — do not "fix" this back toward it.**
@@ -49107,7 +49107,7 @@ export type Parser
 		// writes its own slots.
 		//
 		// ⚠ **THE CALLEE IS PICKED INTO A `var` BECAUSE THE BOOTSTRAP CANNOT LOWER IT AS A CONDITIONAL
-		// EXPRESSION HERE.** Written `callee: ArrMemSetName if isManagedMemory else ArrSetName` — the shape
+		// EXPRESSION HERE.** Written `callee: ManagedMemSetName if isManagedMemory else ManagedSetName` — the shape
 		// `noteReceiverWrite`'s call above already uses — the bootstrap fails the whole build with
 		// `error E9001: Lowering function 'Compiler.Parser.dispatchArrayMethod' failed: assign value %97103
 		// (kind=MaxonInteger) not in valueMap; assigning to '__arg_pin_27'`. ⚠ **No MECHANISM is claimed and
@@ -49129,17 +49129,17 @@ export type Parser
 		// bare-throwing-call E3057 runs a whole pass too late to protect the parser from itself.
 		if methodTok.value.equals(ArraySetMethod) 'set'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			var setCallee = ArrSetName
+			var setCallee = ManagedSetName
 			if isManagedMemory 'capacityBoundedSetter'
 				try self.requireBufferSetOwnsWhatItStores(giid, methodTok: methodTok)
-				setCallee = ArrMemSetName
+				setCallee = ManagedMemSetName
 			end 'capacityBoundedSetter'
 
 			return try self.parseArraySet(func, arr: arr, giid: giid, callee: setCallee, methodTok: methodTok, secondArgLabelled: not isManagedMemory, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
-			return self.emitContainerElementAccessor(func, callee: ArrFirstName, container: arr, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ManagedFirstName, container: arr, args: singletonArgs(arr), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
 		end 'first'
 		// ⭐ **`remove` IS BUFFER-SURFACE ONLY SINCE X-array-retire, AND THE GATE IS WHAT SAYS SO.** The
 		// `Array` spelling is `stdlib/Array.maxon:327`'s, which is this same operation through
@@ -49150,7 +49150,7 @@ export type Parser
 		// that states the surface at the arm rather than only in a list.
 		if isManagedMemory and methodTok.value.equals(RemoveMethod) 'remove'
 			let index = try self.parseArrayOneArg(func)
-			return self.emitContainerElementAccessor(func, callee: ArrRemoveName, container: arr, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitContainerElementAccessor(func, callee: ManagedRemoveName, container: arr, args: pairArgs(arr, second: index), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
 		// ⭐ **`slice` IS BUFFER-SURFACE ONLY SINCE ARR3a**, for `remove`'s reason above and by its gate. The
 		// `Array` spelling is `stdlib/Array.maxon:229`'s, whose body is this same `managed.slice(…)` wrapped in
@@ -49166,11 +49166,11 @@ export type Parser
 		// ⭐ **`byteAt(index)` — THE BUFFER'S BYTE READER (R4.4)**, sitting with the throwing accessors because
 		// it YIELDS a value, where its `setByte` dual is void and sits with the mutators. Its bound is
 		// `length · element_size` and it throws `invalidByteRange`, both of which live in one place with the
-		// setter's (`ArrayRuntime.emitByteRangeGuard`).
+		// setter's (`ManagedMemoryRuntime.emitByteRangeGuard`).
 		if isManagedMemory and methodTok.value.equals(ByteAtMethod) 'byteAt'
 			try self.requireBufferBytesAreNotAPointer(giid, methodTok: methodTok)
 			let index = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryIndexParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ArrByteAtName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedByteAtName, args: pairArgs(arr, second: index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'byteAt'
 
 		// Non-throwing value accessors.
@@ -49184,7 +49184,7 @@ export type Parser
 		// references never gave it, or the roster's own first entry becomes decorative.
 		if methodTok.value.equals(CountMethod) or (isManagedMemory and methodTok.value.equals(ManagedMemoryLengthMethod)) 'count'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ArrCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedCountName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 		// ⭐ **`toCString()` — BUFFER-SURFACE ONLY**, like `length`/`byteAt`/`elementSize`: neither reference
 		// gives `Array` the spelling, and the corpus reaches it through `arr.managed.toCString()`. The result is
@@ -49221,7 +49221,7 @@ export type Parser
 		// `stdlib/Array.maxon:157`'s `managed.capacity()`, which is this arm reached from source.
 		if isManagedMemory and methodTok.value.equals(ArrayCapacityMethod) 'capacity'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ArrCapacityName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedCapacityName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'capacity'
 		// ⭐ **`elementSize()` — THE BUFFER'S STRIDE, AND THE ONE MEMBER THAT REPORTS A REPRESENTATION**
 		// (`specs/ranged-int-bit-packing.md`, `specs/bool-bit-packing.md`). It is on the BUFFER surface only,
@@ -49233,11 +49233,11 @@ export type Parser
 		// `-2`/`-4` as ordinary integers.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryElementSizeMethod) 'elementSize'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ArrElementSizeName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedElementSizeName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'elementSize'
 		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
 			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ArrIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
 		end 'isEmpty'
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
 		// (`requireVoidMethodIsStatement`, whose header carries the D11 measurement).** The refusal used to
@@ -49248,18 +49248,18 @@ export type Parser
 		if methodTok.value.equals(ArrayPushMethod) 'push'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
-			return self.emitArrayVoidCall(ArrPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedPushName, args: pairArgs(arr, second: value), receiver: arr, range: range)
 		end 'push'
 		if methodTok.value.equals(ArrayResizeMethod) 'resize'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.requireArrayResizeHasZeroElement(giid, methodTok: methodTok)
 			let n = try self.parseArrayOneArg(func)
-			return self.emitArrayVoidCall(ArrResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'resize'
 		if methodTok.value.equals(ClearMethod) 'clear'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consumeEmptyArgList()
-			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedClearName, args: singletonArgs(arr), receiver: arr, range: range)
 		end 'clear'
 		// ⭐⭐ **ONE ARM FOR ALL THREE SPELLINGS OF ONE OPERATION — `Array.append`, `Array.appendMemory` AND THE
 		// BUFFER'S `append` — BECAUSE THE CORPUS BUILDS EACH OUT OF THE LAST.** `stdlib/Array.maxon:262` is
@@ -49269,10 +49269,10 @@ export type Parser
 		// emit at any of the three: `parseArrayAppend` copies the source's elements into the receiver's storage
 		// at whatever elementhood the receiver has.
 		//
-		// ⚖ **THE BUFFER USED TO HAVE ITS OWN CALLEE (`__arr_mem_append`), ON THE CLAIM THAT ITS `append`
+		// ⚖ **THE BUFFER USED TO HAVE ITS OWN CALLEE (`__managed_mem_append`), ON THE CLAIM THAT ITS `append`
 		// THROWS. USER RULING, 2026-08-07: IT DOES NOT** — both references make it non-throwing, and
 		// `stdlib/String.maxon:414` declares a non-throwing `append` over a bare `managed.append(other.managed)`
-		// that cannot compile otherwise. The whole argument is at `ArrayRuntime.ArrAppendName`.
+		// that cannot compile otherwise. The whole argument is at `ManagedMemoryRuntime.ManagedAppendName`.
 		//
 		// ⭐ **AND THE SPLIT WAS NOT MERELY REDUNDANT, IT WAS A WRONG ANSWER**: the buffer callee byte-blitted
 		// whatever the receiver held, so `a.managed.append(b.managed)` on an `Array with String` duplicated each
@@ -49304,7 +49304,7 @@ export type Parser
 		// wrong answer.** `resize` GROWS the capacity to fit where `setLength` must REFUSE a length above it —
 		// `stdlib/Array.maxon:378-382` builds `resize` out of `reserve` THEN `setLength` for exactly that
 		// reason — and `set` addresses ELEMENTS where `setByte` addresses BYTES, which coincide at element
-		// size 1 and at no other size. See `ArrayRuntime.ArrSetLengthName`.
+		// size 1 and at no other size. See `ManagedMemoryRuntime.ManagedSetLengthName`.
 		//
 		// ⚠⚠ **THEY GO THROUGH `emitRuntimeCall`, NOT `emitArrayVoidCall`, AND THAT IS NOT A STYLE CHOICE.**
 		// `emitArrayVoidCall` returns the RECEIVER as the expression's value, which is right for the
@@ -49323,7 +49323,7 @@ export type Parser
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetLengthMethod) 'setLength'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let newLength = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewLengthParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ArrSetLengthName, args: pairArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedSetLengthName, args: pairArgs(arr, second: newLength), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setLength'
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySetByteMethod) 'setByte'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
@@ -49368,7 +49368,7 @@ export type Parser
 			// the arg-list protocol stays in its one home and the receiver is added where it belongs.
 			var args = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryOffsetParamName, secondParam: ManagedMemoryValueParamName, methodTok: methodTok)
 			args.insert(0, value: arr)
-			return self.emitRuntimeCall(ArrSetByteName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedSetByteName, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'setByte'
 
 		// ⭐ **`grow(newCapacity)` — THE BUFFER'S CAPACITY RAISER (R4.4).** Void and throwing, so it belongs
@@ -49382,7 +49382,7 @@ export type Parser
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryGrowMethod) 'grow'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			let newCapacity = try self.parseOneBuiltinIntegerArgList(func, paramName: ManagedMemoryNewCapacityParamName, methodTok: methodTok)
-			return self.emitRuntimeCall(ArrMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedMemGrowName, args: pairArgs(arr, second: newCapacity), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'grow'
 
 		// ⭐⭐ **THE THREE RELOCATORS — void, throwing, two integer arguments each, and BUFFER-SURFACE ONLY.**
@@ -49401,7 +49401,7 @@ export type Parser
 		// or write a pointer as though it were data. A relocator does neither: it moves words the buffer
 		// ALREADY OWNS between slots the buffer already owns, so the live multiset — and every element's
 		// refcount — is invariant across it and the element's kind never enters the question.
-		// `ArrayRuntime.ArrMemSwapName`'s header carries that argument in full, and it is the same one that
+		// `ManagedMemoryRuntime.ManagedMemSwapName`'s header carries that argument in full, and it is the same one that
 		// makes `swap` unbuildable out of `get` + `set`.
 		if isManagedMemory and methodTok.value.equals(ManagedMemorySwapMethod) 'swap'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
@@ -49409,7 +49409,7 @@ export type Parser
 			// arg-list protocol stays in its one home, exactly as `setByte` above does it.
 			var swapArgs = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemorySwapFirstParamName, secondParam: ManagedMemorySwapSecondParamName, methodTok: methodTok)
 			swapArgs.insert(0, value: arr)
-			return self.emitRuntimeCall(ArrMemSwapName, args: swapArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return self.emitRuntimeCall(ManagedMemSwapName, args: swapArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 		end 'swap'
 		if isManagedMemory and (methodTok.value.equals(ManagedMemoryShiftRightMethod) or methodTok.value.equals(ManagedMemoryShiftLeftMethod)) 'shift'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
@@ -49417,7 +49417,7 @@ export type Parser
 			// labels, same capacity bound, same thrown case. The direction IS the callee, so it is chosen here
 			// and nothing else in the arm branches on it; two arms would have been one argument protocol
 			// written twice.
-			let shiftCallee = ArrMemShiftRightName if methodTok.value.equals(ManagedMemoryShiftRightMethod) else ArrMemShiftLeftName
+			let shiftCallee = ManagedMemShiftRightName if methodTok.value.equals(ManagedMemoryShiftRightMethod) else ManagedMemShiftLeftName
 			var shiftArgs = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryIndexParamName, secondParam: ManagedMemoryCountParamName, methodTok: methodTok)
 			shiftArgs.insert(0, value: arr)
 			return self.emitRuntimeCall(shiftCallee, args: shiftArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
@@ -49426,8 +49426,8 @@ export type Parser
 		// ⭐⭐ **`createCursor()` — THE BUFFER'S ONE PRODUCER OF A `__ManagedMemoryCursor with Element`.**
 		// Throwing (an EMPTY buffer has no valid position to start at) and OWNED: the cursor is its own
 		// `__mm_alloc` box holding a RETAINED source, so it is tracked as an owned temp and drops at scope exit
-		// through `genericInstanceBoxDropCallee` → `__arr_cursor_decref`, exactly as a `.create()`d container
-		// drops through `__arr_decref`.
+		// through `genericInstanceBoxDropCallee` → `__managed_cursor_decref`, exactly as a `.create()`d container
+		// drops through `__managed_decref`.
 		//
 		// ⚠ **THE RESULT'S ELEMENT IS DERIVED FROM THE RECEIVER'S INSTANCE, NOT RE-INFERRED**
 		// (`managedMemoryCursorInstanceFor`), so a `current()` hands back the element the buffer actually
@@ -49440,11 +49440,11 @@ export type Parser
 		// the provenance table, because unlike the buffer it does not share a `GenericInstanceId` with anything.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryCreateCursorMethod) 'createCursor'
 			try self.consumeEmptyArgList()
-			let cursor = self.emitOwnedRuntimeResult(ArrCursorCreateName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.managedMemoryCursorInstanceFor(giid), range: range)
+			let cursor = self.emitOwnedRuntimeResult(ManagedCursorCreateName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.managedMemoryCursorInstanceFor(giid), range: range)
 
 			// ⭐⭐ **A CURSOR IS A STANDING BORROW OF ITS SOURCE, AND E3070 IS WHERE THAT IS ENFORCED.** ⚖ USER
 			// RULING (PLAN `S2l`, 2026-08-06): *"an array cursor locks its source."* The retain in
-			// `__arr_cursor_create` keeps the record ALIVE, which is a different guarantee from keeping it
+			// `__managed_cursor_create` keeps the record ALIVE, which is a different guarantee from keeping it
 			// UNCHANGED — MEASURED on this tree before this line: `let c = try xs.managed.createCursor()`
 			// followed by `xs.clear()` and `c.current()` compiled clean and faulted with **0xC0000005**, because
 			// `clear` releases every element and zeroes its slot while the cursor still names position 0. The
@@ -49543,7 +49543,7 @@ export type Parser
 	// function. Refusing the write and recording it are the same question asked of the same receiver at the
 	// same instant — `mutatesReceiver` is the per-container authority's answer and is read ONCE — so they
 	// are answered together rather than by two passes that would then have to agree for ever. A summary
-	// built by re-reading the LOWERED callee names (`__arr_push`, `__arr_append`, `__set_insert`) would be
+	// built by re-reading the LOWERED callee names (`__managed_push`, `__managed_append`, `__set_insert`) would be
 	// precisely that second list, three tiers away from the one the parser already consults.
 	//
 	// ⭐⭐ **IT RECORDS TWO MASKS, BECAUSE ONE WRITE ANSWERS TWO QUESTIONS AND shv2 ANSWERS THEM
@@ -49735,8 +49735,8 @@ export type Parser
 		return self.signatures.isArrayInstanceAt(maxonTypeTag(t), nameId: typeNameIdOf(t))
 	end 'typeIsArrayInstance'
 
-	// ⭐ **THE DENSE-GROWTH GATE for `resize` (E3106).** `__arr_resize` lengthens by publishing a longer
-	// `length@8` over slots `__arr_grow` left ZEROED, and a zero is an ELEMENT only while the element lives
+	// ⭐ **THE DENSE-GROWTH GATE for `resize` (E3106).** `__managed_resize` lengthens by publishing a longer
+	// `length@8` over slots `__managed_grow` left ZEROED, and a zero is an ELEMENT only while the element lives
 	// INLINE in the buffer. A MANAGED element lives there as an 8-byte POINTER (`ManagedArrayElementBytes`),
 	// so a zeroed slot is NULL — an absence, not a value — and Maxon has no default constructor to make one.
 	// The array that comes back answers `count()` = N while `get(0)` takes the empty-slot branch of
@@ -49751,11 +49751,11 @@ export type Parser
 	// test written here.
 	//
 	// ⚠⚠ **A SECOND THING NOW DEPENDS ON THIS REFUSAL, IN ANOTHER FILE (P1.8 slice A).**
-	// `__arr_get_unchecked` — the element read a `for x in arr` loop makes — DROPPED the empty-slot arm
-	// `__arr_get` carries, and is safe only because no index in `[0, count)` can hold a NULL managed slot.
+	// `__managed_get_unchecked` — the element read a `for x in arr` loop makes — DROPPED the empty-slot arm
+	// `__managed_get` carries, and is safe only because no index in `[0, count)` can hold a NULL managed slot.
 	// That is true precisely because this rule refuses the one operation that would create one. If this
 	// refusal is ever relaxed, that read becomes a null deref in a function whose own text still looks
-	// correct: `ArrayRuntime.maxon`'s `ArrGetUncheckedName` header states the obligation from its end,
+	// correct: `ManagedMemoryRuntime.maxon`'s `ManagedGetUncheckedName` header states the obligation from its end,
 	// and this note is the pointer back, so neither side can be changed without meeting the other.
 	function requireArrayResizeHasZeroElement(giid GenericInstanceId, methodTok Token) throws ParseError
 		if not self.signatures.containerElementIsManaged(giid) 'trivial'
@@ -49770,14 +49770,14 @@ export type Parser
 	// region that carries NO OWNERSHIP. For a TRIVIAL element that is exactly the intent. For a MANAGED one
 	// the staged element is owned by nobody until a `setLength` publishes it, and by nobody at all if one
 	// never comes: MEASURED at exit **101** by two programs that break no stated contract — `reserve(4)` then
-	// `set(0, "staged")` and return; and stage, then `push` over the staged slot (`__arr_push` stores AT
+	// `set(0, "staged")` and return; and stage, then `push` over the staged slot (`__managed_push` stores AT
 	// `length` without destroying the occupant, because before the ruling that slot was PROVABLY NULL).
 	//
 	// ⚖ **RULED A REJECTION RATHER THAN A FIX (user, 2026-07-30), and the reasons are worth keeping because
 	// they are what a future "why not just make ownership follow?" has to answer.** Making the staged slot
 	// owned means a destructor gate on every managed `push` — a hot path — and it makes the
 	// `[length, capacity)`-reads-ZERO invariant CONDITIONAL, which `push`, `insert`, `append`, the grow
-	// realloc and `__arr_cow_detach` all currently rely on. Refusing costs neither, and costs no capability:
+	// realloc and `__managed_cow_detach` all currently rely on. Refusing costs neither, and costs no capability:
 	// `[0, length)` is precisely what the ARRAY surface's own length-bounded `set` covers, which owns what it
 	// stores and is untouched — so the message names it as the spelling to use.
 	//
@@ -49955,7 +49955,7 @@ export type Parser
 	// ⭐ **THE COPY GATE for an OPAQUE-`T` array (P1.7 slice 3b-vi-b-β).** An opaque `Array with <type parameter>`
 	// inside a generic body copies each element through the enclosing instance's descriptor `copyFunc@32`, which
 	// can hold only a SINGLE `(box) -> newBox` cloner — so a String / struct / boxed-union / trivial-element-array
-	// / trivial-scalar instantiation is served (`__arr_*_opaque` branches on `copyFunc@32`: a byte-blit for a
+	// / trivial-scalar instantiation is served (`__managed_*_opaque` branches on `copyFunc@32`: a byte-blit for a
 	// trivial element, a deep clone for a direct-clonable managed one). It REJECTS (E2015) only when SOME
 	// instantiation of the enclosing generic type substitutes a managed type this rung cannot deep-clone as a
 	// single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic
@@ -50057,7 +50057,7 @@ export type Parser
 	// body has no concrete type, so the tag stays opaque and its drop is descriptor-gated — slice 3b-vi-a); or
 	// `integer` for a TRIVIAL concrete element (slice 1, unchanged). Ownership:
 	//   • get/first/last yield a BORROW (`owned: false`): the array keeps the element, so the result is NOT
-	//     tracked owned and is dropped by nothing here — the array's `__arr_decref` walk destroys it. A borrow
+	//     tracked owned and is dropped by nothing here — the array's `__managed_decref` walk destroys it. A borrow
 	//     merged with an OWNED `otherwise` fallback is reconciled by `finishValueTry` (the fallback drops on the
 	//     error edge; see there).
 	//   • pop/remove MOVE the element OUT (`owned: true`): the runtime NULLS the slot it hands back (so the
@@ -50142,7 +50142,7 @@ export type Parser
 
 			// ⭐⭐ **A NARROW SIGNED SLOT IS SIGN-EXTENDED HERE (`enum-narrow-storage`).** The shared element
 			// load ZERO-EXTENDS — one compiled byte loop, strided by the record's runtime `element_size@24`,
-			// ending in a shift and a width mask (`ArrayRuntime.emitLoadElemAt`) — and the record carries no
+			// ending in a shift and a width mask (`ManagedMemoryRuntime.emitLoadElemAt`) — and the record carries no
 			// signedness for it to consult. So an `i8`-slotted `Signal.minus` comes back as **255** and not
 			// `-1`, which is the wrong answer `specs/enum-narrow-storage.md:enum-rdata-i8-array` describes in
 			// its own prose and catches twice.
@@ -50320,8 +50320,8 @@ export type Parser
 	// Integer` returns from the early arm above, and no trivial element can be a buffer.
 	//
 	// ⚠⚠ **THE CONTAINER IS PASSED IN, AND IT USED TO BE RECOVERED FROM `args.get(0)` ON THE ARGUMENT THAT
-	// "argument 0 is the container, which is the runtime ABI".** That premise held for every `__arr_*`
-	// accessor — `__arr_get(arr, i)`, `__arr_pop(arr)`, `__arr_remove(arr, i)` — and it is FALSE for the list's
+	// "argument 0 is the container, which is the runtime ABI".** That premise held for every `__managed_*`
+	// accessor — `__managed_get(arr, i)`, `__managed_pop(arr)`, `__managed_remove(arr, i)` — and it is FALSE for the list's
 	// loop read: `__list_node_value(node)` takes the NODE the value sits in, so `args.get(0)` there is a node
 	// pointer, and asking a buffer-surface question of it answers `false` by accident rather than by
 	// derivation. A premise that has broken is not a premise, so the value comes from the caller, which holds
@@ -50347,7 +50347,7 @@ export type Parser
 	// ⭐ **THE ONE DOOR FOR "A RUNTIME CALL WHOSE RESULT IS A FRESH OWNED HEAP VALUE".** The result carries the
 	// value type the caller names and is enrolled as a statement-scoped OWNED temporary (`trackOwnedTemp`), so
 	// an UNBOUND result is dropped at statement end and a bound one transfers to the binding; its scope-exit
-	// drop then routes by TAG through `decrefCalleeFor` (`__arr_decref` for an instance, `__str_decref` for a
+	// drop then routes by TAG through `decrefCalleeFor` (`__managed_decref` for an instance, `__str_decref` for a
 	// String), which is why the tag is the caller's to state and nothing here needs to know the family.
 	//
 	// ⚠ **SINGLE-SOURCED BECAUSE IT HAD FOUR INDEPENDENT COPIES and nothing made them agree** — the whole-array
@@ -50371,7 +50371,7 @@ export type Parser
 
 	// `slice(start, end)` — both positional; the `endIndex:` label the `Array` spelling required is OPTIONAL on
 	// this surface (see `consumeArrayArgLabel`), and since ARR3a this surface is the only one that reaches
-	// here. Emits the throwing `__arr_slice(arr, start, end)` as the LAST op so the enclosing `try` rewrites
+	// here. Emits the throwing `__managed_slice(arr, start, end)` as the LAST op so the enclosing `try` rewrites
 	// it; returns the fresh owned array. Neither argument is a managed move-in (both are plain indices).
 	//
 	// ⭐ **A SLICE OF A BUFFER IS A BUFFER, WHICH IS WHY THE MARK REACHES THE RESULT AND NOT ONLY THE LABEL
@@ -50414,20 +50414,20 @@ export type Parser
 
 	function emitArraySliceCall(giid GenericInstanceId, arr ValueId, start ValueId, endIndex ValueId, range SourceRange) returns ValueId
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueSlice'
-			return self.emitOwnedRuntimeResult(ArrSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+			return self.emitOwnedRuntimeResult(ManagedSliceOpaqueName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'opaqueSlice'
 		if self.signatures.containerElementIsManaged(giid) 'managedSlice'
-			return self.emitOwnedRuntimeResult(ArrSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+			return self.emitOwnedRuntimeResult(ManagedSliceManagedName, args: quadArgs(arr, second: start, third: endIndex, fourth: self.arrayElementCloneValue(giid, range: range)), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 		end 'managedSlice'
-		return self.emitOwnedRuntimeResult(ArrSliceName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+		return self.emitOwnedRuntimeResult(ManagedSliceName, args: tripleArgs(arr, second: start, third: endIndex), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitArraySliceCall'
 
 	// `append(other)` — append `other`'s elements to `self`. `other` is BORROWED (read-only, not moved) and
 	// PRESERVED (`append-preserves-originals`). Its element must be one the receiver's admits every value of,
 	// which the rule all three spellings share enforces (`ProgramSignatures.arrayAppendArgAdmits`); only the
 	// SENTENCE is per-surface, which is what `bufferSurface` selects — see the caller. A TRIVIAL receiver
-	// block-copies `other`'s bytes (`__arr_append`); a CONCRETE MANAGED receiver (P1.7 slice 3b-vi-b)
-	// DEEP-CLONES each `other` element into `self` via `__arr_append_managed`, stamped with the element's
+	// block-copies `other`'s bytes (`__managed_append`); a CONCRETE MANAGED receiver (P1.7 slice 3b-vi-b)
+	// DEEP-CLONES each `other` element into `self` via `__managed_append_managed`, stamped with the element's
 	// `funcAddr(__clone_<E>)`, so both arrays end up sole owners of independent elements. Returns the receiver
 	// (what the statement still denotes).
 	function parseArrayAppend(func IrFunction, arr ValueId, giid GenericInstanceId, methodTok Token, bufferSurface bool, range SourceRange) returns ValueId throws ParseError
@@ -50436,12 +50436,12 @@ export type Parser
 		try self.requireAppendArg(other, arr: arr, giid: giid, methodTok: methodTok, bufferSurface: bufferSurface)
 		try self.consume(TokenKind.rightParen)
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueAppend'
-			return self.emitArrayVoidCall(ArrAppendOpaqueName, args: pairArgs(arr, second: other), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedAppendOpaqueName, args: pairArgs(arr, second: other), receiver: arr, range: range)
 		end 'opaqueAppend'
 		if self.signatures.containerElementIsManaged(giid) 'managedAppend'
-			return self.emitArrayVoidCall(ArrAppendManagedName, args: tripleArgs(arr, second: other, third: self.arrayElementCloneValue(giid, range: range)), receiver: arr, range: range)
+			return self.emitArrayVoidCall(ManagedAppendManagedName, args: tripleArgs(arr, second: other, third: self.arrayElementCloneValue(giid, range: range)), receiver: arr, range: range)
 		end 'managedAppend'
-		return self.emitArrayVoidCall(ArrAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
+		return self.emitArrayVoidCall(ManagedAppendName, args: pairArgs(arr, second: other), receiver: arr, range: range)
 	end 'parseArrayAppend'
 
 	// ⭐⭐ **THE ARGUMENT RULE ALL THREE `append` SPELLINGS MAKE, AND THE TWO SENTENCES IT SPEAKS IT IN.** The
@@ -50500,7 +50500,7 @@ export type Parser
 
 	// ⭐ **THE ELEMENT-CLONER `funcAddr` STAMP (P1.7 slice 3b-vi-b)** — the DUAL of `arrayElementDestroyValue`. A
 	// CONCRETE managed element knows its `(box) -> newBox` clone callee at this site (`__str_clone` / `__clone_<T>`
-	// / `__arr_clone` for a trivial-element nested array), so the address rides the P1.5-A1 `funcAddr` code→register
+	// / `__managed_clone` for a trivial-element nested array), so the address rides the P1.5-A1 `funcAddr` code→register
 	// path — the `_managed` runtime helper `callIndirect`s it per element. `requireArrayElementCopyable` has already
 	// guaranteed the strategy is `direct` (an element cloner must satisfy `callIndirect(fn, elem)`); a `managedArray`/
 	// `unsupported` strategy at the TOP element is a gate drift, not a valid program.
@@ -50596,12 +50596,12 @@ export type Parser
 	end 'resolvedSlotType'
 
 	// ⭐⭐ **AN ELEMENT ARGUMENT MUST AGREE WITH THE INSTANCE'S ELEMENT TYPE.** The `Array` mutators are
-	// PARSER-INTRINSIC — `push`/`set` emit `__arr_push`/`__arr_set` directly, so they
+	// PARSER-INTRINSIC — `push`/`set` emit `__managed_push`/`__managed_set` directly, so they
 	// have no `FuncSignature` and never reach `SemanticCheck.validateCall` — and until this existed nothing
 	// asked the question at all: `moveElementIntoContainer` asked only about OWNERSHIP. All three symptoms were
 	// MEASURED, and none of them was a diagnostic:
 	//
-	//   • `Array with String` + `push(42)` — compiled clean, then the array's `__arr_decref` walk freed `42`
+	//   • `Array with String` + `push(42)` — compiled clean, then the array's `__managed_decref` walk freed `42`
 	//     as a String pointer. A WILD FREE (0xC0000005).
 	//   • `Array with Integer` + `push("hello")` — compiled clean and printed the record's raw address as an
 	//     integer. A SILENT WRONG ANSWER.
@@ -50676,7 +50676,7 @@ export type Parser
 		// ⭐⭐ **THE ELEMENT'S DECLARED RANGE BINDS IT AT RUNTIME TOO (A1f-arrayelem) — AND THE GUARD GOES
 		// HERE, AT THE STORE, WHICH IS THE LAST PLACE THAT KNOWS THE ELEMENT TYPE.** This door owed only
 		// the compile-time half until this rung, on the argument the call-argument door owed it: the element
-		// travels as `__arr_push`/`__arr_set`'s third argument, and the callee it travels
+		// travels as `__managed_push`/`__managed_set`'s third argument, and the callee it travels
 		// into is a SHARED `Array` body whose parameter is the OPAQUE element type — so A1f's cure, a guard
 		// at the callee's entry, has no narrowed parameter to stand behind and structurally cannot reach it.
 		//
@@ -50685,7 +50685,7 @@ export type Parser
 		// parameter belongs to a callee that may be in another file — `RangeCheckArgSite`), so it can record
 		// no positioned site at all. An element's alias is RIGHT HERE, in the instance's declared element
 		// type, and this runs BEFORE the store call is emitted — so `recordRangeCheckSite`'s
-		// `opRefs.count()` is the ordinal the `__arr_*` call is about to take, and the split lands the
+		// `opRefs.count()` is the ordinal the `__managed_*` call is about to take, and the split lands the
 		// cascade immediately in front of it. It is the ordinary alias-named site every other door records.
 		//
 		// ⚠ **WHAT IS STILL UNENFORCED IS NOT A DOOR** — it is the zero-initialized slot `Array.resize`
@@ -50799,7 +50799,7 @@ export type Parser
 	end 'atArgLabel'
 
 	// `set` — `( index , value: X )`: the index positional, the value labelled `value:` on every surface but the
-	// buffer (see `consumeArrayArgLabel`). Emits the `__arr_set`/`__arr_mem_set` call and returns its result. The
+	// buffer (see `consumeArrayArgLabel`). Emits the `__managed_set`/`__managed_mem_set` call and returns its result. The
 	// value argument is parsed AFTER the index so the call is the last op the enclosing `try` rewrites.
 	//
 	// ⚠ **IT USED TO SERVE `insert` TOO, ON A `throwing` FLAG, AND ARR1 TOOK BOTH AWAY.** `insert` left the
@@ -50812,7 +50812,7 @@ export type Parser
 		try self.consumeArrayArgLabel(ArrayValueLabel, required: secondArgLabelled)
 		// The value is a managed-element MOVE-IN, so it is consumed exactly as `push` is —
 		// `moveElementIntoContainer` promotes a borrowed String, transfers an owned value, refuses a borrowed
-		// aggregate. `__arr_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
+		// aggregate. `__managed_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
 		// slot), so no leak. The TYPE check precedes the move-in for the reason `requireContainerElementType` states.
 		let valueStart = self.pos
 		let raw = try self.parseExpression(func, block: self.currentBlock)
@@ -50831,7 +50831,7 @@ export type Parser
 		// ''stdlib.Array.set' does not return a value'`. Found in review of D11: the arm is the THIRTEENTH
 		// void one, and the only one whose refusal is DERIVED from the tag rather than written in the arm.
 		// ⚠ The Std entry still ok-returns `(0, flag)` — a throwing `void` runtime function is normal
-		// (`__arr_set_length`, `__arr_set_byte` and `__arr_mem_grow` are all declared `StdReturnType.void`
+		// (`__managed_set_length`, `__managed_set_byte` and `__managed_mem_grow` are all declared `StdReturnType.void`
 		// and all throw); what this tag decides is whether MAXON believes the call yields something.
 		// The elision is asked HERE rather than at the `set` arms, because the index is parsed here — and it
 		// declines by itself for every unsized container, so no arm needs to know about it.
@@ -50857,7 +50857,7 @@ export type Parser
 	end 'parseContainerElementArg'
 
 	// ⭐ **MOVE A PARSED ELEMENT INTO A MANAGED-ELEMENT ARRAY (P1.7 slice 3).** The array becomes the element's
-	// sole owner (its `__arr_decref` walk destroys it), so the source is consumed exactly as a struct-field /
+	// sole owner (its `__managed_decref` walk destroys it), so the source is consumed exactly as a struct-field /
 	// union-payload move-in (`moveManagedValueInto`): a borrowed String literal is promoted to an owned copy,
 	// an owned value is transferred (bare local poisoned / temp de-listed), a borrowed struct/union is refused
 	// (no clone). A TRIVIAL-element array's value owns no heap and passes through unchanged. Shared by
@@ -50867,7 +50867,7 @@ export type Parser
 		// ⭐ **AN OPAQUE-`T` ARRAY MOVE-IN IN THE SHARED BODY (P1.7 slice 3b-v, W10).** The shared generic body has
 		// no static type for the element (`containerElementIsManaged` is false — the element is a `typeParameter`
 		// word), so it can neither promote a borrow nor decide the element's managed-ness here. The array becomes
-		// the element's OWNER whatever the instantiation — `__arr_decref` destroys each slot exactly once through
+		// the element's OWNER whatever the instantiation — `__managed_decref` destroys each slot exactly once through
 		// the descriptor's `destroyFunc@40` — so the value moved in must be one this frame OWNS, and
 		// `moveOpaqueFeedArg` transfers it (poisoning a bare-local source, draining an owned temporary).
 		// The CONCRETE call site's own consume (3b-iii/3b-iv) is untouched — it runs in the caller's frame on the
@@ -50924,7 +50924,7 @@ export type Parser
 	// ⭐⭐ **THE MACHINE WORD A TRIVIAL ELEMENT IS STORED AS — the FLOAT boundary, and the only element type
 	// where the value and its slot live in different register files.**
 	//
-	// Every `__arr_*` mutator takes its element as an ordinary integer parameter, so it arrives in a
+	// Every `__managed_*` mutator takes its element as an ordinary integer parameter, so it arrives in a
 	// general-purpose register; a float value is born in XMM. Handed over unconverted it reached
 	// `X64Backend.emitRegRegMove` and PANICKED — *"a register-to-register move from xmm0 to rdx crosses
 	// register files"* (measured on `Array with Real` + `push(2.5)`, which is exactly the crash
@@ -50980,7 +50980,7 @@ export type Parser
 	//
 	//   • *"widening this door to co-own a borrow UNCONDITIONALLY was tried and measured worse — a feed
 	//     parameter is enrolled OWNED, so `emitScopeDrops` releases it at the method's exit and that release
-	//     cancels the retain, read off the emitted x64 as `__retain_type_param` … `__arr_set` …
+	//     cancels the retain, read off the emitted x64 as `__retain_type_param` … `__managed_set` …
 	//     `__drop_type_param`, with the `Map` still segfaulting at 13."* That is an argument about an OWNED
 	//     value, and an owned value cannot reach here — `moveElementIntoContainer` routes it to the move, or
 	//     across a loop back edge to its own co-own, one branch up. The `Map.grow()` hole it was measured on
@@ -51511,7 +51511,7 @@ export type Parser
 		// ⭐⭐ **AN ITERATED FIELD REFUSES THE STORE WHATEVER IT WAS DECLARED (P1.8 slice A)** — this is the
 		// FIFTH door of the iteration lock, and the rung shipped without it. `for it in items 'l' items =
 		// IntArray.create() … end` drops the record the loop is still walking, and the header re-reads
-		// `__arr_count` off it on the very next trip: MEASURED 0xC0000005 on all four spellings of one
+		// `__managed_count` off it on the very next trip: MEASURED 0xC0000005 on all four spellings of one
 		// program (`items`/`self.items` as the source × `items = …`/`self.items = …` as the write), where
 		// the local twin `arr = other` was already E2013 through `requireMutableBinding`. Asked FIRST, and
 		// keyed on the INDEX rather than a binding, because that is what BOTH callers hold and neither
@@ -52368,7 +52368,7 @@ export type Parser
 		// that gate are ONE change, because the gate also decides the FIELD WALK the drop cascade reads. It is
 		// not: widening the gate to admit a declared `Array` base — the whole prescription, applied on this
 		// tree — was **INERT**, 551 `--filter=array` cases, 0 failures. The reason is that the walk it opens
-		// would enumerate exactly ONE field, the buffer, whose drop callee is `__arr_decref` — the very callee
+		// would enumerate exactly ONE field, the buffer, whose drop callee is `__managed_decref` — the very callee
 		// `genericInstanceBoxDropCallee` already gives the record itself — and both cascade readers filter a
 		// non-`__destruct_` leaf out (`MmRuntime.addNestedInstanceDestructors`, `declareInstanceFieldDropNeeds`).
 		//
@@ -52623,7 +52623,7 @@ export type Parser
 		//
 		// ⛔ **WHY THAT SPLIT EXISTS, MEASURED — IT WAS 86.7x.** `String.byteLength`'s corpus body is
 		// `return managed.length()`, and before the cure that ONE expression emitted `__str_bytes_view` (a
-		// 48-byte `Array` record + `__mm_incref`), then `__arr_count`, then `__arr_decref` — a heap allocation
+		// 48-byte `Array` record + `__mm_incref`), then `__managed_count`, then `__managed_decref` — a heap allocation
 		// and two refcount operations to read `length@8`. `String.byteAt` was the same shape once PER BYTE.
 		// min-of-7 interleaved, same source, base / wave-7-uncured / cured:
 		//
@@ -52633,13 +52633,13 @@ export type Parser
 		//     short.clone()   4,000,000 trips    251.03 ms -> 1370.27 ms -> 841.54 ms  5.5x -> **3.35x**
 		//     integer control                     5.89 ms ->   5.83 ms ->  5.88 ms    1.0x ->   1.00x
 		//
-		// Never a leak (`__arr_decref` ran, no run exits 101) and never a wrong answer — every mode returns a
+		// Never a leak (`__managed_decref` ran, no run exits 101) and never a wrong answer — every mode returns a
 		// bit-identical accumulator on all three binaries, which is what says the cure deleted no work.
 		//
 		// ⚠⚠ **`clone()` IS THE MEMBER THE CURE CANNOT REACH, AND IT STILL IMPROVED.** Its body goes through
 		// `sliceBytes` -> `managed.slice(...)`, and `slice` is the ONE buffer member that may not take a String
-		// record: `__arr_slice` -> `emitArrayView` LOADS `@40` and STORES it into the fresh view, so a String's
-		// `singleByteGraphemesFlag` would become that view's `element_destroy` and the first `__arr_decref`
+		// record: `__managed_slice` -> `emitRecordView` LOADS `@40` and STORES it into the fresh view, so a String's
+		// `singleByteGraphemesFlag` would become that view's `element_destroy` and the first `__managed_decref`
 		// would `callIndirect` address 1. The view mint is not overhead there — it is what supplies a correct
 		// `TrivialDestructor`. It improved anyway (5.5x -> 3.35x) because `sliceBytes` asks `byteLength()`,
 		// which the cure made cheap. See `fusedManagedMemberTakesTheRecord` for the full `@40` census.
@@ -56641,7 +56641,7 @@ export type Parser
 	// write reads `buffer@0` and `length@8` — the two slots a String record already carries, at the SAME
 	// offsets (see `StringRuntime.buildStreamWrite`). So the record is minted and destroyed for a consumer
 	// that never looks at the one slot the two records disagree on (`@40`, `element_destroy` against
-	// `singleByteGraphemes`), and with it arrive `__arr_create`/`__arr_decref`, the whole allocator and the
+	// `singleByteGraphemes`), and with it arrive `__managed_create`/`__managed_decref`, the whole allocator and the
 	// leak gate.
 	//
 	// MEASURED, on a program whose only call is `print`: **1,749 code bytes with the fold, 3,226 without** —
@@ -56658,7 +56658,7 @@ export type Parser
 	// ⭐ **THE REWRITE CHANGES THE CALLEE AND NOTHING ELSE.** Same result value, same single argument, same
 	// labels, ranges and mint — so the shape cannot drift and there is no second op to keep in step. The
 	// value's TYPE moves from the byte instance to `integer` (it is now the write's byte count) and its OWNED
-	// enrolment is released, which is what removes the `__arr_decref` the statement would otherwise emit.
+	// enrolment is released, which is what removes the `__managed_decref` the statement would otherwise emit.
 	//
 	// ⚠⚠ **THE NON-ESCAPE CONDITION IS `pendingTempsContain`, AND IT IS A PROOF RATHER THAN A GUESS.** That
 	// list holds exactly the owned temporaries no binding has taken (`removeFromPendingTemps` runs at every
@@ -57528,7 +57528,7 @@ export type Parser
 	// (`range-check-panic.error.literal-argument` pins the column) — the argument's own span would move the
 	// diagnostic off the name that decides which range applies.
 	function recordConstantArgRangeChecks(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token)
-		// A callee no file DECLARES has no parameter list to consult — a runtime helper (`__arr_push`), or an
+		// A callee no file DECLARES has no parameter list to consult — a runtime helper (`__managed_push`), or an
 		// undeclared name whose own E3004 is SemanticCheck's to raise.
 		if not self.signatures.declaresCallee(callee) 'noDeclaredParams'
 			return

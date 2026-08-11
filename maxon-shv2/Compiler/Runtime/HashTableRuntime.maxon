@@ -22,7 +22,7 @@
 // (`firstDeleted`); and the full `equals` compare guarded by the cached hash (`slotHash == hash` THEN
 // `equals`) so an unequal hash skips the witness call.
 //
-// ⭐ THE SHAPE IS `ArrayRuntime`'s: one fused `__mm_alloc`'d backing record whose fields the runtime functions
+// ⭐ THE SHAPE IS `ManagedMemoryRuntime`'s: one fused `__mm_alloc`'d backing record whose fields the runtime functions
 // read and the parser/lowering writes, plus a set of `__`-prefixed Std runtime functions built as `StdOp`
 // graphs (so they get register allocation, frames and the whole backend for free). It DIVERGES from `Array`
 // in the one place a hash table must: an array's element operations are self-contained, but a probe has to
@@ -353,8 +353,8 @@ end 'emitHtTombstoneSlot'
 //
 // The destructor CALL ABI itself (`callIndirect(drop, value)`, `(i64) -> void`, mask 0) is NOT restated here:
 // a managed table's stored key destructor IS its source array's element destructor (same
-// `funcAddr(__str_decref)`, read from `ArrElementDestroyOffset` by `__set_from`), so both drop through
-// ArrayRuntime's shared `emitElementDestructorCall` — the ONE home of that ABI, which a third copy here would
+// `funcAddr(__str_decref)`, read from `ManagedRecordElementDestroyOffset` by `__set_from`), so both drop through
+// ManagedMemoryRuntime's shared `emitElementDestructorCall` — the ONE home of that ABI, which a third copy here would
 // let silently drift into a miscompiled indirect call. These helpers only add the table-specific gating (test
 // the column's drop stamp `!= 0`) and the slot walk around it.
 //
@@ -402,7 +402,7 @@ function emitHtDropIfManaged(module StdModule, func IrFunction, cur IrBlock, tab
 end 'emitHtDropIfManaged'
 
 // ⭐ **DESTROY EVERY LIVE ENTRY OF ONE COLUMN on teardown IFF that column carries a destructor.** The
-// hash-table twin of `buildArrDecref`'s `emitDestroyRangeIfManaged`: gated on the column's stamp `!= 0` (a
+// hash-table twin of `buildManagedDecref`'s `emitDestroyRangeIfManaged`: gated on the column's stamp `!= 0` (a
 // trivial column skips the whole walk), it scans `[0, capacity)` and, where `states[i] == Occupied`, drops
 // `buffer[i]` through the stored destructor. Gated on the STATE buffer (Occupied), not a null pointer,
 // because a slot's liveness is its STATE, not its content — a tombstoned (Deleted) slot's contents were
@@ -501,8 +501,8 @@ end 'emitHtOccupiedDropRange'
 // record comes zeroed from `__mm_alloc` (count 0, capacity 0, all buffers null), so only the stamps are
 // written (`__str_decref` for a String column, 0 for a trivial int one): the first insert grows from capacity
 // 0. The record's own MM-header destructor is 0 — its buffers and entries are freed explicitly by `decref`
-// (the scope-exit drop), exactly as an array's buffer is freed by `__arr_decref`, not by the header
-// destructor. The `keyDrop` param is the `Array` twin of `__arr_create`'s `elementDestroy`.
+// (the scope-exit drop), exactly as an array's buffer is freed by `__managed_decref`, not by the header
+// destructor. The `keyDrop` param is the `Array` twin of `__managed_create`'s `elementDestroy`.
 function buildHtCreate(module StdModule, family HashTableFamily)
 	let paramCount = 2 as ParamCount if family.carriesValues else 1
 	let paramTypes = twoI64Params() if family.carriesValues else oneI64Param()
@@ -865,7 +865,7 @@ export function buildHtInsert(module StdModule, family HashTableFamily, name Byt
 	// The `unreachableFull` branch (no tombstone AND no empty ⇒ count == capacity) cannot happen after a grow —
 	// so it ABORTS rather than silently `retVoid`ing (which would drop the entry and leave `count` lying); a
 	// reachable `unreachableFull` is a broken load-factor/grow invariant, a compiler bug, exactly the
-	// "unreachable from source, abort not silence" class `ArrayRuntime`'s aborts already occupy.
+	// "unreachable from source, abort not silence" class `ManagedMemoryRuntime`'s aborts already occupy.
 	let zeroForFallback = emitConst(module, block: exhausted, value: 0, ids: ids)
 	let haveFallback = emitCmp(module, block: exhausted, a: firstDeleted, b: zeroForFallback, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(exhausted, op: StdOp.condBranch(haveFallback, thenBlockId: fallbackInsert.id, elseBlockId: unreachableFull.id))
@@ -1101,7 +1101,7 @@ end 'emitHtLookupProbe'
 // owner DESTROY every live entry of every managed column (a managed key column walks its Occupied slots
 // through `keyDrop@40`, a managed value column through `valueDrop@56`; a trivial column skips its walk
 // entirely), then free the external buffers (each `__mm_free` guarded on non-null — an empty table never
-// allocated them) and then the record. The hash-table twin of `__arr_decref`, entry walk and all.
+// allocated them) and then the record. The hash-table twin of `__managed_decref`, entry walk and all.
 //
 // ⚠ **BOTH WALKS RUN BEFORE ANY FREE**, because each reads `states` plus its own column; freeing the states
 // buffer between them would walk released memory.

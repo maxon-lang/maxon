@@ -32,14 +32,14 @@ func @main {
     x64.prologue 32
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 2
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegReg rcx, rbx
     x64.callDirect Array.capacity
     x64.cmpRegImm32 r8, 4
@@ -48,7 +48,7 @@ func @main {
   needsASlotPastTheLength:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
@@ -59,14 +59,14 @@ func @main {
     x64.movRegImm32 rdx, 2
     x64.movRegImm32 rax, 3
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_set
+    x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegImm32 r12, 42
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
@@ -76,7 +76,7 @@ func @main {
   tryok:
     x64.movRegImm32 r12, 5
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12
@@ -95,10 +95,10 @@ func @Array.capacity {
     x64.callDirect __mm_retain
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_capacity
+    x64.callDirect __managed_capacity
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12

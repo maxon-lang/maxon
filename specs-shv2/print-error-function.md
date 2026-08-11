@@ -107,7 +107,7 @@ c
 ### The view the write consumes is FOLDED AWAY — and only when the write is its sole consumer
 
 `stdlib/Print.maxon`'s body is `__Builtins.writeStdout(value.addressableBytes())`, and
-`addressableBytes()` is `__str_bytes_view`, which `__arr_create`s a 48-byte `Array` record so the
+`addressableBytes()` is `__str_bytes_view`, which `__managed_create`s a 48-byte `Array` record so the
 value can be TYPED as one. The write reads `buffer@0` and `length@8` — the two slots a String
 record already carries, at the same offsets — so that record is minted and destroyed for a consumer
 that never looks at the one slot the two disagree on. Left in, it put the allocator, the array

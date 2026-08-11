@@ -77,11 +77,11 @@ refused by E3005 and never builds, so no entry guard ever runs for it. A paramet
 
 ### An ARRAY ELEMENT goes the other way, and the difference is where the ALIAS is known (A1f-arrayelem)
 
-An element travels as `__arr_push`/`__arr_set`/`__arr_insert`'s third argument into a shared `Array`
+An element travels as `__managed_push`/`__managed_set`/`__managed_insert`'s third argument into a shared `Array`
 body whose parameter is the OPAQUE element type, so A1f's callee-entry cure has no narrowed parameter to
 stand behind. But the argument obstacle above never applied to it either: an element's alias is right
 there in the instance's declared element type, at parse time, so it records an ordinary positioned site
-and its guard goes at the **store**, immediately in front of the `__arr_*` call.
+and its guard goes at the **store**, immediately in front of the `__managed_*` call.
 
 ⚠ **What is left unenforced is not a position at all** — `Array.resize` GROWS an array by *exposing*
 zero-initialized slots, so an `Array with NonZero` can acquire a `0` with no value crossing any door.

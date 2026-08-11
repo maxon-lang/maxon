@@ -41,14 +41,14 @@ func @Bag.create {
     arm64.storeSlotReg slot0, x19
     arm64.movImm x0, 8
     arm64.movImm x1, 0
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x19, x0
     arm64.movImm x1, 5
     arm64.movRegReg x0, x19
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movImm x1, 7
     arm64.movRegReg x0, x19
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -73,7 +73,7 @@ func @Bag.sumThenClear {
     arm64.b forhdr
   forhdr:
     arm64.movRegReg x0, x21
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x20, x0
     arm64.cset x0, lt
     arm64.cbnz x0, scan
@@ -81,7 +81,7 @@ func @Bag.sumThenClear {
   scan:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x20
-    arm64.bl __arr_get_unchecked
+    arm64.bl __managed_get_unchecked
     arm64.add x22, x22, x0
     arm64.b forstep
   forstep:
@@ -89,9 +89,9 @@ func @Bag.sumThenClear {
     arm64.b forhdr
   forexit:
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.bl __arr_clear
+    arm64.bl __managed_clear
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.add x0, x22, x0
     arm64.loadRegSlot x19, slot0
     arm64.loadRegSlot x20, slot1

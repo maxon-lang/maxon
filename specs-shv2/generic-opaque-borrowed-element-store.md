@@ -10,7 +10,7 @@ category: type-system
 ## Documentation
 
 A store into a container has to hand the container a reference the container OWNS — the container's
-own element walk (`__arr_decref` through the layout descriptor's `destroyFunc@40`) releases exactly
+own element walk (`__managed_decref` through the layout descriptor's `destroyFunc@40`) releases exactly
 one per slot. A shared generic body has two ways to supply that reference: **give up the one it
 holds** (a move), or **take a new one** through the enclosing instance's descriptor
 (`__retain_type_param` reading `retainFunc@64`).

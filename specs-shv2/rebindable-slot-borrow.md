@@ -55,7 +55,7 @@ case exited **0xC0000005**, and the String case was worse than either — it sil
 
 <!-- test: managed-field-read-survives-the-field-being-replaced -->
 ⭐ **THE ORIGINAL REPRODUCER.** `let old = items` binds a borrow of the array the field holds;
-`items = fresh` then `__arr_decref`s that very record; the walk below reads it. Exit 0 with no leak
+`items = fresh` then `__managed_decref`s that very record; the walk below reads it. Exit 0 with no leak
 is the whole claim — the sum proves the elements were still there, and the exit code proves the
 refcount balanced (a leak is exit 101).
 ```maxon

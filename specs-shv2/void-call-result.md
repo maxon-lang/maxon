@@ -519,7 +519,7 @@ error E3059: <fragment>:8:10: type mismatch: ''set' does not return a value'
 ```
 
 <!-- test: error.buffer-set-in-value-position -->
-⭐ The buffer's `set` is a SECOND callee (`__arr_mem_set`, capacity-bounded where the `Array`'s is
+⭐ The buffer's `set` is a SECOND callee (`__managed_mem_set`, capacity-bounded where the `Array`'s is
 length-bounded), reached through the same arm — so it needs its own case for the reason the two `append`
 arms do.
 
@@ -561,7 +561,7 @@ error E2004: <fragment>:8:14: Function 'set' does not return a value
 
 ⚠⚠ **E3059 USED TO NAME A SYMBOL NO AUTHOR CAN TYPE.** The two `set` cases above and the seven below all
 reach `parseTry`'s `voidInValue` refusal, and its noun came straight off the `tryCall`'s callee — so a
-program that says `mm.setLength(1)` was told about `'__arr_set_length'`, a name the `__` prefix forbids the
+program that says `mm.setLength(1)` was told about `'__managed_set_length'`, a name the `__` prefix forbids the
 author from writing at all (E2051). The right code, quoting a construct the program does not contain: the
 same defect D12 removed from E3057's sentence, arriving at the one door D12 did not pass through.
 
@@ -571,7 +571,7 @@ E3057's caller reaches the file, directory, string-search and buffer families, a
 E3059 can reach a callee that is both throwing and VALUELESS, which is a different subset again.
 
 ⭐⭐ **THAT SUBSET IS NINE, AND IT IS DERIVED — `isThrowingRuntimeCallee` INTERSECTED WITH THE EMISSION
-SITES THAT TAG THEIR RESULT `void`.** `__arr_set`, the buffer's five void mutators (`set`, `setLength`,
+SITES THAT TAG THEIR RESULT `void`.** `__managed_set`, the buffer's five void mutators (`set`, `setLength`,
 `setByte`, `grow`, `append`), and — from two families this rung was not looking at — `__mf_delete`,
 `__mf_rename` and `__md_create`. All nine are pinned here.
 
@@ -629,7 +629,7 @@ error E3059: <fragment>:4:10: type mismatch: ''grow' does not return a value'
 ⚖ **`append` LEFT THIS ENUMERATION ON 2026-08-07 AND IS KEPT AS THE CASE THAT SAYS SO.** The four above it
 are void THROWING members, and a `try` on one is well-formed until the value position is asked about — which
 is the E3059 this block enumerates. The ruling that made the buffer's `append` NON-throwing
-(`ArrayRuntime.ArrAppendName`, and `managed-memory-methods.error.try-on-the-buffers-append` for the door)
+(`ManagedMemoryRuntime.ManagedAppendName`, and `managed-memory-methods.error.try-on-the-buffers-append` for the door)
 takes it out of that class: this program is now wrong about the `try` BEFORE it is wrong about the value.
 
 ⚠ **AND THAT ORDER IS THE RIGHT ONE, WHICH IS THE ONLY REASON THIS IS AN EDIT AND NOT A REGRESSION.** Both

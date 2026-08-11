@@ -3,7 +3,7 @@
 // A String record and an Array record are DISTINCT 48-byte record types, but they carry the same
 // problem: each one holds a `buffer@0` that may or may not be the record's own to write and to release,
 // and every mutator and every drop path has to ask which. This file owns that question — the values
-// that answer it and the emitters that read them — so the String runtime and the Array runtime
+// that answer it and the emitters that read them — so the String runtime and the managed-memory runtime
 // cannot answer it differently.
 //
 // ⚠ **THEY DID.** Array answered it with the SIGN of `capacity@16` while String answered it with
@@ -58,7 +58,7 @@
 // `file-info.md`, `filepath.md` and `url.md` — loudly, at the gate. That is the catcher this note said did
 // not exist; it does not remove the obligation above, it says what ignoring it now costs.
 //
-// ⚠ **THE VALUES ARE NOT PRIVATE, THOUGH: `__arr_capacity` HANDS `capacity@16` STRAIGHT TO USER CODE**,
+// ⚠ **THE VALUES ARE NOT PRIVATE, THOUGH: `__managed_capacity` HANDS `capacity@16` STRAIGHT TO USER CODE**,
 // so a Maxon program can read one, and `arrays.md:slice-capacity-is-a-view-until-written` pins
 // `ViewBufferCapacity` at exactly `-1` — matching the reference compiler, which also answers `-1` for a
 // buffer it does not yet own. So these three are RENUMBERABLE only in the sense that the suite will say
@@ -117,9 +117,10 @@ export let NoOwedAllocation = 0 as ParsedInt
 // two sets "coincide today and nothing here relies on that". Something does now: ONE emitted runtime
 // function reads these offsets out of BOTH records, so a divergence would not be a second value flowing
 // through a parameter — it would be a wrong load in a function that cannot tell which record it was
-// handed. ⇒ the offsets are declared HERE and the two runtimes DERIVE their own names from them
-// (`StringRuntime.StringBufferOffset`, `ArrayRuntime.ArrBufferOffset`, …), so the numbers exist once and
-// the parameter that could only ever carry one value is gone.
+// handed. ⇒ the offsets are declared HERE, so the numbers exist once and the parameter that could only ever
+// carry one value is gone. `StringRuntime` derives its own names from them (`StringBufferOffset`, …) because
+// a String record is a DIFFERENT record and its spelling still says something; `ManagedMemoryRuntime` names
+// these constants directly, its `Arr*Offset` aliases having retired with the file's own name (ARR6).
 //
 // ⚠ **THE SIXTH SLOT IS NOT SHARED AND MUST NOT BE ADDED HERE.** `@40` is `isAscii` in a String record and
 // `element_destroy` in an Array record — genuinely different facts at one offset — which is precisely why
@@ -136,8 +137,8 @@ export let ManagedRecordParentOffset = 32 as ByteOffset
 export let ManagedRecordBytes = 48 as ByteCount
 
 // `capacity < 0` — ⭐ **THE ONE HOME OF THE NOT-MINE TEST**, asked by the places that must act on it and
-// reached by no other: `__arr_cow_detach` (such a buffer cannot be WRITTEN in place, so replace it),
-// `__arr_decref` (it must not be released — it was either never allocated or is still being read by
+// reached by no other: `__managed_cow_detach` (such a buffer cannot be WRITTEN in place, so replace it),
+// `__managed_decref` (it must not be released — it was either never allocated or is still being read by
 // someone else) and `emitOwedAllocationBase` (which of two fields names the allocation this record owes
 // a release to). Their conclusions differ and are meant to — what must never differ is the test, because
 // a record misjudged by any one of them is a fault: a write into read-only memory or into bytes another
@@ -146,7 +147,7 @@ export let ManagedRecordBytes = 48 as ByteCount
 // ⚠ **IT IS ALSO THE ONE TEST THAT MAY BE ASKED BEFORE A HEADER READ IS SAFE**, and that is why it reads
 // the record's own `capacity@16` and nothing else. A view's `buffer@0` is INTERIOR, so the word at
 // `buffer - 8` is the parent's element DATA, not a refcount; anything that wants to read a buffer's
-// `__mm_alloc` header must clear this test first. `__arr_cow_detach` is exactly such a reader, and its
+// `__mm_alloc` header must clear this test first. `__managed_cow_detach` is exactly such a reader, and its
 // arms are ordered accordingly.
 //
 // ⚠ It is the ONLY buffer-provenance test left. `emitBufferCannotHold` below asked the same question
@@ -180,10 +181,10 @@ end 'emitBufferNotOwned'
 // An OWNER's is its own `buffer@0` (the pointer `__mm_alloc` returned, which may be 0 if the record never
 // allocated one); a NON-OWNED record's is `parent@32` (a view's shared base, or 0 for an immortal `.rdata`
 // blob). ⭐ THE ONE HOME OF THAT CHOICE, read by every place whose correctness depends on picking the same
-// field: `__arr_slice` (which allocation to INCREF for the new view), `__mm_cow_detach` (which one to
+// field: `__managed_slice` (which allocation to INCREF for the new view), `__mm_cow_detach` (which one to
 // RELEASE once the record has copied its bytes out — it reads the base here and RETURNS it, and both
 // detaching callers reach this through that one function rather than each asking) and
-// `__arr_decref`/`__str_decref` (which one to release at death). A disagreement between any two of them
+// `__managed_decref`/`__str_decref` (which one to release at death). A disagreement between any two of them
 // is a double-free or a leak, so it is written once.
 //
 // ⭐ **TWO ARMS COVER EVERY RECORD KIND, AND NOTHING WRAPS THIS WITH A THIRD.** An owner's buffer is
@@ -222,7 +223,7 @@ end 'emitOwedAllocationBase'
 // `if base != NoOwedAllocation then <callee>(base)` — the null-guarded refcount step every share and
 // every release of an owed allocation makes, since "this record owes nothing" is an ordinary answer from
 // `emitOwedAllocationBase`. Threads `cur` and returns the continuation block. ONE home for the guard, in
-// both directions: `__arr_slice` raises the count with `__mm_incref`, the detach and drop paths lower it
+// both directions: `__managed_slice` raises the count with `__mm_incref`, the detach and drop paths lower it
 // with `__mm_decref`.
 //
 // ⭐ **A BUFFER IS RELEASED WITH `__mm_decref`, NEVER `__mm_free`, AND THAT IS THE WHOLE OF THE DROP
@@ -258,9 +259,9 @@ end 'emitReleaseOwedBase'
 // ⚠ **THE QUESTION WAS UNIFIED HERE LONG BEFORE THE ACTION WAS, AND THAT GAP IS WHAT THIS CLOSES.** This
 // file's header records that Array and String once answered *"is this buffer mine?"* with different fields
 // at the same offset, and that the cure was to own the question here. The ACTION stayed forked anyway:
-// `__arr_cow_detach` was Array's, and String open-coded its own detach inline inside `__str_append`. Two
+// `__managed_cow_detach` was Array's, and String open-coded its own detach inline inside `__str_append`. Two
 // spellings of *"copy my bytes somewhere private and republish"* — the same defect one level up, and a
-// `__str_cow_detach` beside `__arr_cow_detach` would have made it permanent.
+// `__str_cow_detach` beside `__managed_cow_detach` would have made it permanent.
 //
 // It is `__mm_`-prefixed because it is a MANAGED-MEMORY operation over the shared record shape rather than
 // either container's: both runtimes CALL it, neither owns it. ⭐ The prefix also earns its `usesHeap` bit
@@ -276,8 +277,8 @@ end 'emitReleaseOwedBase'
 // both records already keep it in. A detach that assumed a stride of 1 would be right for every String and
 // would under-allocate every wide-element array by exactly its stride.
 //
-// ⭐ **GROWTH POLICY STAYS WITH THE CALLER, DELIBERATELY.** `__arr_cow_detach` — the one caller left — asks
-// for exactly `length`, because slack is `__arr_grow`/`__arr_grown_cap`'s separate business, and a detach
+// ⭐ **GROWTH POLICY STAYS WITH THE CALLER, DELIBERATELY.** `__managed_cow_detach` — the one caller left — asks
+// for exactly `length`, because slack is `__managed_grow`/`__managed_grown_cap`'s separate business, and a detach
 // that also grew would give one record two growth policies. The ask is therefore a PARAMETER rather than a
 // rule written here.
 //
@@ -285,15 +286,15 @@ end 'emitReleaseOwedBase'
 // `String.append` (W49 wave 8) AND ITS REASONING DID NOT.** That doubling was never a preference: exact
 // growth made `var s = ""` plus a loop of appends QUADRATIC (measured ×3.94/×4.07/×3.82/×3.88 per doubling,
 // and 5.0 s to build a 288 KB string). The corpus body appends through `managed.append(other.managed)` now,
-// so the geometric growth a String depends on is `__arr_grown_cap`'s — the same policy, reached one layer
+// so the geometric growth a String depends on is `__managed_grown_cap`'s — the same policy, reached one layer
 // out. ⇒ **A caller of this function that neither grows geometrically itself nor routes through
-// `__arr_grow` restores that quadratic**, and it restores it silently, because a detach is correct however
+// `__managed_grow` restores that quadratic**, and it restores it silently, because a detach is correct however
 // small the ask.
 //
 // ⚠⚠ **IT RETURNS THE OWED BASE INSTEAD OF RELEASING IT, AND THAT IS LOAD-BEARING RATHER THAN TIDY.**
 // `emitOwedAllocationBase` and `emitReleaseOwedBase` are deliberately unfused (see their headers) because a
 // detach must SPLIT them across its byte copy, and the far side of that split is the CALLER's to name.
-// `__arr_cow_detach` may pay the debt the instant this returns. `__str_append` may NOT, which is why the
+// `__managed_cow_detach` may pay the debt the instant this returns. `__str_append` may NOT, which is why the
 // split exists at all: `s.append(s)` aliased its `other` operand to `self`'s OLD buffer, so the release had
 // to wait until the BLIT had also finished reading, one block later. Releasing inside here would
 // reintroduce exactly the read-after-free that `string-type-2/rc-repeated-self-append` exists to guard —
@@ -302,13 +303,13 @@ end 'emitReleaseOwedBase'
 // when its own reads are done.
 //
 // ⭐ **`s.append(s)` IS STILL SAFE ON THE CORPUS ROUTE, AND BY A DIFFERENT MECHANISM — TRACED, NOT ASSUMED.**
-// `__arr_append` loads BOTH buffers *after* its `__arr_reserve`, and `__arr_grow` detaches and reallocates
+// `__managed_append` loads BOTH buffers *after* its `__managed_reserve`, and `__managed_grow` detaches and reallocates
 // BEFORE returning, copying the live bytes into the new allocation and releasing the old one there. So the
 // aliased read lands in the NEW buffer, which already holds the original contents, and the two ranges do
 // not overlap (`[0, n)` read into `[n, 2n)` written). `__str_append` needed the split because it blitted
 // out of the buffer the detach had just released; this route never reads the released one at all.
 //
-// The traps `buildArrCowDetach`'s header lists are kept here rather than restated there: the old buffer is
+// The traps `buildManagedCowDetach`'s header lists are kept here rather than restated there: the old buffer is
 // loaded AFTER the owed base is read, a ZERO-LENGTH record still detaches (no early-out — `__mm_alloc(0, 0)`
 // is a legal empty box, and skipping would leave a sentinel capacity on a pointer that has no header for the
 // next reallocation to read), and the fresh buffer comes from `__mm_alloc`, which zeroes.

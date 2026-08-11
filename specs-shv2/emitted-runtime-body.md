@@ -9,7 +9,7 @@ category: codegen
 ## Documentation
 
 The compiler EMITS more code than the program declares. The entry stub `mrt_start`, the
-`__mm_*`/`__slab_*` allocator, the `__str_*`/`__arr_*` families and the `__destruct_*`
+`__mm_*`/`__slab_*` allocator, the `__str_*`/`__managed_*` families and the `__destruct_*`
 thunks are all synthesized by the backend, and a golden fragment shows NONE of them: the
 fragment renders only functions parsed from source, because the shared scaffolding is
 identical in every test and would be pure noise in all of them.
@@ -103,7 +103,7 @@ __str_bytes_view
 ```
 
 <!-- test: error-ordinal-in-an-emitted-body -->
-An emitted body transcribes an error enum's ORDINAL as a literal — `__arr_set`'s `rejcont` block
+An emitted body transcribes an error enum's ORDINAL as a literal — `__managed_set`'s `rejcont` block
 returns ordinal 0 with the error flag set, which is the wire format an `otherwise` arm decodes. The
 ordinal is a positional fact about a case LIST, and nothing else in the suite can see the literal
 the runtime actually carries: the run only sees that *some* error came back.
@@ -119,7 +119,7 @@ end 'main'
 0
 ```
 ```RequiredRuntime
-__arr_set
+__managed_set
 ```
 
 <!-- test: entry-stub-body -->
@@ -189,7 +189,7 @@ __gt_morestack
 ```
 
 <!-- test: string-byte-at-body -->
-`__arr_byte_at` — the THROWING, bounds-checked byte read behind `String.byteAt`. It leaves through the
+`__managed_byte_at` — the THROWING, bounds-checked byte read behind `String.byteAt`. It leaves through the
 dual-register `errorReturn` ABI carrying `__ManagedMemoryError.invalidByteRange`, which is exactly what
 `stdlib/String.maxon:266` declares. The corpus's `hashString` is what installs it here, and this block is
 its only gate.
@@ -211,5 +211,5 @@ end 'main'
 3
 ```
 ```RequiredRuntime
-__arr_byte_at
+__managed_byte_at
 ```

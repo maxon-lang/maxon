@@ -28,7 +28,7 @@ direction: a body that poisons its parameter at parse time has already decided t
 and a loop that never runs then leaks the caller's reference with nothing left to release it.
 
 `stdlib/Array.maxon`'s `growFilled` and `refill` are this shape and are why this exists: one `value`,
-N slots, and each slot destroyed exactly once by the array's own `__arr_decref` walk through
+N slots, and each slot destroyed exactly once by the array's own `__managed_decref` walk through
 `destroyFunc@40`.
 
 **A BORROWED element reaches the same `__retain_type_param` by the shorter road**, because it has no

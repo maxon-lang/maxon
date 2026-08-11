@@ -1258,7 +1258,7 @@ end 'trackedValueInArray'
 // may be called at all (`Parser.noteReceiverWrite`). This pass adds only the transitive closure. A FIELD
 // write records nothing, deliberately — see `Parser.receiverOwnerMask` for that ruling and the measured
 // oracle inconsistency it settles. Re-deriving the base facts here —
-// by matching the LOWERED runtime callees (`__arr_push`, `__arr_append`, `__set_insert`) — would be a second
+// by matching the LOWERED runtime callees (`__managed_push`, `__managed_append`, `__set_insert`) — would be a second
 // list of receiver-writing operations, three tiers away from the one the parser consults, and the two would
 // be free to disagree about a method added to either.
 //
@@ -1451,7 +1451,7 @@ end 'collectCallParamEdgesAt'
 // `slotCallArgs` applies — a call summarised against one slotting and checked against another is the
 // disagreement this whole rung is written to avoid.
 //
-// A callee with NO signature is skipped: it is either compiler-internal (`__arr_push` and friends, whose
+// A callee with NO signature is skipped: it is either compiler-internal (`__managed_push` and friends, whose
 // receiver writes the parser already recorded directly) or undeclared (E3004, reported by `checkCalls`).
 // A label naming no parameter slots out of range and is skipped for the same reason — `slotCallArgs`
 // reports it.
@@ -2239,7 +2239,7 @@ function throwingCallRequiresTryMessage(name ByteArray) returns String
 	return "throwing function requires try: '{String.from(name)}'"
 end 'throwingCallRequiresTryMessage'
 
-// ⭐⭐ **WHAT AN E3057 SAYS ABOUT A COMPILER-OWNED THROWING CALLEE.** The user never wrote `__arr_get` or
+// ⭐⭐ **WHAT AN E3057 SAYS ABOUT A COMPILER-OWNED THROWING CALLEE.** The user never wrote `__managed_get` or
 // `__md_next`, so the sentence has to name the construct they DID write; a family that falls through to
 // another family's wording gets the right code and the wrong noun.
 //
@@ -2257,17 +2257,17 @@ end 'throwingCallRequiresTryMessage'
 // only name it has. A sixth family that adds no map gets that fallback rather than another family's noun.
 //
 // ⭐⭐ **THE ARRAY ARM MOVED ABOVE THE LOOKUP AT D11c, AND THAT IS A NARROWING OF THIS FUNCTION'S CLAIM, NOT
-// A CHANGE OF ITS ANSWER.** It used to sit BELOW, with a note saying it had to: `isThrowingArrayRuntimeCallee`
-// COMPOSES the seven `__ManagedMemory` members (one record, one runtime, all `__arr_`-prefixed), so a wide
+// A CHANGE OF ITS ANSWER.** It used to sit BELOW, with a note saying it had to: `isThrowingManagedMemoryRuntimeCallee`
+// COMPOSES the seven `__ManagedMemory` members (one record, one runtime, all `__managed_`-prefixed), so a wide
 // array test above the lookup would have swallowed every buffer member and answered it with the array word —
 // the very defect D12 removed. The ordering was the separator, and a required ordering is a test nobody wrote.
 //
 // ⇒ It now asks `isThrowingArrayAccessorCallee`, the NARROW factoring of that same union, which holds none but
-// the nine genuine `Arr*` accessors — so the arm is correct wherever it sits and sits here because the array
+// the nine genuine `Array`-surface accessors — so the arm is correct wherever it sits and sits here because the array
 // family is the one family whose SENTENCE is not built from a method name. The map below became total over
 // those nine at the same commit (E3059 needs the noun this sentence cannot supply), and without this move the
 // per-method sentence would have displaced the family one. **`try-postfix-target.error.two-throwing-calls-in-
-// one-chain` pins this wording, on `__arr_slice`, and is the check that the move changed no answer.**
+// one-chain` pins this wording, on `__managed_slice`, and is the check that the move changed no answer.**
 function throwingRuntimeCalleeMessage(callee ByteArray) returns String
 	// The subprocess family words itself from the CALL rather than from a method name: `runProcess` is a free
 	// function, and what a bare one drops is a spawn failure, not an index.
@@ -2339,7 +2339,7 @@ end 'divisionRequiresTryMessage'
 function validatePlainCall(project Project, func IrFunction, signatures ProgramSignatures, funcNames FunctionNameIndex, opIndex OpIndex, result ValueId, callee ByteArray, mint CalleeMint, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, argDefaultSlots ParamCountArray, throwsMap FuncThrowsMap, escapeSummary ParamEscapeSummary, mutationSummary ParamMutationSummary, blameTargetErrorsHere bool)
 	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: mint, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
 	// A THROWING BUILTIN reaching here as a plain `call` — not a `tryCall` — was written WITHOUT a `try`, so its
-	// error flag would be silently dropped: a throwing array accessor (`__arr_get`/…) would return a dummy 0 on an
+	// error flag would be silently dropped: a throwing array accessor (`__managed_get`/…) would return a dummy 0 on an
 	// out-of-bounds read, and a bare `runProcess` (P1.5 #93) would return its sentinel exit code while dropping the
 	// spawn-failure/store-overflow flag (a wrong answer). Both are compiler-internal callees, so the blanket skip
 	// below would hide them; the same E3057 "throwing call needs try" rule a user function gets is applied here
@@ -3248,7 +3248,7 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		//     the hand-written mutator are one route, and it is this one.
 		//
 		// ⚠ **THE ARRAY LITERAL IS NOT HERE, AND THAT IS WHY ITS OWN DOOR EXISTS.** `Array` is
-		// parser-intrinsic: `[a, b]` builds through `__arr_create`/`__arr_push` runtime entries carrying no
+		// parser-intrinsic: `[a, b]` builds through `__managed_create`/`__managed_push` runtime entries carrying no
 		// signature, so nothing in this pass sees its elements. `Parser.requireArrayLiteralElementMatches`
 		// records a `containerElement` door for exactly that gap — MEASURED both ways, by deleting each and
 		// watching which programs went quiet. `Array.push` and `List.append` are a third route again (the
@@ -3523,7 +3523,7 @@ function closureEscapeReason(op MaxonOp) returns String
 	panic("closureEscapeReason: this op is not a capturing-closure escape site — `opEscapesValue` and this mapping disagree about which slots persist a value")
 end 'closureEscapeReason'
 
-// The wording for a capturing closure handed to a COMPILER-INTERNAL callee (`__arr_push`, …). Written once
+// The wording for a capturing closure handed to a COMPILER-INTERNAL callee (`__managed_push`, …). Written once
 // because the three call ops share it — a `call`, a `tryCall` and an `asyncCall` reach this mapping only
 // through `directCallArgEscapes`' runtime-entry arm, which is the same fact each time. A function rather
 // than a module-scope `let`, because a top-level constant takes a CONSTANT initializer and may not

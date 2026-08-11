@@ -21,7 +21,7 @@ print("{n.count()}")                                     // reads into the freed
 ```
 
 `get`/`first`/`last` hand back the element the container KEEPS (a borrow — the container's own
-`__arr_decref` walk destroys it), and a managed field read hands back the field the box KEEPS. Freed
+`__managed_decref` walk destroys it), and a managed field read hands back the field the box KEEPS. Freed
 at the end of the statement, the container takes the borrowed element with it, and the next read is
 of poisoned memory — measured as `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s fill byte read back as a
 `count()`. A **wrong answer**, with no crash, no refusal, and no leak: the free is legitimate, so

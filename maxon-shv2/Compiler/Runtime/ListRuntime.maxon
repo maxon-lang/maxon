@@ -8,7 +8,7 @@
 // The structure is not an implementation detail the spec leaves open — those complexities ARE the type's
 // contract, and an `Array`-backed `List` could not meet the `prepend`/`removeFirst` half of them.
 //
-// ⭐ THE SHAPE IS `ArrayRuntime`'s and `HashTableRuntime`'s: one fused `__mm_alloc`'d backing record whose
+// ⭐ THE SHAPE IS `ManagedMemoryRuntime`'s and `HashTableRuntime`'s: one fused `__mm_alloc`'d backing record whose
 // fields the runtime functions read and the parser writes, plus a set of `__`-prefixed Std runtime functions
 // built as `StdOp` graphs (so they get register allocation, frames and the whole backend for free), installed
 // on demand from `RuntimeUsage.usesList`.
@@ -44,7 +44,7 @@
 // construction. It is 0 for a trivial element and the teardown walk then frees nodes without touching them.
 //
 // A fresh record comes ZEROED from `__mm_alloc` (head 0, tail 0, count 0), so `__list_create` writes only the
-// destructor stamp — the same zeroing contract `__arr_create` and `__set_create` rely on.
+// destructor stamp — the same zeroing contract `__managed_create` and `__set_create` rely on.
 export let ListHeadOffset = 0 as ByteOffset
 export let ListTailOffset = 8 as ByteOffset
 export let ListCountOffset = 16 as ByteOffset
@@ -125,7 +125,7 @@ export let ListGetName = b"__list_get"
 export let ListRemoveFirstName = b"__list_remove_first"
 
 // ⭐ **THE THREE CURSOR PRIMITIVES A `for item in list` LOOP IS LOWERED TO**, and they are NON-THROWING for
-// `ArrGetUncheckedName`'s reason: a loop has no `try` to attach and no fallback value to supply, and the
+// `ManagedGetUncheckedName`'s reason: a loop has no `try` to attach and no fallback value to supply, and the
 // header's `cursor != 0` test IS the bounds check that licenses the unchecked reads. `__list_head` answers 0
 // for an empty list (so the loop body never runs) and `__list_node_next` answers 0 at the tail (so it exits).
 export let ListHeadName = b"__list_head"
@@ -183,7 +183,7 @@ end 'listAccessorSourceMethodName'
 // (`isRuntimeFunction`), so an all-or-nothing install costs nothing in the fragments and needs no per-helper
 // dependency tracking; the helpers call each other (`from`→`append`→`node_alloc`→`__mm_alloc`) so a
 // dependency graph would only re-derive the closure this install already is. Appended AFTER the pipeline
-// (like `installArrayRuntime`), so they are never re-optimized.
+// (like `installManagedMemoryRuntime`), so they are never re-optimized.
 export function installListRuntime(module StdModule, usage RuntimeUsage)
 	if not usage.usesList 'noList'
 		return
@@ -491,7 +491,7 @@ end 'buildListClear'
 
 // `__list_first(list) -> (value, flag)` — the head element, throwing `indexOutOfBounds` on an empty list.
 // The result is a BORROW: the list keeps the element and its own `__list_decref` walk destroys it, exactly as
-// `__arr_first` yields.
+// `__managed_first` yields.
 function buildListFirst(module StdModule)
 	var func = IrFunction.createFromStd(ListFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
@@ -569,7 +569,7 @@ end 'buildListGet'
 // O(1). Throws `indexOutOfBounds` on an empty list.
 //
 // ⚠ **THE ELEMENT IS MOVED OUT, NOT DROPPED.** The caller becomes its sole owner (the parser marks the result
-// OWNED), which is the exact mirror of `__arr_pop` nulling the slot it hands out: the node is freed WITHOUT
+// OWNED), which is the exact mirror of `__managed_pop` nulling the slot it hands out: the node is freed WITHOUT
 // consulting `element_drop@24`, so nothing destroys a value that now has an owner elsewhere.
 function buildListRemoveFirst(module StdModule)
 	var func = IrFunction.createFromStd(ListRemoveFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
@@ -656,7 +656,7 @@ end 'buildListNodeNext'
 // threading), then walk the array in order appending each element.
 //
 // ⚠ Each moved-out array slot is NULLED, exactly as `__set_from` nulls its. The array stays the CALLER's
-// owned temporary and its `__arr_decref` walks `[0, length)` dropping every NON-null slot — so a managed
+// owned temporary and its `__managed_decref` walks `[0, length)` dropping every NON-null slot — so a managed
 // element the list now owns must read null there or it is freed twice. A trivial element is copied inline
 // and the null is harmless.
 //
@@ -675,11 +675,11 @@ function buildListFrom(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
-	let elemDrop = emitLoadField(module, block: entry, record: arr, offset: ArrElementDestroyOffset, ids: ids)
+	let elemDrop = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordElementDestroyOffset, ids: ids)
 	let list = ids.mint()
 	module.appendOp(entry, op: StdOp.call(list, callee: ListCreateName, args: argsOf(elemDrop)))
-	let count = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
-	let buffer = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
+	let count = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let buffer = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let scanStart = emitConst(module, block: entry, value: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(header.id))
 	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(scanStart)))

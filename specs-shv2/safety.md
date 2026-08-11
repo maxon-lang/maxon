@@ -842,7 +842,7 @@ Stack trace:
 #### ⭐ THE LAST DOOR: a runtime zero is refused at the `push`, not at the `idiv`
 
 A1f closed the call-argument door at the CALLEE's entry, and could not reach this one — an element
-travels as `__arr_push`'s third argument into a shared `Array` body whose parameter is the OPAQUE
+travels as `__managed_push`'s third argument into a shared `Array` body whose parameter is the OPAQUE
 element type, so there is no narrowed parameter for an entry guard to stand behind. `A1f-arrayelem`
 shuts it from the other side: the guard goes at the **store**, in the caller, which is the one place
 that still knows the element type. Everything the entry guard could not see is visible here, and the

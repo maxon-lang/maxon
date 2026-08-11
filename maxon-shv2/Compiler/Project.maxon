@@ -1558,7 +1558,7 @@ export type RangedAliasRegistry
 	// ⚠ **THE BARE PROBE, for the readers that HAVE no file to ask from** — type resolution's erasure
 	// of a `named` to its primitive (`resolveNamedType`, reached for a `StructLayout` field type,
 	// which records no declaring file), conformance-signature canonicalization, union payload
-	// classification reached from the emitted runtime (`MmRuntime`/`ArrayRuntime` walk
+	// classification reached from the emitted runtime (`MmRuntime`/`ManagedMemoryRuntime` walk
 	// `project.enumTypes`, which records no declaring file) and generic type-argument canonicalization
 	// (`conformerTypeArgName`, which holds an instance id).
 	//
@@ -2264,7 +2264,7 @@ end 'isLegalRepeatedAlias'
 // parameter is the OPAQUE element type, so there is no narrowed parameter for an entry guard to stand
 // behind. But the obstacle above never applied to it either: an element's alias is known at PARSE time,
 // in the instance's declared element type, so it records an ordinary positioned site and its guard goes
-// at the STORE, in front of the `__arr_*` call. See `Parser.requireContainerElementType`.
+// at the STORE, in front of the `__managed_*` call. See `Parser.requireContainerElementType`.
 //
 // ⚠ **WHAT IS STILL UNENFORCED IS NOT A POSITION** — it is the zero-initialized slot `Array.resize`
 // EXPOSES, which no value ever crosses into. Pinned by `specs-shv2/safety.md`'s
@@ -2682,7 +2682,7 @@ export typealias CaseIndex = int(0 to 65535)
 //     `i8` through `i32`, and `X64AccessWidth` has exactly two members (`byte`, `word64`); arm64 has
 //     `ldrb`/`ldr` and wasm gates `i8` behind P1.9. So this is three new access widths in three backends —
 //     and the array half needed NONE of that, because the element load is byte-granular and strides the
-//     record at run time (`ArrayRuntime.emitLoadElemAt`). A field read has no such indirection.
+//     record at run time (`ManagedMemoryRuntime.emitLoadElemAt`). A field read has no such indirection.
 //
 // ⇒ it is a CROSS-TARGET CODEGEN rung with a cross-target gate, and two of its three lanes cannot be
 // executed on the host that would write it (arm64 needs the Mac, wasm needs the vendored wasmtime sweep).
@@ -2719,7 +2719,7 @@ let InlineManagedFieldName = b"managed"
 // ⭐⭐ **HOW MANY BYTES A COLLAPSED `managed` OCCUPIES — the FIVE `__ManagedMemory` slots, DERIVED.** The
 // buffer record is `buffer`, `length`, `capacity`, `element_size`, `parent`: five machine words, and every
 // one of them is named at that offset by both fused records shv2 already builds (`StringRuntime`'s
-// `StringBufferOffset`…`StringParentPtrOffset` and `ArrayRuntime`'s `ArrBufferOffset`…`ArrParentOffset`).
+// `StringBufferOffset`…`StringParentPtrOffset` and `ManagedMemoryRuntime`'s `ManagedRecordBufferOffset`…`ManagedRecordParentOffset`).
 // Writing `40` here instead would be a third statement of a number those ten constants already fix, and the
 // one that no reader would check — so it is a product of the two facts it is made of.
 //
@@ -4452,7 +4452,7 @@ export typealias EnumLayoutMap = Map with (ByteArray, EnumLayout)
 // constants are BARE names (`SignatureIndex.ArrayErrorTypeName` is `b"ArrayError"`, not `__ArrayError` — the
 // old header here said otherwise and was wrong), so the parsed declaration and the seed land on ONE registry
 // key and `upsertDeclaredEnum`'s last-wins upsert hands the program the CORPUS layout. Meanwhile
-// `verifyArrayRuntimeOrdinals` went on checking `builtinArrayErrorEnum()`'s freshly-rebuilt copy — a layout
+// `verifyManagedMemoryRuntimeOrdinals` went on checking `builtinArrayErrorEnum()`'s freshly-rebuilt copy — a layout
 // nothing uses — so it agreed with itself whatever the corpus said. This is the `Builtins.maxon` defect
 // verbatim, one paragraph up: *"the guard was checking a layout the program did not use."*
 //

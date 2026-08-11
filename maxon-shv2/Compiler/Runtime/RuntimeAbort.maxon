@@ -2,7 +2,7 @@
 // WITH**, and the one shape those aborts are emitted in.
 //
 // ⚠ **IT EXISTS BECAUSE THE SPACE HAD ALREADY COLLIDED.** `GtRuntime.ProcStoreOverflowExitCode` and
-// `ArrayRuntime.ElementSizeZeroExitCode` were BOTH 70 — two unrelated aborts wearing one number, each
+// `ManagedMemoryRuntime.ElementSizeZeroExitCode` were BOTH 70 — two unrelated aborts wearing one number, each
 // picked against a different file-local list of "codes I can see from here". Nothing was broken by it
 // (a program cannot reach both), but the next number added was a coin flip, and a runtime abort that
 // reports another abort's code is a debugging session that starts by reading the wrong function.
@@ -54,18 +54,18 @@
 // would be this space defending against a claimant that no longer exists — the very thing the paragraph
 // above rejects.
 export enum RuntimeAbort
-	// `__arr_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
+	// `__managed_grow`: `capacity·element_size` overflowed i64. Without the guard the wrapped byte count
 	// under-allocates and the next element write runs off the buffer — a silent heap overflow.
 	arrayCapacityOverflow = 71
-	// `__arr_append`: `dest` and `src` disagree on `element_size@24`, so the single-stride blit would
+	// `__managed_append`: `dest` and `src` disagree on `element_size@24`, so the single-stride blit would
 	// over-read the packed source and splice garbage in.
 	arrayAppendElementSizeMismatch = 72
-	// `__arr_resize`: a NEGATIVE length. The shrink's zero range starts at `buffer + n·es`, which for a
+	// `__managed_resize`: a NEGATIVE length. The shrink's zero range starts at `buffer + n·es`, which for a
 	// negative `n` is an address BELOW the buffer — the one out-of-buffer write a detach cannot fix.
 	// Pinned by `byte-string-literal.negative-resize-aborts`.
 	arrayNegativeResize = 73
-	// `__arr_create`: a 0 element size, which is a COMPILER bug rather than a program's (a concrete
-	// literal is never 0 and a descriptor read never yields 0) — it would make `__arr_grow` allocate a
+	// `__managed_create`: a 0 element size, which is a COMPILER bug rather than a program's (a concrete
+	// literal is never 0 and a descriptor read never yields 0) — it would make `__managed_grow` allocate a
 	// zero-byte buffer and corrupt. ⚠ It was 70 until this registry landed, colliding with the
 	// process-store-overflow abort that then held 70 (since P1.5 #93 that path throws
 	// `RunProcessError.storeOverflow` instead); this is the one that moved because it is unreachable from
@@ -158,8 +158,8 @@ end 'lastSegment'
 
 // ⭐ **ABORT THE PROCESS FROM A BUILDER-BUILT RUNTIME FUNCTION — THE ONE HOME OF THE ABORT SHAPE.**
 // `osExit` DIVERGES, so the block it sits in never falls out; but a block must still carry a
-// terminator, so a DEAD one follows. That fact was open-coded four times (`ArrayRuntime.emitVoidAbort`
-// plus `GtRuntime`'s `__gt_proc_add` and `__gt_process_run`, and `ArrayRuntime.__arr_create`), and it
+// terminator, so a DEAD one follows. That fact was open-coded four times (`ManagedMemoryRuntime.emitVoidAbort`
+// plus `GtRuntime`'s `__gt_proc_add` and `__gt_process_run`, and `ManagedMemoryRuntime.__managed_create`), and it
 // is written here once.
 //
 // ⭐ **THE TERMINATOR KIND IS DERIVED FROM THE FUNCTION, NOT PASSED IN.** A void function's dead

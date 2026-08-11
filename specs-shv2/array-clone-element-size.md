@@ -52,7 +52,7 @@ them back therefore passes identically at 1 byte and at 8, and pins nothing abou
 
 What DOES discriminate is a second record whose stride was fixed by a **different producer**. A
 `b"…"` byte-string literal is exactly that: its record is stamped `element_size = 1` directly by
-`LowerMaxonToStd.lowerByteStringLiteral`, a path that never consults the element type. `__arr_append`
+`LowerMaxonToStd.lowerByteStringLiteral`, a path that never consults the element type. `__managed_append`
 compares the two records' `element_size@24` at RUN time and aborts
 (`RuntimeAbort.arrayAppendElementSizeMismatch`) when they disagree — so appending a byte-string into
 an `Array with Byte` succeeds at a 1-byte stride and aborts at any other.

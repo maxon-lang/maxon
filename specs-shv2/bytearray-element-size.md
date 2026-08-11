@@ -225,7 +225,7 @@ the two records' strides; every other one just uses whichever it was handed.)
 There is no reference behaviour to match here: the C# bootstrap mis-answers the same program its own way,
 emitting the blob byte-packed and then TYPING the array `u16`, so `b"CD".get(0)` reads **17475**
 (`0x4443`). Emitting the blob at a wider stride is an element-wise widening emission — a real mechanism,
-and the same one a widening `__arr_append` across differing strides would need — so until that exists the
+and the same one a widening `__managed_append` across differing strides would need — so until that exists the
 literal is refused at its own position.
 
 <!-- test: byte-string-literal-refused-when-byte-is-wider-than-one-byte -->

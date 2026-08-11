@@ -118,9 +118,9 @@ readings need a new vehicle and the wasm lane has no guard until they get one.
 
 ⚠ **AN ARRAY ELEMENT LOOKS LIKE THAT VEHICLE AND IS NOT — MEASURED, and the measurement is the point.** A
 `u32`-ranged element genuinely gets a **4-byte STORAGE slot** (`rangedAliasStorageBytes` = 4, visible as
-the `i64.const 4` handed to `__arr_create`), and a `4000000000` pushed through one reads back identically
+the `i64.const 4` handed to `__managed_create`), and a `4000000000` pushed through one reads back identically
 on the host and on wasm. That is a true measurement of a *different* property. **The STORAGE width is not
-the VALUE width:** `__arr_get` is `(param i64 i64) (result i64 i64)`, the loaded element never occupies an
+the VALUE width:** `__managed_get` is `(param i64 i64) (result i64 i64)`, the loaded element never occupies an
 `i32` local, and the emitted `main` for such a program contains **zero** `extend_i32` instructions of
 either signedness — `coerceOnStack` is never asked. A case built on that route would pass with the
 sign-extension defect fully present, which makes it a positive control and not a guard. It is not added,

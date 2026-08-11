@@ -4,7 +4,7 @@
 // synthesized per-type cascades from inside a body the Maxon-module scan cannot see: a
 // `__destruct_<Outer>` calls its managed field's `__destruct_<Inner>` (`MmRuntime.closeDestructorNeeds`),
 // and the CLONE dual `__clone_<Outer>` calls that field's `__clone_<Inner>`
-// (`ArrayRuntime.noteClonerUsage`). Both therefore grow a needed-SYMBOL set to a fixpoint over the SAME
+// (`MmRuntime.noteClonerUsage`). Both therefore grow a needed-SYMBOL set to a fixpoint over the SAME
 // node space — declared structs, declared unions, and (destructors only) generic instances — under the
 // SAME monotone rule. Written twice, they carried the same quadratic twice: each was a `while changed`
 // RE-SCAN of every declared type, so a cascade chain of depth D cost D passes over T types —
@@ -15,7 +15,7 @@
 // ⚠ **DEMAND-DRIVEN, AND THAT IS THE CONTRACT, NOT AN OPTIMIZATION.** The graph is deliberately NOT
 // built up front, the way the parser's descriptor-need fixpoint builds a CSR and marks reachability
 // over it (`Queries.foldDescriptorNeeds`). It cannot be: EXPANDING a node is what turns on that
-// type's transitive `RuntimeUsage` bits (`usesStrDecref`, `usesArray`, `usesStrClone`, `usesHeap`, …),
+// type's transitive `RuntimeUsage` bits (`usesStrDecref`, `usesManagedMemory`, `usesStrClone`, `usesHeap`, …),
 // so a node the program does not reference must never be expanded — a graph built over every declared
 // type's fields would declare runtime needs for types nothing drops or clones and install runtime the
 // program does not carry. That is why `register` (cheap, every type) is separate from
@@ -112,7 +112,7 @@ export type CascadeWorklist
 
 	// A cascade symbol has just NEWLY joined the needed set: enqueue whatever it names. A symbol naming
 	// no registered node adds nothing — that is an ANSWER, not an unhandled case: the drop/clone
-	// classifiers hand back leaf callees (`__str_decref`, `__mm_decref`, `__arr_clone`) and over-rooted
+	// classifiers hand back leaf callees (`__str_decref`, `__mm_decref`, `__managed_clone`) and over-rooted
 	// element cascades alike, and only a symbol belonging to a declaration in THIS node space has a body
 	// with nested cascades to close over. The old fixpoint ignored such a symbol the same way, by never
 	// finding a type whose symbol matched it.

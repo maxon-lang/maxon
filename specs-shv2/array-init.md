@@ -46,7 +46,7 @@ Two facts, and each is load-bearing on its own:
   an unknown `Array` method. `the-surface-flips` below is the case that says so.
 - **The record is RETAINED** (`__mm_retain`). The source buffer is still live and still drops at
   its own scope exit, so the adopted array must be a second owner rather than a stolen one.
-  `__mm_retain` raises the same refcount word `__arr_decref` lowers (both go through
+  `__mm_retain` raises the same refcount word `__managed_decref` lowers (both go through
   `MmRuntime.emitRefcountCheckToLastOwner`), so `let a = ByteArray.init(mm)` traces
   rc 0 → retain → 1 → `a` drops → 0 → `mm` drops → freed. Every case here would exit **101**
   if that did not balance.

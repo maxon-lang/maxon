@@ -29,7 +29,7 @@
 //   * `MmRuntime` — `__str_copy` and the two `u8` load emitters. A byte blit and a byte load are Std-tier
 //     operations; both emitters were ALREADY exported for `GraphemeRuntime`, which is the two-files-own-
 //     the-one-spelling shape their own header claimed to prevent.
-//   * `ArrayRuntime.ByteStringElementSize` absorbed `StringElementSize`. Since the envelope collapse a
+//   * `ManagedMemoryRuntime.ByteStringElementSize` absorbed `StringElementSize`. Since the envelope collapse a
 //     String IS its `__ManagedMemory with Byte`, so its `element_size@24` is an `Array with Byte`'s — one
 //     number, and only the survivor carries a derivation anything checks.
 
@@ -82,7 +82,7 @@ export let StringRecordBytes = ManagedRecordBytes
 let StringFieldBytes = 8 as ByteCount
 
 // ⚠ **`StringElementSize = 1` STOOD HERE AND IS GONE (W49 wave 9).** It said *"a String's elements are
-// bytes"*, which since the envelope collapse is `ArrayRuntime.ByteStringElementSize` in other words — a
+// bytes"*, which since the envelope collapse is `ManagedMemoryRuntime.ByteStringElementSize` in other words — a
 // String IS its `__ManagedMemory with Byte`, so the stride its four producers stamp at `element_size@24`
 // IS an `Array with Byte`'s. Two constants held one number and only the survivor carried a derivation:
 // `ByteStringElementSize` is CHECKED against `ProgramSignatures.arrayElementSize`'s answer for that
@@ -216,8 +216,8 @@ let StringRecordPrefix = "__str_rec_"
 // slotting), but NOT `__mm_`-prefixed, so `isRuntimeCallee` leaves them out of the heap-runtime decision.
 //
 // ⚠⚠ **AND THAT NARROWNESS IS A MEASURED POLICY, NOT AN OVERSIGHT — see `MmRuntime.isRuntimeCallee`.**
-// Every W5-era runtime family declares `usesHeap` AND `usesArray` transitively, because its Std body calls
-// `__arr_create`/`__mm_alloc` one tier down. These two bodies call NOTHING: two loads and one system op.
+// Every W5-era runtime family declares `usesHeap` AND `usesManagedMemory` transitively, because its Std body calls
+// `__managed_create`/`__mm_alloc` one tier down. These two bodies call NOTHING: two loads and one system op.
 // Giving them a W5-shaped usage bit by reflex would drag the allocator and the leak gate into every
 // program that writes a byte to a stream.
 //
@@ -281,11 +281,11 @@ end 'integerToStringScratchBytes'
 // calls are not in the Maxon module — so a reference to it explicitly turns on `usesHeap`.
 //
 // ⚠ **`__str_append` STOOD BESIDE IT AND RETIRED WITH `String.append` (W49 wave 8).** The corpus body
-// appends through `managed.append(other.managed)`, which is `__arr_append` over the receiver's own record,
+// appends through `managed.append(other.managed)`, which is `__managed_append` over the receiver's own record,
 // so the String-specific grower had no producer left. Its two behaviours survive in the corpus rather than
 // being lost: the `singleByteGraphemesFlag` maintenance is the body's own `if`, and the GEOMETRIC growth it
-// spelled as `2 * requiredLen` is `__arr_grown_cap`'s, which `__arr_append` reaches through
-// `__arr_reserve`. That second one is load-bearing — exact growth made `var s = ""` plus a loop of appends
+// spelled as `2 * requiredLen` is `__managed_grown_cap`'s, which `__managed_append` reaches through
+// `__managed_reserve`. That second one is load-bearing — exact growth made `var s = ""` plus a loop of appends
 // quadratic, MEASURED at ×3.94 ×4.07 ×3.82 ×3.88 per doubling — so a retirement onto a runtime with no
 // growth policy would have restored the quadratic silently.
 export let StrDecrefName = b"__str_decref"
@@ -691,7 +691,7 @@ end 'buildStreamWrite'
 //
 // This is the bootstrap's `bytesEqual` (a length check, then a byte loop), NOT the enum `memcmp`
 // helper. It allocates nothing. Empty strings: length 0 == length 0 → the loop runs zero times →
-// return 1. The byte loop itself is `emitByteRangeCompareLoop` — shared with `__arr_eq`; see that emitter
+// return 1. The byte loop itself is `emitByteRangeCompareLoop` — shared with `__managed_eq`; see that emitter
 // for why it is a shared EMITTER and not a shared CALL.
 // ⭐ **IT RETURNS `bool`, NOT A MACHINE WORD, AND THE WITNESS SLOT IS WHY** (P1.7a slice 2b-iv-B). Under the
 // `String.equals` name this graph lands in an `Equatable` witness table, whose slot every dispatch site types
@@ -1082,7 +1082,7 @@ function buildStrDecref(module StdModule)
 	// String that detached is an OWNER (`capacity@16 >= 0`) and owes its own `buffer@0`; one whose bytes are
 	// inline (or in an immortal `.rdata` blob) has a negative capacity and leaves through the `parent@32`
 	// arm holding `NoOwedAllocation`, which the null guard inside the release step turns into an ordinary
-	// answer rather than a case. It is the SAME pair `__arr_decref` uses, so a String and an Array cannot
+	// answer rather than a case. It is the SAME pair `__managed_decref` uses, so a String and an Array cannot
 	// disagree about what a record owns.
 	let base = emitOwedAllocationBase(module, func: func, cur: release, join: baseJoin, record: record, ids: ids)
 	var afterRelease = emitReleaseOwedBase(module, func: func, cur: baseJoin, base: base, callee: MmDecrefName, ids: ids)
@@ -1247,7 +1247,7 @@ end 'buildStrRetain'
 // ⚠ **AND THE PER-BYTE COST OF THE MEMBER THIS GRAPH USED TO SERVE MOVED WITH THE BODY — RECORDED, NOT
 // CURED** (W55, and the same ruling the `findIn`/`sliceBytes` note at the head of this file carries). The
 // corpus's `scanSingleByteGraphemes` (`stdlib/String.maxon:1044-1053`) asks `managed.byteAt(i)` — a
-// throwing, bounds-checked accessor lowering to a `__arr_byte_at` CALL — once per byte, where the loop
+// throwing, bounds-checked accessor lowering to a `__managed_byte_at` CALL — once per byte, where the loop
 // below walks the same bytes with an inline indexed load. shv2 has no inliner, so that is a real call per
 // byte for every `String.from(bytes)` and every `String.init(managed)` in a program. ⛔ **THE LADDER
 // CANNOT SEE IT AND A Δ0 FROM IT IS NOT EVIDENCE**: the generated scale corpus emits neither call, so every
@@ -1267,8 +1267,8 @@ function buildStrFromBytes(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let arr = 0 as ValueId
 
-	let len = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: entry, record: arr, offset: ArrBufferOffset, ids: ids)
+	let len = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(scan.id))
 
@@ -1320,8 +1320,8 @@ end 'buildStrFromBytes'
 //
 // ⚠ **THE SOURCE IS READ THROUGH THE *ARRAY* SLOTS, AND THAT IS THE HONEST SPELLING RATHER THAN A COINCIDENCE
 // EXPLOITED.** Its argument is a `__ManagedMemory`, which in shv2 IS the array-shaped buffer record — what
-// `arr.managed` yields and what `managed.slice(…)` returns (`ArrayRuntime.emitViewRecordHead` builds it
-// through `__arr_create`). The two records agree at `buffer@0`/`length@8`, and `BufferOwnership`'s header
+// `arr.managed` yields and what `managed.slice(…)` returns (`ManagedMemoryRuntime.emitViewRecordHead` builds it
+// through `__managed_create`). The two records agree at `buffer@0`/`length@8`, and `BufferOwnership`'s header
 // says in so many words that *"the two sets coincide today and nothing here relies on that"* — so reading a
 // buffer through the buffer record's own constants is what keeps that true.
 function buildStrOfBuffer(module StdModule)
@@ -1333,8 +1333,8 @@ function buildStrOfBuffer(module StdModule)
 	let src = 0 as ValueId
 	let singleByteGraphemes = 1 as ValueId
 
-	let len = emitLoadField(module, block: entry, record: src, offset: ArrLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: entry, record: src, offset: ArrBufferOffset, ids: ids)
+	let len = emitLoadField(module, block: entry, record: src, offset: ManagedRecordLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: src, offset: ManagedRecordBufferOffset, ids: ids)
 	module.setTerminator(entry, op: StdOp.ret(emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: buf, srcLen: len, singleByteGraphemes: singleByteGraphemes)))
 
 	module.functions.push(func)
@@ -1355,8 +1355,8 @@ function buildMmToCString(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
-	let len = emitLoadField(module, block: entry, record: src, offset: ArrLengthOffset, ids: ids)
-	let buf = emitLoadField(module, block: entry, record: src, offset: ArrBufferOffset, ids: ids)
+	let len = emitLoadField(module, block: entry, record: src, offset: ManagedRecordLengthOffset, ids: ids)
+	let buf = emitLoadField(module, block: entry, record: src, offset: ManagedRecordBufferOffset, ids: ids)
 	let terminator = emitLoadByteIndexed(module, block: entry, base: buf, index: len, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	let isTerminated = emitCmp(module, block: entry, a: terminator, b: zero, pred: StdCmpPred.eq, ids: ids)
@@ -1382,7 +1382,7 @@ end 'buildMmToCString'
 // AN OWNED RECORD AROUND IT.** The corpus's body is `return managed` (`stdlib/String.maxon:181-183`) — hand
 // out this String's own buffer, do not copy it — and that is exactly what this does: a zero-copy
 // `Array with Byte` VIEW whose `buffer@0` IS the receiver's, built in O(1) through the same
-// `emitViewRecordHead`/`emitViewRecordTail` pair `__arr_slice` uses. Nothing is copied and the cost does not
+// `emitViewRecordHead`/`emitViewRecordTail` pair `__managed_slice` uses. Nothing is copied and the cost does not
 // depend on the length.
 //
 // ⚠⚠ **IT IS NOT THE STRING POINTER RETAGGED, AND THE REASON IS ONE SLOT.** A String record and an Array
@@ -1390,13 +1390,13 @@ end 'buildMmToCString'
 // (a String's is 1), `parent@32` (one shared `BufferOwnership` encoding) — and DISAGREE at `@40`, where a
 // String keeps `singleByteGraphemes` and an Array keeps `element_destroy`. Handing the String pointer to the array
 // dispatch would therefore make `urlBytes.slice(0, colonPos)` build a view whose `element_destroy@40` is the
-// source's ASCII FLAG, and `__arr_decref` would `callIndirect` address 1 on every element of an all-ASCII
+// source's ASCII FLAG, and `__managed_decref` would `callIndirect` address 1 on every element of an all-ASCII
 // slice. A URL is all-ASCII, so that is not a rare shape — it is every corpus call. A fresh record stamped
 // `element_destroy = TrivialDestructor` states the fact instead of inheriting a coincidence, and it costs
 // one 48-byte allocation for the whole `addressableBytes()` — the same allocation any `slice` already pays.
 //
 // ⛔⛔ **A WRITE THROUGH THIS VIEW DOES NOT REACH THE STRING, AND THIS BLOCK USED TO CALL THAT "SAFE".**
-// `capacity@16 = ViewBufferCapacity` sends every in-place mutator through `__arr_cow_detach` first, so a
+// `capacity@16 = ViewBufferCapacity` sends every in-place mutator through `__managed_cow_detach` first, so a
 // caller that writes gets a private copy of the bytes and the String is untouched — and since the view is
 // an owned TEMPORARY at every call site, that copy dies at statement end and the write is simply LOST. The
 // old note argued this was the safer of the two answers and rested on *"nothing in `stdlib/` writes through
@@ -1404,7 +1404,7 @@ end 'buildMmToCString'
 // retired `toLower`/`toUpper` onto the corpus, which made `mapAsciiCase` — and with it `String.setByte` —
 // reachable for the first time, and every case conversion in the suite returned its receiver verbatim.
 //
-// ⇒ **`String.setByte` NO LONGER COMES THROUGH HERE**; it hands `__arr_set_byte` the String's own record, so
+// ⇒ **`String.setByte` NO LONGER COMES THROUGH HERE**; it hands `__managed_set_byte` the String's own record, so
 // the detach asks about the STRING's provenance and the private copy it makes is the String's to keep. What
 // this door is for is READING: `addressableBytes()`'s four corpus call sites read, then `slice`. A future
 // writer must take the same route `setByte` now takes — the record — because a view cannot carry a write
@@ -1453,7 +1453,7 @@ end 'buildStrBytesView'
 // So: ask the shared question first, and answer this one only where it says "nothing".
 //
 //   * a non-zero owed base — a DETACHED String's own buffer, or a VIEW's shared base. Both are the
-//     allocation the bytes are in, and a view's flattens exactly as `emitArrayView`'s nesting note
+//     allocation the bytes are in, and a view's flattens exactly as `emitRecordView`'s nesting note
 //     describes, so no chain is built or walked.
 //   * `capacity@16 == RdataBufferCapacity` — an immortal blob, and the RECORD is in `.rdata` too, so there
 //     is nothing to count and nothing that MAY be counted (an incref of read-only memory faults). This is
@@ -1468,7 +1468,7 @@ end 'buildStrBytesView'
 // ⭐ **THE COUNT IS CORRECT IN BOTH DROP ORDERS, in every arm.** DETACHED: the view increfs `buffer@0` and
 // the String's own `__str_decref` decrefs the same address on its last-owner path, so whichever dies second
 // frees it. INLINE: the view increfs the RECORD, so `__str_decref` finds a non-zero count, lowers it and
-// keeps the record — and the view's `__arr_decref` then `__mm_decref`s it, which for an inline String is
+// keeps the record — and the view's `__managed_decref` then `__mm_decref`s it, which for an inline String is
 // exactly right because it owes nothing else. RDATA: nothing happens, twice.
 function emitStringBytesAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	var owedJoin = module.addBlock(func, label: b"bvowed")
@@ -1514,7 +1514,7 @@ end 'emitStringBytesAllocation'
 // once and derive the rest.
 //
 // Both members are `stdlib/String.maxon:266` and `:281` now, and their bodies forward to
-// `__ManagedMemory.byteAt`, whose own `__arr_byte_at` carries the identical bound and the identical
+// `__ManagedMemory.byteAt`, whose own `__managed_byte_at` carries the identical bound and the identical
 // `managedMemoryThrows()` clause. So the read did not lose its check; it moved to the one buffer entry point
 // that always had it.
 //

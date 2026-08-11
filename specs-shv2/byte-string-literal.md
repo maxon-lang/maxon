@@ -329,7 +329,7 @@ end 'main'
 <!-- test: byte-string-literal.push-grows-off-rdata -->
 
 Pushing onto a byte-string literal grows it off its immortal `.rdata` buffer: the original bytes are
-copied into a fresh heap buffer and the rdata blob is left unfreed — `__arr_grow` must honor the same
+copied into a fresh heap buffer and the rdata blob is left unfreed — `__managed_grow` must honor the same
 `capacity < 0` rdata sentinel the drop path does, or it `__mm_free`s a never-allocated `.rdata` address
 and the run reports a leak. The grown array then drops leak-free.
 ```maxon
@@ -544,13 +544,13 @@ a missed free leaks (exit 101) and a freed blob corrupts the allocator.
 
 ⚠ **ITS GOLDEN MOVED WHEN `stdlib/File.maxon` WAS WHITELISTED (R4.7), IN A PROGRAM THAT NEVER MENTIONS
 `File` — AND THE MOVE IS A MISSING CHECK NOW EMITTED, NOT A CODEGEN CHANGE.** MEASURED by an A/B with one
-variable, `detachAndRead` textually identical in both: with `Byte` UNDECLARED the slot before `__arr_set`
+variable, `detachAndRead` textually identical in both: with `Byte` UNDECLARED the slot before `__managed_set`
 holds `movRegReg rcx, r12`; with `typealias Byte = int(0 to u8.max)` declared it holds
 `cmpRegImm32 rbx, 0` / `cmpRegImm32 rbx, 255` / `mrt_panic`. Whitelisting `File.maxon` supplies
 `export typealias Byte = int(0 to u8.max)` (`:45`), so a `b"…"` literal's element has a DECLARED RANGE for
 the first time and `a.set(0, value: n)` — an `int` into a `Byte` slot — gets the narrowing guard it was
 silently missing. The golden diff is a PURE INSERTION: nothing is removed, nothing reordered, and the
-original `movRegReg rcx, r12` / `__arr_set` sequence survives verbatim under the new `__rc_ok` label.
+original `movRegReg rcx, r12` / `__managed_set` sequence survives verbatim under the new `__rc_ok` label.
 ```maxon
 function detachAndRead(n int) returns int
 		var a = b"hi"
@@ -637,7 +637,7 @@ unconditional), the growth check is then satisfied (`3 >= -2`) so nothing reallo
 from `buffer + n·element_size` — two bytes BELOW the freshly allocated private buffer — over the allocation
 header. Measured with the guard stubbed out: the process exits 0, the leak gate stays green, `capacity()`
 reads 3 and `count()` publishes -2. It aborts instead: a length can never be negative, and a corrupt
-operation must never proceed (the `__arr_create` zero-element-size and `__arr_append` element-size-mismatch
+operation must never proceed (the `__managed_create` zero-element-size and `__managed_append` element-size-mismatch
 shape).
 ```maxon
 function main() returns ExitCode

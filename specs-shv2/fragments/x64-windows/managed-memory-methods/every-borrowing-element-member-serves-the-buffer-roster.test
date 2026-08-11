@@ -29,22 +29,22 @@ func @main {
     x64.pushReg r14
     x64.prologue 32
     x64.movRegImm32 rcx, 8
-    x64.leaRegFunc rdx, [rip + __arr_decref]
-    x64.callDirect __arr_create
+    x64.leaRegFunc rdx, [rip + __managed_decref]
+    x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.leaRegRdata rcx, [rip + __str_rec_17]
     x64.callDirect String.toByteArray
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.leaRegRdata rcx, [rip + __str_rec_18]
     x64.callDirect String.toByteArray
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
-    x64.callDirect __arr_push
+    x64.callDirect __managed_push
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -52,7 +52,7 @@ func @main {
   tryerr:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
@@ -63,7 +63,7 @@ func @main {
     x64.ret
   tryok:
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_first
+    x64.callDirect __managed_first
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
@@ -71,7 +71,7 @@ func @main {
   tryerr:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
@@ -91,7 +91,7 @@ func @main {
   tryerr:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
@@ -102,13 +102,13 @@ func @main {
     x64.ret
   tryok:
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r13
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.leaRegRegReg r12, r12, r8
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.leaRegRegReg r12, r12, r8
     x64.cmpRegImm32 r12, 0
     x64.jcc less, __rc_panic
@@ -131,9 +131,9 @@ func @main {
     x64.ret
   __rc_ok:
     x64.movRegReg rcx, r14
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r14
@@ -154,7 +154,7 @@ func @Array.last {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, empty
     x64.jmp ifcont
@@ -170,7 +170,7 @@ func @Array.last {
   ifcont:
     x64.leaRegRegImm32 rdx, r8, -1
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_get
+    x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -211,14 +211,14 @@ func @String.toByteArray {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.movRegReg rax, r8
-    x64.callDirect __arr_slice
+    x64.callDirect __managed_slice
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_41]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -230,12 +230,12 @@ func @String.toByteArray {
     x64.ret
   tryok:
     x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
+    x64.callDirect __managed_decref
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r13
@@ -250,7 +250,7 @@ func @String.byteLength {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.callDirect __arr_count
+    x64.callDirect __managed_count
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

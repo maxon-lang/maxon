@@ -44,7 +44,7 @@ func @Bag.create {
     arm64.leaRdata x19, __str_rec_1
     arm64.movImm x0, 8
     arm64.leaFuncAddr x1, __str_decref
-    arm64.bl __arr_create
+    arm64.bl __managed_create
     arm64.movRegReg x20, x0
     arm64.loadRegBaseDisp.word64 x21, [x19 + 0]
     arm64.loadRegBaseDisp.word64 x19, [x19 + 8]
@@ -66,7 +66,7 @@ func @Bag.create {
     arm64.storeBaseDispReg.word64 [x22 + 24], x0
     arm64.movRegReg x0, x20
     arm64.movRegReg x1, x22
-    arm64.bl __arr_push
+    arm64.bl __managed_push
     arm64.movImm x0, 8
     arm64.movImm x1, 0
     arm64.bl __mm_alloc
@@ -83,7 +83,7 @@ func @Bag.create {
 func @wipe {
   entry:
     arm64.prologue 16
-    arm64.bl __arr_clear
+    arm64.bl __managed_clear
     arm64.epilogue 16
     arm64.ret
 }
@@ -108,7 +108,7 @@ func @main {
     arm64.b forhdr
   forhdr:
     arm64.movRegReg x0, x21
-    arm64.bl __arr_count
+    arm64.bl __managed_count
     arm64.cmp x20, x0
     arm64.cset x0, lt
     arm64.cbnz x0, scan
@@ -116,7 +116,7 @@ func @main {
   scan:
     arm64.movRegReg x0, x21
     arm64.movRegReg x1, x20
-    arm64.bl __arr_get_unchecked
+    arm64.bl __managed_get_unchecked
     arm64.loadRegBaseDisp.word64 x0, [x19 + 0]
     arm64.bl wipe
     arm64.add x22, x22, 1
