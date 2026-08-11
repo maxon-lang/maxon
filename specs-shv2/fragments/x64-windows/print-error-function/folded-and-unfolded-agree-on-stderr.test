@@ -31,10 +31,10 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.prologue 40
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.leaRegRdata rcx, [rip + __str_rec_127]
     x64.callDirect errFolded
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.leaRegRdata rcx, [rip + __str_rec_128]
     x64.callDirect errThroughABinding
     x64.leaRegRegReg r8, rbx, r8
     x64.cmpRegImm32 r8, 0
@@ -46,7 +46,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.leaRegRdata rcx, [rip + __str_blob_145]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -78,7 +78,7 @@ func @errThroughABinding {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.callDirect __str_bytes_view
+    x64.callDirect String.addressableBytes
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
     x64.callDirect __write_stderr
@@ -89,6 +89,17 @@ func @errThroughABinding {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.addressableBytes {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __str_bytes_view
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

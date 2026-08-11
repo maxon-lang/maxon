@@ -48,7 +48,7 @@ func @sleep {
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.leaRegRdata rax, [rip + __str_rec_2]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
     x64.movRegImm32 rcx, 20
@@ -99,7 +99,7 @@ func @sleep {
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.epilogue 72
@@ -120,6 +120,17 @@ func @main {
     x64.movRegImm32 rcx, 41
     x64.callDirect sleep
     x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

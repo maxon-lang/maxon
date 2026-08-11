@@ -47,14 +47,10 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 56
-    x64.leaRegRdata rbx, [rip + __str_rec_1]
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
-    x64.movRegReg r12, r8
+    x64.leaRegRdata rbx, [rip + __str_rec_10]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __str_to_bytes
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
     x64.callDirect __md_create
     x64.cmpRegImm32 r10, 0
@@ -63,20 +59,16 @@ func @main {
   tryerr:
     x64.movRegReg rcx, r12
     x64.callDirect __arr_decref
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
-    x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __str_to_bytes
-    x64.movRegReg rcx, r12
-    x64.callDirect __md_exists
+    x64.callDirect String.toByteArray
     x64.movRegReg rbx, r8
-    x64.xorRegImm32 rbx, r8, 1
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __md_exists
+    x64.movRegReg r12, r8
+    x64.xorRegImm32 r12, r8, 1
+    x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
-    x64.cmpRegImm32 rbx, 0
+    x64.cmpRegImm32 r12, 0
     x64.jcc notEqual, noScratchRoot
     x64.jmp ifcont
   noScratchRoot:
@@ -96,14 +88,10 @@ func @main {
     x64.callDirect __arr_decref
     x64.jmp trycont
   trycont:
-    x64.leaRegRdata rbx, [rip + __str_rec_3]
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
-    x64.movRegReg r12, r8
+    x64.leaRegRdata rbx, [rip + __str_rec_11]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __str_to_bytes
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
     x64.callDirect __md_exists
     x64.movRegReg r13, r8
@@ -114,13 +102,9 @@ func @main {
     x64.jcc notEqual, needCreate
     x64.jmp ifcont
   needCreate:
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
-    x64.movRegReg r12, r8
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __str_to_bytes
+    x64.callDirect String.toByteArray
+    x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
     x64.callDirect __md_create
     x64.cmpRegImm32 r10, 0
@@ -145,7 +129,7 @@ func @main {
   ifcont:
     x64.loadRegBaseDisp.word64 r12, [rbx + 0]
     x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
-    x64.leaRegRdata rax, [rip + __str_rec_5]
+    x64.leaRegRdata rax, [rip + __str_rec_12]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
@@ -165,29 +149,24 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot1
-    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rcx, slot1
+    x64.storeBaseDispReg.word64 [rcx + 0], r15
     x64.loadRegSlot rax, slot0
-    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.storeBaseDispReg.word64 [rcx + 8], rax
     x64.movRegImm rax, -3
-    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
     x64.movRegImm32 rax, 1
-    x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.movRegImm32 rcx, 1
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __arr_create
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __str_to_bytes
-    x64.movRegReg rcx, r12
-    x64.callDirect __md_open_search
+    x64.storeBaseDispReg.word64 [rcx + 24], rax
+    x64.callDirect String.toByteArray
     x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __md_open_search
+    x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
@@ -201,20 +180,20 @@ func @main {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect __arr_decref
     x64.loadRegSlot rcx, slot1
     x64.callDirect __str_decref
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __md_next
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegImm32 r12, 3
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 3
+    x64.movRegReg rcx, r12
     x64.callDirect __md_destruct
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -228,10 +207,10 @@ func @main {
     x64.jcc notEqual, emptyDirectoryHasNoRealEntry
     x64.jmp ifcont
   emptyDirectoryHasNoRealEntry:
-    x64.movRegImm32 r12, 4
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 4
+    x64.movRegReg rcx, r12
     x64.callDirect __md_destruct
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -241,16 +220,16 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __md_next
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.movRegImm32 r12, 5
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 5
+    x64.movRegReg rcx, r12
     x64.callDirect __md_destruct
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -264,10 +243,10 @@ func @main {
     x64.jcc notEqual, eofStaysEof
     x64.jmp ifcont
   eofStaysEof:
-    x64.movRegImm32 r12, 6
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 6
+    x64.movRegReg rcx, r12
     x64.callDirect __md_destruct
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
@@ -277,20 +256,83 @@ func @main {
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __md_close
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.callDirect __md_close
-    x64.movRegImm32 r12, 42
-    x64.movRegReg rcx, rbx
+    x64.movRegImm32 rbx, 42
+    x64.movRegReg rcx, r12
     x64.callDirect __md_destruct
-    x64.movRegReg r8, r12
+    x64.movRegReg r8, rbx
     x64.epilogue 56
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.toByteArray {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_bytes_view
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect __arr_slice
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.leaRegRdata rcx, [rip + __str_blob_25]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __arr_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __arr_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.byteLength {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __arr_count
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

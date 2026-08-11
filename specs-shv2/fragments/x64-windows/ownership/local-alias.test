@@ -106,7 +106,7 @@ func @testAlias {
     x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.loadRegSlot rax, slot0
@@ -151,7 +151,7 @@ func @testAlias {
     x64.loadRegSlot rcx, slot2
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.loadRegSlot rcx, slot0
@@ -173,6 +173,17 @@ func @main {
     x64.prologue 32
     x64.callDirect testAlias
     x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
     x64.epilogue 32
     x64.popReg rbp
     x64.ret

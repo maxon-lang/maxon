@@ -74,7 +74,10 @@ func @Box.echo {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.movRegReg r8, rdx
+    x64.prologue 32
+    x64.movRegReg rcx, rax
+    x64.callDirect __retain_type_param
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -102,11 +105,10 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect Alpha.create
     x64.movRegReg r14, r8
+    x64.leaRegRdata rax, [rip + __layout_Box_Alpha]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect Box.echo
-    x64.movRegReg rcx, r8
-    x64.callDirect __mm_retain
     x64.movRegReg r15, r8
     x64.movRegReg rcx, r14
     x64.callDirect __mm_decref

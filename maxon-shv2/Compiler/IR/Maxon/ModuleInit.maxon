@@ -120,17 +120,18 @@ end 'initialRecordOf'
 //     read of that literal in the program, so it is CLONED into a fresh owned heap String. `__str_clone`
 //     is the `(box) -> newBox` dual of the `__str_decref` the cleanup drops it with, so the pair balances
 //     by construction.
-//   • a **byte string** literal ALREADY materializes as an owned heap 48-byte `Array` record over an
-//     immortal `.rdata` blob (`lowerConstArrayLiteral`), which is precisely what the slot must hold — so
-//     there is nothing to clone. Its first receiver-writing method detaches the buffer off `.rdata`
-//     (`byte-string-literal.push-grows-off-rdata`), which is what makes a MUTABLE byte-string global work.
-//   • a **container** has no literal record at all (P1.7 slice 2b): the record is BUILT here, exactly as
-//     `Parser`'s body emitters build one — this instance's `create` with the stamps it fixes, then one
-//     `__arr_push` per folded element, of which an array LITERAL has some and every other container none.
+//   • a **constant array** literal — a `b"…"` byte string, or any all-constant `[…]` whose element stores
+//     its own bytes — ALREADY materializes as an owned heap 48-byte `Array` record over an immortal
+//     `.rdata` blob (`lowerConstArrayLiteral`), which is precisely what the slot must hold — so there is
+//     nothing to clone. Its first receiver-writing method detaches the buffer off `.rdata`
+//     (`byte-string-literal.push-grows-off-rdata`), which is what makes a MUTABLE one work.
+//   • a **container** with no constant image has no literal record at all (P1.7 slice 2b): the record is
+//     BUILT here, exactly as `Parser`'s body emitters build one — this instance's `create` with the stamps
+//     it fixes, then one `__arr_push` per folded element.
 function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueType MaxonType, range SourceRange) returns ValueId
 	return match build 'build'
 		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
-		byteStringRecord(bytes) gives ownedByteStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
+		constArrayRecord(elementSize, elementCount, bytes) gives ownedConstArrayRecord(fn, elementSize: elementSize, elementCount: elementCount, bytes: bytes, valueType: valueType, range: range)
 		containerRecord(create, elements) gives builtContainerRecord(fn, create: create, elements: elements, valueType: valueType, range: range)
 	end 'build'
 end 'builtRecord'
@@ -146,13 +147,15 @@ function clonedStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType M
 	return fn.emitPositionalCall(StrCloneName, args: singletonArgs(literal), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 end 'clonedStringRecord'
 
-// The byte-string arm: ONE op, because the literal's own materialization is already the owned heap
-// record the slot must hold.
-function ownedByteStringRecord(fn SynthesizedFunction, bytes ByteArray, valueType MaxonType, range SourceRange) returns ValueId
+// The constant-array arm: ONE op, because the literal's own materialization is already the owned heap
+// record the slot must hold. The stride and the element count ride the description rather than being
+// re-derived here — a `b"…"` fixes them from its bytes, an `[…]` from the instance it was typed by, and
+// neither is a fact this function could re-ask without picking one of the two to be authoritative.
+function ownedConstArrayRecord(fn SynthesizedFunction, elementSize ElementStride, elementCount ParsedInt, bytes ByteArray, valueType MaxonType, range SourceRange) returns ValueId
 	let record = fn.mintOfType(valueType)
-	fn.emit(MaxonOp.constArrayLiteral(record, elementSize: ByteStringElementSize, elementCount: bytes.count() as ParsedInt, bytes: bytes), range: range)
+	fn.emit(MaxonOp.constArrayLiteral(record, elementSize: elementSize, elementCount: elementCount, bytes: bytes), range: range)
 	return record
-end 'ownedByteStringRecord'
+end 'ownedConstArrayRecord'
 
 // ⭐ **A CONTAINER GLOBAL'S RECORD IS BUILT AT RUN TIME** (P1.7 slice 2b, every container since spec-port
 // `map-struct-bytearray`) — the ops `Parser`'s body emitters make for `[10, 20, 30]` or `MapAlias.create()`

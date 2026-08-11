@@ -55,7 +55,7 @@ func @build {
     x64.jcc less, fill
     x64.jmp forexit
   fill:
-    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.leaRegRdata rax, [rip + __str_rec_18]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot15, rcx
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
@@ -68,7 +68,7 @@ func @build {
     x64.movRegReg rdx, r15
     x64.callDirect __int_to_string
     x64.storeSlotReg slot12, r8
-    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __str_rec_19]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot10, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -132,7 +132,7 @@ func @build {
     x64.jcc less, read
     x64.jmp forexit
   read:
-    x64.leaRegRdata rax, [rip + __str_rec_1]
+    x64.leaRegRdata rax, [rip + __str_rec_18]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.movRegImm32 rcx, 21
@@ -143,7 +143,7 @@ func @build {
     x64.movRegReg rdx, r15
     x64.callDirect __int_to_string
     x64.storeSlotReg slot14, r8
-    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.leaRegRdata rax, [rip + __str_rec_19]
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
     x64.storeSlotReg slot11, rcx
     x64.loadRegBaseDisp.word64 rax, [rax + 8]
@@ -183,8 +183,9 @@ func @build {
     x64.storeBaseDispReg.word64 [r13 + 24], rax
     x64.movRegReg rcx, r15
     x64.callDirect __mm_decref
-    x64.leaRegRdata rax, [rip + __witness_String.Hashable]
-    x64.leaRegRdata r9, [rip + __witness_String.Equatable]
+    x64.leaRegRdata rax, [rip + __layout_Map_String_Count]
+    x64.leaRegRdata r9, [rip + __witness_String.Hashable]
+    x64.leaRegRdata rsi, [rip + __witness_String.Equatable]
     x64.loadRegSlot rcx, slot3
     x64.movRegReg rdx, r13
     x64.callDirect Map.get
@@ -265,7 +266,7 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 56
-    x64.leaRegRdata rax, [rip + __str_rec_5]
+    x64.leaRegRdata rax, [rip + __str_rec_20]
     x64.loadRegBaseDisp.word64 rbx, [rax + 0]
     x64.loadRegBaseDisp.word64 r12, [rax + 8]
     x64.movRegImm32 rcx, 200
@@ -321,6 +322,85 @@ func @main {
     x64.ret
 }
 
+func @hashString {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 5381
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg r13, r8
+    x64.movRegImm32 r14, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegReg r14, r13
+    x64.jcc less, hash_loop
+    x64.jmp forexit
+  hash_loop:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_34]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.imulRegRegImm32 rax, r12, 33
+    x64.leaRegRegReg rax, rax, r8
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.movRegReg r12, rax
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rax, 4294967295
+    x64.movRegReg r8, r12
+    x64.andRegReg r8, r12, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_64]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @spreadHash {
   entry:
     x64.pushReg rbp
@@ -335,7 +415,7 @@ func @spreadHash {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_15]
+    x64.leaRegRdata rcx, [rip + __str_blob_69]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -368,7 +448,7 @@ func @spreadHash {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_16]
+    x64.leaRegRdata rcx, [rip + __str_blob_70]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
@@ -462,7 +542,7 @@ func @Map.ensureCapacity {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 16
     x64.callDirect __arr_resize
-    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
     x64.movRegReg r15, r8
@@ -527,6 +607,7 @@ func @Map.insertAtSlot {
     x64.movRegReg r13, r9
     x64.movRegReg r14, rsi
     x64.loadRegBaseDisp.word64 rcx, [rbp + 48]
+    x64.loadRegBaseDisp.word64 rcx, [rbp + 56]
     x64.cmpRegImm32 r14, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -536,7 +617,7 @@ func @Map.insertAtSlot {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_17]
+    x64.leaRegRdata rcx, [rip + __str_blob_71]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -553,7 +634,7 @@ func @Map.insertAtSlot {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_8]
+    x64.leaRegRdata rcx, [rip + __str_blob_45]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -571,7 +652,7 @@ func @Map.insertAtSlot {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_9]
+    x64.leaRegRdata rcx, [rip + __str_blob_46]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -589,7 +670,7 @@ func @Map.insertAtSlot {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_10]
+    x64.leaRegRdata rcx, [rip + __str_blob_47]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -607,7 +688,7 @@ func @Map.insertAtSlot {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_11]
+    x64.leaRegRdata rcx, [rip + __str_blob_48]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg r14
@@ -641,24 +722,24 @@ func @Map.upsert {
     x64.prologue 72
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.storeSlotReg slot2, rax
-    x64.storeSlotReg slot1, r9
-    x64.movRegReg r13, rsi
-    x64.storeSlotReg slot0, r13
-    x64.movRegReg r14, rdi
+    x64.storeSlotReg slot1, rax
+    x64.movRegReg r13, r9
+    x64.movRegReg r14, rsi
+    x64.movRegReg r15, rdi
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r9
-    x64.movRegReg rax, r13
-    x64.movRegReg r9, r14
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.movRegReg r9, r15
     x64.callDirect Map.ensureCapacity
     x64.movRegReg rcx, r12
-    x64.callMem [r13 + 24]
-    x64.movRegReg r15, r8
+    x64.callMem [r14 + 24]
+    x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.movRegReg rax, r15
+    x64.movRegReg rax, r8
     x64.movRegReg r9, r13
     x64.movRegReg rsi, r14
+    x64.movRegReg rdi, r15
     x64.callDirect Map.findSlot
     x64.cmpRegImm32 r8, 0
     x64.jcc greaterEqual, found
@@ -666,13 +747,13 @@ func @Map.upsert {
   found:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegReg rdx, r8
-    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rax, slot1
     x64.callDirect __arr_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_12]
+    x64.leaRegRdata rcx, [rip + __str_blob_49]
     x64.callDirect mrt_panic
     x64.epilogue 72
     x64.popReg r15
@@ -683,7 +764,7 @@ func @Map.upsert {
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.loadRegSlot rcx, slot1
+    x64.movRegReg rcx, r13
     x64.movRegReg rdx, r12
     x64.callDirect __drop_type_param
     x64.epilogue 72
@@ -698,11 +779,12 @@ func @Map.upsert {
     x64.leaRegRegImm32 rdx, r8, 1
     x64.negReg rdx, rdx
     x64.storeBaseDispReg.word64 [rsp + 32], r14
+    x64.storeBaseDispReg.word64 [rsp + 40], r15
     x64.movRegReg rcx, rbx
     x64.movRegReg rax, r12
-    x64.loadRegSlot r9, slot2
-    x64.movRegReg rsi, r15
-    x64.loadRegSlot rdi, slot0
+    x64.loadRegSlot r9, slot1
+    x64.loadRegSlot rsi, slot0
+    x64.movRegReg rdi, r13
     x64.callDirect Map.insertAtSlot
     x64.epilogue 72
     x64.popReg r15
@@ -722,18 +804,21 @@ func @Map.get {
     x64.pushReg r12
     x64.pushReg r13
     x64.pushReg r14
-    x64.prologue 32
+    x64.pushReg r15
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
     x64.movRegReg r14, r9
+    x64.movRegReg r15, rsi
     x64.movRegReg rcx, r12
-    x64.callMem [r13 + 24]
+    x64.callMem [r14 + 24]
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.movRegReg rax, r8
     x64.movRegReg r9, r13
     x64.movRegReg rsi, r14
+    x64.movRegReg rdi, r15
     x64.callDirect Map.findSlot
     x64.cmpRegImm32 r8, 0
     x64.jcc greaterEqual, found
@@ -746,8 +831,12 @@ func @Map.get {
     x64.jcc equal, get_value
     x64.jmp ifelse
   get_value:
+    x64.leaRegRegImm32 rcx, r13, 72
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -762,7 +851,8 @@ func @Map.get {
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg r15
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
@@ -793,7 +883,7 @@ func @Map.findSlot {
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegReg r13, rax
-    x64.storeSlotReg slot3, rsi
+    x64.storeSlotReg slot3, rdi
     x64.cmpRegImm32 r13, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
@@ -803,7 +893,7 @@ func @Map.findSlot {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_18]
+    x64.leaRegRdata rcx, [rip + __str_blob_72]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -1078,11 +1168,11 @@ func @Map.grow {
     x64.prologue 168
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
-    x64.storeSlotReg slot5, r12
-    x64.storeSlotReg slot3, rax
-    x64.storeSlotReg slot4, r9
+    x64.storeSlotReg slot7, r12
+    x64.storeSlotReg slot6, rax
+    x64.storeSlotReg slot5, r9
     x64.loadRegBaseDisp.word64 rax, [rbx + 40]
-    x64.storeSlotReg slot11, rax
+    x64.storeSlotReg slot13, rax
     x64.imulRegRegImm32 r13, rax, 2
     x64.cmpRegImm32 r13, 0
     x64.jcc equal, handle_zero
@@ -1093,7 +1183,7 @@ func @Map.grow {
   critsplit:
     x64.jmp ifcont
   ifcont:
-    x64.storeSlotReg slot12, r13
+    x64.storeSlotReg slot4, r13
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [r12 + 40]
     x64.callDirect __arr_create
@@ -1108,7 +1198,7 @@ func @Map.grow {
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.callDirect __arr_resize
-    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
     x64.storeSlotReg slot14, r8
@@ -1124,16 +1214,16 @@ func @Map.grow {
     x64.callDirect __arr_resize
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __mm_retain
-    x64.storeSlotReg slot9, r8
+    x64.storeSlotReg slot11, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.callDirect __mm_retain
-    x64.storeSlotReg slot8, r8
+    x64.storeSlotReg slot10, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 16]
     x64.callDirect __mm_retain
-    x64.storeSlotReg slot10, r8
+    x64.storeSlotReg slot12, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
     x64.callDirect __mm_retain
-    x64.storeSlotReg slot7, r8
+    x64.storeSlotReg slot9, r8
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __arr_decref
     x64.storeBaseDispReg.word64 [rbx + 0], r14
@@ -1147,7 +1237,7 @@ func @Map.grow {
     x64.loadRegBaseDisp.word64 rcx, [rbx + 24]
     x64.callDirect __arr_decref
     x64.storeBaseDispReg.word64 [rbx + 24], r15
-    x64.loadRegSlot rax, slot12
+    x64.loadRegSlot rax, slot4
     x64.storeBaseDispReg.word64 [rbx + 40], rax
     x64.movRegImm32 rcx, 0
     x64.storeBaseDispReg.word64 [rbx + 32], rcx
@@ -1156,12 +1246,12 @@ func @Map.grow {
     x64.jmp forhdr
   forhdr:
     x64.storeSlotReg slot0, r13
-    x64.loadRegSlot rax, slot11
+    x64.loadRegSlot rax, slot13
     x64.cmpRegReg r13, rax
     x64.jcc less, rehash
     x64.jmp forexit
   rehash:
-    x64.loadRegSlot rcx, slot10
+    x64.loadRegSlot rcx, slot12
     x64.movRegReg rdx, r13
     x64.callDirect __arr_get
     x64.cmpRegImm32 r10, 0
@@ -1199,7 +1289,7 @@ func @Map.grow {
     x64.jcc notEqual, occupied
     x64.jmp ifcont
   occupied:
-    x64.loadRegSlot rcx, slot9
+    x64.loadRegSlot rcx, slot11
     x64.movRegReg rdx, r13
     x64.callDirect __arr_get
     x64.movRegReg r14, r8
@@ -1209,7 +1299,7 @@ func @Map.grow {
   tryerr:
     x64.jmp forstep
   tryok:
-    x64.loadRegSlot rcx, slot8
+    x64.loadRegSlot rcx, slot10
     x64.movRegReg rdx, r13
     x64.callDirect __arr_get
     x64.movRegReg r15, r8
@@ -1219,10 +1309,10 @@ func @Map.grow {
   tryerr:
     x64.jmp forstep
   tryok:
-    x64.loadRegSlot rcx, slot7
+    x64.loadRegSlot rcx, slot9
     x64.movRegReg rdx, r13
     x64.callDirect __arr_get
-    x64.storeSlotReg slot6, r8
+    x64.storeSlotReg slot3, r8
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr
     x64.jmp tryok
@@ -1270,7 +1360,7 @@ func @Map.grow {
     x64.loadRegSlot rcx, slot2
     x64.jmp whilehdr
   whilehdr:
-    x64.storeSlotReg slot13, rcx
+    x64.storeSlotReg slot8, rcx
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, find_slot
     x64.jmp whileexit
@@ -1315,7 +1405,7 @@ func @Map.grow {
     x64.jmp whilehdr
   matchdead:
   whileexit:
-    x64.loadRegSlot r13, slot5
+    x64.loadRegSlot r13, slot7
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r14
     x64.callDirect __retain_type_param
@@ -1323,14 +1413,16 @@ func @Map.grow {
     x64.leaRegRegImm32 rcx, r13, 72
     x64.movRegReg rdx, r15
     x64.callDirect __retain_type_param
-    x64.loadRegSlot rax, slot4
+    x64.loadRegSlot rax, slot6
     x64.storeBaseDispReg.word64 [rsp + 32], rax
+    x64.loadRegSlot rax, slot5
+    x64.storeBaseDispReg.word64 [rsp + 40], rax
     x64.movRegReg rcx, rbx
-    x64.loadRegSlot rdx, slot13
+    x64.loadRegSlot rdx, slot8
     x64.movRegReg rax, r14
     x64.movRegReg r9, r8
-    x64.loadRegSlot rsi, slot6
-    x64.loadRegSlot rdi, slot3
+    x64.loadRegSlot rsi, slot3
+    x64.movRegReg rdi, r13
     x64.callDirect Map.insertAtSlot
     x64.jmp ifcont
   matchdead:
@@ -1343,13 +1435,13 @@ func @Map.grow {
     x64.jmp forhdr
   matchdead:
   forexit:
-    x64.loadRegSlot rcx, slot7
+    x64.loadRegSlot rcx, slot9
+    x64.callDirect __arr_decref
+    x64.loadRegSlot rcx, slot12
     x64.callDirect __arr_decref
     x64.loadRegSlot rcx, slot10
     x64.callDirect __arr_decref
-    x64.loadRegSlot rcx, slot8
-    x64.callDirect __arr_decref
-    x64.loadRegSlot rcx, slot9
+    x64.loadRegSlot rcx, slot11
     x64.callDirect __arr_decref
     x64.epilogue 168
     x64.popReg r15
@@ -1394,7 +1486,7 @@ func @__fieldDefault#Map#states {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.prologue 32
-    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
     x64.epilogue 32
@@ -1426,72 +1518,197 @@ func @print {
     x64.ret
 }
 
+func @String.byteLength {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __arr_count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.byteAt {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __arr_byte_at
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_73]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
 func @String.hash {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
-    x64.movRegImm32 rdx, 5381
-    x64.movRegImm32 rsi, 0
-    x64.jmp header
-  header:
-    x64.cmpRegReg rsi, rcx
-    x64.jcc greaterEqual, done
-    x64.jmp body
-  done:
-    x64.movRegImm32 rax, 4294967295
-    x64.movRegReg r8, rdx
-    x64.andRegReg r8, rdx, rax
+    x64.prologue 32
+    x64.callDirect hashString
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
-  body:
-    x64.leaRegRegReg rdi, rax, rsi
-    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
-    x64.movRegImm32 r8, 33
-    x64.imulRegReg rdx, rdx, r8
-    x64.leaRegRegReg rdx, rdx, rdi
-    x64.movRegImm32 rdi, 1
-    x64.leaRegRegReg rsi, rsi, rdi
-    x64.jmp header
 }
 
 func @String.equals {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 rax, [rcx + 8]
-    x64.loadRegBaseDisp.word64 rsi, [rdx + 8]
-    x64.cmpRegReg rax, rsi
-    x64.jcc equal, lenMatch
-    x64.jmp notEqual
-  lenMatch:
-    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
-    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
-    x64.movRegImm32 rsi, 0
-    x64.jmp cmphdr
-  cmphdr:
-    x64.cmpRegReg rsi, rax
-    x64.jcc greaterEqual, allMatch
-    x64.jmp cmpbody
-  allMatch:
-    x64.movRegImm32 r8, 1
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect String.byteLength
+    x64.cmpRegReg r13, r8
+    x64.jcc notEqual, lenMismatch
+    x64.jmp ifcont
+  lenMismatch:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  cmpbody:
-    x64.leaRegRegReg rdi, rcx, rsi
-    x64.loadRegBaseDisp.byte rdi, [rdi + 0]
-    x64.leaRegRegReg r8, rdx, rsi
-    x64.loadRegBaseDisp.byte r8, [r8 + 0]
-    x64.movRegImm32 r9, 1
-    x64.leaRegRegReg rsi, rsi, r9
-    x64.cmpRegReg rdi, r8
-    x64.jcc equal, critsplit
-    x64.jmp notEqual
-  critsplit:
-    x64.jmp cmphdr
-  notEqual:
+  ifcont:
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rax, r12
+    x64.movRegReg rsi, r13
+    x64.callDirect bytesEqual
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @bytesEqual {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.storeSlotReg slot2, rax
+    x64.movRegReg r13, r9
+    x64.movRegReg r14, rsi
+    x64.movRegImm32 r15, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.storeSlotReg slot0, r15
+    x64.cmpRegReg r15, r14
+    x64.jcc less, compare_loop
+    x64.jmp forexit
+  compare_loop:
+    x64.leaRegRegReg rdx, r12, r15
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteAt
+    x64.storeSlotReg slot1, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_53]
+    x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.leaRegRegReg rdx, r13, r15
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect String.byteAt
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_blob_54]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegSlot rax, slot1
+    x64.cmpRegReg rax, r8
+    x64.jcc notEqual, byte_check
+    x64.jmp ifcont
+  byte_check:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.jmp forstep
+  forstep:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.movRegReg r15, rax
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

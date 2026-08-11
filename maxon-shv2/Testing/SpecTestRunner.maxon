@@ -2890,44 +2890,79 @@ function compareLinkedSection(pin SpecSectionPin, exePath FilePath, effectiveTar
 		return TestOutcome.fail("could not read the {sectionName} section of {exePath.toString()}: {e.displayReason()}")
 	end 'noSection'
 
-	// ⚠ **A PREFIX FROM BYTE 0, NOT AN EQUALITY**, and the reference draws the line in the same place and
-	// says why: "the data section may contain additional runtime globals (e.g. green thread scheduler
-	// state) after the user data". shv2's `.data` holds only user globals TODAY, so a prefix check
-	// and an equality check agree on every current case — but the runtime that grows into this
-	// section (P1.5's scheduler) would break equality on every one of these six specs at once,
-	// for a change that says nothing about the property they pin.
-	//
-	// ⛔⛔ **AND FOR `.rdata` A PREFIX IS NOT WHAT IT SOUNDS LIKE: IT PINS THE FIRST PAYLOAD REGISTERED, NOT
-	// THE ONE THE SPEC IS ABOUT.** This block used to end "a spec pins the payload it is about rather than
-	// everything that shares the section", which describes a LABEL-ANCHORED read — and there is no label
-	// lookup here. `.rdata` is a concatenation in REGISTRATION order (`GlobalDataTable.appendRdataPayload`),
-	// several producers register during one `lowerMaxonToStd` walk in op order (a string literal's blob AND
-	// its 48-byte record, a witness table, a `__layout_*` descriptor, another constant array blob), and
-	// `insertRangeChecks`'s panic messages follow them. ⇒ **a `RequiredRdata` pin passes only while the blob
-	// it means is FIRST IN THE WHOLE SECTION**, so adding one `print("x")` above the array literal in an
-	// existing case breaks that case's pin, and the message points at the blob rather than at the string
-	// that displaced it. Every case pinning `.rdata` today (`ranged-int-bit-packing`'s three,
-	// `enum-narrow-storage`'s six) is written with no string literal, no `print` and no generic-body call
-	// for exactly this reason — a property of those programs, held by nothing.
-	//
-	// ⇒ **THE FIX IS A LABEL-ANCHORED READ** — `readLinkedSection` already has `rdataOffsetOf(label)` to
-	// build one on — and it is deliberately NOT taken here: it moves what those nine existing pins mean, so
-	// it is a harness rung with its own goldens rather than a line in whichever spec next trips over this.
-	// Until then this comment, and the note beside each `RequiredRdata` block, are the warning.
+	// ⭐⭐ **THE TWO PIN FORMS ARE COMPARED DIFFERENTLY, AND `SectionPinExpectation` CARRIES THE REASON**:
+	// scalar/array lines describe fields of ONE payload (contiguous by construction, so their position is
+	// part of the claim), while each `utf8` line names one separately-registered interned blob (whose
+	// neighbours are an artifact of registration order, so its position is not).
+	return match expected 'form'
+		contiguousRun(bytes) gives compareSectionPrefix(bytes, actual: actual, sectionName: sectionName)
+		locatedPayloads(payloads) gives locateSectionPayloads(payloads, actual: actual, sectionName: sectionName)
+	end 'form'
+end 'compareLinkedSection'
+
+// ⚠ **A PREFIX FROM BYTE 0, NOT AN EQUALITY**, and the reference draws the line in the same place and
+// says why: "the data section may contain additional runtime globals (e.g. green thread scheduler
+// state) after the user data". shv2's `.data` holds only user globals TODAY, so a prefix check
+// and an equality check agree on every current case — but the runtime that grows into this
+// section (P1.5's scheduler) would break equality on every one of these six specs at once,
+// for a change that says nothing about the property they pin.
+//
+// ⚠ **A PREFIX PINS THE FIRST PAYLOAD REGISTERED, WHICH IS A REAL CONSTRAINT ON THE PROGRAMS THAT MAY USE
+// THIS FORM.** `.rdata` is a concatenation in REGISTRATION order (`GlobalDataTable.appendRdataPayload`), so
+// a second program literal written ABOVE the pinned one displaces it and the message points at the pinned
+// blob rather than at the literal that moved it. Two things hold it in place today, and only the first is
+// this file's: `LowerMaxonToStd.registerProgramLiteralBlobs` registers every blob the SOURCE names ahead of
+// everything the COMPILER composes (panic messages, String records, layout descriptors, witness tables,
+// float islands), which is v1's own guarantee; and each pinning case is written with one program literal.
+//
+// ⛔⛔ **THIS BLOCK USED TO PRESCRIBE A LABEL-ANCHORED READ. THAT ROUTE WAS MEASURED AND IT IS NOT THE
+// ANSWER — do not spend a day on it.** Two findings killed it:
+//   • **it cannot express what the failing case needed.** `codegen-internals`'
+//     `managed-string-reassignment-handles-old-value` pins TWO blobs that shv2 places at 0 and 80 with a
+//     48-byte String record and 3 bytes of padding between them. An anchor names one offset; the pin needed
+//     two payloads found independently, which is a different mechanism.
+//   • **segregating `.rdata` into a blob region and a record region — the other candidate — BREAKS
+//     `rdata-section`.** Measured: that spec's own image is its `__layout_Sizer_bool` descriptor (72 bytes)
+//     followed by a range-check panic BLOB (80). Blob-region-first puts the panic text at offset 0 and the
+//     descriptor at 80, so its committed pin would have had to change its expected bytes.
+// ⇒ **What was adopted instead** (user ruling) is the per-form split above: `utf8` lines are LOCATED
+// independently and in order; scalar and array lines keep this prefix rule exactly. `specs-shv2/
+// rdata-section.md` states the rule and carries the case that defends it.
+function compareSectionPrefix(expected ByteArray, actual ByteArray, sectionName String) returns TestOutcome
 	if actual.count() < expected.count() 'tooShort'
 		return TestOutcome.fail("{sectionName} is shorter than the pin claims\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
 	end 'tooShort'
 
 	for i in 0 upto expected.count() 'eachByte'
-		let e = try expected.get(i) otherwise panic("compareLinkedSection: expected.get OOB at {i} despite the upto bound")
-		let a = try actual.get(i) otherwise panic("compareLinkedSection: actual.get OOB at {i} — the length was checked above")
+		let e = try expected.get(i) otherwise panic("compareSectionPrefix: expected.get OOB at {i} despite the upto bound")
+		let a = try actual.get(i) otherwise panic("compareSectionPrefix: actual.get OOB at {i} — the length was checked above")
 		if e != a 'differs'
 			return TestOutcome.fail("{sectionName} mismatch at byte {i}: expected 0x{hexByte(e)}, got 0x{hexByte(a)}\n    expected ({expected.count()} bytes): {formatHexBytes(expected)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
 		end 'differs'
 	end 'eachByte'
 
 	return TestOutcome.pass
-end 'compareLinkedSection'
+end 'compareSectionPrefix'
+
+// ⭐⭐ **EACH `utf8` PAYLOAD FOUND ON ITS OWN, IN ORDER — the form that pins CONTENT and SEQUENCE without
+// pinning adjacency.** A blob's neighbours are decided by what else registered around it, which is a fact
+// about the rest of the program rather than about the string being pinned; its BYTES and its ORDER relative
+// to the block's other blobs are the claims a spec can honestly make, and they are exactly what this checks.
+//
+// The search for payload `n` starts at the END of payload `n-1`'s match, so the pin's order is a real
+// constraint: two blobs written in one order do not pass if the image places them in the other. It is
+// deliberately not an "anywhere" containment — that would let a re-ordered image pass unnoticed.
+function locateSectionPayloads(payloads ByteArrayArray, actual ByteArray, sectionName String) returns TestOutcome
+	var searchFrom = 0 as ByteOffset
+	for (iter, payload) in payloads.withIterator() 'eachPayload'
+		match findByteRun(actual, needle: payload, from: searchFrom) 'located'
+			found(offset) then searchFrom = offset + payload.count()
+			absent then return TestOutcome.fail("{sectionName} does not hold payload {iter.index() + 1} of {payloads.count()} at or after byte {searchFrom}\n    expected ({payload.count()} bytes): {formatHexBytes(payload)}\n    actual   ({actual.count()} bytes): {formatHexBytes(actual)}")
+		end 'located'
+	end 'eachPayload'
+
+	return TestOutcome.pass
+end 'locateSectionPayloads'
 
 // The stderr half of a run expectation.
 //

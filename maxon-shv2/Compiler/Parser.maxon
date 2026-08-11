@@ -2334,6 +2334,41 @@ union CursorEntrySeed
 	fromFactory(flag ValueId)
 end 'CursorEntrySeed'
 
+// ⭐ **WHERE A `[…]`'s ELEMENT TYPE COMES FROM.** Every bare array literal INFERS it from its own first
+// element; an `<alias> from […]` head STATES it, and stating it is the whole of what that spelling adds —
+// `typealias ByteArray = Array with Byte` then `ByteArray from [10, 20, 30]` writes three bare `int`
+// constants, and only the head says they are `Byte`s stored one byte apart.
+//
+// A union rather than an "instance id, or zero for none": zero IS an instance id, so the two answers have
+// to differ in KIND and not in a number the registry could legitimately hand back.
+union ArrayLiteralElementSource
+	inferred
+	stated(giid GenericInstanceId)
+end 'ArrayLiteralElementSource'
+
+// Is the literal's element type still open — the question the MAP-literal fork asks, which is the one place
+// the two arms differ before the instance is in hand. A `match` arm may not open a block, so the fork reads
+// it as the predicate it is.
+// ⭐ **WHY AN EMPTY `[…]` IS REFUSED, WHICH IS NOT THE SAME SENTENCE UNDER THE TWO HEADS.** A bare `[]` has
+// no element to infer a type FROM; `ByteArray from []` states the type perfectly well and is refused for a
+// different reason — an empty literal builds no record this path knows how to make, and the container's own
+// `.create()` is the spelling for it. Blaming inference under a stated head named a fault the author had
+// already avoided.
+function emptyArrayLiteralMessage(element ArrayLiteralElementSource) returns String
+	if elementSourceIsInferred(element) 'nothingToInferFrom'
+		return "an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array"
+	end 'nothingToInferFrom'
+
+	return "an empty array literal `[]` under a `from` head — the element type is stated, but an empty literal builds no record; use the container's own `.create()` for an empty typed array"
+end 'emptyArrayLiteralMessage'
+
+function elementSourceIsInferred(element ArrayLiteralElementSource) returns bool
+	return match element 'e'
+		inferred gives true
+		stated gives false
+	end 'e'
+end 'elementSourceIsInferred'
+
 // ⭐⭐ **HOW A VALUE'S METHODS ARE REACHED — the one fact the `for … in` ADMISSION tests, its two EMITS and
 // the generic-result promotion all need, and they must not answer it separately.** A value either declares
 // its methods on a type whose bodies exist (a direct call), or carries a witness table it dispatches through,
@@ -6119,7 +6154,7 @@ function escapeByte(c Byte) returns EscapeByte
 	if c == DigitZero 'nul'
 		return EscapeByte.byte(NulByte)
 	end 'nul'
-	// The four self-escapes: a backslash, and the three delimiters a literal must be able
+	// The self-escapes: a backslash, and the delimiters a literal must be able
 	// to contain — the single quote that would close a character literal, the double quote
 	// that would close a string, and the brace that would open an interpolation.
 	if c == Backslash or c == SingleQuote or c == DoubleQuote or c == LeftBrace or c == RightBrace 'selfEscape'
@@ -10225,6 +10260,22 @@ export type Parser
 	function atListFromConstruction() returns bool
 		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.current().value.equals(ListBuiltinBaseName)
 	end 'atListFromConstruction'
+
+	// Is the cursor on an `<alias> from` ARRAY construction — a name that aliases an `Array` INSTANCE,
+	// immediately followed by `from`? `atSetFromConstruction`'s ALIAS half, and ONLY that half: a bare
+	// `Array from […]` would state nothing the literal does not already carry, so it keeps falling through to
+	// `E2004 Undefined variable 'Array'` exactly as `List`'s and `Vector`'s alias forms do.
+	//
+	// ⚠ **IT IS DELIBERATELY NOT READ BY THE DECLARATION SWEEP, WHERE THE THREE PREDICATES ABOVE ARE.** Those
+	// are shared because a BARE base name (`Set from [1, 2]`) mints an instance no declaration in the program
+	// spells, so the sweep has to pre-intern it off the token shape or the parser's own read becomes the first
+	// write to the shared registry. An alias head cannot be in that position: the instance it names was
+	// interned by its own `typealias ByteArray = Array with Byte`, which the ordinary declaration fold
+	// registers whole-program before any function body is parsed. There is nothing here for a sweep to
+	// pre-intern.
+	function atArrayFromConstruction() returns bool
+		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.from and self.namesArrayInstanceAlias(self.current().value)
+	end 'atArrayFromConstruction'
 
 	// ⭐ **IS THE CURSOR ON A `<Type> from "…"` LITERAL CONSTRUCTION?** — the `InitableFromStringLiteral`
 	// sugar, which is how `/specs` spells nearly every `FilePath` in the corpus (128 occurrences, and 31 of
@@ -18938,6 +18989,20 @@ export type Parser
 		return self.signatures.aliasOf(self.internedName(nameId), readerFilePath: self.filePath)
 	end 'declaredAliasOfNameId'
 
+	// ⭐ **THE SAME QUESTION ASKED OF AN INDEX-SPACE TYPE** — one read out of `ProgramSignatures` (a
+	// container's element, an instance's substituted argument) rather than minted by this file's parse. Same
+	// registry probe, DIFFERENT INTERNER, and the difference is not cosmetic: the id means one name in the
+	// index's table and whatever name that NUMBER happens to hold in this file's. `indexSpaceTypeName` carries
+	// the general measurement; the concrete one here is that `[10 as Byte, 20 as Byte, 30 as Byte]` panicked
+	// `internedName` outright the moment the element door was routed through `declaredAliasOfType` above.
+	function declaredAliasOfIndexSpaceType(indexSpaceType MaxonType) returns DeclaredAlias
+		if maxonTypeTag(indexSpaceType) != ValueTypeTag.named 'spellsNoAlias'
+			return DeclaredAlias.undeclared
+		end 'spellsNoAlias'
+
+		return self.signatures.aliasOf(self.signatures.indexSpaceTypeName(indexSpaceType), readerFilePath: self.filePath)
+	end 'declaredAliasOfIndexSpaceType'
+
 	// The ranged-alias name a `(tag, nameId)` pair denotes, else EMPTY — the spelling of the question above
 	// for the two readers that want a NAME rather than the alias: the range-check sites, which store one
 	// (`commitRangeChecks`), and the EXPECTED side of an argument refusal (`declaredSlotDisplayName`), which
@@ -24447,7 +24512,7 @@ export type Parser
 		// `desugarTry`. Both literal kinds are enrolled together — accepting one and not the other would
 		// reject a legal `try b"…".get(…)` as "not a call".
 		if self.at(TokenKind.leftBracket) 'arrayLiteralTarget'
-			return try self.parseArrayLiteral(func)
+			return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 		end 'arrayLiteralTarget'
 		if self.at(TokenKind.byteStringLiteral) 'byteStringLiteralTarget'
 			return try self.parseByteStringLiteral()
@@ -36008,21 +36073,10 @@ export type Parser
 		// DIFFERENT aggregate; letting such a cast reach the float/no-op branches below would emit a
 		// `promoteToFloat` or a range check on a POINTER, or leave a mismatched drop (a String drop run on a
 		// struct box — a double free). See `castHasNoLegalConversion` and `ParseError.invalidCast`.
+		// ⭐ The legality guards are NOT here — they moved INTO `convertValueToDeclaredType` with the
+		// conversion they protect, so the second position that performs this conversion cannot be given
+		// fewer of them than this one. See that function's ⛔⛔ block.
 		let sourceTag = self.tagOf(value)
-		let targetTag = try self.castTargetTag(targetType, asTok: asTok)
-		try self.requireCastSourceIsNotEnum(value, targetTag: targetTag, asTok: asTok)
-		try self.requireCastKindsConvert(sourceTag, targetTag: targetTag, asTok: asTok)
-
-		// ⭐ **A FUNCTION-TO-FUNCTION CAST IS THE ONE `requireCastKindsConvert` LETS THROUGH UNEXAMINED.**
-		// Both ends are `TypeClass.function`, so `castHasNoLegalConversion` sees the same class and stands
-		// aside, and the value then falls all the way to the representational no-op at the end of this
-		// function — untouched, and now claiming to be a function type it may share nothing with but its
-		// tag. `intish as FloatFn` compiled clean and the integer `intish` returns was read back out of the
-		// float return register. The id `castTargetTag` discards is exactly what names the target's
-		// signature, which is why this reads `targetType` and not the reduced tag.
-		if isFunctionTypeDoor(targetTag, got: sourceTag) 'functionTypeDoor'
-			self.recordFunctionTypeDoor(typeNameIdOf(targetType), gotNameId: self.valueNameId(value), door: FunctionTypeDoor.cast, placeName: EmptySourceText, anchor: asTok)
-		end 'functionTypeDoor'
 
 		// The target's ranged-alias declaration, resolved ONCE for EVERY question that needs it — may
 		// this file NAME it (P1.9), WHICH alias a narrowing check names, and WHAT its range says about
@@ -36050,8 +36104,62 @@ export type Parser
 		// impossible is the defect A4f exists to delete.
 		self.reportUnneededCast(self.valueDenotedAlias(value), target: targetAlias, asTok: asTok)
 
-		// `sourceTag` rather than a second `tagOf(value)`: nothing between its binding and here re-tags
-		// `value` — every statement above reads or records — so a re-read is the same answer twice.
+		return try self.convertValueToDeclaredType(value, sourceTag: sourceTag, targetType: targetType, targetAlias: targetAlias, opTok: asTok, sourceIsBareLocal: sourceIsBareLocal, mustCarryTargetType: false)
+	end 'applyCast'
+
+	// ⭐⭐ **THE CONVERSION ITSELF — the three arms and the two records that turn a value OF one declared type
+	// INTO a value of another.** Split from `applyCast` above because a SECOND position performs exactly this
+	// conversion and must not perform the two steps left behind it: an array literal's element under an
+	// `<alias> from […]` head (`admitArrayLiteralElement`), where the target type is not written down at all.
+	//
+	// ⚠ **WHAT STAYS IN `applyCast` IS EVERYTHING THAT IS ABOUT THE `as` THE AUTHOR WROTE — and that is
+	// exactly TWO things, both RECORDS rather than guards.** `reportUnneededCast` is E3010 against a cast the
+	// source does not contain, so `ByteArray from [10 as Byte, …]` would be refused for a redundancy the
+	// runnable oracle accepts (MEASURED on this tree: it compiles and runs). `recordHiddenCastTarget` asks
+	// whether the READING file may name the target alias, which the `from` head never asks of the element:
+	// the visibility question was already settled where `typealias ByteArray = Array with Byte` was declared.
+	//
+	// ⛔⛔ **EVERY LEGALITY GUARD LIVES HERE, BELOW, AND THAT IS A CORRECTION — THEY USED TO SIT IN
+	// `applyCast` AND THE SECOND CALLER SILENTLY GOT FEWER OF THEM.** `admitArrayLiteralElement` re-spelled
+	// one of the three (`requireCastKindsConvert`) and dropped `requireCastSourceIsNotEnum` and the
+	// function-type door, so the element position accepted a conversion this compiler refuses when it is
+	// WRITTEN — measured: `Color.green as Byte` is E3009, while `ByteArray from [Color.red, Color.green]`
+	// compiled and read back `1`, stamping `Byte` onto an enum. **There was no oracle defence either: the
+	// bootstrap also compiles that program and answers `0`, so two compilers disagreed on a program neither
+	// refused**, which is worse than either refusing.
+	//
+	// ⇒ The guards are **inside the conversion**, so a caller gets the whole set by reaching the conversion
+	// at all — not by keeping a list in step with this one. The header above used to name two things while
+	// `applyCast` asked four, which is this repo's signature bug (an enumeration that fails open at a new
+	// door, with a comment asserting the enumeration is complete) in the smallest possible form. A guard
+	// added below is a guard both positions get; there is no second list to forget.
+	//
+	// `sourceTag` is passed rather than re-read for `applyCast`'s stated reason — nothing between its binding
+	// and here re-tags `value`, so a re-read is the same answer twice.
+	function convertValueToDeclaredType(value ValueId, sourceTag ValueTypeTag, targetType MaxonType, targetAlias DeclaredAlias, opTok Token, sourceIsBareLocal bool, mustCarryTargetType bool) returns ValueId throws ParseError
+		// ⭐ REJECT A FUNDAMENTALLY-INCOMPATIBLE KIND CONVERSION FIRST (E3009), before any arm is chosen. A
+		// managed aggregate (String/struct/function) has no conversion to or from a scalar, nor to a
+		// DIFFERENT aggregate; letting one reach the float or no-op arms below would emit a `promoteToFloat`
+		// or a range check on a POINTER, or leave a mismatched drop (a String drop run on a struct box — a
+		// double free). See `castHasNoLegalConversion` and `ParseError.invalidCast`.
+		//
+		// ⭐ **AN ENUM SOURCE IS ITS OWN REFUSAL** — `requireCastSourceIsNotEnum` carries why both backings
+		// share one rule. It is the guard the element door was missing.
+		let targetTag = try self.castTargetTag(targetType, asTok: opTok)
+		try self.requireCastSourceIsNotEnum(value, targetTag: targetTag, asTok: opTok)
+		try self.requireCastKindsConvert(sourceTag, targetTag: targetTag, asTok: opTok)
+
+		// ⭐ **A FUNCTION-TO-FUNCTION CONVERSION IS THE ONE `requireCastKindsConvert` LETS THROUGH
+		// UNEXAMINED.** Both ends are `TypeClass.function`, so `castHasNoLegalConversion` sees the same class
+		// and stands aside, and the value then falls all the way to the representational no-op at the end of
+		// this function — untouched, and now claiming to be a function type it may share nothing with but its
+		// tag. `intish as FloatFn` compiled clean and the integer `intish` returns was read back out of the
+		// float return register. The id `castTargetTag` discards is exactly what names the target's
+		// signature, which is why this reads `targetType` and not the reduced tag.
+		if isFunctionTypeDoor(targetTag, got: sourceTag) 'functionTypeDoor'
+			self.recordFunctionTypeDoor(typeNameIdOf(targetType), gotNameId: self.valueNameId(value), door: FunctionTypeDoor.cast, placeName: EmptySourceText, anchor: opTok)
+		end 'functionTypeDoor'
+
 		let sourceIsFloat = tagIsFloat(sourceTag)
 		let targetIsFloat = self.typeIsFloatDomain(targetType)
 
@@ -36070,13 +36178,13 @@ export type Parser
 			// float operand's.** `trunc` changes the number, so the operand's alias describes a value this
 			// door is no longer checking; anchoring on the result is what stops a `float(0.0 to 1.0)` operand
 			// vouching for an integer, and a freshly minted result denotes no alias at all.
-			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(asTok))
-			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, line: asTok.line, column: asTok.column)
+			let narrowed = self.emitUnaryOp(value, op: MaxonUnaryOp.trunc, resultTag: ValueTypeTag.integer, range: SourceRange.ofToken(opTok))
+			self.recordRangeCheckSite(narrowed, targetAlias: targetAlias, line: opTok.line, column: opTok.column)
 			return self.finishCast(narrowed, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'floatToInt'
 
 		if not sourceIsFloat and targetIsFloat 'intToFloat'
-			return self.finishCast(self.promoteToFloat(value, opTok: asTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
+			return self.finishCast(self.promoteToFloat(value, opTok: opTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'intToFloat'
 
 		// ⚠ **THE RANGE-CHECK SITE IS THE SOURCE, NOT THE MINTED RESULT, AND THAT IS A CORRECTNESS
@@ -36089,7 +36197,7 @@ export type Parser
 		// time — `ranged-typealias.error.unsigned-max-upper-literal-out-of-range` is the case that says
 		// so. The float→int cast above anchors on its RESULT for the opposite reason, stated there:
 		// `trunc` changes the number, so the source is not the value being checked.
-		self.recordRangeCheckSite(value, targetAlias: targetAlias, line: asTok.line, column: asTok.column)
+		self.recordRangeCheckSite(value, targetAlias: targetAlias, line: opTok.line, column: opTok.column)
 
 		// ⭐ **A CAST THAT CHANGES WHAT THE VALUE'S TYPE SAYS IS A CONVERSION, NOT A RE-TAG.** It yields a
 		// DISTINCT result value of the target type and leaves the SOURCE untouched, because the source
@@ -36100,12 +36208,63 @@ export type Parser
 		// of the value runs, and (`ranged-int-bit-packing`) how the value would be STORED as an array
 		// element — because they are answered from different registries and none implies the others.
 		// Everything else is the representational no-op below, with no new value and no new op.
-		if self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) or self.castChangesTheDivisionSignedness(value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) or self.castChangesTheElementPacking(value, targetAlias: targetAlias) 'retaggingCast'
-			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, asTok: asTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
+		//
+		// ⭐ **`mustCarryTargetType` IS THE CALLER'S DEMAND, NOT A SIXTH QUESTION.** The five above are asked
+		// of a value to decide whether an `as` MEANS anything; a caller passing `true` has already decided —
+		// `admitArrayLiteralElement` reaches this only when the element's storage differs from the instance's
+		// slot, and its result has to be TYPED as that element or the literal's own homogeneity check refuses
+		// a value it just converted. It is a parameter rather than a predicate here because the fact lives at
+		// the POSITION, and no reading of the value could recover it. ⛔ It is deliberately not folded into the
+		// five: `applyCast` passes `false`, which is what keeps a plain `x as Byte` a no-op — see
+		// `castChangesTheElementPacking`'s ⛔⛔ block for the two programs that broke when every cast retagged.
+		if mustCarryTargetType or self.castConvertsPerInstance(value, targetType: targetType) or self.castChangesTheShiftFill(value, targetAlias: targetAlias) or self.castChangesTheDivisionProof(value, targetAlias: targetAlias) or self.castChangesTheDivisionSignedness(value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) or self.castChangesTheElementPacking(value, targetAlias: targetAlias) 'retaggingCast'
+			return self.finishCast(self.emitRetaggedCastValue(value, targetType: targetType, asTok: opTok), source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
 		end 'retaggingCast'
 
+		// ⭐⭐ **RENAME, NOT MINT — the third answer, and the one a narrowing `as` needs.** A cast to an alias
+		// that STORES the value differently has to be visible on the value, because `arrayLiteralInstanceFor`
+		// types a bare `[…]` from its first element and nothing downstream can recover what the author wrote.
+		// Minting says so and costs an op, a live range and an owned temporary; `retypeValue` says the same
+		// thing by rewriting this value's two type columns in place, emitting nothing. Nothing else changes:
+		// the bits are identical, and the value had no other reader (below).
+		if self.mayRetypeForNarrowerStorage(value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal) 'renameInPlace'
+			self.retypeValue(value, valueType: targetType)
+		end 'renameInPlace'
+
 		return self.finishCast(value, source: value, targetAlias: targetAlias, sourceIsBareLocal: sourceIsBareLocal)
-	end 'applyCast'
+	end 'convertValueToDeclaredType'
+
+	// ⭐⭐ **MAY THIS VALUE BE RENAMED TO THE TARGET IN PLACE?** Three conditions, each with its own reason,
+	// and all three are necessary — each was measured by a program that broke without it.
+	//
+	//   • **THE STORAGE MUST ACTUALLY DIFFER.** Otherwise the rename says nothing and only costs a wrong
+	//     answer later: `x as Integer` must leave a plain `int` a plain `int`.
+	//   • **THE SOURCE MUST NOT BE A BARE LOCAL**, because with no mint the "result" IS the source `ValueId`
+	//     — renaming it renames the BINDING. `let a = 42` then `let b = a as Byte` must not make `a` a `Byte`
+	//     for its later readers. This is the identical condition, for the identical reason, that
+	//     `finishCast` withholds its alias record on; a non-bare-local operand is this expression's own
+	//     fresh result, which in the parser's on-the-fly SSA has exactly one consumer — the cast.
+	//   • **THE SOURCE MUST BE A PLAIN INTEGER.** A managed or opaque type-parameter value is not a number
+	//     in a slot; relabelling one as a narrow integer alias would tell the ownership layer it has nothing
+	//     to release. `generic-type-substitution/error.a-name-the-scope-does-not-bind-binds-nothing` casts an
+	//     opaque `U` to `ExitCode` and is exactly this case.
+	//
+	// ⚠ **IT IS NOT "IS THE SOURCE A CONSTANT", AND THAT DISTINCTION IS THE WHOLE DESIGN.** Gating on
+	// constants restores the three-answers bug `castChangesTheElementPacking` records — `[7 as Byte, 3 as Byte]`
+	// would type differently from `[v as Byte, w as Byte]` and refuse `[v as Byte, 3 as Byte]` outright.
+	// Single-use and constant are different questions and only the first is sound; both literals and locals
+	// reach the rename here, so all three spellings agree.
+	function mayRetypeForNarrowerStorage(value ValueId, targetAlias DeclaredAlias, sourceIsBareLocal bool) returns bool
+		if sourceIsBareLocal 'wouldRenameTheBinding'
+			return false
+		end 'wouldRenameTheBinding'
+
+		if self.tagOf(value) != ValueTypeTag.integer 'notANumberInASlot'
+			return false
+		end 'notANumberInASlot'
+
+		return self.storageDiffersFromAlias(value, targetAlias: targetAlias)
+	end 'mayRetypeForNarrowerStorage'
 
 	// ⭐ **THE CAST'S RESULT DENOTES THE TARGET ALIAS — recorded on the result, and read by E3010 and by
 	// `arrayLiteralInstanceFor`** (the second reader arrived with `ranged-int-bit-packing`; see
@@ -36412,12 +36571,44 @@ export type Parser
 		return self.integerValueDomain(value) == IntegerValueDomain.signed
 	end 'aliasChangesTheDivisionSignedness'
 
-	// ⭐⭐ **DOES THIS `as` CHANGE HOW THE VALUE WOULD BE STORED AS AN ARRAY ELEMENT — a byte-strided slot
-	// for a SUB-BYTE-PACKED field, or back?** The FIFTH of `applyCast`'s five questions — it was the
-	// fourth until X10's review inserted the division-SIGNEDNESS one ahead of it, and the count is
-	// stated in `applyCast` alone so the two cannot drift apart again.
-	// An `Array with T` literal types its element off the values it is given, so
-	// a cast that moves an element between the two ladders has to be visible ON THE VALUE.
+	// ⭐⭐ **DOES THIS `as` MOVE THE VALUE BETWEEN THE BYTE AND SUB-BYTE STORAGE LADDERS?** The FIFTH of
+	// `applyCast`'s five questions — it was the fourth until X10's review inserted the division-SIGNEDNESS
+	// one ahead of it, and the count is stated in `applyCast` alone so the two cannot drift apart again.
+	// An `Array with T` literal types its element off the values it is given, so a cast that moves an
+	// element between the two ladders has to be visible ON THE VALUE.
+	//
+	// ⛔⛔ **IT WAS WIDENED TO COMPARE THE WHOLE ELEMENT STRIDE AND THAT WAS WITHDRAWN — MEASURED, TWICE, AND
+	// DO NOT RETRY IT WITHOUT READING THIS.** The widening looked obviously right: this predicate's headline
+	// asks how a value is STORED, a stride is `elementStrideOf(packedBits, storageBytes)`, and comparing only
+	// the packed half is half of its own sentence. It made `[10 as Byte, …]` mint an `Array with Byte`, which
+	// `specs/codegen-internals.md`'s `rdata-byte-array-uses-i8` pins and the runnable oracle agrees with.
+	//
+	// **It broke two programs, because `emitRetaggedCastValue` EMITS AN OP** (`binOp add 0`) — so firing on
+	// every narrowing ranged cast in the language creates a SECOND VALUE at each one:
+	//   • `ranged-typealias/many-live-guarded-casts` — 24 `let w = widen(i)` then 24 `let s = w as Small`.
+	//     Source and retag are both live across the same point, so the function needed **10 more registers
+	//     than exist** and no longer compiled at all (E5001).
+	//   • `generic-type-substitution/error.a-name-the-scope-does-not-bind-binds-nothing` — its
+	//     `(try w.first() otherwise panic(…)) as ExitCode` casts an OPAQUE type-parameter value. Splitting it
+	//     in two left the opaque source an owned temporary `main` must release, which `main` reserves no
+	//     layout descriptor for: a spurious E2015 during the PARSE, which preempted the E3005 that case
+	//     exists to pin. **A refusal appeared to fail open when what actually happened is that an earlier
+	//     tier rejected the program first, for a reason invented by this predicate.**
+	//
+	// ⇒ **THE BYTE-WIDTH HALF IS SERVED BY A RENAME INSTEAD, AND THAT IS WHERE IT BELONGS** —
+	// `mayRetypeForNarrowerStorage` + `retypeValue`, which rewrites the value's two type columns in place and
+	// emits nothing. Both broken programs stay fixed because neither reaches it: the 24-cast function casts
+	// BARE LOCALS (renaming one would rename the binding, so it is refused), and the opaque-`U` cast is not a
+	// plain integer (relabelling it would tell the ownership layer it has nothing to release). ⇒ **the answer
+	// was never "which casts should mint" but "minting is the wrong instrument for a representational
+	// no-op".** This predicate stays narrow: it fires only where the two PACKING ladders differ, which is a
+	// question about the value's own type and genuinely does need a distinct value.
+	//
+	// ⚠ And the obvious narrowing does not work: gating on a CONSTANT source restores the exact three-answers
+	// inconsistency the paragraph below records — it would make `[7 as Byte, 3 as Byte]` an `Array with Byte`,
+	// `[v as Byte, w as Byte]` an `Array with int`, and `[v as Byte, 3 as Byte]` a false *"mixed element
+	// types"* refusal of a legal program. Single-use and constant are different questions; only the first is
+	// sound, and it is the one the rename asks.
 	//
 	// ⚠⚠ **WITHOUT IT THE SAME WRITTEN TYPE PRODUCED THREE DIFFERENT ANSWERS — MEASURED, and one of them
 	// REFUSED A LEGAL PROGRAM.** The alternative was to read the alias out of `ValueDeclaredAliasMap`, and
@@ -36434,7 +36625,8 @@ export type Parser
 	// is again only a missing E3010, never a silently different representation.
 	//
 	// ⚠ It asks the SOURCE as well as the target, so it fires only where the answer would actually move —
-	// a cast between two aliases that pack identically stays the no-op it always was.
+	// a cast between two aliases that pack identically stays the no-op it always was. That narrowness is
+	// load-bearing, not incidental: every firing costs an op and a live range (see the ⛔⛔ block above).
 	function castChangesTheElementPacking(value ValueId, targetAlias DeclaredAlias) returns bool
 		return match targetAlias 'a'
 			declared(alias) gives rangedAliasPackedBits(alias.low, high: alias.high) != self.elementPackingOfValue(value)
@@ -36451,6 +36643,37 @@ export type Parser
 			undeclared gives NotSubBytePacked
 		end 'a'
 	end 'elementPackingOfValue'
+
+	// ⭐⭐ **WOULD THIS VALUE BE STORED DIFFERENTLY FROM WHAT THIS ALIAS SAYS?** — the WHOLE element stride,
+	// both ladders. Two callers: `admitArrayLiteralElement`, which asks it of a stated instance's element slot,
+	// and `mayRetypeForNarrowerStorage`, which asks it of an `as` target.
+	//
+	// ⛔ **IT IS NOT ONE OF `applyCast`'s FIVE MINT QUESTIONS, AND MUST NOT BECOME ONE.** It was, briefly, and
+	// the ⛔⛔ block on `castChangesTheElementPacking` records the two programs that stopped compiling: an arm
+	// of that list MINTS a value, and asking this there doubled the live values at every narrowing ranged cast
+	// in the language. The question itself is asked freely — `mayRetypeForNarrowerStorage` puts it to every
+	// `as` — because its yes now costs a RENAME rather than a value.
+	//
+	// ⚠ The two predicates are not redundant and neither subsumes the other: `castChangesTheElementPacking`
+	// asks whether an `as` moved a value between the byte and sub-byte LADDERS, which is a question about the
+	// value's own type; this asks whether a value fits the slot an instance declares, which is a question
+	// about a position. `ByteArray from [10, 20, 30]` is the case that separates them — the packing answer is
+	// "no" (both sides are byte-strided) while the storage answer is "yes" (8 bytes into a 1-byte slot).
+	function storageDiffersFromAlias(value ValueId, targetAlias DeclaredAlias) returns bool
+		return match targetAlias 'a'
+			declared(alias) gives aliasElementStride(alias) != self.elementStrideOfValue(value)
+			undeclared gives false
+		end 'a'
+	end 'storageDiffersFromAlias'
+
+	// The stride the value ALREADY occupies — the source half of the question above. A value with no declared
+	// ranged alias (a bare `int`, a call result, a parameter typed `int`) takes a full machine word.
+	function elementStrideOfValue(value ValueId) returns ElementStride
+		return match self.declaredAliasOfValue(value) 'a'
+			declared(alias) gives aliasElementStride(alias)
+			undeclared gives MachineWordBytes
+		end 'a'
+	end 'elementStrideOfValue'
 
 	// The half of the question above that is about the ALIAS, split out exactly as
 	// `aliasChangesTheShiftFill` is and for the same reason: the arms read as the sentences they are.
@@ -37895,7 +38118,7 @@ export type Parser
 		// `[a, b, c]` — an ARRAY LITERAL (P1.7 slice 1). Its own arm because `[` is its own token. It
 		// desugars to `__arr_create` + a `__arr_push` per element, yielding an owned `Array with integer`.
 		if self.at(TokenKind.leftBracket) 'arrayLiteral'
-			return try self.parseArrayLiteral(func)
+			return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 		end 'arrayLiteral'
 
 		if self.at(TokenKind.leftParen) 'group'
@@ -37990,6 +38213,14 @@ export type Parser
 			if self.atVectorFromConstruction() 'vectorFromConstruction'
 				return try self.parseVectorFromConstruction(func)
 			end 'vectorFromConstruction'
+
+			// `ByteArray from [10, 20, 30]` — the ALIAS-headed form, whose head names an `Array` instance
+			// rather than a builtin base name. Its own arm for the reason the three above are three arms, and
+			// it cannot collide with any of them: the bases are disjoint, and a name that aliases an `Array`
+			// is not `Set`, `List` or `Vector`.
+			if self.atArrayFromConstruction() 'arrayFromConstruction'
+				return try self.parseArrayFromConstruction(func)
+			end 'arrayFromConstruction'
 
 			// `FilePath from "C:\\x.txt"` — the `InitableFromStringLiteral` construction, which is the SECOND
 			// `<Type> from …` form (see `atStringLiteralInitConstruction`, and the paragraph above it that
@@ -44788,31 +45019,28 @@ export type Parser
 	// element, yielding an OWNED `Array with integer`. At this slice a literal's elements are all integer
 	// (a String / struct / bool / Byte element literal is a later slice, rejected E2015); an empty `[]`
 	// carries no element to infer a type from and is rejected (use `Array with T` + `.create()`).
-	function parseArrayLiteral(func IrFunction) returns ValueId throws ParseError
+	//
+	// ⭐ **`element` IS WHERE THE INSTANCE COMES FROM, AND IT IS A PARAMETER RATHER THAN A SECOND ENTRY POINT**
+	// (`ArrayLiteralElementSource`). A `<alias> from […]` head states the instance the literal must build;
+	// everything downstream of that one decision — the map-literal fork, the constant-blob fork, the element
+	// rule, the escape gate, the owned-temp registration — is the same for both spellings, and a second
+	// function to hold a different first line would have had to copy all of it.
+	function parseArrayLiteral(func IrFunction, element ArrayLiteralElementSource) returns ValueId throws ParseError
 		let openTok = try self.consume(TokenKind.leftBracket)
 		let range = SourceRange.ofToken(openTok)
 		self.skipNewlines()
 
 		if self.at(TokenKind.rightBracket) 'empty'
-			throw ParseError.unsupported("an empty array literal `[]` — its element type cannot be inferred; use `Array with T` + `.create()` for an empty typed array", line: openTok.line, column: openTok.column)
+			throw ParseError.unsupported(emptyArrayLiteralMessage(element), line: openTok.line, column: openTok.column)
 		end 'empty'
 
-		// ⭐ **THE INT-LITERAL FAST PATH keeps slice 1's op ORDER (create the record BEFORE evaluating any
-		// element)**, so the pre-existing int-array-literal goldens do not move. A MANAGED / inferred literal
-		// (`["…"]`, `[p1,p2]`) cannot take it: its record's element_destroy stamp needs the element type, which
-		// is only known after the first element is parsed, so that path evaluates the first element first.
-		//
-		// ⚠ **THE GUARD MUST BE SOUND, NOT MERELY LIKELY — it once asked only whether the first TOKEN was an
-		// int literal, and that is a different question from whether the ELEMENT is an integer.** `[10 as Index]`
-		// starts with an int literal and is an `Index`: the record was created for `Array with integer`, the
-		// element resolved to `Array with Index`, and the mismatch was reported as **"mixed element types" on a
-		// literal with ONE element** — a false rejection whose message was false twice over. A token-level guard
-		// can settle an element's type for exactly one shape, a BARE int literal, so that is the shape it asks
-		// about (`arrayElementIsSingleToken`); anything else goes down the path that asks the element itself.
-		if self.at(TokenKind.intLiteral) and self.arrayElementIsSingleToken(self.pos) 'intFastPath'
-			return try self.parseIntArrayLiteralBody(func, range: range)
-		end 'intFastPath'
-
+		// ⚠ **THE INT-LITERAL FAST PATH IS GONE, AND ITS ONLY JOB WAS OP ORDER.** It created the record
+		// BEFORE evaluating any element so that slice 1's int-array goldens would not move, and it was
+		// reachable only for a BARE int literal (`arrayElementIsSingleToken`) because a token-level guard can
+		// settle an element's type for no other shape. Both facts stopped mattering when the blob path
+		// widened to the machine word below: an all-constant `[10, 20, 30]` now creates no record at all, so
+		// there is no order to preserve, and the general path below already infers `integer` from the parsed
+		// first element. What is left of it would be a second spelling of that inference.
 		let firstTok = self.current()
 		let firstStart = self.pos
 		let first = try self.parseExpression(func, block: self.currentBlock)
@@ -44825,45 +45053,58 @@ export type Parser
 		//
 		// ⚠ It sits ahead of `arrayLiteralInstanceFor` because a map literal has NO array instance to mint: the
 		// first element is its first KEY, and the instance it fixes has two columns rather than one.
-		if self.at(TokenKind.colon) 'mapLiteral'
+		//
+		// ⚠⚠ **AND IT IS ASKED ONLY WHERE THE ELEMENT TYPE IS STILL OPEN.** A `<alias> from […]` head has already
+		// named an `Array` instance, so taking this fork under one would hand the head's caller a `Map` — a
+		// silently wrong TYPE rather than a diagnostic. Under a stated head a `:` is simply not part of the
+		// literal, and the element rule or the closing `]` refuses it.
+		if self.at(TokenKind.colon) and elementSourceIsInferred(element) 'mapLiteral'
 			return try self.parseMapLiteralBody(func, firstKey: first, firstKeyStart: firstStart, firstKeyTok: firstTok, range: range)
 		end 'mapLiteral'
 
-		let giid = try self.arrayLiteralInstanceFor(first, elemTok: firstTok)
+		// ⚠ **THE STATED INSTANCE IS TAKEN WITHOUT ASKING THE FIRST ELEMENT AT ALL**, which is the point: under
+		// `ByteArray from […]` the first element is a bare `int` constant, and `arrayLiteralInstanceFor` would
+		// answer `Array with integer` — the very inference the head exists to override.
+		let giid = match element 'elementSource'
+			stated(headGiid) gives headGiid
+			inferred gives try self.arrayLiteralInstanceFor(first, elemTok: firstTok)
+		end 'elementSource'
 
-		// ⭐⭐ **A NARROW ELEMENT COLLECTS ITS ELEMENTS BEFORE IT BUILDS ANYTHING**, because if they are all
-		// constants the whole literal is ONE `.rdata` blob and there is no record to push into. The element's
-		// width is settled by the FIRST element alone — it is what fixes `giid` — so the decision is available
-		// here, one line before the create this path would otherwise emit.
+		// The first element is ADMITTED into that instance exactly as every `, e` after it is
+		// (`admitArrayLiteralElement`) — one element rule, asked of every element including the first.
+		let head = try self.admitArrayLiteralElement(first, giid: giid, elemTok: firstTok, valueStart: firstStart)
+
+		// ⭐⭐ **AN INLINE-STORED ELEMENT COLLECTS ITS ELEMENTS BEFORE IT BUILDS ANYTHING**, because if they
+		// are all constants the whole literal is ONE `.rdata` blob and there is no record to push into. The
+		// element type is settled by the FIRST element alone — it is what fixes `giid` — so the decision is
+		// available here, one line before the create this path would otherwise emit.
 		//
-		// ⭐ **THE GATE IS "NARROWER THAN A MACHINE WORD", NOT "SUB-BYTE PACKED", AND THAT IS WHAT
-		// `enum-narrow-storage` NEEDED.** A three-case enum's element strides ONE BYTE, not a fraction of one,
-		// so `[Color.red, Color.green, Color.blue]` is three contiguous `.rdata` bytes and was reaching
-		// `__arr_create` + three `__arr_push` instead — the spec's own sentence, and its six `RequiredRdata`
-		// pins. One comparison admits both ladders (`arrayElementIsNarrow`), and the machine-word literal
-		// `[10, 20, 30]` keeps the op order its goldens carry.
+		// ⭐⭐ **THE GATE IS "DOES THE SLOT OWN ITS OWN BYTES", NOT A WIDTH** (`arrayElementMayBeConstantBlob`),
+		// and only a MANAGED or OPAQUE element answers no. It asked "narrower than a machine word" until
+		// `codegen-internals`, which excluded `[10, 20, 30]` — the plainest constant array there is, and the
+		// one the spec's own sentence and seven `RequiredRdata` cases are written about. That exclusion was
+		// there to keep the int-literal goldens still; see the gate for the measurement that retired it.
 		//
-		// ⚠ **THE ADMITTED SET IS WIDER THAN "ENUMS AND PACKED ELEMENTS", AND SAYING SO MATTERS.** Every
-		// 1/2/4-byte element reaches the blob now, so a literal whose first element FIXES a narrow ranged
-		// alias (`[1 as Percent, 2 as Percent]`) became a `.rdata` blob where it was `__arr_create` + pushes.
-		// ⭐ That drops no CHECK: `pushArrayLiteralElement` applies none a blob would skip — a ranged
+		// ⚠ **THE ADMITTED SET IS WIDER THAN "ENUMS AND PACKED ELEMENTS", AND SAYING SO MATTERS.** A literal
+		// whose first element FIXES a narrow ranged alias (`[1 as Percent, 2 as Percent]`) became a `.rdata`
+		// blob where it was `__arr_create` + pushes, and every machine-word constant literal has now joined
+		// them. ⭐ That drops no CHECK: `pushArrayLiteralElement` applies none a blob would skip — a ranged
 		// element's runtime guard rides `parseArraySetOrInsert`, which a literal never goes through — and the
-		// values were already required to be compile-time constants. ⚠ Most such literals do not reach here
-		// at all, and for a reason worth knowing before predicting a golden move: a cast to a NON-packing
-		// alias does not retag the element (`applyCast.castChangesTheElementPacking` mints a `named` result
-		// only across the byte/sub-byte boundary), so `[1 as Percent, …]` mints an `Array with integer` and
-		// strides 8 unless something else fixes the instance.
-		if self.signatures.arrayElementIsNarrow(giid) 'aNarrowElement'
-			return try self.parseNarrowArrayLiteralBody(func, first: first, firstStart: firstStart, giid: giid, range: range)
-		end 'aNarrowElement'
+		// values were already required to be compile-time constants. ⚠ A cast to a NON-packing alias still
+		// does not retag the element (`applyCast.castChangesTheElementPacking` mints a `named` result only
+		// across the byte/sub-byte boundary), so which instance `[1 as Percent, …]` mints is that predicate's answer, not this
+		// gate's.
+		if self.signatures.arrayElementMayBeConstantBlob(giid) 'anInlineStoredElement'
+			return try self.parseCollectedArrayLiteralBody(func, first: head, firstStart: firstStart, giid: giid, range: range)
+		end 'anInlineStoredElement'
 
 		let arr = try self.emitArrayCreateOp(giid, range: range)
-		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
+		try self.pushArrayLiteralElement(arr, elem: head, giid: giid, valueStart: firstStart, range: range)
 
-		return try self.finishArrayLiteral(func, arr: arr, giid: giid, first: first, range: range)
+		return try self.finishArrayLiteral(func, arr: arr, giid: giid, first: head, range: range)
 	end 'parseArrayLiteral'
 
-	// ⭐⭐ **A NARROW LITERAL'S BODY — COLLECTED FIRST, EMITTED ONCE.** Every element is parsed and held, and
+	// ⭐⭐ **AN INLINE-STORED LITERAL'S BODY — COLLECTED FIRST, EMITTED ONCE.** Every element is parsed and held, and
 	// only at the `]` is it known whether they are ALL compile-time constants:
 	//
 	//   • **all constant** ⇒ ONE `constArrayLiteral` op over an immortal `.rdata` blob. This is what
@@ -44881,11 +45122,10 @@ export type Parser
 	// wasted. What the CONSTANT arm leaves behind is the elements' own `const` materializations, now unused —
 	// dead values the blob makes redundant, which the backend drops on the floor because nothing reads them.
 	//
-	// ⚠ Only a NARROW element reaches here, and a narrow element is TRIVIAL by construction (a managed
-	// element's slot is the 8-byte pointer `ManagedArrayElementBytes`, which is the machine word this gate
-	// excludes), so there is no managed move-in to preserve — which is what makes holding the elements across
-	// the `]` legitimate at all.
-	function parseNarrowArrayLiteralBody(func IrFunction, first ValueId, firstStart TokenIndex, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+	// ⚠ Only an INLINE-STORED element reaches here — never a managed one, whose slot is a pointer to a heap
+	// box — so there is no managed move-in to preserve, which is what makes holding the elements across the
+	// `]` legitimate at all. `arrayElementMayBeConstantBlob` is where that exclusion is stated.
+	function parseCollectedArrayLiteralBody(func IrFunction, first ValueId, firstStart TokenIndex, giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		var values = ValueIdArray.create()
 		var starts = TokenIndexColumn.create()
 		values.push(first)
@@ -44900,25 +45140,64 @@ export type Parser
 		end 'moreElements'
 		try self.consume(TokenKind.rightBracket)
 
+		// ⚠ **THE BLOB ARM NEEDS NO ESCAPE GATE AND CANNOT.** A capturing closure is not a value the compiler
+		// holds as an integer constant, so `everyElementIsAKnownConstant` has already excluded one from this
+		// arm; the PUSH arm below is a real container build and asks the question in full.
 		if self.everyElementIsAKnownConstant(values) 'aConstantBlob'
-			return self.emitNarrowArrayBlob(values, giid: giid, range: range)
+			return self.emitConstantArrayBlob(values, giid: giid, range: range)
 		end 'aConstantBlob'
 
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 		for i in 0 upto values.count() 'eachElement'
-			let elem = try values.get(i) otherwise panic("parseNarrowArrayLiteralBody: values.get({i}) failed inside its own upto bound")
-			let elemStart = try starts.get(i) otherwise panic("parseNarrowArrayLiteralBody: starts.get({i}) failed — it is pushed in lockstep with values")
+			let elem = try values.get(i) otherwise panic("parseCollectedArrayLiteralBody: values.get({i}) failed inside its own upto bound")
+			let elemStart = try starts.get(i) otherwise panic("parseCollectedArrayLiteralBody: starts.get({i}) failed — it is pushed in lockstep with values")
 			try self.pushArrayLiteralElement(arr, elem: elem, giid: giid, valueStart: elemStart, range: range)
 		end 'eachElement'
 
+		try self.requireNoEscapingClosureElement(values)
+
 		self.trackOwnedTemp(arr)
 		return arr
-	end 'parseNarrowArrayLiteralBody'
+	end 'parseCollectedArrayLiteralBody'
+
+	// ⭐⭐ **THE CONTAINER ESCAPE ROUTE (E3099) — an array's element block is heap memory that outlives the
+	// frame and stores the code pointer alone, so a capturing closure put into one loses its environment.**
+	// Asked through the SAME `rejectEscapingClosure` every other route funnels through, which is why there is
+	// no predicate here: that gate answers "does this value capture?" once, for all five routes.
+	//
+	// ⭐ **ONE ELEMENT ANYWHERE IN THE LITERAL CONDEMNS THE WHOLE CONTAINER**, so the whole element list is
+	// scanned and the LAST capturing one is blamed — which is what the eager tail's carried-across-the-loop
+	// `offender` amounted to. A literal where nothing captures hands the gate its first element, and the gate
+	// tests the value it is given, so that passes.
+	//
+	// ⚠ **IT BLAMES THE CONTAINER, NOT THE ELEMENT, AND THAT IS THE REFERENCE'S ANCHOR — MEASURED.** The
+	// sentence says *"in a container"* and the position agrees with it: the bootstrap reports at the token
+	// FOLLOWING the closing `]`, wherever the offending element sits — `[double, <closure>]` and
+	// `[<closure>, double]` are byte-identical diagnostics at the identical column, and a one-element literal
+	// moves it only by the line's own length. So the anchor is the cursor past the literal, which is exactly
+	// where both callers run it; anchoring at the element would be a different, unpinned diagnostic.
+	//
+	// ⚠ **THE COLLECTED TAIL ASKS IT, AND THAT IS NEW.** This gate used to be the eager tail's alone, on the
+	// argument that the collect path was reached only for a SUB-BYTE-PACKED element and so could hold no
+	// function value and no closure. **That structural exclusion is gone**: the collect path now takes every
+	// inline-stored element (`arrayElementMayBeConstantBlob`), plain `int` and function values included, so
+	// the exclusion would have become an omission — a closure in `[double, <closure>]` reaching a tail with
+	// no escape check. Both tails call this, which is why it is a function and not a paragraph in each.
+	function requireNoEscapingClosureElement(values ValueIdArray) throws ParseError
+		var offender = try values.get(0) otherwise panic("requireNoEscapingClosureElement: an array literal holds at least one element — an empty `[]` is refused at the open bracket")
+		for elem in values 'each'
+			if self.isCapturingClosure(elem) 'thisElementCaptures'
+				offender = elem
+			end 'thisElementCaptures'
+		end 'each'
+
+		try self.rejectEscapingClosure(offender, message: "cannot put a closure that captures in a container: {CapturingClosureEscapeSuffix}", tok: self.current())
+	end 'requireNoEscapingClosureElement'
 
 	// Does the compiler hold every one of these values as an integer constant — the question that decides
-	// whether a narrow literal becomes a blob or a run of pushes. A `bool` element's `true`/`false` folds to
-	// 1/0 through the same constant table, and so does an enum case's TAG (`emitEnumTagLiteral`), which is why
-	// one predicate serves every narrow element kind.
+	// whether a collected literal becomes a blob or a run of pushes. A `bool` element's `true`/`false` folds
+	// to 1/0 through the same constant table, and so does an enum case's TAG (`emitEnumTagLiteral`), which is
+	// why one predicate serves every inline-stored element kind.
 	function everyElementIsAKnownConstant(values ValueIdArray) returns bool
 		for elem in values 'each'
 			if not self.constIsKnown(elem) 'notAConstant'
@@ -44930,85 +45209,51 @@ export type Parser
 	end 'everyElementIsAKnownConstant'
 
 	// ⭐ **SERIALIZE THE CONSTANTS AND EMIT THE ONE OP.** Precondition: `everyElementIsAKnownConstant(values)`
-	// and the instance's element is narrow — both settled by the sole caller.
+	// and the instance's element stores its own bytes — both settled by the sole caller.
 	//
-	// The blob's bytes come from `constantElementsImage`, which reads the STRIDE this op is stamped with and
-	// dispatches on its sign, so the layout and the stamp are one number rather than two questions asked of
-	// the instance in two places.
-	function emitNarrowArrayBlob(values ValueIdArray, giid GenericInstanceId, range SourceRange) returns ValueId
+	// The blob is composed by `constArrayBlobOf` — the ONE factory the file-scope spelling
+	// (`ProgramSignatures.containerRecordOf`) also goes through, so a literal written in a body and the same
+	// literal written at module scope cannot lay down different bytes. The stride it is stamped with is the
+	// stride its image was serialized at, because both come from that one call.
+	function emitConstantArrayBlob(values ValueIdArray, giid GenericInstanceId, range SourceRange) returns ValueId
 		var constants = ParsedIntArray.create()
 		for elem in values 'each'
 			constants.push(self.constOf(elem))
 		end 'each'
 
-		let stride = self.signatures.arrayElementSize(giid)
+		let blob = constArrayBlobOf(constants, stride: self.signatures.arrayElementSize(giid))
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
-		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: stride, elementCount: constants.count() as ParsedInt, bytes: constantElementsImage(constants, stride: stride)), range: range)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: blob.stride, elementCount: blob.elementCount, bytes: blob.bytes), range: range)
 		self.trackOwnedTemp(result)
 		return result
-	end 'emitNarrowArrayBlob'
+	end 'emitConstantArrayBlob'
 
-	// The int-array-literal body (`[10, 20, 30]`) — the record is created FIRST (the element type is `integer`,
-	// which the caller's guard has already settled from the token), then each element is parsed and pushed.
-	// This is slice 1's exact op order, kept so the pre-existing int-literal goldens do not move.
-	function parseIntArrayLiteralBody(func IrFunction, range SourceRange) returns ValueId throws ParseError
-		let giid = self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
-		let arr = try self.emitArrayCreateOp(giid, range: range)
-
-		// The FIRST element is not checked against `giid` — it is what FIXES it, exactly as in the general
-		// path above. Only a LATER element can disagree with the first, which is why the "mixed element types"
-		// verdict lives in the shared tail and can never be reached by a one-element literal.
-		let firstStart = self.pos
-		let first = try self.parseExpression(func, block: self.currentBlock)
-		try self.pushArrayLiteralElement(arr, elem: first, giid: giid, valueStart: firstStart, range: range)
-
-		return try self.finishArrayLiteral(func, arr: arr, giid: giid, first: first, range: range)
-	end 'parseIntArrayLiteralBody'
-
-	// The tail every array literal shares once its record exists and its first element is pushed: the `, e`
-	// elements, the closing `]`, and the owned-temp registration. ONE home, so the two entry paths cannot
-	// drift on the element rule, on where a newline may fall, or on when the array becomes a tracked temp.
+	// The tail a MANAGED or OPAQUE literal takes once its record exists and its first element is pushed: the
+	// `, e` elements, the closing `]`, the escape gate and the owned-temp registration. It pushes as it goes
+	// rather than collecting, and that is the whole difference from `parseCollectedArrayLiteralBody`: a
+	// managed element's move-in is decided from the `[valueStart, self.pos)` window it was written at, which
+	// a collect-then-push walk would have already moved past.
 	//
 	// ⚠ **A NEWLINE IS SKIPPED ONLY AT AN ELEMENT BOUNDARY, and never before `pushArrayLiteralElement`** —
 	// the same two rules `parseStructLiteralFields` states for `{…}`. A skip before the push would widen the
 	// `[valueStart, self.pos)` window `moveElementIntoContainer` reads to decide whether the element was a bare
 	// local, and silently mis-decide a managed element's move-in.
 	function finishArrayLiteral(func IrFunction, arr ValueId, giid GenericInstanceId, first ValueId, range SourceRange) returns ValueId throws ParseError
-		// ⭐ **ONE ELEMENT ANYWHERE IN THE LITERAL CONDEMNS THE WHOLE CONTAINER**, so the element to blame is
-		// carried across the loop rather than decided at any single one. Seeded with `first` — which is the
-		// right answer whether or not it captures: the gate below tests the value it is given, so a literal
-		// where nothing captures hands it a non-capturing element and passes.
-		var offender = first
+		// Held only for the escape gate below, which asks about the whole element list — see
+		// `requireNoEscapingClosureElement` for why the question is the list's and not each element's.
+		var values = ValueIdArray.create()
+		values.push(first)
 
 		self.skipNewlines()
 		while self.at(TokenKind.comma) 'moreElements'
 			let parsed = try self.parseArrayLiteralTailElement(func, giid: giid)
 			try self.pushArrayLiteralElement(arr, elem: parsed.value, giid: giid, valueStart: parsed.start, range: range)
-			if self.isCapturingClosure(parsed.value) 'thisElementCaptures'
-				offender = parsed.value
-			end 'thisElementCaptures'
+			values.push(parsed.value)
 			self.skipNewlines()
 		end 'moreElements'
 		try self.consume(TokenKind.rightBracket)
 
-		// ⭐⭐ **THE CONTAINER ESCAPE ROUTE (E3099) — an array's element block is heap memory that outlives the
-		// frame and stores the code pointer alone, so a capturing closure put into one loses its environment.**
-		// Asked through the SAME `rejectEscapingClosure` every other route funnels through, which is why there
-		// is no predicate here: that gate answers "does this value capture?" once, for all five routes.
-		//
-		// ⚠ **IT BLAMES THE CONTAINER, NOT THE ELEMENT, AND THAT IS THE REFERENCE'S ANCHOR — MEASURED.** The
-		// sentence says *"in a container"* and the position agrees with it: the bootstrap reports at the token
-		// FOLLOWING the closing `]`, wherever the offending element sits — `[double, <closure>]` and
-		// `[<closure>, double]` are byte-identical diagnostics at the identical column, and a one-element
-		// literal moves it only by the line's own length. So the anchor is the cursor past the literal, which is
-		// exactly where this runs; anchoring at the element would be a different, unpinned diagnostic.
-		//
-		// ⚠ **THE PACKED TAIL DOES NOT ASK, AND CANNOT NEED TO.** `parsePackedArrayLiteralBody` is reached only
-		// for a SUB-BYTE-PACKED element (`arrayElementPackedBits`), which answers `NotSubBytePacked` for every
-		// element that is not a narrow ranged int or a bool — so no function value, and therefore no closure,
-		// can reach it. A structural exclusion rather than an omission; the day an element is both packed and
-		// heap-referencing, this call is what that path owes.
-		try self.rejectEscapingClosure(offender, message: "cannot put a closure that captures in a container: {CapturingClosureEscapeSuffix}", tok: self.current())
+		try self.requireNoEscapingClosureElement(values)
 
 		self.trackOwnedTemp(arr)
 		return arr
@@ -45032,10 +45277,71 @@ export type Parser
 		let elemTok = self.current()
 		let elemStart = self.pos
 		let elem = try self.parseExpression(func, block: self.currentBlock)
-		try self.requireArrayLiteralElementMatches(elem, giid: giid, elemTok: elemTok)
 
-		return ArrayLiteralElement.create(elem, start: elemStart)
+		return ArrayLiteralElement.create(try self.admitArrayLiteralElement(elem, giid: giid, elemTok: elemTok, valueStart: elemStart), start: elemStart)
 	end 'parseArrayLiteralTailElement'
+
+	// ⭐⭐ **ONE ELEMENT ADMITTED INTO THE LITERAL'S INSTANCE** — the door the FIRST element and every `, e`
+	// after it both go through, so a literal cannot come to have two element rules.
+	//
+	// ⭐⭐ **IT CONVERTS WHENEVER THE ELEMENT'S STORAGE DIFFERS FROM THE INSTANCE'S SLOT — under a stated head
+	// AND under an inferred one.** The gate is `storageDiffersFromAlias`: *would this value be stored
+	// differently from what the instance says?* It is not a flag this function reads, and it is NOT
+	// structurally false for a bare `[…]` — an earlier version of this comment claimed that and was wrong.
+	//
+	// ⚠ **`[10 as Byte, 20]` IS THE CASE THAT DISPROVES IT, AND IT IS ACCEPTED DELIBERATELY.** Element 1 is
+	// renamed to `Byte` by its own `as` (`mayRetypeForNarrowerStorage`), so the literal mints an
+	// `Array with Byte`; element 2 is a bare `20` at a machine word against a one-byte slot, so it DOES
+	// convert here. shv2 used to refuse that program `MixedArrayLiteralElementsMessage` — and the refusal was
+	// shv2 being stricter than the reference. **MEASURED: the runnable oracle compiles it and answers the
+	// same 20.** The rule is the instance's slot, not the spelling of the head.
+	//
+	// ⭐ **A STATED HEAD IS THE CASE WHERE IT IS TRUE, AND WHAT IT DOES THEN IS THE `as <element>` THE SOURCE
+	// DID NOT HAVE TO WRITE.** `ByteArray from [10, 20, 30]` hands over three bare `int` constants at a
+	// machine word each against an instance that stores one byte each, so each is converted through
+	// `convertValueToDeclaredType` — the same conversion `[10 as Byte, 20 as Byte, 30 as Byte]` performs, and
+	// deliberately the same one, because the two spellings must reach the identical `i8[] 10, 20, 30` blob
+	// (`specs/codegen-internals.md` pins both). Both references settle it the same way: the bootstrap resolves
+	// the destination's ranged element type and hands it down to its element emitter, which range-checks and
+	// re-tags each element, *"the replacement for the old `[U16{10}, U16{20}, …]` per-element construction
+	// pattern"* (`maxon-sharp/Compiler/2-Parser.cs:20593`).
+	//
+	// ⚠ **THE KIND GATE IS NOT OPTIONAL AND IS ASKED BEFORE THE CONVERSION.** A String value against a stated
+	// `Byte` element also answers the stride question TRUE (a String denotes no ranged alias, so it reads as a
+	// full machine word), and the re-tag would have stamped `Byte` onto a heap POINTER — a silent wrong
+	// answer. `requireCastKindsConvert` is the existing E3009 for it and needs no new sentence. (The runnable
+	// oracle has no answer here to match: `ByteArray from ["a", "b"]` crashes it with an internal E9001.)
+	function admitArrayLiteralElement(value ValueId, giid GenericInstanceId, elemTok Token, valueStart TokenIndex) returns ValueId throws ParseError
+		let indexSpaceElement = self.signatures.containerElementType(giid)
+		let targetAlias = self.declaredAliasOfIndexSpaceType(indexSpaceElement)
+
+		// ⚠ **THE ELEMENT TYPE HAS TO BE RE-SPELLED IN THIS FILE'S INTERNER BEFORE ANY DOOR BELOW SEES IT.**
+		// The instance's argument was interned by `ProgramSignatures`, and every step from here mints or reads
+		// a `named` id against the FILE's table — `castTargetTag` resolves one, `emitRetaggedCastValue` stamps
+		// one onto the value it mints. It is always a `named` type where the conversion runs, because
+		// `storageDiffersFromAlias` answers false for a target that declares no ranged alias.
+		//
+		// ⛔ **NO GUARD IS SPELLED HERE, AND THAT IS THE POINT.** This door once re-spelled
+		// `requireCastKindsConvert` and thereby got ONE of the conversion's three legality guards; the enum
+		// refusal it dropped let `ByteArray from [Color.red, …]` through. They live inside
+		// `convertValueToDeclaredType` now, so reaching the conversion is what grants them.
+		let converted = try self.convertedArrayLiteralElement(value, targetAlias: targetAlias, indexSpaceElement: indexSpaceElement, elemTok: elemTok, valueStart: valueStart)
+		try self.requireArrayLiteralElementMatches(converted, giid: giid, elemTok: elemTok)
+
+		return converted
+	end 'admitArrayLiteralElement'
+
+	// The element itself, converted to the instance's slot when its storage differs and handed straight back
+	// when it does not. Split from the homogeneity check above so that check is written ONCE for both arms —
+	// it used to be called in each, which is one question asked from two places.
+	function convertedArrayLiteralElement(value ValueId, targetAlias DeclaredAlias, indexSpaceElement MaxonType, elemTok Token, valueStart TokenIndex) returns ValueId throws ParseError
+		if not self.storageDiffersFromAlias(value, targetAlias: targetAlias) 'storedAsTheInstanceSays'
+			return value
+		end 'storedAsTheInstanceSays'
+
+		let elementType = MaxonType.named(self.artifact.typeNames.intern(self.signatures.indexSpaceTypeName(indexSpaceElement)))
+		return try self.convertValueToDeclaredType(value, sourceTag: self.tagOf(value), targetType: elementType, targetAlias: targetAlias, opTok: elemTok, sourceIsBareLocal: self.rhsWasBareLocalReference(valueStart), mustCarryTargetType: true)
+	end 'convertedArrayLiteralElement'
 
 	// Push one already-parsed array-literal element, moving a managed element in (the array owns it; a trivial
 	// element passes through) — `moveElementIntoContainer` off the value's start position so a bare local is poisoned.
@@ -45080,6 +45386,8 @@ export type Parser
 	// OF ITS OWN FOR IT.** `[0 as Q, 1 as Q, 2 as Q, 3 as Q]` is an `Array with Q`, not an `Array with int`
 	// — and it reaches the `aggregate` arm below unchanged, because `applyCast.castChangesTheElementPacking`
 	// MINTS a `named`-tagged result for a cast that moves an element between the byte and sub-byte ladders.
+	// ⚠ A cast that merely narrows the BYTE width does NOT retag — see that predicate's ⛔⛔ block for the two
+	// programs the wider rule broke.
 	// Reading the tag is therefore complete. ⚠ Asking `castSourceAlias` here instead was tried and is WRONG:
 	// that record is withheld for a bare-local source, so it answered differently for `[7 as N, …]` and
 	// `[v as N, …]` — the measurement is on that predicate.
@@ -45840,6 +46148,45 @@ export type Parser
 		return self.signatures.isGenericAlias(name) and self.signatures.isSetInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 	end 'namesSetInstanceAlias'
 
+	// The same question one container over — is `name` a typealias for an `Array` instance? Its own predicate
+	// rather than a base-name parameter over the pair, because the two bases are not asked the same way:
+	// `isSetInstance` is a name EQUALITY, while `isArrayInstance` also admits the compiler's own minted
+	// `__Array_<T>` spellings (`SignatureIndex.isArrayBaseName`), and a shared base-name compare would have
+	// answered `false` for every one of those.
+	function namesArrayInstanceAlias(name ByteArray) returns bool
+		return self.signatures.isGenericAlias(name) and self.signatures.isArrayInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
+	end 'namesArrayInstanceAlias'
+
+	// ⭐⭐ **`ByteArray from [10, 20, 30]` — AND IT EMITS NOT ONE RUNTIME OP OF ITS OWN**, `Vector from […]`'s
+	// property and for the same reason: the array literal already builds exactly the record an `Array` is. It
+	// does not even need that construction's RETYPE, because the instance was known BEFORE the literal was
+	// parsed and the literal was built at it — the head's whole contribution is the `ArrayLiteralElementSource`
+	// it hands down.
+	//
+	// ⭐ **WHICH IS THE POINT: THE ELEMENT TYPE IS THE ONE THING A `[…]` CANNOT STATE FOR ITSELF.** `[10, 20,
+	// 30]` is an `Array with integer` striding 8; the same three tokens under a head naming `Array with Byte`
+	// are three bytes. That is the same job `CharSet from ['x', 'y', 'z']` does for a `Set` — the alias supplies
+	// what the bracket list cannot — and it is why `List`/`Vector` have no alias form: a list's and a vector's
+	// element are whatever the literal's elements already are.
+	//
+	// The head NAMES a type, so it is a use for the E3062 unused-type check — the hook
+	// `parseStringLiteralInitConstruction` takes for the same reason: this form never reaches
+	// `parseTypeReference` either.
+	function parseArrayFromConstruction(func IrFunction) returns ValueId throws ParseError
+		let headTok = try self.consume(TokenKind.identifier)
+		self.recordTypeNameUse(headTok.value)
+		try self.consume(TokenKind.from)
+
+		// The source must be an array literal `[…]`, exactly as it must for the other three `from` heads —
+		// `<alias> from <expr>` is not a construction shv2 parses.
+		if not self.at(TokenKind.leftBracket) 'notArrayLiteral'
+			let srcTok = self.current()
+			throw ParseError.unsupported("`{String.from(headTok.value)} from` requires an array literal `[…]` — `{String.from(headTok.value)} from <expr>` for another source is not a construction", line: srcTok.line, column: srcTok.column)
+		end 'notArrayLiteral'
+
+		return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.stated(self.signatures.genericAliasInstanceFrom(headTok.value, readerFilePath: self.filePath)))
+	end 'parseArrayFromConstruction'
+
 	function parseSetFromConstruction(func IrFunction) returns ValueId throws ParseError
 		let setTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.from)
@@ -45860,7 +46207,7 @@ export type Parser
 			return try self.parseCharacterMemberSetLiteral(func, range: SourceRange.ofToken(setTok))
 		end 'characterKeyed'
 
-		let arr = try self.parseArrayLiteral(func)
+		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 		let setGid = try self.setInstanceForArrayLiteral(self.valueNameId(arr), setTok: setTok)
 		return self.emitOwnedRuntimeResult(SetFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: setGid, range: SourceRange.ofToken(setTok))
 	end 'parseSetFromConstruction'
@@ -46845,7 +47192,7 @@ export type Parser
 			throw ParseError.unsupported("`List from` requires an array literal `[…]` — `List from <expr>` for another source is a later slice", line: srcTok.line, column: srcTok.column)
 		end 'notArrayLiteral'
 
-		let arr = try self.parseArrayLiteral(func)
+		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 		let listGid = self.signatures.builtinInstanceForElement(ListBuiltinBaseName, element: self.signatures.containerElementType(self.valueNameId(arr)))
 		try self.requireListElementType(listGid, tok: listTok)
 		// ⚠ `__list_from` reads the source buffer one machine WORD per slot, so an element that is byte-PACKED
@@ -47035,7 +47382,7 @@ export type Parser
 		// no literal admits — are reported by the reader that owns those sentences, before this arm asks a
 		// question about an element the program does not have.
 		let openIndex = self.pos
-		let arr = try self.parseArrayLiteral(func)
+		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 		let arrGiid = self.valueNameId(arr)
 		try self.requireVectorElementType(arrGiid, tok: vecTok)
 

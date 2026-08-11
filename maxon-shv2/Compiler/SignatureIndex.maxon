@@ -747,6 +747,17 @@ export function constArrayElementKindOf(element ConstArrayElement) returns Const
 	end 'e'
 end 'constArrayElementKindOf'
 
+// The NUMBER one folded element lays down in a `.rdata` blob. The `string` arm is unreachable and says so
+// rather than answering: a String element makes the array's instance MANAGED, and
+// `arrayElementMayBeConstantBlob` — which every caller of this asks first — refuses a managed element
+// because its slot holds a loader-chosen address rather than a value an image can contain.
+export function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
+	return match element 'e'
+		integer(payload) gives payload
+		string panic("constArrayElementScalar: a String element has no constant image — its slot holds a heap address, which is why `arrayElementMayBeConstantBlob` refuses the instance before this is asked")
+	end 'e'
+end 'constArrayElementScalar'
+
 // WHICH managed literal a top-level `let` folded to — the ONE fact a use site needs beyond the bytes,
 // because the two kinds materialize through different record shapes: a String literal is a wholly
 // immortal `.rdata` record, while a byte string is an owned `Array with Byte` record over an immortal
@@ -820,9 +831,15 @@ export union ManagedGlobalRecord
 	// slot's occupant is a CLONE of it — the `(box) -> newBox` dual of the `__str_decref` the cleanup drops
 	// it with, so the pair balances by construction.
 	stringRecord(bytes ByteArray)
-	// A `b"…"` literal ALREADY materializes as an owned heap 48-byte `Array` record over an immortal `.rdata`
-	// blob, which is precisely what the slot must hold — so there is nothing to clone.
-	byteStringRecord(bytes ByteArray)
+	// ⭐ A CONSTANT ARRAY literal ALREADY materializes as an owned heap 48-byte `Array` record over an
+	// immortal `.rdata` blob, which is precisely what the slot must hold — so there is nothing to clone, and
+	// nothing to build element by element either. `bytes` is the blob at `elementSize`'s stride.
+	//
+	// ⚠ **IT WAS `byteStringRecord(bytes)` UNTIL `codegen-internals`, WHICH IS THE SAME ARM AT STRIDE 1.** A
+	// `b"…"` literal is a constant array of bytes; `[10, 20, 30]` at file scope is a constant array of
+	// machine words. Keeping them two arms would have meant two builders emitting one op, and the second one
+	// arriving is what made the duplication visible.
+	constArrayRecord(elementSize ElementStride, elementCount ParsedInt, bytes ByteArray)
 	// ⭐ A CONTAINER (P1.7 slice 2b, widened by spec-port `map-struct-bytearray`, and to DECLARED generics at
 	// W41) has no literal record at all: it is BUILT, `create` then one `__arr_push` per element. `create`
 	// carries which callee and which stamps this instance fixes, resolved HERE (where the instance registry is)
@@ -1002,7 +1019,7 @@ end 'ContainerSizing'
 function managedLiteralRecord(bytes ByteArray, kind ManagedConstKind) returns ManagedGlobalRecord
 	return match kind 'k'
 		string gives ManagedGlobalRecord.stringRecord(bytes)
-		byteArray gives ManagedGlobalRecord.byteStringRecord(bytes)
+		byteArray gives ManagedGlobalRecord.constArrayRecord(ByteStringElementSize as ElementStride, elementCount: bytes.count() as ParsedInt, bytes: bytes)
 	end 'k'
 end 'managedLiteralRecord'
 
@@ -9780,8 +9797,36 @@ export type ProgramSignatures
 	// A literal INFERS it from its element kind (`constArrayValueType`); a container factory READ it off the
 	// alias the author wrote. Deriving it here would mean re-deriving one of those two from the other, and
 	// an empty container has no element kind to derive from at all.
+	// ⭐⭐ **AN ALL-CONSTANT ARRAY LITERAL IS ONE `.rdata` BLOB HERE TOO, AND IT IS THE SAME DECISION THE
+	// PARSER MAKES INSIDE A FUNCTION** (`Parser.parseCollectedArrayLiteralBody`) — one rule about what a
+	// constant array literal IS, asked at each of the two places a literal can be written rather than made
+	// true in a body and false at file scope. `specs/codegen-internals.md` pins both spellings of it: three
+	// of its cases write the literal in `main` and three write it at module scope, all six against the same
+	// `RequiredRdata` bytes, and the runnable oracle lays down the identical 24 bytes for each.
+	//
+	// ⚠ **A `var` GLOBAL TAKES THIS ARM TOO, AND THE FILE HEADER'S "NOT AN IMMORTAL RECORD" RULE IS
+	// UNBROKEN.** That rule is about SHARING one record: a `constArrayLiteral` mints a FRESH owned heap
+	// 48-byte record per materialization over a blob that is merely read-only, stamped
+	// `capacity@16 = RdataBufferCapacity` so the first receiver-writing method detaches onto a private heap
+	// buffer. It is exactly what already makes a mutable `b"…"` global work, and
+	// `rdata-global-var-array-cow-preserves-original` is the case that pins the whole of it.
+	//
+	// ⚠ **THE ELEMENT COUNT IS WHAT SEPARATES A LITERAL FROM A FACTORY**, which is this union's own stated
+	// rule ("a container factory IS an array literal with no elements"). An empty `IntArray.create()` global
+	// must stay a growable heap record, so it falls through — an immortal empty blob would be a record that
+	// cannot receive its first `push` without detaching from nothing.
 	function containerRecordOf(elements ConstArrayElementArray, giid GenericInstanceId) returns ManagedGlobalRecord
-		return ManagedGlobalRecord.containerRecord(self.containerCreateCall(giid), elements: elements)
+		if elements.count() == 0 or not self.arrayElementMayBeConstantBlob(giid) 'notAConstantBlob'
+			return ManagedGlobalRecord.containerRecord(self.containerCreateCall(giid), elements: elements)
+		end 'notAConstantBlob'
+
+		var constants = ParsedIntArray.create()
+		for element in elements 'eachElement'
+			constants.push(constArrayElementScalar(element))
+		end 'eachElement'
+
+		let blob = constArrayBlobOf(constants, stride: self.arrayElementSize(giid))
+		return ManagedGlobalRecord.constArrayRecord(blob.stride, elementCount: blob.elementCount, bytes: blob.bytes)
 	end 'containerRecordOf'
 
 	// ⭐ **THE TYPE ONE FOLDED RECORD VALUE DENOTES** — what its `.data` slot is sized as, what its value is
@@ -13145,18 +13190,32 @@ export type ProgramSignatures
 		return SignExtendSlot.fromBytes(slot.bytes) if slot.signExtends else SignExtendSlot.notASignExtension
 	end 'narrowSignedSlotOf'
 
-	// ⭐ **DOES THIS INSTANCE'S ELEMENT OCCUPY LESS THAN A MACHINE WORD?** — the question the constant array
-	// literal's `.rdata` blob path turns on (`Parser.parseArrayLiteral`). ONE comparison covers both ladders,
-	// because the stamp's own encoding puts every narrow answer below the word: a sub-byte element is
-	// NEGATIVE, a narrow byte-strided one is 1/2/4, and a machine-word or MANAGED element is exactly 8.
+	// ⭐ **MAY A CONSTANT LITERAL OF THIS INSTANCE'S ELEMENTS BE LAID DOWN AS ONE `.rdata` BLOB?** — the
+	// question the constant array literal's blob path turns on (`Parser.parseArrayLiteral`). A blob is the
+	// elements' STORED bytes concatenated at `arrayElementSize`'s stride, so an element qualifies exactly
+	// when its stored form IS its value, and only two kinds fail that:
+	//   • a MANAGED element's slot holds a POINTER to a heap box, and an address the loader chooses is not
+	//     a value a compile-time image can contain;
+	//   • an OPAQUE type parameter's slot is a machine word whose content depends on the concrete instance
+	//     the shared body is called with, so there is no ONE image to lay down.
+	// Everything else stores its own value inline at a stride this index already answers — `bool`, a
+	// sub-byte-packed ranged alias, a narrow enum tag, `integer`, `ExitCode`, a function pointer.
 	//
-	// ⚠ It compares against `MachineWordBytes` and NOT against `ManagedArrayElementBytes`, which is the same
-	// 8 for a different reason: the question here is "is this narrower than a REGISTER", and a managed
-	// element answers no by being a pointer that happens to be one. Two constants agreeing with nothing
-	// making them agree is how a width stops meaning what a door assumed.
-	export function arrayElementIsNarrow(id GenericInstanceId) returns bool
-		return self.arrayElementSize(id) < MachineWordBytes
-	end 'arrayElementIsNarrow'
+	// ⚠ **ANSWERING YES IS NOT THE SAME AS REACHING A BLOB, and `float` is the case that shows it.** This
+	// predicate admits a float or function element to the COLLECT path; whether that path then lays a blob
+	// down is `everyElementIsAKnownConstant`'s question, and that one is the integer domain only. So a
+	// `[1.5, 2.5]` literal collects and then builds through `__arr_create` + pushes like any other.
+	//
+	// ⚠⚠ **IT ASKED "IS THE ELEMENT NARROWER THAN A MACHINE WORD" UNTIL THIS SPEC, AND THAT EXCLUDED THE
+	// MACHINE WORD FOR A REASON NO PROGRAM COULD SEE — golden stability.** `specs/codegen-internals.md`
+	// states the rule with no width in it (*"Constant array literals (declared with `let`) are stored in
+	// the `.rdata` section"*) and pins `[10, 20, 30]` as `i64[] 10, 20, 30`; under the narrow gate that
+	// literal reached `__arr_create` + three `__arr_push` and the section held no such bytes AT ALL. The
+	// runnable oracle agrees with the spec — the bootstrap lays 24 bytes of `.rdata` for it. Width was
+	// never the question; whether the slot owns its own bytes is.
+	export function arrayElementMayBeConstantBlob(id GenericInstanceId) returns bool
+		return not self.containerElementIsManaged(id) and not self.containerElementIsOpaque(id)
+	end 'arrayElementMayBeConstantBlob'
 
 	// ⭐⭐ **IS THIS INSTANCE'S ELEMENT SUB-BYTE PACKED, AND HOW WIDE — THE ONE HOME OF THE PACKING RULE.**
 	// `NotSubBytePacked` for every element a byte or wider. The stamp above is derived from it, and so is

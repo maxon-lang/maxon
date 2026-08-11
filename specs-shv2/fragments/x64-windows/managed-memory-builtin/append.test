@@ -8,7 +8,7 @@ function main() returns ExitCode
 	try b.setLength(2) otherwise return 5
 	try b.set(0, value: 3) otherwise return 6
 	try b.set(1, value: 4) otherwise return 6
-	try a.append(b) otherwise return 7
+	a.append(b)
 	if a.length() != 4 'badLen'
 		return 8
 	end 'badLen'
@@ -220,26 +220,7 @@ func @main {
   tryok:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __arr_mem_append
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.movRegImm32 r13, 7
-    x64.movRegReg rcx, r12
-    x64.callDirect __arr_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
+    x64.callDirect __arr_append
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_count
     x64.cmpRegImm32 r8, 4

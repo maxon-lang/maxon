@@ -154,16 +154,16 @@ func @show {
     x64.jcc equal, matcharm
     x64.jmp matchnext
   matcharm:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __print_string
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect print
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rcx, 1
     x64.jcc equal, matcharm
     x64.jmp matchnext
   matcharm:
-    x64.leaRegRdata rcx, [rip + __str_rec_3]
-    x64.callDirect __print_string
+    x64.leaRegRdata rcx, [rip + __str_rec_4]
+    x64.callDirect print
     x64.jmp matchcont
   matchnext:
     x64.cmpRegImm32 rcx, 2
@@ -171,7 +171,7 @@ func @show {
     x64.jmp matchdead
   matcharm:
     x64.leaRegRdata rcx, [rip + __str_rec_5]
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.jmp matchcont
   matchcont:
     x64.epilogue 32
@@ -217,6 +217,17 @@ func @main {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

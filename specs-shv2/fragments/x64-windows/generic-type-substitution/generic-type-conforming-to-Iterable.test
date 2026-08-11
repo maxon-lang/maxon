@@ -104,7 +104,9 @@ func @BoxIter.current {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.loadRegBaseDisp.word64 rdx, [rcx + 8]
     x64.movRegReg rcx, rax
@@ -116,11 +118,16 @@ func @BoxIter.current {
     x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.epilogue 32
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -238,6 +245,7 @@ func @main {
     x64.jcc equal, walk
     x64.jmp forexit
   walk:
+    x64.leaRegRdata rdx, [rip + __layout_BoxIter_Integer]
     x64.movRegReg rcx, r13
     x64.callDirect BoxIter.current
     x64.leaRegRegReg r12, r12, r8

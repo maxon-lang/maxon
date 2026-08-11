@@ -182,7 +182,7 @@ func @main {
     x64.movRegImm32 rax, 0
     x64.storeBaseDispReg.word64 [r12 + 8], rax
     x64.movRegReg rcx, r13
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegReg rcx, r13
     x64.callDirect __str_decref
     x64.jmp matchcont
@@ -221,4 +221,15 @@ func @main {
     x64.popReg rbp
     x64.ret
   matchdead:
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
 }

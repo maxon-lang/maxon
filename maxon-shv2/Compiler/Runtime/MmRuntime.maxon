@@ -490,6 +490,46 @@ export function emitWordSlotStore(module StdModule, block IrBlock, base ValueId,
 	emitStoreField(module, block: block, record: emitWordSlotAddr(module, block: block, base: base, index: index, ids: ids), offset: 0, value: value)
 end 'emitWordSlotStore'
 
+// ⭐⭐ **NULL A SLOT WHOSE ELEMENT HAS BEEN MOVED OUT OF A BORROWED ARRAY — AND ONLY WHEN THE NULL MEANS
+// SOMETHING.** `__set_from` and `__list_from` both drain an array the caller still owns: each element is
+// handed to the new container, and the source slot is then nulled so the array's OWN `__arr_decref` walk
+// does not drop a key the container now owns. This is that step, written once for both.
+//
+// ⛔⛔ **THE GUARD IS THE WHOLE POINT, AND WITHOUT IT THIS IS A WILD WRITE INTO READ-ONLY MEMORY.** The
+// array's decref walk drops slots only when the record carries a per-element destructor
+// (`element_destroy@40 != 0`), so for a TRIVIAL element the null does no work — both call sites already
+// said so in a comment (*"a trivial int element is unaffected by the null"*) and stored anyway. That was
+// harmless only while every array reaching them was heap-allocated. It no longer is: an all-constant array
+// literal is now an owned record over an IMMORTAL `.rdata` blob (`LowerMaxonToStd.lowerConstArrayLiteral`),
+// and `Set from [1, 2, 3]` drained one straight into `.rdata` — **exit 0xC0000005, 13 cases**.
+//
+// ⭐ **AND THE TWO CONDITIONS COINCIDE EXACTLY, WHICH IS WHY THIS GUARD IS A CURE AND NOT A PATCH.** A
+// record may have an immortal buffer only if its element stores its own bytes
+// (`SignatureIndex.arrayElementMayBeConstantBlob` refuses a managed or opaque element), and such a record's
+// `element_destroy@40` is never written — `lowerConstArrayLiteral` leaves it at the zero `__mm_alloc`
+// guarantees. So *immortal ⇒ trivial ⇒ guarded out*: the store that could reach read-only memory is
+// precisely the store that was doing nothing. Nothing that was doing work is skipped.
+//
+// ⚠ It is a RUN-TIME test and cannot be a compile-time one: one program's `__set_from` serves every
+// `Set from […]` in it, so a program with both an int-keyed and a String-keyed set needs both answers from
+// one body.
+//
+// It returns the block execution continues in, because it FORKS: the caller goes on emitting into that.
+export function emitMovedOutSlotClear(module StdModule, func IrFunction, block IrBlock, base ValueId, index ValueId, elemDrop ValueId, ids ValueMinter) returns IrBlock
+	var clear = module.addBlock(func, label: b"clearmoved")
+	let resume = module.addBlock(func, label: b"moveddone")
+
+	let noDrop = emitConst(module, block: block, value: 0, ids: ids)
+	let ownsElements = emitCmp(module, block: block, a: elemDrop, b: noDrop, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(ownsElements, thenBlockId: clear.id, elseBlockId: resume.id))
+
+	let nullSlot = emitConst(module, block: clear, value: 0, ids: ids)
+	emitWordSlotStore(module, block: clear, base: base, index: index, value: nullSlot, ids: ids)
+	module.setTerminator(clear, op: StdOp.branch(resume.id))
+
+	return resume
+end 'emitMovedOutSlotClear'
+
 // `a <op> b` into a fresh value.
 export function emitBin(module StdModule, block IrBlock, a ValueId, b ValueId, opcode StdBinOpcode, ids ValueMinter) returns ValueId
 	let v = ids.mint()

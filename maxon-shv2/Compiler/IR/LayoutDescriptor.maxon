@@ -364,8 +364,10 @@ end 'elementsByteLen'
 // here rather than in the runtime because the layout tier is the lower of the two.
 export let BitsPerByte = 8 as ParsedInt
 
-// ⭐⭐ **THE `.rdata` IMAGE OF A RUN OF CONSTANT ELEMENTS, AT EITHER LADDER — the one door
-// `Parser.emitNarrowArrayBlob` hands a constant array literal through.** It dispatches on the SIGN of the
+// ⭐⭐ **THE `.rdata` IMAGE OF A RUN OF CONSTANT ELEMENTS, AT EITHER LADDER — the serializer every constant
+// array literal's blob goes through, wherever the literal was written.** `constArrayBlobOf` below is its one
+// caller and composes the whole `(stride, count, bytes)` description around it, so the in-body and file-scope
+// spellings of one literal cannot serialize differently. It dispatches on the SIGN of the
 // stride for `elementsByteLen`'s reason, and the two must agree to the byte: that function sizes the buffer
 // this fills, and a byte-strided run sized as though its stride were a bit width (or the reverse) is a blob
 // whose length and whose contents disagree.
@@ -373,7 +375,39 @@ export let BitsPerByte = 8 as ParsedInt
 // A byte-strided element is little-endian, `stride` bytes each, exactly as `GlobalDataTable`'s `.data` image
 // writes a scalar global — one serializer for both, so a `u16` enum element in `.rdata` and a `u16` global in
 // `.data` cannot come to lay their two bytes down differently.
-export function constantElementsImage(values ParsedIntArray, stride ElementStride) returns ByteArray
+// ⭐⭐ **THE WHOLE DESCRIPTION OF A CONSTANT ARRAY LITERAL'S `.rdata` BLOB — stride, element count and bytes,
+// composed ONCE.** The three travel together everywhere they go (`MaxonOp.constArrayLiteral`,
+// `ManagedGlobalRecord.constArrayRecord`), and they are not independent: the count is the run's length and
+// the bytes are that run serialized AT that stride, so a producer that got any pair from one place and the
+// third from another could hand on a length and an image that disagree.
+export type ConstArrayBlob
+	export let stride as ElementStride
+	export let elementCount as ParsedInt
+	export let bytes as ByteArray
+
+	// Private to `constArrayBlobOf` below, which is the point: the three fields are only correct together,
+	// so there is one way to make the triple and it derives two of them from the third.
+	static function create(stride ElementStride, elementCount ParsedInt, bytes ByteArray) returns ConstArrayBlob
+		return Self{stride: stride, elementCount: elementCount, bytes: bytes}
+	end 'create'
+end 'ConstArrayBlob'
+
+// ⭐⭐ **THE ONE FACTORY, AND THE REASON IT IS ONE.** A constant array literal has TWO spellings — written in
+// a function body (`Parser.emitConstantArrayBlob`) and written at file scope (`ProgramSignatures.
+// containerRecordOf`) — reaching this from two different element representations, `ValueId`s and folded
+// `ConstArrayElement`s. `specs/codegen-internals.md` pairs those spellings across six cases and requires them
+// to produce IDENTICAL ```RequiredRdata bytes.
+//
+// ⛔ They each composed `(stride, count, bytes)` for themselves until this existed, sharing only the
+// eligibility predicate and the serializer below. That is the shape this repo pays for hardest: a change to
+// one composition is **a wrong answer at the other, not a compile error** — the two spellings would simply
+// lay down different bytes and only a byte-pin would ever say so. Callers now supply the numbers; the
+// composition is here.
+export function constArrayBlobOf(values ParsedIntArray, stride ElementStride) returns ConstArrayBlob
+	return ConstArrayBlob.create(stride, elementCount: values.count() as ParsedInt, bytes: constantElementsImage(values, stride: stride))
+end 'constArrayBlobOf'
+
+function constantElementsImage(values ParsedIntArray, stride ElementStride) returns ByteArray
 	if stride < 0 'subBytePacked'
 		return packConstantElements(values, packedBits: (0 - stride) as PackedBitWidth)
 	end 'subBytePacked'

@@ -47,7 +47,12 @@ func @Box.get {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect __retain_type_param
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }
@@ -67,6 +72,7 @@ func @main {
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_create
     x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __layout_Box_Integer]
     x64.movRegReg rcx, rbx
     x64.callDirect Box.get
     x64.movRegReg rcx, r12

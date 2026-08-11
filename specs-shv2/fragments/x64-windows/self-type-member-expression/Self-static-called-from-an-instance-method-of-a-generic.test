@@ -49,14 +49,21 @@ func @Holder.twin {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.callDirect Holder.make
-    x64.loadRegBaseDisp.word64 rbx, [r8 + 0]
-    x64.movRegReg rcx, r8
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rdx, [r12 + 0]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __retain_type_param
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
     x64.callDirect __mm_decref
     x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -72,6 +79,7 @@ func @main {
     x64.movRegImm32 rcx, 42
     x64.callDirect Holder.make
     x64.movRegReg rbx, r8
+    x64.leaRegRdata rdx, [rip + __layout_Holder_Num]
     x64.movRegReg rcx, rbx
     x64.callDirect Holder.twin
     x64.movRegReg r12, r8

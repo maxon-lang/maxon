@@ -16,7 +16,7 @@ function main() returns ExitCode
 	let more = try __ManagedMemory.create(1, elementSize: 8) otherwise return 10
 	try more.setLength(1) otherwise return 11
 	try more.set(0, value: 33) otherwise return 12
-	try words.append(more) otherwise return 13
+	words.append(more)
 	total = total + words.length()
 	words.clear()
 	total = total + words.length()
@@ -307,28 +307,7 @@ func @main {
   tryok:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
-    x64.callDirect __arr_mem_append
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.movRegImm32 r12, 13
-    x64.movRegReg rcx, r14
-    x64.callDirect __arr_decref
-    x64.movRegReg rcx, r13
-    x64.callDirect __arr_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __arr_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r15
-    x64.popReg r14
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
+    x64.callDirect __arr_append
     x64.movRegReg rcx, rbx
     x64.callDirect __arr_count
     x64.leaRegRegReg r12, r12, r8

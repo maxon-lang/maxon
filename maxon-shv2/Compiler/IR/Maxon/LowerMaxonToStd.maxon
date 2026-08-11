@@ -556,8 +556,71 @@ function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteInd
 end 'requireSiteOrdinalsAscend'
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule
+	registerProgramLiteralBlobs(maxonModule, globalData: project.globalData)
 	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower(project)
 end 'lowerMaxonToStd'
+
+// ⭐⭐ **EVERY BLOB THE PROGRAM'S OWN SOURCE NAMES IS REGISTERED BEFORE ANY THE COMPILER COMPOSES — the
+// `.rdata` ordering, made a PROPERTY here rather than left to the order the lowering happens to reach
+// things in.** A read-only image opens with the payloads a reader can point at in the source, and only
+// then carries what the compiler added: panic messages, String records, layout descriptors, witness
+// tables, float islands, jump tables.
+//
+// ⭐ **THAT IS THE REFERENCE'S GUARANTEE, NOT AN INVENTION.** v1's `PassPipeline.maxon` runs
+// `constantArrayLiteralRdata` (:85) ahead of `lowerMaxonToStd` (:87) and `insertRangeChecks` (:115) — the
+// two passes that mint its `__panic_msg_*` blobs — so in v1 every constant-array blob precedes every panic
+// string by construction. `specs/codegen-internals.md` is written against that layout and pins payloads at
+// offset 0 accordingly; without this, shv2 put the `panic("…")` blob of a function BODY in front of a
+// module-level global's array blob, and the pin read the message instead.
+//
+// ⭐ **IT COSTS NO SECOND COMPUTATION, ONLY AN ORDER.** `GlobalDataTable.registerRdataConstant` dedupes by
+// BYTES, so when `lowerStringLiteral` / `lowerConstArrayLiteral` reach the same literal they are handed the
+// label this minted — the identical call, returning the identical answer. Nothing is built twice and no
+// second blob-shaping path exists to drift.
+//
+// ⚠ **WHAT IT DOES COST: one additional traversal of the module's ops, and it was not foldable.** The two
+// existing walks at this point in the pipeline cannot carry it — `scanRuntimeUsage` is a pure analysis
+// whose whole contract is to compute a usage struct (threading a mutable `.rdata` sink through it would
+// make every `record*Usage` helper a potential mutator), and `collectFnRefThunkTargets` harvests function
+// names for the env-thunk ABI, which this shares nothing with but the loop shape. It sits inside
+// `lowerMaxonToStd` rather than beside them so the ordering is established in the same file that would
+// otherwise interleave these registrations, and so it needs no pipeline wiring of its own. Per op it is one
+// union match, against a lowering that then does real work on every one of them.
+//
+// ⚠⚠ **THE RESIDUAL, NAMED: A SECOND PROGRAM LITERAL AHEAD OF THE PINNED ONE STILL DISPLACES IT.** A
+// `print("x")` written above a pinned array literal registers first and the pin reads `"x"`. This ordering
+// does not fix that and neither does v1's — it is a property of a ```RequiredRdata block being compared as
+// a PREFIX FROM BYTE 0 with no label to anchor on, which is the pin's semantics rather than this walk's
+// fault. The cure for it is a label-anchored read (`Testing/SpecTestRunner.compareLinkedSection`), which is
+// a harness question and not this one.
+function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalDataTable)
+	for func in maxonModule.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try maxonModule.blocks.get(blockRef) otherwise panic("registerProgramLiteralBlobs: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				let op = try maxonModule.ops.get(opIdx) otherwise panic("registerProgramLiteralBlobs: opIdx {opIdx} not in module.ops")
+				registerIfProgramLiteral(op, globalData: globalData)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'registerProgramLiteralBlobs'
+
+// The two ops that carry a blob the SOURCE wrote. It RANGES over the whole `MaxonOp` union so a
+// newly-appended op FAILS TO COMPILE here rather than being silently left out of the ordering — the
+// band-append invariant `FnRefThunk.noteIfFunctionRef` states, and the same reason: an op added later that
+// carries a program literal must be a decision, not an omission.
+//
+// Both arms call the very function the lowering calls (`registerStringBlob`, `registerByteArrayLiteralBlob`),
+// so the bytes this registers and the bytes the lowering asks for are one shaping, not two.
+function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
+	match op 'op'
+		call to storeIndirect then break 'op'
+		stringLiteral(_, bytes) then _ = registerStringBlob(globalData, bytes: bytes)
+		tryCall to sizeofType then break 'op'
+		constArrayLiteral(_, _, _, bytes) then _ = registerByteArrayLiteralBlob(globalData, bytes: bytes)
+		switch to panicAbortValue then break 'op'
+	end 'op'
+end 'registerIfProgramLiteral'
 
 // The label guard shared by `lowerRuntimeCall` (a plain `call`) and the compiler-internal arm of
 // `lowerTryCall` (a throwing `tryCall`): a runtime entry point is declared by nothing, so there is no

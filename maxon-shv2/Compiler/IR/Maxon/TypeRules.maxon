@@ -1286,6 +1286,30 @@ export function aliasIsFloat(alias RangedTypeAlias) returns bool
 	return tagIsFloat(maxonTypeTag(alias.underlying))
 end 'aliasIsFloat'
 
+// ⭐ **THE STRIDE A VALUE OF THIS ALIAS OCCUPIES AS AN ARRAY ELEMENT.** The alias-keyed twin of
+// `SignatureIndex.arrayElementSize`, which asks the same question of a container INSTANCE — and both compose
+// it through the one `elementStrideOf`, so a stride cannot mean one thing on the value that fills an element
+// and another on the instance that stores it.
+//
+// ⚠ **IT IS ASKED OF EVERY `as`, AND WHAT IS BOUNDED IS THE ANSWER'S COST — NOT THE QUESTION.** Both callers
+// reach `Parser.storageDiffersFromAlias`: the array-literal element door asks it of an instance's slot, and
+// `Parser.mayRetypeForNarrowerStorage` asks it of an `as` target on every cast. That is safe only because a
+// yes now RENAMES the value in place (`retypeValue`, no op) instead of minting a second one. It was briefly a
+// sixth arm of `applyCast`'s MINT list, and that broke two programs outright — see
+// `Parser.castChangesTheElementPacking`'s ⛔⛔ block for the measurement.
+//
+// ⚠ **THE FLOAT ARM IS `aliasChangesTheDivisionProof`'s, for its reason and not a rounding of it:** a ranged
+// FLOAT alias's `low`/`high` are IEEE-754 BIT PATTERNS, which `rangedAliasStorageBytes` would read as
+// ordinary integers and answer a narrow slot for. Maxon's `float` IS f64, so a float element is a machine
+// word whatever bounds were written on it.
+export function aliasElementStride(alias RangedTypeAlias) returns ElementStride
+	if aliasIsFloat(alias) 'aFloatDomain'
+		return MachineWordBytes
+	end 'aFloatDomain'
+
+	return elementStrideOf(rangedAliasPackedBits(alias.low, high: alias.high), storageBytes: rangedAliasStorageBytes(alias.low, high: alias.high))
+end 'aliasElementStride'
+
 // ⚠⚠ **A DOUBLE'S BIT PATTERN DOES NOT ORDER LIKE ITS VALUE.** IEEE-754 is sign-and-magnitude, so
 // among NEGATIVES the integer order is exactly REVERSED (-1.0's pattern is numerically larger than
 // -100.0's), and `-0.0`'s pattern is `i64.min` while `+0.0`'s is zero. This maps a pattern to an i64

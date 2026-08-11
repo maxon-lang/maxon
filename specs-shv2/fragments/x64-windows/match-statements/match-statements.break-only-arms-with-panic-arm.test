@@ -75,7 +75,7 @@ func @Holder.assertUsable {
     x64.jcc equal, matcharm
     x64.jmp matchnext
   matcharm:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.epilogue 32
     x64.popReg rbp
@@ -127,7 +127,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Holder.assertUsable
     x64.leaRegRdata rcx, [rip + __str_rec_2]
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Holder
@@ -136,6 +136,17 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

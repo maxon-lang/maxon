@@ -104,8 +104,8 @@ func @main {
     x64.jcc notEqual, eq
     x64.jmp ifcont
   eq:
-    x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __print_string
+    x64.leaRegRdata rcx, [rip + __str_rec_2]
+    x64.callDirect print
     x64.jmp ifcont
   ifcont:
     x64.movRegReg rcx, rbx
@@ -117,7 +117,7 @@ func @main {
     x64.jmp ifcont
   neq:
     x64.leaRegRdata rcx, [rip + __str_rec_3]
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.jmp ifcont
   ifcont:
     x64.movRegImm32 r14, 0
@@ -133,6 +133,17 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

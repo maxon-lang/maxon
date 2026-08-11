@@ -46,7 +46,7 @@ func @main {
     x64.jmp trycont
   trycont:
     x64.leaRegRdata rcx, [rip + __str_rec_1]
-    x64.callDirect __print_string
+    x64.callDirect print
     x64.movRegImm32 rax, 100
     x64.movRegImm32 rdx, 0
     x64.divReg r12
@@ -75,6 +75,17 @@ func @main {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

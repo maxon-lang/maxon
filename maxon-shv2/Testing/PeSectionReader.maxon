@@ -79,15 +79,45 @@ export union PeReadError implements Error
 	end 'displayReason'
 end 'PeReadError'
 
+// ⭐⭐ **WHAT A SECTION PIN CLAIMS — AND THE TWO SPELLINGS CLAIM DIFFERENT THINGS.** The distinction is
+// about what a line NAMES, not about convenience:
+//
+//   • a SCALAR or ARRAY line (`i64 42`, `u8[] 0, 1, 2`) describes FIELDS OF ONE PAYLOAD. Several such
+//     lines are one blob written across several lines, so their bytes are contiguous BY CONSTRUCTION and
+//     the claim includes where that blob sits — compared as a run from byte 0.
+//   • a `utf8` line names ONE INTERNED STRING BLOB: a separately-registered payload with its own label,
+//     which the table is free to place anywhere. Two such blobs being ADJACENT is not a property of the
+//     language, the compiler or the program — it is an artifact of what else happened to register between
+//     them — so pinning it would be pinning the artifact. Each is located independently, in order.
+//
+// ⛔ **A BLOCK MAY NOT MIX THEM**, and that is a REFUSAL rather than a guess: the two forms disagree about
+// whether a block's lines are one payload or many, so a mixed block has no meaning to compute. Guessing one
+// is the "reads as coverage, pins nothing" shape this file refuses everywhere else.
+export union SectionPinExpectation
+	// One payload, compared as a run from byte 0 — see `compareSectionPrefix` for why a PREFIX and not an
+	// equality.
+	contiguousRun(bytes ByteArray)
+	// N independently-placed blobs, each found at or after the end of the previous one.
+	locatedPayloads(payloads ByteArrayArray)
+end 'SectionPinExpectation'
+
 // Why a ```RequiredData block could not be turned into bytes.
 export union TypedValueError implements Error
 	missingValue(line String)
 	unknownType(typeName String)
 	badNumber(typeName String, text String)
+	unquotedText(typeName String, text String)
+	unknownEscape(escape String)
+	mixedPinForms
+	emptyTextPayload
 
 	export function displayReason() returns String
 		return match self 'k'
 			missingValue(line) gives "line '{line}' is not `<type> <value>`"
+			unquotedText(typeName, text) gives "a {typeName} value is a DOUBLE-QUOTED string, and '{text}' is not one"
+			unknownEscape(escape) gives "unknown escape sequence '{escape}' in a {Utf8TypeName} value"
+			emptyTextPayload gives "a `{Utf8TypeName}` line decodes to NO bytes, which pins nothing — the empty run occurs in every image ever linked, so the line could not fail. Give it the payload it means, or delete it"
+			mixedPinForms gives "the block mixes `{Utf8TypeName}` lines with scalar/array lines, and the two cannot be combined — a `{Utf8TypeName}` line names ONE interned blob and is located independently, while scalar and array lines describe fields of a SINGLE payload compared from byte 0, so a mixed block does not say whether its lines are one payload or several. Write them as separate blocks"
 			// ⚠ **THE ROSTER IS BUILT FROM THE TABLE, NOT TRANSCRIBED BESIDE IT.** A spec author reading this
 			// message needs to know which names exist, and it said `i8/i16/i32/i64/f64` for as long as `u8`
 			// had been accepted — a stale list is worse than none, because it reads as an authority. So the
@@ -162,8 +192,12 @@ end 'readPeSectionData'
 // ⭐ `f64` ARRIVED WITH P1.0d.4, WHICH IS WHAT THIS COMMENT SAID IT WAS WAITING FOR. It was shelved
 // because a float global could not be compiled at all; it can now, and the two `data-section-f64-*`
 // cases that were parked behind it are the gate on the eight bytes `3.14` actually lays down.
-export function parseTypedSectionValues(block String) returns ByteArray throws TypedValueError
+export function parseTypedSectionValues(block String) returns SectionPinExpectation throws TypedValueError
 	var out = ByteArray.create()
+	var payloads = ByteArrayArray.create()
+	// Tracked rather than inferred from `out.count()`: an array line with no elements contributes zero
+	// bytes, and "a scalar line was written" is the question the mixed-form refusal asks.
+	var sawFieldLine = false
 	for rawLine in block.split("\n") 'eachLine'
 		let line = rawLine.trim()
 		if line.isEmpty() 'blank'
@@ -186,6 +220,17 @@ export function parseTypedSectionValues(block String) returns ByteArray throws T
 		// BYTES with no scalar spelling at all — `[0 as Q, 1 as Q, 2 as Q, 3 as Q]` at 2 bits is the single
 		// byte `0b11_10_01_00` — and pinning it byte-for-byte is the only way a spec can prove the bit
 		// ORDER and the `ceil(count·bits/8)` sizing rather than merely the values that read back out.
+		// ⭐ **`utf8 "…"` IS A LINE OF TEXT, NOT A WIDTH** — the one spelling in the notation whose length
+		// comes from the VALUE rather than from the type name, which is why it branches ahead of the width
+		// lookup instead of taking a row in `typedValueTypes`. A string literal's `.rdata` blob is the bytes
+		// of its source text plus the NUL the compiler appends, and `\0` is how a pin says that NUL —
+		// `specs/codegen-internals.md`'s six string cases are the whole of its use in the canonical corpus.
+		if typeName == Utf8TypeName 'aTextPayload'
+			payloads.push(try utf8PinBytes(valueText))
+			continue
+		end 'aTextPayload'
+
+		sawFieldLine = true
 		let elementType = arrayElementTypeName(typeName)
 		let byteCount = try typedValueByteCount(elementType)
 		if elementType == typeName 'oneScalarValue'
@@ -203,8 +248,63 @@ export function parseTypedSectionValues(block String) returns ByteArray throws T
 		end 'eachElement'
 	end 'eachLine'
 
-	return out
+	// ⛔ The two forms answer "is this block one payload or several?" differently, so a block written in both
+	// answers it twice. Refused by name rather than resolved — see `SectionPinExpectation`.
+	if sawFieldLine and payloads.count() > 0 'mixedForms'
+		throw TypedValueError.mixedPinForms
+	end 'mixedForms'
+
+	if payloads.count() > 0 'everyLineNamedABlob'
+		return SectionPinExpectation.locatedPayloads(payloads)
+	end 'everyLineNamedABlob'
+
+	return SectionPinExpectation.contiguousRun(out)
 end 'parseTypedSectionValues'
+
+// Where a payload sits in a section, or that it is not there at all. A union rather than a `-1`: "found at
+// offset 0" and "absent" are different answers and a sentinel would let the first read as the second.
+export union SectionPayloadMatch
+	found(offset ByteOffset)
+	absent
+end 'SectionPayloadMatch'
+
+// ⭐ The first occurrence of `needle` in `haystack` at or after `from`. Plain byte-by-byte scan: a section
+// is kilobytes and a pin has a handful of payloads, so the scan is not worth an index.
+//
+// An EMPTY needle answers `found(from)` — the empty run does occur, everywhere. It is unreachable from a pin
+// (`SpecParser` refuses an empty block and a `utf8 ""` line still carries no bytes only if a spec writes
+// one), and answering `absent` for it would be the wrong sentence about a real question.
+export function findByteRun(haystack ByteArray, needle ByteArray, from ByteOffset) returns SectionPayloadMatch
+	if needle.count() == 0 'theEmptyRunIsEverywhere'
+		return SectionPayloadMatch.found(from)
+	end 'theEmptyRunIsEverywhere'
+
+	if needle.count() > haystack.count() 'longerThanTheSection'
+		return SectionPayloadMatch.absent
+	end 'longerThanTheSection'
+
+	for start in from upto haystack.count() - needle.count() + 1 'eachStart'
+		if byteRunMatchesAt(haystack, needle: needle, start: start) 'thisOne'
+			return SectionPayloadMatch.found(start)
+		end 'thisOne'
+	end 'eachStart'
+
+	return SectionPayloadMatch.absent
+end 'findByteRun'
+
+// Does `needle` sit at exactly `start`? The caller's bound guarantees the window fits, which is why both
+// reads panic rather than answering false — a miss here would be an index error wearing a mismatch's clothes.
+function byteRunMatchesAt(haystack ByteArray, needle ByteArray, start ByteOffset) returns bool
+	for i in 0 upto needle.count() 'eachByte'
+		let want = try needle.get(i) otherwise panic("byteRunMatchesAt: needle.get OOB at {i} despite the upto bound")
+		let got = try haystack.get(start + i) otherwise panic("byteRunMatchesAt: haystack.get OOB at {start + i} — the caller's bound keeps the window inside the section")
+		if want != got 'differs'
+			return false
+		end 'differs'
+	end 'eachByte'
+
+	return true
+end 'byteRunMatchesAt'
 
 // What separates the elements of an array line, and what marks a type name as one. Named together
 // because they are one notation and a reader deciding whether `u8[] 1, 2` is an array reads both.
@@ -225,6 +325,115 @@ end 'arrayElementTypeName'
 // The type name whose value is a FLOAT literal rather than an integer one. Named because two
 // places ask it — the width and the parse — and they must agree.
 let F64TypeName = "f64"
+
+// --- `utf8 "…"`: the one pin spelling whose LENGTH comes from its value ---
+
+// The type name a text payload is written under. It has no row in `typedValueTypes` on purpose: that
+// table answers a WIDTH, and this line's width is however many bytes its string decodes to.
+let Utf8TypeName = "utf8"
+
+// A `utf8` value is a double-quoted string; the shortest legal one is the empty `""`.
+let QuoteMark = "\""
+let ShortestQuotedValue = 2 as ByteCount
+
+// ⭐ **THE BYTES A `utf8` PIN CLAIMS — a SECOND escape decoder, and this file's header is the argument
+// for it.** `Parser.decodeEscapes` turns a SOURCE literal into the bytes the compiler then lays down; if
+// this gate resolved the pin's escapes through that same function, a bug in it would move the expectation
+// and the image together and the pin could never see it. Reading independently is the only reading that
+// can disagree, which is the whole reason this reader is not the writer's codec.
+//
+// ⚠ It stays SMALL by covering only what the notation needs — the one-byte escapes. `\xNN` and `\uNNNN`
+// are REFUSED BY NAME rather than half-implemented: no canonical pin writes one (`\0` is the only escape
+// in the corpus, and only `specs/codegen-internals.md`'s six string cases use the spelling at all), and a
+// named refusal is what this file already does with every other thing it cannot express.
+function utf8PinBytes(valueText String) returns ByteArray throws TypedValueError
+	if valueText.count() < ShortestQuotedValue or not valueText.startsWith(QuoteMark) or not valueText.endsWith(QuoteMark) 'notQuoted'
+		throw TypedValueError.unquotedText(Utf8TypeName, text: valueText)
+	end 'notQuoted'
+
+	// ⛔ **AN EMPTY PAYLOAD IS A PIN THAT CANNOT FAIL, which is what `rdata-section.md` refuses an empty
+	// BLOCK for — the same hole one line down.** `findByteRun` answers `found` for an empty needle, correctly
+	// (the empty run does occur, everywhere), so a `utf8 ""` line would pass against every image ever linked
+	// and say nothing. Refused here, by name, rather than left to read as coverage.
+	if valueText.count() == ShortestQuotedValue 'nothingPinned'
+		throw TypedValueError.emptyTextPayload
+	end 'nothingPinned'
+
+	let raw = valueText.toByteArray()
+	let bodyEnd = raw.count() - 1
+	var out = ByteArray.create()
+	var i = 1 as ByteOffset
+	while i < bodyEnd 'eachByte'
+		let ch = try raw.get(i) otherwise panic("utf8PinBytes: i < bodyEnd just held but get({i}) failed")
+		if ch != PinBackslash 'aPlainByte'
+			out.push(ch)
+			i = i + 1
+			continue
+		end 'aPlainByte'
+
+		if i + 1 >= bodyEnd 'danglingBackslash'
+			throw TypedValueError.unknownEscape(pinEscapeText(PinBackslash))
+		end 'danglingBackslash'
+
+		let marker = try raw.get(i + 1) otherwise panic("utf8PinBytes: i + 1 < bodyEnd just held but get({i + 1}) failed")
+		out.push(try pinEscapeByte(marker))
+		i = i + 2
+	end 'eachByte'
+
+	return out
+end 'utf8PinBytes'
+
+// The escapes a `utf8` pin accepts, in `Parser.escapeByte`'s order and shape: the named control bytes, then
+// the self-escapes — a backslash and the delimiters a quoted body must be able to contain.
+//
+// ⚠ **AN IF-CHAIN AND NOT A TABLE, WHICH MIRRORS THE DECODER IT IS INDEPENDENT OF AND ALLOCATES NOTHING.**
+// It was a 9-row `Array` built inside this function, so every escape in every pin constructed the whole
+// table to walk it once. The rows carried no data the chain does not; a constant is not worth an allocation,
+// and a top-level `let` cannot hold one here (a global initializer may not call a function).
+function pinEscapeByte(marker Byte) returns Byte throws TypedValueError
+	if marker == LowerNMarker 'newline'
+		return NewlineByte
+	end 'newline'
+	if marker == LowerTMarker 'tab'
+		return TabByte
+	end 'tab'
+	if marker == LowerRMarker 'carriageReturn'
+		return CarriageReturnByte
+	end 'carriageReturn'
+	if marker == DigitZeroMarker 'nul'
+		return NulByte
+	end 'nul'
+	if marker == PinBackslash or marker == SingleQuoteByte or marker == DoubleQuoteByte or marker == LeftBraceByte or marker == RightBraceByte 'selfEscape'
+		return marker
+	end 'selfEscape'
+
+	throw TypedValueError.unknownEscape(pinEscapeText(marker))
+end 'pinEscapeByte'
+
+// How an escape reads back in a diagnostic — the backslash plus what followed it.
+function pinEscapeText(marker Byte) returns String
+	var text = ByteArray.create()
+	text.push(PinBackslash)
+	text.push(marker)
+	return String.from(text)
+end 'pinEscapeText'
+
+// The ASCII bytes the pin decoder recognizes and produces. Named rather than spelled as bare numbers for
+// `Parser.maxon`'s reason at its own copy of this table: a decoder of escape syntax cannot define its
+// table in the syntax it decodes.
+let PinBackslash = 92 as Byte
+let SingleQuoteByte = 39 as Byte
+let DoubleQuoteByte = 34 as Byte
+let LeftBraceByte = 123 as Byte
+let RightBraceByte = 125 as Byte
+let LowerNMarker = 110 as Byte
+let LowerTMarker = 116 as Byte
+let LowerRMarker = 114 as Byte
+let DigitZeroMarker = 48 as Byte
+let NewlineByte = 10 as Byte
+let TabByte = 9 as Byte
+let CarriageReturnByte = 13 as Byte
+let NulByte = 0 as Byte
 
 // The BITS of one line's value, little-endian-ready.
 //

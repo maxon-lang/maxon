@@ -7,7 +7,7 @@ function main() returns ExitCode
 	b.push(65)
 	var cwd = try __ManagedDirectory.currentPath() otherwise return 1
 	let before = cwd.length()
-	try cwd.append(b) otherwise panic("test invariant: append")
+	cwd.append(b)
 	return 0 if cwd.length() == before + 1 else 2
 end 'main'
 ---
@@ -56,21 +56,7 @@ func @main {
     x64.movRegReg r13, r8
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
-    x64.callDirect __arr_mem_append
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
-    x64.callDirect mrt_panic
-    x64.movRegImm32 r8, 0
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-  tryok:
+    x64.callDirect __arr_append
     x64.movRegReg rcx, r12
     x64.callDirect __arr_count
     x64.leaRegRegImm32 rax, r13, 1
@@ -97,7 +83,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40

@@ -168,20 +168,20 @@ function buildSetFrom(module StdModule)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
 	// body: read element `i` (one machine word — an int inline, or a managed KEY pointer, both one slot wide),
-	// MOVE it into the set (`__set_insert` takes ownership of a managed key, or drops it as a dup), then NULL
+	// MOVE it into the set (`__set_insert` takes ownership of a managed key, or drops it as a dup), then null
 	// the array slot so the array's own `__arr_decref` walk skips it — the array's decref drops only NON-null
 	// slots, so a moved-out slot must read null or the key double-frees (the set owns it now). The exact mirror
-	// of `__arr_pop` nulling the slot it hands out. A trivial int element is unaffected by the null (its array
-	// decref never walks). Then advance `i = i + 1`.
+	// of `__arr_pop` nulling the slot it hands out. ⛔ That clear is CONDITIONAL, and
+	// `emitMovedOutSlotClear` carries the whole reason: on a trivial element it does nothing, and the source
+	// buffer may be immortal `.rdata`. Then advance `i = i + 1` in whatever block the fork resumed in.
 	let elem = emitWordSlotLoad(module, block: body, base: buffer, index: i, ids: ids)
 	let inserted = ids.mint()
 	module.appendOp(body, op: StdOp.call(inserted, callee: SetInsertName, args: fourArgs(set, second: elem, third: hashWitness, fourth: eqWitness)))
-	let nullSlot = emitConst(module, block: body, value: 0, ids: ids)
-	emitWordSlotStore(module, block: body, base: buffer, index: i, value: nullSlot, ids: ids)
-	let one = emitConst(module, block: body, value: 1, ids: ids)
-	let iNext = emitBin(module, block: body, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(body, op: StdOp.branch(header.id))
-	body.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
+	var advance = emitMovedOutSlotClear(module, func: func, block: body, base: buffer, index: i, elemDrop: elemDrop, ids: ids)
+	let one = emitConst(module, block: advance, value: 1, ids: ids)
+	let iNext = emitBin(module, block: advance, a: i, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(advance, op: StdOp.branch(header.id))
+	advance.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(iNext)))
 
 	// done: return the populated set (the caller's owned value, dropped via `__set_decref` at scope exit).
 	module.setTerminator(done, op: StdOp.ret(set))

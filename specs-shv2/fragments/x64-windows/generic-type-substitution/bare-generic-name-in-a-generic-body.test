@@ -63,7 +63,9 @@ func @Inner.first {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
     x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
     x64.movRegImm32 rdx, 0
     x64.callDirect __arr_get
@@ -72,12 +74,17 @@ func @Inner.first {
     x64.jmp tryok
   tryerr:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
     x64.movRegImm32 r10, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -137,6 +144,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect Outer.wrap
     x64.movRegReg r12, r8
+    x64.leaRegRdata rdx, [rip + __layout_Inner_Integer]
     x64.movRegReg rcx, r12
     x64.callDirect Inner.first
     x64.cmpRegImm32 r10, 0
