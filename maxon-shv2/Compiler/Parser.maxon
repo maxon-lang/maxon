@@ -2045,10 +2045,16 @@ type MethodDescriptorScan
 	// receiver is not resolved here, for the reason `hasArrayMoveOut`'s is not; see
 	// `Parser.containerMoveInMutatorCallAt`.
 	export let storesContainerElement as bool
+	// ⭐⭐ **THE CROSS-TYPE CALL EDGES — `Array.<member>` NAMES THIS REGION CALLS THAT THE CORPUS, NOT THE
+	// ROSTER, SERVES (ARRG).** Every other entry above is a fact about what this body DOES; this one is a fact
+	// about a CALLEE'S ABI, and it is the only edge in the descriptor fixpoint that leaves the enclosing type.
+	// Already qualified, because the type they belong to is not `site.typeName` — see
+	// `Parser.corpusServesArrayMember`, which decides which names are on it.
+	export let corpusContainerCallees as ByteArrayArray
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, corpusContainerCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, corpusContainerCallees: corpusContainerCallees, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -3090,6 +3096,17 @@ let FirstOverloadNameOrdinal = 2
 // of them.
 let sharedEmptyDeclaredFuncNames = DeclaredFuncNameSet.create()
 let sharedEmptyOverloadMembers = OverloadMemberMap.create()
+
+// The same two anchors for the cross-type descriptor edge (ARRG), and here for the identical reason stated
+// one paragraph up. `Parser.corpusServedArrayMembers` is the per-file memo of "does the corpus serve
+// `Array.<m>` off the roster?"; `sharedEmptyCorpusContainerCallees` is what a scanned region's edge list IS
+// until it records its first edge. **Both stay empty for almost every region there is** — the memo is
+// touched only by a file that scans a GENERIC type's body at all, and the edge list only by a body that
+// calls a member the roster has already given up. Allocated unconditionally, the pair billed one heap object
+// per `Parser` and one per scanned method to every program in the suite: MEASURED on the ladder at **+3,329
+// allocations at rung 0 rising to +17,682 at rung 5** before this anchor pair went in.
+let sharedEmptyCorpusMemberVerdicts = DescriptorNeedMap.create()
+let sharedEmptyCorpusContainerCallees = ByteArrayArray.create()
 
 // ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
 // The join's INVERSE, and deliberately allocation-free: its caller
@@ -4916,7 +4933,8 @@ end 'cursorSurfaceMemberNames'
 //     used to name all eight of the members it was briefed on under ONE diagnosis, and the diagnosis was
 //     wrong about seven — including which BULLET two of them belong to (`get` and `set` are the first).
 //   • **AN OPAQUE-ELEMENT RECEIVER CANNOT REACH A CORPUS BODY AT ALL** — `set`'s class, and ARR1's finding;
-//     see `set`'s own line on the roster below.
+//     see `set`'s own line on the roster below. ⭐ **ARRG CLOSED TWO OF ITS THREE SHAPES** (the compiler
+//     panic and the loop-store move); the third turned out to belong to the second bullet.
 //
 // ⭐⭐⭐ **ARR3a STRUCK ONE MORE — `slice` — AND ITS MEASUREMENT RETIRED THE SENTENCE ABOVE AS MUCH AS THE
 // MEMBER.** It was briefed to strike EIGHT (`get`, `set`, `slice`, `clone`, `push`, `insert`, `append`,
@@ -4972,17 +4990,29 @@ end 'cursorSurfaceMemberNames'
 //       – a **COMPILER PANIC** on 34 `map` cases plus `tuples`/`interface-extensions`/`for-destructuring`,
 //         *"primitiveTypeByteSize: a `typeParameter`'s size is a runtime layout-descriptor read"*, raised by
 //         `MaxonToStdLowering.materializeLayoutArgFor` → `ensureLayoutDescriptor` for the instance
-//         `Array with Key` — `stdlib/Map.maxon`'s own slot columns. A corpus-served call on an
-//         `Array with <a parameter of the ENCLOSING generic>` needs a per-instance descriptor that cannot be
-//         a static blob; the arm needs none, because `__arr_set` reads the enclosing frame's own descriptor.
-//       – a **REFUSAL** where that receiver is not even admitted (`memberBelongsToTheCorpus` declines a
-//         non-instance-tagged receiver): 3 cases, `stable-partition-managed-pivot` ×2 and
-//         `generic-opaque-element-borrow-liveness.a-trivial-element-container-is-untouched`.
+//         `Array with Key` — `stdlib/Map.maxon`'s own slot columns. ⭐ **CLOSED AT ARRG, AND ITS DIAGNOSIS
+//         HERE WAS WRONG.** It is not that such a receiver *"needs a per-instance descriptor that cannot be a
+//         static blob"* — the FORWARD it needs already existed (`instanceLayoutArg`, whose parameter-run arm
+//         answered YES for `Array with Key` throughout). What was missing was the RESERVATION: the
+//         descriptor-need fixpoint's edges followed SELF calls only, so `Map.insertAtSlot`'s obligation to
+//         SUPPLY `Array.set`'s descriptor had no edge to arrive by. `Parser.corpusServesArrayMember` is
+//         that edge. Re-measured with `set` struck: **38 panics → 0**.
+//       – a **REFUSAL** where that receiver is not even admitted: 3 cases, `stable-partition-managed-pivot`
+//         ×2 and `generic-opaque-element-borrow-liveness.a-trivial-element-container-is-untouched`.
+//         ⛔ **THE ATTRIBUTION HERE WAS WRONG TOO (ARRG): `memberBelongsToTheCorpus` is not declining a
+//         receiver.** All three programs DECLARE THEIR OWN `type Array uses Element`, which replaces the
+//         corpus's for the whole compile — so the corpus has no `set` to serve and the roster refusal is
+//         correct. They are the SECOND bullet's class (a declared-own `Array` depends on this roster), which
+//         is `ARR4`'s gate and not a generics question at all.
 //       – the **LOOP-STORE MOVE**: 5 `generic-opaque-element-loop-store` cases lose W58's
-//         `coOwnBorrowedOpaque`, which lives in the arm's `moveElementIntoContainer` and has no counterpart on
+//         `coOwnBorrowedOpaque`, which lives in the arm's `moveElementIntoContainer` and had no counterpart on
 //         the ordinary caller-consume path (*"moving a value declared outside this loop from inside the loop
-//         body"*).
-//     Three mechanisms, none of them a roster question, and the first is the one that gates the other two.
+//         body"*). ⭐ **CLOSED AT ARRG** — the rule is about the LOOP and the sink's obligation rather than
+//         about which door emitted the store, so `transferConsumedArg`'s opaque arm reads the same
+//         `moveOfValueEscapesLoop` decision and takes the same reference. It was reachable with NO roster
+//         strike at all (a consuming SIBLING call in a loop), which is what
+//         `generic-opaque-element-loop-store`'s two `a-consuming-sibling-…` cases pin.
+//     Three mechanisms, none of them a roster question; TWO are now closed and the third belongs to `ARR4`.
 //   • **`push`** — three separate faults at once, measured: `arrays/slice-parent-grows-while-view-lives`
 //     stopped detaching a COW view (exit 1 against 0); a `byte-enum-comparison` case lost the arm's
 //     enum→element coercion (`expected 'Byte', got 'Ascii'`); and both `bytearray-element-size`
@@ -9378,6 +9408,19 @@ export type Parser
 	var stringIndexSurfaceRoster as ByteArrayArray
 	var mapSurfaceRoster as ByteArrayArray
 	var cursorSurfaceRoster as ByteArrayArray
+	// ⭐⭐ **ONE VERDICT PER MEMBER NAME, memoized beside the rosters and for their reason (ARRG).** "Does the
+	// corpus serve `Array.<m>` off the roster?" is a function of the NAME, the roster and the whole-program
+	// declaration index — none of which move while a file is scanned — but answering it has to JOIN
+	// `Array.<m>` to probe the index with, and `scanDescriptorSignalsIn`'s cross-type arm asks it at EVERY
+	// `. <name> (` in every generic body the descriptor pre-scan walks. Memoized, the join is paid once per
+	// distinct name instead of once per call site.
+	//
+	// ⚠ **THE MEMO IS ONLY SOUND BECAUSE ITS ONE ASKER RUNS AFTER `allFilesFolded`.** `declaresCallee` GROWS
+	// while the sweep folds, so the same name can answer NO early and YES later — and a memo written during
+	// the sweep would serve the early answer for the rest of the file. `scanDescriptorSignalsIn`'s arm is
+	// reached only from `Queries.foldDescriptorNeeds`, which `scanDescriptorNeedsInto`'s header records as
+	// running once the index is whole. A second asker placed inside the sweep must not share this table.
+	var corpusServedArrayMembers as DescriptorNeedMap
 
 	// ⭐⭐ **THE STDLIB/USER SHADOW RENAME IS APPLIED HERE, TO THE TOKENS, AND THAT PLACEMENT IS THE WHOLE
 	// DESIGN (A1s wave 2).**
@@ -9555,7 +9598,8 @@ export type Parser
 			characterSurfaceRoster: sharedEmptySurfaceRoster,
 			stringIndexSurfaceRoster: sharedEmptySurfaceRoster,
 			mapSurfaceRoster: sharedEmptySurfaceRoster,
-			cursorSurfaceRoster: sharedEmptySurfaceRoster
+			cursorSurfaceRoster: sharedEmptySurfaceRoster,
+			corpusServedArrayMembers: sharedEmptyCorpusMemberVerdicts
 		}
 	end 'create'
 
@@ -10999,6 +11043,15 @@ export type Parser
 				let alreadyContributed = directSeeds.contains(qualified)
 				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or storesBorrowedOpaqueElement
 				var edges = self.qualifiedSelfCallees(site.typeName, callees: scan.callees)
+				// ⭐⭐ **THE CROSS-TYPE EDGES (ARRG)** — already qualified, because they name a method of
+				// ANOTHER type. Gated exactly as `adoptsOpaqueResult` is and for its reasons: a NON-generic
+				// enclosing type has no descriptor to forward, and a STATIC has no receiver to source one
+				// from (`staticLayoutNeedsSelfReturn` refuses one that needs it, with a position). Without
+				// both gates this edge would reserve a parameter whose only supply is
+				// `forwardCallerLayout`'s panic.
+				if not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q) 'aGenericInstanceMethod'
+					edges.append(scan.corpusContainerCallees)
+				end 'aGenericInstanceMethod'
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
 				// (W43b). See `fieldDefaultHelperNamesOf` for why every helper is named rather than only the
 				// fields the literal omits.
@@ -11087,7 +11140,16 @@ export type Parser
 		// A field name is unique within one declaration, so — unlike a METHOD name, which a body and an
 		// extension may both wear — one helper name cannot be contributed twice and there is no union to take.
 		directSeeds.upsert(helperName, value: scan.direct)
-		selfCallees.upsert(helperName, value: self.qualifiedSelfCallees(typeName, callees: scan.callees))
+		// A field default is a nullary helper OF this type, so it holds the enclosing instance's descriptor on
+		// exactly the terms a method does — and a default calling a corpus-served container member owes the
+		// same cross-type edge (ARRG). No `isStatic` gate: a field default is never one. The generic gate is
+		// the enclosing type's own, read here for the same reason it is read at the method site.
+		var edges = self.qualifiedSelfCallees(typeName, callees: scan.callees)
+		if not self.enclosingTypeParams.isEmpty() 'aGenericTypesDefault'
+			edges.append(scan.corpusContainerCallees)
+		end 'aGenericTypesDefault'
+
+		selfCallees.upsert(helperName, value: edges)
 		methodNames.push(helperName)
 		return regionEnd
 	end 'recordFieldDefaultDescriptorNeeds'
@@ -11168,6 +11230,9 @@ export type Parser
 		var adoptsOpaqueCallResult = false
 		// ⭐ Does this region STORE INTO A CONTAINER (W60)? See `MethodDescriptorScan.storesContainerElement`.
 		var storesContainerElement = false
+		// ⭐ The cross-type call edges (ARRG), minted on the first one. See
+		// `MethodDescriptorScan.corpusContainerCallees` and `sharedEmptyCorpusContainerCallees`.
+		var corpusContainerCallees = sharedEmptyCorpusContainerCallees
 		// The open `(`/`[`/`{` groups enclosing the cursor, each carrying whether a comma directly inside it
 		// would be a TUPLE's separator rather than an argument list's. See the comma arm below.
 		var groupIsTuplePosition = BoolArray.create()
@@ -11273,6 +11338,18 @@ export type Parser
 			if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen and self.signatures.methodNameEverReturnsBareTypeParameter(self.tokenAt(q + 1).value) 'adoptsOpaqueResult'
 				adoptsOpaqueCallResult = true
 			end 'adoptsOpaqueResult'
+			// ⭐⭐ **THE CROSS-TYPE EDGE (ARRG)** — a `.<member>(` the CORPUS serves on a builtin generic
+			// container. Read at the `.` for the arm above's reason, and recorded as an EDGE rather than as a
+			// seed because whether the callee needs a descriptor is the fixpoint's own answer, not this scan's.
+			// The list is minted on the FIRST edge (`sharedEmptyCorpusContainerCallees`), so a body with no
+			// corpus call — nearly every body there is — allocates nothing for this arm.
+			if kind == TokenKind.dot and self.memberCallFollows(q) and self.corpusServesArrayMember(self.tokenAt(q + 1).value) 'aCorpusContainerCall'
+				if corpusContainerCallees is sharedEmptyCorpusContainerCallees 'firstEdgeInThisRegion'
+					corpusContainerCallees = ByteArrayArray.create()
+				end 'firstEdgeInThisRegion'
+
+				corpusContainerCallees.push(qualifiedMethodName(ArrayBuiltinBaseName, methodName: self.tokenAt(q + 1).value))
+			end 'aCorpusContainerCall'
 			if kind == TokenKind.selfType and self.kindAt(q + 1) == TokenKind.leftBrace 'selfLiteral'
 				constructsSelfLiteral = true
 			end 'selfLiteral'
@@ -11312,8 +11389,70 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, endPos: regionEnd)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, corpusContainerCallees: corpusContainerCallees, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
+
+	// ⭐⭐⭐ **THE ONE EDGE IN THE DESCRIPTOR-NEED FIXPOINT THAT LEAVES THE ENCLOSING TYPE (ARRG).** A `.<m>(`
+	// whose `<m>` the ROSTER does not carry and `stdlib/Array.maxon` DOES declare is a call to a
+	// SHARED GENERIC BODY over `Element`, and such a body may reserve a layout descriptor its caller must
+	// SUPPLY. When the receiver is an `Array with <a parameter of the enclosing generic>` the only supply is
+	// the enclosing frame's own descriptor, FORWARDED — so the caller has to carry one, and nothing in the
+	// fixpoint said so: its edges followed SELF calls only.
+	//
+	// ⛔⛔ **AND A MISSING EDGE HERE IS A COMPILER ABORT, NOT A DIAGNOSTIC.** MEASURED with `set` struck from
+	// `arraySurfaceMemberNames`: 38 cases — 34 `map/*` plus `tuples`, `interface-extensions` and
+	// `for-destructuring-pattern` — died at `panic … primitiveTypeByteSize: a typeParameter's size is a
+	// runtime layout-descriptor read`, raised by `MaxonToStdLowering.materializeLayoutArgFor` for
+	// `Array with Key` inside `stdlib/Map.maxon`'s `insertAtSlot`. The reservation side had every seed it
+	// needed and no edge to carry the callee's obligation across the `Map`/`Array` boundary.
+	//
+	// ⚠ **IT IS AN EDGE AND NOT A SEED, WHICH IS THE WHOLE OF WHY IT COSTS NOTHING WHERE IT IS NOT NEEDED.**
+	// Whether `Array.set` reserves is `solveDescriptorNeeds`' own answer about `Array.set`; this only says
+	// "and if it does, so does the caller". A member the ROSTER still serves is not a corpus call at all, so
+	// it records no edge — which is why striking a name from the roster is the whole of what turns this on,
+	// one name at a time, exactly as the retirement chain is designed to proceed.
+	//
+	// ⚠ **THE RECEIVER IS NOT RESOLVED, for every sibling signal's reason** — the scan runs before any body
+	// is parsed. An edge to a callee the receiver could never have reached only ever reserves a descriptor
+	// parameter nothing reads; a missing one aborts the compiler.
+	//
+	// ⚠ **`Array` ALONE, AND THE OTHER ROSTERED GENERIC SURFACE IS A DELIBERATE OMISSION.** `Map`'s roster is
+	// also incomplete against the corpus (`extension Iterable` publishes `map`/`filter`/`contains` onto it),
+	// so the identical edge exists there — but a `Map` edge reserves a descriptor in bodies that hold a
+	// `Map`'s element, which is a TUPLE over two of its parameters, and the layout descriptor has one block
+	// per type PARAMETER with no block a composite argument could occupy. Turning those reservations on
+	// therefore trades a wrong answer for a different one; the measurement is in this rung's report and the
+	// mechanism is the descriptor ABI's, not this edge's.
+	//
+	// The verdict itself is memoized per NAME (`corpusServedArrayMembers` carries why), so the scan's `.` arm
+	// pays it once per distinct member name in a file rather than once per call site.
+	//
+	// ⛔⛔ **A STATIC IS NOT A MEMBER CALL, AND ADMITTING ONE IS THE MEASURED WAY THIS EDGE GOES WRONG.**
+	// `MapIterator.create(self, …)` has the identical token shape `<name> . <name> (`, and
+	// `stdlib/Array.maxon` declares a `create` — so the receiver-blind test read that as a call to
+	// `Array.create`, which reserves a descriptor for its own `return Self{}`. MEASURED: the edge gave
+	// `Map.createIterator` a descriptor its own caller does not carry, and
+	// `interface-extensions/stdlib-map-on-map-with-function` died at
+	// `forwardCallerLayout: caller 'Map.map' has no layout descriptor to forward to 'Map.createIterator'`.
+	// The receiver-blind over-approximation the sibling signals take is only free where the fixpoint can
+	// still reach the caller; a STATIC's descriptor comes from its RESULT, not from a receiver, so an edge to
+	// one describes a supply route the call site does not have.
+	function corpusServesArrayMember(member ByteArray) returns bool
+		if let remembered = try self.corpusServedArrayMembers.get(member) 'askedBefore'
+			return remembered
+		end 'askedBefore'
+
+		// The first two clauses are the DISPATCH's own (`corpusServesNamedMemberOffRoster`), so the call this
+		// edge is drawn for and the call the parser will actually route to a corpus body are one decision. The
+		// receiver clause is this asker's alone — the ⛔⛔ paragraph above carries what admitting a static cost.
+		let served = self.corpusServesNamedMemberOffRoster(member, surface: MemberSurface.array, typeName: ArrayBuiltinBaseName) and self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(ArrayBuiltinBaseName, methodName: member))
+		if self.corpusServedArrayMembers is sharedEmptyCorpusMemberVerdicts 'firstQuestionThisFileAsks'
+			self.corpusServedArrayMembers = DescriptorNeedMap.create()
+		end 'firstQuestionThisFileAsks'
+
+		self.corpusServedArrayMembers.upsert(member, value: served)
+		return served
+	end 'corpusServesArrayMember'
 
 	// ⭐ **DOES THE TOKEN AT `q` END A PRIMARY EXPRESSION — i.e. does a `(` after it open a CALL rather than a
 	// GROUPING (W41-opaque)?** The whole of how the signal walk tells `f(a, b)` from `(a, b)`. An identifier, a
@@ -47591,12 +47730,27 @@ export type Parser
 		if not tokenCanBeAName(memberTok) 'notAMemberName'
 			return false
 		end 'notAMemberName'
-		if namesInclude(self.surfaceMemberNames(surface), name: memberTok.value) 'theSynthesizedSurfaceServesIt'
+
+		return self.corpusServesNamedMemberOffRoster(memberTok.value, surface: surface, typeName: typeName)
+	end 'corpusServesMemberOffRoster'
+
+	// ⭐⭐ **THE RULE ITSELF, GIVEN A NAME RATHER THAN A CURSOR (ARRG).** The door above PEEKS, and that peek
+	// is a fact about where the dispatch stands rather than about the rule — so a second asker that holds a
+	// TOKEN INDEX instead of a cursor (`Parser.corpusServesArrayMember`, the descriptor fixpoint's cross-type
+	// edge) can read the same two clauses rather than restate them.
+	//
+	// ⛔ **AND RESTATING THEM WOULD DIVERGE SILENTLY IN THE WORST DIRECTION.** The two askers are the DISPATCH
+	// (which member calls reach a corpus body) and the RESERVATION (which callers must supply that body's
+	// layout descriptor). A clause added to one only — a visibility test, a further roster — would leave a
+	// call dispatched to a body whose descriptor nobody passes, and that is not a diagnostic:
+	// `materializeLayoutArgFor` aborts the compiler. One home is what makes the two answers the same answer.
+	function corpusServesNamedMemberOffRoster(member ByteArray, surface MemberSurface, typeName ByteArray) returns bool
+		if namesInclude(self.surfaceMemberNames(surface), name: member) 'theSynthesizedSurfaceServesIt'
 			return false
 		end 'theSynthesizedSurfaceServesIt'
 
-		return self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))
-	end 'corpusServesMemberOffRoster'
+		return self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: member))
+	end 'corpusServesNamedMemberOffRoster'
 
 	// ⭐⭐⭐ **THE STATIC TWIN OF THE DOOR ABOVE IS GONE (W55), AND WHAT REPLACED IT IS `parseQualifiedCall`
 	// ITSELF.** `stringStaticBelongsToTheCorpus` asked this same question about a `String` STATIC, so that a
@@ -56809,6 +56963,29 @@ export type Parser
 		// so this must precede the scalar short-circuit; it carries no owning COPY (like an owned aggregate), so
 		// the value passes through unchanged, poisoned in place. Reached only for `isOpaqueOwnedFeedArg` positions.
 		if self.valueIsOpaqueOwned(argValue) 'opaqueOwned'
+			// ⭐⭐ **INSIDE A LOOP THE FRAME TAKES A NEW REFERENCE INSTEAD OF GIVING UP ITS OWN — W58's RULE,
+			// AT THE DOOR AN ORDINARY CONSUMING CALL COMES THROUGH (ARRG).** It was written only into
+			// `moveElementIntoContainer`, whose header states the whole argument (N iterations take N
+			// references; a `movedFrom` bit set once at the store's TEXT cannot say "moved on iteration 3,
+			// live on iteration 4"; and a loop that never runs leaks the caller's reference outright). That
+			// argument is about the LOOP and the SINK's obligation, not about which door emitted the store —
+			// so a sibling call that consumes its opaque argument owes exactly the same discharge, and had
+			// only the refusal.
+			//
+			// ⛔ **MEASURED, on a program with no `Array` mutator in it at all**: `Bag.fill(n, v)` whose loop
+			// body calls the consuming sibling `store(v)` was refused *"moving a value declared outside this
+			// loop from inside the loop body"*, while the identical loop writing `items.set(n, value: v)`
+			// compiled — one rule, two answers, decided by which arm happened to serve the statement. It is
+			// also what leaves `stdlib/Array.maxon`'s `set` unreachable from a shared body: served by the
+			// corpus, `Bag.fillTo`'s store IS this door.
+			//
+			// The decision is `moveOfValueEscapesLoop`, read by both doors so they cannot settle on different
+			// bindings (see `liveOwnerIndexOf`), and the reference is `coOwnBorrowedOpaque`, emitted by both
+			// so the retain and its release are one protocol.
+			if self.moveOfValueEscapesLoop(argValue) 'referenceRatherThanMove'
+				return self.coOwnBorrowedOpaque(argValue, range: SourceRange.ofToken(anchor))
+			end 'referenceRatherThanMove'
+
 			try self.poisonMoveSource(argValue, anchor: anchor)
 			self.removeFromPendingTemps(argValue)
 			return argValue

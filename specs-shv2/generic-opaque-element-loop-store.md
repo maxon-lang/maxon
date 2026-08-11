@@ -378,3 +378,128 @@ end 'main'
 a second source string, also long enough to force a heap allocation
 a second source string, also long enough to force a heap allocation
 ```
+
+### The same loop, discharged through a consuming SIBLING rather than through the store
+
+The rule above is about the LOOP and about what the sink owes, not about which door emitted the
+store — so a call that CONSUMES its opaque argument owes the identical discharge. `fill`'s loop
+hands `v` to the consuming sibling `store`, which is the same three references the `set` spelling
+takes, arriving one call boundary out. Written only into the container-store arm, this program was
+refused outright (`moving a value declared outside this loop from inside the loop body`) while the
+`set` spelling beside it compiled — one rule with two answers.
+
+⭐ **AND IT IS ONE OF THE THINGS THAT KEPT `set` ON `Parser.arraySurfaceMemberNames` (ARRG).** Once
+the corpus serves the store, `Bag.fillTo`'s `items.set(n, value: value)` STOPS being the arm and
+BECOMES this door: an ordinary call with a consuming opaque parameter. MEASURED with `set`
+temporarily struck, before this case existed: five of this file's cases took that refusal. They are
+the reason the rule is read here rather than only inside `moveElementIntoContainer` — and this case
+pins it WITHOUT the strike, so nothing about it waits on the retirement.
+
+`v` keeps its own reference and releases it at scope exit; the bag's element walk releases the three
+it took. A missing retain is a double free at teardown and a surplus one is exit 101.
+
+<!-- test: a-consuming-sibling-called-in-a-loop-takes-a-reference-per-call -->
+```maxon
+typealias Idx = int(0 to u64.max)
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	export static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function store(v Element)
+		items.push(v)
+	end 'store'
+
+	export function fill(n Idx, v Element)
+		var i = 0 as Idx
+		while i < n 'fill'
+			store(v)
+			i = i + 1
+		end 'fill'
+	end 'fill'
+
+	export function at(i Idx) returns Element throws ArrayError
+		return try items.get(i)
+	end 'at'
+
+	export function count() returns Idx
+		return items.count()
+	end 'count'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	let s = "a filled string long enough to force a heap allocation"
+	b.fill(3, v: s)
+	let first = try b.at(0) otherwise return 1
+	let last = try b.at(2) otherwise return 1
+	print("{first}\n")
+	print("{last}\n")
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+```stdout
+a filled string long enough to force a heap allocation
+a filled string long enough to force a heap allocation
+```
+
+### A loop that never runs still releases what a consuming sibling did not take
+
+The zero-iteration half of the case above, and the one a parse-time move gets wrong in the other
+direction: `fill(0, …)` calls `store` never, so the frame still owes exactly the one release its
+consuming caller handed it.
+
+<!-- test: a-consuming-sibling-loop-that-never-runs-still-releases-the-value -->
+```maxon
+typealias Idx = int(0 to u64.max)
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	export static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function store(v Element)
+		items.push(v)
+	end 'store'
+
+	export function fill(n Idx, v Element)
+		var i = 0 as Idx
+		while i < n 'fill'
+			store(v)
+			i = i + 1
+		end 'fill'
+	end 'fill'
+
+	export function count() returns Idx
+		return items.count()
+	end 'count'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	let s = "a filled string long enough to force a heap allocation"
+	b.fill(0, v: s)
+	print("{s}\n")
+	return b.count() as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a filled string long enough to force a heap allocation
+```
