@@ -1,0 +1,81 @@
+// Test: enum-struct-backing-field-argument
+typealias Wide = int(i64.min to i64.max)
+
+type Spec
+	export var width as Wide
+	export var height as Wide
+
+	export static function make(width Wide, height Wide) returns Spec
+		return Spec{width: width, height: height}
+	end 'make'
+end 'Spec'
+
+enum Preset
+	small = Spec{width: 3, height: 2}
+	large = Spec{width: 9, height: 4}
+end 'Preset'
+
+function over(x String) returns Wide
+	return x.count() + 200
+end 'over'
+
+function over(x Wide) returns Wide
+	return x + 100
+end 'over'
+
+function main() returns ExitCode
+	let p = Preset.large
+	return over(p.width)
+end 'main'
+---
+ExitCode: 109
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @over#Wide {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 100
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.imulRegRegImm32 rcx, rcx, 3
+    x64.leaRegRegImm32 rcx, rcx, 0
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg equal, rax
+    x64.imulRegRegImm32 rax, rax, 9
+    x64.leaRegRegReg rcx, rcx, rax
+    x64.callDirect over#Wide
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_16]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

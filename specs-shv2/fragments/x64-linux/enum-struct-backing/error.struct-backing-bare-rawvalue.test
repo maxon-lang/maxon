@@ -1,0 +1,19 @@
+// Test: error.struct-backing-bare-rawvalue
+typealias Wide = int(0 to 100)
+
+type Meta
+	export let value as Wide
+end 'Meta'
+
+enum Task
+	quick = Meta{value: 1}
+end 'Task'
+
+function main() returns ExitCode
+	let t = Task.quick
+	let r = t.rawValue
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:12: Unsupported: `rawValue` on `enum Task` read as a whole value — its raw value is a `Meta` record, which shv2 selects one FIELD of at a time (`.rawValue.<field>`) rather than materializing. Both reference compilers do materialize it; doing so here means minting an owned heap record inside an expression, and no case in `/specs/enum-struct-backing.md` asks for one

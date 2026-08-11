@@ -1,0 +1,51 @@
+// Test: simple-panic
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+
+function dangerous(value Integer) returns Byte
+	return value as Byte
+end
+
+function main() returns ExitCode
+	return dangerous(300)
+end
+---
+ExitCode: 1
+---
+func @dangerous {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r8, rcx, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 300
+    x64.callDirect dangerous
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

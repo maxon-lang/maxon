@@ -1,0 +1,25 @@
+// Test: error.type-parameter-argument-out-of-range
+typealias Percent = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	export function put(value T)
+		self.v = value
+	end 'put'
+end 'Box'
+
+typealias PB = Box with Percent
+
+function main() returns ExitCode
+	var b = PB.create(1)
+	b.put(505)
+	return b.v
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:20:4: Value 505 is outside the range of 'Percent' (int(0 to 100))

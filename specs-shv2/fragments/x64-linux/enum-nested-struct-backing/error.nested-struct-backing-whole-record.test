@@ -1,0 +1,22 @@
+// Test: error.nested-struct-backing-whole-record
+typealias Wide = int(0 to 100)
+
+type Inner
+	export let n as Wide
+end 'Inner'
+
+type Meta
+	export let inner as Inner
+end 'Meta'
+
+enum Task
+	quick = Meta{inner: Inner{n: 1}}
+end 'Task'
+
+function main() returns ExitCode
+	let t = Task.quick
+	return t.rawValue.inner
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:18:20: Unsupported: field 'inner' of the `Meta` backing read as a whole value — it is declared `Inner`, a record, and shv2 selects one SCALAR field of a struct backing at a time (`.inner.<field>`) rather than materializing one. That is the refusal `rawValue` itself carries, one level in: a materialized record is an owned heap value minted inside an expression
