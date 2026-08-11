@@ -571,6 +571,22 @@ export type SpecTest
 	export function isMultiFile() returns bool
 		return self.sourceFiles.count() > 0
 	end 'isMultiFile'
+
+	// ⭐ True when this case pins the bytes of a LINKED SECTION (a ```RequiredData / ```RequiredRdata
+	// block), which is what a target restriction for such a case is DERIVED from — see
+	// `SpecTestRunner.targetCanCheckSectionPins` and `LinkedSection.targetHasLinkedSections`. The
+	// declaration lives on the CASE that carries the block rather than in a `<!-- targets: … -->`
+	// marker beside it, because a marker is a second copy of "which formats have a section", and the
+	// copy that goes missing takes a whole lane down with it.
+	//
+	// A `compilerError` case answers a structural FALSE, not a default: `scanTestFromMarker`'s
+	// `pinsOnARejectedCase` refuses a pin on a case that never links, so such a case cannot carry one.
+	export function pinsLinkedSection() returns bool
+		return match self.expectation 'e'
+			run(_, _, _, sectionPins) gives not sectionPins.isEmpty()
+			compilerError gives false
+		end 'e'
+	end 'pinsLinkedSection'
 end 'SpecTest'
 
 export typealias SpecTestArray = Array with SpecTest
@@ -690,6 +706,18 @@ end 'parseSpecFile'
 // Read the `status:` key out of the YAML frontmatter (the leading `--- … ---` block). "" when
 // there is no frontmatter or no status key — the runner skips only the literal "draft", so ""
 // runs normally.
+//
+// ⚠⚠ **`status: selfhosted` DOES NOT SUSPEND A SPEC HERE, AND READING IT AS "SUSPENDED" HAS ALREADY
+// COST A RUNG.** It is INHERITED metadata: in `/specs` it means "the C# bootstrap hands this file to
+// the other runner" and the bootstrap's `SpecParser.SuspendingStatuses` skips it, counting it in a
+// `Suspended: N spec file(s) holding M test(s)` trailer. A spec ported into `specs-shv2/` is copied
+// BYTE-IDENTICAL, frontmatter and all, so that line rides along — describing a decision the BOOTSTRAP
+// made about the `/specs` copy, not one about this corpus. THIRTY-TWO files carry it here today
+// (`arithmetic`, `assignment`, `basics`, `break`, `division`, `functions`, `if-statements`,
+// `variables`, `while-loops`, …) and every one of them RUNS and PASSES; honouring it
+// would silently delete the language's core cases from the suite. ⇒ the only status that means
+// anything to THIS runner is `draft`, and a suspension in `specs-shv2/` is spelled by disabling the
+// cases (`<!-- disabled-test: … -->`), which is counted.
 function parseStatus(lines StringArray) returns String
 	var status = ""
 

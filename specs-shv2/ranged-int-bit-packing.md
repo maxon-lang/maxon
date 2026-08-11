@@ -167,7 +167,6 @@ end 'main'
 ```
 
 <!-- test: static-2bit-cast-packed -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 typealias Q = int(0 to 3)
 
@@ -193,7 +192,6 @@ u8[] 228
 ```
 
 <!-- test: static-4bit-cast-packed-cross-byte -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 typealias N = int(0 to 15)
 
@@ -232,7 +230,6 @@ end 'main'
 ```
 
 <!-- test: static-bool-packed -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```maxon
 function main() returns ExitCode
 	let a = [true, false, true, false]

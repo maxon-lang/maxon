@@ -39,6 +39,22 @@ empty prefix matches every image ever linked, so it cannot fail, and it cannot e
 section is empty" either. A block on a case that expects a COMPILE ERROR is refused for the
 same reason — that case never links, so there is no image to read.
 
+### A pinned case needs no `<!-- targets: … -->` marker
+
+Only a native container format keeps the sections these blocks name — `.rdata`/`.data` in a
+PE, `.rodata`/`.data` in an ELF, `__DATA,__const`/`__DATA,__data` in a Mach-O image. A WASI
+component keeps neither: its data lives in `(data …)` segments addressed by a linear-memory
+offset, with no section header a reader could name.
+
+The runner DERIVES that restriction from the block itself, so a case carrying one runs on
+every native target and is excluded from `wasm32-wasi` with nothing written down
+(`SpecTestRunner.targetCanCheckSectionPins`, over `LinkedSection.targetHasLinkedSections`).
+⛔ **Do not spell it as a marker.** Twenty-odd cases across four files once did, and the one
+file that forgot — `enum-narrow-storage.md` — panicked reading a section out of a wasm
+component, killed its worker and ABORTED THE WHOLE LANE, so the wasm gate reported nothing at
+all. The cases in that file still carry no marker, deliberately: they are what proves the
+derived rule still fires.
+
 ### Why it exists
 
 A `.rdata` payload registered under a STRUCTURAL label — a `__layout_*` descriptor, a
@@ -49,7 +65,6 @@ fragment shows which label a `lea` names; only this block shows what is IN it.
 ## Tests
 
 <!-- test: layout-descriptor-payload -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 `Sizer with bool`'s layout descriptor is the program's whole read-only image: nine
 machine words — size, alignment, elementSize, four zero slots, elementLogicalSize, and the
 `retainFunc@64` a `bool` argument leaves 0 (W41-opaque).

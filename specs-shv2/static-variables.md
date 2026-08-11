@@ -944,7 +944,6 @@ end 'main'
 ```
 
 <!-- test: data-section-bool-1byte -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A single bool global occupies 1 byte in the .data section.
 
 ```maxon
@@ -965,7 +964,6 @@ i8 1
 ```
 
 <!-- test: data-section-i64-8byte -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A single i64 global occupies 8 bytes in the .data section.
 
 ```maxon
@@ -983,7 +981,6 @@ i64 42
 ```
 
 <!-- test: data-section-f64-8byte -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A single f64 global occupies 8 bytes in the .data section.
 
 ```maxon
@@ -1004,7 +1001,6 @@ f64 3.14
 ```
 
 <!-- test: data-section-f64-8byte-folded -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A FOLDED float initializer lays down the same 8 bytes as the literal: `3.0 + 0.14` produces `3.14`, the strongest proof the constant evaluator produced a NUMBER (folded with the host's f64) and not a summed bit pattern (oracle-verified byte-identical to the literal `3.14`).
 
 ```maxon
@@ -1025,7 +1021,6 @@ f64 3.14
 ```
 
 <!-- test: data-section-bool-then-i64-sorted -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A bool and i64 global: sorted largest-first, no padding needed.
 
 ```maxon
@@ -1048,7 +1043,6 @@ i8 0
 ```
 
 <!-- test: data-section-bool-true-then-i64 -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 A true bool and i64: sorted largest-first, no padding needed.
 
 ```maxon
@@ -1071,7 +1065,6 @@ i8 1
 ```
 
 <!-- test: data-section-i64-then-bool -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 An i64 followed by a bool: no padding needed since bool has 1-byte alignment.
 
 ```maxon
@@ -1094,7 +1087,6 @@ i8 1
 ```
 
 <!-- test: data-section-multiple-bools -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Multiple consecutive bools occupy 1 byte each with no padding.
 
 ```maxon
@@ -1119,7 +1111,6 @@ i8 1
 ```
 
 <!-- test: data-section-mixed-types -->
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 Mixed bool, i64, f64 globals sorted largest-first, no padding.
 
 ```maxon

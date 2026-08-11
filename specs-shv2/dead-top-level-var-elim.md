@@ -87,7 +87,6 @@ function main() returns ExitCode
 	return used - 42
 end 'main'
 ```
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```exitcode
 0
 ```
@@ -110,7 +109,6 @@ function main() returns ExitCode
 	return live
 end 'main'
 ```
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```exitcode
 7
 ```
@@ -134,7 +132,6 @@ function main() returns ExitCode
 	return ((try liveArr.get(1) otherwise 0) - probe) as ExitCode
 end 'main'
 ```
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```exitcode
 16
 ```
@@ -159,7 +156,6 @@ function main() returns ExitCode
 	return live
 end 'main'
 ```
-<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->
 ```exitcode
 5
 ```

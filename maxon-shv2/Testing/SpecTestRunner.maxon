@@ -793,8 +793,8 @@ end 'runOneSpec'
 
 // The tests of `specFile` that this run will actually execute, in DECLARATION order.
 //
-// THE ONE PLACE THE SELECTION RULES LIVE — the `draft` skip, the `--filter` match, and the per-target
-// gate — and it has to be, because BOTH HALVES OF THE POOL ASK THE SAME QUESTION IN DIFFERENT
+// THE ONE PLACE THE SELECTION RULES LIVE — the `draft` skip, the `--filter` match, and the two
+// per-target gates — and it has to be, because BOTH HALVES OF THE POOL ASK THE SAME QUESTION IN DIFFERENT
 // PROCESSES. The parent asks it to decide what the run will report and to weight the job queue
 // (`buildPlans`); the worker asks it to decide what to run (`runOneSpec`). Written out twice, the two
 // copies could drift — a rule added to one and not the other — and the drift would not read as a bug:
@@ -815,14 +815,21 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	// so this is the string every test's `targets` list is checked against.
 	let effectiveTargetKey = targetToString(effectiveTarget)
 
-	// ⭐ **SELECTION ASKS THE AUTHOR ONLY.** Whether the TARGET can express the case is not asked here
-	// and structurally cannot be: it is a property of the case's SOURCE, which only the compiler reads.
-	// It is answered where the compiler answers it — see `targetRefusalIn` — and the answer arrives as
-	// a SKIPPED result rather than as an absent one, so it is counted and reported instead of vanishing
-	// out of the plan. This used to carry a second gate that guessed at it from the `<!-- Args: -->`
-	// marker, and the guess was measurably wrong (PLAN row `X2`).
+	// ⭐ **SELECTION ASKS THE SPEC, NEVER THE SOURCE.** Whether the TARGET can compile what the case
+	// WRITES is not asked here and structurally cannot be: that is a property of the case's SOURCE,
+	// which only the compiler reads. It is answered where the compiler answers it — see
+	// `targetRefusalIn` — and the answer arrives as a SKIPPED result rather than as an absent one, so
+	// it is counted and reported instead of vanishing out of the plan. This used to carry a second gate
+	// that guessed at it from the `<!-- Args: -->` marker, and the guess was measurably wrong (PLAN row
+	// `X2`).
+	//
+	// ⚠ **THE TWO PER-TARGET QUESTIONS ASKED HERE ARE BOTH THE SPEC'S OWN, AND THE SECOND IS THE FIRST
+	// ONE DERIVED.** `markerAllowsTarget` reads a restriction the author SPELLED; `targetCanCheckSectionPins`
+	// reads one the author DECLARED by writing a ```RequiredData / ```RequiredRdata block, because a
+	// section pin names bytes only a native container format has. Both are properties of the spec TEXT,
+	// which is why both are answerable before a compiler is spawned and why neither is a guess.
 	for test in specFile.tests 'eachTest'
-		if selectedByFilter(specName, testName: test.name, filter: filter) and markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) 'isSelected'
+		if selectedByFilter(specName, testName: test.name, filter: filter) and markerAllowsTarget(test, effectiveTargetKey: effectiveTargetKey) and targetCanCheckSectionPins(test, effectiveTarget: effectiveTarget) 'isSelected'
 			selected.push(test)
 		end 'isSelected'
 	end 'eachTest'
@@ -830,17 +837,25 @@ export function selectedTests(specFile SpecFile, specName String, filter String,
 	return selected
 end 'selectedTests'
 
-// The MARKER's own gate — what the SPEC AUTHOR declared, and the only per-target question selection
-// asks. A gated-out test is not run, not failed and not reported, exactly as a draft or filtered-out
-// test is, which is why this lives beside `selectedByFilter` under the one door.
+// The MARKER's own gate — what the SPEC AUTHOR SPELLED. A gated-out test is not run, not failed and
+// not reported, exactly as a draft or filtered-out test is, which is why this lives beside
+// `selectedByFilter` under the one door.
 //
 // UNIFORM rule for EVERY target (native and cross alike): a test runs on ALL
 // targets unless it declares a `<!-- targets: … -->` RESTRICTION, in which case it runs ONLY on the
 // listed targets. A marker is a restriction for a TECHNICAL reason — an ISA-specific
-// register-allocation test (its register pool), a `RequiredData` test (the native `.data` section a
-// wasm module has no equivalent of), a fault-handler-dependent test — NEVER a per-target opt-in. So an
-// unmarked test runs on x64-windows, arm64-macos AND wasm32-wasi; there is no marking to "enable" a
-// target.
+// register-allocation test (its register pool), a fault-handler-dependent test, a runtime chunk whose
+// body only one backend emits — NEVER a per-target opt-in. So an unmarked test runs on x64-windows,
+// arm64-macos AND wasm32-wasi; there is no marking to "enable" a target.
+//
+// ⛔ **A SECTION PIN IS NO LONGER ONE OF THOSE REASONS, AND IT IS THE REASON THIS SENTENCE CHANGED.**
+// "A `RequiredData` test (the native `.data` section a wasm module has no equivalent of)" used to head
+// that list, and the corpus obeyed it by hand: twenty-odd cases across four files each spelled
+// `x64-windows, x64-linux, arm64-macos, arm64-linux`, which is the literal enumeration of
+// `targetHasLinkedSections`. `enum-narrow-storage.md` did not, and its six cases panicked in
+// `linkedSectionName` under `--target=wasm32-wasi`, killed the worker and aborted the whole lane. That
+// restriction is DERIVED now — see `targetCanCheckSectionPins` — so writing it as a marker is writing
+// the same fact twice, and the markers came out with the fix.
 function markerAllowsTarget(test SpecTest, effectiveTargetKey String) returns bool
 	if test.targets.isEmpty() 'unrestricted'
 		return true
@@ -857,6 +872,33 @@ function markerAllowsTarget(test SpecTest, effectiveTargetKey String) returns bo
 
 	return false
 end 'markerAllowsTarget'
+
+// ⭐⭐ **THE RESTRICTION A SECTION PIN CARRIES WITHOUT SPELLING IT — the same shape as
+// `markerAllowsTarget` and gated-out the same silent way, but DERIVED from the case rather than read
+// off a marker.** A ```RequiredData / ```RequiredRdata block is checked by reading named bytes back out
+// of the LINKED IMAGE (`compareLinkedSection`), so a case carrying one asserts something only a
+// container format with named sections can answer. Which formats those are is
+// `LinkedSection.targetHasLinkedSections`, and it is asked here rather than restated by every author.
+//
+// ⚠ **THE WHOLE CASE IS EXCLUDED, NOT JUST ITS PIN, AND THAT IS DELIBERATE.** A case pins a section
+// alongside its exit code because both halves are one indivisible claim about one build-and-run
+// (`SpecExpectation.run`); running the half a target can answer and silently dropping the other would
+// report PASS for an assertion nobody made — the exact shape `RequiredDataFence`'s header refuses. It
+// is also precisely what the hand-written markers did, so the corpus's behaviour on every native
+// target is unchanged.
+//
+// ⚠ **SILENT, LIKE A MARKER, AND UNLIKE A `TestOutcome.skipped`.** The counted, reported skip exists
+// because the COMPILER's refusal can be wrong — an E3104 emitted in error would delete coverage while
+// the suite read green — so it must never be believed quietly. This one cannot be wrong in that
+// direction: it is decided from the spec's own text by a total match over `Os`, before anything is
+// compiled, and a case it excludes had no verdict to lose.
+function targetCanCheckSectionPins(test SpecTest, effectiveTarget Target) returns bool
+	if targetHasLinkedSections(effectiveTarget) 'formatHasSections'
+		return true
+	end 'formatHasSections'
+
+	return not test.pinsLinkedSection()
+end 'targetCanCheckSectionPins'
 
 // What the compiler's own stderr says about whether this target could express the case AT ALL.
 union TargetRefusal

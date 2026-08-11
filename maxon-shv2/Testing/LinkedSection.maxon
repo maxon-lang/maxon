@@ -46,19 +46,49 @@ export union DataSectionReadError implements Error
 	end 'displayReason'
 end 'DataSectionReadError'
 
+// ⭐⭐ **DOES `target`'s EXECUTABLE FORMAT HAVE THE SECTIONS A PIN NAMES AT ALL — the ONE producer of
+// that fact, and the reason a section-pin case needs no `<!-- targets: … -->` marker.**
+//
+// Keyed on the OS, because that IS the fact: the OS chooses the container format, and the three
+// containers below (PE, Mach-O, ELF) each keep a named globals and a named read-only section while a
+// WASI component keeps neither — its data lives in `(data …)` segments addressed by a linear-memory
+// offset, with no section header a reader could name. There is nothing to read and nothing to compare.
+//
+// ⚠ **IT IS READ AT SELECTION TIME (`SpecTestRunner.selectedTests`), AND THAT IS WHY THE `wasi` PANICS
+// BELOW ARE UNREACHABLE RATHER THAN MERELY UNLIKELY.** They used to be reachable, and the way in was a
+// spec author's memory: every ```RequiredData / ```RequiredRdata case in the corpus carried a
+// hand-written `<!-- targets: x64-windows, x64-linux, arm64-macos, arm64-linux -->` marker spelling out
+// exactly this predicate, and the ONE file that did not — `enum-narrow-storage.md`, ported without
+// markers — ran under `--target=wasm32-wasi`, panicked in `linkedSectionName`, killed its worker and
+// ABORTED THE WHOLE LANE, so the wasm gate reported nothing at all (measured on `main`, 2026-08-10).
+// One fact written in twenty-odd places, and the copy that went missing took a suite down with it.
+// ⇒ the restriction is now DERIVED from the pin — the case declares that it pins a linked section by
+// carrying the block, and this function decides which targets have one — so there is no marker to
+// forget. It also un-gates itself: the day a WASI component grows a readable equivalent, this gains an
+// arm and every pinned case starts running there with no edit to any spec.
+export function targetHasLinkedSections(target Target) returns bool
+	return match target.os 'format'
+		windows gives true
+		macos gives true
+		linux gives true
+		wasi gives false
+	end 'format'
+end 'targetHasLinkedSections'
+
 // Read `section` out of the binary at `exePath`, as `target`'s format keeps it.
 //
 // EXHAUSTIVE over `Os`, with no bare `else`. The previous shape — `if macos … else <PE>` — quietly
 // made PE the answer for every os nobody had thought about, which is precisely how an ELF came to be
 // parsed as a PE. `wasi` panics rather than guessing: a wasm component has no native data sections
-// at all, so there is no reading to attempt, and the only way to reach it is a section-pin spec that
-// was allowed to run under wasm — a gating bug in the spec, which the panic names.
+// at all, so there is no reading to attempt, and selection has already excluded every case that would
+// ask — see `targetHasLinkedSections`, which is the gate and this panic's one reason for being
+// unreachable.
 export function readLinkedSection(exePath FilePath, target Target, section LinkedSectionKind) returns ByteArray throws DataSectionReadError
 	match target.os 'format'
 		windows then return try peSection(exePath, section: section)
 		macos then return try machoSection(exePath, section: section)
 		linux then return try elfSection(exePath, section: section)
-		wasi then panic("readLinkedSection: a wasm component has no native {linkedSectionLabel(section)} section, so a section pin cannot be checked under {targetToString(target)} — the spec carrying it must restrict itself to the targets that have one")
+		wasi then panic("readLinkedSection: a wasm component has no native {linkedSectionLabel(section)} section, so a section pin cannot be checked under {targetToString(target)} — and `targetHasLinkedSections` should have kept this case out of the run entirely")
 	end 'format'
 end 'readLinkedSection'
 
@@ -71,7 +101,7 @@ export function linkedSectionName(section LinkedSectionKind, target Target) retu
 		windows then return peSectionName(section)
 		macos then return "{MachoDataSegmentName}{MachoSectionPairSeparator}{machoSectionName(section)}"
 		linux then return elfSectionName(section)
-		wasi then panic("linkedSectionName: a wasm component has no native {linkedSectionLabel(section)} section — see readLinkedSection")
+		wasi then panic("linkedSectionName: a wasm component has no native {linkedSectionLabel(section)} section — see targetHasLinkedSections, which keeps a pinned case off this target")
 	end 'format'
 end 'linkedSectionName'
 
