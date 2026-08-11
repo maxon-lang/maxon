@@ -509,7 +509,7 @@ end 'main'
 
 <!-- test: parsable.byte-user-type-outranks-primitive -->
 **A USER DECLARATION OUTRANKS THE PRIMITIVE READING, and this is the case that makes the clause
-load-bearing.** `type int` is refused at its own name (`E2010: Expected 'identifier' but got 'int'`), so
+load-bearing.** `type int` is refused at its own name (`E2010: Expected identifier but got 'int'`), so
 `int.`/`float.`/`bool.` can never be contested — but `byte` is an ordinary identifier here, and a `type
 byte` with its own `static function fromString` compiled and ran on this tree BEFORE the rewrite existed.
 Minting `__byte_fromString` ahead of it would silently re-point a call that already worked at the stdlib

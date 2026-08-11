@@ -1284,7 +1284,10 @@ end 'unknownReservedCalleeMessage'
 // while it did so.
 function reportParseError(project Project, path FilePath, error ParseError)
 	match error 'kind'
-		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected '{expected}' but got '{got}'", line: line, column: column, filePath: path)
+		// ⚠ The `expected` half is NOT quoted here — `Lexer.expectationDisplayText` decides that, and it is
+		// the only place that does: a bare lexical CATEGORY (`identifier`) is written bare and everything
+		// else quoted, which is canonical `/specs`' own rule. See there.
+		unexpectedToken(expected, got, line, column) then reportPositioned(project, code: ErrorCode.parserExpectedToken, message: "Expected {expectationDisplayText(expected)} but got '{got}'", line: line, column: column, filePath: path)
 		expectedExpression(got, line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected expression but got '{got}'", line: line, column: column, filePath: path)
 		// The fifth E2004 family (see the registry's `doc`): the initializer parsed fine and is simply
 		// not CONSTANT. Byte-for-byte the reference compilers' sentence, gated by `lexer-edge-cases.md`.
@@ -1471,7 +1474,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// stderr exactly and the two suites run the same spec file.
 		localShadowsSelfField(name, typeName, line, column) then reportPositioned(project, code: ErrorCode.duplicateDefinition, message: "local '{name}' shadows self field '{typeName}.{name}' — rename the local to avoid silent type confusion at every read/write keyed on the name", line: line, column: column, filePath: path)
 		unexportedFieldAccess(typeName, fieldName, line, column) then reportPositioned(project, code: ErrorCode.unexportedFieldAccess, message: "cannot access unexported field: '{fieldName}' outside of type '{typeName}'", line: line, column: column, filePath: path)
-		immutableMutatingCall(name, functionName, line, column) then reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(name, paramName: SelfParamDisplayName, functionName: functionName), line: line, column: column, filePath: path)
+		immutableMutatingCall(name, functionName, line, column) then reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(name, paramName: String.from(ReceiverSourceSpelling), functionName: functionName), line: line, column: column, filePath: path)
 		// Byte-for-byte the reference compilers' E2001 sentence, gated exactly by the `maxoncstderr`
 		// goldens in `match-statements.md`/`match-simple.md` and `function-declaration.md`. Its raisers
 		// are listed on the union arm and deliberately not here — the variant exists to have several,
@@ -1541,6 +1544,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// `reserved-double-underscore.md` `maxoncstderr` goldens gate this stderr exactly, so the two
 		// compilers must not drift.
 		reservedIdentifier(name, line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier '{name}' is reserved: declarations starting with '__' are reserved for compiler internals", line: line, column: column, filePath: path)
+		// The reservation's SECOND arm — same code, a different name set and a different reason (see
+		// `ParseError.reservedReceiverName`). Byte-for-byte the bootstrap's text, which `reserved-self.md`'s
+		// `maxoncstderr` golden gates exactly, so the two compilers must not drift.
+		reservedReceiverName(line, column) then reportPositioned(project, code: ErrorCode.reservedIdentifier, message: "identifier 'self' is reserved: it is the implicit instance receiver and cannot be bound by user code", line: line, column: column, filePath: path)
 		// ⚠ **THE SENTENCE SAID "shv2 SYNTHESIZES THAT DECLARATION RATHER THAN READING IT FROM THE STDLIB",
 		// AND W3 MADE THAT FALSE FOR TWO OF THE NAMES** — `Ordering` and `IterationError` are read from
 		// `stdlib/Interfaces.maxon`. What is true of ALL of them, and what the reservation actually is, is

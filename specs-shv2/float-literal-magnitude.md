@@ -416,5 +416,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/float-literal-magnitude/error.two-decimal-points.test:3:14: Expected 'identifier' but got '3'
+error E2010: specs/fragments/float-literal-magnitude/error.two-decimal-points.test:3:14: Expected identifier but got '3'
 ```

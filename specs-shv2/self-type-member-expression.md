@@ -432,7 +432,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:12:15: Expected ''min' or 'max'' but got 'nope'
+error E2010: <fragment>:12:15: Expected 'min or max' but got 'nope'
 ```
 
 <!-- test: error.Self-member-at-file-scope -->
@@ -810,7 +810,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2010: <fragment>:3:6: Expected 'identifier' but got 'Self'
+error E2010: <fragment>:3:6: Expected identifier but got 'Self'
 ```
 
 <!-- test: parameter-named-Self-does-not-capture-a-static-call -->

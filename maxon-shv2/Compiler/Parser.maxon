@@ -1011,6 +1011,20 @@ export union ParseError implements Error
 	// what this reservation does and does not buy the readers that ask "is this callee the compiler's own?"
 	// (`MmRuntime.isSignaturelessCompilerCallee`). `name` is the offending identifier, for the message.
 	reservedIdentifier(name String, line LineNumber, column ColumnNumber)
+	// A user declaration BINDING THE NAME `self` — a parameter, a local, a field, a function, a type.
+	// Renders as **E2051** too, positioned at the declared name, and raised by the same
+	// `requireUnreservedName` at the same binding sites.
+	//
+	// ⭐ It is `reservedIdentifier`'s SIBLING rather than an arm of it, and the split is the same one
+	// `integerOverflow`/`floatLiteralOverflow` make: the two share a CODE because a user declaration may
+	// not take either name, and they must not share a MESSAGE, because what is reserved and WHY differs —
+	// `__` is the space the compiler emits its own symbols into, `self` is the implicit instance receiver
+	// a binding of the name would shadow.
+	//
+	// It carries NO payload because the sentence names no part of the program: there is exactly one word
+	// this refuses, and the message spells it. The text is the bootstrap's verbatim
+	// (`2-Parser.cs:27418`), which `specs/reserved-self.md` pins.
+	reservedReceiverName(line LineNumber, column ColumnNumber)
 	// A user declaration giving a NOMINAL type identity to a name the COMPILER owns — `type Ordering`,
 	// `enum HashValue`, a `function`/`Base with Args` typealias over either (`Ordering`, `HashValue`,
 	// `ExitCode`; see `TypeResolution.isCompilerOwnedTypeName` for the coupling and the measured fault it
@@ -1380,14 +1394,24 @@ export let SelfParamName = b"__self"
 // `__self` to resolve the receiver out of `Scope`, and no source ever writes that — so an E3070 that
 // blamed the key would point the reader at a name absent from their file. `self` is the spelling they
 // wrote, or (for the BARE call that wrote no receiver at all) the one they would.
-let SelfBlameName = b"self"
+//
+// ⚠ **IT HAS THREE READERS, WHICH IS WHY IT IS NAMED FOR THE RECEIVER RATHER THAN FOR BLAME** —
+// `borrowSubjectBlameName` (E3070's noun), `displayParamName` (every diagnostic that names a parameter),
+// and `requireUnreservedName`, which refuses a user declaration of this same spelling (E2051,
+// `reserved-self.md`). All three ask one question — which word in the source means the implicit receiver
+// — so a second `b"self"` or `"self"` beside any of them is that fact written twice. There WAS one: an
+// `export let SelfParamDisplayName = "self"` twenty-nine lines below, differing only in being a `String`,
+// read by a function that mapped the same IR key to the same spelling. A change to what the receiver is
+// called would have landed in one and not the other, and the symptom is a WRONG NOUN in a message rather
+// than a compile error.
+export let ReceiverSourceSpelling = b"self"
 
 // The name an E3070 blames for a write, given the name its subject RESOLVES under. They differ for
-// exactly one storage — see `SelfBlameName` — and the translation is here, at the one place that knows
-// both, rather than at the message, which is `BorrowCheck`'s and cannot see the parameter convention.
+// exactly one storage — see `ReceiverSourceSpelling` — and the translation is here, at the one place that
+// knows both, rather than at the message, which is `BorrowCheck`'s and cannot see the parameter convention.
 function borrowSubjectBlameName(subjectName ByteArray) returns ByteArray
 	if subjectName.equals(SelfParamName) 'theReceiverParameter'
-		return SelfBlameName
+		return ReceiverSourceSpelling
 	end 'theReceiverParameter'
 
 	return subjectName
@@ -1405,16 +1429,19 @@ let DestructureTempPrefix = "__destructure_"
 // common answer and the initial value of every function's mask.
 export let NoParamPositions = 0 as ParamPositionMask
 
-// **THE SOURCE SPELLING OF THE RECEIVER PARAMETER.** `__self` is the IR's name for it; `self` is the
-// KEYWORD the user actually wrote, and the only one a diagnostic may quote back at them — a message
-// naming `__self` would name an identifier that appears nowhere in their program (and one the language
-// reserves). Both reference compilers print `self`.
-export let SelfParamDisplayName = "self"
-
+// **THE SOURCE SPELLING OF THE RECEIVER PARAMETER, AS A DIAGNOSTIC PRINTS IT.** `__self` is the IR's name
+// for it; `self` is the KEYWORD the user actually wrote, and the only one a diagnostic may quote back at
+// them — a message naming `__self` would name an identifier that appears nowhere in their program (and one
+// the language reserves). Both reference compilers print `self`.
+//
+// ⚠ **THE SPELLING ITSELF IS `ReceiverSourceSpelling`'s** — see there for the three readers of that one
+// fact and for the second copy this deleted. Only the `String` CONVERSION is written at each diagnostic
+// site, and it is free: every path through one is already building a message.
+//
 // A parameter's name AS A DIAGNOSTIC PRINTS IT. Only the receiver differs from its IR name; every other
 // parameter is spelled exactly as it was declared.
 export function displayParamName(name ByteArray) returns String
-	return SelfParamDisplayName if name.equals(SelfParamName) else String.from(name)
+	return String.from(ReceiverSourceSpelling) if name.equals(SelfParamName) else String.from(name)
 end 'displayParamName'
 
 // ⭐ **THE ONE WIRE FORMAT OF E3019.** Its two producers are deliberately far apart — the RECEIVER half is
@@ -2132,6 +2159,35 @@ export typealias MethodFeedScanArray = Array with MethodFeedScan
 // module owning the parser's reservation, or the reverse, would be the worse coupling. The language
 // rule that `__` is reserved is what binds them, not a shared symbol.
 let ReservedNamePrefix = b"__"
+
+// ⭐ **WHICH NAMESPACE A DECLARED NAME ENTERS — the one thing `requireUnreservedName`'s two reservations
+// answer differently.** The `__` prefix is refused in both; the RECEIVER's name is refused in one only,
+// because shadowing is the whole reason that reservation exists and only one of these namespaces can
+// shadow anything. It is a scalar and not a bool for the reason `NamePosition` is one: the caller states
+// what its declaration IS, and the rule over that is this door's alone.
+enum DeclaredNameNamespace
+	// A local, a parameter, a field, a function, a type — everything reached by writing the bare name,
+	// which is exactly how an instance method's implicit `self` is reached. A binding here would shadow it.
+	shadowsTheReceiver
+	// An enum or union CASE, reachable only as `TypeName.case`, which shadows nothing — so `enum Marker`
+	// may declare a case `self`, and `specs/reserved-self.md` says it may. Both references agree (the
+	// bootstrap carries the identical carve-out as `CheckReservedDeclName`'s `isEnumCase`), and the
+	// compiler's own `TokenKind` is an enum with a case spelled `self`.
+	qualifiedByItsType
+end 'DeclaredNameNamespace'
+
+// ⛔ **THE EXHAUSTIVE READER, AND IT IS THE WHOLE POINT OF THE ENUM.** An `==` compare against
+// `shadowsTheReceiver` at the one call site would make a THIRD case join the non-refusing side silently —
+// no compile error, a reservation that quietly stops applying to a namespace nobody decided about. The
+// `match` refuses to compile until the new case answers, which is the property a bool never had and the
+// reason this is not one. (`enumMatchIsDeclared` and `nameExpectationOf` are the same shape, for the same
+// reason.)
+function namespaceShadowsTheReceiver(bindsInto DeclaredNameNamespace) returns bool
+	return match bindsInto 'which'
+		shadowsTheReceiver gives true
+		qualifiedByItsType gives false
+	end 'which'
+end 'namespaceShadowsTheReceiver'
 
 // How many arguments an unparenthesized `implements I with …` clause takes when THIS FILE cannot see
 // `I`'s declaration (R5) — see `interfaceUsesArity`, which is where the choice is argued. Named because
@@ -4656,7 +4712,7 @@ let UpsertMethod = b"upsert"
 // (A3g).** `CharacterSet.from(chars)` is spelled `from`, which the lexer classifies as `TokenKind.from`
 // because the same word opens a `Set from […]`. It was therefore recognized by KIND, so the only spelling a
 // roster over it could have been derived from was `TokenKind.from`'s `rawValue` — a DISPLAY string whose job
-// is *"Expected 'identifier' but got 'from'"*, free to gain punctuation the day a message reads better with
+// is *"Expected identifier but got 'from'"*, free to gain punctuation the day a message reads better with
 // it. (`String.from(bytes)` was the second such door until W55 retired it to `stdlib/String.maxon:119`.)
 //
 // ⭐ **A KEYWORD TOKEN CARRIES ITS OWN SOURCE BYTES**: `Lexer.scanIdentifier` emits `value: identBytes`
@@ -7425,7 +7481,7 @@ let EnumCaseNameExpectation = "an enum case name"
 // is now built only on the throw.
 enum NamePosition
 	// A DECLARATION's own name, a parameter, a callee or method name, an argument label — every position whose
-	// mismatch the spec corpus pins as E2010 `Expected 'identifier' but got '<x>'`.
+	// mismatch the spec corpus pins as E2010 `Expected identifier but got '<x>'`.
 	declaration
 	// An enum/union CASE name, whose wording is the bootstrap's.
 	enumCase
@@ -16110,7 +16166,12 @@ export type Parser
 		if fieldTok.value.equals(MinBoundField) 'min'
 			return false
 		end 'min'
-		throw ParseError.unexpectedToken("'min' or 'max'", got: tokenDisplayText(fieldTok), line: fieldTok.line, column: fieldTok.column)
+		// ⚠ **UNQUOTED, BECAUSE THE QUOTES ARE `expectationDisplayText`'s TO ADD.** This site used to pass its
+		// expectation ALREADY QUOTED, so the renderer quoted it again and the message carried a doubled pair
+		// around a doubly-quoted string — the renderer quoting text that had quoted itself, which is what a
+		// second site deciding presentation looks like from the outside. It was the one live counterexample to
+		// that function's claim to be the only decider.
+		throw ParseError.unexpectedToken("min or max", got: tokenDisplayText(fieldTok), line: fieldTok.line, column: fieldTok.column)
 	end 'boundFieldIsMax'
 
 	// Parse a struct type declaration (P1.0r):
@@ -17197,7 +17258,11 @@ export type Parser
 		// ⚠ It is asked about `caseName` — the DECODED name, the one this case is actually declared under
 		// everywhere else in this function — and not about the token's text. This is THE site that makes those
 		// two different things (`"\x5f\x5fx"` declares `__x`); see `requireUnreservedName`.
-		try self.requireUnreservedName(nameTok, declaredName: caseName)
+		// ⚠ `bindsInto` is stated HERE and nowhere else: a case name is reachable only as `Marker.self`, so it
+		// is the one declaration in the language that cannot shadow the implicit receiver. See
+		// `DeclaredNameNamespace` — the default is the refusing side, so a new binding site added tomorrow
+		// gets the reservation without having to remember it.
+		try self.requireUnreservedName(nameTok, declaredName: caseName, bindsInto: DeclaredNameNamespace.qualifiedByItsType)
 
 		// E3030 — checked at the second declaration, as the bootstrap positions it.
 		if layout.hasCase(caseName) 'duplicateCase'
@@ -22567,16 +22632,29 @@ export type Parser
 		self.markMutabilityExercised(binding)
 	end 'requireMutableBinding'
 
-	// **THE `__`-RESERVATION RULE, IN ONE PLACE.** A user may not DECLARE a name that starts with the
-	// prefix Maxon reserves for compiler internals (see `ReservedNamePrefix`). Raised as E2051 at the
-	// declared name — the token the user has to change.
+	// **WHAT A USER MAY NOT DECLARE, IN ONE PLACE.** Two reservations, both raised as E2051 at the declared
+	// name — the token the user has to change:
+	//   • a name starting with the prefix Maxon reserves for compiler internals (`ReservedNamePrefix`);
+	//   • the implicit receiver's own name, `self` (`ReceiverSourceSpelling`, and see `bindsInto` for the
+	//     one namespace it is legal in).
+	// They are one DOOR and two RULES: every binding site asks "may this declaration take this name?" once,
+	// and what the answer is made of lives here rather than at the sites.
 	//
-	// ⚠ It is called at EIGHT binding sites — function/method name, parameter, top-level and body
-	// `let`/`var`, `type` name, struct field, `typealias` name, enum/union case — and it is ONE call
-	// at each, never eight copies of `bytesStartWith(…, b"__")` + the message. That the rule reads
-	// once is the whole point: eight copies is this project's signature bug, and a reservation that
-	// held at seven sites and lapsed at the eighth would be a SILENT hole (a user `__`-name accepted
-	// there), not a compile error — exactly the class of defect this rung exists to close.
+	// ⚠ It is called at **17** binding sites — function/method name, parameter, top-level and body
+	// `let`/`var`, destructuring names, loop-variable pattern, `if` binder, caught-error binders,
+	// `type` name, struct field, union payload field, `typealias` name, interface name, enum/union case —
+	// and it is ONE call at each, never 17 copies of `bytesStartWith(…, b"__")` + the message. That the rule
+	// reads once is the whole point: 17 copies is this project's signature bug, and a reservation that held
+	// at 16 sites and lapsed at the 17th would be a SILENT hole (a user `__`-name accepted there), not a
+	// compile error — exactly the class of defect this door exists to close.
+	//
+	// ⛔ **AND IT LAPSED AT EXACTLY TWO, WHICH IS WHY THE COUNT IS WRITTEN DOWN AND WHY IT IS CHECKED.** This
+	// header said EIGHT while the tree had 15 calls, and the two CAUGHT-ERROR binders — `otherwise (e)` and
+	// `end 'c' else (e)` — took `consume(TokenKind.identifier)` straight to `declareCaughtError` without ever
+	// asking. MEASURED before the two calls below were added: `try arr.get(0) otherwise (__x) 'h'` COMPILED
+	// AND RAN on shv2 (exit 42) while the oracle refuses it, `E2051 … identifier '__x' is reserved`, and the
+	// `else (__e)` form was the same both ways. A stale census is not a documentation defect here — it is the
+	// only thing that would have shown the hole, since nothing else about those two sites looks wrong.
 	//
 	// ⛔⛔ **`declaredName` IS PASSED AND IS *NOT* `nameTok.value`, AND THAT SPLIT IS A HOLE THIS DOOR ONCE
 	// HAD.** For every site but one the two are the same bytes, which is exactly why reading the token's own
@@ -22593,7 +22671,7 @@ export type Parser
 	// names out of `funcSignatures`, which is the fact `MmRuntime.isSignaturelessCompilerCallee` reads to
 	// license the "skip the user-function checks" shortcut — a registry answer, not a naming convention,
 	// because the exemption below means the prefix alone no longer decides it.
-	function requireUnreservedName(nameTok Token, declaredName ByteArray) throws ParseError
+	function requireUnreservedName(nameTok Token, declaredName ByteArray, bindsInto DeclaredNameNamespace = DeclaredNameNamespace.shadowsTheReceiver) throws ParseError
 		// ⭐ **THE ONE FILE THAT DECLARES THE RESERVED SPACE IS EXEMPT (D6)** — `stdlib/Builtins.maxon`,
 		// whose whole content is the type-system bridge to compiler intrinsics: the error enums a builtin
 		// throws (`__ManagedFileError`) and the parse helpers `int.fromString` rewrites to
@@ -22609,9 +22687,37 @@ export type Parser
 			return
 		end 'theReservedSpacesOwnFile'
 
+		// ⭐⭐ **THE SECOND RESERVATION AT THIS DOOR: THE IMPLICIT RECEIVER'S OWN NAME (`reserved-self.md`).**
+		// `self` is not a `__` name, so it cannot ride the prefix test below and would be waved through by its
+		// early-out; it is a separate rule over a separate name, asked here because "may a user declaration
+		// take this name" is ONE question and this is the one place every binding site asks it. Before this,
+		// `function configure(self int)` PARSED and the fault surfaced two ways downstream, both in the wrong
+		// place and for the wrong reason: `E3012 unused variable: 'self'` if the body never read it, and
+		// `E2001 'self' can only be used inside instance methods` if it did.
+		//
+		// ⚠ **IT SITS BELOW THE FILE EXEMPTION, ON THE SAME SIDE AS THE `__` RULE** — the reference draws
+		// exactly one boundary in this door (`2-Parser.cs:27418`: the `self` throw is inside the same function
+		// the stdlib-file exemption returns from), and a second boundary here would be one door with two
+		// shapes. Nothing shv2 parses rides on the choice: MEASURED across every module
+		// `whitelistedStdlibModules` lists and `stdlib/Builtins.maxon` besides (which reaches the parser as the
+		// exempt file rather than as one of the listed ones), ZERO declare a binding named `self`.
+		//
+		// ⛔ **AND THE FILE THAT WOULD — `stdlib/Internals.maxon`, 24 of them, `__destruct___ManagedMemory(self
+		// MachineWord)` and its siblings — IS NOT EXEMPT IN shv2 AND MUST NOT BE ASSUMED TO BE.** The bootstrap
+		// exempts three BASENAMES (`2-Parser.cs:27401-27402`: `Builtins.maxon`, `Internals.maxon`,
+		// `Testing.maxon`); shv2's `declaresCompilerInternalNames` is an identity compare against
+		// `Builtins.maxon` ALONE. `whitelistedStdlibModules` does not list `Internals.maxon`, so shv2 never
+		// parses it and the gap costs nothing today — but whoever lists it inherits NOTHING from the reference:
+		// it goes red on the `__` rule first (every one of those function NAMES is `__`-prefixed), and widening
+		// the exemption is what that day's work is. This rule rides along with that decision; it does not
+		// depend on it.
+		if namespaceShadowsTheReceiver(bindsInto) and declaredName.equals(ReceiverSourceSpelling) 'theImplicitReceiversName'
+			throw ParseError.reservedReceiverName(nameTok.line, column: nameTok.column)
+		end 'theImplicitReceiversName'
+
 		// ⭐⭐ **THE RULE'S OWN TEST COMES FIRST, AND THAT ORDER IS A COST CURVE RATHER THAN A STYLE (A1s
-		// optimizer).** This function is called at EIGHT binding sites, so it runs once per declared name in
-		// every file — and the exemption below is a LINEAR SCAN of the rename table
+		// optimizer).** This function is called at every binding site (see the header's census), so it runs
+		// once per declared name in every file — and the exemption below is a LINEAR SCAN of the rename table
 		// (`isMintedStdlibShadowName`, whose own header argues why a scan is the right shape for a table that
 		// is empty in the whole existing corpus). Asked BEFORE this test, that scan ran at every stdlib
 		// declaration site whether or not the name could possibly be a mint, which is a `sites x renames`
@@ -25260,6 +25366,12 @@ export type Parser
 	function parseOtherwiseBinding(func IrFunction, flag ValueId, errorType MaxonType) returns TryHandler throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let eNameTok = try self.consume(TokenKind.identifier)
+		// ⛔ **A CAUGHT ERROR IS A DECLARATION, SO IT ASKS THE DECLARATION DOOR** — for the reason
+		// `requireUnreservedName`'s header gives at length, and this is one of the two sites that proved it:
+		// before this call, `try f() otherwise (__x) 'h'` declared a `__`-prefixed local and RAN (measured,
+		// exit 42) where the oracle refuses it E2051. `self` was never reachable here — `consume(identifier)`
+		// refuses the keyword first — which is exactly why the hole was invisible to the receiver rule.
+		try self.requireUnreservedName(eNameTok, declaredName: eNameTok.value)
 		try self.consume(TokenKind.rightParen)
 		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, errorType: errorType)
 	end 'parseOtherwiseBinding'
@@ -27937,6 +28049,9 @@ export type Parser
 			if self.at(TokenKind.leftParen) 'errorBinder'
 				try self.consume(TokenKind.leftParen)
 				let eNameTok = try self.consume(TokenKind.identifier)
+				// The same declaration door `parseOtherwiseBinding` asks, and for the same measured reason —
+				// `end 'c' else (__e) 'err'` compiled here too. Same binder, same rule, asked at both.
+				try self.requireUnreservedName(eNameTok, declaredName: eNameTok.value)
 				try self.consume(TokenKind.rightParen)
 				bindingName = eNameTok.value
 				hasBinding = true
@@ -30830,7 +30945,7 @@ export type Parser
 		// ⭐ **A LABEL — the OTHER lookahead, and it is a `:` (D8).** `weigh(i, for: 3, match: 4)` labels a
 		// keyword-named PARAMETER. (An ARGUMENT label is the only reader: a struct literal's `Self{x: 3}` keys
 		// on a FIELD name, and a field DECLARATION admits no keyword — `var end as Integer` is
-		// `E2010 Expected 'identifier' but got 'end'` — so there is no keyword-named field to label.) A `:`
+		// `E2010 Expected identifier but got 'end'` — so there is no keyword-named field to label.) A `:`
 		// follows a NAME and nothing else in this grammar — no `if`/`while`/`match`/`for` header may be followed by one,
 		// and Maxon has no `?:` and no label syntax that puts a colon after a keyword — so a keyword whose next
 		// token is `:` is a name, whatever precedes it. Unexcluded, `for: 3` opened a block nothing closes and
@@ -41428,7 +41543,7 @@ export type Parser
 		// `requirePrimitiveStaticIsResolvable`'s, which is where the two qualifiers part company.
 		//
 		// ⚠⚠ **A USER DECLARATION OUTRANKS THE PRIMITIVE READING, AND THAT CLAUSE IS `byte`'s ALONE.** `type
-		// int` is refused at its own name (`E2010: Expected 'identifier' but got 'int'`, measured), so
+		// int` is refused at its own name (`E2010: Expected identifier but got 'int'`, measured), so
 		// `int.`/`float.`/`bool.` can never be contested — but `byte` is an ordinary identifier here, and a
 		// `type byte` declaring `static function fromString` COMPILES AND RUNS on this tree today (measured:
 		// exit 7). Minting ahead of it would silently re-point a call that already worked at the stdlib body,
@@ -41438,7 +41553,7 @@ export type Parser
 		// `typealias byte = Box with Num` resolves `byte.fromString` to `Box.fromString` before this test, so a
 		// user's own generic instance keeps its static (measured: exit 9) with no arm of its own here. It is
 		// the identity for the three KEYWORD qualifiers, which can name no declaration at all (`typealias int`
-		// is `E2010: Expected 'identifier' but got 'int'`, measured) — so what
+		// is `E2010: Expected identifier but got 'int'`, measured) — so what
 		// `requirePrimitiveStaticIsResolvable` then tests really is the qualifier the author wrote.
 		//
 		// The order of the two probes is cost: `namesAPrimitiveType` is four `equals` on a short slice and
@@ -58986,7 +59101,7 @@ export type Parser
 	// every dispatcher at once rather than to three of four.
 	//
 	// The BASE half stays a plain identifier because a keyword cannot NAME a *declared* type: `type to` is
-	// refused at its declaration (`E2010: Expected 'identifier' but got 'to'`). `parseQualifiedCall` reads
+	// refused at its declaration (`E2010: Expected identifier but got 'to'`). `parseQualifiedCall` reads
 	// its base through `typeBaseTokenAt`, which resolves two keywords — `Self` and, since A1s-prim, the
 	// primitive-type names — so widening this half would claim a shape the routine CAN parse but no
 	// STATEMENT wants: `Self.m()` and `int.fromString(s)` are refused as statements exactly as

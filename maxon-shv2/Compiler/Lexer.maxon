@@ -399,6 +399,71 @@ export function expressionOperandDisplayText(token Token) returns String
 	return token.kind.rawValue
 end 'expressionOperandDisplayText'
 
+// ⭐⭐ **HOW A DIAGNOSTIC NAMES WHAT THE GRAMMAR REQUIRED — the `expected` half of E2010.**
+// `tokenDisplayText` above answers the `got` half; this answers the other, and they are not the same
+// question — `got` names a token that IS in the file, `expected` names something the source has yet to
+// supply, so it is not routed through that helper (see `ParseError.unexpectedToken`).
+//
+// **THE RULE IS THE REFERENCE'S, AND IT IS ABOUT SPELLINGS AND NOTHING ELSE: a token SPELLING is
+// QUOTED; a CLASS is BARE.** `1-Lexer.cs:135-153` builds its display table by quoting every entry of
+// `KeywordMap` and `OperatorMap` plus the punctuators — exactly the strings an author has to TYPE — and
+// leaves everything else bare (`identifier`, `characterliteral`, `newline`, `end of file`). So the
+// quotes are a QUOTATION, symmetric with the `got` half quoting what the author did type, and that is
+// their whole job.
+//
+// ⛔⛔ **THEY ARE *NOT* A DELIMITER, AND "a PHRASE is quoted so the reader can see where it stops" IS
+// REFUTED — canonical writes a multi-word expectation BARE in this very message family:**
+//   `specs/lexer-parser-robustness.md:57,81`  `Unexpected end of input, expected type name`
+//   `specs/lexer-parser-robustness.md:181`    `Unexpected end of input, expected characterliteral`
+// The three quoted PHRASES canonical does carry (`'interpolation end'`, `'end of default value'`,
+// `'end of global initializer'`) are hand-typed literals at three call sites, sitting beside that bare
+// `type name` — the exception, not the rule. ⚠ Both framings were believed in this loop before they
+// were measured; neither survived. What is structurally unfakeable is the PROVENANCE, not the text: in
+// the reference every QUOTED expectation arrives from `Token.DisplayName` for a keyword or operator
+// token type, and every BARE one does not.
+//
+// ⛔ **THE SPELLING TEST IS THEREFORE `classifyIdentifier`'s — THE LEXER'S OWN KEYWORD TABLE — AND NOT
+// A LIST OF WORDS.** No property of the TEXT can separate `identifier` from `function`: both are one
+// lowercase word, and `identifier` is itself a legal identifier. What separates them is that the lexer
+// reads `function` as a keyword and `identifier` as no token at all. A word list here would fail OPEN —
+// the next keyword added would silently start rendering bare — which is the shape this project keeps
+// paying for, so the question is asked of the table that already knows the answer.
+//
+// ⚠⚠ **TWO KNOWN DIVERGENCES ARE LEFT STANDING HERE, DELIBERATELY.** Under the rule above a CLASS is
+// bare whether or not it is one word, so `Expected 'a type'` (12 pins) and `Expected 'character
+// literal'` (8 pins) are on the wrong side of it — the reference spells the second `characterliteral`
+// and bare. This function quotes them because it only asks the SPELLING question and treats every
+// multi-word expectation as quoted, which is right for the three phrase pins above and wrong for these
+// two. Moving them is 20 pins, needs the bootstrap's live output as the oracle for the exact wording
+// (`type name`? `a type`? `characterliteral`?), and is its own decision — NOT a ride-along on the tick
+// that unquoted `identifier`. (E2004 hardcodes the bare `expression` in its own template: a different
+// CODE with a different sentence, which agrees with the rule rather than being decided by it.)
+export function expectationDisplayText(expected String) returns String
+	if expectationNamesATokenClass(expected) 'aClassNoSourceSpells'
+		return expected
+	end 'aClassNoSourceSpells'
+
+	return "'{expected}'"
+end 'expectationDisplayText'
+
+// Is `expected` a CLASS of token rather than a spelling of one? Answered for the single-word case only,
+// which is where the two are genuinely indistinguishable by text — see `expectationDisplayText` for the
+// rule, for why the keyword table and not a list, and for the multi-word classes this leaves quoted.
+function expectationNamesATokenClass(expected String) returns bool
+	let word = expected.toByteArray()
+	if word.isEmpty() 'namesNothingAtAll'
+		return false
+	end 'namesNothingAtAll'
+
+	for b in word 'eachByte'
+		if not isAlpha(b) 'notOneIdentifierShapedWord'
+			return false
+		end 'notOneIdentifierShapedWord'
+	end 'eachByte'
+
+	return classifyIdentifier(word) == TokenKind.identifier
+end 'expectationNamesATokenClass'
+
 // The two characters the lexer hands to the parser as IDENTIFIERS so that it, not the
 // lexer, reports them: neither is legal Maxon, and the parser quotes the offending text
 // back in its diagnostic.

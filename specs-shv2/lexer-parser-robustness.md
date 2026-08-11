@@ -30,7 +30,7 @@ error E3001: No 'main' function found
 function 
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-keyword.test:2:10: Expected 'identifier' but got 'newline'
+error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-keyword.test:2:10: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-function-name -->
@@ -46,7 +46,7 @@ error E2010: specs/fragments/lexer-parser-robustness/truncated-after-function-na
 function main(
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-mid-param-list.test:2:15: Expected 'identifier' but got 'newline'
+error E2010: specs/fragments/lexer-parser-robustness/truncated-mid-param-list.test:2:15: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-param-name -->
@@ -97,7 +97,7 @@ function main() returns ExitCode
 	let
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-let.test:3:5: Expected 'identifier' but got 'newline'
+error E2010: specs/fragments/lexer-parser-robustness/truncated-after-let.test:3:5: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-let-name -->
@@ -133,7 +133,7 @@ function main() returns ExitCode
 	let x = (5).
 ```
 ```maxoncstderr
-error E2010: specs/fragments/lexer-parser-robustness/truncated-after-dot.test:3:14: Expected 'identifier' but got 'newline'
+error E2010: specs/fragments/lexer-parser-robustness/truncated-after-dot.test:3:14: Expected identifier but got 'newline'
 ```
 
 <!-- test: truncated-after-open-paren -->
