@@ -644,8 +644,7 @@ end 'main'
 109
 ```
 
-<!-- disabled-test: enum-property-argument -->
-<!-- ENUM PROPERTIES, not overloading — `k.name` on an enum value is `E2015: a field access on 'k', which is declared 'int' and not a struct type`. shv2 gives an enum no `.name`/`.ordinal`/`.rawValue`; its own rung. D7 resolves the `over` pair the moment the argument has a type at all. -->
+<!-- test: enum-property-argument -->
 An ENUM PROPERTY is a member access that is not a struct field, and it scores by
 what the property yields. `.name` is a `String` for every enum, so it selects the
 `String` overload even though the `Wide` one is declared first. Reaching this
@@ -677,8 +676,7 @@ end 'main'
 205
 ```
 
-<!-- disabled-test: enum-property-argument-via-variable -->
-<!-- ENUM PROPERTIES — `k.name`; see the case above. -->
+<!-- test: enum-property-argument-via-variable -->
 The same property routed through a local binding. Binding first has always
 worked; it is the control that says the direct form must agree with it rather
 than failing where it succeeds.
@@ -709,7 +707,6 @@ end 'main'
 ```
 
 <!-- test: enum-ordinal-argument -->
-<!-- ENUM PROPERTIES — `k.ordinal`; see `enum-property-argument`. -->
 `.ordinal` is an integer, so the same shape of access on the same value selects
 the OTHER overload. Declared with `String` first, so a resolver that fell back to
 declaration order would pick the wrong one and be caught here.
@@ -738,8 +735,7 @@ end 'main'
 101
 ```
 
-<!-- disabled-test: enum-raw-value-argument -->
-<!-- STRING-BACKED ENUM RAW VALUES — `greeting = "hi"` is `E2015: a raw value of kind 'string literal'` at the DECLARATION (only integer and float backings are parsed), plus the `.rawValue` property gap above. Not overloading. -->
+<!-- test: enum-raw-value-argument -->
 `.rawValue` scores by the enum's BACKING rather than by one fixed type: a
 string-backed enum yields a `String` here, while the integer-backed default
 yields an integer. Both spellings appear in one program so neither can be
@@ -782,8 +778,7 @@ end 'main'
 39
 ```
 
-<!-- disabled-test: enum-struct-backing-field-argument -->
-<!-- STRUCT-BACKED ENUM RAW VALUES — `small = Spec{...}` is `E2015: a raw value of kind 'identifier'` at the DECLARATION, plus the enum-property gap above. Not overloading. -->
+<!-- test: enum-struct-backing-field-argument -->
 A struct-backed enum exposes its backing struct's fields directly — `e.field` is
 `e.rawValue.field` — so the peek has to take both steps to score one access.
 Stopping after the enum hands back no type and leaves the call ambiguous;

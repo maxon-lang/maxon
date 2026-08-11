@@ -3241,6 +3241,21 @@ export type StructLayout
 		return self.fieldNames.count()
 	end 'indexOfField'
 
+	// The name of field `index` — `EnumLayout.caseNameAt`'s twin, and here so the OOB panic is written once
+	// rather than at each site that renders a field's name into a diagnostic.
+	export function fieldNameAt(index FieldIndex) returns ByteArray
+		return try self.fieldNames.get(index) otherwise panic("StructLayout.fieldNameAt: fieldNames.get OOB at {index} for `type {String.from(self.name)}`, which declares {self.fieldCount()} field(s)")
+	end 'fieldNameAt'
+
+	// Does this type declare a field named `wanted`? — `EnumLayout.hasCase`'s twin, and here for its reason:
+	// `indexOfField`'s "absent" answer is the SENTINEL `fieldCount()`, and every caller that only wants the
+	// yes/no was re-spelling that comparison. Two had (`Parser.enumBackingFieldMember` as
+	// `indexOfField(...) < fieldCount()`, `Parser.emitEnumBackingFieldSelect` as the `>=` throw), which is
+	// the convention written down in three places and changeable in none.
+	export function declaresField(wanted ByteArray) returns bool
+		return self.indexOfField(wanted) < self.fieldCount()
+	end 'declaresField'
+
 	// The byte displacement of field `index` from the box's PAYLOAD pointer — which is what
 	// `__mm_alloc` returns, so the header is invisible here and the first field sits at 0. Read straight off
 	// the derived prefix sum; see `fieldOffsets` for why it is a column rather than a computation.
@@ -3294,6 +3309,188 @@ end 'PayloadField'
 
 export typealias PayloadFieldArray = Array with PayloadField
 export typealias PayloadFieldArrayArray = Array with PayloadFieldArray
+
+// ⭐⭐ **ONE FIELD OF A CONSTANT STRUCT BACKING, AS THE DECLARATION COULD KNOW IT** — `value: 1` out of
+// `add = Meta{value: 1}`, or the argument `1` out of `add = Meta.create(1)`.
+//
+// ⚠⚠ **IT IS DELIBERATELY NOT RESOLVED, AND THE REASON IS *WHEN* AN ENUM CASE IS READ.** The reader runs in
+// the TOLERANT DECLARATION SWEEP — the pass that BUILDS the whole-program index — so at the moment a case is
+// read there is no `structOf` to ask which field position 0 is, and no `enumOf` to ask what tag `Priority.low`
+// carries. Both are answered at the USE (`Parser.emitEnumBackingFieldSelect`), where the index is complete.
+// This is the same split the FUNCTION backing already makes for the same reason: the declaration records a
+// NAME and the address is materialized per read (see `EnumBacking.functionRef`).
+export type EnumBackingField
+	// ⭐ **THE FIELD'S NAME AS WRITTEN, OR `EmptySourceText` FOR A POSITIONAL FACTORY ARGUMENT** — the same
+	// "no label here" spelling `Parser.consumeConstArgumentLabel` uses, and it means the same thing: the
+	// field is the one at THIS entry's position in the struct's declaration order, which only the use site
+	// can look up. `Meta{value: 1}` names every field; `OpInfo.create(1, throughput: 1)` names the second.
+	export let name as ByteArray
+	export let value as EnumBackingFieldValue
+
+	export static function create(name ByteArray, value EnumBackingFieldValue) returns EnumBackingField
+		return Self{name: name, value: value}
+	end 'create'
+end 'EnumBackingField'
+
+// ⭐ **WHAT A BACKING FIELD'S VALUE IS, IN THE TWO FORMS THE DECLARATION CAN CARRY.** The admitted set is
+// exactly `/specs/enum-struct-backing.md`'s — *"compile-time integer, float, or boolean constants"* — plus
+// the enum-member reference its own two cases write (`Priority.low`, `Mode.fast`, `Cat.bool`).
+export union EnumBackingFieldValue
+	// A literal: `bits` is its value — an int's number, a bool's 0/1, or a float's IEEE-754 BIT PATTERN, the
+	// same `ParsedInt` payload every other constant in this compiler travels in (`ConstValue`,
+	// `EnumLayout.caseTags`) — and `tag` is WHICH of those it was.
+	//
+	// ⛔⛔ **`tag` IS NOT DECORATION, AND ITS ABSENCE WAS A COMPILER PANIC AND A WILD POINTER.** This arm
+	// carried only the bits for one edit, which made `1`, `1.5` and `true` indistinguishable after parse — so
+	// nothing could check a written value against the field's DECLARED type, and nothing did. MEASURED on the
+	// tree that shipped it: a `Real` field written `1.5` reached `X64Backend.maxon:834` as
+	// *"a register-to-register move from rax to xmm0 crosses register files"*, a compiler panic on a
+	// legal-looking program; and a `String` field written `1` COMPILED CLEAN and access-violated at run time
+	// (exit `0xC0000005`), a String record address of 1 dereferenced on print. The check that consumes this
+	// is `Parser.checkStructBackedCase`.
+	//
+	// It is an `EnumBackingLiteralKind` and not a `ValueTypeTag` because exactly three literals can be
+	// written here: a tag would give the door a match over the whole value space to answer, most of which
+	// `readEnumBackingFieldValue` cannot produce, and the two could then drift apart.
+	literal(bits ParsedInt, kind EnumBackingLiteralKind)
+	// `Priority.low` — a case of ANOTHER enum, whose tag is a whole-program fact the declaration cannot
+	// reach. Both names ride verbatim and the tag is read at the use site.
+	enumCase(enumName ByteArray, caseName ByteArray)
+end 'EnumBackingFieldValue'
+
+// ⭐ **THE THREE LITERALS A BACKING FIELD MAY BE WRITTEN AS** — the whole of what `readEnumBackingFieldValue`
+// can produce, and therefore the whole of what the door has to answer for. `1` and `1.0` fold to the SAME
+// `ParsedInt` (`floatLiteralBits(0.0)` is 0), so the bits alone cannot tell them apart and this is the fact
+// that does.
+export enum EnumBackingLiteralKind
+	integerLiteral
+	floatLiteral
+	booleanLiteral
+end 'EnumBackingLiteralKind'
+
+// ⭐⭐ **WHAT A BACKING FIELD'S DECLARED TYPE DOES TO THE i64 THE SELECT SUM PRODUCES** — the ONE
+// classification, asked by the DOOR that admits a case (`Parser.checkStructBackedCase`) and by the READ that
+// decodes the sum (`Parser.emitEnumBackingFieldSelect`). Both are exhaustive over it, which is what makes
+// "the door admits exactly what the read can decode" structural instead of a claim in a comment.
+//
+// ⚠ **THE SUM IS INTEGER ARITHMETIC — `emitCompareAgainstLiteral` → `mul` → `add`, `operandType = i64` —
+// AND `retypeValue` ONLY REWRITES TYPE COLUMNS.** It does not convert, reinterpret or check. So a field
+// whose domain is not the i64's needs an explicit decode, exactly as `Parser.emitEnumRawValue`'s float arm
+// emits `MaxonUnaryOp.bitsToFloat` (whose header records four measured wrong answers from getting this
+// wrong). The two pre-existing retype columns are safe only because a `.rdata` String address and a `.text`
+// function address ARE i64 at Std — the one property a float field does not have.
+export enum EnumBackingFieldDomain
+	// `int`, `ExitCode`, a ranged-INT alias — the i64 IS the value, and only an int literal may fill it.
+	integerWord
+	// `bool` — the i64 is 0 or 1 (`TypeRules.BoolTrueValue` is 1), so the word is the value here too; it is
+	// a separate arm because only a `true`/`false` literal may fill it.
+	booleanWord
+	// A declared enum — the i64 is that enum's TAG, which is what an enum value IS
+	// (`Parser.parseEnumLiteral`). Only an `<Enum>.<case>` of the SAME enum may fill it.
+	enumWord
+	// `float`, or a ranged-FLOAT alias — the i64 is an IEEE-754 bit pattern and the read must REINTERPRET it.
+	// An int literal is promoted to its f64 value, the same widening `TypeRules.widensIntToFloat` states and
+	// `Parser.constFloatBits` performs for a constant.
+	floatBits
+	// `String`, `Character`, a record, an array, an interface, a function — a value the constant column
+	// cannot hold and the sum cannot denote. Refused AT THE DOOR, so the read's decode never meets one.
+	unsupported
+end 'EnumBackingFieldDomain'
+
+// ⭐ **DOES THIS DOMAIN NEED THE SUM REINTERPRETED?** - the one domain whose i64 is not the value,
+// spelled as an exhaustive `match` and never as `== floatBits`, for `namesAnEnumInstanceAccessor`'s reason:
+// a domain appended to the enum must be classified HERE too, so the read cannot silently start treating a
+// new one as a machine word.
+export function domainIsEnumBackingFloatBits(domain EnumBackingFieldDomain) returns bool
+	match domain 'd'
+		floatBits then return true
+		integerWord then return false
+		booleanWord then return false
+		enumWord then return false
+		unsupported then return false
+	end 'd'
+end 'domainIsEnumBackingFloatBits'
+
+// ⭐ **IS THIS DOMAIN ONE NO CONSTANT COLUMN CAN HOLD?** — `domainIsEnumBackingFloatBits`' twin, and an
+// exhaustive `match` for its reason: a domain appended to the enum must be classified here too, so a new one
+// cannot silently be treated as holdable by the two gates that ask.
+export function domainIsEnumBackingUnsupported(domain EnumBackingFieldDomain) returns bool
+	match domain 'd'
+		unsupported then return true
+		integerWord then return false
+		booleanWord then return false
+		enumWord then return false
+		floatBits then return false
+	end 'd'
+end 'domainIsEnumBackingUnsupported'
+
+// ⭐⭐ **THE PAIRING TABLE — MAY THIS WRITTEN CONSTANT FILL A FIELD OF THIS DOMAIN?** One function, read by
+// one caller (`Parser.requireEnumBackingFieldValueSuitsField`), so the rule that decides and the sentence
+// that explains it sit together. Split into the two value forms below because they are answered by
+// different questions: a LITERAL by its kind alone, an enum case by its enum's IDENTITY.
+export function enumBackingValueSuitsDomain(value EnumBackingFieldValue, domain EnumBackingFieldDomain, enumName ByteArray) returns bool
+	match value 'written'
+		literal(_, kind) then return enumBackingLiteralSuitsDomain(kind, domain: domain)
+		enumCase(writtenEnum, _) then return enumBackingEnumCaseSuitsDomain(writtenEnum, domain: domain, enumName: enumName)
+	end 'written'
+end 'enumBackingValueSuitsDomain'
+
+// ⚠ **EVERY ARM SPELLED OUT, NO RANGES.** `EnumBacking`'s header states the rule this obeys: a range is the
+// one arm shape that can absorb a newly declared member silently, and here that would mean admitting a
+// constant into a domain nobody classified — which is a wrong answer at the machine level, not a diagnostic.
+function enumBackingLiteralSuitsDomain(kind EnumBackingLiteralKind, domain EnumBackingFieldDomain) returns bool
+	match domain 'd'
+		integerWord then return kind == EnumBackingLiteralKind.integerLiteral
+		booleanWord then return kind == EnumBackingLiteralKind.booleanLiteral
+		// ⭐ An INT literal is admitted into a FLOAT field and promoted to its f64 value at the read — the
+		// widening `TypeRules.widensIntToFloat` states and `Parser.constFloatBits` performs for a constant,
+		// so `M{ratio: 1}` means 1.0 exactly as `let x = 1 + 2.0` does. A bool has no float reading.
+		floatBits then return kind == EnumBackingLiteralKind.integerLiteral or kind == EnumBackingLiteralKind.floatLiteral
+		// A field of a declared enum takes `<ThatEnum>.<case>` and never a bare number: an enum value IS its
+		// tag, and WHICH number that is belongs to the enum's declaration, not to this case.
+		enumWord then return false
+		unsupported then return false
+	end 'd'
+end 'enumBackingLiteralSuitsDomain'
+
+// ⭐ **THE BITS A LITERAL CONTRIBUTES TO THE SELECT SUM, WHICH IS NOT ALWAYS THE BITS IT WAS PARSED AS.**
+// An INT literal written into a FLOAT field is PROMOTED to its f64 value here — the one thing the door
+// admits that is not already in the field's domain (`enumBackingLiteralSuitsDomain`'s `floatBits` arm), and
+// the same `0.0 + payload` widening `Parser.constFloatBits` performs for a constant, so `M{ratio: 1}` sums
+// the bits of 1.0 and the read's `bitsToFloat` reinterprets them into 1.0 rather than into 4.9e-324.
+//
+// Every other admitted pairing already carries the right bits: an int in an integer field, a `true`/`false`
+// in a bool field, a float literal in a float field (parsed as its IEEE pattern by `floatLiteralBits`).
+export function enumBackingLiteralBits(bits ParsedInt, kind EnumBackingLiteralKind, domain EnumBackingFieldDomain) returns ParsedInt
+	if domainIsEnumBackingFloatBits(domain) and kind == EnumBackingLiteralKind.integerLiteral 'promoteToFloat'
+		return __Builtins.floatToBits(0.0 + bits)
+	end 'promoteToFloat'
+
+	return bits
+end 'enumBackingLiteralBits'
+
+// The enum-case form suits exactly one domain, and only when the enums MATCH — `Config{mode: Priority.low}`
+// on a `Mode`-typed field is refused, where a name-blind check would store `Priority.low`'s tag into a field
+// every reader types `Mode`.
+function enumBackingEnumCaseSuitsDomain(writtenEnum ByteArray, domain EnumBackingFieldDomain, enumName ByteArray) returns bool
+	match domain 'd'
+		enumWord then return writtenEnum.equals(enumName)
+		integerWord then return false
+		booleanWord then return false
+		floatBits then return false
+		unsupported then return false
+	end 'd'
+end 'enumBackingEnumCaseSuitsDomain'
+
+export typealias EnumBackingFieldArray = Array with EnumBackingField
+export typealias EnumBackingFieldArrayArray = Array with EnumBackingFieldArray
+
+// ⭐ **THE ONE EMPTY `EnumBackingFieldArray` EVERY NON-STRUCT-BACKED CASE SHARES.** `addCase` fills this
+// column for EVERY case of EVERY enum in the program, and all but a struct-backed one have nothing to put
+// in it — a fresh `create()` at each would be one allocation per case for a column nothing reads. It is the
+// treatment `emitEnumCaseConstant`'s header already argues for one directory over, where a seed
+// `ByteArray.create()` above a match was allocating per case for two arms that never read it.
+export let sharedEmptyEnumBackingFields = EnumBackingFieldArray.create()
 
 // A boxed union is `UnionTagBytes` (the i64 tag at offset 0) plus `FieldSlotBytes` per payload slot
 // of the WIDEST case. The tag is always i64 — an enum value is its i64 tag, boxed or not — so the
@@ -3562,7 +3759,7 @@ export function appendUnionCasesCompanion(enums EnumLayoutArray, layout EnumLayo
 	var companion = EnumLayout.create(unionCasesCompanionName(layout.name), isUnion: false, conformsTo: sharedEmptyDeclaredConformances, visibility: layout.visibility, declFilePath: layout.declFilePath, backing: EnumBacking.integer)
 
 	for i in 0 upto layout.caseCount() 'eachVariant'
-		companion.addCase(layout.caseNameAt(i), tag: i, rawValue: "{i}", payloads: PayloadFieldArray.create())
+		companion.addCase(layout.caseNameAt(i), tag: i, rawValue: "{i}", payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 	end 'eachVariant'
 
 	enums.push(companion)
@@ -3614,6 +3811,15 @@ export let EnumAllCaseNamesMemberName = b"allCaseNames"
 // would have to be written in every `match` over this enum in a position the grammar reads as a
 // declaration. The word a DIAGNOSTIC uses is still "function" — see `enumBackingNoun`, which is the one
 // place the spelling a reader sees is decided.
+// ⭐ **`structRecord` JOINS `string` AND `functionRef` ON THE "the tag is only an index" SIDE**, and is
+// APPENDED past them for the reason the ⛔ paragraph above gives: appending it leaves it outside BOTH of
+// `rawValueIdentity`'s ranges, so that classifier stops building until this backing is answered there.
+// (Inserted between `string` and `functionRef` it would have been swallowed by a range and answered
+// `recordedText` — a wrong answer, since a struct-backed case records no text at all.)
+//
+// A case backed by a compile-time constant STRUCT (`add = Meta{value: 1}`, `add = Meta.create(1)`) has no
+// number to be a tag, so it takes the auto-increment declaration index; the per-field constants ride
+// `EnumLayout.caseBackingFields` and the struct's own name rides `EnumLayout.backingStructName`.
 export enum EnumBacking
 	unresolved
 	integer
@@ -3621,6 +3827,7 @@ export enum EnumBacking
 	character
 	string
 	functionRef
+	structRecord
 end 'EnumBacking'
 
 // The word a diagnostic calls each backing — the bootstrap's spelling, which `E3032`'s
@@ -3629,7 +3836,18 @@ end 'EnumBacking'
 //
 // `unresolved` names no backing and can reach no message: the mismatch is raised only where an
 // ESTABLISHED backing disagrees with an incoming one, and `unresolved` is by definition neither.
-export function enumBackingNoun(backing EnumBacking) returns String
+//
+// ⭐⭐ **ONE BACKING'S NOUN IS NOT A FIXED WORD — A STRUCT BACKING IS CALLED BY THE STRUCT TYPE'S OWN NAME**,
+// which is why this takes a second argument that five of its six answering arms never read. The pin is
+// `specs-shv2/enum-struct-backing.md`'s `error.struct-backing-mixed` — *"expected Meta, got int"* — and both
+// references render it from the type-name TOKEN the case wrote (`maxon-selfhosted/Compiler/Parser.maxon:5505`
+// spells the same sentence at seven sites; here there is one).
+//
+// ⚠ `structName` is `EmptySourceText` for every backing that names no struct — the "there is no name here"
+// spelling this file already uses for an absent argument label (`Parser.consumeConstArgumentLabel`). The
+// `structRecord` arm PANICS on it rather than printing an empty noun, so the one arm that must be handed a
+// name cannot be handed nothing quietly.
+export function enumBackingNoun(backing EnumBacking, structName ByteArray) returns String
 	match backing 'backing'
 		integer then return "int"
 		float then return "float"
@@ -3639,9 +3857,40 @@ export function enumBackingNoun(backing EnumBacking) returns String
 		// (`maxon-selfhosted/Compiler/Parser.maxon:5544` — *"expected int, got function"*), which is why the
 		// noun and the arm's own spelling differ; see `EnumBacking.functionRef`.
 		functionRef then return "function"
+		structRecord then break 'backing'
 		unresolved then panic("enumBackingNoun: `unresolved` names no backing — it is the state an enum with no cases yet is in, and `Parser.requireEnumBacking` never reports it as either side of a mismatch")
 	end 'backing'
+
+	if structName.isEmpty() 'noStructName'
+		panic("enumBackingNoun: a `structRecord` backing is called by its struct type's NAME and none was supplied — every producer of this backing reads the name off the type token the case wrote (`Parser.appendStructBackedEnumCase`), so there is no route to this backing without one")
+	end 'noStructName'
+
+	return String.from(structName)
 end 'enumBackingNoun'
+
+// ⭐⭐ **WHAT MAKES TWO CASES' RAW VALUES THE SAME VALUE — the THREE-WAY answer that replaced a bool.** Two
+// readers with nothing else in common ask it: E3031's collision test (`EnumLayout.rawValueCollidesAt`) and
+// the decl-shape content hash (`ProgramSignatures.mixEnumCase`), and both must be exhaustive over it.
+//
+// ⛔ **IT WAS `tagCarriesRawValue`, A BOOL, AND A THIRD ANSWER DOES NOT FIT IN ONE.** A struct backing
+// records no comparable raw value at all, which is neither of the two the bool could say — and either
+// answer is a WRONG ANSWER rather than a compile error. `theTag` would compare declaration indices (never
+// equal, so E3031 could never fire for anything) and `recordedText` would compare an empty column and
+// report EVERY second struct-backed case as a duplicate.
+export enum EnumRawValueIdentity
+	// `integer` / `float` / `character` — the raw value IS a number, so `caseTags[i]` is it. `1.1` and `1.10`
+	// are one float whatever the source text wrote, which is exactly what a tag compare gets right.
+	theTag
+	// `string` / `functionRef` — the tag is only a declaration index and the value rides `caseRawValues`
+	// (the declared text, or the backing function's name). Compared BYTEWISE, which is what refuses
+	// `a = "x"  b = "x"` and `a = f  b = f`.
+	recordedText
+	// ⭐ `structRecord` — **THERE IS NO COMPARISON, AND THAT IS THE LANGUAGE'S RULE RATHER THAN A GAP.** Two
+	// cases may carry equal struct backings: `specs-shv2/enum-struct-backing.md`'s `struct-backing-match`
+	// declares `add = Meta.create(1)` and `sub = Meta.create(1)` and pins an exit code, so both references
+	// compile it. The IDENTITY of such a case is its name and its ordinal; the field constants are metadata.
+	incomparable
+end 'EnumRawValueIdentity'
 
 export type EnumLayout
 	export var name as ByteArray
@@ -3686,9 +3935,24 @@ export type EnumLayout
 	// case fixes or re-confirms it (`Parser.requireIntBacking`/`requireFloatBacking`, which raise E3032 on a
 	// mismatch), and read at every site that consumes an enum VALUE as a number rather than as an identity.
 	export var backing as EnumBacking
+	// ⭐ **THE STRUCT TYPE A `structRecord` BACKING NAMES** — `Meta` out of `add = Meta{value: 1}`. It is
+	// `EmptySourceText` for every other backing, and the FIRST struct-backed case fixes it exactly as that
+	// case fixes `backing`; a later case naming a DIFFERENT struct is the E3032 mismatch
+	// (`Parser.requireEnumBacking` compares both halves in one place).
+	//
+	// It is a name and not a `StructLayout`, for `caseBackingFields`' reason: the case reader runs inside the
+	// sweep that is still building the index this name would be resolved through.
+	export var backingStructName as ByteArray
+	// ⭐ **PER CASE, THE BACKING STRUCT'S FIELDS AS THE DECLARATION WROTE THEM** — in the order written, which
+	// for a positional factory argument IS the field's position (see `EnumBackingField.name`).
+	// `sharedEmptyEnumBackingFields` for every case of every other backing.
+	//
+	// ⚠ **PARALLEL TO THE FOUR COLUMNS ABOVE AND WRITTEN ONLY BY `addCase`**, for their stated reason: a
+	// caller that pushed a name and forgot this would shift every later case's backing onto the wrong case.
+	export var caseBackingFields as EnumBackingFieldArrayArray
 
 	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray, visibility Visibility, declFilePath FilePath, backing EnumBacking) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing}
+		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, backingStructName: EmptySourceText, caseBackingFields: EnumBackingFieldArrayArray.create()}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
@@ -3702,15 +3966,26 @@ export type EnumLayout
 		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'createCompilerOwned'
 
-	// Append one declared case. THE one writer of all FOUR columns, so they cannot drift — a caller
+	// Append one declared case. THE one writer of all FIVE columns, so they cannot drift — a caller
 	// that pushed a name and forgot the payloads would shift every later case's payloads onto the
-	// wrong case. A payload-free case passes an empty array.
-	export function addCase(caseName ByteArray, tag ParsedInt, rawValue String, payloads PayloadFieldArray)
+	// wrong case. A payload-free case passes an empty array, and every case that is not backed by a
+	// constant struct passes `sharedEmptyEnumBackingFields`.
+	//
+	// ⚠ Both empties are spelled at the call site rather than defaulted, so the sentence above stays
+	// literally true: there is no argument this writer can supply on a caller's behalf.
+	export function addCase(caseName ByteArray, tag ParsedInt, rawValue String, payloads PayloadFieldArray, backingFields EnumBackingFieldArray)
 		self.caseNames.push(caseName)
 		self.caseTags.push(tag)
 		self.caseRawValues.push(rawValue)
 		self.casePayloads.push(payloads)
+		self.caseBackingFields.push(backingFields)
 	end 'addCase'
+
+	// The constant struct backing case `index` declares, field by field in the order written — empty for
+	// every case of every other backing (see `caseBackingFields`).
+	export function backingFieldsAt(index CaseIndex) returns EnumBackingFieldArray
+		return try self.caseBackingFields.get(index) otherwise panic("EnumLayout.backingFieldsAt: caseBackingFields.get OOB at {index} for `{self.kindWord()} {String.from(self.name)}`, which declares {self.caseCount()} cases")
+	end 'backingFieldsAt'
 
 	// ⭐ **REPLACE CASE `index`'s PAYLOAD SLOTS — `StructLayout.retypeField`'s twin (N3)**, for the same one
 	// caller and the same one reason: a payload declared with a generic alias two files declare differently
@@ -3798,24 +4073,27 @@ export type EnumLayout
 	// enums folding to one hash. Written as a `match`, it cannot be declared without being classified here.
 	// (The FUNCTION backing is exactly the case this argument predicted: two cases naming two different
 	// functions carry declaration indices 0 and 1, so a tag compare would have admitted `a = f  b = f`.)
-	export function tagCarriesRawValue() returns bool
+	export function rawValueIdentity() returns EnumRawValueIdentity
 		match self.backing 'backing'
-			integer to character then return true
-			string to functionRef then return false
-			unresolved then panic("EnumLayout.tagCarriesRawValue: `{self.kindWord()} {String.from(self.name)}` has no backing yet — both readers ask this about a case already read, and reading a case is what fixes the backing (`Parser.requireEnumBacking`)")
+			integer to character then return EnumRawValueIdentity.theTag
+			string to functionRef then return EnumRawValueIdentity.recordedText
+			structRecord then return EnumRawValueIdentity.incomparable
+			unresolved then panic("EnumLayout.rawValueIdentity: `{self.kindWord()} {String.from(self.name)}` has no backing yet — both readers ask this about a case already read, and reading a case is what fixes the backing (`Parser.requireEnumBacking`)")
 		end 'backing'
-	end 'tagCarriesRawValue'
+	end 'rawValueIdentity'
 
 	// ⭐ **DO CASE `index` AND AN INCOMING CASE CARRY THE SAME RAW VALUE?** — the E3031 question. A tag
 	// compare where the tag is the value (`1.1` and `1.10` are one float, whatever the source text wrote),
-	// and a byte compare where it is not — because a string backing's tags are declaration indices, never
-	// equal between two cases, which would make a tag compare a silent acceptance of `a = "x"  b = "x"`.
+	// a byte compare where it is not — because a string backing's tags are declaration indices, never
+	// equal between two cases, which would make a tag compare a silent acceptance of `a = "x"  b = "x"` —
+	// and NO comparison at all for a struct backing, which declares no comparable raw value
+	// (see `EnumRawValueIdentity.incomparable` for the measurement behind that).
 	export function rawValueCollidesAt(index CaseIndex, tag ParsedInt, rawValue String) returns bool
-		if self.tagCarriesRawValue() 'theTagIsTheValue'
-			return self.tagOfIndex(index) == tag
-		end 'theTagIsTheValue'
-
-		return self.rawValueAt(index).equals(rawValue)
+		match self.rawValueIdentity() 'identity'
+			theTag then return self.tagOfIndex(index) == tag
+			recordedText then return self.rawValueAt(index).equals(rawValue)
+			incomparable then return false
+		end 'identity'
 	end 'rawValueCollidesAt'
 
 	// How case `index`'s raw value was written — see `caseRawValues`.
@@ -4015,7 +4293,7 @@ end 'builtinEnumLookupErrorEnum'
 // conflation back in through the builder.
 function addBuiltinEnumCase(layout EnumLayout, caseName ByteArray)
 	let tag = layout.caseCount()
-	layout.addCase(caseName, tag: tag, rawValue: "{tag}", payloads: PayloadFieldArray.create())
+	layout.addCase(caseName, tag: tag, rawValue: "{tag}", payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 end 'addBuiltinEnumCase'
 
 // ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, FIVE FAMILIES (7b, +A1, +A1s).**

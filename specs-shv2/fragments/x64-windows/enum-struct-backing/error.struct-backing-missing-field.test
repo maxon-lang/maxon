@@ -1,0 +1,19 @@
+// Test: error.struct-backing-missing-field
+typealias Wide = int(0 to 100)
+
+type Meta
+	export let value as Wide
+	export let cost as Wide
+end 'Meta'
+
+enum Task
+	quick = Meta{value: 1}
+	slow = Meta{value: 2, cost: 5}
+end 'Task'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:10:2: Unsupported: field 'cost' of the `Meta` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case

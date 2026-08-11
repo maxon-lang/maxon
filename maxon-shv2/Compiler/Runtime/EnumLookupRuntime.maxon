@@ -105,7 +105,10 @@ function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout)
 	match layout.backing 'backing'
 		integer then break 'backing'
 		unresolved then break 'backing'
-		float to functionRef then panic("synthesizeEnumFromRawValue: `{layout.kindWord()} {String.from(layout.name)}` is {enumBackingNoun(layout.backing)}-backed, whose tag column is not its raw values — `Parser.requireFromRawValueBacking` refuses `fromRawValue` on such a declaration, so no call to this helper can exist for it")
+		float to functionRef then panic("synthesizeEnumFromRawValue: `{layout.kindWord()} {String.from(layout.name)}` is {enumBackingNoun(layout.backing, structName: layout.backingStructName)}-backed, whose tag column is not its raw values — `Parser.requireFromRawValueBacking` refuses `fromRawValue` on such a declaration, so no call to this helper can exist for it")
+		// The STRUCT backing does not reach the refusal above either: `Parser.parseEnumLiteral` never claims
+		// the member for it, so the call is an unknown case (E3034) and no helper is ever asked for.
+		structRecord then panic("synthesizeEnumFromRawValue: `{layout.kindWord()} {String.from(layout.name)}` is struct-backed, which declares no `{String.from(EnumFromRawValueMemberName)}` member at all — the call is reported as an unknown enum case, so no call to this helper can exist for it")
 	end 'backing'
 
 	let func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())

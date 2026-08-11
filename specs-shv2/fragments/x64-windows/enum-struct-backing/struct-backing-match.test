@@ -1,0 +1,82 @@
+// Test: struct-backing-match
+typealias Latency = int(0 to 50)
+
+type Meta
+	export let latency as Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'Meta'
+
+enum TestOp
+	add = Meta.create(1)
+	sub = Meta.create(1)
+	mul = Meta.create(3)
+end 'TestOp'
+
+function main() returns ExitCode
+	let op = TestOp.sub
+	return match op 'dispatch'
+		add gives 10
+		sub gives 20
+		mul gives 30
+	end 'dispatch'
+end 'main'
+---
+ExitCode: 20
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 10
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 20
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 30
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}

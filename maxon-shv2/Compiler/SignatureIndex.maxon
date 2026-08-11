@@ -102,6 +102,7 @@ let EnumBackingFloat = 69 as ContentHash
 let EnumBackingString = 79 as ContentHash
 let EnumBackingCharacter = 80 as ContentHash
 let EnumBackingFunctionRef = 81 as ContentHash
+let EnumBackingStructRecord = 82 as ContentHash
 
 // The discriminator for one backing. A `match` rather than a chained `if`, so a new backing cannot be added
 // without being given a hash constant here — which is exactly how the string and character ones arrived.
@@ -113,8 +114,37 @@ function enumBackingDiscriminator(backing EnumBacking) returns ContentHash
 		string gives EnumBackingString
 		character gives EnumBackingCharacter
 		functionRef gives EnumBackingFunctionRef
+		structRecord gives EnumBackingStructRecord
 	end 'b'
 end 'enumBackingDiscriminator'
+
+// ⭐ One FIELD of a constant struct backing, mixed per field so a second field cannot be absorbed by the
+// first. Its own discriminator for `PayloadShapeSlot`'s reason: a reading file compiles `op.rawValue.latency`
+// down to the CONSTANTS this column holds, so `add = Meta{value: 1}` edited to `Meta{value: 2}` changes what
+// every other file emits while that file's own bytes never move — the staleness `mixEnumCase`'s raw-value
+// line already exists to catch, for the one backing whose value is not in `caseRawValues` at all.
+let EnumBackingFieldSlot = 83 as ContentHash
+// The ENUM-CASE form of such a field's value (`Priority.low`), separated from the LITERAL form so
+// `Priority.low` and the bare number `0` cannot fold alike — they are resolved by different rules and one
+// of them moves when `Priority`'s case list is edited.
+let EnumBackingFieldEnumCase = 84 as ContentHash
+
+// ⭐ Which LITERAL a backing field was written as. `1` and `1.0` carry the same `ParsedInt`, and they
+// type-check differently against the field's declared type — so without this they fold alike and a file that
+// edits one into the other leaves every reader's parse memo standing. `enumBackingDiscriminator`'s reason,
+// one column further in, and a `match` for the same reason: a fourth literal kind cannot be added without
+// being given a number here.
+let EnumBackingLiteralInteger = 85 as ContentHash
+let EnumBackingLiteralFloat = 86 as ContentHash
+let EnumBackingLiteralBoolean = 87 as ContentHash
+
+function enumBackingLiteralDiscriminator(kind EnumBackingLiteralKind) returns ContentHash
+	return match kind 'k'
+		integerLiteral gives EnumBackingLiteralInteger
+		floatLiteral gives EnumBackingLiteralFloat
+		booleanLiteral gives EnumBackingLiteralBoolean
+	end 'k'
+end 'enumBackingLiteralDiscriminator'
 
 // One `implements <Interface>` name on a declaration (A1s wave 2), mixed per name so a SECOND interface
 // moves the hash rather than being absorbed by the first. Its own discriminator for `DeclShapeStruct`'s
@@ -7946,6 +7976,16 @@ export type ProgramSignatures
 		upsertDeclaredEnum(self.enumTypes, layout: layout, declaredByTheCorpus: declaredByTheCorpus)
 
 		var state = mix(mix(mixBytes(mix(self.hash, value: DeclShapeEnum), bytes: layout.name), value: EnumKindUnion if layout.isUnion else EnumKindEnum), value: enumBackingDiscriminator(layout.backing))
+		// ⭐⭐ **THE BACKING STRUCT'S NAME, WHICH THE DISCRIMINATOR ABOVE CANNOT CARRY.** `Meta` and `Other`
+		// are both `structRecord`, so the backing bit says only THAT a struct backs the cases, never WHICH —
+		// and which one it is decides what every reading file compiles a `.rawValue.<field>` to, because the
+		// field POSITIONS come from that struct. Concretely: two structs with different field orders, and
+		// `add = Meta.create(1)` edited to `Other.create(1)`. The argument is positional so no field name
+		// moves, the constant is unchanged and the discriminator is unchanged — without this line the decl
+		// hash does not move while a reader compiles a different constant. That is exactly the staleness
+		// class `mixEnumCase`'s raw-value line exists for, and it is a per-DECLARATION fact rather than a
+		// per-case one, so it rides here and not there. `EmptySourceText` for every other backing.
+		state = mixBytes(state, bytes: layout.backingStructName)
 		// The `implements` list rides for the field list's reason (A1s wave 2) — see `mixDeclaredConformances`,
 		// which states it once for both declaration kinds.
 		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo, shape: DeclShapeDeclaredConformance)
@@ -8069,11 +8109,21 @@ export type ProgramSignatures
 		// ⚠ **A RAW VALUE THE TAG DOES NOT CARRY MUST RIDE SEPARATELY** — `a = "x"` and `a = "y"` fold to the
 		// identical name + tag + backing, which is the same blind spot the backing discriminator above exists
 		// for, one column further in. Where the tag IS the raw value it is already mixed on the line above, so
-		// nothing more is owed. WHICH backings those are is `EnumLayout.tagCarriesRawValue`'s single answer,
-		// not a second `== EnumBacking.string` test that a later backing could silently fall past.
-		if not layout.tagCarriesRawValue() 'theTagIsOnlyAnIndex'
-			folded = mixBytes(folded, bytes: layout.rawValueAt(index).toByteArray())
-		end 'theTagIsOnlyAnIndex'
+		// nothing more is owed. WHICH column holds it is `EnumLayout.rawValueIdentity`'s single answer, not a
+		// second `== EnumBacking.string` test that a later backing could silently fall past — and the third
+		// answer is the reason that classifier is not a bool: a struct backing's per-case value lives in
+		// `caseBackingFields`, so `rawValueAt` cannot carry it.
+		//
+		// ⚠ **`rawValueAt` FOR A STRUCT-BACKED CASE IS NOT EMPTY — IT IS THE STRUCT'S NAME**
+		// (`Parser.appendStructBackedEnumCase` writes `String.from(typeTok.value)`), and an earlier draft of
+		// this comment said it was empty and used that as the reason for skipping it. The reason is the one
+		// above; and because the struct's name is a per-DECLARATION fact rather than a per-case one, it is
+		// mixed once by `recordEnum` instead of once per case here.
+		match layout.rawValueIdentity() 'identity'
+			theTag then break 'identity'
+			recordedText then folded = mixBytes(folded, bytes: layout.rawValueAt(index).toByteArray())
+			incomparable then folded = self.mixEnumBackingFields(folded, layout: layout, index: index)
+		end 'identity'
 
 		for field in layout.payloadsAt(index) 'eachSlot'
 			folded = self.mixPayloadField(folded, field: field)
@@ -8081,6 +8131,27 @@ export type ProgramSignatures
 
 		return folded
 	end 'mixEnumCase'
+
+	// ⭐ **FOLD A CASE'S CONSTANT STRUCT BACKING IN — `mixPayloadField`'s twin for the one backing whose value
+	// lives in a column of its own.** The struct's NAME rides once per DECLARATION, mixed by `recordEnum`
+	// beside the backing discriminator (see there), so what is owed here is per case: each field's written
+	// label and its value, in the order written — because the
+	// order IS the field position for a positional factory argument (`EnumBackingField.name`), so two cases
+	// whose arguments were merely reordered mean different things and must fold differently.
+	function mixEnumBackingFields(state ContentHash, layout EnumLayout, index CaseIndex) returns ContentHash
+		var folded = state
+		for field in layout.backingFieldsAt(index) 'eachField'
+			folded = mixBytes(mix(folded, value: EnumBackingFieldSlot), bytes: field.name)
+			match field.value 'value'
+				// The literal's KIND rides beside its bits: `1` and `1.0` are different declarations that fold
+				// to the same `ParsedInt` (`floatLiteralBits(0.0)` is 0), and they type-check differently.
+				literal(bits, kind) then folded = mix(mix(folded, value: bits), value: enumBackingLiteralDiscriminator(kind))
+				enumCase(enumName, caseName) then folded = mixBytes(mixBytes(mix(folded, value: EnumBackingFieldEnumCase), bytes: enumName), bytes: caseName)
+			end 'value'
+		end 'eachField'
+
+		return folded
+	end 'mixEnumBackingFields'
 
 	// ⭐ **FOLD ONE PAYLOAD SLOT IN — `mixField`'s twin, and it rides for `recordStruct`'s rule (BATCH22).**
 	// A reading file COPIES a payload's declared type into its own code: the `match` binding's load width, its
