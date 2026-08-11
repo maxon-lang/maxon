@@ -63,6 +63,12 @@ export typealias DestructorSet = Set with ByteArray
 // cycle-breaker over struct/union names), since both are membership sets of `ByteArray` names.
 export typealias ClonerSet = Set with ByteArray
 
+// The set of `__enum_from_raw_<Enum>` symbols a module references — the `DestructorSet` shape a third time,
+// for the third installer that walks EVERY declared enum and asks "is this one's helper referenced?"
+// (`installEnumLookupHelpers`). It needs no closure pass: the helper's body compares constants and calls
+// nothing, so a referenced helper reaches nothing further.
+export typealias EnumLookupSet = Set with ByteArray
+
 export type RuntimeUsage
 	export var usesHeap as bool
 	// The program spawns a green thread (`async`/`await`). Drives `installGtRuntime` + the GT `.data`
@@ -233,6 +239,9 @@ export type RuntimeUsage
 	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the
 	// referenced cloners. `usesHeap` follows any cloner (the box it allocates).
 	export var neededCloners as ClonerSet
+	// The `__enum_from_raw_<Enum>` symbols this module CALLS — the `neededDestructors` shape with no closure
+	// pass, so `installEnumLookupHelpers` synthesizes only the referenced helpers. See `EnumLookupSet`.
+	export var neededEnumLookups as EnumLookupSet
 	// The program reads the WALL clock (`__clock_now_unix_s`, `__Builtins.currentUnixTimeSeconds`). Its OWN
 	// bit, DECOUPLED from `usesGt` and from `usesHeap`, and that decoupling is the point: a calendar read is
 	// a leaf that calls one Win32 import and divides, with no relationship to the green-thread scheduler
@@ -319,7 +328,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesArray: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedArrayCopy: false, usesOpaqueArrayCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -616,6 +625,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.neededDestructors.insert(callee)
 	end 'uniondtor'
+	// A `<Enum>.fromRawValue(raw)` lookup (`__enum_from_raw_<Enum>`). It declares NOTHING else — the
+	// synthesized body compares i64 constants and returns, allocating nothing and calling nothing — which puts
+	// it in `__ucd_category`'s company as a family whose body this scan need not see past.
+	if isEnumLookupRuntimeCallee(callee) 'enumfromraw'
+		usage.neededEnumLookups.insert(callee)
+	end 'enumfromraw'
 	// A String DEEP-CLONE (`__str_clone`, P1.7 slice 3b-vi-b) — a managed array/struct copy cloning a String
 	// element/field. It `__mm_alloc`s a fresh fused record and `__str_copy`s the bytes in, inside its SYNTHESIZED
 	// body this scan cannot see, so those transitive bits are declared here (the `__str_decref` shape).

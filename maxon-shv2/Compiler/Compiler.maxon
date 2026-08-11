@@ -362,13 +362,21 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// phase that cost nothing.
 	let ordinalProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.verifyOrdinals)
 
-	// ⭐⭐ **THE SEVEN BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT SCATTERED ACROSS THE
+	// ⭐⭐ **THE BUILTIN-ERROR ORDINAL CLAIMS — ALL OF THEM, HERE, AND NOT SCATTERED ACROSS THE
 	// RUNTIME INSTALLERS THAT TRANSCRIBE THEM (A1s).**
 	//
-	// ⚠ SEVEN FAMILIES, SIX CALLS: `verifyArrayRuntimeOrdinals` claims for BOTH `ArrayError` and
-	// `__ManagedMemoryError` (see its header). This line said SIX while the two comments below already
-	// numbered `StringError` the sixth and `MapError` the seventh — the count and the ordinals in one
-	// block, disagreeing.
+	// ⛔⛔ **THERE IS NO COUNT IN THIS HEADER, AND THAT IS THE THIRD TIME OF ASKING.** It read *"SEVEN
+	// FAMILIES, SIX CALLS"*, and its own next sentence recorded the previous correction — *"this line said
+	// SIX while the two comments below already numbered `StringError` the sixth and `MapError` the seventh —
+	// the count and the ordinals in one block, disagreeing."* Both numbers were stale AGAIN by the time the
+	// enum-lookup family arrived: W49 wave 3 retired `StringError`'s claim (the note below survives), leaving
+	// **five** calls over **six** families, and neither figure was decremented. A count of the lines directly
+	// beneath it is a fact written twice, which is this project's signature bug wearing a tally's clothes.
+	//
+	// ⇒ **THE RULE, WHICH DOES NOT ROT:** one call per family that TRANSCRIBES its enum's ordinals as
+	// literals, except that a family whose runtime shares another's claims through it (`ArrayError` and
+	// `__ManagedMemoryError` are both `verifyArrayRuntimeOrdinals`' — see its header) is one call for two.
+	// A family that stops transcribing loses its call and keeps a note saying why, as `StringError` did.
 	//
 	// Each family's runtime transcribes its enum's ordinals as literals, and each holds them to the
 	// declaration on every compile (`Project.BuiltinErrorOrdinalCheck` — drift silently reroutes every
@@ -401,6 +409,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		// `keyNotFound`'s ordinal as a literal to build `__map_get`'s failure edge, while
 		// `Project.builtinMapErrorEnum` declares it by POSITION. See `verifyMapErrorOrdinals`.
 		verifyMapErrorOrdinals(project)
+		// `__EnumLookupError` is here for `__DivisionByZeroError`'s reason exactly: `EnumLookupRuntime`
+		// transcribes `noSuchRawValue`'s ordinal as the literal error flag every `__enum_from_raw_<Enum>`
+		// returns on a miss, while `Project.builtinEnumLookupErrorEnum` declares it by POSITION. ONE case is
+		// not an excuse to skip the claim — see `verifyEnumLookupErrorOrdinals`.
+		verifyEnumLookupErrorOrdinals(project)
 	end 'wellFormedSoFar'
 
 	recordPhase(project, phase: CompilePhase.verifyOrdinals, probe: ordinalProbe)
@@ -779,6 +792,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (see `fnRefThunkTargets`), installed here already-lowered so they flow through the whole backend and (on
 	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
 	installFnRefThunks(pipeline.stdModule, project: project, targets: fnRefThunkTargets)
+	// The per-enum `<Enum>.fromRawValue` lookups — the same already-lowered append, and only the helpers the
+	// module CALLS. See `Runtime/EnumLookupRuntime.maxon` for why this one member of the enum reflection
+	// surface is a function while its four siblings expand in the parser.
+	installEnumLookupHelpers(pipeline.stdModule, project: project, needed: usage.neededEnumLookups)
 
 	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
 

@@ -905,8 +905,7 @@ end 'main'
 error E3005: specs/fragments/enum-full/error.associated-value-wrong-count.test:11:11: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 
-<!-- disabled-test: error.associated-value-type-mismatch -->
-<!-- shv2 REFUSES this program under the SAME code, `E3005`, with different words and a different anchor: "cannot assign 'String' to variable 'Container.value(n)' of type 'int'" at :10:21 against the oracle's "type mismatch: 'expected Integer, got String'" at :10:34. A wording/anchor difference, not a missing check. -->
+<!-- test: error.associated-value-type-mismatch -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

@@ -1,0 +1,131 @@
+// EnumLookupRuntime — the per-enum `<Enum>.fromRawValue(raw)` helper.
+//
+// ⭐⭐ **THE ONE MEMBER OF THE ENUM REFLECTION SURFACE THAT IS A *FUNCTION*, AND WHY IT HAS TO BE.**
+// `.ordinal`, `.name`, `.rawValue` and `.allCases` are all expanded IN PLACE by the parser
+// (`Parser.emitEnumCaseConstantSelect`, `Parser.emitEnumAllCases`) — each is a per-case CONSTANT selected by
+// a branchless sum, and nothing about them can fail. `fromRawValue` can: a raw value naming no case is a
+// RUNTIME failure, and shv2's `try` binds to a CALL — `Parser.rewriteLastCallToTryCall` converts the last
+// `call` op the target emitted into a `tryCall`, and a target that emitted no call is `rejectTryTarget`'s.
+// So this member is a call or it cannot be `try`ed at all, which is the only way a program uses it.
+//
+// ⭐ **ONE HELPER PER ENUM, SYNTHESIZED ON DEMAND — `MmRuntime.installUnionDestructors`' shape exactly.** The
+// module's own `call` ops name the symbols it needs (`RuntimeUsage.scanRuntimeUsage`), and only those are
+// built. A program that never writes `fromRawValue` carries not one byte of this file.
+//
+// ⭐ **IT AGREES WITH v1 ABOUT THE SHAPE AND DIVERGES ABOUT THE TIER.** v1 also synthesizes a per-enum
+// `__enum_<Name>_fromRawValue` (`maxon-selfhosted/Compiler/Parser.maxon:18717`), but builds it in the PARSER
+// as Maxon-tier IR that the whole pipeline then re-optimizes. shv2 builds it already-lowered at the Std tier
+// and appends it after the pipeline, which is what every other synthesized body here does — the compare
+// chain is three ops per case and has nothing an optimizer could take off it.
+
+// ⭐ **THE SYMBOL PREFIX, AND THE PREDICATE THAT READS IT.** A per-enum symbol cannot be a fixed name, so the
+// family is recognized by its prefix exactly as `__destruct_` is — which is what lets `scanRuntimeUsage`
+// collect the needed set without knowing any enum's name.
+let EnumFromRawValuePrefix = b"__enum_from_raw_"
+
+// `__enum_from_raw_<Enum>` — the helper's symbol. A dotted enum name (`Shape.unionCases`) rides through
+// unchanged: a `.` is already legal in an emitted symbol here (every method is `Type.method`).
+export function enumFromRawValueSymbol(enumName ByteArray) returns ByteArray
+	return "{String.from(EnumFromRawValuePrefix)}{String.from(enumName)}".toByteArray()
+end 'enumFromRawValueSymbol'
+
+// Is `callee` one of this family's entry points? Every member of the family throws, so this doubles as the
+// throwing test (`GtRuntime.isThrowingRuntimeCallee`) — the shape `isManagedMemoryRuntimeCallee` uses and
+// for the stated reason: a family all of whose members throw needs no second predicate.
+export function isEnumLookupRuntimeCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: EnumFromRawValuePrefix)
+end 'isEnumLookupRuntimeCallee'
+
+// The `throws` clause every helper in this family is stamped with — the composed spelling `runtimeThrowsClause`
+// hands back, so an `otherwise (e)` binding at a call site is typed by the one fact rather than by a guess.
+export function enumLookupThrows() returns ThrowsClause
+	return ThrowsClause.throwing(String.from(EnumLookupErrorTypeName))
+end 'enumLookupThrows'
+
+// `__EnumLookupError`'s one case, as an ORDINAL, and the error flag built from it.
+//
+// ⛔ **THIS IS A TRANSCRIPTION AND IT HAS A SECOND HALF.** The paragraph that stood here claimed there was
+// *"no second declaration for this transcription to drift from and no `verify*Ordinals` guard to hold it
+// against"*, and both clauses were false. The second declaration is `Project.builtinEnumLookupErrorEnum`,
+// whose `addBuiltinEnumCase` DERIVES the ordinal from declaration position; the guard is
+// `BuiltinErrorOrdinalCheck.overSynthesized`, built for precisely this position — a family with no loadable
+// stdlib declaration. Two files, one number, and until `verifyEnumLookupErrorOrdinals` below, nothing
+// holding them together. The twin this family was copied from pre-rejects the excuse verbatim
+// (`CheckedDivisionRuntime.verifyDivisionByZeroOrdinals`): *"ONE case is not an excuse to skip the claim; it
+// is the cheapest possible claim, and a family that does not make one reintroduces precisely the drift 7b
+// closed."*
+let EnumLookupNoSuchRawValueOrdinal = 0 as ParsedInt
+let EnumLookupNoSuchRawValueFlag = EnumLookupNoSuchRawValueOrdinal + ErrorFlagOrdinalBias
+
+// ⭐ **THE ORDINAL DRIFT GUARD, FOR THIS FAMILY.** The enum's case ORDER is the wire format and
+// `EnumLookupNoSuchRawValueOrdinal` above is a transcription of it, so the two are asserted to agree on every
+// compile — exactly as the sibling families' guards do, and for the same reason: drift is otherwise SILENT,
+// because every `otherwise (e)` arm would simply name the wrong case.
+//
+// `overSynthesized`, and it is the honest word: `__EnumLookupError` is declared in no stdlib file at all, so
+// the compiler builds this layout and only the compiler's own source can make it disagree — which is what
+// keeps this family's verdict a `panic` rather than an E4016 (A1s). It is a free function called from
+// `Compiler.maxon` rather than the tail of `installEnumLookupHelpers`, because the installs run AFTER the
+// pipeline, where a diagnostic would have no error gate left to fail against.
+export function verifyEnumLookupErrorOrdinals(project Project)
+	var enumLookupErrors = BuiltinErrorOrdinalCheck.overSynthesized(project, declaration: builtinEnumLookupErrorEnum(), installer: b"installEnumLookupHelpers")
+	enumLookupErrors.claim(EnumLookupNoSuchRawValueCaseName, ordinal: EnumLookupNoSuchRawValueOrdinal)
+end 'verifyEnumLookupErrorOrdinals'
+
+// ⭐ Synthesize `__enum_from_raw_<Enum>(raw)` for every enum whose helper the module CALLS. Appended
+// already-lowered after the pipeline (like `installUnionDestructors`), so it is never re-optimized.
+export function installEnumLookupHelpers(module StdModule, project Project, needed EnumLookupSet)
+	for (_, layout) in project.enumTypes 'each'
+		if not needed.contains(enumFromRawValueSymbol(layout.name)) 'notReferenced'
+			continue
+		end 'notReferenced'
+		synthesizeEnumFromRawValue(module, layout: layout)
+	end 'each'
+end 'installEnumLookupHelpers'
+
+// Emit `__enum_from_raw_<Enum>(raw) -> (tag, flag)`:
+//
+//   entry / nextcase_i: `raw == tag_i` → `hit_i`, else the next test
+//   hit_i:              the ok return of case `i`'s tag
+//   the final else:     the error return — `noSuchRawValue`
+//
+// ⚠ **IT COMPARES AGAINST THE *TAG*, WHICH IS THE RAW VALUE ONLY FOR THE TWO BACKINGS THAT REACH HERE.** An
+// `integer`-backed case's tag IS its declared raw value, and an unnumbered enum's tag is the declaration index
+// its raw value is defined to be — for both, one column answers both questions. The other three backings do
+// NOT have that property (a string backing's tag is only an index; a float or character raw value is not an
+// i64 argument at all), and `Parser.requireFromRawValueBacking` refuses them at the call site rather than
+// letting a helper be built that would compare the wrong column. The panic below is that refusal's backstop.
+//
+// A branch chain rather than the branchless sum the parser-tier accessors use: this one has to DISTINGUISH
+// "no case matched" from "case 0 matched", which a sum of products cannot express — an unmatched lookup and a
+// case whose tag is 0 both total zero.
+function synthesizeEnumFromRawValue(module StdModule, layout EnumLayout)
+	match layout.backing 'backing'
+		integer then break 'backing'
+		unresolved then break 'backing'
+		float to string then panic("synthesizeEnumFromRawValue: `{layout.kindWord()} {String.from(layout.name)}` is {enumBackingNoun(layout.backing)}-backed, whose tag column is not its raw values — `Parser.requireFromRawValueBacking` refuses `fromRawValue` on such a declaration, so no call to this helper can exist for it")
+	end 'backing'
+
+	let func = IrFunction.createFromStd(enumFromRawValueSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: enumLookupThrows())
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let raw = 0 as ValueId
+
+	var cur = entry
+	for i in 0 upto layout.caseCount() 'eachCase'
+		var hit = module.addBlock(func, label: b"hit")
+		let nextTest = module.addBlock(func, label: b"casetest")
+		let tag = emitConst(module, block: cur, value: layout.tagOfIndex(i), ids: ids)
+		let isThisCase = emitCmp(module, block: cur, a: raw, b: tag, pred: StdCmpPred.eq, ids: ids)
+		module.setTerminator(cur, op: StdOp.condBranch(isThisCase, thenBlockId: hit.id, elseBlockId: nextTest.id))
+		// The tag constant is defined in `cur`, which dominates `hit` — the one edge into it.
+		emitOkReturn(module, block: hit, value: tag, ids: ids)
+		cur = nextTest
+	end 'eachCase'
+
+	emitErrorReturn(module, block: cur, flag: EnumLookupNoSuchRawValueFlag, ids: ids)
+
+	module.functions.push(func)
+end 'synthesizeEnumFromRawValue'

@@ -450,8 +450,14 @@ export type FileParseArtifact
 
 	// Record a declared enum/union type as this file's contribution to the project-wide `enumTypes`
 	// registry — the same NEVER-touch-Project discipline every `record*` above follows.
+	//
+	// ⭐ **A PAYLOAD-BEARING UNION CONTRIBUTES ITS `unionCases` COMPANION TOO**, through the same door and
+	// the same builder the declaration SWEEP appends it with (`Project.appendUnionCasesCompanion`, whose
+	// header says why both registries need it). Here rather than at `parseEnumDeclaration`'s tail so the
+	// artifact's enum list and the sweep's are filled by one rule.
 	export function recordEnumType(layout EnumLayout)
 		self.enumTypes.push(layout)
+		appendUnionCasesCompanion(self.enumTypes, layout: layout)
 	end 'recordEnumType'
 
 	// Record a declared `interface` as this file's contribution to `project.interfaces` (P1.7a slice 1)

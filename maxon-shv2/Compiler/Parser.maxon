@@ -41,6 +41,12 @@
 // `TopLevelDecl`) rather than a tree of it.
 export typealias TokenIndex = int(0 to u64.max)
 
+// A column of token POSITIONS, kept where a diagnostic must be anchored at a token the parse has
+// already walked past. It carries the INDEX and never the `Token`: a `Token` owns its `value`
+// `ByteArray`, so a per-slot column of them would clone one managed record per argument on a path
+// that raises nothing almost every time, where an index is a scalar `self.tokenAt` recovers for free.
+export typealias TokenIndexArray = Array with TokenIndex
+
 // How many blocks are open around a token. 0 is FILE SCOPE — the depth at which a `let` is a
 // top-level constant rather than a body-local binding (see `foldDeclaredSignaturesInto`). Wide
 // range: nesting is unbounded.
@@ -439,6 +445,14 @@ export union ParseError implements Error
 	// other reason a binding can refuse a value. See `parseAssignment` for why this one check
 	// is what makes every merge phi's type honest.
 	assignTypeMismatch(name String, got String, expected String, line LineNumber, column ColumnNumber)
+	// ⭐ **THE SENTENCE A DECLARED SLOT REACHED THROUGH AN ARGUMENT LIST REFUSES A VALUE IN** — a union
+	// case's payload slot (`Paint.tint(Shade.light)`). It names NEITHER a variable nor a parameter,
+	// and that is the canonical corpus's choice rather than a shv2 one: `specs/union-cases.md` and
+	// `specs/enum-full.md` both pin `type mismatch: 'expected <declared>, got <arriving>'` for exactly
+	// this position. A payload slot has no parameter an author could rename and is not a place they
+	// assign to — what they must change is the ARGUMENT — so the sentence states the two types and
+	// nothing else. Renders as E3005; see `SlotMismatchVoice.payloadArgument`.
+	typeMismatchExpectedGot(expected String, got String, line LineNumber, column ColumnNumber)
 	// A `return <expr>` whose value's type class differs from the function's declared return
 	// type (`return flag` from a function declared `returns Integer`). Renders as E3005 with
 	// the bootstrap's exact text — `Cannot return 'bool' from function declared to return
@@ -1401,7 +1415,7 @@ export function immutableMutatingCallMessage(blamed String, paramName String, fu
 end 'immutableMutatingCallMessage'
 
 // ⭐ **WHAT SEPARATES AN UNNUMBERED ENUM'S TAG FROM ITS ORDINAL — nothing, and this constant IS that
-// claim.** `Parser.parseEnumOrdinal` adds this offset only past `EnumLayout.tagsAreDeclarationIndices`,
+// claim.** `Parser.enumTagAsANumber` adds this offset only past `EnumLayout.tagsAreDeclarationIndices`,
 // which proves `caseTags[i] == i` for every case; the offset is therefore zero by PROOF rather than by
 // luck. It is named so the `+ 0` in the emit reads as the identity it was shown to be, instead of as a
 // literal a reader has to re-derive.
@@ -1410,20 +1424,54 @@ end 'immutableMutatingCallMessage'
 // accessor answers that first, and a BOXED union's tag is a load rather than the value (see there).
 let EnumOrdinalTagOffset = 0 as ParsedInt
 
-// ⭐ **THE ORDINAL OF THE FIRST DECLARED CASE, AND THE SEED OF THE TAG→INDEX SUM** — a DIFFERENT fact from
-// the offset above, which is why it is a second constant and not a second use of the first. The renumbered
-// accessor computes `Σᵢ i × (tag == tagᵢ)` (`Parser.emitEnumOrdinalLookup`), and case 0's term is
-// `0 × (tag == tag₀)` — identically zero whichever case the value is, so it is elided and the running sum
-// STARTS at it. The loop therefore runs from 1, and this names the term it starts from rather than leaving a
-// bare `0` whose relationship to that bound a reader has to reconstruct.
+// ⭐ **THE ORDINAL OF THE FIRST DECLARED CASE, AND THE SEED OF THE TAG→CONSTANT SUM** — a DIFFERENT fact
+// from the offset above, which is why it is a second constant and not a second use of the first. The sum
+// `Σᵢ constantᵢ × (tag == tagᵢ)` (`Parser.emitEnumCaseConstantSelect`) accumulates onto a zero, and for the
+// `declarationIndex` column that zero doubles as case 0's own term (see `firstSummedCaseIndex`), which is
+// what this constant names rather than leaving a bare `0` a reader has to reconstruct.
 let FirstCaseOrdinal = 0 as ParsedInt
 
-// The first case the tag→index sum emits a TERM for. `FirstCaseOrdinal`'s own term is identically zero and
-// is folded into the seed, so the chain starts at the case AFTER it — the same quantity as
-// `FirstCaseOrdinal + 1`, and spelled separately rather than computed because the two live in different
-// domains: the seed is the `ParsedInt` a `literal` op carries, this is the `CaseIndex` the loop counts and
-// `EnumLayout.tagOfIndex` is indexed by.
+// The first case the tag→constant sum emits a TERM for, for the ONE column whose first term is provably
+// zero — the same quantity as `FirstCaseOrdinal + 1`, and spelled separately rather than computed because
+// the two live in different domains: the seed is the `ParsedInt` a `literal` op carries, this is the
+// `CaseIndex` the loop counts and `EnumLayout.tagOfIndex` is indexed by.
 let FirstSummedCaseIndex = 1 as CaseIndex
+
+// The declaration index of an enum's FIRST case — where a column whose case-0 term is not provably zero
+// starts summing. Named rather than written `0` beside `FirstSummedCaseIndex`, so the two bounds read as
+// the pair of answers to one question.
+let FirstCaseIndex = 0 as CaseIndex
+
+// ⭐⭐ **WHICH PER-CASE COLUMN AN ENUM ACCESSOR SELECTS OUT OF ITS LAYOUT.** The three instance accessors
+// differ in exactly this and in nothing else — same tag, same compare chain, same sum — so it is one enum
+// read by one emitter (`Parser.emitEnumCaseConstantSelect`) rather than three near-copies of a loop.
+enum EnumCaseConstant
+	// `.ordinal` — the case's position in the declaration. Read only where the tags are NOT already those
+	// positions (`EnumLayout.tagsAreDeclarationIndices`); where they are, the tag is the answer and no sum
+	// is emitted at all.
+	declarationIndex
+	// `.name` — `EnumLayout.caseNames[i]`, the case's spelling, as an immortal `.rdata` String.
+	caseName
+	// `.rawValue` of a STRING-backed enum — `EnumLayout.caseRawValues[i]`, the declared string, as an
+	// immortal `.rdata` String. The three NUMERIC backings never reach the sum: their tag IS the raw value.
+	declaredRawValue
+end 'EnumCaseConstant'
+
+// ⭐ **WHERE THE SUM STARTS, WHICH IS A PROPERTY OF THE COLUMN AND NOT OF THE ENUM.** A declaration index's
+// first term is `0 × (tag == tag₀)` — identically zero whichever case the value is — so it is folded into
+// the seed and the chain begins at case 1. Both string columns select a `.rdata` ADDRESS, which is never
+// zero, so their case 0 carries real information and must be summed like any other.
+//
+// A full match rather than a `default`: a column appended to `EnumCaseConstant` whose first constant is not
+// provably zero would otherwise silently inherit the skip and answer the SECOND case's constant for the
+// first — a wrong answer, where an unclassified arm is a compile error.
+function firstSummedCaseIndex(column EnumCaseConstant) returns CaseIndex
+	return match column 'c'
+		declarationIndex gives FirstSummedCaseIndex
+		caseName gives FirstCaseIndex
+		declaredRawValue gives FirstCaseIndex
+	end 'c'
+end 'firstSummedCaseIndex'
 
 // Every type NAME one file writes in a type position (P1.9). See `Parser.usedTypeNames`.
 export typealias UsedTypeNameSet = Set with ByteArray
@@ -5601,7 +5649,7 @@ end 'comparisonOpSpelling'
 // The corpus declares that type (`stdlib/String.maxon:917`), so the ordinary declaration fold registers it
 // in every program and there is nothing per-file left to answer. The remaining three name types the
 // compiler still owns outright.
-typealias ProducerMask = int(0 to 15)
+typealias ProducerMask = int(0 to 31)
 
 let CharacterSetProducerBit = 1 as ProducerMask
 let ManagedFileProducerBit = 2 as ProducerMask
@@ -5614,7 +5662,14 @@ let ManagedDirectoryProducerBit = 4 as ProducerMask
 // invisible to an arm written there, and the instance would go uninterned in exactly the programs that
 // declare their enums and their uses together.
 let AllCaseNamesProducerBit = 8 as ProducerMask
-let AllProducerBits = 15 as ProducerMask
+// ⭐ **A `<Enum>.allCases` — the FIFTH question, and `allCaseNames`' twin in every respect but its element
+// type.** What it registers is an `Array with <Enum>` instance PER DECLARED ENUM, which the sweep cannot
+// narrow to one: the member's base may be a dotted companion (`Shape.unionCases.allCases`) and the enum
+// registry is still being built while this walk runs. So the bit is only NOTED here and the over-interning
+// waits for the whole program, exactly as `noteAggregateArrayLiteral`'s does and for the same measured
+// O(files × types) reason (`ProgramSignatures.internLiteralContainerInstances`).
+let AllCasesProducerBit = 16 as ProducerMask
+let AllProducerBits = 31 as ProducerMask
 
 // --- Character literals ---
 //
@@ -7148,8 +7203,8 @@ end 'NamePosition'
 // arms are a CONTIGUOUS BAND a range arm depends on, and a container element is still the `field` door for
 // that question (it is a slot of the container's storage). Two questions, two scalars.
 enum SlotMismatchVoice
-	// A place the author NAMED and can point at — a local, a global, a struct field, a union payload. The
-	// refusal names it: `cannot assign '<got>' to variable '<name>' of type '<expected>'`.
+	// A place the author NAMED and can point at — a local, a global, a struct field. The refusal names it:
+	// `cannot assign '<got>' to variable '<name>' of type '<expected>'`.
 	assignedPlace
 	// The element argument of a parser-intrinsic container mutator (`push` / `set` / `insert`). These emit
 	// `__arr_push`/`__arr_set`/`__arr_insert` directly, so they have no `FuncSignature` and never reach
@@ -7157,6 +7212,14 @@ enum SlotMismatchVoice
 	// every other argument position takes (`SemanticCheck.argTypeMismatchSentence`, through
 	// `ParseError.builtinArgumentType` — the SAME variant the sibling `append` doors already raise).
 	containerElementArgument
+	// A UNION CASE's payload slot, filled from an argument list (`Paint.tint(Shade.light)`). It spoke in
+	// the `assignedPlace` voice until this rung and called itself `variable 'Paint.tint(c)'`, which named
+	// a place no source line holds. The two canonical specs that pin this position — `union-cases.md`'s
+	// two `union-payload.error.*` cases and `enum-full.md`'s `error.associated-value-type-mismatch` —
+	// both word it `type mismatch: 'expected <declared>, got <arriving>'` and both anchor it at the token
+	// FOLLOWING the offending argument (its `,` or the construct's `)`), which is where the reference
+	// compiler leaves its cursor after reading that argument.
+	payloadArgument
 end 'SlotMismatchVoice'
 
 // ⭐⭐ **THE TWO DOORS AN ERROR LEAVES A FUNCTION BY (A1s-throwsbox review).** Both hand the caller a flag the
@@ -9528,6 +9591,7 @@ export type Parser
 		let hasManagedFileProducer = (producers and ManagedFileProducerBit) != 0
 		let hasManagedDirectoryProducer = (producers and ManagedDirectoryProducerBit) != 0
 		let hasAllCaseNamesAccess = (producers and AllCaseNamesProducerBit) != 0
+		let hasAllCasesAccess = (producers and AllCasesProducerBit) != 0
 		while not self.isEof() 'scan'
 			if self.at(TokenKind.leftBracket) 'arrayLiteralToken'
 				hasIntArrayLiteral = true
@@ -9669,6 +9733,11 @@ export type Parser
 		if hasAggregateArrayLiteral 'noteAggregateArrayLiteral'
 			index.noteAggregateArrayLiteral()
 		end 'noteAggregateArrayLiteral'
+		// `<Enum>.allCases` — NOTED for the same reason and performed at the same place: its `Array with <Enum>`
+		// instance is one per declared enum, and the registry is complete only after the last file folds.
+		if hasAllCasesAccess 'noteEnumAllCases'
+			index.noteEnumAllCasesAccess()
+		end 'noteEnumAllCases'
 
 		// Intern the `Set with integer` AND `Set with String` instances if this file materializes a `Set from […]`
 		// construction — its key type (int or String) is inferred from the array literal, which the sweep cannot
@@ -9923,9 +9992,12 @@ export type Parser
 			if (mask and ManagedDirectoryProducerBit) == 0 and self.atManagedDirectoryProducer() 'md'
 				mask = (mask or ManagedDirectoryProducerBit) as ProducerMask
 			end 'md'
-			if (mask and AllCaseNamesProducerBit) == 0 and self.atAllCaseNamesAccess() 'acn'
+			if (mask and AllCaseNamesProducerBit) == 0 and self.atStaticEnumMember(EnumAllCaseNamesMemberName) 'acn'
 				mask = (mask or AllCaseNamesProducerBit) as ProducerMask
 			end 'acn'
+			if (mask and AllCasesProducerBit) == 0 and self.atStaticEnumMember(EnumAllCasesMemberName) 'ac'
+				mask = (mask or AllCasesProducerBit) as ProducerMask
+			end 'ac'
 			if mask == AllProducerBits 'allFound'
 				break
 			end 'allFound'
@@ -9945,21 +10017,35 @@ export type Parser
 		return self.at(TokenKind.identifier) and (self.current().value.equals(CharacterSetBuiltinName) or self.current().value.equals(CharacterMemberSetAliasName))
 	end 'atCharacterSetProducer'
 
-	// ⭐ **IS THE CURSOR ON THE `allCaseNames` MEMBER NAME?** — asked by BOTH halves of that member and
-	// deliberately once: the SWEEP asks it to decide whether the file needs an `Array with String` interned
-	// (`AllCaseNamesProducerBit`), and `parseEnumLiteral` asks it to decide whether to read that instance
-	// back. A shape one accepted and the other declined would be a parse-time lookup for an instance nobody
-	// interned, so the two cannot be allowed to spell it separately — and they briefly did, one testing the
-	// token KIND as well as the name and the other only the name. They agreed solely because that word cannot
-	// lex as anything but an identifier, which is a property of the lexer rather than of either line.
+	// ⭐⭐ **IS THE CURSOR ON THE STATIC MEMBER NAMED `member`?** — asked by BOTH halves of every member of
+	// this surface, and deliberately ONCE PER MEMBER: the SWEEP asks it to decide whether the file needs the
+	// member's generic instance interned (`AllCaseNamesProducerBit`, `AllCasesProducerBit`), and
+	// `parseEnumLiteral` asks it to decide whether to read that instance back. A shape one accepted and the
+	// other declined would be a parse-time lookup for an instance nobody interned, so the two cannot be
+	// allowed to spell it separately — and for `allCaseNames` they briefly did, one testing the token KIND as
+	// well as the name and the other only the name. They agreed solely because that word cannot lex as
+	// anything but an identifier, which is a property of the lexer rather than of either line.
+	//
+	// ⚠ **IT WAS `atAllCaseNamesAccess` UNTIL FOUR MEMBERS NEEDED THE IDENTICAL QUESTION ABOUT A DIFFERENT
+	// WORD**, and that function stayed on as a body that did nothing but call this one — the thin wrapper
+	// this rung deleted `requireManagedPayloadArg` for, with its four new siblings calling this directly on
+	// adjacent lines. The tolerance argument below is the one paragraph of its header that was not a
+	// restatement of this one, so it lives here now.
 	//
 	// Asked of the MEMBER name alone and not of the `<base> .` in front of it, which is the same tolerance
 	// every sweep probe has: it sees tokens, not types, so a local variable spelled `allCaseNames`
 	// over-interns one registry entry and nothing more (an instance nobody names gets no descriptor and no
 	// destructor — both gate on usage). Missing one, by contrast, costs the member its array at parse time.
-	function atAllCaseNamesAccess() returns bool
-		return self.at(TokenKind.identifier) and self.current().value.equals(EnumAllCaseNamesMemberName)
-	end 'atAllCaseNamesAccess'
+	function atStaticEnumMember(member ByteArray) returns bool
+		return self.at(TokenKind.identifier) and self.current().value.equals(member)
+	end 'atStaticEnumMember'
+
+	// ⭐ **IS THE CURSOR ON `unionCases .` — the companion HOP?** The trailing `.` is required and is what
+	// separates the member from a case a union could (legally) name `unionCases`: `U.unionCases` alone denotes
+	// a TYPE, which is not an expression, so the only expression spelling is `U.unionCases.<something>`.
+	function atUnionCasesAccess() returns bool
+		return self.atStaticEnumMember(UnionCasesMemberName) and self.kindAt(self.pos + 1) == TokenKind.dot
+	end 'atUnionCasesAccess'
 
 	// The `__ManagedFile` type name (R4.1). Deliberately TOLERANT like every sweep probe: it sees the
 	// identifier, not a type, so a file merely MENTIONING the name over-registers the layout rather than
@@ -13371,6 +13457,7 @@ export type Parser
 		end 'body'
 
 		enums.push(layout)
+		appendUnionCasesCompanion(enums, layout: layout)
 		self.closeTypeParamScope()
 	end 'recordScannedEnum'
 
@@ -21379,6 +21466,11 @@ export type Parser
 		return match voice 'v'
 			assignedPlace gives ParseError.assignTypeMismatch(assignedName, got: got, expected: resolvedExpected, line: line, column: column)
 			containerElementArgument gives ParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: self.declaredSlotDisplayName(declared, nameId: declaredNameId, gotTag: gotTag), got: got, line: line, column: column)
+			// The payload voice quotes no name at all (there is none to quote) and spells the EXPECTED side
+			// through `declaredSlotDisplayName`, the same probe the argument voice makes — which is what puts
+			// `enum-full.md`'s `expected Integer` (a ranged alias) and `union-cases.md`'s `expected Color` (an
+			// enum) under one rule instead of two.
+			payloadArgument gives ParseError.typeMismatchExpectedGot(self.declaredSlotDisplayName(declared, nameId: declaredNameId, gotTag: gotTag), got: got, line: line, column: column)
 		end 'v'
 	end 'slotMismatchError'
 
@@ -32186,7 +32278,7 @@ export type Parser
 	//   • **AN `Ordering` VERDICT** (`emitOrderingVerdict`) — the tag test that turns a `compare` result into
 	//     an ordering operator's bool. Its subject is a `named(Ordering)` value, which `emitCompare` would
 	//     hand to the same `valueIsUnion` gate the match dispatch dodges.
-	//   • **A RENUMBERED ENUM'S `.ordinal`** (`emitEnumOrdinalLookup`) — one `tag == tagᵢ` term of the
+	//   • **AN ENUM ACCESSOR'S CASE SELECT** (`emitEnumCaseConstantSelect`) — one `tag == tagᵢ` term of the
 	//     branchless tag→index sum. Its subject is the same `named(<Enum>)` (or loaded i64) tag the match
 	//     dispatch tests, for the same E3066 reason, which is why the two read this one door.
 	//
@@ -33059,7 +33151,7 @@ export type Parser
 	// the columns it writes are exactly the columns `valueTagToStdType` reads, so a re-record ACROSS width
 	// families is a width change, and a caller may not assume otherwise.
 	//
-	// ⭐ **THE ONE CALLER THAT CROSSES A WIDTH FAMILY IS `emitEnumOrdinalLookup`, `boolean` → `integer`
+	// ⭐ **THE ONE CALLER THAT CROSSES A WIDTH FAMILY IS `emitEnumCaseConstantSelect`, `boolean` → `integer`
 	// (i1 → i64), and it is safe for two reasons that belong here rather than only at the call site.** It
 	// re-records a `compare` result so the multiply that consumes it reads an i64 operand type:
 	//
@@ -38362,10 +38454,10 @@ export type Parser
 		// are disjoint by the member name, and the order is what matters: an enum binding reaching
 		// `parseFieldAccess` is refused by `requireStructBase` (a declared enum erases to `integer`, so it
 		// has no struct layout to find), which is the E2015 this arm exists to route past. See
-		// `enumOrdinalFieldAt`.
-		if self.enumOrdinalFieldAt(self.pos) 'enumOrdinal'
-			return try self.parseEnumOrdinal()
-		end 'enumOrdinal'
+		// `enumAccessorFieldAt`.
+		if self.enumAccessorFieldAt(self.pos) 'enumAccessor'
+			return try self.parseEnumAccessor()
+		end 'enumAccessor'
 
 		if self.baseNamesAValueInScope(self.current()) 'valueBase'
 			return try self.parseFieldAccess()
@@ -38400,7 +38492,7 @@ export type Parser
 		// probe is inside the `containsEnum` hit, so it costs nothing on the path this arm is guarded for.
 		if self.signatures.containsEnum(baseTok.value) and self.typeNameVisibleHere(baseTok.value) 'enumRef'
 			match self.signatures.enumOf(baseTok.value) 'declared'
-				declared(layout) then return try self.parseEnumLiteral(func, layout: layout)
+				declared(layout) then return try self.parseEnumLiteral(func, declaredLayout: layout)
 				undeclared then panic("parseDottedPrimary: containsEnum answered yes but enumOf answered undeclared — the two read the same enum registry, under the same key")
 			end 'declared'
 		end 'enumRef'
@@ -38601,10 +38693,21 @@ export type Parser
 	// as a `Color`, and the OP's `integer` type is what the Std lowering reads to give it an i64
 	// (a `named` op-type would hit `maxonTypeToStdType`'s panic). Both collapse to i64, so the value's
 	// register class and its lowering agree — see `emitEnumTagLiteral`.
-	function parseEnumLiteral(func IrFunction, layout EnumLayout) returns ValueId throws ParseError
+	function parseEnumLiteral(func IrFunction, declaredLayout EnumLayout) returns ValueId throws ParseError
 		// `Self.off` reaches here as `Toggle.off` (D9) — see `typeBaseTokenAt`.
 		let typeTok = try self.consumeTypeBaseToken()
 		try self.consume(TokenKind.dot)
+
+		// ⭐⭐ **`Shape.unionCases.<anything>` IS THE COMPANION'S `<anything>` — ONE HOP, THEN THIS FUNCTION
+		// CONTINUES AS IF THE COMPANION HAD BEEN NAMED DIRECTLY.** Every member below — a bare CASE,
+		// `allCases`, `allCaseNames`, `fromRawValue` — means for the companion exactly what it means for any
+		// other payload-free enum, so the whole of `.unionCases` support past the sweep is this substitution.
+		// Writing it as a re-dispatch instead would need each member's arm duplicated under a second head.
+		//
+		// ⚠ **THE ANCHOR STAYS `typeTok`**, i.e. `Shape` and not `unionCases`: a diagnostic about a case the
+		// companion does not have names the type the reader wrote, which is what E3034's position means for
+		// every other enum reference.
+		let layout = self.unionCasesCompanionOf(declaredLayout, typeTok: typeTok)
 
 		// ⭐ **`<Enum>.allCaseNames` IS A STATIC MEMBER, NOT A CASE** — it is claimed here, ahead of the case
 		// lookup, because that lookup's answer for it is E3034 and there is nothing further along this path
@@ -38619,15 +38722,42 @@ export type Parser
 		// and reserving the name outright would be a refusal with corpus-wide blast radius that nothing is
 		// asking for — so this is a recorded divergence, not a settled rule.
 		//
-		// The cursor test is `atAllCaseNamesAccess`, the SAME predicate the sweep interns the member's
+		// The cursor test is `atStaticEnumMember`, the SAME predicate the sweep interns the member's
 		// `Array with String` off. The two must agree exactly: the sweep decides whether the instance exists
 		// and this decides whether it is read, so a shape one accepts and the other declines is a parse-time
 		// lookup for an instance nobody interned.
-		if self.atAllCaseNamesAccess() 'allCaseNames'
+		if self.atStaticEnumMember(EnumAllCaseNamesMemberName) 'allCaseNames'
 			let memberTok = self.current()
 			self.advance()
 			return try self.emitEnumAllCaseNames(layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
 		end 'allCaseNames'
+
+		// ⭐ **`allCases` AND `fromRawValue` ARE AN *ENUM*-ONLY SURFACE, WHERE `allCaseNames` IS ON BOTH — AND
+		// THAT ASYMMETRY IS THE REFERENCE'S, MEASURED.** The oracle answers `allCases is not available on
+		// unions` (E4006) and `unknown union case: 'fromRawValue'` (`2-Parser.cs:19113`) for a payload-free
+		// UNION, and `specs-shv2/union-scalar-backing.md`'s documentation states the second outright. Both are
+		// therefore claimed only for an enum; on a union they fall through to the case lookup, which words it
+		// `unknown union case: '<member>'` — the sentence that spec's prose describes. `allCaseNames` returns
+		// only NAMES, which every declaration has, so it needs no such gate (see `EnumAllCaseNamesMemberName`).
+		//
+		// The SYNTHESIZED `<Union>.unionCases` companion is an ENUM, which is precisely how a payload-bearing
+		// union reaches this surface at all.
+		if not layout.isUnion 'enumOnlyStatics'
+			// `<Enum>.allCases` — claimed for `allCaseNames`' stated reason, and interned by the same sweep
+			// walk. The two are siblings in every respect but their element type.
+			if self.atStaticEnumMember(EnumAllCasesMemberName) 'allCases'
+				self.advance()
+				return try self.emitEnumAllCases(layout, range: SourceRange.ofToken(typeTok))
+			end 'allCases'
+
+			// `<Enum>.fromRawValue(raw)` — the one member of this surface that is a CALL, and the one that
+			// throws. Claimed here so the case lookup never sees it.
+			if self.atStaticEnumMember(EnumFromRawValueMemberName) 'fromRawValue'
+				let memberTok = self.current()
+				self.advance()
+				return try self.parseEnumFromRawValue(func, layout: layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
+			end 'fromRawValue'
+		end 'enumOnlyStatics'
 
 		let caseTok = try self.consumeNameToken(NamePosition.enumCase)
 
@@ -38651,6 +38781,98 @@ export type Parser
 
 		return self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(index), range: range)
 	end 'parseEnumLiteral'
+
+	// ⭐ **CONSUME A `unionCases .` HOP AND ANSWER WITH THE COMPANION'S LAYOUT** — or hand back the layout that
+	// was named, unchanged, when the cursor is on anything else.
+	//
+	// ⚠ **A COMPANION THE SWEEP DID NOT SYNTHESIZE IS AN ORDINARY UNKNOWN CASE, NOT A PANIC.** `unionCases` is
+	// synthesized only for a union with associated values (`appendUnionCasesCompanion`), so writing
+	// `Color.unionCases.red` on a payload-free enum finds no registered companion — and the honest answer is
+	// the one the reader can act on: E3034 at the type name, exactly as any other member that names no case
+	// gets. So the hop is NOT consumed when the companion is absent, and the case lookup below reports it.
+	function unionCasesCompanionOf(layout EnumLayout, typeTok Token) returns EnumLayout
+		if not self.atUnionCasesAccess() 'notTheCompanion'
+			return layout
+		end 'notTheCompanion'
+
+		let found = self.signatures.enumOf(unionCasesCompanionName(layout.name))
+		if not enumMatchIsDeclared(found) 'noCompanionRegistered'
+			return layout
+		end 'noCompanionRegistered'
+
+		self.advance()
+		try self.consume(TokenKind.dot) otherwise panic("unionCasesCompanionOf: `atUnionCasesAccess` required a `.` after `{String.from(UnionCasesMemberName)}` at `{String.from(typeTok.value)}` and it is not there — the predicate and this consumption read the same two tokens")
+
+		return requireEnumLayout(found)
+	end 'unionCasesCompanionOf'
+
+	// ⭐⭐ **MATERIALIZE `<Enum>.allCases` — an OWNED `Array with <Enum>` of every case value, in declaration
+	// order.** `emitEnumAllCaseNames`' twin one column over, and deliberately built the same way: what the
+	// member denotes is a VALUE of a type the language already has, so `.count()`, `.get(0)` and
+	// `for c in …` reach it through the ordinary machinery with no accessor protocol of its own.
+	//
+	// ⭐ **ITS ELEMENTS NEED NO MOVE-IN, WHERE `allCaseNames`' DO.** A case value is a bare i64 tag — a scalar
+	// the array copies by value — so there is no ownership to transfer; the names member has to promote each
+	// borrowed literal because the array's element destructor releases every live slot.
+	//
+	// ⚠ **THE INSTANCE IS READ BACK, NEVER FIRST INTERNED HERE** — `atSetFromConstruction`'s discipline, and
+	// `emitEnumAllCaseNames`' note in full: a parse-time intern would be the first write to a shared registry
+	// mid-parse and the gid would depend on parse order. `ProgramSignatures.internEnumAllCasesInstances`
+	// interns one per declared enum for any program that names the member.
+	function emitEnumAllCases(layout EnumLayout, range SourceRange) returns ValueId throws ParseError
+		let giid = self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: layout.name)
+		let arr = try self.emitArrayCreateOp(giid, range: range)
+
+		for i in 0 upto layout.caseCount() 'eachCase'
+			self.emitArrayPush(arr, element: self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(i), range: range), range: range)
+		end 'eachCase'
+
+		self.trackOwnedTemp(arr)
+		return arr
+	end 'emitEnumAllCases'
+
+	// ⭐⭐ **`<Enum>.fromRawValue(raw)` — THE REVERSE LOOKUP, EMITTED AS A CALL TO THE PER-ENUM Std HELPER.**
+	// The parser's whole job here is the argument and the two refusals; the search itself is
+	// `Runtime/EnumLookupRuntime.maxon`'s, which is where the reason it must be a call is written down.
+	//
+	// ⚠ **ENUM-ONLY, WHICH IS THE REFERENCE'S RULE AND `union-scalar-backing.md`'s COMMITTED PROSE.** A union
+	// answers `unknown union case: 'fromRawValue'` (`maxon-sharp/Compiler/2-Parser.cs:19113`, and that spec's
+	// own documentation section says so outright), so the member is claimed only for an enum and a union
+	// falls through to the case lookup that already words it that way. The SYNTHESIZED companion is an enum,
+	// which is exactly how `Shape.unionCases.fromRawValue(0)` is reached.
+	function parseEnumFromRawValue(func IrFunction, layout EnumLayout, memberTok Token, range SourceRange) returns ValueId throws ParseError
+		try self.requireFromRawValueBacking(layout, memberTok: memberTok)
+
+		try self.consume(TokenKind.leftParen)
+		let argTok = self.current()
+		let raw = try self.parseValueExpression(func)
+		try self.consume(TokenKind.rightParen)
+
+		// The argument's domain is the backing's, and past the guard above that domain is `int`. The sentence
+		// and the anchor are the reference's (`constants.md`'s `error.fromRawValue-type-mismatch` pins
+		// `type mismatch: 'expected int, got String'`), reached through the shared renderer so this position
+		// and the payload one cannot come to word one rejection two ways.
+		if not tagIsIntegral(self.tagOf(raw)) 'notANumber'
+			throw ParseError.typeMismatchExpectedGot(typeTagName(ValueTypeTag.integer), got: self.valueDisplayTypeName(raw), line: argTok.line, column: argTok.column)
+		end 'notANumber'
+
+		return self.emitRuntimeCall(enumFromRawValueSymbol(layout.name), args: singletonArgs(raw), resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
+	end 'parseEnumFromRawValue'
+
+	// ⭐ **WHICH BACKINGS `fromRawValue` IS BUILT FOR, AND WHY THE OTHER THREE ARE A REFUSAL RATHER THAN A
+	// SILENT WRONG ANSWER.** The helper searches the layout's TAG column, which is the raw-value column only
+	// for an `integer` backing and for an unnumbered enum (whose raw value IS its declaration index). A
+	// STRING backing's tags are declaration indices and its raw values are text; a FLOAT or CHARACTER raw
+	// value is not an i64 argument at all. Each of those needs a differently-typed parameter and a different
+	// comparison, and no committed case exercises one — so they are named and refused here, which is
+	// strictly better than the `unknown enum case: 'fromRawValue'` they got before this rung.
+	function requireFromRawValueBacking(layout EnumLayout, memberTok Token) throws ParseError
+		match layout.backing 'backing'
+			integer then break 'backing'
+			unresolved then break 'backing'
+			float to string then throw ParseError.unsupported("`{String.from(EnumFromRawValueMemberName)}` on `{layout.kindWord()} {String.from(layout.name)}`, which is {enumBackingNoun(layout.backing)}-backed — shv2's lookup searches the case TAGS, which carry the declared raw values only for an int-backed or unnumbered enum", line: memberTok.line, column: memberTok.column)
+		end 'backing'
+	end 'requireFromRawValueBacking'
 
 	// ⭐⭐ **MATERIALIZE `<Enum>.allCaseNames` — an OWNED `Array with String` of the case names, in
 	// declaration order.** It builds exactly what the source literal `["red", "green", "blue"]` builds, op
@@ -38708,23 +38930,27 @@ export type Parser
 		// is the value for the payload field the case declares at slot `i`, whatever position/label the
 		// construct wrote it in; `filled[i]` turns an unwritten slot into a missing-argument error rather
 		// than a zero nobody chose; `slotBareLocal[i]` records whether slot `i`'s value was a bare reference
-		// to a local binding — what a managed payload's move-in poisons (`moveInPayload`).
+		// to a local binding — what a managed payload's move-in poisons (`moveInPayload`); `slotAnchors[i]`
+		// is the token the slot's TYPE refusal is anchored at, which the type check (in `emitEnumBox`, after
+		// the whole list is read) can no longer see for itself — see `parsePayloadArgs`.
 		var slotValues = ValueIdArray.create()
 		var filled = BoolArray.create()
 		var slotBareLocal = BoolArray.create()
+		var slotAnchors = TokenIndexArray.create()
 		for _ in 0 upto arity 'initSlots'
 			slotValues.push(0 as ValueId)
 			filled.push(false)
 			slotBareLocal.push(false)
+			slotAnchors.push(self.pos)
 		end 'initSlots'
 
 		if self.at(TokenKind.leftParen) 'withArgs'
-			try self.parsePayloadArgs(func, layout: layout, payloads: payloads, slotValues: slotValues, filled: filled, slotBareLocal: slotBareLocal, caseTok: caseTok)
+			try self.parsePayloadArgs(func, layout: layout, payloads: payloads, slotValues: slotValues, filled: filled, slotBareLocal: slotBareLocal, slotAnchors: slotAnchors, caseTok: caseTok)
 		end 'withArgs'
 
 		try self.requireAllPayloadsProvided(layout, payloads: payloads, filled: filled, caseTok: caseTok)
 
-		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, caseTok: caseTok, range: range)
+		return try self.emitEnumBox(layout, caseIndex: caseIndex, args: slotValues, argsBareLocal: slotBareLocal, argAnchors: slotAnchors, caseTok: caseTok, range: range)
 	end 'parseEnumBoxConstruct'
 
 	// Parse the `(pos, label: value, …)` payload argument list into the layout-parallel columns. The caller
@@ -38732,7 +38958,16 @@ export type Parser
 	// fills slot 0; every later argument is named and slots by the payload FIELD name it labels
 	// (`payloadSlotFor`). A slot written twice is a duplicate, mirroring `parseStructLiteralFields` — a
 	// payload field IS a field, so the same struct-literal diagnostics fit.
-	function parsePayloadArgs(func IrFunction, layout EnumLayout, payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, slotBareLocal BoolArray, caseTok Token) throws ParseError
+	//
+	// ⭐ **IT ALSO RECORDS EACH SLOT'S DIAGNOSTIC ANCHOR, AND ONLY THIS FUNCTION CAN.** A payload argument's
+	// TYPE is judged in `emitEnumBox`, once the whole list is read, and by then the cursor is past the
+	// construct — so the position the two canonical specs pin (`,` or `)`, the token FOLLOWING the argument)
+	// is not recoverable there. It is captured here, at the one moment it is `self.pos`, and by SLOT rather
+	// than by source position for `slotBareLocal`'s stated reason: a named argument may fill a slot the
+	// author wrote out of order, and an anchor paired with the wrong slot points at another argument.
+	// It is the anchor `rejectEscapingClosure` already uses one line further down, which is why the two
+	// refusals about one argument point at the same place.
+	function parsePayloadArgs(func IrFunction, layout EnumLayout, payloads PayloadFieldArray, slotValues ValueIdArray, filled BoolArray, slotBareLocal BoolArray, slotAnchors TokenIndexArray, caseTok Token) throws ParseError
 		try self.consume(TokenKind.leftParen)
 
 		// A case that declares NO payload takes no argument LIST — it is written `U.empty`, never `U.empty()`
@@ -38764,15 +38999,23 @@ export type Parser
 			let valueStart = self.pos
 			let value = try self.parseValueExpression(func)
 
+			// ⭐ **THE TOKEN AFTER THE ARGUMENT — READ ONCE, AND BOTH REFUSALS ABOUT THIS ARGUMENT TAKE IT.** The
+			// escaping-closure reject is positioned there (matching its golden) and so is the TYPE refusal
+			// (`emitEnumBox`, through `slotAnchors`). Taking `self.current()` for one and `self.pos` for the
+			// other five lines apart made that agreement a coincidence of two reads of a cursor nothing pins
+			// between them; one binding makes it structural.
+			let afterArg = self.pos
+
 			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a union PAYLOAD** — the payload is a heap
 			// box slot that outlives the frame, so it would carry a closure whose env is gone (exactly a struct
-			// field, one indirection out). Positioned at the token after the argument, matching the golden.
+			// field, one indirection out).
 			let payloadField = try payloads.get(slot) otherwise panic("parsePayloadArgs: payloads.get OOB at slot {slot} — the columns are sized to the case's arity")
-			try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in payload '{String.from(payloadField.name)}' of case '{String.from(caseTok.value)}': {CapturingClosureEscapeSuffix}", tok: self.current())
+			try self.rejectEscapingClosure(value, message: "cannot store a closure that captures in payload '{String.from(payloadField.name)}' of case '{String.from(caseTok.value)}': {CapturingClosureEscapeSuffix}", tok: self.tokenAt(afterArg))
 
 			try slotValues.set(slot, value: value) otherwise panic("parsePayloadArgs: slotValues.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try filled.set(slot, value: true) otherwise panic("parsePayloadArgs: filled.set OOB at slot {slot} — the columns are sized to the case's arity")
 			try slotBareLocal.set(slot, value: self.rhsWasBareLocalReference(valueStart)) otherwise panic("parsePayloadArgs: slotBareLocal.set OOB at slot {slot} — the columns are sized to the case's arity")
+			try slotAnchors.set(slot, value: afterArg) otherwise panic("parsePayloadArgs: slotAnchors.set OOB at slot {slot} — the columns are sized to the case's arity")
 
 			argIndex = argIndex + 1
 
@@ -38838,7 +39081,7 @@ export type Parser
 	// ⚠ **THE ZERO-FILL IS MANDATORY** even though the slab returns zeroed memory: it pins a
 	// deterministic 0 in a narrow case's unused slots, and a NULL slot is exactly what the cascade's
 	// null-guard skips — so a zeroed managed slot is never decref'd as a bogus pointer.
-	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, caseTok Token, range SourceRange) returns ValueId throws ParseError
+	function emitEnumBox(layout EnumLayout, caseIndex CaseIndex, args ValueIdArray, argsBareLocal BoolArray, argAnchors TokenIndexArray, caseTok Token, range SourceRange) returns ValueId throws ParseError
 		let payloads = layout.payloadsAt(caseIndex)
 
 		// Validate + classify every field before emitting a single op — a refused payload emits no code.
@@ -38848,7 +39091,8 @@ export type Parser
 			let declared = self.signatures.payloadTypeOf(field, layout: layout, into: self.artifact.typeNames)
 			let class = try self.requirePayloadLowerable(field, declared: declared, layout: layout, posTok: caseTok)
 			let arg = try args.get(i) otherwise panic("emitEnumBox: args.count() was checked to equal the arity but get OOB at {i}")
-			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, layout: layout, caseTok: caseTok)
+			let anchorIndex = try argAnchors.get(i) otherwise panic("emitEnumBox: argAnchors.get OOB at {i} — captured in lockstep with the args")
+			try self.requirePayloadArgType(field, declared: declared, class: class, value: arg, caseTok: caseTok, argTok: self.tokenAt(anchorIndex))
 			classes.push(class)
 		end 'validate'
 
@@ -39144,20 +39388,28 @@ export type Parser
 	end 'boxedUnionDisplay'
 
 	// A payload argument must agree with its field's classified type. A SCALAR uses `checkDeclaredType`,
-	// the same coercion-site rule a struct literal field, a call argument and a `return` ask; a MANAGED
-	// payload requires the matching heap kind (a String, or a struct of the same name). Anchored at the
-	// case name (the whole construct's anchor); no per-argument span is tracked at this rung.
-	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
+	// the same coercion-site rule a struct literal field, a call argument and a `return` ask, PLUS the
+	// nominal identity `checkDeclaredType` structurally cannot ask (`requireEnumPayloadIdentity`); a MANAGED
+	// payload requires the matching heap kind (a String, or a struct of the same name).
+	//
+	// ⚠ **TWO ANCHORS, AND THEY ARE DIFFERENT QUESTIONS.** `caseTok` names the CONSTRUCT and is where a
+	// refusal about the case as a whole belongs (a payload the tier cannot lower, a slot left unfilled);
+	// `argTok` is the token following THIS argument and is where a refusal about ONE argument's type
+	// belongs, which is the position the canonical specs pin. Passing the construct's anchor for both is
+	// what made `union-payload.error.wrong-struct` point at `tint` rather than at the argument.
+	function requirePayloadArgType(field PayloadField, declared MaxonType, class PayloadClass, value ValueId, caseTok Token, argTok Token) throws ParseError
 		match class 'c'
-			scalar then try self.requireScalarPayloadArg(field, declared: declared, value: value, layout: layout, caseTok: caseTok)
+			scalar then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
 			// ⚠ The scalar rule, spelled as its OWN arm and deliberately not folded into a `scalar to typeParam`
 			// RANGE: `typeParam` is the last variant of `PayloadClass` and `scalar` the first, so that range
 			// would swallow every case between them — the band-append trap, one union down.
 			// `checkDeclaredType`'s type-parameter arm is where an argument meets an opaque formal, which is
 			// what checked this payload while it was classified `scalar`; the store-side split changed nothing
 			// an argument must satisfy.
-			typeParam then try self.requireScalarPayloadArg(field, declared: declared, value: value, layout: layout, caseTok: caseTok)
-			managed(storage, isString) then try self.requireManagedPayloadArg(field, storage: storage, isString: isString, value: value, layout: layout, caseTok: caseTok)
+			typeParam then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
+			// The shared managed door directly — `requireManagedPayloadArg` stood here and did nothing but
+			// forward, once the payload voice stopped needing a `<Union>.<case>(<field>)` label built for it.
+			managed(storage, isString) then try self.requireManagedValueMatches(storage, isString: isString, value: value, assignedName: String.from(field.name), voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
 			undeclaredName then break 'c'
@@ -39171,7 +39423,7 @@ export type Parser
 	// FUNCTION-alias payload is a `named` — an int — so `Payload.op(twice)` met the
 	// `functionIntoNonFunction` arm below and was refused E3005 on a program the payload cascade had, until
 	// this rung, never even classified as a scalar. Resolved, it is the function type the value is.
-	function requireScalarPayloadArg(field PayloadField, declared MaxonType, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
+	function requireScalarPayloadArg(field PayloadField, declared MaxonType, value ValueId, caseTok Token, argTok Token) throws ParseError
 		let declaredTag = maxonTypeTag(declared)
 		let got = self.tagOf(value)
 
@@ -39191,20 +39443,29 @@ export type Parser
 
 		match checkDeclaredType(got, declared: declaredTag) 'declared'
 			ok then break 'declared'
-			mismatch then throw ParseError.assignTypeMismatch("{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", got: typeTagName(got), expected: typeTagName(declaredTag), line: caseTok.line, column: caseTok.column)
-			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: caseTok.line, column: caseTok.column)
+			mismatch then throw self.slotMismatchError(SlotMismatchVoice.payloadArgument, assignedName: String.from(field.name), got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(declaredTag), declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
+			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
 			// A FUNCTION VALUE into a scalar union PAYLOAD whose declared type is NOT a function — the same
 			// E3005 a function value meeting any other non-function slot earns. A function-ALIAS payload no
 			// longer reaches it: `declaredTag` is `function` there and `checkDeclaredType` answers `ok`.
-			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction("payload", name: String.from(field.name), heldType: typeTagName(declaredTag), line: caseTok.line, column: caseTok.column)
+			functionIntoNonFunction then throw ParseError.functionValueIntoNonFunction("payload", name: String.from(field.name), heldType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
 		end 'declared'
-	end 'requireScalarPayloadArg'
 
-	// A managed payload argument must be the matching heap kind — the union-payload caller of the shared
-	// `requireManagedValueMatches`, naming its site `<Union>.<case>(<field>)`.
-	function requireManagedPayloadArg(field PayloadField, storage MaxonType, isString bool, value ValueId, layout EnumLayout, caseTok Token) throws ParseError
-		try self.requireManagedValueMatches(storage, isString: isString, value: value, assignedName: "{String.from(layout.name)}.{String.from(caseTok.value)}({String.from(field.name)})", voice: SlotMismatchVoice.assignedPlace, anchor: caseTok)
-	end 'requireManagedPayloadArg'
+		// ⭐⭐ **AND THE NOMINAL IDENTITY, WHICH `checkDeclaredType` STRUCTURALLY CANNOT ASK — THE SIXTH DOOR
+		// ON `requireSlotAggregateIdentity`, AND IT WAS THE ONE STILL MISSING.** A payload-free enum's value
+		// IS its i64 tag, so an ENUM-typed payload is `PayloadClass.scalar` and its verdict was
+		// `checkDeclaredType(named, named)` — which AGREES for any two enums, exactly as it did for an
+		// enum-typed struct FIELD until BATCH32 wired that door (see the header there). MEASURED on
+		// `union Paint tint(c Color) end` handed a `Shade`: it COMPILED, and the binding `c` came back out as
+		// a `Shade` ordinal wearing `Color`'s name — `specs/union-cases.md`'s `union-payload.error.wrong-enum`
+		// is that program. The MANAGED half of the payload door was already asking (through
+		// `requireManagedValueMatches`), which is why the STRUCT twin of the same hole was refused all along
+		// and only the enum one was open.
+		//
+		// Asked past the verdict rather than instead of it: a tag disagreement is the coarser fact and reads
+		// better said first, and a value that failed it has no identity worth comparing.
+		try self.requireSlotAggregateIdentity(declared, value: value, assignedName: String.from(field.name), voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+	end 'requireScalarPayloadArg'
 
 	// Load a boxed union's i64 TAG from offset 0 — the DISPATCH SUBJECT a `match` compares against
 	// each case's tag. Its result is `integer`-tagged (a plain i64), not `named`, so the dispatch
@@ -55485,18 +55746,23 @@ export type Parser
 	// binding whose `varType` reads `integer`. This asks the identical question through the identical door,
 	// so the accessor and the `match` can never come to disagree about what `s` is.
 	//
-	// ⚠ **IT IS NARROW ON PURPOSE, exactly as the `.managed` predicate is.** The member must be `ordinal`
-	// — every other member of an enum keeps `requireStructBase`'s refusal, which is still the true answer
-	// for `.name`/`.rawValue` (a different mechanism; see `EnumOrdinalMemberName`). And the base must be a
-	// binding in THIS function's scope: a captured or top-level enum's `.ordinal` stays refused rather than
-	// reaching a door built for a local's `boundValue`.
-	function enumOrdinalFieldAt(index TokenIndex) returns bool
+	// ⚠ **IT IS NARROW ON PURPOSE, exactly as the `.managed` predicate is.** The member must classify as one
+	// of the THREE the language defines on an enum VALUE (`enumInstanceAccessorOf`) — every other member of
+	// an enum keeps `requireStructBase`'s refusal. And the base must be a binding in THIS function's scope: a
+	// captured or top-level enum's accessor stays refused rather than reaching a door built for a local's
+	// `boundValue`.
+	//
+	// It asks the CLASSIFIER through the DERIVED predicate `namesAnEnumInstanceAccessor` — which of the
+	// three it got is the whole of what this door does not need to know; `parseEnumAccessor` asks the same
+	// classifier and answers for each. One rule, two questions of it, both exhaustive — see
+	// `EnumInstanceAccessor` for why it may not be a predicate beside an `if` chain.
+	function enumAccessorFieldAt(index TokenIndex) returns bool
 		if not tokenCanBeAName(self.tokenAt(index)) 'notABase'
 			return false
 		end 'notABase'
-		if self.kindAt(index + 1) != TokenKind.dot or not self.tokenAt(index + 2).value.equals(EnumOrdinalMemberName) 'notTheOrdinalMember'
+		if self.kindAt(index + 1) != TokenKind.dot or not namesAnEnumInstanceAccessor(enumInstanceAccessorOf(self.tokenAt(index + 2).value)) 'notAnAccessorMember'
 			return false
-		end 'notTheOrdinalMember'
+		end 'notAnAccessorMember'
 
 		let baseName = self.baseBindingName(self.tokenAt(index))
 		if not self.scope.contains(baseName) 'notALocalBinding'
@@ -55513,11 +55779,17 @@ export type Parser
 		end 'notAnEnumValue'
 
 		return enumMatchIsDeclared(self.enumMatchFor(boundValue))
-	end 'enumOrdinalFieldAt'
+	end 'enumAccessorFieldAt'
 
-	// ⭐ **`s.ordinal` — THE CASE'S DECLARATION INDEX, WHICH FOR AN UNNUMBERED ENUM IS THE VALUE ITSELF.**
-	// Guarded by `enumOrdinalFieldAt`, so the base is a local binding whose value belongs to a declared
-	// enum; this consumes `<base> . ordinal` and answers.
+	// ⭐⭐ **`s.ordinal` / `s.name` / `s.rawValue` — THE THREE READS OF AN ENUM VALUE, THROUGH ONE DOOR.**
+	// Guarded by `enumAccessorFieldAt`, so the base is a local binding whose value belongs to a declared
+	// enum; this consumes `<base> . <member>` and answers.
+	//
+	// ⭐ **THE SPLIT BETWEEN THEM IS THE *CONSTANT* EACH SELECTS AND NOTHING ELSE.** All three ask the same
+	// two questions of the same layout, in the same order (below), and all three that must compute an answer
+	// compute it with the same branchless sum — see `emitEnumCaseConstantSelect`, and `EnumCaseConstant` for
+	// the three columns it selects from. What differs per member is which column, and what TYPE the answer
+	// is handed back at.
 	//
 	// ⭐⭐ **IT ASKS TWO INDEPENDENT QUESTIONS, IN THIS ORDER, AND THEY MUST NEVER BE FUSED INTO ONE.**
 	//
@@ -55527,7 +55799,7 @@ export type Parser
 	//      looking, which is the half they each used to decide for themselves.
 	//   2. **IS THAT TAG THE ORDINAL, OR ONLY A KEY TO IT?** Where the tag column is `0,1,2,…` the ordinal
 	//      is the tag and the accessor costs no instruction; where the author renumbered the cases it is a
-	//      different number and the mapping has to be computed (`emitEnumOrdinalLookup` below).
+	//      different number and the mapping has to be computed (`emitEnumCaseConstantSelect` below).
 	//   3. **IS THE ANSWER ALREADY AN `integer`-TYPED VALUE?** A loaded tag is; an unboxed enum's value is
 	//      `named(<Enum>)` and needs the `+ 0` below. Asked of the value's TYPE COLUMN, not re-derived from
 	//      question 1 — see the call site.
@@ -55563,7 +55835,7 @@ export type Parser
 	//
 	// It takes no `IrFunction`: the emitters it calls append to `self.currentBlock`, exactly as the
 	// `.managed` field door's do. A parameter kept for symmetry would be an unused one (E3012).
-	function parseEnumOrdinal() returns ValueId throws ParseError
+	function parseEnumAccessor() returns ValueId throws ParseError
 		let baseTok = try self.consumeChainBaseToken()
 		try self.consume(TokenKind.dot)
 		let memberTok = try self.consumeMemberNameToken()
@@ -55577,38 +55849,141 @@ export type Parser
 		let layout = requireEnumLayout(self.enumMatchFor(baseBinding.boundValue))
 		let range = SourceRange.between(baseTok, last: memberTok)
 
-		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through.
+		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through. Asked
+		// ONCE for all three members: which of them was written cannot change where a union keeps its tag.
 		let tag = self.emitEnumTagOf(baseBinding.boundValue, layout: layout, range: range)
+
+		// The dispatch is EXHAUSTIVE over `EnumInstanceAccessor`, which is what makes the door's cursor test and
+		// this answer one rule: a member added to the classifier stops this function compiling until it is
+		// answered here. `notAnAccessor` survives as the unreachable arm the guard already excluded.
+		match enumInstanceAccessorOf(memberTok.value) 'member'
+			caseName then return try self.emitEnumCaseStringSelect(layout, tag: tag, column: EnumCaseConstant.caseName, anchor: memberTok, range: range)
+			rawValue then return try self.emitEnumRawValue(layout, tag: tag, anchor: memberTok, range: range)
+			ordinal then break 'member'
+			notAnAccessor then panic("parseEnumAccessor: member '{String.from(memberTok.value)}' reached the accessor and classifies as no accessor at all — `enumAccessorFieldAt` guards this door with the SAME classifier, so a member it admitted cannot be one this refuses")
+		end 'member'
 
 		// QUESTION 2 — whether that tag is already the answer. The lookup reads the tag as a bare i64, which
 		// both forms of it are, so it needs to know nothing about question 1.
 		if not layout.tagsAreDeclarationIndices() 'renumberedCases'
-			return try self.emitEnumOrdinalLookup(layout, tag: tag, anchor: memberTok, range: range)
+			return try self.emitEnumCaseConstantSelect(layout, tag: tag, column: EnumCaseConstant.declarationIndex, anchor: memberTok, range: range)
 		end 'renumberedCases'
 
-		// QUESTION 3, and it is a third question rather than question 1 re-read: the tag IS the ordinal here,
-		// so all that is left is handing it back as a NUMBER rather than as a value of the enum's type. That
-		// asks what this value is TYPED, which is the predicate spelled — a LOADED tag is already `integer`
-		// and is returned as it stands, and the `+ 0` below is the same obligation where it is not. Reading
-		// `isBoxed` for this would be right only while `emitEnumTagOf`'s load happens to mint `integer`; the
-		// type column is what the answer actually turns on, so it is what is asked.
+		return try self.enumTagAsANumber(tag, anchor: memberTok, range: range)
+	end 'parseEnumAccessor'
+
+	// ⭐ **QUESTION 3 — HAND A TAG BACK AS A NUMBER RATHER THAN AS A VALUE OF THE ENUM'S TYPE**, and it is a
+	// third question rather than question 1 re-read. It asks what the tag value is TYPED, which is the
+	// predicate spelled — a LOADED tag is already `integer` and is returned as it stands, and the `+ 0` below
+	// is the same obligation where it is not. Reading `isBoxed` for this would be right only while
+	// `emitEnumTagOf`'s load happens to mint `integer`; the type column is what the answer turns on, so it is
+	// what is asked.
+	//
+	// ⭐⭐ **THE `+ 0` IS THE MEANING RATHER THAN A TRICK FOR PRODUCING IT.** An enum value IS its tag
+	// (`parseEnumLiteral`), so under the accessor's guard the answer and the value are the same 64 bits — and
+	// `s + 0` is already a legal Maxon expression whose result the language types `integer`
+	// (`TypeRules.arithResultTag`, a `named` operand being `TypeClass.numeric`). So this emits exactly the IR
+	// the equivalent source expression does, and gets its result type from the one rule that types every
+	// other arithmetic result rather than from an assertion here.
+	//
+	// ⚠ **THE FRESH VALUE IS THE POINT, AND HANDING BACK THE RECEIVER'S OWN `ValueId` WAS MEASURED WRONG.**
+	// It looks free — same bits, no instruction — but the receiver's value is tagged `named(LocalStatus)`,
+	// and that tag is what E3005 reads: `return s.ordinal` from a `returns Integer` function reported
+	// *"Cannot return 'LocalStatus' from function declared to return 'int'"*. The tag is not decoration; it
+	// is the value's source type, and an ordinal is not of the enum's type. `retypeValue` is not the fix
+	// either — it rewrites the columns IN PLACE, and this value may be a BINDING's, so retyping it would
+	// break the `match s` two lines later. (`s as Integer` does not help for the same reason: shv2's `as`
+	// inside one numeric domain leaves the tag alone, so it is refused identically.)
+	//
+	// Two readers: `.ordinal` where the tags ARE the declaration indices, and `.rawValue` where the tag IS
+	// the raw value and the backing is integral — the same obligation, which is why it is one function.
+	function enumTagAsANumber(tag ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		if self.tagOf(tag) == ValueTypeTag.integer 'tagIsAlreadyANumber'
 			return tag
 		end 'tagIsAlreadyANumber'
 
 		let zero = self.emitLiteral(EnumOrdinalTagOffset, valueType: MaxonType.integer, range: range)
 
-		return try self.emitBinOp(tag, rhs: zero, op: MaxonBinOp.add, opTok: memberTok)
-	end 'parseEnumOrdinal'
+		return try self.emitBinOp(tag, rhs: zero, op: MaxonBinOp.add, opTok: anchor)
+	end 'enumTagAsANumber'
 
-	// ⭐⭐ **THE TAG→INDEX MAPPING A RENUMBERED ENUM'S `.ordinal` NEEDS — `Σᵢ i × (tag == tagᵢ)`, BRANCHLESS.**
-	// `enum Code { ok = 5 }` has ordinal 0 and tag 5, so on this route the tag is NOT the answer and the
-	// answer has to be computed from it. Exactly one of the comparisons holds — an enum value is one of the
-	// declared tags, the same closure `match`'s exhaustiveness rests on (nothing in the language mints an enum
-	// value except a case construct, a match binding, or a value that came from one) — so the sum is that
-	// case's index and every other term is zero.
+	// ⭐⭐ **`s.rawValue` — THE ONE ACCESSOR WHOSE RESULT TYPE THE *BACKING* DECIDES**, which is why it has a
+	// function of its own where `.name` is one line. Every arm answers from the SAME tag; what differs is the
+	// domain the tag is read in:
 	//
-	// It takes the TAG, not the receiver: `parseEnumOrdinal` has already answered where the tag lives (the
+	//   • `integer` / `unresolved` — the tag IS the raw value and it is already a number. (`unresolved` is an
+	//     enum whose cases numbered nothing, where the auto-increment declaration index is the raw value —
+	//     which is exactly what the reference answers for `enum Color red green end`.)
+	//   • `float` — the tag is the f64's IEEE-754 BIT PATTERN in a GPR, so the read is the `bitsToFloat`
+	//     REINTERPRETATION every other float-backed-enum read goes through (`floatBehindEnumValue`, and its
+	//     header for the four wrong answers a `cvtsi2sd` produced here).
+	//   • `character` — the tag is the Unicode CODEPOINT, and a `Character` is a 48-byte record, so the value
+	//     has to be MINTED (`__char_from_cp`) exactly as a `for c in 'a' to 'e'` trip element is. It is the
+	//     one raw value that owns heap, so it is enrolled as an owned temporary and dropped at the statement's
+	//     end like any other minted record.
+	//   • `string` — the tag is only a declaration index (`EnumLayout.tagCarriesRawValue`), so the value rides
+	//     `caseRawValues` and is selected the same way `.name` selects `caseNames`.
+	function emitEnumRawValue(layout EnumLayout, tag ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		match layout.backing 'backing'
+			integer then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
+			// ⭐⭐ **AN UNNUMBERED DECLARATION HAS NO ESTABLISHED BACKING, AND ITS RAW VALUE IS ITS DECLARATION
+			// INDEX** — the same answer the `integer` arm gives, because the tag IS that index.
+			//
+			// ⚠⚠ **THIS ARM ALSO CARRIES EVERY PAYLOAD-BEARING UNION, AND THAT IS THE MEASURED ANSWER RATHER
+			// THAN A FALLTHROUGH.** No case of `union Shape circle(r Integer) … end` ever writes a raw value,
+			// so its backing is `unresolved` and `sh.rawValue` arrives here. Review flagged it as an invented
+			// answer — reasoning from the fact that the two STATIC members (`allCases`, `fromRawValue`) are
+			// gated `not layout.isUnion` thirty lines up, where the oracle refuses them.
+			//
+			// ⇒ **REFUTED, twice.** MEASURED against the C# bootstrap on exactly that union: it COMPILES and
+			// prints `0/1/2` — the declaration indices, byte-identical to shv2's answer. And the CANONICAL
+			// spec requires it: `/specs/union-cases.md`'s `union-cases.runtime-accessors` declares
+			// `function tagOf(sh Shape) returns Integer  return sh.rawValue` on a payload-bearing union and
+			// pins `0`/`1`/`2`. A refusal here would turn that committed case red. The asymmetry with the
+			// static members is real and is the reference's: `allCases`/`fromRawValue` need a per-case RAW
+			// VALUE the union has not got, while `.rawValue`, `.name` and `.ordinal` need only the tag column
+			// every declaration has.
+			unresolved then return try self.enumTagAsANumber(tag, anchor: anchor, range: range)
+			float then return self.emitUnaryOp(tag, op: MaxonUnaryOp.bitsToFloat, resultTag: ValueTypeTag.float, range: range)
+			character then break 'backing'
+			string then return try self.emitEnumCaseStringSelect(layout, tag: tag, column: EnumCaseConstant.declaredRawValue, anchor: anchor, range: range)
+		end 'backing'
+
+		let character = self.emitRuntimeCall(CharFromCodepointName, args: singletonArgs(tag), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
+		self.trackOwnedTemp(character)
+		return character
+	end 'emitEnumRawValue'
+
+	// ⭐ **A `String`-VALUED ACCESSOR — the selection, then the ONE line that says what was selected.** The
+	// sum below is arithmetic and types itself `integer`; the selected words are `.rdata` record ADDRESSES,
+	// so the result IS a String and this is where it is recorded as one. Written once because `.name` and a
+	// string backing's `.rawValue` differ only in the column.
+	//
+	// ⚠ **NOTHING OWNS THE RESULT, AND THAT IS A PROPERTY OF WHAT WAS SELECTED.** Every candidate is an
+	// IMMORTAL literal record (`capacity = -2`, never allocated, refcounted or dropped), so the selected one
+	// is too — which is what lets `return sh.name` hand it straight out of the function, exactly as
+	// `return "circle"` does.
+	function emitEnumCaseStringSelect(layout EnumLayout, tag ValueId, column EnumCaseConstant, anchor Token, range SourceRange) returns ValueId throws ParseError
+		let selected = try self.emitEnumCaseConstantSelect(layout, tag: tag, column: column, anchor: anchor, range: range)
+		self.retypeValue(selected, valueType: MaxonType.string)
+		return selected
+	end 'emitEnumCaseStringSelect'
+
+	// ⭐⭐ **THE TAG→CONSTANT MAPPING EVERY ENUM ACCESSOR NEEDS — `Σᵢ constantᵢ × (tag == tagᵢ)`, BRANCHLESS.**
+	// `enum Code { ok = 5 }` has ordinal 0 and tag 5, so on that route the tag is NOT the answer and the
+	// answer has to be computed from it; a case NAME is never the tag at all. Exactly one of the comparisons
+	// holds — an enum value is one of the declared tags, the same closure `match`'s exhaustiveness rests on
+	// (nothing in the language mints an enum value except a case construct, a match binding, or a value that
+	// came from one) — so the sum is that case's constant and every other term is zero.
+	//
+	// ⭐⭐ **ONE EMITTER FOR THREE ACCESSORS, AND THE THREE ARE THE SAME QUESTION.** It was `.ordinal`'s alone
+	// (`emitEnumOrdinalLookup`) while the other two were unbuilt, and the note beside `EnumOrdinalMemberName`
+	// argued that a NAME would need a different mechanism — "a value materialized on the selected edge".
+	// That reading was wrong in a way worth recording: an immortal `.rdata` String is a machine word that is
+	// CONSTANT PER CASE, exactly as a declaration index is, so it sums identically and needs no edge and no
+	// merge. `EnumCaseConstant` is the whole of what varies.
+	//
+	// It takes the TAG, not the receiver: `parseEnumAccessor` has already answered where the tag lives (the
 	// value itself, or a load out of a boxed union's offset 0), and both forms are the bare i64 the compares
 	// below read. So this function needs to know nothing about boxing, and cannot get that question wrong.
 	//
@@ -55637,10 +56012,10 @@ export type Parser
 	// DISTINCT declarable cases here (`rawValueCollidesAt` compares tags, so it admits both) — under an f64
 	// compare `low = 0.0  negLow = -0.0` answers ordinal 1 for BOTH, and under the tag compare each answers
 	// its own index.
-	function emitEnumOrdinalLookup(layout EnumLayout, tag ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
-		var ordinal = self.emitLiteral(FirstCaseOrdinal, valueType: MaxonType.integer, range: range)
+	function emitEnumCaseConstantSelect(layout EnumLayout, tag ValueId, column EnumCaseConstant, anchor Token, range SourceRange) returns ValueId throws ParseError
+		var selected = self.emitLiteral(FirstCaseOrdinal, valueType: MaxonType.integer, range: range)
 
-		for i in FirstSummedCaseIndex upto layout.caseCount() 'eachLaterCase'
+		for i in firstSummedCaseIndex(column) upto layout.caseCount() 'eachSummedCase'
 			// ⚠ **THE COMPARE'S RESULT IS RE-RECORDED AS A NUMBER, AND THE WIDTH CHANGE IS THE POINT.** The
 			// mint types it `boolean` (i1 at Std) because that is what every other caller of that door feeds a
 			// branch with; here the 0/1 is an arithmetic OPERAND. Left `boolean` it does not reach the machine
@@ -55653,14 +56028,43 @@ export type Parser
 			let isThisCase = self.emitCompareAgainstLiteral(tag, literal: layout.tagOfIndex(i), op: MaxonCmpOp.eq, opTok: anchor)
 			self.retypeValue(isThisCase, valueType: MaxonType.integer)
 
-			let caseOrdinal = self.emitLiteral(i as ParsedInt, valueType: MaxonType.integer, range: range)
-			let contribution = try self.emitBinOp(isThisCase, rhs: caseOrdinal, op: MaxonBinOp.mul, opTok: anchor)
+			let caseConstant = self.emitEnumCaseConstant(layout, index: i, column: column, range: range)
+			let contribution = try self.emitBinOp(isThisCase, rhs: caseConstant, op: MaxonBinOp.mul, opTok: anchor)
 
-			ordinal = try self.emitBinOp(ordinal, rhs: contribution, op: MaxonBinOp.add, opTok: anchor)
-		end 'eachLaterCase'
+			selected = try self.emitBinOp(selected, rhs: contribution, op: MaxonBinOp.add, opTok: anchor)
+		end 'eachSummedCase'
 
-		return ordinal
-	end 'emitEnumOrdinalLookup'
+		return selected
+	end 'emitEnumCaseConstantSelect'
+
+	// ⭐ **ONE CASE'S CONSTANT, AS AN `integer`-TYPED OPERAND THE SUM ABOVE CAN MULTIPLY.** A declaration
+	// index already is a number; a `.rdata` String record is an ADDRESS, which is a number too — so the only
+	// thing the two string columns need is for the value's TYPE COLUMN to say so, which is the `retypeValue`
+	// below.
+	//
+	// ⚠ **RETYPING THE LITERAL IS SAFE HERE AND NOWHERE ELSE**: the value was minted one line above, names no
+	// binding and has no other reader, so the claim cannot be stale for anybody. The op it defines is
+	// untouched — a `stringLiteral` still lowers to the record's address — and both claims agree at the Std
+	// tier, where a String and an `integer` are the same i64. `emitEnumCaseStringSelect` restores the `string`
+	// claim on the SUM, which is the value a program actually reads.
+	//
+	// ⚠ **A FULL MATCH, FOR `firstSummedCaseIndex`'s STATED REASON AND NOT MERELY FOR SYMMETRY.** These are
+	// the TWO per-column deciders `EnumCaseConstant` has, and they must refuse an unclassified column
+	// ALIKE — an `if` chain ending in an `else` over `caseRawValues` would hand a fourth column the raw-value
+	// bytes silently, which is a wrong answer where the sibling gives a compile error, and nothing routes an
+	// author from that compile error to this function.
+	function emitEnumCaseConstant(layout EnumLayout, index CaseIndex, column EnumCaseConstant, range SourceRange) returns ValueId
+		var bytes = ByteArray.create()
+		match column 'c'
+			declarationIndex then return self.emitLiteral(index, valueType: MaxonType.integer, range: range)
+			caseName then bytes = layout.caseNameAt(index)
+			declaredRawValue then bytes = layout.rawValueAt(index).toByteArray()
+		end 'c'
+
+		let literal = self.emitStringLiteral(bytes, range: range)
+		self.retypeValue(literal, valueType: MaxonType.integer)
+		return literal
+	end 'emitEnumCaseConstant'
 
 	// ⭐ **`<arrayBinding> . managed . <member>(` — the CHAINED spelling, for the two positions where a bare
 	// `arr.managed` denotes nothing a program can want.** A STATEMENT of it would build a buffer reference and

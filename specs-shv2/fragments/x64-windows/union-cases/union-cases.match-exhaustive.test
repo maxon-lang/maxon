@@ -1,0 +1,100 @@
+// Test: union-cases.match-exhaustive
+typealias Integer = int(i64.min to i64.max)
+
+union Shape
+	circle(radius Integer)
+	square(side Integer)
+	point
+end 'Shape'
+
+function describe(k Shape.unionCases) returns Integer
+	match k 'tag'
+		circle then return 100
+		square then return 200
+		point then return 300
+	end 'tag'
+end 'describe'
+
+function main() returns ExitCode
+	let c = Shape.unionCases.circle
+	let s = Shape.unionCases.square
+	let p = Shape.unionCases.point
+	let total = describe(c) + describe(s) + describe(p)
+	if total == 600 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+func @describe {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 100
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 r8, 200
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rcx, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 300
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 r12, 2
+    x64.callDirect describe
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect describe
+    x64.leaRegRegReg rbx, r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect describe
+    x64.leaRegRegReg rax, rbx, r8
+    x64.cmpRegImm32 rax, 600
+    x64.jcc equal, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

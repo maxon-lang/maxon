@@ -40,8 +40,7 @@ duplicate raw values are rejected — identical to enum backing rules.
 
 ## Tests
 
-<!-- disabled-test: int-backed-union-rawvalue -->
-<!-- .rawValue accessor (later rung) -->
+<!-- test: int-backed-union-rawvalue -->
 A bare reference to an int-backed union case exposes its raw value via
 `.rawValue`.
 ```maxon
@@ -114,8 +113,7 @@ error E3034: specs/fragments/union-scalar-backing/error.unknown-union-case.test:
 ```
 
 
-<!-- disabled-test: string-backed-union-name -->
-<!-- P1.2 String backing + .rawValue / .name accessors + print -->
+<!-- test: string-backed-union-name -->
 A string-backed union keeps an integer runtime tag but exposes the decoded
 string through `.rawValue`, and `.name` returns the case spelling.
 ```maxon

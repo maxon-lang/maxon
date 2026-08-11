@@ -637,7 +637,7 @@ end 'isThrowingGtRuntimeCallee'
 // belonged: `managedMemorySourceMethodName` names `__ManagedMemory.byteAt`, and after the retirement that
 // IS the construct the author wrote.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee)
+	return isThrowingArrayRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -751,6 +751,16 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 	if isThrowingListRuntimeCallee(callee) 'listFamily'
 		return arrayErrorThrows()
 	end 'listFamily'
+
+	// ⭐ **THE ENUM-LOOKUP FAMILY** — `__enum_from_raw_<Enum>`, one case (`__EnumLookupError.noSuchRawValue`),
+	// and the arm is here from the family's first day for the map family's stated reason: a lookup that
+	// misses has nothing else to answer with, and without the arm `throwsOf` says `none`, the `(e)` binding
+	// types `integer`, and `match e` reports a missing feature for a feature that is present. The wide
+	// predicate IS the throwing one here — every member of this family throws, which is the whole reason it
+	// is a function at all.
+	if isEnumLookupRuntimeCallee(callee) 'enumLookupFamily'
+		return enumLookupThrows()
+	end 'enumLookupFamily'
 
 	return ThrowsClause.none
 end 'runtimeThrowsClause'

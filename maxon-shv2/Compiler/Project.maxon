@@ -3405,19 +3405,168 @@ end 'builtinErrorConformance'
 // `cvtsi2sd`, which would convert the encoding as if it were a magnitude.
 // See `Parser.floatBehindEnumValue` for the one door every one of those sites goes through.
 
-// ⭐ **THE ONE ENUM ACCESSOR shv2 READS — `s.ordinal`, a case's DECLARATION INDEX.** Spelled beside the
+// ⭐ **THE ENUM ACCESSOR shv2 READS — `s.ordinal`, a case's DECLARATION INDEX.** Spelled beside the
 // layout because the layout is what answers it (`tagsAreDeclarationIndices`), and named rather than
-// inlined at `Parser.enumOrdinalFieldAt` so the member's spelling and the rule that decides it cannot
+// inlined at `Parser.enumAccessorFieldAt` so the member's spelling and the rule that decides it cannot
 // come apart.
 //
-// ⚠ Its two INSTANCE siblings `.name` and `.rawValue` are NOT here and are not implemented. What they need
-// is a tag→PAYLOAD mapping — a String per case, or a raw value in whatever domain the backing declares —
-// which is a different mechanism from the tag→INDEX arithmetic `.ordinal` computes
-// (`Parser.emitEnumOrdinalLookup`): an index is a number the compare chain can sum, a name is a value that
-// has to be materialized on the selected edge. The DECLARATION-side half they were once blocked behind is
-// built — the four backings are parsed and `EnumLayout.caseRawValues` records what each case was written as
-// — so what is left for them is the runtime read, not the declaration.
+// ⚠ **ITS TWO INSTANCE SIBLINGS ARE `EnumNameMemberName` AND `EnumRawValueMemberName` BELOW, AND ALL THREE
+// ARE NOW ONE MECHANISM.** The note that stood here called a name "a value that has to be materialized on
+// the selected edge" and therefore a different mechanism from the tag→INDEX arithmetic. It is not: a case
+// NAME is an IMMORTAL `.rdata` String, i.e. a machine word that is constant per case exactly as an index is,
+// so the identical branchless `Σᵢ constantᵢ × (tag == tagᵢ)` selects it — see
+// `Parser.emitEnumCaseConstantSelect`, which is the ONE emitter all three read through.
 export let EnumOrdinalMemberName = b"ordinal"
+
+// ⭐ **`s.name` — THE CASE'S SPELLING, AS A `String`.** The constant selected is `EnumLayout.caseNames[i]`,
+// materialized as the same immortal `.rdata` record a source literal of those bytes materializes, so it is
+// never allocated, refcounted or dropped and may be returned out of the function that read it.
+export let EnumNameMemberName = b"name"
+
+// ⭐ **`s.rawValue` — WHAT THE CASE WAS DECLARED AS, IN THE DOMAIN ITS BACKING NAMES.** The one accessor whose
+// RESULT TYPE depends on `EnumLayout.backing`: an `int` for an integer (or unnumbered) backing, a `float` for
+// a float one, a `Character` for a char one, a `String` for a string one. For the three backings whose tag IS
+// the raw value (`tagCarriesRawValue`) the tag is the answer, decoded into that domain; for a string backing
+// the tag is only a declaration index and the value rides `caseRawValues`, selected the same way `.name` is.
+export let EnumRawValueMemberName = b"rawValue"
+
+// ⭐⭐ **THE THREE MEMBERS AN ENUM *VALUE* CARRIES, AS A CLASSIFICATION RATHER THAN AS A LIST OF NAMES.**
+// Two parties read it — the accessor door's cursor predicate (`Parser.enumAccessorFieldAt`, which only asks
+// whether the member is one of them) and the accessor itself (`Parser.parseEnumAccessor`, which has to
+// answer for each) — and they must not be able to disagree about the set.
+//
+// ⛔ **A PREDICATE PLUS AN `if` CHAIN CANNOT DELIVER THAT, AND THE FAILURE IS A RUNTIME PANIC.** Spelled as
+// an `or` over three names beside a chain of three `if`s, a fourth member added to the predicate reaches the
+// accessor's unreachable arm — a compiler PANIC in front of a user, at run time, for a member the predicate
+// itself invited. As a union the accessor's `match` is exhaustive, so the fourth member cannot be admitted
+// without the accessor refusing to COMPILE until it is answered. It is `CheckedDivisionKind`'s shape one
+// directory over, and its header states the rule this borrows: *"a fourth kind cannot be named as throwing
+// without the lowering refusing to compile."*
+export union EnumInstanceAccessor
+	// `.ordinal` — the case's DECLARATION INDEX.
+	ordinal
+	// `.name` — the case's SPELLING, as a `String`.
+	caseName
+	// `.rawValue` — what the case was declared as, in the domain its backing names.
+	rawValue
+	// The member names none of the three. The door declines it and `requireStructBase`'s refusal stands,
+	// which is still the true answer for every other member of an enum.
+	notAnAccessor
+end 'EnumInstanceAccessor'
+
+// THE classifier — the one place a member NAME becomes one of the three, so the door's cursor test and the
+// accessor's dispatch read one answer.
+export function enumInstanceAccessorOf(member ByteArray) returns EnumInstanceAccessor
+	if member.equals(EnumOrdinalMemberName) 'ordinal'
+		return EnumInstanceAccessor.ordinal
+	end 'ordinal'
+	if member.equals(EnumNameMemberName) 'caseName'
+		return EnumInstanceAccessor.caseName
+	end 'caseName'
+	if member.equals(EnumRawValueMemberName) 'rawValue'
+		return EnumInstanceAccessor.rawValue
+	end 'rawValue'
+
+	return EnumInstanceAccessor.notAnAccessor
+end 'enumInstanceAccessorOf'
+
+// ⭐ **DOES THIS CLASSIFICATION NAME AN ACCESSOR AT ALL?** — the DERIVED predicate the cursor door asks,
+// spelled as an exhaustive `match` and never as `!= notAnAccessor`. It is `divisionKindThrows`' shape
+// exactly (`Runtime/CheckedDivisionRuntime.maxon`), and for its reason as well as shv2's own: a union may
+// not be compared with `==` (E3066), and — the part that matters — a member appended to
+// `EnumInstanceAccessor` must be classified HERE too, so the door cannot silently start admitting one that
+// `Parser.parseEnumAccessor` has not been taught to answer.
+export function namesAnEnumInstanceAccessor(accessor EnumInstanceAccessor) returns bool
+	match accessor 'a'
+		ordinal then return true
+		caseName then return true
+		rawValue then return true
+		notAnAccessor then return false
+	end 'a'
+end 'namesAnEnumInstanceAccessor'
+
+// ⭐ **`<Enum>.allCases` — EVERY CASE, IN DECLARATION ORDER, AS AN `Array with <Enum>`.** The STATIC sibling
+// of `allCaseNames` and deliberately its twin in shape: an ordinary array value of the type the language
+// already has, built op-for-op like the source literal `[E.a, E.b]` — so `.count()`, `.get(0)` and
+// `for c in …` reach it through the ordinary postfix and loop machinery with no accessor protocol of its own.
+// See `Parser.emitEnumAllCases`.
+export let EnumAllCasesMemberName = b"allCases"
+
+// ⭐ **`<Enum>.fromRawValue(raw)` — THE REVERSE LOOKUP, AND THE ONE MEMBER OF THIS SURFACE THAT THROWS.**
+// A raw value naming no case is a runtime failure, so unlike its four siblings it cannot be an expression
+// the parser expands in place: shv2's `try` binds to a CALL (`Parser.rewriteLastCallToTryCall`), so this one
+// is a per-enum Std helper the parser calls. See `Runtime/EnumLookupRuntime.maxon`.
+export let EnumFromRawValueMemberName = b"fromRawValue"
+
+// ⭐⭐ **`<Union>.unionCases` — THE COMPILER-SYNTHESIZED COMPANION ENUM OF A PAYLOAD-BEARING UNION**
+// (`/specs/union-cases.md`). One bare case per variant of the union, in declaration order, rawValue = index:
+// it exposes the union's DISCRIMINANT as a first-class enum value, so a decoder can write the variant's
+// `rawValue` to a buffer and lift it back through `fromRawValue` — and adding a variant breaks the match in
+// the writer AND the reader.
+//
+// ⚠ **IT IS SYNTHESIZED ONLY FOR A UNION WITH ASSOCIATED VALUES**, which the spec states outright: a
+// payload-free enum or union already exposes `.allCases` / `.fromRawValue` on itself, so a companion would
+// be a second name for the same thing.
+export let UnionCasesMemberName = b"unionCases"
+
+// ⭐ **THE COMPANION'S REGISTERED NAME — `<Union>.unionCases`, the spelling the author writes.** A DOTTED
+// name, which is what makes `function describe(k Shape.unionCases)` resolve with no new type grammar: the
+// qualified arm of `Parser.parseTypeReference` already assembles a dotted chain into one `named(...)`, so
+// the companion is found under exactly the key a type reference to it produces. It is v1's spelling
+// (`maxon-selfhosted/Compiler/Parser.maxon:6145`) and is kept for that reason — the alternative, a reserved
+// `__`-prefixed mint, would need a translation at every door the author's spelling arrives through.
+export function unionCasesCompanionName(unionName ByteArray) returns ByteArray
+	return "{String.from(unionName)}.{String.from(UnionCasesMemberName)}".toByteArray()
+end 'unionCasesCompanionName'
+
+// ⭐⭐ **SYNTHESIZE `<Union>.unionCases` BESIDE THE UNION THAT WAS JUST READ** (`/specs/union-cases.md`).
+// One bare case per variant, in declaration order, tag = index — which makes it an ordinary payload-free
+// enum in every respect, and that is the whole design: it is APPENDED TO THE SAME `EnumLayoutArray` the
+// union itself goes into, so `Shape.unionCases.circle`, `match k`, `.allCases`, `.fromRawValue`, `.name`,
+// `.rawValue` and `.ordinal` all reach it through the doors an author-written enum reaches them through.
+// Nothing about the companion is special-cased past this function and `Parser.unionCasesCompanionOf`'s hop.
+//
+// ⭐ **IT IS BORN AT THE DECLARATION AND NOT AT FIRST USE — A DIVERGENCE FROM THE BOOTSTRAP AND AN AGREEMENT
+// WITH v1.** The bootstrap materializes the companion lazily on the first `.unionCases` it parses
+// (`maxon-sharp/Compiler/2-Parser.cs:19113`); v1 registers it eagerly at the declaration
+// (`maxon-selfhosted/Compiler/Parser.maxon:6134`). shv2 must do the latter, and for a reason neither of them
+// has: its whole-program index is built by a TOLERANT DECLARATION SWEEP that runs before any body is parsed,
+// and a type named in a PARAMETER position (`function describe(k Shape.unionCases)`) has to be resolvable
+// from that index. A lazily-minted companion would exist only in files that had already parsed a use of it.
+//
+// ⭐ **TWO CALLERS, TWO REGISTRIES, ONE FUNCTION — and both are required.** The sweep's array feeds
+// `ProgramSignatures.enumTypes` (what the PARSER resolves `Shape.unionCases.circle` and `match k` through);
+// the real parse's `FileParseArtifact.enumTypes` feeds `Project.enumTypes` (what `TypeResolution` erases the
+// named type through, what `SemanticCheck`'s argument identity reads, and what the Std installer walks).
+// ⛔ MEASURED with only the first: `describe(c)` was refused *"expected 'Shape.unionCases', got 'int'"* —
+// the argument's own aggregate name came back empty — and `__enum_from_raw_Shape.unionCases` was never
+// synthesized, taking the x64 backend down at `resolveCallFixups`.
+//
+// ⚠ **ONLY FOR A UNION WITH ASSOCIATED VALUES.** `isBoxed` is that question — a union is boxed exactly when
+// some case declares a payload — and the spec states the exclusion outright: a payload-free enum or union
+// already exposes this surface on itself, so a companion would be a second name for one thing. The gate
+// lives HERE rather than at either caller, so the two cannot come to disagree about which unions have one.
+//
+// ⚠ It must be called with the layout AFTER every case is read, because the companion's case list IS the
+// union's.
+export function appendUnionCasesCompanion(enums EnumLayoutArray, layout EnumLayout)
+	if not layout.isBoxed() 'noAssociatedValues'
+		return
+	end 'noAssociatedValues'
+
+	// `integer` backing, never `unresolved`: the companion's cases are numbered by the compiler rather than
+	// read by the case READER that would otherwise fix a backing, and every tag IS its declaration index —
+	// which is exactly `createCompilerOwned`'s reason for stating the same thing. It nonetheless carries the
+	// UNION's own visibility and declaring file, not `global`/compiler-owned: the companion is nameable
+	// exactly where the union is, so a `module union` does not leak its discriminant type across files.
+	var companion = EnumLayout.create(unionCasesCompanionName(layout.name), isUnion: false, conformsTo: sharedEmptyDeclaredConformances, visibility: layout.visibility, declFilePath: layout.declFilePath, backing: EnumBacking.integer)
+
+	for i in 0 upto layout.caseCount() 'eachVariant'
+		companion.addCase(layout.caseNameAt(i), tag: i, rawValue: "{i}", payloads: PayloadFieldArray.create())
+	end 'eachVariant'
+
+	enums.push(companion)
+end 'appendUnionCasesCompanion'
 
 // ⭐ **`<Enum>.allCaseNames` — THE CASE NAMES, IN DECLARATION ORDER, AS AN `Array with String`.** A STATIC
 // member of every enum AND every union, payload-bearing ones included: only the NAMES are returned, so a
@@ -3664,14 +3813,14 @@ export type EnumLayout
 	// coincide for an enum that numbers nothing (`idle`/`running`/`done` ⇒ tags 0,1,2), and they do not
 	// for one that does (`ok = 5` ⇒ tag 5 at index 0). Where they coincide the accessor is the value
 	// itself and costs no instruction; where they do not it is computed by the branchless tag→index sum
-	// `Parser.emitEnumOrdinalLookup` emits. This predicate is what picks between those two routes, and
+	// `Parser.emitEnumCaseConstantSelect` emits. This predicate is what picks between those two routes, and
 	// nothing else reads it — so it is a COST question, not a support question.
 	//
 	// ⚠⚠ **IT ANSWERS ONLY WHETHER A TAG IS ITS INDEX — NEVER WHERE THE TAG IS, AND READING IT AS BOTH IS A
 	// MEASURED WRONG ANSWER.** "An enum value IS its tag" above is true of a SCALAR enum and false of a
 	// BOXED union, whose value is the box pointer; a boxed union's tags are `0,1,2,…` so this answers true
 	// for one, and `.ordinal` used that as permission to skip the tag load and add zero to an address. Ask
-	// `isBoxed` for where the tag lives and this for what the tag means — see `Parser.parseEnumOrdinal`.
+	// `isBoxed` for where the tag lives and this for what the tag means — see `Parser.parseEnumAccessor`.
 	//
 	// A FLOAT-backed enum answers false unless its bit patterns happen to be 0,1,2,… — which no float
 	// backing produces — so it always takes the computed route, without being named here.
@@ -3832,6 +3981,15 @@ export function builtinDivisionByZeroErrorEnum() returns EnumLayout
 	return layout
 end 'builtinDivisionByZeroErrorEnum'
 
+// ⭐ **WHAT `<Enum>.fromRawValue(raw)` THROWS ON A RAW VALUE NO CASE CARRIES.** The division family's twin in
+// every respect — declared in no corpus file, seeded unconditionally beside it for the same reason, and
+// payload-free so it stays golden-neutral (see `createEnumRegistry`).
+export function builtinEnumLookupErrorEnum() returns EnumLayout
+	var layout = EnumLayout.createCompilerOwned(EnumLookupErrorTypeName, conformsTo: builtinErrorConformance())
+	addBuiltinEnumCase(layout, caseName: EnumLookupNoSuchRawValueCaseName)
+	return layout
+end 'builtinEnumLookupErrorEnum'
+
 // Append one payload-free case carrying the AUTO-INCREMENT tag a bare `enum` case gets. The case count so
 // far IS the next tag (`Parser.readEnumCaseInto`'s counter starts at 0 and steps by 1), so the tag is
 // DERIVED from declaration order rather than written down — this type's header explains why a tag and a
@@ -3925,8 +4083,13 @@ export type BuiltinErrorOrdinalCheck
 	// reads it: it panics, which is exactly the difference `source` records.
 	var project as Project
 
-	// A check over a layout the COMPILER built. Its two callers are the two families that have no loadable
-	// stdlib declaration to read (`ArrayError`, `__DivisionByZeroError`).
+	// A check over a layout the COMPILER built — the families that have no loadable stdlib declaration to
+	// read, which today are `__DivisionByZeroError` and `__EnumLookupError`.
+	//
+	// ⚠ **`ArrayError` WAS NAMED HERE AND HAS NOT BELONGED SINCE `stdlib/Array.maxon` WAS LISTED**, which
+	// gave it a real declaration and moved its check to `overDeclared` — so this sentence spent a while
+	// naming a caller that was not one, beside a count of them. Both are stated as *"today"* now: the SET is
+	// a consequence of which modules the loader lists, and that changes without this line being read.
 	export static function overSynthesized(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
 		return Self{declaration: declaration, source: BuiltinErrorDeclarationSource.synthesized, installer: installer, project: project}
 	end 'overSynthesized'
@@ -4060,6 +4223,9 @@ export function createEnumRegistry() returns EnumLayoutMap
 	// A1: what a possibly-zero `/` or `mod` throws — declared in no stdlib file, so it is seeded and its
 	// guard stays `overSynthesized`. See `builtinDivisionByZeroErrorEnum`.
 	registry.upsert(DivisionByZeroErrorTypeName, value: builtinDivisionByZeroErrorEnum())
+	// What `<Enum>.fromRawValue(raw)` throws — declared in no stdlib file either, so it is seeded beside the
+	// division one. See `builtinEnumLookupErrorEnum`.
+	registry.upsert(EnumLookupErrorTypeName, value: builtinEnumLookupErrorEnum())
 	return registry
 end 'createEnumRegistry'
 
