@@ -1623,6 +1623,15 @@ let sharedEmptyRequirementSlots = CollectedInterfaceMethodArray.create()
 // program pays nothing per function OR per parser (`typeParamFeedOf` reads a missing index as `none`).
 let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 
+// The module-level shared empty CALL-ALIGNED parameter-name list the declaration sweep leaves in hand for a
+// declaration it does not walk the parameters of — a NON-GENERIC instance method, which needs neither the
+// consume scan (its direct field stores are the callee-side refusal's business, `detectFieldStores: false`)
+// nor the opaque-parameter record (it has no `uses` list for a parameter to name). `scanConsumeBits` returns
+// at once on an empty list, which is exactly the "not walked" behaviour, so the one shared array is what
+// makes that single call site able to serve every declaration shape. Never mutated; ONE allocation for the
+// whole compile, the discipline every `sharedEmpty*` here states.
+let sharedEmptyScannedParamNames = ByteArrayArray.create()
+
 // The module-level shared EMPTY per-instance-alias placeholders (P1.6-C), held as the INITIAL value of the
 // `enclosingInnerAliases` / `valueInstanceAlias` working fields AND as the COW anchors the reset points at.
 // ONE allocation for the whole compile each (like `sharedEmptyTypeParamFeeds`), so a generics-free program
@@ -10282,7 +10291,31 @@ export type Parser
 		let declaredSurface = self.returnDeclaredSurface()
 		let returnType = try self.parseOptionalReturnType() otherwise return
 		let funcName = self.declaredMethodName(nameTok)
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver))
+		// ⭐⭐ **ONE WALK OF THE PARAMETER LIST, TWO WHOLE-PROGRAM FACTS.** The CONSUME/FEED scan (at the tail
+		// of this routine, which needs the body's start) and the OPAQUE-PARAMETER record (which rides the
+		// entry pushed on the next line) both read the SAME call-aligned names and the SAME per-parameter
+		// type-parameter positions. Walking twice would be one declaration read two ways, with nothing
+		// holding the two readings in agreement about where `self` sits — which is the alignment
+		// `callAlignedInstanceParams` exists to state once.
+		var scannedParamNames = sharedEmptyScannedParamNames
+		var scannedTypeParamPositions = self.emptyTypeParamPositions
+		if not takesReceiver 'receiverless'
+			// A parameter can be type-parameter-typed ONLY inside a generic type's body (a non-empty `uses`
+			// list); a top-level function and a non-generic type's method have none. Off the generic path the
+			// flags stay the SHARED empty array (⚡ no per-function `TypeParamPositionArray`) and `paramNamesIn`
+			// skips the flag work — `paramIsTypeParamTyped` reads every missing index as `false`.
+			let collectTypeParamFlags = not self.enclosingTypeParams.isEmpty()
+			if collectTypeParamFlags 'genericScope'
+				scannedTypeParamPositions = TypeParamPositionArray.create()
+			end 'genericScope'
+			scannedParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: collectTypeParamFlags)
+		end 'receiverless' else 'instanceMethod'
+			if not self.enclosingTypeParams.isEmpty() 'genericInstanceMethod'
+				scannedTypeParamPositions = TypeParamPositionArray.create()
+				scannedParamNames = self.callAlignedInstanceParams(paramsStart, typeParamPositionsOut: scannedTypeParamPositions)
+			end 'genericInstanceMethod'
+		end 'instanceMethod'
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions)))
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME (N1b's qualified-spelling record, re-cut by N1c)** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
 		// the whole-program index can: is `utils.helper(…)` a directory-qualified free call or a static on a
@@ -10353,36 +10386,40 @@ export type Parser
 		// parameter list already IS its call-site parameter list.
 		//
 		// ⚠ **AN INSTANCE method** (`push(item Element)`) prepends `self` as parameter 0 (`parseFunction`), so
-		// the recorded facts must be CALL-ALIGNED — `SelfParamName` is prepended here so `feeds[i]`/`bits[i]`
-		// name the same slot the receiver-prepending call site (`parseCallNamed`) does. A direct `Self{f: p}`
-		// store in an instance method is deliberately left to the callee-side borrowed-value refusal
-		// (`moveInPayload`'s clean E2015) — so no instance method that does not FEED changes its consume facts
-		// (`detectFieldStores: false`).
+		// the recorded facts must be CALL-ALIGNED — `SelfParamName` is prepended by the walk above so
+		// `feeds[i]`/`bits[i]` name the same slot the receiver-prepending call site (`parseCallNamed`) does. A
+		// direct `Self{f: p}` store in an instance method is deliberately left to the callee-side
+		// borrowed-value refusal (`moveInPayload`'s clean E2015) — so no instance method that does not FEED
+		// changes its consume facts (`detectFieldStores: false`).
 		//
-		// ⚠ **THE OPAQUE-`T` FEED SHAPES ARE SCANNED FOR IN BOTH, and W10 is why.** They used to be probed only
-		// under a literal `self` token, which made them an instance method's business by construction; a `static`
-		// that pushes its type-parameter argument into a LOCAL `Array with T` and hands that array to the `Self`
-		// it returns feeds just as durably, so `scanConsumeBits` probes for them on either side of this branch.
-		if not takesReceiver 'receiverless'
-			// A parameter can be type-parameter-typed ONLY inside a generic type's body (a non-empty `uses`
-			// list); a top-level function and a non-generic type's method have none. Off the generic path the
-			// flags stay the SHARED empty array (⚡ no per-function `BoolArray`) and `paramNamesIn` skips the
-			// flag work — `paramIsTypeParamTyped` reads every missing index as `false`.
-			let collectTypeParamFlags = not self.enclosingTypeParams.isEmpty()
-			var typeParamPositions = self.emptyTypeParamPositions
-			if collectTypeParamFlags 'genericScope'
-				typeParamPositions = TypeParamPositionArray.create()
-			end 'genericScope'
-			let paramNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositions, collectTypeParamFlags: collectTypeParamFlags)
-			self.scanConsumeBits(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, detectFieldStores: true)
-		end 'receiverless' else 'instanceMethod'
-			if not self.enclosingTypeParams.isEmpty() 'genericInstanceMethod'
-				var typeParamPositions = TypeParamPositionArray.create()
-				let paramNames = self.callAlignedInstanceParams(paramsStart, typeParamPositionsOut: typeParamPositions)
-				self.scanConsumeBits(funcName, paramNames: paramNames, typeParamPositions: typeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, detectFieldStores: false)
-			end 'genericInstanceMethod'
-		end 'instanceMethod'
+		// ⚠ **THE OPAQUE-`T` FEED SHAPES ARE SCANNED FOR ON BOTH SIDES, and W10 is why.** They used to be probed
+		// only under a literal `self` token, which made them an instance method's business by construction; a
+		// `static` that pushes its type-parameter argument into a LOCAL `Array with T` and hands that array to
+		// the `Self` it returns feeds just as durably, so `scanConsumeBits` probes for them whichever kind of
+		// declaration it was handed.
+		//
+		// ⚠ **ONE CALL, NOT A BRANCH, AND THE NON-GENERIC INSTANCE METHOD IS COVERED BY ITS EMPTY NAME LIST
+		// RATHER THAN BY A GATE.** `scanConsumeBits` returns immediately on an empty `paramNames`, and that is
+		// exactly the declaration shape the walk above declines to read — so the two spellings of "do not scan
+		// this one" have become one.
+		self.scanConsumeBits(funcName, paramNames: scannedParamNames, typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, detectFieldStores: not takesReceiver)
 	end 'recordScannedSignature'
+
+	// ⭐ **THE DECLARATION'S OPAQUE-PARAMETER RECORD, OR THE SHARED "NONE" (ARRR)** — see `OpaqueParamInfo`
+	// for what a call site does with it. An info is built only when at least one parameter genuinely names a
+	// `uses` slot, so a generic type's methods that take no bare `T` cost nothing beyond this scan of an
+	// array the sweep already filled, and a program with no generic type never enters the loop (the shared
+	// empty positions array has no entries).
+	function opaqueParamsDeclaredBy(paramNames ByteArrayArray, positions TypeParamPositionArray) returns OpaqueParamInfo
+		let typeParamCount = self.enclosingTypeParams.count()
+		for i in 0 upto positions.count() 'eachParam'
+			if self.paramIsTypeParamTyped(positions, index: i) 'namesATypeParameter'
+				return OpaqueParamInfo.create(paramNames, positions: positions, typeParamCount: typeParamCount)
+			end 'namesATypeParameter'
+		end 'eachParam'
+
+		return sharedNoOpaqueParams
+	end 'opaqueParamsDeclaredBy'
 
 	// ⭐ **RECORD THIS FUNCTION'S PARAMETER DEFAULTS WHOLE-PROGRAM (BATCH2 slice 4)** — one
 	// `ParamDefaultEntry` per function that declares at least one, and one `FuncReturnTypeEntry` per default
@@ -35618,7 +35655,9 @@ export type Parser
 
 	// ⭐ **THE ONE PLACE A RANGE-CHECK SITE IS APPENDED** for a position whose declared alias the parser
 	// already holds — an `as` cast, a struct-literal field, a field store, a self-field store, a field's
-	// declared default, an array element. Each caller decides exactly ONE thing: which alias (through
+	// declared default, an array element, and an argument at an OPAQUE type parameter (ARRR, whose alias is
+	// the receiver instance's substituted type argument rather than anything the callee declared). Each
+	// caller decides exactly ONE thing: which alias (through
 	// `declaredAliasOfType`, the one asker, so every door resolves the question the same way).
 	// `undeclared` — a bare primitive, a struct, a name nothing declares — records nothing. (⚠ `ExitCode`
 	// was in that list until X6 gave it a range; every door below now records a site for it, which is the
@@ -55209,6 +55248,7 @@ export type Parser
 		// emitted so a refused call emits nothing.
 		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
+		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructorInstance)
 		let opIdx = self.artifact.module.ops.count()
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.call(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots, mint: mint), range: SourceRange.between(anchor, last: rparenTok))
 		// ⭐ **THE OTHER ROUTING DOOR FOR A BLOCK-FORM `try` BODY** — this one carries every call the author
@@ -55509,6 +55549,134 @@ export type Parser
 			self.rangeCheckArgSites.push(RangeCheckArgSite.create(argValue, callee: callee, argIndex: i, label: label, block: self.currentBlock.id, line: anchor.line, column: anchor.column))
 		end 'eachArg'
 	end 'recordConstantArgRangeChecks'
+
+	// ⭐⭐ **AN ARGUMENT AT AN OPAQUE TYPE PARAMETER IS CHECKED AGAINST WHAT THE INSTANCE BOUND IT TO — AND
+	// THIS DOOR OWES BOTH HALVES, BECAUSE THE CALLEE CANNOT OWE EITHER (ARRR).**
+	//
+	// A CONCRETE ranged parameter splits the rule between two places: the caller reports a folded literal
+	// (`recordConstantArgRangeChecks`, above) and the CALLEE'S ENTRY guards everything else, once per
+	// narrowed parameter, in front of every caller including the indirect ones (A1f, `RangeCheckParamSite`).
+	// Neither half is available at a bare `T`. A generic body is compiled ONCE — `Box.put` is one function
+	// for `Box with Percent` and `Box with Wide` alike — so the callee has no range to guard and the sweep
+	// records it no `paramSite` for the caller's argument site to resolve against. The CALL SITE is the only
+	// frame that knows what `T` was bound to, so it owes the whole rule.
+	//
+	// ⭐ **IT IS THE ORDINARY ALIAS-NAMED SITE, AND THAT IS THE POINT: NOTHING NEW DECIDES ANYTHING.**
+	// `recordRangeCheckSite` is the same door the `as` cast, the field store and the array element record,
+	// so `InsertRangeChecks` raises the same E3005 for a foldable literal and emits the same cascade for
+	// everything else, from one decider (`guardVerdict`). A rule with a second implementation for
+	// substituted parameters would be this project's signature defect — one fact written twice — in the very
+	// place the first copy is already known to be incomplete.
+	//
+	// ⭐⭐ **AND THE GUARD LANDS EXACTLY WHERE THE CALLEE'S ENTRY GUARD WOULD HAVE STOOD.** `RangeCheckGuard`'s
+	// obstacle — *"a check is a BRANCH, and a call argument is evaluated part-way through building an
+	// argument list, so the guard would land PAST the call"* — is about a site recorded WHILE the list is
+	// being built. This runs after the last argument is parsed and before the `call` op is emitted, so
+	// `recordRangeCheckSite`'s `opRefs.count()` is the ordinal that op is about to take and the split puts
+	// the cascade immediately in FRONT of the call. Every argument has been evaluated and the callee has not
+	// run: observably the entry guard's position, in the one frame that can hold it. It is the same
+	// reasoning — and the same anchor arithmetic — as `requireContainerElementType`'s store guard.
+	//
+	// ⚠ **THE RUNNABLE ORACLE HAS THE FIRST HALF AND NOT THE SECOND, AND SHV2 DELIBERATELY DIVERGES ON THE
+	// SECOND.** The bootstrap MONOMORPHIZES, so its substituted parameter refuses the literal (`E3005`,
+	// MEASURED, at this same callee-token anchor) — but its runtime guard is still keyed on the DECLARED
+	// type, which is the opaque `T`, so `b.put(grow(5))` compiles there and **exits 505**. `range-check-panic.md`
+	// promises both halves at every position, and the one position exempted from the runtime half is exempt
+	// only because the callee's entry guard covers it. Here it structurally cannot, so there is no exemption
+	// to inherit.
+	//
+	// ⚠ **THE GATES ARE ORDERED CHEAPEST-FIRST, exactly as `retypeOpaqueMethodResult`'s are**, and for its
+	// reason: almost every call in a program has neither a generic-instance receiver nor a constructed
+	// instance, and that test is one dense array read. Only past it is the whole-program index probed.
+	//
+	// ⚠ **AN INSTANCE THAT STILL MENTIONS A TYPE PARAMETER DECLINES BY CONSTRUCTION** — a call made inside a
+	// generic body on a `self` receiver is tagged with the base `structRef` and never reaches here, and a
+	// partially-opaque instance substitutes to a `typeParameter`, which names no ranged alias. So the shared
+	// body keeps the P1.6-A deferral it must have and only a concrete instantiation is checked.
+	// ⭐ **THE TWO SHAPES A GENERIC CALL TAKES, IN THE ORDER `SemanticCheck.callInstanceSubject` ASKS THEM** —
+	// an instance METHOD carries its instance on argument 0, the receiver `parseCallNamed` prepended; a STATIC
+	// FACTORY has no receiver and its instance is the one the caller resolved from the alias it wrote
+	// (`constructorInstanceOf`), which is also what retypes its result. The receiver is asked FIRST because a
+	// method's answer must be its receiver's.
+	//
+	// ⚠ **IT MINTS NO UNION OF ITS OWN, and that is worth the two call sites.** A single
+	// "which instance, if any?" answer would be a payload-carrying union built at EVERY generic-instance
+	// method call, and a Maxon union value IS a heap box — the constant factor that reverted the
+	// math-intrinsic resolver one door up (`parseCallNamed`) at +2,193 allocations on the scale ladder's top
+	// rung. This reads the receiver's own dense tag column and re-uses the `ConstructorInstance` the CALLER
+	// already holds.
+	function recordOpaqueArgRangeChecks(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token, constructorInstance ConstructorInstance)
+		match constructorInstance 'constructed'
+			// ⚠ **THE INSTANCE THE CALL ITSELF NAMED IS ASKED FIRST, AND THE ORDER IS THE SAFE ONE.** It is
+			// the ONLY answer available to a receiverless static (`PB.create(505)`, whose instance comes from
+			// the alias the call wrote), and where a call carries BOTH — every method site that passes one
+			// derives it with `receiverConstructorInstance(<the receiver>)` — the two are the same instance.
+			// Reading the receiver first would let a RECEIVERLESS static whose first argument happens to be an
+			// instance of the same base substitute against the ARGUMENT's binding instead of the constructed
+			// one.
+			instance(gid) then self.recordSubstitutedArgRangeChecks(gid, callee: callee, args: args, argLabels: argLabels, anchor: anchor)
+			none then self.recordReceiverSubstitutedArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
+		end 'constructed'
+	end 'recordOpaqueArgRangeChecks'
+
+	// The ordinary method call, whose instance is the receiver `parseCallNamed` prepended at argument 0 — the
+	// same place `SemanticCheck.callInstanceSubject` reads it from. Two dense reads and no map probe for
+	// every call in the program that has no generic-instance receiver, which is almost all of them.
+	function recordReceiverSubstitutedArgRangeChecks(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token)
+		if args.isEmpty() 'noReceiver'
+			return
+		end 'noReceiver'
+
+		let receiver = try args.get(0) otherwise panic("recordReceiverSubstitutedArgRangeChecks: args.get(0) failed on a non-empty list")
+		if self.tagOf(receiver) != ValueTypeTag.genericInstance 'concreteReceiverOnly'
+			return
+		end 'concreteReceiverOnly'
+
+		self.recordSubstitutedArgRangeChecks(self.valueNameId(receiver), callee: callee, args: args, argLabels: argLabels, anchor: anchor)
+	end 'recordReceiverSubstitutedArgRangeChecks'
+
+	// One call's opaque arguments, once the instance is known. Each argument is slotted to its parameter
+	// position through `argSlotPosition` — the ONE label→position mapping, the same one the default fill and
+	// `slotCallArgs` use, so a labelled `insert(0, value: 300)` cannot be checked against a different
+	// parameter than it is passed to.
+	//
+	// ⚠ **THE CALLEE MUST BE QUALIFIED UNDER THE INSTANCE'S OWN BASE**, `retypeOpaqueMethodResult`'s guard and
+	// for its reason: a `T` recorded against another type's `uses` list is numbered against a list that does
+	// not describe this instance, so substituting through it would bind the wrong type argument. It is asked
+	// HERE rather than at each of the two doors above so both arms carry it — a fact one caller could forget.
+	function recordSubstitutedArgRangeChecks(gid GenericInstanceId, callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, anchor Token)
+		if not isQualifiedUnderTypeName(callee, typeName: self.signatures.genericInstanceBaseName(gid)) 'notThisTypesMethod'
+			return
+		end 'notThisTypesMethod'
+
+		let opaque = self.signatures.opaqueParamsOf(callee)
+		if not opaque.declaresATypeParameterParam() 'everyParameterIsConcrete'
+			return
+		end 'everyParameterIsConcrete'
+
+		let argCount = self.signatures.genericInstanceArgCount(gid)
+		for i in 0 upto args.count() 'eachArg'
+			let slot = argSlotPosition(opaque.paramNames, argIndex: i, label: try argLabels.get(i) otherwise EmptySourceText)
+			if not opaque.namesATypeParameter(slot) 'concreteParam'
+				continue
+			end 'concreteParam'
+
+			// A position past the instance's own argument list is an arity the instantiation was already
+			// refused for (E2056); reading it would index a list that does not describe this type.
+			let position = opaque.positionAt(slot)
+			if position >= argCount 'boundNothingHere'
+				continue
+			end 'boundNothingHere'
+
+			// ⚠ **THROUGH `resolvedSlotType`, NEVER `adoptType` ALONE** — the substituted argument comes out
+			// of the INDEX's interner, and a sweep-recorded `named` leaf read against this file's interner is
+			// a name id that means something else (the trap `slotTypeThroughReceiver` and
+			// `requireContainerElementType` both cross through this same door).
+			let substituted = self.resolvedSlotType(self.signatures.substitutedInstanceArg(gid, position: position))
+			let argValue = try args.get(i) otherwise panic("recordSubstitutedArgRangeChecks: args.get OOB at {i} inside its own count()")
+			self.recordRangeCheckSite(argValue, targetAlias: self.declaredAliasOfType(substituted), line: anchor.line, column: anchor.column)
+		end 'eachArg'
+	end 'recordSubstitutedArgRangeChecks'
 
 	// ⭐ **`async f(args…)` — SPAWN A GREEN THREAD** (P1.5-B1a). The cursor sits just past `async`, on the
 	// callee name. B1a supports a FREE call only (`async f(…)`), so the callee name is followed directly by

@@ -1904,6 +1904,292 @@ Stack trace:
   in mrt_start
 ```
 
+### An argument at an OPAQUE type parameter is checked against what the INSTANCE bound it to
+
+⭐⭐ The rule the three `Array` spellings above are one instance of, stated where it actually lives: **it
+is not about containers at all.** A generic body is compiled ONCE, so a parameter declared `value T`
+carries no range and the callee can hold no entry guard for it — the cure every CONCRETE ranged
+parameter gets (`RangeCheckParamSite`). The CALL SITE is the one place that knows what `T` was bound to,
+so both halves are owed there: the compile-time E3005 for a literal, and the runtime guard for anything
+else. The guard stands immediately in front of the call, which is exactly where the callee's entry guard
+would have stood.
+
+`Box with Percent` has no container in it and `b.put(505)` stored **505** in silence until this rung —
+the same loss `insert` measured through `stdlib/Array.maxon`, one door up.
+
+<!-- test: error.type-parameter-argument-out-of-range -->
+```maxon
+typealias Percent = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	export function put(value T)
+		self.v = value
+	end 'put'
+end 'Box'
+
+typealias PB = Box with Percent
+
+function main() returns ExitCode
+	var b = PB.create(1)
+	b.put(505)
+	return b.v
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:4: Value 505 is outside the range of 'Percent' (int(0 to 100))
+```
+
+### A STATIC factory's type-parameter argument is the same door
+
+The factory has no receiver, so the instance rides its RESULT rather than its argument 0
+(`retypeGenericAliasConstructorResult`) — a different way to reach the same substitution, and the rule
+may not depend on which one a call took.
+
+<!-- test: error.type-parameter-constructor-argument-out-of-range -->
+```maxon
+typealias Percent = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+end 'Box'
+
+typealias PB = Box with Percent
+
+function main() returns ExitCode
+	let b = PB.create(505)
+	return b.v
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:15:10: Value 505 is outside the range of 'Percent' (int(0 to 100))
+```
+
+### Type-parameter argument: runtime panic
+
+The half a literal cannot reach, at the position that has no callee entry guard to fall back on. ⚠ The
+RUNNABLE ORACLE IS WRONG HERE and the case is written against the language rather than against it: the
+bootstrap MONOMORPHIZES, so it refuses the literal above — but its runtime guard is still keyed on the
+parameter's DECLARED type, which is the opaque `T`, so `b.put(grow(5))` compiles there and **exits 505**.
+Every other position owes both halves (`RangeCheckGuard`); this one has no exemption available, because
+the exemption a call argument does have is precisely the callee entry guard a shared body cannot hold.
+
+<!-- test: type-parameter-argument-runtime-panic -->
+<!-- targets: x64-windows, x64-linux -->
+<!-- x64 ONLY, for `field-store-runtime-panic`'s reason: this case pins the panic MESSAGE and the BACKTRACE, and only the two x64 lanes have a panic runtime to print them. The CHECK is target-neutral and the compile-time cases beside this one cover it on every target. -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	export function put(value T)
+		self.v = value
+	end 'put'
+end 'Box'
+
+typealias PB = Box with Percent
+
+function grow(n Wide) returns Wide
+	return n * 101
+end 'grow'
+
+function main() returns ExitCode
+	var b = PB.create(1)
+	b.put(grow(5))
+	return b.v
+end 'main'
+```
+```exitcode
+1
+```
+```stderr
+panic at type-parameter-argument-runtime-panic.test:25: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in main
+  in mrt_start
+```
+
+### An IN-RANGE value at an opaque type parameter still compiles and runs
+
+The control for the three cases above: the guard must refuse the values the alias forbids and nothing
+else. A check that passed by rejecting everything would be green on all three and would be caught here.
+
+<!-- test: type-parameter-argument-in-range -->
+```maxon
+typealias Wide = int(0 to 1000)
+typealias Percent = int(0 to 100)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	export function put(value T)
+		self.v = value
+	end 'put'
+end 'Box'
+
+typealias PB = Box with Percent
+
+function grow(n Wide) returns Wide
+	return n * 11
+end 'grow'
+
+function main() returns ExitCode
+	var b = PB.create(1)
+	b.put(grow(5))
+	return b.v
+end 'main'
+```
+```exitcode
+55
+```
+
+### A type argument with NO narrowed range is untouched
+
+`FullInt` spans the whole `int` domain, so there is nothing for a guard to test and nothing for a
+literal to violate — the same `noGuard` verdict a full-range alias gets at every other position
+(`RangeGuardVerdict`). This is the case that says the new site is decided by the RANGE and not merely by
+the parameter being opaque.
+
+<!-- test: type-parameter-argument-unranged-type-argument -->
+```maxon
+typealias FullInt = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	export function put(value T)
+		self.v = value
+	end 'put'
+end 'Box'
+
+typealias IB = Box with FullInt
+
+function main() returns ExitCode
+	var b = IB.create(1)
+	b.put(1000000)
+	return 42
+end 'main'
+```
+```exitcode
+42
+```
+
+### A MANAGED type argument reaches no range rule at all
+
+A `String` type argument names no ranged alias, so the door declines before it looks for bounds — the
+site must not fire on a type argument that carries no numeric domain.
+
+<!-- test: type-parameter-argument-managed-type-argument -->
+```maxon
+type Box uses T
+	export var v as T
+
+	static function create(seed T) returns Self
+		return Self{v: seed}
+	end 'create'
+
+	export function put(value T)
+		self.v = value
+	end 'put'
+end 'Box'
+
+typealias SB = Box with String
+
+function main() returns ExitCode
+	var b = SB.create("a")
+	b.put("hello")
+	return b.v.byteLength()
+end 'main'
+```
+```exitcode
+5
+```
+
+### The `Array` half: an element reached through a shared body's `Element` parameter
+
+⭐ This is `push`/`set`/`insert`'s shape with nothing retired to reach it. An `extension Array` method
+declaring `value Element` is compiled ONCE — exactly as `stdlib/Array.maxon`'s own three mutators are —
+so the element's range is invisible inside it and visible only at the call. It measured the identical
+loss: **compiled clean, stored 300 twice, exit 2.** The roster-served `insert` beside it refuses the same
+literal today; when `insert` is struck, this is the door it arrives at.
+
+<!-- test: error.array-extension-element-argument-out-of-range -->
+```maxon
+typealias Byte = int(0 to 255)
+typealias BA = Array with Byte
+
+export extension Array
+	export function pushTwice(value Element)
+		push(value)
+		push(value)
+	end 'pushTwice'
+end 'Array'
+
+function main() returns ExitCode
+	var a = BA.create()
+	a.pushTwice(300)
+	return a.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:4: Value 300 is outside the range of 'Byte' (int(0 to 255))
+```
+
+### An OVERLOADED method is declined, not checked against the member the call did not resolve to
+
+⛔ The boundary, pinned by the program that fell through it. The declaration sweep keys by BARE NAME — the
+limitation `Parser.requireOverloadableName` states in full — so `stdlib/Array.maxon`'s two `contains`
+declarations, `contains(element Element)` and `contains(sequence ElementArray)`, arrive under one key.
+Answering for the set from either member checks the OTHER member's argument: **MEASURED in this rung's own
+first build, `a.contains(needle)` — which compiles and runs — had its ARRAY POINTER range-checked against
+`0 to 255` and died `panic … value outside typealias 'Byte'`.** A disagreeing pair is therefore CONTESTED
+and gets no check at all, which costs a missed refusal on an overloaded generic method and can never cost
+a wrong one. This case is that program, and it must stay green.
+
+<!-- test: overloaded-generic-method-is-not-range-checked -->
+```maxon
+typealias Byte = int(0 to 255)
+typealias BA = Array with Byte
+
+function main() returns ExitCode
+	var a = BA.create()
+	a.push(3)
+	a.push(4)
+	var needle = BA.create()
+	needle.push(4)
+	if a.contains(needle) 'has'
+		return 7
+	end 'has'
+	return 9
+end 'main'
+```
+```exitcode
+7
+```
+
 ### Error: a call argument is checked against the CALLEE's declaration of the alias
 
 Two files each declare `Limit`, over different ranges — which

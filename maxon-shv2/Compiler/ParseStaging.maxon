@@ -86,15 +86,23 @@ let sharedEmptyOverloadSets = OverloadSetMap.create()
 // them to state; `file` is the narrowest one and states nothing wider than the truth. The two SYNTHESIZED
 // helpers the sweep itself publishes (a parameter default's, a field default's) take the receiverless
 // default and mean it: each is a plain function the emitter calls with no instance.
+// ⭐⭐ **`opaqueParams` IS WHICH OF THE DECLARATION'S PARAMETERS TAKE A BARE TYPE PARAMETER, AND IT RIDES
+// HERE FOR `takesReceiver`'S REASON (ARRR)** — a fourth fact about the SAME declaration, applied by
+// `ProgramSignatures.record` in the same act. It is what lets a CALL SITE build the range guard a shared
+// generic body cannot hold for itself (`OpaqueParamInfo`), and it can only come from the sweep: the callee
+// may be declared in another file, and `resolveTypes` has erased the parameter's alias long before any
+// caller asks. It DEFAULTS to `sharedNoOpaqueParams` for the three `Project.funcReturnTypes` producers named
+// below and for every declaration outside a generic type, which is the overwhelming majority.
 export type FuncReturnTypeEntry
 	export var name as ByteArray
 	export var returnType as MaxonReturnType
 	export var declaredSurface as DeclaredSurface
 	export var visibility as Visibility
 	export var takesReceiver as bool
+	export var opaqueParams as OpaqueParamInfo
 
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams}
 	end 'create'
 end 'FuncReturnTypeEntry'
 

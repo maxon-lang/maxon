@@ -6,8 +6,11 @@
 //
 // ⚠ **WHICH HALVES A POSITION OWES IS `RangeCheckGuard`'S TO SAY, NOT THIS PASS'S.** The compile-time
 // E3005 is owed EVERYWHERE and is raised by the one decision function (`needsRuntimeGuard`); the runtime
-// cascade is skipped at exactly ONE position, the CALL ARGUMENT, whose alias is not known where the
-// argument is written and whose runtime half is therefore enforced at the callee's entry instead.
+// cascade is skipped at exactly ONE position, the CALL ARGUMENT AT A CONCRETE PARAMETER, whose alias is not
+// known where the argument is written and whose runtime half is therefore enforced at the callee's entry
+// instead. An argument at an OPAQUE `T` parameter has no such entry to be enforced at — the body is
+// compiled once and knows no range — so it records an ordinary alias-named site and takes both halves here
+// (ARRR, `Parser.recordOpaqueArgRangeChecks`).
 //
 // ⭐ **A CALL ARGUMENT USED TO BE ON THAT LIST, AND A1f TOOK IT OFF — BY MOVING THE GUARD, NOT BY
 // DEFEATING THE OBSTACLE.** The obstacle is real and unchanged: a check is a BRANCH, so a guard emitted

@@ -441,6 +441,15 @@ let DeclShapeParamDefault = 63 as ContentHash
 let DefaultBitSet = 64 as ContentHash
 let DefaultBitClear = 65 as ContentHash
 
+// ⭐ A method's OPAQUE (bare type-parameter) PARAMETER POSITIONS (ARRR), mixed for `DeclShapeParamConsume`'s
+// reason and carrying exactly what a CALL SITE compiles to: which `uses` slot a parameter names decides
+// which of the receiver instance's type arguments the range guard in front of that call is built from
+// (`Parser.recordOpaqueArgRangeChecks`). Retyping `put(value T)` to `put(value Integer)` — or moving `T` to
+// another `uses` slot — changes the caller's emitted code while the caller's own bytes never move, so only
+// this hash can carry it. The param NAMES ride for `recordParamConsume`'s reason: a rename changes which
+// labelled argument slots to the opaque position.
+let DeclShapeOpaqueParams = 82 as ContentHash
+
 // ⭐ A free function's NAMESPACE-QUALIFIED SPELLING (N1b) — `utils.helper` for a `helper` declared in
 // `utils/`. Its own discriminator for `DeclShapeAlias`'s reason, and load-bearing for a reason NO other
 // entry in this table carries: it is the one fact keyed on a file's DIRECTORY rather than on its bytes.
@@ -2346,6 +2355,117 @@ end 'ParamDefaultEntry'
 
 export typealias ParamDefaultEntryArray = Array with ParamDefaultEntry
 export typealias ParamDefaultMap = Map with (ByteArray, ParamDefaultInfo)
+
+// ⭐⭐ **WHICH OF A METHOD'S PARAMETERS ARE DECLARED AS A BARE TYPE PARAMETER, AND WHICH `uses` SLOT EACH
+// NAMES (ARRR)** — the call-aligned `paramNames` (so a call site can slot a LABELLED argument to its
+// position before any `FuncSignature` exists, exactly as `ParamConsumeInfo` and `ParamDefaultInfo` do) and,
+// per slot, that parameter's position in the declaring type's `uses` list.
+//
+// ⭐ **IT EXISTS BECAUSE A SHARED GENERIC BODY CANNOT HOLD ITS OWN RANGE GUARD.** A concrete ranged
+// parameter gets one at the callee's ENTRY (`RangeCheckParamSite`); a `value T` has no range there to guard,
+// and the only frame that knows what `T` was bound to is the CALLER. So the call site needs to know which of
+// its arguments land on an opaque formal, and that is a whole-program fact about a callee that may be
+// declared in another file — which is the same reason `ParamConsumeInfo` and `ParamDefaultInfo` are
+// whole-program. Like both of them it travels by NAME with no interner ids (names, numbers), so it folds
+// with no remap.
+//
+// ⚠ **IT IS NOT A COLUMN ON `ParamConsumeInfo`, AND THE REASON IS MEASURED RATHER THAN AESTHETIC.** That
+// record's presence is itself read as a fact: `Parser.requireOverloadableName` refuses an overload set the
+// moment `consumeOf` answers `consumes(…)` at all, whatever the bits say. Recording an entry for every
+// generic method that merely HAS an opaque parameter would therefore start refusing overload sets that
+// transfer nothing — a legal program rejected over a record that decides nothing. Widening it would also put
+// this rung inside `publishTransitiveFeeds`' rebuild, the one place a previous rung's review found a SIGSEGV
+// caused by reconstructing that record from partial state (W10).
+//
+// ⚠ **ONE ENTRY PER BARE NAME, LAST DECLARATION WINS** — `ProgramSignatures.record`'s discipline for every
+// fact it applies. An OVERLOAD SET therefore publishes one answer for the whole set, which is the boundary
+// `requireOverloadableName`'s header already states in full (*"THE FIX IS NOT A BETTER TEST HERE, IT IS
+// PER-MEMBER FACTS IN THE SWEEP"*). The consequence here is a MISSED check, never a wrong one: an overloaded
+// method whose last declaration takes no opaque parameter records nothing and its call sites are guarded
+// exactly as they were before this rung.
+export type OpaqueParamInfo
+	export let paramNames as ByteArrayArray
+	// One entry per CALL-ALIGNED slot: the parameter's position in the declaring type's `uses` list, or
+	// `typeParamCount` for a parameter declared with a concrete type. The sentinel is the count for
+	// `Parser.paramTypeParamPositionAt`'s reason — it is the value that walk already writes for a plain
+	// parameter, so this record stores what the sweep computed rather than a re-encoding of it.
+	export let positions as TypeParamPositionArray
+	// The declaring type's `uses` ARITY — the boundary above, and the presence bit. Only
+	// `sharedNoOpaqueParams` has ZERO, because an info is built only when some position is BELOW the count,
+	// which requires the count to be positive.
+	export let typeParamCount as TypeParamPosition
+
+	export static function create(paramNames ByteArrayArray, positions TypeParamPositionArray, typeParamCount TypeParamPosition) returns OpaqueParamInfo
+		return Self{paramNames: paramNames, positions: positions, typeParamCount: typeParamCount}
+	end 'create'
+
+	// Does this declaration take ANY bare type-parameter argument? False for the shared "none", which is
+	// what a callee with no recorded entry reads back — the "absence is the answer" default
+	// `ParamConsumeInfo.isConsumed` and `ParamDefaultInfo.helperFor` both rest on.
+	export function declaresATypeParameterParam() returns bool
+		return self.typeParamCount > 0
+	end 'declaresATypeParameterParam'
+
+	// Is the parameter at call-slot `index` a bare type parameter? A slot past the recorded list reads as a
+	// plain one, exactly as `Parser.paramIsTypeParamTyped` reads a short positions array.
+	export function namesATypeParameter(index ParamCount) returns bool
+		return self.positionAt(index) < self.typeParamCount
+	end 'namesATypeParameter'
+
+	// The `uses` position that slot names — asked only past `namesATypeParameter`, which is the gate that
+	// makes the answer meaningful.
+	export function positionAt(index ParamCount) returns TypeParamPosition
+		return try self.positions.get(index) otherwise self.typeParamCount
+	end 'positionAt'
+
+	// ⭐⭐ **DO TWO DECLARATIONS OF ONE NAME DESCRIBE THE SAME OPAQUE PARAMETERS?** — the test that keeps an
+	// OVERLOAD SET from being checked against a member the call did not resolve to. The sweep keys by bare
+	// name (`requireOverloadableName`'s stated boundary), so `Array.contains(element Element)` and
+	// `Array.contains(sequence ElementArray)` arrive under one key; answering for the set from whichever
+	// member wrote last would build a range guard for the OTHER member's argument.
+	//
+	// ⛔ **MEASURED, AND IT WAS A LIVE WRONG ANSWER IN THIS RUNG'S OWN FIRST BUILD**: `a.contains(needle)` on
+	// an `Array with Byte` — a legal program that compiled and ran — was handed the `Element` member's record,
+	// range-checked its ARRAY POINTER against `0 to 255` and died `panic … value outside typealias 'Byte'`.
+	// A disagreeing pair is therefore CONTESTED and declined (`ProgramSignatures.opaqueParamsOf`), which costs
+	// a MISSED check on an overloaded generic method and can never cost a wrong one.
+	//
+	// Equality is by VALUE and not by arrival, deliberately: a declaration re-folded from the same source
+	// compares equal and stays answerable, so this cannot be defeated by how many times a file is swept.
+	export function matches(other OpaqueParamInfo) returns bool
+		if self.typeParamCount != other.typeParamCount or self.positions.count() != other.positions.count() or self.paramNames.count() != other.paramNames.count() 'differentShape'
+			return false
+		end 'differentShape'
+
+		for i in 0 upto self.positions.count() 'eachPosition'
+			if self.positionAt(i) != other.positionAt(i) 'movedSlot'
+				return false
+			end 'movedSlot'
+		end 'eachPosition'
+
+		for i in 0 upto self.paramNames.count() 'eachName'
+			let mine = try self.paramNames.get(i) otherwise panic("OpaqueParamInfo.matches: paramNames.get OOB at {i} despite i < count")
+			if not mine.equals(try other.paramNames.get(i) otherwise panic("OpaqueParamInfo.matches: other.paramNames.get OOB at {i} despite the counts being equal")) 'renamedSlot'
+				return false
+			end 'renamedSlot'
+		end 'eachName'
+
+		return true
+	end 'matches'
+end 'OpaqueParamInfo'
+
+export typealias OpaqueParamMap = Map with (ByteArray, OpaqueParamInfo)
+
+// The bare names two declarations disagreed about — see `OpaqueParamInfo.matches`. `opaqueParamsOf` declines
+// for every one of them. Empty for every program that does not overload a generic type's method, which is
+// every program in the corpus but one.
+export typealias ContestedOpaqueParamNameSet = Set with ByteArray
+
+// The answer for every declaration that takes no bare type-parameter argument — which is every function in a
+// program that declares no generic type, and most methods of one. Shared for `sharedEmptyTypeParamFeeds`'
+// reason: an instance per declaration would be one allocation per function in the program, on the sweep's
+// hottest path, for a record that says "nothing to do".
+export let sharedNoOpaqueParams = OpaqueParamInfo.create(ByteArrayArray.create(), positions: TypeParamPositionArray.create(), typeParamCount: 0)
 
 // ⭐ **THE NAMES TWO DIFFERENT DECLARATIONS BOTH CLAIMED, EACH WITH ITS OWN PARAMETER DEFAULTS.** The
 // defaults registry is keyed by the name the SOURCE wrote and is last-wins, exactly as `funcParamConsumes`
@@ -6369,6 +6489,17 @@ export type ProgramSignatures
 	// default are recorded — a callee with no entry has no defaults, the "absence is the answer" default
 	// `funcParamConsumes` rests on — so the overwhelming majority of programs carry an empty map.
 	var funcParamDefaults as ParamDefaultMap
+	// ⭐ Method name -> which of its parameters are declared as a bare TYPE PARAMETER (ARRR). See
+	// `OpaqueParamInfo`. `opaqueParamsOf(callee)` is the door `Parser.recordOpaqueArgRangeChecks` asks before
+	// building a range guard out of the receiver instance's own type argument. Filled by `record` from each
+	// file's scanned signatures, beside the return type it accompanies and with the identical last-wins
+	// semantics. Only a declaration that HAS such a parameter is recorded — the "absence is the answer"
+	// default `funcParamConsumes` rests on — so every program that declares no generic type carries an
+	// empty map.
+	var funcOpaqueParams as OpaqueParamMap
+	// The names two declarations described DIFFERENTLY — an overload set, whose members the sweep cannot tell
+	// apart. See `OpaqueParamInfo.matches` for the wrong answer this exists to refuse.
+	var contestedOpaqueParams as ContestedOpaqueParamNameSet
 	// The names `funcParamDefaults` had to overwrite with a DIFFERENT declaration's defaults — see
 	// `CollidingParamDefaultNameSet`. Empty for every program that declares each function once.
 	var collidingParamDefaults as CollidingParamDefaultNameSet
@@ -6678,7 +6809,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -7097,11 +7228,11 @@ export type ProgramSignatures
 		// `MM leak: 7 allocation(s) remain` on every build, exit 101). Recorded in OPEN.md.
 		if remap.isIdentity 'idsUnchanged'
 			for entry in scanned 'eachUnmapped'
-				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver)
+				self.record(entry.name, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams)
 			end 'eachUnmapped'
 		end 'idsUnchanged' else 'idsMoved'
 			for entry in scanned 'eachRemapped'
-				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver)
+				self.record(entry.name, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams)
 			end 'eachRemapped'
 		end 'idsMoved'
 
@@ -7151,7 +7282,11 @@ export type ProgramSignatures
 	//
 	// So `declaredReturnSurface` is exact for every name that reaches a call: a name with no entry names the
 	// buffer in no declaration anywhere, and a name with one is either unique or already refused.
-	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool)
+	function record(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo)
+		// Read BEFORE the upsert below, which is what makes `returnTypes` the arrival counter: every
+		// declaration reaches here exactly once and writes it, so a name already present is a name some
+		// other declaration already claimed. It is `recordParamDefaults`' membership test, one registry over.
+		let secondDeclaration = self.returnTypes.contains(name)
 		self.returnTypes.upsert(name, value: returnType)
 		if not surfaceIsPlain(declaredSurface) 'namesTheBufferAlias'
 			self.declaredReturnSurfaces.upsert(name, value: declaredSurface)
@@ -7160,9 +7295,49 @@ export type ProgramSignatures
 			self.funcReturnDeclFiles.upsert(name, value: declFilePath)
 		end 'aNameThisFileMustBeAbleToResolveLaterOn'
 		self.funcDeclSites.upsert(name, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver))
+		// ⭐ **THE OPAQUE-PARAMETER POSITIONS ARE WRITTEN HERE, WITH THE DECLARATION THEY DESCRIBE (ARRR)** —
+		// the same one-act discipline `declaredSurface`, `visibility` and `takesReceiver` ride on, and for
+		// their reason: they are facts about ONE declaration, and a second writer is a second chance for them
+		// to come to describe two.
+		//
+		// ⚠ A CONTESTED FREE FUNCTION'S ENTRIES ARE NOT MOVED OFF THE BARE KEY WITH THE REST
+		// (`refileContestedFreeFunction`), AND THAT IS EXACT RATHER THAN AN OMISSION: a bare type-parameter
+		// parameter can only be declared inside a generic type's body, and a free function is by definition
+		// outside every one — so this map never holds an entry a namespace contest could be about.
+		if secondDeclaration and not self.storedOpaqueParams(name).matches(opaqueParams) 'twoDeclarationsDisagree'
+			self.contestedOpaqueParams.insert(name)
+		end 'twoDeclarationsDisagree'
+		if opaqueParams.declaresATypeParameterParam() 'takesABareTypeParameter'
+			self.funcOpaqueParams.upsert(name, value: opaqueParams)
+		end 'takesABareTypeParameter'
 
-		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver)
+		self.hash = self.mixDeclaration(self.hash, name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams)
 	end 'record'
+
+	// The opaque record already stored for `name`, or the shared "declares none" — split out for
+	// `storedReturnSurface`'s reason: `Map.get` is a `try` and a name with no entry is the common case
+	// rather than an error.
+	function storedOpaqueParams(name ByteArray) returns OpaqueParamInfo
+		return try self.funcOpaqueParams.get(name) otherwise sharedNoOpaqueParams
+	end 'storedOpaqueParams'
+
+	// ⭐ **WHICH OF `callee`'s PARAMETERS TAKE A BARE TYPE-PARAMETER ARGUMENT (ARRR)** — the door
+	// `Parser.recordOpaqueArgRangeChecks` asks once it knows the call has a concrete generic-instance
+	// receiver. A callee with no entry reads back the shared "declares none", which every predicate on the
+	// record answers negatively for, so the caller needs no second presence test.
+	//
+	// ⚠ **A CONTESTED NAME ANSWERS "NONE", AND THAT IS A REFUSAL RATHER THAN A GAP.** The sweep keys by bare
+	// name, so an overload set whose members disagree about their opaque parameters has no answer this index
+	// can give — and giving one anyway builds a range guard for the member the call did not resolve to
+	// (`OpaqueParamInfo.matches` carries the measured wrong answer). Declining costs a missed check on
+	// exactly those sets and nothing anywhere else.
+	export function opaqueParamsOf(callee ByteArray) returns OpaqueParamInfo
+		if self.contestedOpaqueParams.contains(callee) 'twoDeclarationsDisagree'
+			return sharedNoOpaqueParams
+		end 'twoDeclarationsDisagree'
+
+		return self.storedOpaqueParams(callee)
+	end 'opaqueParamsOf'
 
 	// The surface already recorded for `name`, or the plain one. Split out because `Map.get` is a `try` and a
 	// name with no entry is the common case rather than an error.
@@ -18596,11 +18771,28 @@ export type ProgramSignatures
 	// on a method decides whether a bare `helper()` in ANOTHER file's `extension` body resolves — and, when it
 	// does, whether the call carries the enclosing `self` — so the answer is baked into that file's memoized
 	// parse and the key that memo is validated against has to move with it.
-	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool) returns ContentHash
+	function mixDeclaration(state ContentHash, name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, takesReceiver bool, opaqueParams OpaqueParamInfo) returns ContentHash
 		let named = self.mixReturnType(mixBytes(state, bytes: name), returnType: returnType)
 		let tiered = mix(mixSurface(mix(named, value: ReturnShapeSurface), surface: declaredSurface), value: tierOrdinal(visibility) as ContentHash)
-		return mix(tiered, value: ReceiverShapePresent if takesReceiver else ReceiverShapeAbsent)
+		return mixOpaqueParams(mix(tiered, value: ReceiverShapePresent if takesReceiver else ReceiverShapeAbsent), opaqueParams: opaqueParams)
 	end 'mixDeclaration'
+
+	// ⭐ The opaque-parameter half of a declaration's hash (ARRR) — see `DeclShapeOpaqueParams` for what a
+	// reader copies out of it. A declaration that takes no bare type parameter mixes NOTHING, so every
+	// program without a generic type hashes exactly as it did before this rung: absence is the answer here
+	// too, and `recordThrows` skips a non-throwing clause for the same reason.
+	function mixOpaqueParams(state ContentHash, opaqueParams OpaqueParamInfo) returns ContentHash
+		if not opaqueParams.declaresATypeParameterParam() 'takesNoBareTypeParameter'
+			return state
+		end 'takesNoBareTypeParameter'
+
+		var mixed = mix(state, value: DeclShapeOpaqueParams)
+		for i in 0 upto opaqueParams.paramNames.count() 'eachSlot'
+			let paramName = try opaqueParams.paramNames.get(i) otherwise panic("mixOpaqueParams: paramNames.get OOB at {i} despite i < count")
+			mixed = mix(mixBytes(mixed, bytes: paramName), value: opaqueParams.positionAt(i))
+		end 'eachSlot'
+		return mix(mixed, value: opaqueParams.typeParamCount)
+	end 'mixOpaqueParams'
 
 	function mixReturnType(state ContentHash, returnType MaxonReturnType) returns ContentHash
 		return match returnType 'r'

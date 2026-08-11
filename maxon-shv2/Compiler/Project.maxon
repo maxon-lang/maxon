@@ -2185,7 +2185,8 @@ end 'isLegalRepeatedAlias'
 
 // ⭐ **WHICH HALVES OF THE RULE A POSITION OWES.** `range-check-panic.md` states both — a compile-time
 // E3005 for a value the compiler can fold, and a runtime check where an unfoldable value LANDS — and
-// **EVERY POSITION NOW OWES BOTH EXCEPT ONE: the CALL ARGUMENT, which owes the compile-time half alone.**
+// **EVERY POSITION NOW OWES BOTH EXCEPT ONE: the CALL ARGUMENT AT A CONCRETE PARAMETER, which owes the
+// compile-time half alone.**
 //
 // The reason that one position can owe only the first half is mechanical: a runtime check is a BRANCH, so
 // it splits the block it lands in, and a call argument is evaluated part-way through building an argument
@@ -2193,6 +2194,14 @@ end 'isLegalRepeatedAlias'
 // mid-argument-list and never hits the bootstrap's arg-pinning `E9001` — but it also has no alias to
 // check against at the argument: the parameter belongs to a callee that may be declared in another file
 // (`RangeCheckArgSite`), so no positioned site can be recorded there at all.
+//
+// ⭐⭐ **AN ARGUMENT AT AN *OPAQUE* PARAMETER IS THE EXCEPTION'S OWN EXCEPTION, AND IT OWES BOTH HALVES
+// (ARRR).** The exemption above is not really "a call argument cannot be guarded" — it is "the CALLEE'S
+// ENTRY guards it instead". A parameter declared `value T` has no range at that entry, because a generic
+// body is compiled ONCE for every instantiation, so the exemption has nothing to hand the obligation to.
+// The CALL SITE knows the substitution and therefore owes the whole rule; it records an ordinary
+// alias-named site (below) at the position the `call` op is about to take, which puts the cascade exactly
+// where the entry guard would have stood. See `Parser.recordOpaqueArgRangeChecks`.
 //
 // ⭐⭐ **A1f DID NOT DEFEAT THAT OBSTACLE — IT MOVED THE GUARD.** The runtime half of the argument door
 // belongs to the CALLEE'S ENTRY instead: one guard per narrowed parameter per function, standing in front
@@ -2251,6 +2260,10 @@ end 'RangeCheckGuard'
 // holding one value at every site is a fact written twice, and the copy that goes stale is the prose.
 // The call-argument door is the one position that still owes the compile-time half alone, and it holds
 // no site at all: it asks `guardVerdict` directly (`InsertRangeChecks.checkArgAgainstParamRange`).
+// ⚠ **AN ARGUMENT AT AN OPAQUE `T` PARAMETER RECORDS ONE OF THESE (ARRR)**, and is not a counter-example to
+// the paragraph above: its alias is not the CALLEE's to name — the callee has none — it is the receiver
+// instance's substituted type argument, which the call site holds. So it is an ordinary alias-named door
+// like every other, and it owes both halves like every other.
 export type RangeCheckSite
 	export var value as ValueId
 	export var aliasName as ByteArray
