@@ -4691,7 +4691,13 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	// so E3019, E3070 and the storage-written mask must all see it; served as a member but left off this
 	// answer, `let a = [1, 2]` followed by `a.appendMemory(b.managed)` COMPILES and writes through an
 	// immutable binding (`arrays.error.appendMemory-on-a-let-array`, verified red before this line).
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod)
+	// ⚠ **`insert` LEFT THIS LIST WITH ITS ROSTER ENTRY (ARR1), AND THE TWO GO TOGETHER BY CONSTRUCTION.**
+	// This answer is only ever asked past `requireSurfaceMember`, so a name neither surface carries can never
+	// reach it — an entry for one would be a rule about a member the receiver does not have, which is exactly
+	// what R4.2 moved the buffer-only mutators out of this list to stop. A corpus-served `insert` gets E3019
+	// and E3070 from its own declaration's write masks instead, which is what `arrays.error.insert-on-a-let-array`
+	// and `.insert-through-a-live-borrow` now pin.
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayReserveMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod)
 end 'arrayMethodMutatesReceiver'
 
 // ⭐ **WHICH PARAMETER THE APPEND REFUSAL NAMES — READ OFF THE SPELLING THE AUTHOR WROTE.** One operation, two
@@ -4875,16 +4881,17 @@ end 'cursorSurfaceMemberNames'
 // ⚠⚠ **WHAT STAYED, STAYED FOR A MEASURED REASON, AND EACH IS RECORDED AT ITS OWN LINE OR HERE.** Three
 // classes, and only the first is about this file:
 //   • **A COMPILE-TIME RULE THE CORPUS CANNOT STATE** — `resize` is E3106 (a managed element has no zero),
-//     `first` and `get` are BORROW SOURCES for E3070 (`borrow-liveness.first-is-a-borrow-source`), `set` is
-//     where a RANGED element gets its runtime range check, and `clear` carries the receiver-write mask that
-//     answers *"does `Bag.wipe()` free what the caller borrowed?"* — MEASURED, five `borrow-liveness` cases
-//     stop being refused when `clear` goes, and the rest move column.
+//     `first` and `get` are BORROW SOURCES for E3070 (`borrow-liveness.first-is-a-borrow-source`), and `clear`
+//     carries the receiver-write mask that answers *"does `Bag.wipe()` free what the caller borrowed?"* —
+//     MEASURED, five `borrow-liveness` cases stop being refused when `clear` goes, and the rest move column.
 //   • **A DECLARED-OWN-`Array` DEPENDS ON IT** — `reserve`, `count`, `isEmpty`, `clear`, `appendMemory`; see
 //     `reserve`'s line, and ARR3a's line below for `appendMemory`, which joined this class by measurement.
-//   • **THE CORPUS BODY IS WRONG OR THE CALL TO IT IS** — `contains` (see its line, a fault), `push`,
-//     `insert` and `append`; ARR3a's block below records what each one measured, because that third bullet
+//   • **THE CORPUS BODY IS WRONG OR THE CALL TO IT IS** — `contains` (see its line, a fault), `push` and
+//     `append`; ARR3a's block below records what each one measured, because that third bullet
 //     used to name all eight of the members it was briefed on under ONE diagnosis, and the diagnosis was
 //     wrong about seven — including which BULLET two of them belong to (`get` and `set` are the first).
+//   • **AN OPAQUE-ELEMENT RECEIVER CANNOT REACH A CORPUS BODY AT ALL** — `set`'s class, and ARR1's finding;
+//     see `set`'s own line on the roster below.
 //
 // ⭐⭐⭐ **ARR3a STRUCK ONE MORE — `slice` — AND ITS MEASUREMENT RETIRED THE SENTENCE ABOVE AS MUCH AS THE
 // MEMBER.** It was briefed to strike EIGHT (`get`, `set`, `slice`, `clone`, `push`, `insert`, `append`,
@@ -4921,36 +4928,44 @@ end 'cursorSurfaceMemberNames'
 // edge that would re-point a stdlib-body diagnostic at the construct that forced it still does not exist, and
 // `specs-shv2/array-conditional-conformance-withheld.md`'s disabled case is the standing record of it.
 //
-// ⚠⚠ **THE SIX THAT DID NOT GO, AND WHAT EACH ONE MEASURED** — no two of them for the same reason. Both
-// compiler defects above are FIXED, so several of these are one named mechanism away rather than open-ended;
-// each says which:
+// ⚠⚠ **THE SIX THAT DID NOT GO AT ARR3a, AND WHAT EACH ONE MEASURED** — no two of them for the same reason.
+// Both compiler defects above are FIXED, so several of these are one named mechanism away rather than
+// open-ended; each says which — and `insert` has since gone, which is what a bullet naming its mechanism
+// buys. FIVE remain:
 //   • **`get`** — it is a BORROW SOURCE, exactly as `first` is, so it belongs to the FIRST bullet above and
 //     not the third. Struck alone, the three `array-realloc-dangling-ref` cases stopped being refused at all
 //     (*"expected a compile error but compilation succeeded"*): the arm mints the E3070 borrow through
 //     `emitContainerElementAccessor` and a corpus body cannot, because a borrow does not COMPOSE through a
 //     call. That is the transitive-liveness rung `dispatchArrayMethod`'s `createCursor` arm already names (v1
 //     does it as a per-value `baseOf` chain, `StdLiveness.maxon:236-267`), and it is not a line here.
-//   • **`set`** — first bullet as well, and for a rule NOTHING in the language can state at the callee: the
-//     arm is where a RANGED element's stored value gets its runtime range check, and the corpus declaration
-//     takes the opaque `Element`, so the shared callee knows no range and the call site has no site kind for
-//     the substituted one. MEASURED struck: `ranged-typealias.array-set-runtime-panic` stored **505** into an
-//     `int(0 to 100)` array, exited 0 with an EMPTY stderr, where it pins `Range check failed`. The hole is
-//     GENERAL and PRE-EXISTING — the same 505 lands silently through a plain `type Box uses T`'s `put(value
-//     T)`, no `Array` member retired — so it is a rung of its own; see the `set` arm, which carries it.
-//     Its OTHER half is easy and is written down HERE rather than in the body, because
-//     `stdlib/Array.maxon`'s LINE NUMBERS are pinned by four `/specs` cases through `Array.resize`'s panic
-//     message — an eight-line note above `set` moved that panic from `:382` to `:390` and turned the C#
-//     suite red, which is the second copy of one fact costing more than the fact is worth. The half:
-//     `:217`'s body forwards to a CAPACITY-bounded `managed.set` where the `Array` owes a LENGTH bound, so
-//     `set`'s retirement adds a `index >= managed.length()` throw there and shares it with `accessFailure`.
+//   • **`set`** — ⛔ **THE RANGE-CHECK BLOCKER THIS BULLET NAMED IS CLOSED (ARRR) AND `set` STILL DOES NOT
+//     GO. ARR1 STRUCK IT AND MEASURED WHY: AN OPAQUE-ELEMENT RECEIVER CANNOT REACH A CORPUS BODY AT ALL.**
+//     Both range halves arrive for free through `recordOpaqueArgRangeChecks` — verified struck, the E3005 and
+//     the `Range check failed` panic both land — and the LENGTH bound is now the corpus body's own
+//     (`stdlib/Array.maxon`'s `set`, repaired by this rung). What refuses is the receiver, in three shapes,
+//     none of them about `set`:
+//       – a **COMPILER PANIC** on 34 `map` cases plus `tuples`/`interface-extensions`/`for-destructuring`,
+//         *"primitiveTypeByteSize: a `typeParameter`'s size is a runtime layout-descriptor read"*, raised by
+//         `MaxonToStdLowering.materializeLayoutArgFor` → `ensureLayoutDescriptor` for the instance
+//         `Array with Key` — `stdlib/Map.maxon`'s own slot columns. A corpus-served call on an
+//         `Array with <a parameter of the ENCLOSING generic>` needs a per-instance descriptor that cannot be
+//         a static blob; the arm needs none, because `__arr_set` reads the enclosing frame's own descriptor.
+//       – a **REFUSAL** where that receiver is not even admitted (`memberBelongsToTheCorpus` declines a
+//         non-instance-tagged receiver): 3 cases, `stable-partition-managed-pivot` ×2 and
+//         `generic-opaque-element-borrow-liveness.a-trivial-element-container-is-untouched`.
+//       – the **LOOP-STORE MOVE**: 5 `generic-opaque-element-loop-store` cases lose W58's
+//         `coOwnBorrowedOpaque`, which lives in the arm's `moveElementIntoContainer` and has no counterpart on
+//         the ordinary caller-consume path (*"moving a value declared outside this loop from inside the loop
+//         body"*).
+//     Three mechanisms, none of them a roster question, and the first is the one that gates the other two.
 //   • **`push`** — three separate faults at once, measured: `arrays/slice-parent-grows-while-view-lives`
 //     stopped detaching a COW view (exit 1 against 0); a `byte-enum-comparison` case lost the arm's
 //     enum→element coercion (`expected 'Byte', got 'Ascii'`); and both `bytearray-element-size`
 //     contested-alias cases lost their refusal. Plus the declared-record class below.
-//   • **`insert`** — ⛔ **BOTH HALVES OF THIS BULLET WERE WRONG, AND ARR3c MEASURED BOTH.** Its filed blocker
-//     (the negative index) was real but is CLOSED, in the corpus rather than here; and the reason it does not
-//     retire is one this bullet never named. It has moved to the FIRST bullet, beside `set`. See its own line
-//     on the roster below.
+//   • **`insert`** — ⭐ **RETIRED AT ARR1**, once ARRR gave the call site both range halves. It is the one of
+//     the eight whose blocker was genuinely only the range rule, and the one that never touches an
+//     opaque-element receiver in the corpus: nothing in `stdlib/` inserts into an `Array with <a parameter>`.
+//     The strike took `__arr_insert` and `parseArraySetOrInsert`'s `throwing` flag with it.
 //   • **`append`** — the ONE half of the old sentence that survived contact, and it hid something worse. Its
 //     `other Self` parameter meets the ORDINARY nominal argument agreement, which refuses what
 //     `ProgramSignatures.arrayAppendArgAdmits` admits by VALUE SET: three cases, `expected 'Array_int', got
@@ -4997,31 +5012,6 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(ArrayReserveMethod)
 	names.push(ArrayResizeMethod)
 	names.push(ClearMethod)
-	// ⭐⭐ **`insert` IS A FIRST-BULLET MEMBER — A COMPILE-TIME RULE THE CORPUS CANNOT STATE — AND ARR3c FOUND
-	// THAT ONLY BY PROBING, BECAUSE NO CASE IN THE CORPUS ASKS.** Struck alone it measured 22 failures of which
-	// 18 were this list rendering itself, and the four that remained all looked like expectation TEXT. The
-	// suite was GREEN on the retirement. It is a SILENT WRONG ANSWER: `Array with int(0 to 255)` taking
-	// `insert(0, value: 300)` is `E3005 Value 300 is outside the range of 'Byte'` at this arm, and through the
-	// corpus it COMPILES, RUNS and stores **44**. Both halves go — the literal refusal AND the runtime check —
-	// and a runtime-computed 300 exits 0 having read back 44 as well.
-	//
-	// ⚠ **THAT IS `set`'S BLOCKER, ON A SECOND MEMBER**: the corpus declares `value Element`, so the shared
-	// callee is compiled once and knows no range, while the CALL SITE, which does know the substitution, has no
-	// site kind for it. ARR3a filed it as a general pre-existing hole measured on a plain `type Box uses T`;
-	// this is its second member and its second HALF (ARR3a's was the runtime check alone). One rung closes
-	// `set`, `insert` and one of `push`'s five blockers together, and until it lands `insert` stays here.
-	//
-	// ⚠ **THE NEGATIVE INDEX — the bound this bullet used to hold — IS SETTLED AND IS NOT WHY IT STAYED.**
-	// Asked of the runnable reference: the bootstrap serves `insert` from `stdlib/Array.maxon`, does NOT
-	// range-check the `-1` (nothing range-checks an argument at a ranged parameter in EITHER compiler — a plain
-	// `int(0 to u64.max)` parameter printed `18446744073709551615`), and the corpus body clamped only the HIGH
-	// end. So it ran `managed.shiftRight(-1, len)`, whose buffer has no negative guard there, and READ THE SLOT
-	// BEFORE THE BUFFER INTO SLOT 0: `[10, 20, 30]` came back `[0, 10, 20]`, then `set` panicked quoting the
-	// clamp it had just failed to keep. `buildArrInsert`'s header below already carried that whole hazard and
-	// clamped both ends — one operation written twice, and only this copy had been fixed. The corpus body has
-	// the clamp now (`stdlib/Array.maxon`'s `insert`, `0 if at < 0 else at`), which repairs the BOOTSTRAP as
-	// much as shv2 and is gated by `specs/arrays.md`'s `insert-negative-index-clamps-to-front`.
-	names.push(InsertMethod)
 	names.push(AppendMethod)
 	// ⚠ **THE `Array` SURFACE'S OWN, AND THE ONE THE CORPUS ACTUALLY DECLARES** (`stdlib/Array.maxon:272`).
 	// It sits beside `append` because `append` is its CALLER — `:262`'s whole body is
@@ -7361,7 +7351,7 @@ enum SlotMismatchVoice
 	// `cannot assign '<got>' to variable '<name>' of type '<expected>'`.
 	assignedPlace
 	// The element argument of a parser-intrinsic container mutator (`push` / `set` / `insert`). These emit
-	// `__arr_push`/`__arr_set`/`__arr_insert` directly, so they have no `FuncSignature` and never reach
+	// `__arr_push`/`__arr_set` directly, so they have no `FuncSignature` and never reach
 	// `SemanticCheck.checkArgTypes` — but they are calls all the same, and their refusal takes the sentence
 	// every other argument position takes (`SemanticCheck.argTypeMismatchSentence`, through
 	// `ParseError.builtinArgumentType` — the SAME variant the sibling `append` doors already raise).
@@ -11769,6 +11759,13 @@ export type Parser
 	// The three `Array` mutators that MOVE an element in — `push` (its sole argument), `set` / `insert` (their
 	// labelled `value:` argument) — all of which transfer ownership of that element to the array (P1.7 slice
 	// 3b-iii). `append` borrows another array, `reserve`/`resize`/`clear` take no element, so none feeds.
+	//
+	// ⚠ **`insert` STAYS HERE THOUGH IT LEFT THE ROSTER (ARR1), AND THAT IS THE SAME SPLIT `clone` KEEPS ONE
+	// SWEEP UP** (`arrayCopyMethodAt`): a roster says which surface shv2 SERVES, and this asks what a method
+	// DOES to its element. A corpus-served `insert` still takes ownership, so a body forwarding its own `T` to
+	// `self.items.insert(i, value: item)` still owes a descriptor to take that reference through — and this
+	// pre-scan resolves no receiver, so it is over-approximate BY DESIGN and errs toward reserving one. The
+	// other direction is a MISSING descriptor, which is a fault.
 	function isArrayMoveInMutator(name ByteArray) returns bool
 		return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod)
 	end 'isArrayMoveInMutator'
@@ -44421,7 +44418,7 @@ export type Parser
 	function requireArrayLiteralElementMatches(elem ValueId, giid GenericInstanceId, elemTok Token) throws ParseError
 		let declaredElement = self.signatures.containerElementType(giid)
 		if self.tagOf(elem) == ValueTypeTag.function and maxonTypeTag(declaredElement) == ValueTypeTag.function 'bothAreFunctionValues'
-			self.recordFunctionTypeDoorByName(self.signatures.indexFunctionTypeName(declaredElement), gotName: self.internedName(self.valueNameId(elem)), door: FunctionTypeDoor.containerElement, placeName: EmptySourceText, anchor: elemTok)
+			self.recordFunctionTypeDoorByName(self.signatures.indexSpaceTypeName(declaredElement), gotName: self.internedName(self.valueNameId(elem)), door: FunctionTypeDoor.containerElement, placeName: EmptySourceText, anchor: elemTok)
 			return
 		end 'bothAreFunctionValues'
 
@@ -45863,7 +45860,7 @@ export type Parser
 			// ⚠ The runtime RETURNS the node it linked (the `__ManagedList` surface's handle), so the call is
 			// typed `integer` and the value discarded — a `List` has no node type to hand it to. Typing it
 			// `void` here would tell the Maxon tier a value-returning entry yields nothing, which is the
-			// mismatch `parseArraySetOrInsert`'s own tag note records as a wrong answer in the other
+			// mismatch `parseArraySet`'s own tag note records as a wrong answer in the other
 			// direction. `requireVoidMethodIsStatement` above is what keeps the SURFACE void.
 			_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 			return list
@@ -46202,7 +46199,7 @@ export type Parser
 
 	// ⭐ **DISPATCH A BUILTIN `Vector` METHOD** — cursor on the method NAME, `vec` the (borrowed) receiver
 	// record. Three members, and every one of them is emitted through the CONTAINER doors the `Array` and
-	// `List` dispatchers already use (`emitContainerElementAccessor`, `parseArraySetOrInsert`), so the
+	// `List` dispatchers already use (`emitContainerElementAccessor`, `parseArraySet`), so the
 	// ownership, the borrow and the element type are one answer for all three containers.
 	//
 	// ⭐⭐ **`count()` FOLDS TO A CONSTANT, WHICH IS THE ONE PLACE A VECTOR VISIBLY IS NOT AN ARRAY.** The size
@@ -46234,7 +46231,7 @@ export type Parser
 
 		if methodTok.value.equals(ArraySetMethod) 'set'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			return try self.parseArraySetOrInsert(func, arr: vec, giid: giid, callee: ArrSetName, methodTok: methodTok, throwing: true, secondArgLabelled: true, range: range)
+			return try self.parseArraySet(func, arr: vec, giid: giid, callee: ArrSetName, methodTok: methodTok, secondArgLabelled: true, range: range)
 		end 'set'
 
 		throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)}` method '{String.from(methodTok.value)}' — a vector provides `{String.from(CountMethod)}`/`{String.from(GetMethod)}`/`{String.from(ArraySetMethod)}` and `for … in`. It has no `push`/`pop`/`append`/`resize`/`clear`: its size is part of its type, and an operation that changed the length would change the value's type", line: methodTok.line, column: methodTok.column)
@@ -47702,18 +47699,24 @@ export type Parser
 		// bound, and the record is shared — so the surface answer that already decides this call's LABEL rule
 		// decides its CALLEE too, and there is no second discriminator.
 		//
-		// ⛔⛔ **ARR3a TRIED TO RETIRE THE `Array` HALF AND PUT IT BACK, FOR A REASON THAT IS NOT ABOUT `set`.**
-		// The corpus body is one guard short of the length bound (`stdlib/Array.maxon:217`, which now says so),
-		// and that half was easy. What is not: the arm's `parseArraySetOrInsert` is where a RANGED element's
-		// stored value gets its runtime range check, and the corpus declaration cannot host one — its parameter
-		// is the opaque `Element`, so the callee is compiled once and knows no range, while the CALL SITE, which
-		// does know the substitution, has no site kind for it (`rangeCheckParamSites` is the callee's own
-		// declared list). **MEASURED with `set` struck: `ranged-typealias.array-set-runtime-panic` stored 505
-		// into an `int(0 to 100)` array and exited 0 with an EMPTY stderr, where it pins
-		// `Range check failed: value outside typealias 'Percent'`.** The hole is GENERAL and PRE-EXISTING, not
-		// `set`'s — the same 505 lands silently through a plain `type Box uses T`'s `put(value T)` with no
-		// `Array` member retired anywhere — so it is a rung of its own, and until it is closed this arm is what
-		// enforces a ranged element's domain.
+		// ⛔⛔ **ARR3a AND ARR1 BOTH TRIED TO RETIRE THE `Array` HALF AND BOTH PUT IT BACK — AND THE SECOND
+		// ATTEMPT RETIRED THE FIRST ONE'S REASON ALONG WITH ITS OWN HOPE.** ARR3a's blocker was the RANGE CHECK
+		// (the corpus declares `value Element`, so the shared callee knows no range); ARRR closed exactly that,
+		// at the call site, and ARR1 verified struck that BOTH halves arrive — the E3005 on a literal and the
+		// `Range check failed` panic on a computed 505 — from `recordOpaqueArgRangeChecks` with no arm involved.
+		// The LENGTH bound is likewise the corpus body's own now (`stdlib/Array.maxon`'s `set`, whose missing
+		// guard ARR1 measured as a LEAK and repaired there, in the body the bootstrap shares).
+		//
+		// ⛔ **WHAT REFUSES IS THE RECEIVER, NOT `set`.** An `Array with <a parameter of the enclosing generic>`
+		// cannot reach a corpus body at all: `stdlib/Map.maxon`'s own slot columns PANIC the compiler
+		// (*"primitiveTypeByteSize: a `typeParameter`'s size is a runtime layout-descriptor read"*, from
+		// `MaxonToStdLowering.materializeLayoutArgFor` needing a per-instance descriptor for `Array with Key`),
+		// 34 `map` cases plus four more; three further cases are REFUSED outright because
+		// `memberBelongsToTheCorpus` does not admit that receiver; and five `generic-opaque-element-loop-store`
+		// cases lose W58's `coOwnBorrowedOpaque`, which lives in `moveElementIntoContainer` and has no
+		// counterpart on the ordinary caller-consume path. `arraySurfaceMemberNames`' `set` bullet carries the
+		// full measurement. Until an opaque-element receiver can name a corpus body, this arm is how a `Map`
+		// writes its own slots.
 		//
 		// ⚠ **THE CALLEE IS PICKED INTO A `var` BECAUSE THE BOOTSTRAP CANNOT LOWER IT AS A CONDITIONAL
 		// EXPRESSION HERE.** Written `callee: ArrMemSetName if isManagedMemory else ArrSetName` — the shape
@@ -47728,7 +47731,7 @@ export type Parser
 		// ⚠⚠ **`set` IS A VOID MUTATOR TOO — IT SITS HERE ONLY BECAUSE IT THROWS, AND IT NEEDS BOTH HALVES OF
 		// THE REFUSAL (found in review of D11).** The two halves cover DISJOINT positions and neither can do
 		// the other's job: this guard answers the BARE spelling (`let x = arr.set(…)`, where `resultUsed` is
-		// TRUE at the arm), and the honest `void` result tag `parseArraySetOrInsert` mints answers the `try`
+		// TRUE at the arm), and the honest `void` result tag `parseArraySet` mints answers the `try`
 		// spelling (`let x = try arr.set(…) otherwise …`, where the target is parsed `resultUsed: false` and
 		// only `parseTry`'s `voidInValue` can see it). The three buffer mutators below have carried both since
 		// R4.4; `set` had NEITHER, which is why it compiled and ran.
@@ -47744,7 +47747,7 @@ export type Parser
 				setCallee = ArrMemSetName
 			end 'capacityBoundedSetter'
 
-			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: setCallee, methodTok: methodTok, throwing: true, secondArgLabelled: not isManagedMemory, range: range)
+			return try self.parseArraySet(func, arr: arr, giid: giid, callee: setCallee, methodTok: methodTok, secondArgLabelled: not isManagedMemory, range: range)
 		end 'set'
 		if methodTok.value.equals(ArrayFirstMethod) 'first'
 			try self.consumeEmptyArgList()
@@ -47875,12 +47878,6 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitArrayVoidCall(ArrClearName, args: singletonArgs(arr), receiver: arr, range: range)
 		end 'clear'
-		if methodTok.value.equals(InsertMethod) 'insert'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			// `insert` is an `Array` method and nothing else — the buffer surface has no member of that name —
-			// so its `value:` label is required whichever surface the receiver wears.
-			return try self.parseArraySetOrInsert(func, arr: arr, giid: giid, callee: ArrInsertName, methodTok: methodTok, throwing: false, secondArgLabelled: true, range: range)
-		end 'insert'
 		// ⭐⭐ **ONE ARM FOR ALL THREE SPELLINGS OF ONE OPERATION — `Array.append`, `Array.appendMemory` AND THE
 		// BUFFER'S `append` — BECAUSE THE CORPUS BUILDS EACH OUT OF THE LAST.** `stdlib/Array.maxon:262` is
 		// `append(other Self)` whose entire body is `appendMemory(other.managed)` — the array half of `other` is
@@ -47931,8 +47928,8 @@ export type Parser
 		// NON-throwing mutators around it (`arr.push(x)` yields something for a statement to be). Under a
 		// `try` it makes the TRY's value the array — an owned managed record — and the try's ok/error
 		// reconciliation then acts on it: MEASURED as an access violation on the first `setByte` of a freshly
-		// created buffer. `parseArraySetOrInsert` already splits the same way for the same reason (its
-		// throwing arm calls `emitRuntimeCall`, its non-throwing one `emitArrayVoidCall`).
+		// created buffer. `parseArraySet` reaches `emitRuntimeCall` for the identical reason — it is throwing on
+		// every surface that still has it, which is what let ARR1 delete the flag that used to choose.
 		//
 		// ⭐ **R4.4 CLOSED THE HOLE THIS BLOCK USED TO NAME.** R4.2's note here read "the cost of the R4.1
 		// binding is that all three are visible on a user's `ByteArray` too, which the language does not give
@@ -49032,7 +49029,7 @@ export type Parser
 	end 'resolvedSlotType'
 
 	// ⭐⭐ **AN ELEMENT ARGUMENT MUST AGREE WITH THE INSTANCE'S ELEMENT TYPE.** The `Array` mutators are
-	// PARSER-INTRINSIC — `push`/`set`/`insert` emit `__arr_push`/`__arr_set`/`__arr_insert` directly, so they
+	// PARSER-INTRINSIC — `push`/`set` emit `__arr_push`/`__arr_set` directly, so they
 	// have no `FuncSignature` and never reach `SemanticCheck.validateCall` — and until this existed nothing
 	// asked the question at all: `moveElementIntoContainer` asked only about OWNERSHIP. All three symptoms were
 	// MEASURED, and none of them was a diagnostic:
@@ -49112,7 +49109,7 @@ export type Parser
 		// ⭐⭐ **THE ELEMENT'S DECLARED RANGE BINDS IT AT RUNTIME TOO (A1f-arrayelem) — AND THE GUARD GOES
 		// HERE, AT THE STORE, WHICH IS THE LAST PLACE THAT KNOWS THE ELEMENT TYPE.** This door owed only
 		// the compile-time half until this rung, on the argument the call-argument door owed it: the element
-		// travels as `__arr_push`/`__arr_set`/`__arr_insert`'s third argument, and the callee it travels
+		// travels as `__arr_push`/`__arr_set`'s third argument, and the callee it travels
 		// into is a SHARED `Array` body whose parameter is the OPAQUE element type — so A1f's cure, a guard
 		// at the callee's entry, has no narrowed parameter to stand behind and structurally cannot reach it.
 		//
@@ -49234,19 +49231,22 @@ export type Parser
 		return self.kindAt(index) == TokenKind.comma and self.kindAt(index + 1) == TokenKind.identifier and self.kindAt(index + 2) == TokenKind.colon
 	end 'atArgLabel'
 
-	// `set`/`insert` — `( index , value: X )`: the index positional, the value labelled `value:`. Emits the
-	// `__arr_set`/`__arr_insert` call (throwing for `set`, void for `insert`) and returns its result. The
-	// value argument is parsed AFTER the index so the throwing `set`'s call is the last op the enclosing
-	// `try` rewrites.
-	function parseArraySetOrInsert(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, methodTok Token, throwing bool, secondArgLabelled bool, range SourceRange) returns ValueId throws ParseError
+	// `set` — `( index , value: X )`: the index positional, the value labelled `value:` on every surface but the
+	// buffer (see `consumeArrayArgLabel`). Emits the `__arr_set`/`__arr_mem_set` call and returns its result. The
+	// value argument is parsed AFTER the index so the call is the last op the enclosing `try` rewrites.
+	//
+	// ⚠ **IT USED TO SERVE `insert` TOO, ON A `throwing` FLAG, AND ARR1 TOOK BOTH AWAY.** `insert` left the
+	// `Array` roster and is served from `stdlib/Array.maxon`, which was the flag's only `false` — every
+	// remaining spelling of this shape (`Vector.set`, the buffer's `set`) throws, so a parameter with one value
+	// is a branch nothing can reach.
+	function parseArraySet(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, methodTok Token, secondArgLabelled bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let index = try self.parseExpression(func, block: self.currentBlock)
 		try self.consumeArrayArgLabel(ArrayValueLabel, required: secondArgLabelled)
-		// The value is a managed-element MOVE-IN (`set`/`insert`), so it is consumed exactly as `push` is —
+		// The value is a managed-element MOVE-IN, so it is consumed exactly as `push` is —
 		// `moveElementIntoContainer` promotes a borrowed String, transfers an owned value, refuses a borrowed
 		// aggregate. `__arr_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
-		// slot), so no leak; `__arr_insert` shifts the tail (a relocation) and stores into the vacated slot.
-		// The TYPE check precedes the move-in for the reason `requireContainerElementType` states.
+		// slot), so no leak. The TYPE check precedes the move-in for the reason `requireContainerElementType` states.
 		let valueStart = self.pos
 		let raw = try self.parseExpression(func, block: self.currentBlock)
 		let checked = try self.requireContainerElementType(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
@@ -49266,13 +49266,10 @@ export type Parser
 		// ⚠ The Std entry still ok-returns `(0, flag)` — a throwing `void` runtime function is normal
 		// (`__arr_set_length`, `__arr_set_byte` and `__arr_mem_grow` are all declared `StdReturnType.void`
 		// and all throw); what this tag decides is whether MAXON believes the call yields something.
-		if throwing 'throwing'
-			// The elision is asked HERE rather than at the `set` arms, because the index is parsed here — and it
-			// declines by itself for `insert` and for every unsized container, so no arm needs to know about it.
-			return self.emitRuntimeCall(self.elementAccessCallee(callee, index: index, giid: giid), args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'throwing'
-		return self.emitArrayVoidCall(callee, args: tripleArgs(arr, second: index, third: value), receiver: arr, range: range)
-	end 'parseArraySetOrInsert'
+		// The elision is asked HERE rather than at the `set` arms, because the index is parsed here — and it
+		// declines by itself for every unsized container, so no arm needs to know about it.
+		return self.emitRuntimeCall(self.elementAccessCallee(callee, index: index, giid: giid), args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	end 'parseArraySet'
 
 	// `( expr )` — a single element-VALUE argument (`push(x)`), TYPE-CHECKED against the instance's element
 	// type and then MOVED into the array (P1.7 slice 3): a managed element is consumed so the array owns it
@@ -54515,9 +54512,11 @@ export type Parser
 		// Its span is the receiver EXPRESSION's OWN anchor (`acc`, or the `self` keyword), which is the
 		// token a diagnostic about the receiver has to point at — and it is the receiver's rather than this
 		// function's `anchor` because a method call anchors the CALL at the method name. See `ReceiverArg`.
+		// ⚠ **BOTH TOKENS TRAVEL, AND THEY WERE ONE UNTIL ARR1** — the ARGUMENT span is the receiver's, and
+		// E3070's write site is the METHOD's. See `prependReceiverArg`.
 		match receiver 'prependReceiver'
 			none then break 'prependReceiver'
-			value(id, immutableName, subjectName, receiverTok) then try self.prependReceiverArg(func, callee: callee, anchor: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
+			value(id, immutableName, subjectName, receiverTok) then try self.prependReceiverArg(func, callee: callee, callAnchor: anchor, receiverTok: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
 		end 'prependReceiver'
 
 		// ⭐ THE ONE DOOR WHERE A BARE BUILTIN CAN ARRIVE, so it is the one door that asks which label
@@ -55304,9 +55303,18 @@ export type Parser
 	// `argSlotPosition` maps to a parameter, and a site recorded beside a push that had not happened yet
 	// would name the wrong column. Recorded BEFORE the push, so `args.count()` is this argument's own index
 	// — the identical rule `parseCallArgs` states for the source's arguments.
-	function prependReceiverArg(func IrFunction, callee ByteArray, anchor Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) throws ParseError
-		self.noteReceiverBorrowSubjects(func, callee: callee, display: EmptySourceText, anchor: anchor, argColumn: args.count(), id: id, subjectName: subjectName)
-		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(anchor), immutableName: immutableName)
+	//
+	// ⭐⭐ **THE TWO SPANS ARE DIFFERENT TOKENS, AND THEY WERE ONE UNTIL ARR1 (a measured wrong anchor).** The
+	// ARGUMENT SPAN stays the receiver's own token, because a diagnostic about argument 0 points at the value
+	// the author wrote. E3070's WRITE SITE is the METHOD NAME, because its sentence names the method as the
+	// instrument — *"cannot mutate 'arr' via 'insert'"* — and every other door recording one hands over
+	// `methodTok` (`noteBorrowSubjectWrite`'s four container callers). Sharing one token made a DECLARED
+	// mutator blame a different column from the parser-intrinsic mutator on the line above it: MEASURED when
+	// `insert` left the roster, `arr.insert(…)` moved from `5:6` to `5:2` while `arr.push(…)` stayed at `5:6`,
+	// and the runnable oracle anchors `insert` at the method too.
+	function prependReceiverArg(func IrFunction, callee ByteArray, callAnchor Token, receiverTok Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) throws ParseError
+		self.noteReceiverBorrowSubjects(func, callee: callee, display: EmptySourceText, anchor: callAnchor, argColumn: args.count(), id: id, subjectName: subjectName)
+		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(receiverTok), immutableName: immutableName)
 	end 'prependReceiverArg'
 
 	// ⭐⭐ **WHICH STORAGES A RECEIVER STANDS FOR — and `self` stands for MORE THAN ONE.** An ordinary

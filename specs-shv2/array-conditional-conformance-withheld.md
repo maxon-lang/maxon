@@ -108,7 +108,7 @@ things at once and both matter:
   and it reads REPO-RELATIVE because the runner rewrites the compiler's absolute `stdlib/` root the way it
   already rewrites a staged fragment's path (`SpecTestRunner.rewriteStdlibPaths`). The line number is the
   library's, so this expectation moves when `stdlib/Array.maxon` gains a line above 145; that is a real
-  cost and it is the same one the four `/specs` cases pinning `Array.maxon:382`'s panic already pay.
+  cost and it is the same one the four `/specs` cases pinning `Array.maxon:413`'s panic already pay.
 
 ⭐⭐ **THIS SPAN IS NOW FOUR OTHER CASES' ANSWER TOO, AND THIS IS WHERE THAT IS EXPLAINED ONCE.** ARRH struck
 `clone` from `Parser.arraySurfaceMemberNames`, so `arr.clone()` is `stdlib/Array.maxon:143`'s declaration

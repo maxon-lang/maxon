@@ -215,6 +215,38 @@ end 'main'
 99
 ```
 
+<!-- test: negative-index-reports-index-out-of-bounds -->
+### A NEGATIVE index is out of bounds too, and it used to be called an empty slot
+The third answer the same distinction owes, and the one nothing asked for. The failure is decided from
+the live range, and "below the length" is true of `-1` on every signed comparison — so a negative index
+was reported as a slot that was never filled, sending the reader to look for a slot that was never
+addressable. It is out of bounds at BOTH ends.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+	export var value as Integer
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+	var arr = SlotArray.create()
+	arr.reserve(2)
+	try arr.managed.setLength(2) otherwise panic("setLength: capacity just reserved for 2")
+	try arr.get(-1) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
+end 'main'
+```
+```exitcode
+99
+```
+
 <!-- test: first-empty-slot -->
 ### first() on an array whose slot 0 is empty
 ```maxon

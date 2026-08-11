@@ -298,7 +298,6 @@ export let ArrReserveName = b"__arr_reserve"
 export let ArrResizeName = b"__arr_resize"
 export let ArrFirstName = b"__arr_first"
 export let ArrClearName = b"__arr_clear"
-export let ArrInsertName = b"__arr_insert"
 export let ArrRemoveName = b"__arr_remove"
 export let ArrDecrefName = b"__arr_decref"
 
@@ -567,7 +566,7 @@ export let CursorRecordBytes = 16 as ParsedInt
 // REACH THIS ENTRY AT ALL.** ⚖ USER RULING, 2026-07-30 (the second on this member): the front end REFUSES
 // `arr.managed.set` when the element type is managed — `Parser.requireBufferSetOwnsWhatItStores`, **E3109**.
 // A managed element written past the length would be owned by NOBODY until `setLength` published it:
-// `__arr_decref` destroys only `[0, length)`, `__arr_push`/`__arr_insert`/`__arr_append` store AT `length`
+// `__arr_decref` destroys only `[0, length)`, `__arr_push`/`__arr_append` store AT `length`
 // WITHOUT destroying the occupant (before R4.6 that slot was provably NULL, so there was nothing to destroy),
 // and a grow or a detach copies only `length · element_size` live bytes and abandons the rest. MEASURED in
 // R4.6 review, all at exit **101**: a `String` staged and never published; one staged then `push`ed over; and
@@ -575,7 +574,7 @@ export let CursorRecordBytes = 16 as ParsedInt
 //
 // ⭐ **REJECTED RATHER THAN FIXED, and the reason is this file's own invariant.** Making the staged slot owned
 // means a destructor gate on every managed `push` — a hot path — and it makes `[length, capacity)`-reads-ZERO
-// CONDITIONAL, which `__arr_push`, `__arr_insert`, `__arr_append`, `emitReallocateToCapacity` and
+// CONDITIONAL, which `__arr_push`, `__arr_append`, `emitReallocateToCapacity` and
 // `__arr_cow_detach` all rely on. Refusing costs neither, and costs no capability: `[0, length)` is exactly
 // what `__arr_set` covers, which owns what it stores. **So this entry only ever sees a TRIVIAL element**, and
 // the staging story the ruling exists to serve — `__ManagedMemory.create`, which can only yield a trivial
@@ -1038,7 +1037,6 @@ export function installArrayRuntime(module StdModule, usage RuntimeUsage)
 	buildArrResize(module)
 	buildArrFirst(module)
 	buildArrClear(module)
-	buildArrInsert(module)
 	buildArrRemove(module)
 	buildArrSlice(module)
 	buildArrClone(module)
@@ -2105,7 +2103,7 @@ end 'emitZeroElems'
 // index slips past every at-or-over-length bounds test (`index >= length` / `end > length`): signed, `-1 >= 3`
 // is FALSE and the index reads as "in bounds", then `buffer + index·elementSize` addresses BEFORE the buffer
 // (an OOB heap read/write). This explicit guard is the ONE home of "reject a negative index" — shared by
-// `emitIndexOutOfRange` (get/set/remove) and `buildArrSlice`/`buildArrInsert`, so the fact is written once.
+// `emitIndexOutOfRange` (get/set/remove) and `buildArrSlice`, so the fact is written once.
 function emitIsNegative(module StdModule, block IrBlock, value ValueId, ids ValueMinter) returns ValueId
 	let zero = emitConst(module, block: block, value: 0, ids: ids)
 	return emitCmp(module, block: block, a: value, b: zero, pred: StdCmpPred.lt, ids: ids)
@@ -3039,72 +3037,6 @@ function buildArrClear(module StdModule)
 
 	module.functions.push(func)
 end 'buildArrClear'
-
-// `__arr_insert(arr, index, value)` — insert at `index` (clamped to `[0, length]`), shifting the tail
-// right by one slot (a backward byte copy, overlap-safe). Insert at `length` is a plain append.
-//
-// ⭐ **`insert` CLAMPS, it does NOT throw** — deliberately, mirroring the reference `stdlib/Array.maxon`'s
-// `insert` ("clamps index to [0, count]"), which is why it stays a NON-throwing void mutator (unlike the
-// throwing `get`/`set`/`remove`/`slice`, whose out-of-range index is an ERROR). So an out-of-range index is
-// CLAMPED both ways: above `length` → append at `length`; BELOW 0 → insert at the front (0). The low clamp is
-// not cosmetic — without it a negative index reaches `emitSlotAddr` and addresses `buffer + index·elementSize`
-// BEFORE the buffer (an OOB heap WRITE, plus a backward-copy of `length - index` — a wrong count — slots).
-// `StdCmpPred` is signed, so `index < 0` catches it; the pre-existing `index > length` never could (`-1 > 3`
-// is FALSE). This makes the implementation honor its own long-documented `[0, length]` clamp contract.
-function buildArrInsert(module StdModule)
-	var func = IrFunction.createFromStd(ArrInsertName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(3)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var clampHigh = module.addBlock(func, label: b"clamphigh")
-	var checkLow = module.addBlock(func, label: b"chklow")
-	var clampLow = module.addBlock(func, label: b"clamplow")
-	var useIndex = module.addBlock(func, label: b"useidx")
-	var afterClamp = module.addBlock(func, label: b"aclamp")
-
-	emitParams(module, block: entry, count: 3)
-	let arr = 0 as ValueId
-	let index = 1 as ValueId
-	let value = 2 as ValueId
-
-	// entry: an index above `length` clamps to `length`; otherwise fall to the low-side check.
-	let length = emitLoadField(module, block: entry, record: arr, offset: ArrLengthOffset, ids: ids)
-	let overLen = emitCmp(module, block: entry, a: index, b: length, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(overLen, thenBlockId: clampHigh.id, elseBlockId: checkLow.id))
-
-	let clamped = ids.mint()
-	afterClamp.blockArgs.push(IrBlockArg.create(clamped, argType: StdType.i64))
-	module.setTerminator(clampHigh, op: StdOp.branch(afterClamp.id))
-	clampHigh.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(length)))
-
-	// checkLow: a negative index clamps to the front (0); an in-range index is used as-is.
-	let negative = emitIsNegative(module, block: checkLow, value: index, ids: ids)
-	module.setTerminator(checkLow, op: StdOp.condBranch(negative, thenBlockId: clampLow.id, elseBlockId: useIndex.id))
-
-	let frontIndex = emitConst(module, block: clampLow, value: 0, ids: ids)
-	module.setTerminator(clampLow, op: StdOp.branch(afterClamp.id))
-	clampLow.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(frontIndex)))
-
-	module.setTerminator(useIndex, op: StdOp.branch(afterClamp.id))
-	useIndex.branchEdges.push(BranchEdge.create(afterClamp.id, argIds: argsOf(index)))
-
-	// afterClamp: grow for one more, then shift `[clamped, length)` up one slot and store `value`.
-	let one = emitConst(module, block: afterClamp, value: 1, ids: ids)
-	let required = emitBin(module, block: afterClamp, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
-	let grown = ids.mint()
-	module.appendOp(afterClamp, op: StdOp.call(grown, callee: ArrGrowName, args: twoArgs(arr, second: required)))
-	let es = emitLoadField(module, block: afterClamp, record: arr, offset: ArrElementSizeOffset, ids: ids)
-	let buffer = emitLoadField(module, block: afterClamp, record: arr, offset: ArrBufferOffset, ids: ids)
-	let openedAt = emitBin(module, block: afterClamp, a: clamped, b: one, opcode: StdBinOpcode.add, ids: ids)
-	let moveCount = emitBin(module, block: afterClamp, a: length, b: clamped, opcode: StdBinOpcode.sub, ids: ids)
-	emitMoveElems(module, block: afterClamp, destBuffer: buffer, destIndex: openedAt, srcBuffer: buffer, srcIndex: clamped, count: moveCount, es: es, ids: ids)
-	var afterStore = emitStoreElemAt(module, func: func, cur: afterClamp, buffer: buffer, index: clamped, value: value, es: es, ids: ids)
-	let newLen = emitBin(module, block: afterStore, a: length, b: one, opcode: StdBinOpcode.add, ids: ids)
-	emitStoreField(module, block: afterStore, record: arr, offset: ArrLengthOffset, value: newLen)
-	module.setTerminator(afterStore, op: StdOp.retVoid)
-
-	module.functions.push(func)
-end 'buildArrInsert'
 
 // `__arr_remove(arr, index) -> (value, flag)` — remove and return element `index` (throws OOB), shifting
 // the tail left by one slot (a forward byte copy) and zeroing the vacated last slot.

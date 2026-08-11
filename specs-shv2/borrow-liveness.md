@@ -893,7 +893,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-writing-its-own-field.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/fragments/borrow-liveness/receiver-method-writing-its-own-field.test:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: receiver-method-explicit-self-spelling -->
@@ -924,7 +924,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-explicit-self-spelling.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/fragments/borrow-liveness/receiver-method-explicit-self-spelling.test:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: receiver-method-rebinding-its-own-field -->
@@ -957,7 +957,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-rebinding-its-own-field.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+error E3070: specs/fragments/borrow-liveness/receiver-method-rebinding-its-own-field.test:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
 ```
 
 <!-- test: receiver-method-inside-a-for-loop -->
@@ -1042,7 +1042,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/receiver-method-writes-transitively.test:24:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 23)
+error E3070: specs/fragments/borrow-liveness/receiver-method-writes-transitively.test:24:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 23)
 ```
 
 <!-- test: receiver-method-that-writes-nothing -->
@@ -1199,7 +1199,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/sibling-call-explicit-self-spelling.test:18:3: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
+error E3070: specs/fragments/borrow-liveness/sibling-call-explicit-self-spelling.test:18:8: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)
 ```
 
 <!-- test: sibling-call-that-writes-nothing -->

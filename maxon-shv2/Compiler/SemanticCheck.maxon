@@ -3255,15 +3255,23 @@ function checkTypeParameterArgsAt(project Project, func IrFunction, gid GenericI
 		// parser's `field` door), which is the asymmetry that hid all of this: one rule, covered on some
 		// containers and not their siblings.
 		if maxonTypeTag(substituted) == ValueTypeTag.function and argTag == ValueTypeTag.function 'functionTypeArgument'
-			if checkFunctionArgShape(project, func: func, declaredShape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: signatures.indexFunctionTypeName(substituted), side: "declared"), argId: argId, paramName: paramName, position: i, callRange: callRange, filePath: filePath) 'signatureMismatch'
+			if checkFunctionArgShape(project, func: func, declaredShape: requireFunctionShapeOf(functionTypeRegistryOf(project), name: signatures.indexSpaceTypeName(substituted), side: "declared"), argId: argId, paramName: paramName, position: i, callRange: callRange, filePath: filePath) 'signatureMismatch'
 				return
 			end 'signatureMismatch'
 			continue
 		end 'functionTypeArgument'
 
-		// The substituted type argument carries no pre-erasure carrier of either kind: it is the INSTANCE's own
+		// The substituted type argument carries no pre-erasure AGGREGATE of either kind: it is the INSTANCE's own
 		// argument type, read live out of the signature index rather than off a declaration this pass ever saw.
-		if checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: substituted, declaredAggregate: EmptySourceText, declaredName: EmptySourceText, paramName: paramName, position: i, callRange: callRange, filePath: filePath) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
+		//
+		// ⭐ **IT DOES CARRY THE OTHER PRE-ERASURE COLUMN — THE `typealias` THE AUTHOR WROTE — AND PASSING IT
+		// EMPTY WAS A WRONG NOUN.** `paramDisplayName`'s last arm falls back to the tag's class word, so a
+		// refusal at a `Box with Integer` read `expected 'int'` where the concrete `takeInt`-shaped parameter
+		// beside it reads `expected 'Integer'` off `sig.paramDeclaredNames` — one rule spelling its type two
+		// ways by which door the value entered, and the runnable oracle says `Integer`. Found by ARR1 when
+		// `insert` started arriving here (`arrays.error.insert-string-into-int-array`); it was equally wrong for
+		// every other substituted scalar argument, ARRR's own `Box with Percent` included.
+		if checkArgAgainstDeclaredTag(project, argTag: argTag, argNameId: argNameId, declaredType: substituted, declaredAggregate: EmptySourceText, declaredName: signatures.indexScalarAliasName(substituted), paramName: paramName, position: i, callRange: callRange, filePath: filePath) != DeclaredTypeMatch.ok 'refusedBySubstitutedType'
 			return
 		end 'refusedBySubstitutedType'
 	end 'eachArg'
@@ -4483,7 +4491,7 @@ end 'checkOneArgType'
 // project-space, a substituted type argument's is index-space — so a shared `id → name → shape` chain here
 // would be exactly the door that hides a cross-space read. Each caller crosses on the side that owns its ids
 // and hands over the answer; names travel between interners, ids never do
-// (`ProgramSignatures.indexFunctionTypeName`).
+// (`ProgramSignatures.indexSpaceTypeName`).
 //
 // ⛔⛔ **THE SECOND CALLER IS WHY THIS IS SHARED, AND IT WAS A LIVE SILENT MISCOMPILE.** A generic instance's
 // method takes its parameter as an opaque `T`, so `checkOneArgType`'s own arm — which keys on the PARAMETER

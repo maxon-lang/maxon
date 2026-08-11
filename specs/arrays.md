@@ -787,6 +787,52 @@ end 'main'
 159
 ```
 
+### Set is bounded by the LIVE LENGTH, not by the capacity
+
+`set` refuses every index at or past `count()`, and the bound is the array's own rather than the storage
+layer's: `__ManagedMemory.set` underneath admits any index below the CAPACITY, deliberately, because the
+buffer is where a caller stages slots and then publishes them with `setLength`. An `Array` has no staging
+idiom — `count()` is its whole contract — so forwarding straight through would write a slot no reader can
+reach.
+
+For a MANAGED element that is not merely invisible, it is a LEAK: the record lands outside `[0, count)`,
+which is exactly the range the element-destroy walk covers, so nothing ever releases it. Measured before
+the guard existed, on both compilers: `push` one string, `reserve(8)`, `set(2, …)` — the store SUCCEEDED,
+`count()` still read 1, and the second string was never freed.
+
+<!-- test: set-past-the-live-length-is-refused -->
+```maxon
+function main() returns ExitCode
+	var arr = ["one long heap allocated string value here"]
+	arr.reserve(8)
+	try arr.set(2, value: "two long heap allocated string value here") otherwise 'pastLength'
+		return 42
+	end 'pastLength'
+	return arr.count()
+end 'main'
+```
+```exitcode
+42
+```
+
+A NEGATIVE index is the same refusal and needs saying separately, for `insert`'s reason one section up:
+nothing range-checks an argument at `index`'s `int(0 to u64.max)`, so a `-1` arrives intact and is below
+the length on every signed comparison.
+
+<!-- test: set-negative-index-is-refused -->
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	try arr.set(-1, value: 99) otherwise 'negative'
+		return 42
+	end 'negative'
+	return try arr.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
 ### Copy-on-Write
 
 <!-- test: slice-cow-modify-slice -->
@@ -978,7 +1024,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:382: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
+panic at Array.maxon:413: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
 Stack trace:
   in __Array_i64.resize
   in main
@@ -1006,7 +1052,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at Array.maxon:382: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
+panic at Array.maxon:413: Array.resize: newLength is not an ElementCount — a negative request is never above the capacity, so reserve does not grow for it and setLength refuses it
 Stack trace:
   in IntArray.resize
   in main

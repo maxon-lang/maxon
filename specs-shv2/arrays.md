@@ -998,6 +998,89 @@ end 'main'
 error E3070: <fragment>:5:6: cannot mutate 'arr' via 'insert' while it is borrowed by 's' (borrowed at line 4)
 ```
 
+<!-- test: error.set-on-a-let-array -->
+### … and `set` is the THIRD member of that pair, which nothing asked either
+⚠ ARR3c added `insert`'s two because *"coverage is not agreement"*, and left `set` — the member on the
+same `arrayMethodMutatesReceiver` answer, reached through the same `parseArraySet`, with the same
+two omissions. ARR1 tried to retire `set` and put it back for reasons that have nothing to do with these
+two answers, so they are pinned HERE first: whichever rung reaches `set` next inherits a guard rather than
+a green suite. Both were verified by measuring the arm before the strike, not by writing down what it
+ought to say.
+```maxon
+function main() returns ExitCode
+	let arr = [1, 2, 3]
+	try arr.set(0, value: 9) otherwise 'oob'
+		return 9
+	end 'oob'
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:4:10: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: error.set-through-a-live-borrow -->
+```maxon
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	let s = try arr.first() otherwise ""
+	try arr.set(0, value: "a second long string that also lives on the heap") otherwise 'oob'
+		return 9
+	end 'oob'
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:5:10: cannot mutate 'arr' via 'set' while it is borrowed by 's' (borrowed at line 4)
+```
+
+### Set is bounded by the LIVE LENGTH, not by the capacity
+
+`set` refuses every index at or past `count()`, and the bound is the array's own rather than the storage
+layer's: `__ManagedMemory.set` underneath admits any index below the CAPACITY, deliberately, because the
+buffer is where a caller stages slots and then publishes them with `setLength`. An `Array` has no staging
+idiom — `count()` is its whole contract — so forwarding straight through would write a slot no reader can
+reach.
+
+For a MANAGED element that is not merely invisible, it is a LEAK: the record lands outside `[0, count)`,
+which is exactly the range the element-destroy walk covers, so nothing ever releases it. Measured before
+the guard existed, on both compilers: `push` one string, `reserve(8)`, `set(2, …)` — the store SUCCEEDED,
+`count()` still read 1, and the second string was never freed.
+
+<!-- test: set-past-the-live-length-is-refused -->
+```maxon
+function main() returns ExitCode
+	var arr = ["one long heap allocated string value here"]
+	arr.reserve(8)
+	try arr.set(2, value: "two long heap allocated string value here") otherwise 'pastLength'
+		return 42
+	end 'pastLength'
+	return arr.count()
+end 'main'
+```
+```exitcode
+42
+```
+
+A NEGATIVE index is the same refusal and needs saying separately, for `insert`'s reason one section up:
+nothing range-checks an argument at `index`'s `int(0 to u64.max)`, so a `-1` arrives intact and is below
+the length on every signed comparison.
+
+<!-- test: set-negative-index-is-refused -->
+```maxon
+function main() returns ExitCode
+	var arr = [10, 20, 30]
+	try arr.set(-1, value: 99) otherwise 'negative'
+		return 42
+	end 'negative'
+	return try arr.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+
 ### Copy-on-Write
 
 <!-- test: slice-cow-modify-slice -->
@@ -1963,7 +2046,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:8:6: cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: <fragment>:8:6: argument 'value': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: error.set-int-into-string-array -->

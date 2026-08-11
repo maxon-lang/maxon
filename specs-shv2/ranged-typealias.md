@@ -1817,6 +1817,28 @@ Stack trace:
 (`requireArrayElementType`), so all three owe the same two halves — a rule that held for one spelling
 and not the others would be the door half-shut.
 
+⚠ **AND THE COMPILE-TIME HALF OF `set` WAS THE ONE STILL MISSING (ARR1).** `push` and `insert` each have
+their literal refusal above; `set` had only the runtime panic below, so the prose *"all three owe the same
+two halves"* was two-thirds tested for a second time, one half over. This is the missing sixth.
+
+<!-- test: error.array-set-out-of-range -->
+```maxon
+typealias Percent = int(0 to 100)
+typealias PA = Array with Percent
+
+function main() returns ExitCode
+	var a = PA.create()
+	a.push(3)
+	try a.set(0, value: 500) otherwise 'oob'
+		return 9
+	end 'oob'
+	return a.count()
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:8: Value 500 is outside the range of 'Percent' (int(0 to 100))
+```
+
 <!-- test: array-set-runtime-panic -->
 <!-- targets: x64-windows, x64-linux -->
 <!-- x64 ONLY, for the reason above. -->

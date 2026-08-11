@@ -14829,9 +14829,31 @@ export type ProgramSignatures
 	//
 	// It is named for the SPACE and not for a caller ("container column" was its first name, and the second
 	// caller is not a column) because the space is the whole of what it settles.
-	export function indexFunctionTypeName(indexSpaceType MaxonType) returns ByteArray
-		return try self.typeNames.nameOf(typeNameIdOf(indexSpaceType)) otherwise panic("ProgramSignatures.indexFunctionTypeName: type-name id {typeNameIdOf(indexSpaceType)} is not in this index's interner — a container column's type argument and an instance's substituted argument are both interned HERE, so an id that misses came from another table and every name it could answer would be the wrong one")
-	end 'indexFunctionTypeName'
+	export function indexSpaceTypeName(indexSpaceType MaxonType) returns ByteArray
+		return try self.typeNames.nameOf(typeNameIdOf(indexSpaceType)) otherwise panic("ProgramSignatures.indexSpaceTypeName: type-name id {typeNameIdOf(indexSpaceType)} is not in this index's interner — a container column's type argument and an instance's substituted argument are both interned HERE, so an id that misses came from another table and every name it could answer would be the wrong one")
+	end 'indexSpaceTypeName'
+
+	// ⭐ **THE ALIAS AN INDEX-SPACE TYPE ARGUMENT SPELLS, or EMPTY for one that spells nothing** — the third
+	// reader of the door above, and the one that made its name honest. A refusal naming a SCALAR type argument
+	// owes the author's `typealias` (`Integer`) and not the class word its tag resolves to (`int`): it is the
+	// same `declaredName` piece a CONCRETE parameter hands `paramDisplayName` off `sig.paramDeclaredNames`,
+	// read for a type ARGUMENT instead. MEASURED against the runnable oracle, which says `expected 'Integer'`
+	// where shv2's substituted arm said `expected 'int'`.
+	//
+	// ⚠ **IT IS NOT `instanceArgDisplayName`, WHICH IS THE FULL DISPLAY RULE AND IS FAILURE-PATH ONLY** — that
+	// one goes through `mangleTypeArg`, a `String` build plus a `toByteArray`, on the strength of *"a path that
+	// only a REJECTED program reaches"*. Its caller here is reached by EVERY substituted scalar argument in the
+	// program, so it reads the interned leaf directly: one dense read, no allocation. The two cannot disagree
+	// about a `named` leaf — a ranged alias's compiled name IS its declared name — and every arg they would
+	// disagree about (a nested instance, an opaque parameter) carries a nominal identity and is judged, and
+	// spelled, by the arm above this one.
+	export function indexScalarAliasName(indexSpaceType MaxonType) returns ByteArray
+		if maxonTypeTag(indexSpaceType) != ValueTypeTag.named 'spellsNoAlias'
+			return EmptySourceText
+		end 'spellsNoAlias'
+
+		return self.indexSpaceTypeName(indexSpaceType)
+	end 'indexScalarAliasName'
 
 	// Over-intern `<base> with <T>` for the possible element types of an array literal whose elements the
 	// sweep's tokens cannot name (P1.7 slice 3): a local identifier's type is unknowable there, so

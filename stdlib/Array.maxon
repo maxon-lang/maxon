@@ -201,11 +201,23 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 	/// builtin binds the raw wire flag as an `int`: switching on it here would put a third copy of an
 	/// ordinal map into the stdlib.
 	function accessFailure(index ElementIndex) returns ArrayError
-		if index >= managed.length() 'outsideLiveRange'
+		if isOutsideLiveRange(index) 'outsideLiveRange'
 			return ArrayError.indexOutOfBounds
 		end 'outsideLiveRange'
 		return ArrayError.emptySlot
 	end 'accessFailure'
+
+	/// Is `index` outside the LIVE range — negative, or at or past `count()`? The one home of the bound the
+	/// two element accessors share: `accessFailure` reads it to name a READ's failure, and `set` throws on
+	/// it outright, because `set`'s builtin does not refuse the same indices this type does.
+	///
+	/// ⚠ THE NEGATIVE HALF IS LIVE CODE THOUGH `ElementIndex` STARTS AT 0, for the reason `insert`'s own
+	/// clamp is: nothing range-checks an argument at a ranged parameter in either compiler, so a `-1`
+	/// arrives intact. Read as merely "below the length" it would name a negative index `emptySlot`, which
+	/// sends the reader to look for a slot that was never addressable.
+	function isOutsideLiveRange(index ElementIndex) returns bool
+		return index < 0 or index >= managed.length()
+	end 'isOutsideLiveRange'
 
 	/// Get element at index. Throws `indexOutOfBounds` when `index` is at or past `count()`, and
 	/// `emptySlot` when it is inside and the slot was never filled — see `accessFailure`.
@@ -213,9 +225,28 @@ export type Array uses Element implements BuiltinArrayLiteral, Iterable with (El
 		return try managed.get(index) otherwise throw accessFailure(index)
 	end 'get'
 
-	/// Set element at index, throws if out of bounds
+	/// Set element at index. Throws `indexOutOfBounds` for an index at or past `count()` — an `Array` is
+	/// bounded by its LIVE LENGTH, where `__ManagedMemory.set` underneath is bounded by CAPACITY (⚖ user
+	/// ruling 2026-07-30, recorded at `ArrayRuntime.ArrMemSetName`: the buffer's wider bound is what makes
+	/// the stage-then-publish idiom `setLength`'s contract prescribes writable).
+	///
+	/// ⛔ SO THE GUARD HERE IS NOT BELT-AND-BRACES, IT IS THE WHOLE OF THE ARRAY'S BOUND, AND WITHOUT IT
+	/// THIS BODY LEAKS. Forwarding straight to `managed.set` writes any slot below the CAPACITY: a
+	/// reserved-but-not-live slot takes the value, `count()` never moves, and for a MANAGED element the
+	/// record lands outside `[0, length)` — which is exactly the range the element-destroy walk covers, so
+	/// nothing ever releases it. MEASURED with this guard absent, on `push` one string / `reserve(8)` /
+	/// `set(2, …)`: the BOOTSTRAP, which is served from this body, stored it and returned `count()` = 1,
+	/// and shv2 served from this body (ARR1 struck its own `set` arm to reach it) reported the same program
+	/// **exit 101**. Only shv2's arm hid it — the bootstrap has had it all along, and this repair lands
+	/// there too. `specs/arrays.md`'s `set-past-the-live-length-is-refused` is the case, RED before this.
 	export function set(index ElementIndex, value Element) throws ArrayError
-		try managed.set(index, value) otherwise throw ArrayError.indexOutOfBounds
+		if isOutsideLiveRange(index) 'outsideLiveRange'
+			throw ArrayError.indexOutOfBounds
+		end 'outsideLiveRange'
+
+		try managed.set(index, value) otherwise 'setErr'
+			panic("Array.set: managed.set refused an index inside the live range, which is always within the capacity")
+		end 'setErr'
 	end 'set'
 
 	// =========================================================================
