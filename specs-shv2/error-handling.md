@@ -1645,10 +1645,12 @@ end 'main'
 
 // A MANAGED (String) payload NESTED in an error union — the only shape that proves the
 // caught box's cascade drops the payload before freeing the box. `throw E.failed("boom")`
-// hands the box to the caller; `otherwise (e)` adopts it; `match e { failed(m) ... }` moves
-// the String out (using it, then dropping it at the arm's end) and the box is freed once by
-// its `__destruct_E` cascade (which null-guards the moved-out slot). A leak or double-free of
-// either the String or the box is exit 101; a clean `"boom".byteLength()` is 4.
+// hands the box to the caller; `otherwise (e)` adopts it; `match e { failed(m) ... }` binds
+// the String by RETAIN — a caught box is a CO-OWNER, because the thrower may have retained
+// it out of a container it still holds (`retainThrownField`) and the flag register carries
+// no note of which transfer ran — so the binding drops its own reference at the arm's end
+// and `__destruct_E` drops the slot's. A leak or double-free of either the String or the box
+// is exit 101; a clean `"boom".byteLength()` is 4.
 union E implements Error
 	failed(msg String)
 end 'E'

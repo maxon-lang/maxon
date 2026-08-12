@@ -1,0 +1,445 @@
+// Test: inlined-accessor-field-return-order
+typealias TokenId = int(0 to u64.max)
+
+union Ty
+	concrete(name ByteArray)
+	stringy
+end 'Ty'
+
+union Expr
+	direct(ty Ty)
+	named(ty Ty, id TokenId)
+	unresolved
+end 'Expr'
+
+// Multi-arm accessor: the direct/named arms return the `ty` field (an interior
+// borrow of `e`); the `unresolved` arm returns a fresh `Ty.stringy` (a distinct
+// borrow root), so the inlined continuation phi drops e's borrow and the base's
+// death lands in a field-returning arm.
+function exprType(e Expr) returns Ty
+	return match e 'k'
+		direct(ty) gives ty
+		named(ty, _) gives ty
+		unresolved gives Ty.stringy
+	end 'k'
+end 'exprType'
+
+function makeDirect(ty Ty) returns Expr
+	return Expr.direct(ty)
+end 'makeDirect'
+
+function tyLen(ty Ty) returns TokenId
+	return match ty 'l'
+		concrete(name) gives name.count()
+		stringy gives 0
+	end 'l'
+end 'tyLen'
+
+// A fresh single-+1 `Expr`, like a freshly materialized parser `result`.
+function makeFresh(seed TokenId) returns Expr
+	if seed == 0 'z'
+		return Expr.unresolved
+	end 'z'
+	return Expr.direct(Ty.concrete("hello".toByteArray()))
+end 'makeFresh'
+
+function walk(rounds TokenId) returns Expr
+	var last = Expr.unresolved
+	var total = 0
+
+	for i in 1 to rounds 'loop'
+		let e = makeFresh(i)
+
+		if total == 888 'ret'
+			// Returns the fresh `e`, marking it transferred so a field loaded
+			// out of it (in `exprType`) def-acquires — the collision trigger.
+			return e
+		end 'ret'
+
+		// exprType(e) is `e`'s last use; the fresh `e` (rc 1) then dies right
+		// where its `ty` field was just loaded.
+		let ty = exprType(e)
+		total = total + tyLen(ty)
+		last = makeDirect(ty)
+	end 'loop'
+
+	return last
+end 'walk'
+
+function main() returns ExitCode
+	let r = walk(5)
+	let ty = exprType(r)
+	return tyLen(ty)
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @exprType {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg r8, rbx
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg r8, rbx
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @makeDirect {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 16], rax
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @tyLen {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_count
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 0
+    x64.jmp matchcont
+  matchcont:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @makeFresh {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, z
+    x64.jmp ifcont
+  z:
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_rec_8]
+    x64.callDirect String.toByteArray
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r12 + 0], rax
+    x64.storeBaseDispReg.word64 [r12 + 8], rbx
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @walk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 16], rax
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 1
+    x64.movRegReg r13, r12
+    x64.movRegReg r12, r8
+    x64.jmp forhdr
+  forhdr:
+    x64.storeSlotReg slot1, rcx
+    x64.cmpRegReg rcx, rbx
+    x64.jcc lessEqual, loop
+    x64.jmp forexit
+  loop:
+    x64.callDirect makeFresh
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r13, 888
+    x64.jcc equal, ret
+    x64.jmp ifcont
+  ret:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Expr
+    x64.movRegReg r8, r14
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, r14
+    x64.callDirect exprType
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r15
+    x64.callDirect tyLen
+    x64.leaRegRegReg rax, r13, r8
+    x64.storeSlotReg slot0, rax
+    x64.movRegReg rcx, r15
+    x64.callDirect makeDirect
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Expr
+    x64.movRegReg rcx, r15
+    x64.callDirect __destruct_Ty
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Expr
+    x64.jmp forstep
+  forstep:
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegImm32 rcx, rax, 1
+    x64.loadRegSlot rax, slot0
+    x64.movRegReg r12, r13
+    x64.movRegReg r13, rax
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Expr
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 5
+    x64.callDirect walk
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect exprType
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect tyLen
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Ty
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Expr
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r13, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_26]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.toByteArray {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_bytes_view
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect String.byteLength
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r8
+    x64.callDirect __managed_slice
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.leaRegRdata rcx, [rip + __str_blob_21]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.byteLength {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

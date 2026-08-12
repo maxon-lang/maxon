@@ -1604,24 +1604,31 @@ export union PayloadClass
 	floatPayload
 	// A boxed-union field/payload (a nested payload-bearing union) — a MANAGED owned heap pointer, exactly
 	// like a `managed` struct box: construct MOVES it in (no incref), and the cascade drops it through its
-	// OWN `__destruct_<U>` (or the trivial `__mm_decref` for a scalar-only union box). It is kept a case
-	// DISTINCT from `managed` so the UNION-payload path — whose store width comes from `payloadStorageOf`
-	// and CANNOT carry the `named` tag through `maxonTypeToStdType` — can still reject a nested boxed-union
-	// PAYLOAD cleanly (`requirePayloadLowerable`); the STRUCT-field path derives its store width from
-	// `fieldStorageType` instead, so it lowers a boxed-union field fine (P1.4b wave 2c). `storage` is the
-	// field's `named(<union>)` type — the value tag a struct-field type-check compares, a moved-out load
-	// carries, AND the union-payload reject derives its "union U" message text from (at the error site, not
-	// eagerly — the message is a cold path, so nothing precomputes a `String` on every classification).
+	// OWN `__destruct_<U>` (or the trivial `__mm_decref` for a scalar-only union box). `storage` is the
+	// field's `named(<union>)` type — the value tag a slot type-check compares against the value and the tag
+	// a moved-out load carries, which is what makes a nested `match` on the extracted payload work.
+	//
+	// ⚠ **IT IS A CASE DISTINCT FROM `managed` BECAUSE ITS SLOT WIDTH AND ITS VALUE TYPE ARE DIFFERENT
+	// ANSWERS, AND FOR NO OTHER REASON (W55)** — stated in full, arm by arm, at `payloadStorageOf`, which is
+	// the one home of that split. What is local to this case: nesting costs NO codegen at any depth, because a
+	// nested box's drop closes at RUN TIME through the destructor pointer in its own allocation header. That is
+	// why the UNION-payload path's old refusal (`requirePayloadLowerable`) was a missing width derivation and
+	// never the missing cascade its message claimed.
 	nestedUnion(storage MaxonType)
 	// A name no file declares — `TypeResolution` reports it as E3011; the caller keeps the op
 	// well-formed for the instant before the pipeline's error gate throws.
 	undeclaredName
 	// ⭐ **A STRUCT FIELD DECLARED AT AN INTERFACE TYPE (P1.7a-existentials slice 2)** — the two-slot fat
 	// pointer. MANAGED (`payloadClassIsManaged`), so the construct MOVES it in and the cascade drops it — but
-	// kept a case DISTINCT from `managed` for `nestedUnion`'s exact reason: the UNION-payload path, whose slot
-	// is one machine word, must still refuse it (`requirePayloadLowerable`), while the STRUCT-field path
-	// carves out two slots and lowers it. Its storage is the VALUE half's machine word; the witness half is
-	// stored beside it by `Parser.emitFieldStore`, which is the only site that knows the field's base offset.
+	// kept a case DISTINCT from `managed` by ITS OWN arithmetic: a conformer takes TWO slots (a value half and
+	// a witness half), and a union payload has exactly ONE, because every case of a union shares one slot
+	// region and there is nowhere for a second word to widen into. So a union PAYLOAD at an interface type is
+	// refused — at its DECLARATION (`Parser.requireStorableDeclaredType`), with `requirePayloadLowerable`'s arm
+	// as the backstop — while the STRUCT-field path carves out both slots and lowers it. That refusal is
+	// PERMANENT and arithmetic, which is what distinguishes it from `nestedUnion`'s, now retired: that one was a
+	// missing width derivation for a payload that always fitted in the one slot it had. Its storage is the VALUE
+	// half's machine word; the witness half is stored beside it by `Parser.emitFieldStore`, which is the only
+	// site that knows the field's base offset.
 	//
 	// ⚠ **APPENDED AT THE END, per the band-append rule** — `payloadClassIsManaged`/`payloadClassIsString` are
 	// exhaustive `match`es over this union, so a case inserted mid-list would be silently absorbed by nothing
@@ -1865,11 +1872,15 @@ end 'payloadClassIsManaged'
 
 // ⭐ **MAY A MATCH-ARM BINDING ON THIS SLOT BE WRITTEN BACK INTO THE BOX (`specs/mutable-enums.md`)?**
 // The write-back (`Parser.writeBackPayload`) must state, statically, who owns the value the slot held
-// BEFORE it and who owns the one going in — and only these two classes state it:
+// BEFORE it and who owns the one going in — and only these three classes state it:
 //
 //   • `scalar` — the slot owns nothing, so a store is the whole of the write.
 //   • `managed` — writable only where the payload was MOVED OUT, which nulls the slot: there is then no
 //     previous owner to release, and the box simply takes its own reference to the new value.
+//   • `nestedUnion` — a boxed union is an owned heap pointer with a statically named release
+//     (`unionBoxDropCallee`), so the two sentences above are true of it WORD FOR WORD: the move-out nulls
+//     the slot, and the `__mm_incref` the write-back emits is the box's own reference. It answered `false`
+//     only while a nested boxed-union payload could not be constructed at all (W55).
 //
 // ⚠ **THIS PREDICATE IS NOT THE WHOLE GATE, AND SAYING SO IS THE POINT OF THIS PARAGRAPH.** It answers
 // about the CLASS. Whether a managed payload was actually moved out is a fact about the ACQUISITION, and
@@ -1883,8 +1894,8 @@ end 'payloadClassIsManaged'
 // one that could be wrongly waved through: its slot's reference protocol is a RUN-TIME fact reached
 // through the instance descriptor (`Parser.moveOpaqueValueInto`), so a plain store would drop the
 // reference the box still holds — and it is unreachable today besides, a generic union having no
-// construct syntax. `nestedUnion`/`floatPayload` never reach a binding at all
-// (`Parser.requirePayloadLowerable` refuses them), and `undeclaredName` is an error path.
+// construct syntax. `floatPayload` never reaches a binding at all
+// (`Parser.requirePayloadLowerable` refuses it), and `undeclaredName` is an error path.
 //
 // A `match` like its siblings, so a case appended to `PayloadClass` fails to compile here rather than
 // being silently absorbed into either answer.
@@ -1892,9 +1903,9 @@ export function payloadBindingAcceptsWrites(class PayloadClass) returns bool
 	return match class 'c'
 		scalar gives true
 		managed gives true
+		nestedUnion gives true
 		typeParam gives false
 		existential gives false
-		nestedUnion gives false
 		floatPayload gives false
 		undeclaredName gives false
 	end 'c'
@@ -1958,23 +1969,74 @@ export function payloadClassIsString(class PayloadClass) returns bool
 	end 'c'
 end 'payloadClassIsString'
 
-// The CONCRETE storage type a classified payload occupies its slot as — what the `loadIndirect`/
-// `storeIndirect` carries. A managed payload's storage is a `structRef`/`string` (an i64 pointer); a
-// boxed-union (`nestedUnion`) payload's is the field's `named(<union>)` — the value tag a struct-field
-// type-check compares against the value (`requireManagedValueMatches`, tag-only, never lowered here).
-// A `float` payload is rejected before any store reaches here. ⚠ A `named` storage does NOT lower
-// through `maxonTypeToStdType` (it panics), so the UNION-payload store — whose width comes from
-// `payloadStorageOf` — must never receive a `nestedUnion` (`requirePayloadLowerable` rejects it first);
-// the STRUCT-field store derives its width from `fieldStorageType` (→ i64), not from here.
+// ⭐⭐ **THE SLOT'S OWN WIDTH — the type a `loadIndirect`/`storeIndirect` through this slot CARRIES**, and
+// nothing else. **THE ONE HOME of the width-vs-identity split** (W55): `payloadValueTypeOf` answers the other
+// half and points here rather than restating it, and so do `PayloadClass.nestedUnion` and
+// `Parser.requirePayloadLowerable`. It was written out in full at three sites and had already drifted on which
+// tags a `managed` payload's storage can be.
+//
+// ⛔ **THE WIDTH IS NOT THE IDENTITY, AND FOR MOST CLASSES IT IS NOT EVEN THE SAME TYPE.** Only `managed`
+// (whose `storage` is already a concrete machine-word tag — `structRef`/`string`/`genericInstance`/
+// `character`) and `typeParam` (one opaque word, whose declared type IS that word) answer identically at both
+// doors. Every OTHER class answers a width here that is not what a value filling the slot must BE:
+//
+//   • `scalar` — a ranged alias classifies as `scalar(<underlying primitive>)`, so the width is the bare
+//     `integer` while the IDENTITY keeps the alias NAME, which is what lets the shift rule read its low bound.
+//     Ask this door the identity question and a `Byte` silently becomes an `int`.
+//   • `existential` — the slot is a TWO-word fat pointer and a `storeIndirect` moves ONE word, so the width is
+//     that word; the identity is the declared `interfaceRef` every witness-dispatching reader needs. The
+//     witness half rides at `+InterfaceWitnessHalfOffset`, stored beside it by `Parser.emitFieldStore`, the
+//     only site holding the field's base offset.
+//   • `nestedUnion` — a boxed union IS a pointer, so the width is the word; the identity is the union's own
+//     `named(<union>)`. ⚠ **The one class where handing the identity to an op does not merely lose information
+//     but PANICS** (`maxonTypeToStdType` has no `named` arm) — and deriving the width from the union's name is
+//     exactly what made a nested boxed-union payload unlowerable until W55.
+//   • `undeclaredName` — an error path: the width keeps the op well-formed for the instant before the
+//     pipeline's error gate throws, while the identity stays the name the user wrote, for the diagnostic.
+//
+// ⇒ the three `MaxonType.integer` arms below are deliberately NOT collapsed under the redundant-arm rule:
+// they are three DIFFERENT reasons that happen to share an answer, and a range arm over them would be the
+// band-append trap one union down besides. A `float` payload is rejected before any store reaches here.
+//
+// ⚠ **"A DECLARED ENUM/UNION OCCUPIES ONE MACHINE WORD" HAS TWO DERIVERS LEFT, AND THEY NOW SHARE A HOME** —
+// `declaredAggregateSlotWidth` below. It had THREE, and the note here declined to unify them on the grounds
+// that *"a single home would have to sit where all three can reach it"* — which was a false dichotomy the
+// review caught: **two of the three are in these two files** (`Parser.fieldStorageType`'s `containsEnum` arm,
+// the STRUCT-FIELD slot, and the `nestedUnion` arm below, the UNION-PAYLOAD slot), so unifying two of three is
+// a real reduction and the third being out of reach never argued against it.
+//
+// The remaining party is `TypeResolution.resolveNamedType`, which erases a declared enum/union to `integer` in
+// a file outside this rung. **What one accessor buys is that the divergence mode this note originally named —
+// a struct field and a payload slot storing the SAME union at two different widths, reportable by no
+// diagnostic and no exit code — is now unrepresentable**, because there is one expression to change. Only the
+// remaining two-party agreement rests on prose.
+// ⭐⭐ **THE WIDTH A SLOT HOLDING A DECLARED ENUM OR UNION IS ACCESSED AT — one machine word, stated ONCE.**
+// A payload-FREE enum's value IS its i64 tag; a payload-bearing union's value is an i64 POINTER to its box
+// (P1.4b wave 2c). Two different representations, one access width, and that coincidence is exactly why the
+// two slot kinds could drift apart while each looked right on its own.
+//
+// Its two callers are the two slot kinds: `Parser.fieldStorageType`'s `containsEnum` arm (a struct FIELD) and
+// `payloadStorageOf`'s `nestedUnion` arm (a union PAYLOAD). See the ⚠ above for the third deriver that is out
+// of reach and for what having one home for these two buys.
+//
+// ⚠ **IT IS A WIDTH AND NEVER AN IDENTITY.** `payloadValueTypeOf` answers the other half; handing this answer
+// to a reader that needed the identity loses the union's NAME, and handing the identity to an op PANICS
+// (`maxonTypeToStdType` has no `named` arm).
+export function declaredAggregateSlotWidth() returns MaxonType
+	return MaxonType.integer
+end 'declaredAggregateSlotWidth'
+
 export function payloadStorageOf(class PayloadClass) returns MaxonType
 	match class 'c'
 		scalar(storage) then return storage
 		managed(storage, _) then return storage
-		nestedUnion(storage) then return storage
-		// The VALUE half's machine word. The witness half rides at `+InterfaceWitnessHalfOffset` and is stored
-		// by `Parser.emitFieldStore`, the only site holding the field's base offset — so a `storeIndirect`'s
-		// own width is the one word this answers.
+		// One machine word — the box POINTER. Not the `named(<union>)` the case carries: that is the slot's
+		// IDENTITY, and it panics the lowering. See the ⛔ above. Through the shared accessor, so this width and
+		// the STRUCT-FIELD one cannot come apart.
+		nestedUnion then return declaredAggregateSlotWidth()
+		// The VALUE half's word, one of the fat pointer's two. See the ⛔ above.
 		existential then return MaxonType.integer
+		// An error path's placeholder width. See the ⛔ above.
 		undeclaredName then return MaxonType.integer
 		// The opaque word itself — the same value the `scalar` arm carried before this case split off, so the
 		// store's width is unchanged for every instantiation.
@@ -1983,11 +2045,22 @@ export function payloadStorageOf(class PayloadClass) returns MaxonType
 	end 'c'
 end 'payloadStorageOf'
 
-// The MaxonType a LOADED payload value is tagged with: a managed payload's concrete storage (so a
-// struct binding reads as `structRef` — required by `requireStructBase` — and a String as `string`); a
-// boxed-union payload's `named(<union>)` (so a moved-out load is recognized as a boxed union by
-// `enumMatchFor`/`decrefCalleeFor`); a scalar's DECLARED type (so a ranged alias's low bound stays
-// readable by the shift rule, exactly as `emitFieldLoad` keeps a scalar field's alias).
+// ⭐ **THE MaxonType THE SLOT'S VALUE IS TAGGED WITH — read in BOTH directions**: what a LOADED payload
+// reads back as, and what a value STORED into the slot must already be (`Parser.requireFieldType`,
+// `requireContainerElementType`; `requirePayloadArgType` asks the same question but is itself a `match` over
+// this union, so it reads the case's own field rather than calling in). It is one question — the slot's
+// value IDENTITY — and asking it once is what keeps a slot from admitting a type it cannot hand back.
+//
+// A managed payload's concrete storage (so a struct binding reads as `structRef` — required by
+// `requireStructBase` — and a String as `string`); a boxed-union payload's `named(<union>)` (so a moved-out
+// load is recognized as a boxed union by `enumMatchFor`/`decrefCalleeFor`, and so a store into one is
+// refused a DIFFERENT union — `requireSlotAggregateIdentity` compares that name); a scalar's DECLARED type
+// (so a ranged alias's low bound stays readable by the shift rule, exactly as `emitFieldLoad` keeps a
+// scalar field's alias).
+//
+// ⛔ **THIS IS NOT THE SLOT'S WIDTH, AND FOR EVERY CLASS BUT `managed`/`typeParam` IT IS NOT EVEN THE SAME
+// TYPE** — `payloadStorageOf` is the one home of that split and states it arm by arm. Handing a `scalar`'s
+// answer to an op loses a ranged alias's bound; handing a `nestedUnion`'s PANICS the lowering.
 export function payloadValueTypeOf(class PayloadClass, declared MaxonType) returns MaxonType
 	match class 'c'
 		scalar then return declared

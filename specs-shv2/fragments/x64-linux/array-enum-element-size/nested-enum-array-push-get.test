@@ -1,0 +1,309 @@
+// Test: nested-enum-array-push-get
+typealias Integer = int(i64.min to i64.max)
+
+union CfOp
+		br(target Integer)
+		condBr(cond Integer)
+end 'CfOp'
+
+union IrOp
+		cf(op CfOp)
+		arith(value Integer)
+end 'IrOp'
+
+typealias IrOpArray = Array with IrOp
+
+function checkFirst(ops IrOpArray) returns Integer
+		let first = try ops.get(0) otherwise IrOp.arith(0)
+		match first 'checkFirst'
+				arith(v) then return v
+				cf then return 99
+		end 'checkFirst'
+end 'checkFirst'
+
+function checkMid(ops IrOpArray) returns Integer
+		let mid = try ops.get(2) otherwise IrOp.arith(0)
+		match mid 'checkMid'
+				cf then return 1
+				arith then return 0
+		end 'checkMid'
+end 'checkMid'
+
+function main() returns ExitCode
+		var ops = IrOpArray.create()
+		ops.push(IrOp.arith(10))
+		ops.push(IrOp.arith(20))
+		ops.push(IrOp.cf(CfOp.br(99)))
+		ops.push(IrOp.arith(30))
+		ops.push(IrOp.arith(40))
+
+		if ops.count() != 5 'badCount'
+				return 1
+		end 'badCount'
+
+		// First element must still be arith(10), not overwritten
+		let v = checkFirst(ops)
+		if v != 10 'wrong'
+				return 2
+		end 'wrong'
+
+		// Middle element must be cf variant
+		let m = checkMid(ops)
+		if m != 1 'wrongMid'
+				return 3
+		end 'wrongMid'
+
+		return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @checkFirst {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_get
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegReg rcx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rbx, 99
+    x64.callDirect __destruct_IrOp
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
+    x64.callDirect __destruct_IrOp
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}
+
+func @checkMid {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rdx, 2
+    x64.callDirect __managed_get
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegReg rcx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchnext
+  matcharm:
+    x64.movRegImm32 rbx, 1
+    x64.callDirect __destruct_IrOp
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 rbx, 0
+    x64.callDirect __destruct_IrOp
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+  matchcont:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_IrOp]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 10
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 20
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 99
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r13
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 30
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegImm32 r12, 40
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_count
+    x64.cmpRegImm32 r8, 5
+    x64.jcc notEqual, badCount
+    x64.jmp ifcont
+  badCount:
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect checkFirst
+    x64.cmpRegImm32 r8, 10
+    x64.jcc notEqual, wrong
+    x64.jmp ifcont
+  wrong:
+    x64.movRegImm32 r12, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect checkMid
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, wrongMid
+    x64.jmp ifcont
+  wrongMid:
+    x64.movRegImm32 r12, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

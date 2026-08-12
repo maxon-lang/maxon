@@ -2564,7 +2564,7 @@ end 'MethodReceiver'
 //
 // It returns the STRING and each caller throws `ParseError.unsupported(…)` INLINE — never
 // `throw self.helperReturningAParseError(…)`, which leaks two allocations under the C#-emitted refcount
-// runtime (`nestedUnionPayloadMessage` records the family).
+// runtime (`floatPayloadMessage` records the family).
 function structTypedSelfFieldBaseMessage(fieldName ByteArray) returns String
 	return "a field access through '{String.from(fieldName)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)"
 end 'structTypedSelfFieldBaseMessage'
@@ -7585,6 +7585,12 @@ let BorrowSourceBindingName = b"__borrow_source"
 let ScrutineeSourceBindingName = b"__match_scrutinee"
 let EscapingFeedSourceBindingName = b"__escaping_feed"
 
+// The tail of every panic about the sole-ownership column being unindexable, so the invariant it names — the
+// two owned-heap columns are pushed together by `mintValue`/`recordValueType` — is written once and the three
+// askers cannot come to describe it differently. The ASKER's own name still leads each message, because that
+// is the half saying WHICH read failed.
+let SoleOwnershipSlotPanicTail = " has no sole-ownership slot — the two owned-heap columns are pushed in lockstep by mintValue"
+
 // The value a match arm produces, if any: `none` for a `then` (statement) arm, `value` for a
 // `gives` (expression) arm. A union rather than a `ValueId` plus a bool — for the reason
 // `ReceiverArg` is one: a `ValueId` has no empty value, and a sentinel would be READ downstream
@@ -7817,6 +7823,58 @@ function borrowLaunderDoorIsHandOff(door BorrowLaunderDoor) returns bool
 		merged gives true
 	end 'which'
 end 'borrowLaunderDoorIsHandOff'
+
+// ⭐⭐⭐ **HOW MANY OWNERS DOES THIS OWNED VALUE'S ALLOCATION HAVE — ONE, OR MORE THAN ONE?** Every door that
+// makes a value owned states this, because `markValueOwnsHeap` takes it as a required argument and there is no
+// other writer of the owned bit. It exists because *"this value owns a reference"* and *"this frame is the
+// allocation's SOLE owner"* are DIFFERENT FACTS, and shv2 had one predicate answering both:
+// `valueIsOwnedHeap` gated the two DESTRUCTIVE transfers — the match payload move-out
+// (`Parser.moveOutManagedPayload`) and the thrown-field move-out (`Parser.moveOutThrownField`), each of which
+// NULLS a slot in a box it does not re-read — and a co-owned box's other owner does. MEASURED as SIX
+// segfaulting programs, all one defect: a union bound out of a mutable struct FIELD, out of an array element,
+// out of a borrowed union's payload and then matched again inline, a field thrown out of a co-owned container,
+// a co-owned reference RETURNED across a call, and a retained box CAUGHT across one.
+//
+// ⛔ **CO-OWNERSHIP IS THE DEFAULT, AND THAT DIRECTION IS THE WHOLE SAFETY ARGUMENT.** The RETAIN path is
+// unconditionally correct — a bounded `__mm_incref` whose release is structural (`retainBorrowedPayload`) — so
+// a door that understates its ownership costs one refcount pair, while one that overstates it steals a slot
+// from a live owner. A new door therefore has to EARN `sole`; forgetting to claim it is safe, and the required
+// argument means it cannot be forgotten silently either way.
+//
+// ⚠ It is a two-case enum rather than a `bool` for the reason `BorrowLaunderDoor` is not one: `sole: true` at a
+// call site says nothing about which of the two facts is being asserted, and this is the file where confusing
+// them cost six segfaults.
+enum OwnedHeapExclusivity
+	// The value holds the ONLY live reference to its allocation, and there is exactly ONE way to know that:
+	// **THIS FRAME JUST EXECUTED THE OP THAT MADE THE ALLOCATION** (a `__mm_alloc`, a container create, a
+	// `constArrayLiteral`, an interpolation record, a minted Character). A destructive move-out through it is
+	// sound: nothing else will read the slots it nulls.
+	//
+	// ⛔⛔ **AND HERE IS THE INFERENCE THAT IS RETIRED, BECAUSE IT IS THE ONE THAT COST THREE SEGFAULTS**: *"or
+	// because it is what is LEFT after a slot this frame solely owned was vacated."* That sentence stood here,
+	// and it is FALSE — **soleness is not transitive.** A box this frame solely owns can hold a payload it only
+	// CO-owns, because `moveManagedValueInto`'s `borrowedManaged` arm stores by `__mm_incref` rather than by
+	// move. Three doors derived a claim about the CONTENTS from a claim about the CONTAINER and each nulled a
+	// slot a live co-owner still read: `moveOutManagedPayload`, `emitContainerElementAccessor`'s `owned` arm,
+	// and `moveOutThrownField` — the third found only after a review had cleared it as "properly gated", which
+	// was right about liveness and wrong about the inference. All three now pass `coOwned`.
+	//
+	// ⇒ **The audit that keeps this true is a PROPERTY, not a list**: no site may derive `sole` from another
+	// value's soleness. `mergedHeapExclusivity` is the sole exception and it is safe by direction — it joins
+	// its edges' own claims UNIVERSALLY, so one non-sole edge poisons the result.
+	//
+	// ⚠ This case comment is where the header above sends every future door-writer, which is exactly why the
+	// retired inference is spelled out and struck rather than deleted: a reader who reaches for it needs to
+	// find it refused here, not absent.
+	sole
+	// Some other live owner holds the same allocation, or this frame cannot prove that none does. Three
+	// producers, and the third is the one an enumeration would miss: a RETAIN (`__mm_retain`/`__mm_incref` —
+	// co-ownership by construction), a MERGE whose edges are not all sole, and a value that CROSSED A FRAME
+	// BOUNDARY — a consumed parameter, a call's owned result, a caught error box — where the transferring
+	// frame's choice between a move and an incref is invisible here and is a whole-program fact shv2 does not
+	// compute.
+	coOwned
+end 'OwnedHeapExclusivity'
 
 // The whole sentence for laundering a `let`-declared top-level global's record into an owned aggregate.
 // ⚠ The `binding` door's rendering is BYTE-IDENTICAL to the message that shipped before there were doors,
@@ -8877,15 +8935,20 @@ export type Parser
 	// for why that is one column and not two, and why the tag cannot answer it.
 	var valueConsts as ParsedIntArray
 	var valueConstDomains as ConstPayloadDomainArray
-	// ⭐ **THE OWNED-HEAP PROVENANCE — the SSA values that are FRESH owned heap allocations this function
-	// must drop.** Today, the interpolation RESULTS (`emitStringInterp`). It exists because ownership CANNOT
-	// be read off the type tag: an owned interpolation String and a borrowed-immortal rdata literal String
-	// share `ValueTypeTag.string`, so keying a drop on the tag would either decref an immortal literal (a
-	// wrong decref of unowned `.rdata`) or leak an interpolation result. This is the provenance the tag
-	// cannot carry — recorded by the ONE expression that allocates a String, never by the literal path —
-	// read by `parseBinding` (does this binding OWN a drop?) and structurally by the statement-scoped
-	// temp-drop. Structs need no entry: every struct is heap, so `tagIsStructRef` already answers for them;
-	// this is only the String owned/borrowed split the tag conflates.
+	// ⭐ **THE OWNED-HEAP PROVENANCE — the SSA values that OWE A DROP in this function.** It exists because
+	// ownership CANNOT be read off the type tag: an owned interpolation String and a borrowed-immortal rdata
+	// literal String share `ValueTypeTag.string`, so keying a drop on the tag would either decref an immortal
+	// literal (a wrong decref of unowned `.rdata`) or leak an interpolation result; and a fresh struct box and a
+	// borrowed struct PARAMETER share `structRef`. This is the provenance the tag cannot carry — recorded at
+	// every producer that hands this frame a droppable reference, never by a literal or a parameter — read by
+	// `parseBinding` (does this binding OWN a drop?) and structurally by the statement-scoped temp-drop.
+	//
+	// ⛔⛔ **IT SAID "FRESH … allocations" AND "today, the interpolation RESULTS", AND BOTH WERE FALSE — the
+	// second by drift, the FIRST by a conflation that cost six segfaults.** The bit is set for a `__mm_retain`
+	// of somebody else's box, for a consumed parameter, for a caught error box and for a call's owned result;
+	// none of those is fresh, and *"owes a drop"* was never the same claim as *"nobody else holds this
+	// allocation"*. The second claim is `valueOwnsHeapAlone`'s, one field down, and every reader that needs it
+	// must ask THAT one. See `OwnedHeapExclusivity`.
 	//
 	// A PER-VALUE bool column, indexed by ValueId in lockstep with `valueTags`/`valueConstKnown` (pushed
 	// `false` in `mintValue`/`recordValueType`, set `true` in `markValueOwnsHeap` — which `trackOwnedTemp`
@@ -8894,9 +8957,27 @@ export type Parser
 	// read is the right shape and the earlier sparse list was not: that list was scanned once per binding
 	// and grew by one per interpolation, never pruned within a function, so a function with N bound
 	// interpolations paid Σk = O(N²) — a `findFirst`-in-a-loop quadratic in one function's size. The column
-	// makes each query O(1); its one added bool per value is strictly linear and dwarfed by the four sibling
-	// columns already carried per value. Reset per function.
+	// makes each query O(1); its one added bool per value is strictly linear and dwarfed by the sibling columns
+	// already carried per value (no COUNT of them here — this file has had a call-site count go stale three
+	// times; see `markDeclaredSurface`). Reset per function.
 	var valueOwnsHeap as BoolArray
+	// ⭐⭐ **AND WHETHER THAT OWNED REFERENCE IS THE ALLOCATION'S ONLY ONE** — the column that tells a SOLE
+	// owner from a CO-OWNER, which `valueOwnsHeap` alone structurally cannot (see `OwnedHeapExclusivity` for
+	// the six segfaults that conflation cost). Read ONLY by the two transfers that write DESTRUCTIVELY through
+	// a box they will not re-read — `moveOutManagedPayload` nulls a payload slot, `moveOutThrownField` nulls a
+	// field slot — because those are the only decisions in the parser that need sole ownership rather than
+	// ownership. Every other owner-aware rule (a drop, a move poison, a reassignment's move-vs-copy) is correct
+	// for a co-owner too and goes on asking `valueIsOwnedHeap`.
+	//
+	// Same lockstep as `valueOwnsHeap` (pushed `false` in `mintValue`/`recordValueType`, set by
+	// `markValueOwnsHeap`'s `sole` argument, cleared by `markValueCoOwnsHeap`'s three callers), and
+	// DENSE for `valuePromiseMarks`' measured reason read the other way: a sole owner is the COMMON case (every
+	// fresh box in the program), so a sparse set would carry hundreds of entries per function to save one bool
+	// per value.
+	//
+	// ⚠ **SEEDED `false` = CO-OWNED, and the seed is the safety property.** A value nothing claimed takes the
+	// retain path, which is one refcount pair rather than a stolen slot.
+	var valueOwnsHeapAlone as BoolArray
 	// ⭐ **THE PROMISE MARK (P1.5-B1a)** — true iff value `v` is an `async` spawn's handle. A per-value bool
 	// column in the SAME lockstep as `valueOwnsHeap` (pushed `false` in `mintValue`/`recordValueType`, set by
 	// `markValuePromise` on the one value `emitAsyncCall` mints, read by `valueIsPromise`). The handle's TAG
@@ -9852,6 +9933,7 @@ export type Parser
 			valueConsts: ParsedIntArray.create(),
 			valueConstDomains: ConstPayloadDomainArray.create(),
 			valueOwnsHeap: BoolArray.create(),
+			valueOwnsHeapAlone: BoolArray.create(),
 			valuePromiseMarks: BoolArray.create(),
 			phiAliasUnprovenMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
@@ -18888,6 +18970,7 @@ export type Parser
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
+		self.valueOwnsHeapAlone = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
@@ -20143,6 +20226,7 @@ export type Parser
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
+		self.valueOwnsHeapAlone = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
@@ -20360,8 +20444,15 @@ export type Parser
 			// moved on some path `emitScopeDrops` drops it once at function exit — sound whether the analysis
 			// was exact or over-approximated. A SCALAR consumed param owns no heap and is left borrowed (its
 			// consume bit is inert), so it is never enrolled — a decref of an integer would corrupt the count.
+			//
+			// ⚠ **CO-OWNED, NOT SOLE, AND THE DIFFERENCE IS A SEGFAULT THIS FRAME CANNOT SEE.** The caller
+			// transfers a consumed argument either by MOVING an owned value or by `coOwnBorrowedForConsume`'s
+			// `__mm_incref` of a borrowed one, and which it chose is a fact about the CALL SITE, not about this
+			// signature — the same boundary the transitive-consume fixpoint sits on. So a `match` on a consumed
+			// union parameter must RETAIN its payload rather than null the slot, or an incref-transferring caller
+			// re-reads a hole (measured on the sibling shapes; see `OwnedHeapExclusivity`).
 			if self.signatures.paramIsConsumed(funcName, index: i) and self.valueIsManagedHeap(i as ValueId) 'consumedManaged'
-				self.markValueOwnsHeap(i as ValueId)
+				self.markValueOwnsHeap(i as ValueId, exclusivity: OwnedHeapExclusivity.coOwned)
 				self.ownedBindings.push(binding)
 			end 'consumedManaged'
 
@@ -20400,8 +20491,10 @@ export type Parser
 			// with the right question and lost the guard with the wrong one. The tag is the guard that belongs
 			// here — it is local, it is exact (a feed parameter is type-parameter-typed by construction, stated
 			// two paragraphs up), and it is already a required conjunct, so asking it first adds no test at all.
+			// Co-owned for the branch above's reason, which does not depend on the tag: a feed parameter's
+			// concrete call site may have increfed a borrow to pay for the slot.
 			if self.tagOf(i as ValueId) == ValueTypeTag.typeParameter and self.signatures.paramFeedOf(funcName, index: i).sinkIsCalleeStorage() 'opaqueFeed'
-				self.markValueOwnsHeap(i as ValueId)
+				self.markValueOwnsHeap(i as ValueId, exclusivity: OwnedHeapExclusivity.coOwned)
 				self.ownedBindings.push(binding)
 			end 'opaqueFeed'
 
@@ -24383,13 +24476,18 @@ export type Parser
 		// the flag register, which ADOPTS and drops it once. An OWNED box (a fresh `throw U.case(x)` or a caught
 		// `(e)` binding) carries the provenance bit and is moved out below. A box that is NOT owned here splits
 		// three ways:
-		//   • a boxed-union FIELD read whose CONTAINER is an OWNED LOCAL of THIS function — the throw TRANSFERS
+		//   • a boxed-union FIELD read whose CONTAINER this frame is the SOLE owner of — the throw TRANSFERS
 		//     it out by MOVE: `moveOutThrownField` nulls the field slot (so the container's `__destruct_<T>`
 		//     cascade skips it) and marks the value owned, so the same owned hand-off below transfers it. Sound
-		//     because the owned-local container dies with this frame — no surviving caller can read the nulled
+		//     because a solely-owned container dies with this frame — no surviving owner can read the nulled
 		//     slot, and the null is cheaper than an incref that the container's own drop would only cancel (#64).
-		//   • a boxed-union FIELD of a BORROWED container (a `self`-field in an instance method, or a borrowed
-		//     struct/union PARAM's field, whose owner is the CALLER's local) — the throw TRANSFERS it out by
+		//     ⚠ **THE GATE IS `valueIsSoleHeapOwner` AND IT USED TO BE `valueIsOwnedHeap`, WHICH IS A DIFFERENT
+		//     QUESTION AND A MEASURED SEGFAULT.** A CO-OWNED container — `let c = g.inner`, whose read out of a
+		//     mutable field is promoted by `__mm_retain` (W41) — carries the owned bit while `g.inner` still
+		//     points at the same box, so the null store stole the field from a live owner and `g.inner.e` read a
+		//     hole. Its match-side twin is `declarePayloadBindings`; see `OwnedHeapExclusivity`.
+		//   • a boxed-union FIELD of a container this frame does not solely own (a `self`-field in an instance
+		//     method, a borrowed struct/union PARAM's field, a co-owned local) — the throw TRANSFERS it out by
 		//     RETAIN (#64): `retainThrownField` increfs the box so the thrown reference is a SECOND owner, and
 		//     the slot is LEFT INTACT so a caller that catches and re-reads the field still sees a live box. The
 		//     caller's container keeps its own reference; the catch consumes the thrown one; the refcount
@@ -24401,7 +24499,7 @@ export type Parser
 		//     an OWNED value instead. Refused until cross-call consume.
 		if errorIsBoxed and not self.valueIsOwnedHeap(errValue) 'borrowedThrow'
 			let thrownIsFieldRead = self.lastFieldReadValid and self.lastFieldReadValue == errValue
-			if thrownIsFieldRead and self.valueIsOwnedHeap(self.lastFieldReadBox) 'fieldThrow'
+			if thrownIsFieldRead and self.valueIsSoleHeapOwner(self.lastFieldReadBox) 'fieldThrow'
 				self.moveOutThrownField(errValue, anchor: anchor)
 			end 'fieldThrow' else 'borrowedFieldOrValue'
 				if thrownIsFieldRead 'borrowedField'
@@ -24430,12 +24528,27 @@ export type Parser
 	// `lastFieldRead*` fields), so the container's `__destruct_<T>` cascade's null-guard SKIPS it — else the
 	// container would free the box the caller has just adopted (a double free). Marking the value OWNED then
 	// routes it through the SAME hand-off + `throwError` transfer a fresh `throw U.case(x)` takes. This is the
-	// throw twin of match's `moveOutManagedPayload`, one field-load out. **The caller GATES this on an OWNED
-	// LOCAL container** (`valueIsOwnedHeap(lastFieldReadBox)`): such a container dies with this frame, so its
-	// own scope-exit drop honours the null and no surviving caller can read the nulled slot — and the null is
-	// cheaper than an incref its own drop would only cancel. A BORROWED container (a `self`-field, a borrowed
-	// param's field) instead RETAINS (`retainThrownField`, #64): its owner is the CALLER's local, which may
-	// re-read the field after catching, so the slot is left intact and the box increfed rather than nulled.
+	// throw twin of match's `moveOutManagedPayload`, one field-load out. **The caller GATES this on a container
+	// this frame SOLELY owns** (`valueIsSoleHeapOwner(lastFieldReadBox)`): such a container dies with this frame,
+	// so its own scope-exit drop honours the null and no surviving owner can read the nulled slot — and the null
+	// is cheaper than an incref its own drop would only cancel. Anything else — a BORROWED container (a
+	// `self`-field, a borrowed param's field) or a CO-OWNED one (a `let c = g.inner` the field read's `__mm_retain`
+	// promoted, whose other owner is still `g.inner`) — RETAINS instead (`retainThrownField`, #64): that owner may
+	// re-read the field, so the slot is left intact and the box increfed rather than nulled.
+	//
+	// ⛔ **THE THROWN VALUE IS CO-OWNED, AND THE `sole` THAT STOOD HERE WAS F1'S INFERENCE ONE DOOR OVER.** It
+	// read *"sole because the gate has just established that the container was"* — which derives a claim about
+	// the box in the SLOT from a claim about the box HOLDING the slot, and that step is exactly the one
+	// `moveOutManagedPayload` measured two segfaults for. A sole container may hold a co-owned field:
+	// `Self{pending: <a borrowed union>}` co-owns it in (`moveManagedValueInto`'s borrowed arm), so nulling the
+	// container's slot transfers THAT slot's reference and says nothing about the allocation.
+	//
+	// ⚠ **UNREACHABLE TODAY, AND FIXED ANYWAY FOR `markValueCoOwnsHeap`'s STATED REASON.** `valueIsSoleHeapOwner`
+	// has exactly two readers — a match scrutinee and a field-read base — and control leaves this frame on the
+	// terminator two lines down, so nothing here can read the claim. It costs nothing to be honest and it stops
+	// the sentence being an invitation to the edit that makes it matter. What the caller needs is unaffected:
+	// adopt-and-drop-once is `valueIsOwnedHeap`'s business, and the catch enrols its own box co-owned regardless
+	// (`enrollCaughtBox`).
 	//
 	// The null store is an i64 pointer write — a boxed-union field slot holds a machine-word box address
 	// (`fieldStorageType` gives a boxed-union field `integer`), the same width `moveOutManagedPayload` nulls
@@ -24444,7 +24557,7 @@ export type Parser
 		let range = SourceRange.ofToken(anchor)
 		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(self.lastFieldReadBox, offset: self.lastFieldReadOffset, value: zero, storageType: MaxonType.integer, range: range)
-		self.markValueOwnsHeap(value)
+		self.markValueOwnsHeap(value, exclusivity: OwnedHeapExclusivity.coOwned)
 	end 'moveOutThrownField'
 
 	// ⭐ **RETAIN A THROWN BOXED-UNION FIELD OF A BORROWED CONTAINER (#64).** The field READ borrowed the box
@@ -24461,9 +24574,13 @@ export type Parser
 	// retain-promotion thesis (`retainBorrowedAggregate`) to the throw error channel — a bounded refcount
 	// exception that sidesteps the cross-call move-tracking a null-move would have needed to tell a re-reading
 	// caller from a tearing-down one.
+	//
+	// The thrown value is CO-OWNED, which is the whole content of the paragraph above said once in the type
+	// system: the container keeps its reference, so a callee that catches this box and matches it must retain its
+	// payload rather than null the slot the container still reads (`OwnedHeapExclusivity`).
 	function retainThrownField(value ValueId, anchor Token)
 		self.emitIncref(value, range: SourceRange.ofToken(anchor))
-		self.markValueOwnsHeap(value)
+		self.markValueOwnsHeap(value, exclusivity: OwnedHeapExclusivity.coOwned)
 	end 'retainThrownField'
 
 	// ⭐ **`panic("message")` — ABORT, PRINTING `panic at <file>:<line>: <message>` AND A BACKTRACE, EXIT 1.**
@@ -25425,8 +25542,19 @@ export type Parser
 			self.drainPendingTemps(WholeStatementTempFloor, anchor: tryTok)
 		end 'dropFallbackTemps'
 
+		// ⭐ **THE TWO EDGE VALUES THAT REACH `cont`, BUILT ONCE FOR BOTH READERS.** The exclusivity join and
+		// `recordMergeAliasProof` below ask DIFFERENT questions of the SAME pair, and both only iterate it, so
+		// one list serves both — the comment used to say "the same pair `recordMergeAliasProof` reads below"
+		// while each site built its own, which is one `ValueIdArray` per value-`try` merge for nothing. Hoisted
+		// above the `phiOwned` gate deliberately: the alias reader is ungated, so the list is needed on every
+		// path anyway and the branch would only decide WHICH site paid for it.
+		let contEdges = pairArgs(result, second: errEdgeValue)
+
+		// The phi is only as strong as its weakest path. Both branches above already downgraded what they
+		// increfed (`emitIncref` marks its operand co-owned), so this reads the state they left rather than
+		// re-deriving which branch ran.
 		if phiOwned 'enrolPhi'
-			self.trackOwnedTemp(phiId)
+			self.trackOwnedTemp(phiId, exclusivity: self.mergedHeapExclusivity(contEdges))
 		end 'enrolPhi'
 
 		// ⭐ **THE THIRD MERGE'S SHARE OF THE E3019 BLAME** — `finalizeMatchMerge`'s rule, one construct over,
@@ -25453,7 +25581,7 @@ export type Parser
 		// proves the range when it is an in-range literal or a value already denoting one, and proves nothing
 		// when it is neither. `recordMergeAliasProof` decides from the values rather than from the shape, which
 		// is what keeps `otherwise 0` eliding while `otherwise <wider var>` no longer does.
-		self.recordMergeAliasProof(phiId, incoming: pairArgs(result, second: errEdgeValue))
+		self.recordMergeAliasProof(phiId, incoming: contEdges)
 
 		self.currentBlock = cont
 		return phiId
@@ -25747,9 +25875,15 @@ export type Parser
 	// enrols it so the scope machinery releases it exactly once. `binding` is the NAMED `(e)` binding, or an
 	// ANONYMOUS one for a discarding form (a no-binding block, `otherwise ignore`, a fallback value). ONE
 	// enrolment shape for every catching form, so they cannot drift on how a transferred box becomes owned.
+	//
+	// ⚠ **CO-OWNED, BECAUSE THE THROW MAY HAVE RETAINED RATHER THAN MOVED.** `retainThrownField` hands the
+	// caller a SECOND reference to a box the thrower's container still holds, and the flag register carries no
+	// note of which transfer produced it — the catcher is a different frame and cannot ask. So a `match e` on a
+	// caught box retains its payload; claiming `sole` here nulled a slot the thrower's container went on
+	// reading, MEASURED as a segfault. See `OwnedHeapExclusivity`.
 	function enrollCaughtBox(flag ValueId, eType MaxonType, binding VarInfo)
 		self.retypeValue(flag, valueType: eType)
-		self.markValueOwnsHeap(flag)
+		self.markValueOwnsHeap(flag, exclusivity: OwnedHeapExclusivity.coOwned)
 		self.ownedBindings.push(binding)
 	end 'enrollCaughtBox'
 
@@ -26789,6 +26923,12 @@ export type Parser
 	// increfed in place and the caller already holds the ValueId it means.
 	function emitIncref(value ValueId, range SourceRange)
 		self.emitOwnershipRuntimeCall(MmIncrefName, args: singletonArgs(value), range: range)
+		// ⭐ **AND THE OP IS THE FACT: after this line `value`'s allocation has two owners.** The mark rides
+		// here rather than at the named doors above because that is what makes it unforgettable — see
+		// `markValueCoOwnsHeap`. It matters even for a value that was FRESH: `writeBackPayload` increfs a
+		// payload the arm moved out of a box it solely owned, and the box is now the second owner of it, so a
+		// nested `match` on that same binding must retain rather than steal the slot back.
+		self.markValueCoOwnsHeap(value)
 	end 'emitIncref'
 
 	// ⭐ **THE ONE `__mm_alloc` CALL.** Every heap box the compiler builds — a struct record, a fused
@@ -26809,12 +26949,18 @@ export type Parser
 		return self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: resultTag, resultNameId: resultNameId, range: range)
 	end 'emitBoxAlloc'
 
-	// ⭐ **TRACK A FRESH OWNED HEAP TEMPORARY.** The one door `emitStringInterp` reaches ownership through:
+	// ⭐ **TRACK AN OWNED HEAP TEMPORARY.** The one door `emitStringInterp` reaches ownership through:
 	// it records the value's provenance (so `parseBinding` knows the binding owns a drop) AND enrolls it in
 	// the statement's pending-drop list (so an UNBOUND result is dropped at statement end). Both from one
 	// call, so the two facts — "this value owns heap" and "someone must drop it" — cannot be set apart.
-	function trackOwnedTemp(value ValueId)
-		self.markValueOwnsHeap(value)
+	//
+	// ⚠ **`exclusivity` IS THREADED RATHER THAN ASSUMED, AND THIS DOOR IS EXACTLY WHY IT HAD TO BE.** Its
+	// header read "a FRESH owned heap temporary" for as long as most of its callers were allocations, and three
+	// of them are not: a `try … otherwise` result phi, a `match` result phi, and `coOwnAggregateAsTemp`, which
+	// increfs somebody else's box. A door that had baked `sole` in here would have handed a stolen slot to each
+	// of those. See `OwnedHeapExclusivity`.
+	function trackOwnedTemp(value ValueId, exclusivity OwnedHeapExclusivity)
+		self.markValueOwnsHeap(value, exclusivity: exclusivity)
 		self.pendingTempDrops.push(value)
 	end 'trackOwnedTemp'
 
@@ -26829,6 +26975,8 @@ export type Parser
 	// record still EXISTS is a leak. The caller's obligation is that the producing op is gone.
 	function releaseOwnedTemp(value ValueId)
 		try self.valueOwnsHeap.set(value, value: false) otherwise panic("releaseOwnedTemp: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
+		// The exclusivity claim goes with the ownership it qualified — see `markValueCoOwnsHeap`.
+		self.markValueCoOwnsHeap(value)
 		self.removeFromPendingTemps(value)
 	end 'releaseOwnedTemp'
 
@@ -26838,9 +26986,52 @@ export type Parser
 	// `pendingTempDrops` too would drop it a SECOND time at the enclosing statement's end — the double-free
 	// that made `Outer.create(inner)` free its own field. A temporary, by contrast, IS statement-scoped and
 	// wants both.
-	function markValueOwnsHeap(value ValueId)
+	//
+	// ⭐⭐ **THE ONE WRITER OF THE OWNED BIT, WHICH IS WHY THE EXCLUSIVITY ARGUMENT IS REQUIRED HERE.** Every
+	// door that makes a value owned passes through this line, so a required `exclusivity` is a question no
+	// producer — present or future — can leave unanswered: the compiler refuses the call. See
+	// `OwnedHeapExclusivity` for what the two answers mean and for the six segfaults that came of having only
+	// one bit to say them with.
+	function markValueOwnsHeap(value ValueId, exclusivity OwnedHeapExclusivity)
 		try self.valueOwnsHeap.set(value, value: true) otherwise panic("markValueOwnsHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
+
+		match exclusivity 'howMany'
+			sole then try self.valueOwnsHeapAlone.set(value, value: true) otherwise panic("markValueOwnsHeap: v{value}{SoleOwnershipSlotPanicTail}")
+			coOwned then self.markValueCoOwnsHeap(value)
+		end 'howMany'
 	end 'markValueOwnsHeap'
+
+	// ⭐⭐ **SOMETHING ELSE OWNS THIS ALLOCATION TOO — the one write of `false` into the exclusivity column**,
+	// shared by the three statements that mean it: an ownership RELEASED (`releaseOwnedTemp` — a value that owns
+	// nothing is the sole owner of nothing, and a stale `true` would be a destructive-move licence on an
+	// integer), an ownership DECLARED co-owned by its producer (`markValueOwnsHeap`), and an ownership
+	// DOWNGRADED by an incref.
+	//
+	// ⭐ **THE DOWNGRADE IS AUTOMATIC WHERE THE OTHER TWO ARE DECLARED, AND THAT IS THE POINT.** A value marked
+	// `sole` can STOP being sole later, so the downgrade is a property of the OP that mints the second owner
+	// rather than of the doors that reach it — the only form of it that cannot be forgotten. **EVERY such op
+	// calls this on its SOURCE, and there are FIVE of them, not one:**
+	//
+	//   • `emitIncref` — `__mm_incref` in place (a write-back taking the box's own reference, a consuming
+	//     argument co-owning a borrow, a `try … otherwise` phi edge). Its operand may already carry a fresh
+	//     allocation's `sole` claim: `writeBackPayload` increfs a payload the arm moved out of a box it solely
+	//     owned, and the box becomes that payload's second owner.
+	//   • `emitRetainCall` — `__mm_retain`, the RETURNING twin, which mints a fresh name for the same box.
+	//   • `retainBorrowedByteRecord` — `__str_retain`, an incref on its heap branch.
+	//   • `emitRetainExistentialCall` — `__retain_existential`, an incref through the witness.
+	//   • `coOwnBorrowedOpaque` — `__retain_typeparam`, an incref through the instance descriptor.
+	//
+	// ⛔ **THIS LIST USED TO SAY "co-ownership is not expressible without that op" AND NAME ONLY THE FIRST —
+	// false, and it was the invitation to the edit that would break it.** The other four were latent rather than
+	// live (their sources are gated borrowed, or are records with no nullable slot), which is exactly why fixing
+	// it was free and why leaving it would have been the trap: a sentence claiming completeness is load-bearing
+	// only while it is true. This rung's whole thesis, applied to its own new code.
+	//
+	// The reverse direction has no door at all: nothing may promote a co-owner to sole, because a decref this
+	// frame emits cannot be known to be the allocation's last.
+	function markValueCoOwnsHeap(value ValueId)
+		try self.valueOwnsHeapAlone.set(value, value: false) otherwise panic("markValueCoOwnsHeap: v{value}{SoleOwnershipSlotPanicTail}")
+	end 'markValueCoOwnsHeap'
 
 	// Mark `value` as an `async` spawn's promise handle (P1.5-B1a), and read that mark back. `await` uses the
 	// read to reject a non-promise operand and to know it may unwrap the handle to its awaited scalar.
@@ -26879,6 +27070,45 @@ export type Parser
 	function valueIsOwnedHeap(value ValueId) returns bool
 		return try self.valueOwnsHeap.get(value) otherwise panic("valueIsOwnedHeap: v{value} has no owned-heap slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'valueIsOwnedHeap'
+
+	// ⭐⭐⭐ **THE STRICTER QUESTION — is `value`'s allocation owned by THIS FRAME AND NOBODY ELSE?** The
+	// predicate the two DESTRUCTIVE transfers ask, and the only two: `declarePayloadBindings` before nulling a
+	// payload slot, `emitThrowError` before nulling a thrown field's slot. Both write through a box they will
+	// never read again, so both need a promise about every OTHER reader of that box — which is precisely what
+	// `valueIsOwnedHeap` does not make.
+	//
+	// ⛔ **DO NOT REACH FOR THIS ANYWHERE ELSE WITHOUT THE SAME ARGUMENT.** A drop, a move poison, a
+	// reassignment's move-vs-copy and a hand-off are all correct for a CO-OWNER — each releases exactly the one
+	// reference this frame holds — so asking soleness there would refuse or leak on programs that are fine.
+	// The distinguishing property is not "does this touch ownership" but "does this write into a slot whose
+	// other readers this frame cannot enumerate".
+	function valueIsSoleHeapOwner(value ValueId) returns bool
+		return self.valueIsOwnedHeap(value) and try self.valueOwnsHeapAlone.get(value) otherwise panic("valueIsSoleHeapOwner: v{value}{SoleOwnershipSlotPanicTail}")
+	end 'valueIsSoleHeapOwner'
+
+	// ⭐⭐ **WHAT A RESULT PHI INHERITS FROM ITS EDGES — sole ONLY if every edge is.** A phi is one name for a
+	// value several paths produced, so a destructive move-out through it is sound only where it is sound on ALL
+	// of them; one co-owning edge makes the whole merge a co-owner. That is the same conservative direction
+	// `propagateImmutableGlobalReadToPhi` takes at the same two merges and for the same structural reason — the
+	// alternative licenses the theft on precisely the path that shares the box.
+	//
+	// Its two callers are the two constructs that merge an OWNED value: a `match`/ternary result
+	// (`finalizeMatchMerge`) and a `try … otherwise <expr>` result (`finishValueTry`). An EMPTY edge list is a
+	// caller error rather than a vacuous `sole`: "every edge is sole" is trivially true of no edges, and this is
+	// the file where an unearned `sole` costs a segfault.
+	function mergedHeapExclusivity(edges ValueIdArray) returns OwnedHeapExclusivity
+		if edges.isEmpty() 'nothingToJoin'
+			panic("mergedHeapExclusivity: asked to join an EMPTY edge list — a phi has at least one incoming value, and answering `sole` for none would be an ownership claim nothing established")
+		end 'nothingToJoin'
+
+		for edge in edges 'each'
+			if not self.valueIsSoleHeapOwner(edge) 'thisPathSharesIt'
+				return OwnedHeapExclusivity.coOwned
+			end 'thisPathSharesIt'
+		end 'each'
+
+		return OwnedHeapExclusivity.sole
+	end 'mergedHeapExclusivity'
 
 	// ⭐ **IS `value` AN ENROLLED OPAQUE OWNED type-parameter binding (P1.7 slice 3b-v)?** A consumed opaque
 	// ARRAY-feed parameter, enrolled owned in a shared generic body (`bindParameters`): its `typeParameter`
@@ -27510,9 +27740,13 @@ export type Parser
 	// identically. `markValueOwnsHeap` (not `trackOwnedTemp`) sets the owned-heap provenance WITHOUT
 	// enrolling a statement-scoped pending drop: `parseBinding` binds this to the `var`, which drops it at
 	// ITS scope exit through `ownedBindings` — the same door a consumed managed parameter drops through.
+	//
+	// ⭐ **CO-OWNED IS THIS DOOR'S DEFINING FACT, NOT A CAVEAT ON IT** — the paragraph above says the box is
+	// deliberately SHARED and the alias deliberately observable, so the result is the textbook co-owner. Claiming
+	// `sole` here is what let `let borrowed = h.ty` steal `h`'s payload slot.
 	function retainBorrowedAggregate(source ValueId, range SourceRange) returns ValueId
 		let retained = self.emitRetainCall(source, range: range)
-		self.markValueOwnsHeap(retained)
+		self.markValueOwnsHeap(retained, exclusivity: OwnedHeapExclusivity.coOwned)
 		self.carryInterfaceWitness(retained, from: source)
 		return retained
 	end 'retainBorrowedAggregate'
@@ -27524,9 +27758,17 @@ export type Parser
 	// the reason stated one function up — the phi, not this statement, owes the drop.
 	//
 	// The result carries the SOURCE's tag and name id, so a `Character` edge stays a `Character`.
+	//
+	// CO-OWNED for the reason the two provenances give it: `__str_retain` increfs a HEAP record, and which of its
+	// two branches ran is exactly what this frame cannot know (that is why the entry exists). A byte record has no
+	// slot a move-out can null, so the claim costs nothing today and is the true one.
 	function retainBorrowedByteRecord(source ValueId, range SourceRange) returns ValueId
 		let retained = self.emitRuntimeCall(StrRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
-		self.markValueOwnsHeap(retained)
+		// The SOURCE is downgraded too, for `emitIncref`'s reason — see `markValueCoOwnsHeap`. On the heap branch
+		// this op is an incref, so afterwards two names hold one record; on the `.rdata` branch it is a copy and
+		// the source was never sole anyway, so the mark is true either way and the parser need not know which ran.
+		self.markValueCoOwnsHeap(source)
+		self.markValueOwnsHeap(retained, exclusivity: OwnedHeapExclusivity.coOwned)
 		return retained
 	end 'retainBorrowedByteRecord'
 
@@ -27607,6 +27849,9 @@ export type Parser
 			return self.emitRetainExistentialCall(source, range: range)
 		end 'existential'
 
+		// `__mm_retain` gives `source`'s box a second owner exactly as `__mm_incref` does, so the source is
+		// downgraded here for the identical reason — see `markValueCoOwnsHeap`.
+		self.markValueCoOwnsHeap(source)
 		return self.emitRuntimeCall(MmRetainName, args: singletonArgs(source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 	end 'emitRetainCall'
 
@@ -27616,6 +27861,10 @@ export type Parser
 	// `__str_clone` handing back a DIFFERENT record, so the co-owner is what came out and never what went in.
 	// The result carries the SOURCE's exact type so a caller that binds it holds the same existential.
 	function emitRetainExistentialCall(source ValueId, range SourceRange) returns ValueId
+		// Downgraded for `markValueCoOwnsHeap`'s reason. Which of the witness's three protocols runs is a RUN-TIME
+		// choice (incref a record, copy a byte record, hand back a raw value), and the co-owned answer is the
+		// sound one under every branch — the incref one makes it literally true, and the others make it harmless.
+		self.markValueCoOwnsHeap(source)
 		return self.emitRuntimeCall(RetainExistentialName, args: pairArgs(self.witnessOfValue(source), second: source), resultTag: self.tagOf(source), resultNameId: self.valueNameId(source), range: range)
 	end 'emitRetainExistentialCall'
 
@@ -27675,7 +27924,9 @@ export type Parser
 
 	function coOwnAggregateAsTemp(source ValueId, range SourceRange) returns ValueId
 		let owned = self.retainBorrowedAggregate(source, range: range)
-		self.trackOwnedTemp(owned)
+		// `coOwned` restates the retain above rather than contradicting it — this call adds the statement-scoped
+		// DROP obligation and must not launder the ownership claim while it is there.
+		self.trackOwnedTemp(owned, exclusivity: OwnedHeapExclusivity.coOwned)
 		return owned
 	end 'coOwnAggregateAsTemp'
 
@@ -29496,7 +29747,9 @@ export type Parser
 			// source wrote holds the whole element. That program is refused a few lines below anyway (a
 			// Character is not a tuple), and the enrolment runs first — so the label has to be a name, and
 			// the honest one is the one the element already has where nothing spells it.
-			self.markValueOwnsHeap(loopValue)
+			// `sole` — the record did not exist until `__char_at`/`__char_from_cp` built it one line up, which is
+			// the paragraph above's whole argument ("a minted value has exactly one owner and it is this trip").
+			self.markValueOwnsHeap(loopValue, exclusivity: OwnedHeapExclusivity.sole)
 			self.ownedBindings.push(VarInfo.createValueBinding(self.loopVariableOwnerName(nameToks), varType: self.typeOf(loopValue), mutable: false, boundValue: loopValue))
 		end 'ownsTheTripsCharacter'
 		// ⭐ **THE TWO INDEXED-CONTAINER FORMS READ THEIR ELEMENT THROUGH ONE DOOR**, differing only in what the
@@ -32059,12 +32312,19 @@ export type Parser
 		end 'enumDispatchSubject'
 
 		// ⭐ **MATCH-CONSUME BOOKKEEPING (P1.3 slice 2).** A managed payload BINDING takes its field out of
-		// the box, and `scrutOwned` decides HOW: an OWNED local is MOVED out of, a BORROWED one (a
-		// param/receiver, whose owner is the caller's local) is RETAINED from instead (D1b —
-		// `moveOutManagedPayload` vs `retainBorrowedPayload`). If ANY arm MOVES a managed payload out, the
+		// the box, and `scrutSolelyOwned` decides HOW: a box this frame is the ONLY owner of is MOVED out of;
+		// anything else — a BORROWED scrutinee (a param/receiver/field read, whose owner is the caller's local)
+		// and equally a CO-OWNED one (a box this frame holds a SECOND reference to) — is RETAINED from instead
+		// (D1b — `moveOutManagedPayload` vs `retainBorrowedPayload`). If ANY arm MOVES a managed payload out, the
 		// whole scrutinee is consumed: its binding is marked `partiallyMoved` — a re-read is E3102, but the
 		// box is still dropped, its cascade null-guarding the moved slots. A match that retains, or binds
 		// nothing managed, BORROWS — the union survives.
+		//
+		// ⛔⛔ **TWO QUESTIONS, TWO PREDICATES, AND MERGING THEM WAS A SEGFAULT.** `scrutOwned` below is
+		// *"does this value owe a drop?"* and is what the temporary-scrutinee enrolment needs — a co-owned
+		// temporary owes exactly the same drop a fresh box does. `scrutSolelyOwned` is *"will anything else ever
+		// read this box's slots?"* and is what the destructive move-out needs. One predicate served both for
+		// three rungs, and six programs faulted through the gap; see `OwnedHeapExclusivity`.
 		//
 		// ⚠ **THE MARK IS PATH-SENSITIVE, AND IT LANDS AT THE ARM THAT MOVED — not after the loop.** The
 		// scrutinee is dead for the REST OF THAT ARM the instant its payload leaves the box: the slot is
@@ -32076,6 +32336,7 @@ export type Parser
 		// mutually exclusive, so an arm that did not run moved nothing), while an `and fallthrough`
 		// successor INHERITS it, exactly as it inherits `movedFrom`.
 		let scrutOwned = self.valueIsOwnedHeap(scrut)
+		let scrutSolelyOwned = self.valueIsSoleHeapOwner(scrut)
 		// ⭐ **AND WHETHER THE ARMS MAY WRITE THROUGH THEIR BINDINGS (`specs/mutable-enums.md`)** — read
 		// HERE, beside the ownership question it is the second half of, and BEFORE the temporary-scrutinee
 		// enrolment below so the question is asked of the author's own bindings. See
@@ -32305,7 +32566,7 @@ export type Parser
 				if hasPayloadBindings 'openArmBindings'
 					self.currentBlock = bodyBlock
 					self.scope.pushScope()
-					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutOwned: scrutOwned, scrutMutable: scrutMutable, layout: requireEnumLayout(enumMatch))
+					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, layout: requireEnumLayout(enumMatch))
 					if armMovedManaged 'consumed'
 						// The scrutinee is dead for the REST OF THIS ARM from here — its slot is nulled, so the
 						// arm body's own re-read must be E3102 rather than a null deref. See the match-consume
@@ -32578,8 +32839,8 @@ export type Parser
 	// dropped is refused. Those are v1's answers, reached without a second grammar for "what shapes may
 	// appear before a match label".
 	//
-	// ⚠ **IT IS MEMBERSHIP, AND THE ACQUISITION DECISION (`scrutOwned`) IS PROVENANCE — THEY DISAGREE ON THE
-	// LOOP-CARRIED PHI.** This one is right about mutability there and the provenance bit is wrong about
+	// ⚠ **IT IS MEMBERSHIP, AND THE ACQUISITION DECISION (`scrutSolelyOwned`) IS PROVENANCE — THEY DISAGREE ON
+	// THE LOOP-CARRIED PHI.** This one is right about mutability there and the provenance columns are wrong about
 	// ownership, so a `var` union matched inside the loop that reassigns it comes out mutable-but-retained.
 	// `declarePayloadBindings` demotes that combination to read-only at the branch that chose the retain —
 	// see the `borrowedRetain` arm, and the exit-101 leak that measured it.
@@ -32880,10 +33141,18 @@ export type Parser
 			try self.refuseExistentialValueMerge(maxonTypeTag(giveType), what: "the value a `match` expression / ternary gives", tok: matchTok)
 
 			let phiId = self.mintPhi(merge, tag: maxonTypeTag(giveType), nameId: typeNameIdOf(giveType))
-			// The phi is the new sole owner of the transferred give value (see the ownership-transfer
-			// block above), so it is an owned temp: `parseBinding`/the statement drain drops it once.
+			// The phi owns the transferred give value (see the ownership-transfer block above), so it is an
+			// owned temp: `parseBinding`/the statement drain drops it once.
+			//
+			// ⚠ **"THE NEW SOLE OWNER" IS WHAT THIS COMMENT USED TO SAY, AND IT IS TRUE OF THE DROP AND FALSE OF
+			// THE ALLOCATION.** The phi is the only thing that will DROP the value, which is what the transfer
+			// block establishes; whether anything ELSE still owns the allocation is a question about the ARMS —
+			// `promoteBorrowedGive` promotes a borrowed give by `__mm_incref`, so `pick if c else h.ty` reaches
+			// here holding a box the struct field also holds. So the claim is asked of the edges
+			// (`mergedHeapExclusivity`), which is also the direction `propagateImmutableGlobalReadToPhi` takes
+			// four lines down.
 			if resultOwned 'ownedResultPhi'
-				self.trackOwnedTemp(phiId)
+				self.trackOwnedTemp(phiId, exclusivity: self.mergedHeapExclusivity(finalGives))
 			end 'ownedResultPhi'
 
 			// ⭐⭐ **AN IMMUTABLE-GLOBAL READ SURVIVES THE MERGE (P1.7 slice 2b).** The mark that refuses
@@ -34031,15 +34300,23 @@ export type Parser
 	// binds nothing (its managed payload is left in the box and dropped by the scope-exit cascade).
 	//
 	// ⭐ **A SCALAR binding is a COPY** (not a borrow into the box), so dropping the box does not
-	// invalidate it. A MANAGED binding (String/struct) OWNS its payload either way — it drops at its own
-	// scope exit — but HOW it acquires that ownership depends on who owns the box:
-	//   • an OWNED LOCAL scrutinee ⇒ a MOVE-OUT, and the box slot is nulled so the box's cascade skips it
-	//     (`moveOutManagedPayload`);
-	//   • a BORROWED scrutinee (a parameter, a receiver) ⇒ a RETAIN, and the slot is left INTACT because
-	//     the box's real owner is the caller's local (`retainBorrowedPayload`, D1b).
+	// invalidate it. A MANAGED binding (String/struct/boxed union) OWNS its payload either way — it drops at its
+	// own scope exit — but HOW it acquires that ownership depends on HOW MANY OWNERS THE BOX HAS, which is a
+	// THREE-state question and not the two-state one this header asserted for three rungs:
+	//   • a scrutinee this frame is the SOLE owner of ⇒ a MOVE-OUT, and the box slot is nulled so the box's
+	//     cascade skips it (`moveOutManagedPayload`);
+	//   • a BORROWED scrutinee (a parameter, a receiver, a bare field read) ⇒ a RETAIN, and the slot is left
+	//     INTACT because the box's real owner is the caller's local (`retainBorrowedPayload`, D1b);
+	//   • a CO-OWNED scrutinee — one this frame owns a reference to WHILE SOMETHING ELSE HOLDS THE SAME BOX ⇒
+	//     the SAME RETAIN, for the same reason read one step out. `let borrowed = h.ty` (a read out of a mutable
+	//     field, promoted by `__mm_retain`), a payload retained out of a borrowed union and then matched again, a
+	//     call's owned result, a caught error box and a consumed parameter are all in this state, and every one
+	//     of them SEGFAULTED while the move-out's gate asked `valueIsOwnedHeap` — a predicate that answers
+	//     *"this value owns a reference"* where the null store needs *"nobody else will read these slots"*. The
+	//     gate is `valueIsSoleHeapOwner`; see `OwnedHeapExclusivity` for the six measured programs.
 	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
 	// (`setScrutineePartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
-	// borrowed box, and marking it moved would make the caller's later re-read a false E3102.
+	// box, and marking it moved would make the other owner's later re-read a false E3102.
 	//
 	// ⭐ **`scrutMutable` DECIDES WHETHER THE BINDINGS ACCEPT A WRITE (`specs/mutable-enums.md`).** It is a
 	// fact about the SCRUTINEE and never about the pattern: every binding of a `var` union is writable and
@@ -34047,7 +34324,7 @@ export type Parser
 	// (v1 refuses a per-binding `var` keyword from overriding an immutable scrutinee), and it is the honest
 	// rule — the write is a store into the scrutinee's box, so the scrutinee's own mutability is the
 	// permission being asked for.
-	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutOwned bool, scrutMutable bool, layout EnumLayout) returns bool throws ParseError
+	function declarePayloadBindings(bindings PayloadBindingArray, scrutBox ValueId, scrutSolelyOwned bool, scrutMutable bool, layout EnumLayout) returns bool throws ParseError
 		var movedManaged = false
 		for binding in bindings 'each'
 			if binding.isDiscard 'discard'
@@ -34072,7 +34349,7 @@ export type Parser
 			let loaded = self.emitUnionPayloadLoad(scrutBox, field: binding.field, offset: offset, valueType: payloadValueTypeOf(class, declared: declared), storage: storage, range: range)
 			var bindingInfo = try self.scope.declarePayloadValueBinding(binding.nameTok.value, varType: self.typeOf(loaded), mutable: scrutMutable and payloadBindingAcceptsWrites(class), value: loaded, scrutBox: scrutBox, slotOffset: offset, storage: storage) otherwise throw ParseError.localShadowsSelfField(String.from(binding.nameTok.value), typeName: String.from(self.enclosingType), line: binding.nameTok.line, column: binding.nameTok.column)
 			if payloadClassIsManaged(class) 'managedPayload'
-				if scrutOwned 'ownedMoveOut'
+				if scrutSolelyOwned 'ownedMoveOut'
 					self.moveOutManagedPayload(bindingInfo, loaded: loaded, scrutBox: scrutBox, offset: offset, storage: storage, range: range)
 					movedManaged = true
 				end 'ownedMoveOut' else 'borrowedRetain'
@@ -34081,14 +34358,20 @@ export type Parser
 					// ⭐⭐ **A RETAINED MANAGED PAYLOAD IS READ-ONLY, WHATEVER THE SCRUTINEE'S MUTABILITY SAYS —
 					// AND THE STATE THIS CLOSES IS A MEASURED LEAK.** Writability is decided from
 					// `scrutMutable`, which is MEMBERSHIP in `ownedBindings`; the acquisition above is decided
-					// from `scrutOwned`, which is VALUE PROVENANCE — and the tree already records that those two
-					// disagree (`reassignBindingValue`'s header: a loop-carried `var`'s current value is a header
+					// from `scrutSolelyOwned`, which is VALUE PROVENANCE — and the tree already records that those
+					// two disagree (`reassignBindingValue`'s header: a loop-carried `var`'s current value is a header
 					// phi, and a phi carries no provenance bit, so the value column reads `false` for a binding
 					// the loop genuinely owns). A `var` union matched INSIDE the loop that reassigns it lands
 					// exactly there: mutable by membership, borrowed by provenance. It took this retain path —
 					// slot still occupied, box still holding a reference — while the binding was minted writable,
 					// so the write-back stored straight over an occupied slot and nothing released what the box
 					// held. MEASURED as exit 101 before this line existed.
+					//
+					// ⭐ **AND THE CO-OWNED SCRUTINEE ARRIVES HERE BY THE SAME DOOR, WHICH IS WHY THE DEMOTION IS
+					// STATED ABOUT THE ACQUISITION AND NOT ABOUT THE PHI.** A `var borrowed = <a field/element
+					// read>` is mutable by membership and CO-OWNED by provenance, so it also takes this retain and
+					// also has no vacancy to write into — an unrelated shape reaching one rule, which is what says
+					// the rule is about the retain rather than about loop-carried phis.
 					//
 					// It is stated HERE, at the branch that chose the acquisition, rather than folded into the
 					// `mutable:` argument above — that would re-derive the move-vs-retain decision at a second
@@ -34109,12 +34392,36 @@ export type Parser
 	// its own scope exit through `emitDecref`'s tag routing), and the box SLOT is NULLED so the box's own
 	// `__destruct_<U>` cascade — which null-guards every field — does not decref it a second time.
 	//
-	// ⚠ **Reached ONLY for an OWNED LOCAL scrutinee.** Moving a managed field out of a BORROWED union
-	// would STEAL it from its owner — the caller's cascade would then skip a payload the callee already
-	// dropped, or double-free one it did not. A borrowed scrutinee takes `retainBorrowedPayload` instead,
-	// which leaves the slot alone; `declarePayloadBindings` is the one place that picks between them.
+	// ⚠⚠ **REACHED ONLY WHERE THIS FRAME IS THE BOX'S SOLE OWNER (`valueIsSoleHeapOwner`), WHICH IS STRICTLY
+	// NARROWER THAN "OWNED" AND USED TO SAY "OWNED".** The null store below is destructive and this function
+	// never re-reads the slot, so every OTHER owner of the box is a reader it cannot account for: a BORROWED
+	// union's owner is the caller's local, and a CO-OWNED one's is a struct field, an array slot, a caller's
+	// payload slot or a caller's own local that the retain gave this frame a second reference to. Both take
+	// `retainBorrowedPayload` instead, which leaves the slot alone; `declarePayloadBindings` is the one place
+	// that picks between them, and `OwnedHeapExclusivity` records the six programs the wider gate segfaulted.
 	function moveOutManagedPayload(bindingInfo VarInfo, loaded ValueId, scrutBox ValueId, offset ByteOffset, storage MaxonType, range SourceRange)
-		self.ownPayloadBinding(bindingInfo, loaded: loaded)
+		// ⛔⛔ **CO-OWNED, AND THE ARGUMENT FOR `sole` HERE WAS THIS RUNG'S OWN BUG ONE LEVEL DOWN.** It read
+		// *"the box was this frame's alone and the store below empties the slot, so the binding now holds the
+		// allocation's only reference"* — and the second clause does not follow from the first. The box's
+		// soleness is a fact about the BOX; the reference its slot HOLDS is a separate fact, because
+		// `moveManagedValueInto`'s borrowed arm stores a borrowed aggregate by `__mm_incref`
+		// (`coOwnBorrowedForConsume`) rather than by move. **So a genuinely-sole box can hold a co-owned
+		// payload**, and stamping that payload `sole` re-arms the very destructive write this column exists to
+		// disarm. MEASURED two ways, both 0xC0000005: `let w = Wrap.held(<a borrowed union>)` then an INLINE
+		// nested `match i` nulls the CALLER's box slot
+		// (`union-managed-payload/a-co-owned-payload-moved-out-of-a-sole-box-is-still-co-owned`), and
+		// `held(b) then throw b.e` nulls the caller's struct field
+		// (`throw-transfers-ownership/boxed-union-field-thrown-out-of-a-co-owned-in-payload`, a shape that
+		// predates this rung). Both have CONTROLS that pass: the same programs with a helper call, and with the
+		// payload CONSTRUCTED at the construct site — so the discriminator is move-in versus co-own-in and
+		// nothing else.
+		//
+		// ⚖ **THE CURE IS THE UNDERSTATEMENT, BY DECISION (coordinator, this rung).** Tracking "every managed
+		// payload in this box was MOVED in" per box would keep the nested move-out, and it would add a THIRD
+		// ownership state and a new invariant to a rung that has already paid six segfaults for one predicate
+		// answering two facts. The cost of understating is one refcount pair per nested move-out; the cost of
+		// overstating is a stolen slot. `OwnedHeapExclusivity`'s own safety argument decides it.
+		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: OwnedHeapExclusivity.coOwned)
 
 		let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
 		self.emitIndirectStore(scrutBox, offset: offset, value: zero, storageType: storage, range: range)
@@ -34146,21 +34453,32 @@ export type Parser
 	// is STRUCTURAL: the binding is in `ownedBindings` and drops at its scope exit whatever the analysis
 	// would have said, so an unconditional acquire is unconditionally balanced and needs no analysis at
 	// all. Porting v1's would buy a saved incref with a dataflow pass shv2 does not have.
+	//
+	// ⭐⭐ **AND THE BINDING IS A CO-OWNER, WHICH IS WHAT MAKES A NESTED `match` ON IT SAFE.** The reference this
+	// took is a SECOND one; the box still holds the first. So `direct(ty) gives match ty …` — a nested match on a
+	// retained payload — must retain in turn, and it does because the acquisition is recorded on the value rather
+	// than re-derived from its owned bit. Claiming sole here is exactly how an inline nested match came to null a
+	// caller's `Ty` box slot (MEASURED; the same program with a HELPER CALL in place of the inline match was fine,
+	// because the callee's parameter is borrowed and retains).
 	function retainBorrowedPayload(bindingInfo VarInfo, loaded ValueId, range SourceRange)
 		self.emitIncref(loaded, range: range)
-		self.ownPayloadBinding(bindingInfo, loaded: loaded)
+		self.ownPayloadBinding(bindingInfo, loaded: loaded, exclusivity: OwnedHeapExclusivity.coOwned)
 	end 'retainBorrowedPayload'
 
 	// The half both managed-payload bind paths share: the binding OWNS the payload's reference, however it
-	// was acquired (moved out of an owned box, or retained out of a borrowed one). The provenance bit is
-	// what `valueIsOwnedHeap` reads — a later `let q = <it>` re-moves it correctly, and a struct payload is
-	// not mistaken for a borrow — and `ownedBindings` is what DROPS it, at the arm's own exit.
+	// was acquired (moved out of a solely-owned box, or retained out of a box with another owner). The
+	// provenance bit is what `valueIsOwnedHeap` reads — a later `let q = <it>` re-moves it correctly, and a
+	// struct payload is not mistaken for a borrow — and `ownedBindings` is what DROPS it, at the arm's own exit.
+	//
+	// ⚠ **`exclusivity` IS THE CALLER'S BECAUSE IT IS THE ONE THING THE TWO PATHS DO NOT SHARE, and folding it
+	// in here would re-derive the move-vs-retain decision at a second site** — the split that produced the
+	// write-back leak `declarePayloadBindings` records, one question over.
 	//
 	// `markValueOwnsHeap` rather than `trackOwnedTemp`, for the reason a consumed parameter needs the same
 	// half: the BINDING owns the drop, not the statement, so enrolling a statement-scoped pending temp
 	// would drop the payload a second time at the enclosing statement's end.
-	function ownPayloadBinding(bindingInfo VarInfo, loaded ValueId)
-		self.markValueOwnsHeap(loaded)
+	function ownPayloadBinding(bindingInfo VarInfo, loaded ValueId, exclusivity OwnedHeapExclusivity)
+		self.markValueOwnsHeap(loaded, exclusivity: exclusivity)
 		self.ownedBindings.push(bindingInfo)
 	end 'ownPayloadBinding'
 
@@ -35054,6 +35372,9 @@ export type Parser
 		// on the one value an interpolation allocates. The slot must exist before that call, exactly as
 		// the constant slot must exist before `recordConst`.
 		self.valueOwnsHeap.push(false)
+		// And its exclusivity, seeded CO-OWNED — the safe direction, because an unclaimed value takes the
+		// retain path rather than a destructive move-out (see `OwnedHeapExclusivity`).
+		self.valueOwnsHeapAlone.push(false)
 		// The promise mark rides the same lockstep, seeded NOT-a-promise; set by `markValuePromise` on the
 		// one value an `async` spawn produces.
 		self.valuePromiseMarks.push(false)
@@ -35162,6 +35483,11 @@ export type Parser
 		// A parameter is never a fresh interpolation result, so it starts NOT owned — but its slot must
 		// exist so the column stays indexable by every ValueId, params included.
 		self.valueOwnsHeap.push(false)
+		// A CONSUMED parameter is enrolled owned a few lines on (`bindParameters`), and it is enrolled
+		// CO-OWNED: the caller may have transferred it by `__mm_incref` rather than by a move
+		// (`coOwnBorrowedForConsume`), and which of the two it chose is not a fact this frame can read. So the
+		// seed here is also the final answer for every parameter.
+		self.valueOwnsHeapAlone.push(false)
 		// A parameter is never an async spawn's handle; the slot must exist so the column stays indexable.
 		self.valuePromiseMarks.push(false)
 		// A parameter is never a merge, and its declared range IS proved — by the entry guard `guardRangedParams`
@@ -38154,7 +38480,7 @@ export type Parser
 			// A near-miss reports the SAME E3005 as no constraint at all, because the author's cure is the same
 			// sentence: constrain the parameter with the protocol. (Constructed inline rather than through a
 			// shared factory — `throw self.helperReturningAParseError(…)` leaks the boxed union under the
-			// bootstrap's refcounting; see `nestedUnionPayloadMessage`.)
+			// bootstrap's refcounting; see `floatPayloadMessage`.)
 			none then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(self.valueNameId(receiver))), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
 			// TWO constraints genuinely shaped like the protocol. They are two DISTINCT witness slots holding
 			// two DISTINCT conformers' impls, so "they are both `Equatable`" does not make them interchangeable
@@ -38177,7 +38503,7 @@ export type Parser
 	// whose tags `emitOrderingVerdict` tests. A near-miss reports the SAME E3005 as no constraint at all,
 	// because the author's cure is the same sentence: constrain the parameter with the protocol. (Constructed
 	// inline at both sites rather than through a shared factory — `throw self.helperReturningAParseError(…)`
-	// leaks the boxed union under the bootstrap's refcounting; see `nestedUnionPayloadMessage`.)
+	// leaks the boxed union under the bootstrap's refcounting; see `floatPayloadMessage`.)
 	//
 	// ⚠ **A THROWING METHOD IS REFUSED HERE FOR THE SAME REASON A WRONG-RESULT ONE IS (P1.7a slice 2b-v).**
 	// `Equatable.equals` and `Comparable.compare` are synthesized non-throwing, so a user interface whose
@@ -39124,7 +39450,7 @@ export type Parser
 		let giid = self.signatures.internArrayByteInstance(self.filePath)
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: ByteStringElementSize, elementCount: bytes.count() as ParsedInt, bytes: bytes), range: range)
-		self.trackOwnedTemp(result)
+		self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
 		return result
 	end 'emitByteStringLiteralValue'
 
@@ -39510,7 +39836,7 @@ export type Parser
 		let overhead = self.emitLiteral(StringInterpOverheadBytes, valueType: MaxonType.integer, range: range)
 		let allocSize = self.emitMachineWordAdd(totalLen, rhs: overhead, range: range)
 		let result = self.emitBoxAlloc(allocSize, resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
-		self.trackOwnedTemp(result)
+		self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
 
 		// The inline byte region begins right after the record. Copy each part in at a cursor that advances
 		// by the part's length; the NUL at `buffer[totalLen]` is already zero (the slab zeroes the payload).
@@ -40030,7 +40356,7 @@ export type Parser
 
 	// A field initializer / assignment must agree with the field's DECLARED type. A SCALAR field takes the
 	// `checkDeclaredType` coercion-site rule (the same one a call argument, a `return` and an assignment
-	// ask). A MANAGED field (a `String` or a `struct`) takes the tag-AND-name check `requireManagedPayloadArg`
+	// ask). A MANAGED field (a `String` or a `struct`) takes the tag-AND-name check `requirePayloadArgType`
 	// uses for a union payload — a struct field's declared type is `named(<Struct>)` (unresolved), which the
 	// tag path would read as `int` (`typeTagName(named)`), so it MUST classify first (`classifyUnionPayload`
 	// resolves it to `managed(structRef)`) rather than compare the raw tag.
@@ -40059,7 +40385,7 @@ export type Parser
 			return try self.widenValueIntoExistentialField(layout, index: index, fieldType: fieldType, value: value, anchor: anchor)
 		end 'existentialField'
 		if payloadClassIsManaged(class) 'managed'
-			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 			return value
 		end 'managed'
 
@@ -40162,6 +40488,31 @@ export type Parser
 		let fieldName = try layout.fieldNames.get(index) otherwise panic("fieldSiteName: fieldNames.get OOB at {index}")
 		return "{String.from(layout.name)}.{String.from(fieldName)}"
 	end 'fieldSiteName'
+
+	// ⭐⭐ **A CLASSIFIED MANAGED SLOT'S THREE-PART IDENTITY CHECK, IN ONE PLACE — the value type, the String
+	// flag and the check itself.** A struct FIELD (`requireFieldType`) and a CONTAINER ELEMENT
+	// (`requireContainerElementType`) ask the identical question of a `PayloadClass`: may this value fill this
+	// slot? They differ only in the three things a diagnostic needs — the label, the voice and the anchor — so
+	// those are threaded and the derivation is not.
+	//
+	// ⛔ **IT WAS SPELLED AT BOTH SITES, AND THE PAIR DEMONSTRABLY DRIFTS: W55 HAD TO CORRECT BOTH COPIES FROM
+	// `payloadStorageOf` TO `payloadValueTypeOf` IN ONE DIFF.** That is the failure mode this door removes —
+	// two independently-correct-looking lines that must agree about which of the two answers
+	// `SignatureIndex`'s width-vs-identity split gives, where getting it wrong is a nonsense tag mismatch on a
+	// slot the language admits (`struct-managed-field.md`) rather than a compile error.
+	//
+	// ⚠ **`requirePayloadArgType`'s ARMS ARE DELIBERATELY NOT ROUTED THROUGH HERE.** It is itself a `match`
+	// over `PayloadClass`, so each arm reads the case's OWN fields — which is what lets the `nestedUnion` arm
+	// state `isString: false` as a fact about union boxes rather than deriving it — and folding it in would
+	// trade a legible exhaustive match for a call that re-derives what the arm already destructured.
+	function requireManagedSlotValueMatches(class PayloadClass, declared MaxonType, value ValueId, assignedName String, voice SlotMismatchVoice, anchor Token) throws ParseError
+		// `payloadValueTypeOf`, NEVER `payloadStorageOf` (W55): the question is what a value filling the slot must
+		// BE, and for a boxed-union slot those two parted company when the payload slot's WIDTH became the machine
+		// word a box is. Asked of the width, a `Ty` box meets `integer`; asked of the identity, it meets `Ty` —
+		// and the identity is also what `containerSlotValueType` types the value a read hands BACK, so a slot
+		// admits exactly what it can return. `SignatureIndex.payloadStorageOf` is the one home of that split.
+		try self.requireManagedValueMatches(payloadValueTypeOf(class, declared: declared), isString: payloadClassIsString(class), value: value, assignedName: assignedName, voice: voice, anchor: anchor)
+	end 'requireManagedSlotValueMatches'
 
 	// ⭐ **A MANAGED VALUE MUST BE THE MATCHING HEAP KIND** — the ONE check a struct FIELD and a union
 	// PAYLOAD share: a `String` slot takes a `string`; a `struct` slot takes a `structRef` of the SAME struct
@@ -40616,7 +40967,7 @@ export type Parser
 	function emitOwnedStructBox(layout StructLayout, range SourceRange) returns ValueId
 		let size = self.emitLiteral(layout.sizeBytes(), valueType: MaxonType.integer, range: range)
 		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
-		self.trackOwnedTemp(box)
+		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
 		return box
 	end 'emitOwnedStructBox'
 
@@ -41191,7 +41542,7 @@ export type Parser
 			self.emitArrayPush(arr, element: self.emitEnumTagLiteral(layout.name, tag: layout.tagOfIndex(i), range: range), range: range)
 		end 'eachCase'
 
-		self.trackOwnedTemp(arr)
+		self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
 		return arr
 	end 'emitEnumAllCases'
 
@@ -41278,7 +41629,7 @@ export type Parser
 			self.emitArrayPush(arr, element: owned, range: range)
 		end 'eachCase'
 
-		self.trackOwnedTemp(arr)
+		self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
 		return arr
 	end 'emitEnumAllCaseNames'
 
@@ -41438,7 +41789,7 @@ export type Parser
 		end 'each'
 	end 'requireAllPayloadsProvided'
 
-	// Emit the box: validate + classify every payload field (reject float/nested-union, type-check each
+	// Emit the box: validate + classify every payload field (reject a float payload, type-check each
 	// argument) BEFORE any op, then `__mm_alloc` the `8 + maxArity*8` bytes, store the case TAG at
 	// offset 0, store each payload at `8 + slot*8`, and ZERO-FILL the unused slots `[arity, maxArity)`.
 	//
@@ -41472,7 +41823,7 @@ export type Parser
 
 		let size = self.emitLiteral(layout.boxSizeBytes(), valueType: MaxonType.integer, range: range)
 		let box = self.emitBoxAlloc(size, resultTag: ValueTypeTag.named, resultNameId: self.artifact.typeNames.intern(layout.name), range: range)
-		self.trackOwnedTemp(box)
+		self.trackOwnedTemp(box, exclusivity: OwnedHeapExclusivity.sole)
 
 		self.emitUnionTagStore(box, tag: layout.tagOfIndex(caseIndex), range: range)
 
@@ -41621,6 +41972,10 @@ export type Parser
 			self.functionStoredOpaqueWithoutDescriptor = true
 		end 'noDescriptorToRetainThrough'
 
+		// Downgraded for `markValueCoOwnsHeap`'s reason: the instance descriptor's retain is an incref for every
+		// managed instantiation, and inert for a trivial one — so a second owner either exists or there is
+		// nothing to own, and neither case licenses a destructive write through `value`.
+		self.markValueCoOwnsHeap(value)
 		return self.emitRuntimeCall(RetainTypeParamName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 	end 'coOwnBorrowedOpaque'
 
@@ -41700,8 +42055,8 @@ export type Parser
 		self.emitIndirectStore(box, offset: UnionTagOffset, value: tagLit, storageType: MaxonType.integer, range: range)
 	end 'emitUnionTagStore'
 
-	// Classify a payload field's storage, rejecting the ones this rung's UNION-payload store cannot lower —
-	// a FLOAT and a NESTED boxed-union payload.
+	// Classify a payload field's storage, rejecting the one kind the UNION-payload store still cannot
+	// lower — a FLOAT.
 	//
 	// ⚠ THE FLOAT REJECT IS NO LONGER WAITING ON AN OPCODE. Both bitcast directions now exist
 	// (`StdUnaryOpcode.bitcastF64ToI64`/`bitcastI64ToF64`, reachable as `__Builtins.floatToBits`/
@@ -41709,19 +42064,22 @@ export type Parser
 	// LOWERING that uses them: an int-tagged box stores a payload as an i64, so a float field has to be
 	// re-encoded on the way in and decoded on the way out at BOTH the construct and the extract site,
 	// and neither site does that today. Until it does, this refuses cleanly rather than storing an f64
-	// register through an i64 slot. A SCALAR, a String, and a struct are
+	// register through an i64 slot. A SCALAR, a String, a struct and a nested boxed UNION are
 	// lowerable; the returned class carries the storage type and, for a managed
 	// payload, whether it is a String. The reject is at the construct/extract USE site (not the
 	// declaration), so the tolerant enum sweep never truncates a layout over it.
 	//
-	// ⚠ **THE nestedUnion REJECT IS THE UNION-PAYLOAD SITE'S ALONE — a boxed-union STRUCT FIELD lowers.**
-	// A boxed union is now a MANAGED class (its move-in and drop are wired), so a boxed-union struct FIELD
-	// is constructible (its store width comes from `fieldStorageType` → i64). But a union PAYLOAD's store
-	// width comes from `payloadStorageOf`, which for a `nestedUnion` is the `named(<union>)` type — and
-	// `maxonTypeToStdType` PANICS on a `named`. Storing a boxed-union payload IN A BOX needs the payload
-	// slot's width derived the field way (a follow-up slice); until then this refuses it cleanly rather
-	// than panic the lowering. Only `emitEnumBox`/`emitUnionPayloadLoad` call this — the struct-field path
-	// classifies through `classifyUnionPayload` directly and never reaches here.
+	// ⚠ **v1 PANICS ON A FLOAT PAYLOAD** (`LowerMaxonToStd.maxon:12529-12536`, `:12574-12578`) where this
+	// refuses positioned; the divergence is deliberate and shv2's answer is the better one.
+	//
+	// ⚠ **THE nestedUnion REJECT THAT USED TO STAND HERE WAS A MISSING WIDTH, NOT A MISSING CASCADE (W55).**
+	// Its message said a nested payload-bearing union "needs its own destructor cascade"; it never did — the
+	// cascade is generic (`managedFieldDropCallee` → `unionBoxDropCallee`) and a boxed-union STRUCT FIELD had
+	// been dropping through it since P1.4b wave 2c. What the payload path actually lacked was the width-vs-
+	// identity split `payloadStorageOf` now states in full — this door's store width was being asked of the
+	// slot's IDENTITY, and a boxed union's identity is a `named` that `maxonTypeToStdType` panics on. Only
+	// `emitEnumBox`/`declarePayloadBindings` call this; the struct-field path classifies through
+	// `classifyUnionPayload` directly and never reaches here.
 	// `declared` is the payload's type out of `payloadTypeOf` — a signatures-layout id adopted into this
 	// file's interner (or a ranged alias that shifts the interning order makes `classifyUnionPayload` read
 	// the wrong name off the id, the wrong E3005 reject — OPEN #52) AND resolved. It is threaded in rather
@@ -41732,13 +42090,15 @@ export type Parser
 		match class 'c'
 			scalar then break 'c'
 			managed then break 'c'
+			// A nested boxed union is a managed heap pointer whose slot is the same one machine word a struct
+			// FIELD holding one occupies — see the ⚠ above for the derivation that was missing.
+			nestedUnion then break 'c'
 			undeclaredName then break 'c'
 			// An opaque `T` payload lowers exactly as a scalar does — one machine word out of
 			// `payloadStorageOf` — which is what it did while it WAS classified `scalar`. What the split bought
 			// is the store-side reference (`moveInPayload`), not a different slot.
 			typeParam then break 'c'
 			floatPayload then throw ParseError.unsupported(self.floatPayloadMessage(field, layout: layout), line: posTok.line, column: posTok.column)
-			nestedUnion(storage) then throw ParseError.unsupported(self.nestedUnionPayloadMessage(field, layout: layout, typeName: self.boxedUnionDisplay(storage)), line: posTok.line, column: posTok.column)
 			// An interface-typed PAYLOAD is refused at the DECLARATION (`requireStorableDeclaredType`,
 			// `DeclaredStoragePosition.unionPayload`) — a struct field carves out two slots for a fat pointer
 			// and a payload slot cannot, because every case shares one slot region. So this arm is the
@@ -41748,23 +42108,10 @@ export type Parser
 		return class
 	end 'requirePayloadLowerable'
 
-	// The "union U"/"enum U" text a boxed-union payload's rejection message names, derived from the payload's
-	// `named(<union>)` storage type — a COLD path (only a nested-union-payload reject reaches it), which is why
-	// `nestedUnion` carries the type rather than a precomputed `String` every classification would allocate.
-	// The storage id lives in this file's interner (`classifyUnionPayload` adopted it), and it always names a
-	// declared boxed union (that is what made the classification `nestedUnion`).
-	function boxedUnionDisplay(storage MaxonType) returns String
-		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(storage)) otherwise panic("boxedUnionDisplay: a nestedUnion storage type's id is not in this file's interner — classifyUnionPayload adopts it before classifying")
-		match self.signatures.enumOf(name) 'e'
-			declared(layout) then return "{layout.kindWord()} {String.from(name)}"
-			undeclared then panic("boxedUnionDisplay: '{String.from(name)}' names no declared enum/union — classifyUnionPayload classifies `nestedUnion` only for a boxed EnumLayout")
-		end 'e'
-	end 'boxedUnionDisplay'
-
 	// A payload argument must agree with its field's classified type. A SCALAR uses `checkDeclaredType`,
 	// the same coercion-site rule a struct literal field, a call argument and a `return` ask, PLUS the
-	// nominal identity `checkDeclaredType` structurally cannot ask (`requireEnumPayloadIdentity`); a MANAGED
-	// payload requires the matching heap kind (a String, or a struct of the same name).
+	// nominal identity `checkDeclaredType` structurally cannot ask (`requireSlotAggregateIdentity`); a MANAGED
+	// payload requires the matching heap kind (a String, or a struct/boxed union of the same name).
 	//
 	// ⚠ **TWO ANCHORS, AND THEY ARE DIFFERENT QUESTIONS.** `caseTok` names the CONSTRUCT and is where a
 	// refusal about the case as a whole belongs (a payload the tier cannot lower, a slot left unfilled);
@@ -41784,11 +42131,19 @@ export type Parser
 			// The shared managed door directly — `requireManagedPayloadArg` stood here and did nothing but
 			// forward, once the payload voice stopped needing a `<Union>.<case>(<field>)` label built for it.
 			managed(storage, isString) then try self.requireManagedValueMatches(storage, isString: isString, value: value, assignedName: String.from(field.name), voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+			// ⭐ **A NESTED BOXED UNION TAKES THE MANAGED DOOR, over its `named(<union>)` VALUE type and not over
+			// the machine word its slot is (W55).** A boxed union's value carries `named`, which every ranged-int
+			// alias and every payload-free enum also carries — so the tag comparison alone AGREES for any two of
+			// them, and it is `requireManagedValueMatches`' second half (`requireSlotAggregateIdentity`) that
+			// makes `Wrap.wrap(Other.a(5))` a positioned refusal rather than an `Other` box read back under
+			// `Inner`'s destructor. `isString: false` — a union box is an aggregate, released by
+			// `__destruct_<U>`/`__mm_decref` and co-owned by `__mm_retain`, never by the fused-record COPY
+			// protocol a String takes.
+			nestedUnion(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, assignedName: String.from(field.name), voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
 			undeclaredName then break 'c'
 			floatPayload then panic("requirePayloadArgType: a float payload reached the arg check — requirePayloadLowerable rejects it first")
-			nestedUnion then panic("requirePayloadArgType: a nested-union payload reached the arg check — requirePayloadLowerable rejects it first")
 			existential then panic("requirePayloadArgType: an interface-typed payload reached the arg check — an interface-typed union payload is refused at its DECLARATION (`requireStorableDeclaredType`), and a struct FIELD at one is checked by `requireStructFieldArgType`, never here")
 		end 'c'
 	end 'requirePayloadArgType'
@@ -41909,8 +42264,10 @@ export type Parser
 	// A SCALAR is minted at the field's DECLARED type (so a nested `match dir` sees a `Direction`, and the
 	// shift rule reads a ranged alias's low bound); a MANAGED payload is minted at its concrete storage
 	// type (`structRef`/`string`) so an extracted struct's field access (`b.mass`) resolves and its
-	// ownership is read off the tag. The op carries the concrete storage width in both cases
-	// (`maxonTypeToStdType` panics on a `named`).
+	// ownership is read off the tag; a nested BOXED UNION is minted at its `named(<union>)`, so a `match` on
+	// the extracted payload recognizes it and its drop routes to `__destruct_<U>`. The op itself always
+	// carries a concrete storage WIDTH, which for the boxed-union case is not the value type
+	// (`maxonTypeToStdType` panics on a `named`) — see `payloadStorageOf`.
 	//
 	// ⚠ **THE ADDRESS, THE WIDTH AND THE VALUE TYPE ARE ALL THE CALLER'S, exactly as they are on the STORE
 	// side (`emitEnumBox`), and that is not a convenience.** `declarePayloadBindings` needs the slot's
@@ -43906,7 +44263,7 @@ export type Parser
 		var args = pairArgs(source, second: filled)
 		args.append(extraArgs)
 		_ = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		self.trackOwnedTemp(filled)
+		self.trackOwnedTemp(filled, exclusivity: OwnedHeapExclusivity.sole)
 		return filled
 	end 'emitMaterializedFill'
 
@@ -44861,7 +45218,7 @@ export type Parser
 	// de-lists it again when one does take ownership, so it is dropped exactly once either way.
 	function emitEmptyCharacterMemberSet(range SourceRange) returns ValueId
 		let chars = self.emitSetCreateOp(self.signatures.setInstanceForCharacter(), range: range)
-		self.trackOwnedTemp(chars)
+		self.trackOwnedTemp(chars, exclusivity: OwnedHeapExclusivity.sole)
 		return chars
 	end 'emitEmptyCharacterMemberSet'
 
@@ -45533,7 +45890,7 @@ export type Parser
 
 		try self.requireNoEscapingClosureElement(values)
 
-		self.trackOwnedTemp(arr)
+		self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
 		return arr
 	end 'parseCollectedArrayLiteralBody'
 
@@ -45601,7 +45958,7 @@ export type Parser
 		let blob = constArrayBlobOf(constants, stride: self.signatures.arrayElementSize(giid))
 		let result = self.mintValue(ValueTypeTag.genericInstance, nameId: giid)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.constArrayLiteral(result, elementSize: blob.stride, elementCount: blob.elementCount, bytes: blob.bytes), range: range)
-		self.trackOwnedTemp(result)
+		self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
 		return result
 	end 'emitConstantArrayBlob'
 
@@ -45632,7 +45989,7 @@ export type Parser
 
 		try self.requireNoEscapingClosureElement(values)
 
-		self.trackOwnedTemp(arr)
+		self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
 		return arr
 	end 'finishArrayLiteral'
 
@@ -46165,7 +46522,7 @@ export type Parser
 	function emitOwnedContainerCreate(giid GenericInstanceId, aliasTok Token, aliasName ByteArray, range SourceRange) returns ValueId throws ParseError
 		if self.signatures.isArrayInstance(giid) 'array'
 			let arr = try self.emitArrayCreateOp(giid, range: range)
-			self.trackOwnedTemp(arr)
+			self.trackOwnedTemp(arr, exclusivity: OwnedHeapExclusivity.sole)
 			if self.signatures.aliasElementIsBufferSurface(aliasName, readerFilePath: self.filePath) 'elementsAreBuffers'
 				self.markBufferSurfaceElements(arr)
 			end 'elementsAreBuffers'
@@ -46174,7 +46531,7 @@ export type Parser
 		end 'array'
 
 		let container = try self.gateAndEmitContainerCreate(giid, aliasTok: aliasTok, range: range)
-		self.trackOwnedTemp(container)
+		self.trackOwnedTemp(container, exclusivity: OwnedHeapExclusivity.sole)
 		return container
 	end 'emitOwnedContainerCreate'
 
@@ -47041,7 +47398,7 @@ export type Parser
 		end 'morePairs'
 		try self.consume(TokenKind.rightBracket)
 
-		self.trackOwnedTemp(map)
+		self.trackOwnedTemp(map, exclusivity: OwnedHeapExclusivity.sole)
 		return map
 	end 'parseMapLiteralBody'
 
@@ -50334,7 +50691,14 @@ export type Parser
 		let result = self.emitRuntimeCall(callee, args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: range)
 		self.markElementReadSurface(result, container: container)
 		if owned 'moveOut'
-			self.trackOwnedTemp(result)
+			// ⛔ **CO-OWNED: REMOVING AN ELEMENT PROVES THE CONTAINER NO LONGER HOLDS IT, NOT THAT NOBODY DOES.**
+			// `append`/`push` of a BORROWED aggregate co-owns it (`moveManagedValueInto`'s borrowed arm), so the
+			// element handed back here may be a reference the CALLER still shares — MEASURED as 0xC0000005 on
+			// `list.append(<a borrowed union>)` + `removeFirst()` + `match`. ⭐ The `Array` spelling of that same
+			// program always passed, because `Array.remove` is a CORPUS member reaching `enrolOwnedCallTemp`,
+			// which is co-owned; this compiler-emitted door was the one still claiming sole, and two spellings of
+			// one operation must not disagree. See `OwnedHeapExclusivity`.
+			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.coOwned)
 		end 'moveOut' else 'borrowsInPlace'
 			// ⭐⭐ **A CONTAINER THE STATEMENT ALONE OWNS IS HELD TO THE SCOPE'S EXIT, BECAUSE THE ELEMENT JUST
 			// HANDED OUT POINTS INTO IT (A3h).** ⚖ USER RULING, 2026-08-01: extend the TEMPORARY's lifetime.
@@ -50436,8 +50800,8 @@ export type Parser
 	// than guessing at which of those two routes failed.
 	//
 	// ⚠ Sites whose `otherwise` carries a REAL derivation — `fieldStorageType`, `readTypeAliasDeclaration`,
-	// `requireThrownTypeFitsEnclosing`, `boxedUnionDisplay` — deliberately keep their own message: the
-	// explanation is the value there, and collapsing four different invariants onto one sentence would be
+	// `requireThrownTypeFitsEnclosing` — deliberately keep their own message: the
+	// explanation is the value there, and collapsing three different invariants onto one sentence would be
 	// deduplication that loses the thing being deduplicated.
 	function localTypeName(t MaxonType, asker String) returns ByteArray
 		return try self.artifact.typeNames.nameOf(typeNameIdOf(t)) otherwise panic("{asker}: a leaf type's id ({typeNameIdOf(t)}) is not in this file's interner — every id reaching here was interned into that table or adopted into it")
@@ -50533,9 +50897,24 @@ export type Parser
 	// receiver. `slice` is THROWING, so this must stay the last op it emits — the enclosing `try` rewrites it
 	// to a `tryCall`, and `finishValueTry` reconciles the OWNED result with an OWNED `otherwise` fallback (both
 	// drop once, on their own edge).
+	// ⚠ **`sole` IS ABOUT THE RECORD THIS RETURNS, WHICH IS THE ONLY THING A DROP OR A DESTRUCTIVE WRITE
+	// TOUCHES.** `__str_bytes_view` is the one entry here that hands back a record VIEWING bytes another
+	// allocation owns — but the record itself is freshly minted and has exactly one owner, and a byte record has
+	// no payload or field slot for a move-out to null. See `OwnedHeapExclusivity`.
+	//
+	// ⛔ **AND THIS IS THE ONE `sole` IN THE FILE THAT RESTS ON THE SET OF CALLEES RATHER THAN ON AN OP — SO THE
+	// FRESHNESS IS THE CALLEE'S TO EARN, NOT THIS DOOR'S TO ASSUME.** Every runtime entry reaching here today
+	// mints its result, so the claim holds; but it holds by ENUMERATION, and this tree's enumerated doors rot.
+	// Three of them already return a `structRef` (`__file_open`, `__dir_open_search`, `__charset_make`), and a
+	// struct box CAN serve as `lastFieldReadBox` for a `throw box.unionField` — so an 18th entry that handed
+	// back a SHARED record would inherit `sole` here in silence and re-arm the destructive write
+	// `OwnedHeapExclusivity` documents three segfaults for. ⇒ **Adding a runtime entry whose result is not
+	// freshly minted means passing `coOwned` here, not extending this list.** (Found by W55's review, which
+	// classified it as the enumerated-doors shape rather than as transitive soleness — a different bug class,
+	// and not live today.)
 	function emitOwnedRuntimeResult(callee ByteArray, args ValueIdArray, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
 		let result = self.emitRuntimeCall(callee, args: args, resultTag: resultTag, resultNameId: resultNameId, range: range)
-		self.trackOwnedTemp(result)
+		self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.sole)
 		return result
 	end 'emitOwnedRuntimeResult'
 
@@ -50831,7 +51210,7 @@ export type Parser
 		let element = try self.integerizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath)
 		if payloadClassIsManaged(class) 'managed'
-			try self.requireManagedValueMatches(payloadStorageOf(class), isString: payloadClassIsString(class), value: element, assignedName: String.from(methodTok.value), voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
+			try self.requireManagedSlotValueMatches(class, declared: declared, value: element, assignedName: String.from(methodTok.value), voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
 			return element
 		end 'managed'
 
@@ -53147,11 +53526,12 @@ export type Parser
 			undeclared then break 'alias'
 		end 'alias'
 
-		// A declared enum/union field stores an i64 — a payload-free enum's value IS its i64 tag, and a
-		// boxed-union field is an i64 POINTER to its box (P1.4b wave 2c). Both collapse to `integer`,
-		// exactly as `TypeResolution.resolveNamedType` erases a declared enum/union to `integer`.
+		// A declared enum/union field's width, through the accessor the UNION-PAYLOAD slot reads too
+		// (`SignatureIndex.declaredAggregateSlotWidth`) — so the two slot kinds cannot come to store the SAME
+		// union at two different widths, a divergence no diagnostic and no exit code can report. `TypeResolution.
+		// resolveNamedType` is the third deriver and is out of this rung's files; that accessor's header names it.
 		if self.signatures.containsEnum(name) 'enumOrUnion'
-			return MaxonType.integer
+			return declaredAggregateSlotWidth()
 		end 'enumOrUnion'
 
 		// A name NO file declares, or a `type` the sweep recorded but whose reference the parser typed
@@ -53163,34 +53543,24 @@ export type Parser
 		return MaxonType.integer
 	end 'fieldStorageType'
 
-	// ⭐ **THE SCALAR-VS-MANAGED PAYLOAD DECISION — the boundary of slice 1.** The concrete storage
-	// type a union payload field of declared type `declared` occupies its 8-byte slot as, OR a clean
-	// rejection of the types slice 1 cannot lower: a FLOAT (BOTH bitcast directions exist now, so what is
-	// missing is no longer an OPCODE but the encode/decode PAIR at the construct and extract sites — see
-	// `requirePayloadLowerable`) and every MANAGED reference (String, struct, a boxed union —
-	// an owned heap pointer whose move-in/drop is slice 2's ownership work). A SCALAR — `int`/`bool`,
-	// a ranged-int alias, or a
-	// payload-FREE enum (whose value IS its i64 tag) — is stored inline and returned here.
+	// ⭐ **THE ONE UNION-PAYLOAD REJECTION MESSAGE, so the construct and the extract site report a refused
+	// payload identically.** The REJECT itself is `requirePayloadLowerable`'s — deferred to the construct and
+	// extract sites rather than taken at the declaration, exactly as a struct-typed field's is refused at its
+	// use site (`requireStructBase`): a rejection at declaration would `throw` in the tolerant enum sweep and
+	// truncate the layout (see `readEnumCaseInto`'s payload arm).
 	//
-	// It is the payload twin of `fieldStorageType`, and it is a SEPARATE policy on purpose: a struct
-	// FIELD may be a `structRef` (a struct holds a pointer to another struct, `sizeof` counts it as 8
-	// bytes) and `fieldStorageType` returns it; a union PAYLOAD may not, because storing a managed
-	// pointer without the incref/decref discipline slice 2 supplies would leak it or free it twice.
-	// The rejection is deferred to HERE — the construct and extract sites — rather than the
-	// declaration, exactly as a struct-typed field's is refused at its use site (`requireStructBase`)
-	// and not where the field is declared: a rejection at declaration would `throw` in the tolerant
-	// enum sweep and truncate the layout (see `readEnumCaseInto`'s payload arm).
-	// The payload-rejection MESSAGES, one shape each, so the construct and extract sites report a refused
-	// payload identically. They return the STRING, and each caller throws `ParseError.unsupported(…)`
-	// INLINE — never `throw self.helperReturningAParseError(…)`, which LEAKS 2 allocations under the
-	// C#-emitted refcount runtime: a freshly-owned union returned across a call and immediately re-thrown
-	// is not reconciled (the family OPEN.md records for a `throw` of a call result and for the owned-value
-	// ternary). Building the message via a call that returns a String and throwing the ParseError inline
-	// is the non-leaking shape.
-	function nestedUnionPayloadMessage(field PayloadField, layout EnumLayout, typeName String) returns String
-		return "a payload field '{String.from(field.name)}' of type '{typeName}' on `{layout.kindWord()} {String.from(layout.name)}` — a nested payload-bearing union payload needs its own destructor cascade, which arrives at a later rung (String and struct payloads are supported)"
-	end 'nestedUnionPayloadMessage'
-
+	// ⚠ **IT RETURNS THE STRING, and the caller throws `ParseError.unsupported(…)` INLINE** — never
+	// `throw self.helperReturningAParseError(…)`, which LEAKS 2 allocations under the C#-emitted refcount
+	// runtime: a freshly-owned union returned across a call and immediately re-thrown is not reconciled (the
+	// family OPEN.md records for a `throw` of a call result and for the owned-value ternary). Building the
+	// message via a call that returns a String and throwing the ParseError inline is the non-leaking shape,
+	// and it is the shape three other refusals in this file cite this one for.
+	//
+	// ⚠ **IT HAD A SIBLING — `nestedUnionPayloadMessage`, DELETED WITH ITS REFUSAL (W55).** That message
+	// claimed a nested payload-bearing union payload "needs its own destructor cascade"; the cascade was
+	// generic all along and what the payload path lacked was a slot-width derivation, so both the refusal and
+	// the sentence explaining it are gone rather than reworded. A message describing a refusal that no longer
+	// exists is a defect this project has paid for repeatedly.
 	function floatPayloadMessage(field PayloadField, layout EnumLayout) returns String
 		return "payload field '{String.from(field.name)}' on `{layout.kindWord()} {String.from(layout.name)}`: a `float` payload is not lowered yet (a scalar-only union is int-tagged, so a float must be re-encoded on the way into the slot and decoded on the way out, and neither the construct nor the extract does that)"
 	end 'floatPayloadMessage'
@@ -54199,6 +54569,7 @@ export type Parser
 		let savedValueConsts = self.valueConsts
 		let savedValueConstDomains = self.valueConstDomains
 		let savedValueOwnsHeap = self.valueOwnsHeap
+		let savedValueOwnsHeapAlone = self.valueOwnsHeapAlone
 		let savedValuePromiseMarks = self.valuePromiseMarks
 		let savedPhiAliasUnprovenMarks = self.phiAliasUnprovenMarks
 		let savedOwnedBindings = self.ownedBindings
@@ -54382,6 +54753,7 @@ export type Parser
 		self.valueConsts = ParsedIntArray.create()
 		self.valueConstDomains = ConstPayloadDomainArray.create()
 		self.valueOwnsHeap = BoolArray.create()
+		self.valueOwnsHeapAlone = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
@@ -54567,6 +54939,7 @@ export type Parser
 		self.valueConsts = savedValueConsts
 		self.valueConstDomains = savedValueConstDomains
 		self.valueOwnsHeap = savedValueOwnsHeap
+		self.valueOwnsHeapAlone = savedValueOwnsHeapAlone
 		self.valuePromiseMarks = savedValuePromiseMarks
 		self.phiAliasUnprovenMarks = savedPhiAliasUnprovenMarks
 		self.ownedBindings = savedOwnedBindings
@@ -54673,7 +55046,8 @@ export type Parser
 			self.emitIndirectStore(env, offset: envSlotOffset(i), value: capValue, storageType: self.envSlotStorageType(capType), range: range)
 		end 'storeEach'
 
-		self.markValueOwnsHeap(env)
+		// `sole` — a fresh `__mm_alloc` four lines up, whose pointer nothing else has been handed.
+		self.markValueOwnsHeap(env, exclusivity: OwnedHeapExclusivity.sole)
 		self.ownedBindings.push(VarInfo.createValueBinding(EmptySourceText, varType: MaxonType.integer, mutable: false, boundValue: env))
 		self.markCapturingClosure(closureValue, env: env)
 	end 'buildClosureEnv'
@@ -58520,9 +58894,17 @@ export type Parser
 	// the invariant it depends on — *a call's own result is the last thing enrolled before the op is
 	// appended* — and takes the result back off the pending list while it builds the error edge, because the
 	// `tryCall` never wrote that register on a throw.
+	//
+	// ⚠⚠ **CO-OWNED, BECAUSE A `return` PROMOTES A BORROW BY INCREF.** `emitOwnedValueReturn` runs a borrowed
+	// return value through `promoteBorrowedToOwned`, whose aggregate arm is an `__mm_incref` — so
+	// `function getTy(h Holder) returns Ty return h.ty end` hands its caller a SECOND owner of the receiver's
+	// field, and the callee's signature records nothing about it. `let t = getTy(h)` then matched and moved its
+	// payload out nulled `h.ty`'s slot: MEASURED as a segfault. Telling a fresh-box return from a co-owning one
+	// is a whole-program fact (which returns launder a borrow), the same fixpoint the transitive consume waits
+	// on; until it exists a call result is a co-owner, which costs one refcount pair and never a stolen slot.
 	function enrolOwnedCallTemp(result ValueId)
 		if self.valueIsManagedHeap(result) or self.tagOf(result) == ValueTypeTag.typeParameter 'adoptsHeapBox'
-			self.trackOwnedTemp(result)
+			self.trackOwnedTemp(result, exclusivity: OwnedHeapExclusivity.coOwned)
 		end 'adoptsHeapBox'
 	end 'enrolOwnedCallTemp'
 
@@ -59401,7 +59783,7 @@ export type Parser
 		end 'backing'
 
 		let character = self.emitRuntimeCall(CharFromCodepointName, args: singletonArgs(tag), resultTag: ValueTypeTag.character, resultNameId: UnnamedTypeId, range: range)
-		self.trackOwnedTemp(character)
+		self.trackOwnedTemp(character, exclusivity: OwnedHeapExclusivity.sole)
 		return character
 	end 'emitEnumRawValue'
 

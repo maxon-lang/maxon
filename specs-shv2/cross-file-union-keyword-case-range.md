@@ -76,8 +76,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: cross-file-nested-match-result-scrutinee -->
-<!-- needs a nested payload-bearing union payload destructor cascade (E2015) -->
+<!-- test: cross-file-nested-match-result-scrutinee -->
 The result of a `match` whose arms construct values of a CROSS-FILE union is
 itself matched. A cross-file union case construction (`MyType.named(7)`,
 `MyType.unresolved`) is emitted as a constructor call, not an inline

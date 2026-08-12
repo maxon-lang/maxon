@@ -103,8 +103,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: nested-enum-array-push-get -->
-<!-- nested union payload (union-in-union) — a payload field of `union CfOp` on `union IrOp` needs its own destructor cascade (E2015); a union feature, orthogonal to arrays -->
+<!-- test: nested-enum-array-push-get -->
 ### Nested enum (enum wrapping enum) in array
 This mirrors the IrOp pattern from the self-hosted compiler.
 ```maxon
@@ -169,8 +168,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: enum-array-in-struct-cascade-free -->
-<!-- nested union payload (union-in-union) — a payload field of `union CfOp` on `union IrOp` needs its own destructor cascade (E2015); a union feature, orthogonal to arrays -->
+<!-- test: enum-array-in-struct-cascade-free -->
 ### Struct with enum array field: cascade free must not crash
 When a struct holding an enum array is freed, the cascade must correctly
 walk the array elements. If element_size is 0, the array has stale pointers

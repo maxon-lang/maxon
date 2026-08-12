@@ -122,8 +122,7 @@ end 'main'
 90
 ```
 
-<!-- disabled-test: nested-struct-enum-array-grow -->
-<!-- nested union payload (union-in-union) — a payload field of `union CfOp` on `union IrOp` needs its own destructor cascade (E2015); a union feature, orthogonal to arrays -->
+<!-- test: nested-struct-enum-array-grow -->
 Deeply nested struct with enum field and multiple arrays.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -567,8 +566,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: returned-struct-with-enum-and-arrays -->
-<!-- nested union payload (union-in-union) — a payload field of `union CfOp` on `union IrOp` needs its own destructor cascade (E2015); a union feature, orthogonal to arrays -->
+<!-- test: returned-struct-with-enum-and-arrays -->
 Returned struct with enum field and arrays that grow.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

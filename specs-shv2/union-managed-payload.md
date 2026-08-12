@@ -20,12 +20,14 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   payload slot — no incref, no copy. The source binding is moved-from (a later
   read is `E3102`). A borrowed String literal payload is promoted to an owned
   heap copy first, so the box always owns a droppable payload.
-- **A match binding on an OWNED union is a MOVE-OUT.** `match u { case(x) then … }`
+- **A match binding on a SOLELY-OWNED union is a MOVE-OUT.** `match u { case(x) then … }`
   loads the managed field into `x` (which becomes an owned binding, dropped at its
   own scope exit) and clears the box slot. After the match `u` is moved-from (a
   later read is `E3102`). A discard `_`, an unbound tag-only arm, and a
   payload-free / scalar arm bind nothing and leave the box owned — `u` is dropped
-  at scope exit.
+  at scope exit. **Sole ownership is the requirement, not ownership**: a
+  freshly-constructed `let u = U.case(s)` qualifies; a box this frame merely holds
+  *a* reference to does not — see the co-owned bullet below.
 - **A match binding on a BORROWED union is a RETAIN.** Where the scrutinee is a
   parameter or a method receiver, the box's owner is the caller's local and
   survives the call, so ownership cannot be moved out of it. The bind emits
@@ -37,6 +39,28 @@ Ownership is static single-owner, exactly as for a `String` or a struct binding:
   later read of it is legal, not `E3102`. The retain is unconditional (no escape
   analysis): the binding's release is structural — its scope exit — so a blanket
   acquire is blanket-balanced.
+- **A match binding on a CO-OWNED union takes the SAME RETAIN, and co-ownership is
+  the third state the two bullets above do not cover.** A scrutinee can hold an
+  owned reference while something else holds the same box: `let borrowed = h.ty`
+  (a read out of a mutable field, or an array element bound to a `var`, promoted by
+  `__mm_retain`), a payload retained out of a borrowed union and then matched again,
+  a call's owned result (a `return h.ty` promotes its borrow by incref), a caught
+  error box (the thrower may have retained it), and a consumed parameter (the caller
+  may have increfed a borrow to transfer it). Nulling such a box's slot steals it
+  from an owner that is still reading, so the acquisition asks *"is this frame the
+  box's SOLE owner?"* rather than *"does this value own a reference?"* — and, as with
+  a borrowed scrutinee, a retaining match consumes nothing: a later read is legal.
+  Recovering the move-out for a call result needs a whole-program *"does this
+  function's return launder a borrow"* fact, which shv2 does not compute.
+- **A SOLE box may hold a CO-OWNED payload, so soleness is NOT transitive.** The
+  construct co-owns a borrowed argument by `__mm_incref` rather than moving it in, so
+  `Wrap.held(<a borrowed union>)` yields a box this frame really is the only owner of
+  whose *slot* holds a shared reference. Vacating that slot proves the frame now holds
+  the slot's reference; it proves nothing about the allocation. **So a payload moved
+  out of a sole box is itself CO-OWNED**, and a nested `match` on it retains — one
+  refcount pair per nested move-out, against a stolen slot. The same is true of a
+  container element handed back by a `remove`: the container no longer holds it, but
+  whoever co-owned it into the container still does.
 - **Drop is a tag-conditional STATIC cascade.** When an owned managed-payload
   union is dropped, its `__destruct_<U>` loads the tag, and for the live case
   drops each still-present managed field through its own type's destructor (a
@@ -1987,29 +2011,767 @@ end 'main'
 error E3086: <fragment>:10:17: field 'column' of 'LexErr' is not initialized by this literal, and it has no default value
 ```
 
-<!-- test: error.nested-union-payload -->
-A union PAYLOAD that is itself a payload-bearing (boxed) union is refused. A boxed
-union is now a managed field kind (a boxed-union STRUCT FIELD is constructible — see
-`struct-managed-field.md`), but storing one in a union PAYLOAD slot needs the slot's
-width derived the field way rather than from `payloadStorageOf` (which for a boxed
-union is the un-lowerable `named` type). A clean reject at the construct site, not a
-crash, until that follow-up slice.
+<!-- test: error.recursive-union-payload-is-still-a-cycle -->
+A union payload may be another payload-bearing (boxed) union — that payload is a
+heap pointer whose box carries its own destructor, so nesting costs no codegen at
+any depth. What a payload may NOT be is a reference back to the type being
+declared: the type graph must be acyclic, and boxing is not an exception to that.
+`union Tree { node(left Tree) }` names itself, so the CYCLE guard refuses it, and
+it refuses it BEFORE the payload path ever classifies the slot — which is what
+keeps a legal nested union from legalizing a recursive one. The body CONSTRUCTS
+the recursive case, so the payload path would genuinely be reached: a pin whose
+body were `Tree.leaf` would earn the same E4014 off the declaration alone and
+prove nothing about the ordering this prose claims.
 ```maxon
-typealias N = int(0 to i64.max)
-
-union Inner
-	a(x N)
-end 'Inner'
-
-union Wrap
-	wrap(inner Inner)
-end 'Wrap'
+union Tree
+	node(left Tree)
+	leaf
+end 'Tree'
 
 function main() returns ExitCode
-	let w = Wrap.wrap(Inner.a(5))
+	let t = Tree.node(Tree.leaf)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:15: Unsupported: a payload field 'inner' of type 'union Inner' on `union Wrap` — a nested payload-bearing union payload needs its own destructor cascade, which arrives at a later rung (String and struct payloads are supported)
+error E4014: <fragment>:2:7: type 'Tree' contains a reference cycle (via Tree → node.left: Tree); recursive type references are not allowed
+```
+
+<!-- test: error.wrong-union-in-a-nested-union-payload -->
+A nested boxed-union payload slot admits its OWN union and no other. The check is
+the shared managed door (`requireManagedValueMatches`) over the slot's `named(<union>)`
+IDENTITY, and its second half is what does the work here: a boxed union's value carries
+the `named` tag that every payload-free enum and every ranged-int alias also carries, so
+the tag comparison alone AGREES for any two of them and only the interned NAME separates
+them (`requireSlotAggregateIdentity`). Unchecked, an `Other` box would be stored in an
+`Inner` slot and later released by `Inner`'s destructor. Anchored at the ARGUMENT, not at
+the case name. ⭐ The bootstrap oracle answers this program character for character,
+including the position.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Inner
+	empty
+	a(x Integer)
+end 'Inner'
+
+union Other
+	none
+	b(y Integer)
+end 'Other'
+
+union Wrap
+	bare
+	wrap(inner Inner)
+end 'Wrap'
+
+function main() returns ExitCode
+	let w = Wrap.wrap(Other.b(5))
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:30: type mismatch: 'expected Inner, got Other'
+```
+
+<!-- test: nested-union-payload-write-back -->
+A nested boxed-union payload bound out of a `var` union is WRITABLE, exactly as a String or a struct
+payload is (`payloadBindingAcceptsWrites`) — the two facts a write-back needs are both statically
+available for it: the move-out nulled the slot, so there is no previous owner to release, and the box's
+own reference is the `__mm_incref` the write-back emits. The displaced `Ty` box is dropped when the
+binding it moved into leaves the arm, the replacement is released by `__destruct_Expr` → `__destruct_Ty`
+→ `__str_decref` at scope exit, and the second `match` reads the value the FIRST one stored — so the
+exit code is the replacement's byte length (43) and not the original's (66). Every one of those
+allocations is a real heap record, so a missed drop or a double release would be exit 101 rather than a
+wrong number.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Ty
+	concrete(name String)
+	stringy
+end 'Ty'
+
+union Expr
+	direct(ty Ty)
+	unresolved
+end 'Expr'
+
+function tyLen(ty Ty) returns Integer
+	return match ty 'l'
+		concrete(name) gives name.byteLength() as Integer
+		stringy gives 0
+	end 'l'
+end 'tyLen'
+
+function main() returns ExitCode
+	var e = Expr.direct(Ty.concrete("the first nested payload, long enough to be a real heap allocation"))
+
+	match e 'write'
+		direct(ty) then ty = Ty.concrete("the second one, also a real heap allocation")
+		unresolved then print("none")
+	end 'write'
+
+	return match e 'read'
+		direct(ty) gives tyLen(ty)
+		unresolved gives 99
+	end 'read'
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: error.write-back-through-a-retained-nested-union-payload -->
+⭐ **THE EDGE OF THE CASE ABOVE, AND THE REFUSAL IS THE STANDING RULE RATHER THAN THIS PAYLOAD KIND'S.**
+Writability is decided from MEMBERSHIP (`scrutMutable` — is the scrutinee a `var`?) and the acquisition
+from PROVENANCE (`scrutOwned` — does the value carry an owned-heap bit?), and the two disagree on a
+loop-carried `var`: its current value inside the loop is a header phi, and a phi carries no provenance
+bit, so the payload is acquired by RETAIN and the slot is left occupied. A write-back into an occupied
+slot would strand the reference the box still holds, so `declarePayloadBindings` demotes such a binding
+to read-only and the assignment is E2013 — never the `writeBackPayload` panic that guards the same
+combination one level down.
+```maxon
+union Ty
+	concrete(name String)
+	stringy
+end 'Ty'
+
+union Expr
+	direct(ty Ty)
+	unresolved
+end 'Expr'
+
+function main() returns ExitCode
+	var e = Expr.direct(Ty.concrete("the first nested payload, long enough to be a real heap allocation"))
+	var total = 0
+
+	for i in 1 to 2 'round'
+		total = total + i
+		match e 'write'
+			direct(ty) then ty = Ty.concrete("a replacement, also a real heap allocation")
+			unresolved then total = total + 1
+		end 'write'
+		e = Expr.direct(Ty.concrete("the next round's payload, a real heap allocation too"))
+	end 'round'
+
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:19:20: cannot assign to immutable variable: 'ty'
+```
+
+<!-- test: error.write-back-through-a-retained-string-payload-is-the-same-refusal -->
+⭐⭐ **THE CONTROL FOR THE CASE ABOVE, AND IT IS WHAT MAKES THAT REFUSAL ATTRIBUTABLE.** The identical
+shape over a `String` payload — a payload kind that has been writable since `mutable-enums.md` shipped —
+earns the identical E2013 at the identical position. So the refusal belongs to the retain acquisition and
+not to the nested-union payload kind, and the rung that made a nested boxed union writable neither
+introduced it nor is free to remove it. ⚠ Both programs are a DIVERGENCE the bootstrap does not share: it
+borrows-and-retains where this tier consumes, so it accepts both and returns 3. Pinned here as shv2's own
+ownership rule, which is what this file is for.
+```maxon
+union Expr
+	direct(s String)
+	unresolved
+end 'Expr'
+
+function main() returns ExitCode
+	var e = Expr.direct("the first payload, long enough to be a real heap allocation")
+	var total = 0
+
+	for i in 1 to 2 'round'
+		total = total + i
+		match e 'write'
+			direct(s) then s = "a replacement, also a real heap allocation"
+			unresolved then total = total + 1
+		end 'write'
+		e = Expr.direct("the next round's payload, a real heap allocation too")
+	end 'round'
+
+	return total
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:14:19: cannot assign to immutable variable: 's'
+```
+
+<!-- test: co-owned-container-field-bind-then-the-field-is-read-again -->
+⭐⭐ **CO-OWNERSHIP IS THE THIRD STATE, AND A MOVE-OUT OF A CO-OWNED BOX IS A THEFT.** `let borrowed = h.ty`
+reads a union out of a MUTABLE struct field, and a value read out of a rebindable slot is promoted by
+`__mm_retain` (W41) — so `borrowed` carries the owned-heap bit while `h.ty` still points at the SAME box.
+The move-out reads that bit and nulls a slot the struct's field is the other owner of; `tyLen(h.ty)` then
+loads a null payload and dereferences it. Neither union here is nested and neither is a parameter, so this
+is the generic shape: the acquisition question is *"is this frame the box's SOLE owner?"*, which is not
+*"does this value own a reference?"*. A co-owned scrutinee takes the RETAIN path, leaves the slot intact,
+and both reads answer 67.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Ty
+	concrete(name String)
+	stringy
+end 'Ty'
+
+type Holder
+	export var ty as Ty
+
+	static function create(ty Ty) returns Self
+		return Self{ty: ty}
+	end 'create'
+end 'Holder'
+
+function tyLen(ty Ty) returns Integer
+	return match ty 'l'
+		concrete(name) gives name.byteLength() as Integer
+		stringy gives 0
+	end 'l'
+end 'tyLen'
+
+function main() returns ExitCode
+	let h = Holder.create(Ty.concrete("a co-owned payload string, long enough to be a real heap allocation"))
+	let borrowed = h.ty
+	let first = match borrowed 'b'
+		concrete(name) gives name.byteLength() as Integer
+		stringy gives 0
+	end 'b'
+	let second = tyLen(h.ty)
+	print("first={first} second={second}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first=67 second=67
+```
+
+<!-- test: co-owned-nested-payload-bound-inside-a-borrowed-union-s-arm -->
+⭐ **THE SAME RULE ONE LEVEL DOWN, and the route the nested-union payload opens.** `steal(e Expr)` binds
+`ty` out of a BORROWED parameter, so the outer bind is a retain and `ty` is co-owned with the caller's
+box. The INLINE nested `match ty` then reads `ty`'s owned-heap bit and moves the String out of a `Ty` box
+the caller still reaches through `e`, so the caller's own re-match loads a nulled slot. The cure is the one
+above and not a nested-union special case: a retained payload is co-owned, so the nested match retains too
+and the refcount balances at one free per allocation (a second free or a leak is exit 101, not a wrong
+number).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Ty
+	concrete(name String)
+	stringy
+end 'Ty'
+
+union Expr
+	direct(ty Ty)
+	unresolved
+end 'Expr'
+
+function steal(e Expr) returns Integer
+	return match e 'i'
+		direct(ty) gives match ty 't'
+			concrete(name) gives name.byteLength() as Integer
+			stringy gives 0
+		end 't'
+		unresolved gives 99
+	end 'i'
+end 'steal'
+
+function main() returns ExitCode
+	let e = Expr.direct(Ty.concrete("a nested payload string, long enough to be a real heap allocation"))
+	let stolen = steal(e)
+	let again = match e 'k'
+		direct(ty) gives match ty 'u'
+			concrete(name) gives name.byteLength() as Integer
+			stringy gives 0
+		end 'u'
+		unresolved gives 99
+	end 'k'
+	print("stolen={stolen} again={again}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stolen=65 again=65
+```
+
+<!-- test: the-same-nested-payload-handed-to-a-helper-instead -->
+⭐⭐ **THE CONTROL FOR THE CASE ABOVE, AND THE CONTRAST IS THE DIAGNOSIS.** The identical program with the
+inline nested match replaced by a HELPER CALL passed the whole time: `tyLen(ty)` hands the co-owned `Ty`
+box to a callee whose own parameter is borrowed, so the callee retains and the destructive move-out is
+never reached. So the defect belonged to the ACQUISITION the inline nested match chose and never to the
+nesting, the payload kind, or the depth — which is why the cure is a property of the scrutinee's ownership
+and not a rule about nested unions. Pinned so that a future acquisition change cannot fix one spelling and
+leave the other.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Ty
+	concrete(name String)
+	stringy
+end 'Ty'
+
+union Expr
+	direct(ty Ty)
+	unresolved
+end 'Expr'
+
+function tyLen(ty Ty) returns Integer
+	return match ty 'l'
+		concrete(name) gives name.byteLength() as Integer
+		stringy gives 0
+	end 'l'
+end 'tyLen'
+
+function steal(e Expr) returns Integer
+	return match e 'i'
+		direct(ty) gives tyLen(ty)
+		unresolved gives 99
+	end 'i'
+end 'steal'
+
+function main() returns ExitCode
+	let e = Expr.direct(Ty.concrete("a nested payload string, long enough to be a real heap allocation"))
+	let stolen = steal(e)
+	let again = match e 'k'
+		direct(ty) gives tyLen(ty)
+		unresolved gives 99
+	end 'k'
+	print("stolen={stolen} again={again}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+stolen=65 again=65
+```
+
+<!-- test: co-owned-array-element-bind-then-the-element-is-read-again -->
+⭐ **THE CONTAINER ROUTE, AND IT TURNS ON THE BINDING'S MUTABILITY RATHER THAN ON THE CONTAINER.** An array
+element read is a BORROW the array keeps (`emitContainerElementAccessor(owned: false)`), so `let e = …get(0)`
+is not owned and matches by retain — which is why the `let` spelling of this program was never broken. A `var`
+binding promotes its borrowed initializer by `__mm_retain` at the declaration, and THAT reference is co-owned
+with the array's slot: the move-out nulled a payload slot `arr.get(0)` reads again. One `var` keyword apart,
+and only one of the two faulted, which is what makes the rule a fact about the ACQUISITION and not about
+containers.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias TyArray = Array with Ty
+
+union Ty
+	concrete(name String)
+	stringy
+end 'Ty'
+
+function tyLen(ty Ty) returns Integer
+	return match ty 'l'
+		concrete(name) gives name.byteLength() as Integer
+		stringy gives 0
+	end 'l'
+end 'tyLen'
+
+function main() returns ExitCode
+	var arr = TyArray.create()
+	arr.push(Ty.concrete("an array element payload, long enough to be a real heap allocation"))
+	var borrowed = try arr.get(0) otherwise panic("get failed")
+	let first = match borrowed 'b'
+		concrete(name) gives name.byteLength() as Integer
+		stringy gives 0
+	end 'b'
+	let second = tyLen(try arr.get(0) otherwise panic("get failed"))
+	print("first={first} second={second}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first=66 second=66
+```
+
+<!-- test: a-thrown-field-of-a-co-owned-container-is-retained-not-moved-out -->
+⭐ **THE SAME DEFECT IN THE THROW CHANNEL, whose move-out asked the same too-weak question.** `throw c.e` out
+of a container the frame merely CO-OWNS (`let c = g.inner`, a read out of a mutable field the promotion
+retained) nulled the field slot `g.inner.e` still points at, so the caller's `whyLen(g.inner.e)` dereferenced
+a hole. `moveOutThrownField` now gates on sole ownership exactly as the match's move-out does, and a co-owned
+container takes `retainThrownField` — the box is increfed, the caught reference is consumed by the handler,
+the container drops its own, and the refcount balances at one free (a second free or a leak would be exit 101
+rather than a wrong number).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Err
+	bad(why String)
+end 'Err'
+
+type Inner
+	export var e as Err
+
+	static function create(e Err) returns Self
+		return Self{e: e}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function boom(g Outer) returns Integer throws Err
+	let c = g.inner
+	throw c.e
+end 'boom'
+
+function whyLen(e Err) returns Integer
+	return match e 'l'
+		bad(why) gives why.byteLength() as Integer
+	end 'l'
+end 'whyLen'
+
+function main() returns ExitCode
+	let g = Outer.create(Inner.create(Err.bad("a thrown field payload, long enough to be a real heap allocation")))
+	let first = try boom(g) otherwise 7
+	let second = whyLen(g.inner.e)
+	print("first={first} second={second}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first=7 second=64
+```
+
+<!-- test: a-returned-co-owned-union-is-not-moved-out-of -->
+⭐⭐ **A CALL'S OWNED RESULT IS A CO-OWNER, BECAUSE A `return` PROMOTES A BORROW BY INCREF.** `getTy`'s body is
+`return h.ty`, which `emitOwnedValueReturn` promotes through `__mm_retain` — so the caller's `t` and the
+receiver's field are two owners of one box, and nothing in `getTy`'s signature says so. Matching `t` and moving
+its payload out therefore stole `h.ty`'s slot. Telling a fresh-box return from a co-owning one is a
+whole-program fact shv2 does not compute, so a call result retains; the cost is one refcount pair and the
+answer is right on both reads.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Ty
+	concrete(name String)
+	stringy
+end 'Ty'
+
+type Holder
+	export var ty as Ty
+
+	static function create(ty Ty) returns Self
+		return Self{ty: ty}
+	end 'create'
+end 'Holder'
+
+function getTy(h Holder) returns Ty
+	return h.ty
+end 'getTy'
+
+function tyLen(ty Ty) returns Integer
+	return match ty 'l'
+		concrete(name) gives name.byteLength() as Integer
+		stringy gives 0
+	end 'l'
+end 'tyLen'
+
+function main() returns ExitCode
+	let h = Holder.create(Ty.concrete("a returned co-owned payload, long enough for the heap"))
+	let t = getTy(h)
+	let first = match t 'b'
+		concrete(name) gives name.byteLength() as Integer
+		stringy gives 0
+	end 'b'
+	let second = tyLen(h.ty)
+	print("first={first} second={second}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first=53 second=53
+```
+
+<!-- test: a-caught-retained-error-box-is-not-moved-out-of -->
+⭐ **AND ACROSS THE ERROR CHANNEL, where the transfer the thrower chose is invisible to the catcher.** `throw
+h.e` out of a BORROWED container retains (`retainThrownField`, #64), so the box reaching the handler is
+co-owned with `h.e` — but the flag register carries only a pointer, and the catching frame has no way to ask
+which of the two transfers produced it. So a caught box is a co-owner and `match e` in the handler retains its
+payload; claiming otherwise nulled a slot `whyLen(h.e)` read one line later.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Err
+	bad(why String)
+end 'Err'
+
+type Holder
+	export var e as Err
+
+	static function create(e Err) returns Self
+		return Self{e: e}
+	end 'create'
+end 'Holder'
+
+function boom(h Holder) returns Integer throws Err
+	throw h.e
+end 'boom'
+
+function whyLen(e Err) returns Integer
+	return match e 'l'
+		bad(why) gives why.byteLength() as Integer
+	end 'l'
+end 'whyLen'
+
+function main() returns ExitCode
+	let h = Holder.create(Err.bad("a caught retained payload, long enough for the heap"))
+	var first = 0 as Integer
+	try boom(h) otherwise (e) 'caught'
+		first = match e 'm'
+			bad(why) gives why.byteLength() as Integer
+		end 'm'
+	end 'caught'
+	let second = whyLen(h.e)
+	print("first={first} second={second}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+first=51 second=51
+```
+
+<!-- test: a-co-owned-payload-moved-out-of-a-sole-box-is-still-co-owned -->
+⛔⛔ **A SOLE BOX MAY HOLD A CO-OWNED PAYLOAD, AND THE MOVE-OUT MUST NOT LAUNDER THE ONE FACT INTO THE
+OTHER.** `Wrap.held(inner)` over a BORROWED `inner` does not move the box in — `moveManagedValueInto`'s
+borrowed arm co-owns it by `__mm_incref` — so `w` is genuinely the frame's alone while the `Inner` box in its
+slot has two owners. Nulling `w`'s slot proves the frame now holds *that slot's* reference; it proves nothing
+about the allocation, so stamping the moved-out payload SOLE re-arms exactly the destructive write this file
+exists to disarm, one level down: the INLINE nested `match i` then nulls the CALLER's `Inner` slot and the
+caller's own re-match dereferences the hole. A moved-out payload is therefore CO-OWNED — the box's soleness is
+a fact about the box and is not inherited by what the box points at.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Inner
+	text(body String)
+end 'Inner'
+
+union Wrap
+	held(i Inner)
+end 'Wrap'
+
+function probe(inner Inner) returns Integer
+	let w = Wrap.held(inner)
+	return match w 'o'
+		held(i) gives match i 'n'
+			text(body) gives body.byteLength() as Integer
+		end 'n'
+	end 'o'
+end 'probe'
+
+function main() returns ExitCode
+	let inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
+	let n = probe(inner)
+	let again = match inner 'k'
+		text(body) gives body.byteLength() as Integer
+	end 'k'
+	print("n={n} again={again}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=62 again=62
+```
+
+<!-- test: a-co-owned-payload-out-of-a-sole-box-through-a-helper -->
+⭐ **CONTROL ONE FOR THE CASE ABOVE.** The identical program with the inline nested match replaced by a HELPER
+CALL passed throughout: the callee's parameter is borrowed, so it retains and never reaches the destructive
+write. Pinned so a future acquisition change cannot fix one spelling and leave the other — the same pairing
+`the-same-nested-payload-handed-to-a-helper-instead` makes for the outer level.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Inner
+	text(body String)
+end 'Inner'
+
+union Wrap
+	held(i Inner)
+end 'Wrap'
+
+function innerLen(i Inner) returns Integer
+	return match i 'n'
+		text(body) gives body.byteLength() as Integer
+	end 'n'
+end 'innerLen'
+
+function probe(inner Inner) returns Integer
+	let w = Wrap.held(inner)
+	return match w 'o'
+		held(i) gives innerLen(i)
+	end 'o'
+end 'probe'
+
+function main() returns ExitCode
+	let inner = Inner.text("a co-owned payload inside a sole box, long enough for the heap")
+	let n = probe(inner)
+	let again = match inner 'k'
+		text(body) gives body.byteLength() as Integer
+	end 'k'
+	print("n={n} again={again}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=62 again=62
+```
+
+<!-- test: a-freshly-built-payload-in-a-sole-box-is-genuinely-sole -->
+⭐⭐ **CONTROL TWO, AND IT IS THE ONE THAT ISOLATES THE DISCRIMINATOR TO MOVE-IN VS CO-OWN-IN.** The same
+sole box and the same inline nested match, but the payload is CONSTRUCTED at the construct site — so it is
+moved in, the frame really is the allocation's only owner, and the program was correct before this rule and
+stays correct after it. Its answer therefore attributes the fault above to the co-own-in and to nothing about
+nesting, depth, or the inline spelling. It also pins the cost of the cure: this shape gains a refcount pair
+it does not need, which is the price of a box's soleness not being transitive.
+
+⛔ **READ THE NAME AS A CLAIM ABOUT THE PROGRAM, NEVER ABOUT THE EMITTED CODE.** The payload here *is*
+genuinely the allocation's only reference — that is why the case is named so — but the compiler deliberately
+**no longer CLAIMS `sole` for it**, because proving it would need a per-box "every payload was moved in" bit
+and that would be a third ownership state (W55 declined it; see `OwnedHeapExclusivity`). So the `__mm_incref`
+in this case's golden is CORRECT AND OWED, not a missed optimization. A future reader who takes the title as a
+codegen claim and removes the retain re-arms the destructive write two cases above — which is exactly the
+inference this rung retired, arriving through a test name instead of through a comment.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Inner
+	text(body String)
+end 'Inner'
+
+union Wrap
+	held(i Inner)
+end 'Wrap'
+
+function probe() returns Integer
+	let w = Wrap.held(Inner.text("a freshly built payload inside a sole box, heap-long"))
+	return match w 'o'
+		held(i) gives match i 'n'
+			text(body) gives body.byteLength() as Integer
+		end 'n'
+	end 'o'
+end 'probe'
+
+function main() returns ExitCode
+	print("n={probe()}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=52
+```
+
+<!-- test: a-list-element-removed-from-its-container-may-still-be-co-owned -->
+⛔ **REMOVING AN ELEMENT PROVES THE CONTAINER NO LONGER HOLDS IT — NOT THAT NOBODY DOES.** `list.append(ty)`
+over a BORROWED `ty` co-owns the box through the same `moveManagedValueInto` arm the construct above takes, so
+`removeFirst()` hands back a reference the CALLER still shares. The compiler-emitted element accessor stamped
+that result SOLE, and matching it nulled the caller's `Ty` slot. The removal is not the question the move-out
+asks.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias TyList = List with Ty
+
+union Ty
+	concrete(name String)
+end 'Ty'
+
+function steal(ty Ty) returns Integer
+	var list = TyList.create()
+	list.append(ty)
+	let got = try list.removeFirst() otherwise panic("removeFirst failed")
+	return match got 'm'
+		concrete(name) gives name.byteLength() as Integer
+	end 'm'
+end 'steal'
+
+function main() returns ExitCode
+	let ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
+	let n = steal(ty)
+	let again = match ty 'k'
+		concrete(name) gives name.byteLength() as Integer
+	end 'k'
+	print("n={n} again={again}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=56 again=56
+```
+
+<!-- test: the-array-spelling-of-a-removed-element-was-never-wrong -->
+⭐⭐ **THE CONTROL THAT NAMES WHICH DOOR LIED.** `Array.remove` is a CORPUS member, so its result arrives
+through `enrolOwnedCallTemp` — the user-call door, which is co-owned because a `return` may launder a borrow —
+and this program was correct the whole time. `List.removeFirst` is COMPILER-EMITTED and went through
+`emitContainerElementAccessor`'s `owned` arm, which claimed sole. Two spellings of one operation disagreeing is
+what says the defect belonged to the door and not to removal; both now answer the same way.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias TyArray = Array with Ty
+
+union Ty
+	concrete(name String)
+end 'Ty'
+
+function steal(ty Ty) returns Integer
+	var arr = TyArray.create()
+	arr.push(ty)
+	let got = try arr.remove(0) otherwise panic("remove failed")
+	return match got 'm'
+		concrete(name) gives name.byteLength() as Integer
+	end 'm'
+end 'steal'
+
+function main() returns ExitCode
+	let ty = Ty.concrete("a list element payload co-owned by its caller, heap-long")
+	let n = steal(ty)
+	let again = match ty 'k'
+		concrete(name) gives name.byteLength() as Integer
+	end 'k'
+	print("n={n} again={again}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+n=56 again=56
 ```

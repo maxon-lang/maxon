@@ -1,0 +1,196 @@
+// Test: nested-struct-enum-array-grow
+typealias Integer = int(i64.min to i64.max)
+
+export union CfOp
+		br(target Integer)
+		condBr(cond Integer)
+end 'CfOp'
+
+export union IrOp
+		cf(op CfOp)
+		arith(value Integer)
+end 'IrOp'
+
+typealias IrOpArray = Array with IrOp
+
+export type IrBlock
+		export var id as Integer
+		export var ops as IrOpArray
+		export var terminator as IrOp
+		export var hasTerminator as bool
+
+		static function create(id Integer, ops IrOpArray, terminator IrOp, hasTerminator bool) returns Self
+			return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
+		end 'create'
+end 'IrBlock'
+
+typealias DepArray = Array with Integer
+
+export type Database
+		export var block as IrBlock
+		export var deps as DepArray
+
+		static function create(block IrBlock, deps DepArray) returns Self
+			return Self{block: block, deps: deps}
+		end 'create'
+end 'Database'
+
+function main() returns ExitCode
+		let block = IrBlock.create(0, ops: IrOpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
+		var db = Database.create(block, deps: DepArray.create())
+		db.deps.push(1)
+		db.deps.push(2)
+		db.deps.push(3)
+		db.deps.push(4)
+		db.deps.push(5)
+		return db.deps.count()
+end 'main'
+---
+ExitCode: 5
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @IrBlock.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegReg r14, r9
+    x64.movRegImm32 rcx, 32
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.storeBaseDispReg.byte [r8 + 24], r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Database.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_IrOp]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r14
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r8
+    x64.callDirect IrBlock.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Database.create
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 1
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 2
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 3
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 4
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 5
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.callDirect __managed_count
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Database
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
