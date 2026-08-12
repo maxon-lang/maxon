@@ -6127,6 +6127,7 @@ let ManagedDirectoryProducerBit = 4 as ProducerMask
 // invisible to an arm written there, and the instance would go uninterned in exactly the programs that
 // declare their enums and their uses together.
 let AllCaseNamesProducerBit = 8 as ProducerMask
+
 // ⭐ **A `<Enum>.allCases` — the FIFTH question, and `allCaseNames`' twin in every respect but its element
 // type.** What it registers is an `Array with <Enum>` instance PER DECLARED ENUM, which the sweep cannot
 // narrow to one: the member's base may be a dotted companion (`Shape.unionCases.allCases`) and the enum
@@ -22985,17 +22986,34 @@ export type Parser
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
 	end 'emitCheckedGlobalStore'
 
-	// **THE MUTABILITY RULE FOR A LOCAL BINDING — asked by both statements that write one**: the
-	// reassignment (`x = 5`, the binding itself) and the field store (`p.x = 5`, its INSTANCE). One
-	// home, because it is one rule — a binding declared `let` does not accept a write — and the
-	// diagnostic names that binding and anchors on the token that names it.
+	// **THE MUTABILITY RULE FOR A LOCAL BINDING — TWO DOORS, BECAUSE THE TWO STATEMENTS THAT WRITE A
+	// BINDING WRITE TWO DIFFERENT THINGS.** The reassignment `x = 5` gives the NAME a new value; the field
+	// store `p.x = 5` leaves the name alone and writes the RECORD it denotes. They agree about every
+	// binding kind but one, and they are kept together here so the disagreement is READ rather than
+	// rediscovered.
 	//
-	// ⚠ Written down twice, a future answer to what "writable" MEANS — a captured closure variable
-	// (P1.4), a moved-from binding under static ownership — taught to one site and not the other
-	// would let `p.x = 5` silently compile where `p = q` correctly reports. An ACCEPTED write that
-	// should have been refused is a WRONG ANSWER, not a compile error, and neither site would read
-	// as wrong on its own. The bootstrap is the cautionary tale: it spells this rule at FOUR sites
-	// and reads `VarInfo.Mutable` in three unrelated places.
+	// ⭐⭐ **THE ONE DISAGREEMENT IS A PARAMETER, AND IT IS A RULING RATHER THAN A RELAXATION** (⚖ user,
+	// 2026-07-18, `PLAN.md`): **parameters BORROW by default, and a borrow's POINTEE is writable even
+	// though the binding itself is not rebindable.** A struct parameter holds a pointer to the CALLER's
+	// box (`LowerMaxonToStd`), so `state.flag = 7` inside `function scan(state State)` writes the record
+	// the caller handed over — which is what by-reference means and what the runnable oracle does
+	// (measured, all four cells: `state.flag = 7` on a PARAMETER compiles and the caller sees the write,
+	// while `s.flag = 7` on a `let` LOCAL is E2013 in BOTH compilers). shv2 used to refuse both from one
+	// door, conflating *"cannot rebind the reference"* with *"cannot write through it"*.
+	//
+	// ⛔ **THE REBIND IS NOT RELAXED WITH IT, AND MUST NOT BE.** `p = Point.create(…)` on a parameter stays
+	// E2013: rebinding needs a per-call cell for the name, which shv2 does not have, and `bindParameters`
+	// PANICS on `ParametersAreMutable = true` because `assignedBindingsIn`'s loop-phi token scan is
+	// exhaustive only while parameters are immutable. So the split lives in the PERMISSION, per operation
+	// — which is precisely the split the bootstrap never had to make (it declares every parameter
+	// `Mutable = true` outright, `2-Parser.cs:8097-8125`, and gets both writes from one flag).
+	//
+	// ⚠ What the two doors DO share is single-sourced rather than restated: the E2013 mint
+	// (`assignToImmutableError`), the E3077 evidence (`markMutabilityExercised`) and the iteration lock a
+	// `for … in` imposes on either write. A future answer to what "writable" means — a captured closure
+	// variable, a moved-from binding under static ownership — belongs in the predicate both read, never in
+	// one door. The bootstrap is the cautionary tale: it spells this rule at FOUR sites and reads
+	// `VarInfo.Mutable` in three unrelated places.
 	function requireMutableBinding(binding VarInfo, nameTok Token) throws ParseError
 		// ⭐ A binding an enclosing `for … in` is iterating may not be REBOUND either: the loop keeps
 		// walking the record it captured in its preheader, and rebinding the name drops that record
@@ -23010,6 +23028,24 @@ export type Parser
 		// the rule reads the enforcement rather than re-deriving from the syntax which statements are writes.
 		self.markMutabilityExercised(binding)
 	end 'requireMutableBinding'
+
+	// **THE SECOND DOOR: MAY THE RECORD THIS NAME DENOTES BE WRITTEN THROUGH?** — the INSTANCE rank of
+	// `p.x = 5` (see `parseFieldAssignment` for the rank order the whole permission band obeys). It differs
+	// from the rebind above in exactly the parameter, and it asks that through
+	// `bindingStorageIsWritableHere` rather than restating it — the same predicate the mutating-METHOD
+	// receiver asks, because `p.push(9)` and `p.x = 5` are one write of one record under two spellings.
+	//
+	// ⚠ It marks E3077's evidence on the same terms the rebind door does, and for a PARAMETER that mark is
+	// inert rather than special-cased: only a `var` DECLARATION is ever an E3077 candidate, and the
+	// receiver door already marks a parameter receiver unconditionally (`dispatchMethodOnBinding`), so a
+	// second rule here would be this one fact answered twice.
+	function requireWritableInstance(binding VarInfo, nameTok Token) throws ParseError
+		if not self.bindingStorageIsWritableHere(binding) 'immutableInstance'
+			throw assignToImmutableError(nameTok)
+		end 'immutableInstance'
+
+		self.markMutabilityExercised(binding)
+	end 'requireWritableInstance'
 
 	// **WHAT A USER MAY NOT DECLARE, IN ONE PLACE.** Two reservations, both raised as E2051 at the declared
 	// name — the token the user has to change:
@@ -48123,17 +48159,14 @@ export type Parser
 	// "this binding IS the parameter" from "this binding holds the parameter's value"; the ValueId
 	// cannot. Do not "simplify" it away.
 	//
-	// ⭐ **AN ITERATED BINDING IS UNWRITABLE WHATEVER IT WAS DECLARED** — checked FIRST, because the
-	// question a `for … in` body asks is not "was this declared `let`?" but "would this write free the
-	// element the loop is borrowing?" (see `bindingIsIterationLocked`). A `var` and a PARAMETER both
-	// answer "writable" to the two tests below and both would destroy the borrow.
+	// ⭐ **AN ITERATED BINDING IS UNWRITABLE WHATEVER IT WAS DECLARED**, which is why the question this
+	// asks is `bindingStorageIsWritableHere` and not `bindingStorageIsWritable`: a `var` and a PARAMETER
+	// both answer "writable" to the declaration test and both would destroy the loop's borrow.
 	function immutableReceiverNameOf(binding VarInfo, baseTok Token) returns ByteArray
-		if self.bindingIsIterationLocked(binding) 'iterated'
-			return baseTok.value
-		end 'iterated'
-		if self.bindingStorageIsWritable(binding) 'writable'
+		if self.bindingStorageIsWritableHere(binding) 'writable'
 			return EmptySourceText
 		end 'writable'
+
 		return baseTok.value
 	end 'immutableReceiverNameOf'
 
@@ -48156,6 +48189,25 @@ export type Parser
 	function bindingStorageIsWritable(binding VarInfo) returns bool
 		return binding.mutable or binding.isParameter
 	end 'bindingStorageIsWritable'
+
+	// ⭐⭐ **THE SAME QUESTION, ASKED *HERE*** — the declared fact above, minus the storage an enclosing
+	// `for … in` has locked. A loop keeps walking the record it captured in its preheader, so a write that
+	// replaces that record frees what the header is still reading; the lock is therefore not "was this
+	// declared `let`?" but "would this write destroy the loop's borrow?", and it overrules a `var` and a
+	// PARAMETER alike (see `bindingIsIterationLocked`).
+	//
+	// ⭐ **THREE DOORS ASK IT AND ALL THREE MUST GET ONE ANSWER**: the mutating-METHOD receiver (E3019,
+	// `immutableReceiverNameOf`), the field STORE's instance rank (E2013, `requireWritableInstance`) and,
+	// through the second, `p.x = 5`. They are three spellings of one write — the record `p` denotes is
+	// modified — so a fourth kind of writable binding taught to one of them and not the others is exactly
+	// the drift `bindingStorageIsWritable`'s header is about, one qualifier further out.
+	//
+	// ⚠ E3078's source test (`requireMutableBindingSource`) deliberately reads the UNQUALIFIED predicate:
+	// it asks whether the SOURCE was declared writable, which is a fact about the declaration and not
+	// about where in the body the second name is being bound.
+	function bindingStorageIsWritableHere(binding VarInfo) returns bool
+		return not self.bindingIsIterationLocked(binding) and self.bindingStorageIsWritable(binding)
+	end 'bindingStorageIsWritableHere'
 
 	// ⭐ **DISPATCH AN INTERFACE METHOD ON A CONSTRAINED TYPE-PARAMETER VALUE (P1.7a slice 2a).** `receiver` is a
 	// `typeParameter`-tagged value (`self.item`, a `T` field read) and the cursor sits on the method name. The concrete type is UNKNOWN in the shared body, so it dispatches through the runtime WITNESS:
@@ -52162,11 +52214,16 @@ export type Parser
 	// `p`, which slot does that type call `x`), landing on `storeIndirect` where that one lands on
 	// `loadIndirect`. There is no `fieldStore` op for the same reason there is no `fieldLoad`.
 	//
-	// ⭐ **TWO THINGS MUST BE MUTABLE AND THEY ARE TWO DIFFERENT FACTS**: the INSTANCE (`let p` is
+	// ⭐ **TWO THINGS MUST BE WRITABLE AND THEY ARE TWO DIFFERENT FACTS**: the INSTANCE (`let p` is
 	// not writable through) and the FIELD (`export let version` is not writable). Both report E2013
 	// — one code, because it is one defect from two sides: a write to something declared not to
 	// accept one. Both anchor at the ROOT VARIABLE token and not at the field, which is measured
 	// from the bootstrap and pinned by `structs.md`'s two `error.*` cases at `:16:2`.
+	//
+	// ⚠ **THE INSTANCE RANK IS NOT `requireMutableBinding` — A PARAMETER PASSES IT AND STILL REFUSES A
+	// REBIND** (rung PBR-1). `let p` is refused here exactly as before; a parameter is not, because it
+	// BORROWS the caller's box and a borrow's pointee fields are writable. The two doors and the ruling
+	// behind the split are at `requireMutableBinding` / `requireWritableInstance`.
 	//
 	// ⭐ **RESOLVE, THEN PERMIT — AND THE ORDER IS THE WHOLE DIAGNOSTIC CONTRACT.** The checks below
 	// run in two bands, and the band boundary is what makes every message name a change that
@@ -52205,6 +52262,10 @@ export type Parser
 	// The READ path asks the same chain minus its middle: it has no instance to write through, so
 	// resolution is followed directly by visibility (`parseFieldAccess`).
 	function parseFieldAssignment(func IrFunction, block IrBlock) throws ParseError
+		// The base's own token index, taken before the chain walk moves the cursor, so the E3070 subject below
+		// comes through the shared `borrowSubjectNameAt` — ONE derivation of "which storage does this write go
+		// through", asked identically at every door (`parseAssignment` captures it for the same reason).
+		let baseIndex = self.pos
 		// `resolveFieldChain` reads `base.f1.…fN` (a single `p.x` or a chain `o.inner.x`), resolving every
 		// intermediate struct field and leaving the cursor on the `=`. Its `requireStructBase` already
 		// enforced the base's live-binding guard.
@@ -52212,12 +52273,38 @@ export type Parser
 		try self.consume(TokenKind.equals)
 		let index = try self.requireFieldIndex(step.layout, fieldTok: step.lastFieldTok)
 
-		try self.requireMutableBinding(step.baseBinding, nameTok: step.baseTok)
+		try self.requireWritableInstance(step.baseBinding, nameTok: step.baseTok)
 		try self.requireFieldAccessible(step.layout, index: index, fieldTok: step.lastFieldTok)
 
 		if not step.layout.fieldIsMutable(index) 'immutableField'
 			throw ParseError.assignToImmutableField(String.from(step.layout.name), fieldName: String.from(step.lastFieldTok.value), line: step.baseTok.line, column: step.baseTok.column)
 		end 'immutableField'
+
+		// ⭐⭐ **E3070's TWO DOORS, WHICH THIS STORE OWED THE MOMENT ITS INSTANCE COULD BE A PARAMETER
+		// (PBR-1).** `b.items = <fresh>` DROPS the record the field held (`emitFieldWrite`'s decref), freeing
+		// every element some other name still borrows — the same write `items = <fresh>` performs one
+		// indirection in, which is why `emitCheckedSelfFieldStore` has carried both of these all along and
+		// this door is the twin that had nothing to guard: until PBR-1 no write here could reach a caller's
+		// record, because a parameter base was refused outright. **MEASURED on the permission change alone:**
+		// `let s = try b.items.get(0) otherwise ""` + `wipe(b)` whose body is `b.items = StringArray.create()`
+		// compiled clean and faulted **0xC0000005**, where the oracle reports the conflict.
+		//
+		// ⚠ The subject is `b`, not `items` — `iterationSubjectNameAt` names the FIELD only for a `self`-rooted
+		// chain, where the receiver is not a subject anything can write through. The self-spelled door passes
+		// its own field token for exactly that reason; both are the one derivation, asked of their own base.
+		let subjectName = self.borrowSubjectNameAt(baseIndex)
+		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
+			self.noteBorrowSubjectRebind(func, subjectName: subjectName, anchor: step.baseTok)
+		end 'mayConflictWithABorrow'
+
+		// ⚠ **GATED ON THE FIELD BEING AN ARRAY, which is E3070's SCOPE**, and `writtenParamMask` (E3019)
+		// deliberately stays untouched beside it — the row `IrFunction`'s table already carries for the
+		// field-chain write whose base is a parameter: **no / yes**. Setting E3019's column here would make
+		// `let state = …` + `clearAll(state)` an error, which is the very program
+		// `array-managed-field-reassign:reassign-empty-array-field` pins at exit 0.
+		if self.typeIsArrayInstance(self.signatures.fieldTypeOf(step.layout, index: index, into: self.artifact.typeNames)) 'arrayFieldStore'
+			func.storageWrittenParamMask = func.storageWrittenParamMask or self.subjectStorageMask(func, subjectName: subjectName)
+		end 'arrayFieldStore'
 
 		// Parsed AFTER both rejections, so a refused program emits no op — `emitCheckedGlobalStore`'s
 		// discipline, for its reason. The value's start is captured so `emitFieldWrite` can decide, for a
@@ -52238,12 +52325,15 @@ export type Parser
 	// is promoted, an owned value transfers, a borrowed struct is refused), so the field owns exactly one
 	// value across the write and the old one is freed exactly once. Mirrors the `var`-String reassignment
 	// drop model, one indirection out.
-	// ⚠ **A FIELD WRITE DELIBERATELY RECORDS NO PARAMETER MUTATION (E3019, the call-site half).** The only
-	// box a write can reach today is the enclosing `self` (a field write through a PARAMETER is refused by
-	// `requireMutableBinding`, E2013), and a method writing its own receiver's data does not make the
-	// caller's `let` an error in shv2 — see `receiverOwnerMask` for the ruling, the corpus case that pins it
-	// and the measured oracle inconsistency it settles. The rung that makes a struct PARAMETER's field
-	// writable inherits the question, and inherits it here.
+	// ⚠ **A FIELD WRITE DELIBERATELY RECORDS NO PARAMETER MUTATION (E3019, the call-site half)** — and since
+	// PBR-1 that is a RULING rather than a vacuous truth. It used to be vacuous: the only box a write could
+	// reach was the enclosing `self`, because a field write through a PARAMETER was refused outright (E2013),
+	// and a method writing its own receiver's data does not make the caller's `let` an error in shv2 (see
+	// `receiverOwnerMask` for that ruling, the corpus case that pins it and the measured oracle inconsistency
+	// it settles). A parameter's box is now reachable, and the answer is the SAME `no` — it is the row
+	// `IrFunction`'s table already carries for a field-chain write whose base is a parameter, and
+	// `array-managed-field-reassign:reassign-empty-array-field` is the case that goes red the moment E3019's
+	// column is fed from here. **E3070's column IS fed**, at the two doors `parseFieldAssignment` states.
 	// ⭐⭐ **THE TYPE A WRITE THROUGH *THIS BOX* ACTUALLY STORES — the ONE derivation, read by the TYPE CHECK
 	// and by the STORE.** A field's declared type is the SHARED layout's, so an opaque `export var value as T`
 	// answers `typeParameter` however concrete the receiver is; only the box says what `T` stands for. A

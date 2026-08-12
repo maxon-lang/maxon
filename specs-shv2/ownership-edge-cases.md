@@ -2022,8 +2022,7 @@ end 'main'
 45
 ```
 
-<!-- disabled-test: rc-struct-field-overwrite-in-if-no-leak -->
-<!-- E2013 param-field mutation — assigning to a field of a struct-typed PARAMETER (`state.deps = …`, `o.inner = …`) is rejected as immutable; a by-reference divergence from the bootstrap -->
+<!-- test: rc-struct-field-overwrite-in-if-no-leak -->
 Assigning a new struct to a struct field inside an if block must decref the old value and not leak the old struct's managed children (e.g., arrays).
 ```maxon
 typealias Integer = int(i64.min to i64.max)

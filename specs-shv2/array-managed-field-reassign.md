@@ -196,8 +196,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: reassign-empty-array-field -->
-<!-- E2013 param-field mutation — assigning to a field of a struct-typed PARAMETER (`state.deps = …`, `o.inner = …`) is rejected as immutable; a by-reference divergence from the bootstrap -->
+<!-- test: reassign-empty-array-field -->
 ### Reassign to Empty Array
 Replace a populated array with an empty one — all elements must be cleaned up.
 ```maxon
