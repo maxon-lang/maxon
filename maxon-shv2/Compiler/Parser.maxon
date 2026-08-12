@@ -23015,11 +23015,18 @@ export type Parser
 	// one door. The bootstrap is the cautionary tale: it spells this rule at FOUR sites and reads
 	// `VarInfo.Mutable` in three unrelated places.
 	function requireMutableBinding(binding VarInfo, nameTok Token) throws ParseError
-		// ⭐ A binding an enclosing `for … in` is iterating may not be REBOUND either: the loop keeps
-		// walking the record it captured in its preheader, and rebinding the name drops that record
-		// (`reassignBindingValue`) while the header is still reading its length. The same one fact the
-		// two receiver doors read — see `bindingIsIterationLocked`.
-		if not binding.mutable or self.bindingIsIterationLocked(binding) 'immutable'
+		// ⭐ **THE REBIND RANK IS THE INSTANCE RANK PLUS ONE CONJUNCT, AND IT IS WRITTEN THAT WAY SO THE
+		// LOCK CANNOT BE TAUGHT TO ONE DOOR AND NOT THE OTHER.** Every reason a record may not be written
+		// through is also a reason its name may not be rebound — an enclosing `for … in` iterating the
+		// binding is today's (the loop walks the record it captured in its preheader, and a rebind drops it
+		// via `reassignBindingValue` while the header still reads its length) — so this asks the shared
+		// `bindingStorageIsWritableHere` and adds only what a REBIND additionally needs: a `var`
+		// declaration. Spelling the lock out here instead left `bindingStorageIsWritableHere`'s header
+		// claiming three doors while a fourth read `bindingIsIterationLocked` on its own.
+		//
+		// `binding.mutable` implies `bindingStorageIsWritable`, so the conjunction is exactly the
+		// "declared `var` and not iteration-locked" this door has always asked.
+		if not (self.bindingStorageIsWritableHere(binding) and binding.mutable) 'immutable'
 			throw assignToImmutableError(nameTok)
 		end 'immutable'
 
@@ -48196,11 +48203,13 @@ export type Parser
 	// declared `let`?" but "would this write destroy the loop's borrow?", and it overrules a `var` and a
 	// PARAMETER alike (see `bindingIsIterationLocked`).
 	//
-	// ⭐ **THREE DOORS ASK IT AND ALL THREE MUST GET ONE ANSWER**: the mutating-METHOD receiver (E3019,
-	// `immutableReceiverNameOf`), the field STORE's instance rank (E2013, `requireWritableInstance`) and,
-	// through the second, `p.x = 5`. They are three spellings of one write — the record `p` denotes is
-	// modified — so a fourth kind of writable binding taught to one of them and not the others is exactly
-	// the drift `bindingStorageIsWritable`'s header is about, one qualifier further out.
+	// ⭐ **EVERY DOOR THAT WRITES A BINDING ASKS IT, AND THEY MUST ALL GET ONE ANSWER**: the mutating-METHOD
+	// receiver (E3019, `immutableReceiverNameOf`), the field STORE's instance rank (E2013,
+	// `requireWritableInstance`, which is `p.x = 5`), and the REBIND (`requireMutableBinding`), which asks
+	// this and then adds the one conjunct a rebind needs on top of it. They are spellings of one write — the
+	// record `p` denotes is modified — so a further kind of writable binding, or a further LOCK, taught to
+	// one of them and not the others is exactly the drift `bindingStorageIsWritable`'s header is about, one
+	// qualifier further out. The lock therefore lives HERE, in the one conjunct they share, and nowhere else.
 	//
 	// ⚠ E3078's source test (`requireMutableBindingSource`) deliberately reads the UNQUALIFIED predicate:
 	// it asks whether the SOURCE was declared writable, which is a fact about the declaration and not
