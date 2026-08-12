@@ -1247,3 +1247,136 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:22:14: Unsupported: `Array` member 'at' — this value's type is the `Array` the standard library declares, and 'at' is declared on the `type Array` this program declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/push/resize/append/appendMemory
 ```
+
+<!-- test: a-compiler-minted-literal-is-the-library-array -->
+⭐⭐ **A LITERAL THE COMPILER MINTS IS THE LIBRARY'S RECORD, NOT THE PROGRAM'S — and the program never
+wrote a type for it to be read from.** `b"Hi!"` and `[4, 5]` name no declaration: the sweep interns their
+`Array with Byte` / `Array with int` instances itself. Under a contest the corpus's own declaration has
+MOVED (`SignatureIndex.contestStdlibTypeName`), so a mint filed under the bare name lands on the
+PROGRAM's container and every library-only member is refused on a value the reader never typed. `isEmpty`
+is declared on `stdlib/Array.maxon` and nowhere else here, so it is the whole question. The bootstrap
+oracle prints `false false` and exits 5.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+function main() returns ExitCode
+	let bytes = b"Hi!"
+	let nums = [4, 5]
+	print("{bytes.isEmpty()} {nums.isEmpty()}")
+	return (bytes.count() + nums.count()) as ExitCode
+end 'main'
+```
+```stdout
+false false
+```
+```exitcode
+5
+```
+
+<!-- test: a-minted-managed-element-literal-is-the-library-array-and-balances -->
+⭐ **THE SAME MINT WITH A MANAGED ELEMENT, WHERE A WRONG RECORD IDENTITY IS A LEAK OR A DOUBLE FREE
+RATHER THAN AN EXPECTATION MISMATCH.** `["a", "bb"]` interns `Array with String`; `contains` is served
+only from the library's declaration. The two `String` records are freed by one `__managed_decref` walk,
+so a record identity that picked the wrong declaration exits 101 rather than 2.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+function main() returns ExitCode
+	let words = ["a", "bb"]
+	print("{words.contains("bb")}")
+	return words.count() as ExitCode
+end 'main'
+```
+```stdout
+true
+```
+```exitcode
+2
+```
+
+<!-- test: error.a-conformer-of-another-name-is-refused-under-its-own-name -->
+⛔ **THE ROSTER REFUSAL NAMES THE TYPE THE VALUE ACTUALLY HAS.** Since a conformer of any name IS the
+record, the array surface serves more than one declaration — so the refusal cannot name a constant. This
+program declares no `Array` at all and `Bag` is the only container in it; a sentence about `Array` would
+send the reader to a type their program does not have, which is the mistake `surfaceRosterProvider`'s
+own rule forbids. The roster itself is unchanged: it is the surface's, and the surface is shared.
+```maxon
+type Bag uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Bag'
+
+typealias IntBag = Bag with int
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	b.push(1)
+	return b.nosuchmember() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:21:11: Unsupported: `Bag` member 'nosuchmember' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+```
+
+<!-- test: error.the-librarys-array-is-refused-under-the-name-its-file-writes -->
+⛔⛔ **AND THE OTHER SIDE OF THAT NOUN — THE ONE THAT CAN LEAK A NAME NO AUTHOR MAY WRITE.** Under a
+contest the corpus's declaration is keyed under this compile's MINT, so a refusal reading the receiver's
+instance straight off says **`__Array`** — a spelling `Parser.requireUnreservedName` forbids the reader
+from typing, about a type they cannot name. `nosuchmember` is on neither declaration, so this falls past
+the two-declarations refusal to the roster one, which is the door that has to say `Array`.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Array'
+
+function main() returns ExitCode
+	let parts = "a,b,c".split(",")
+	return parts.nosuchmember() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:15: Unsupported: `Array` member 'nosuchmember' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+```

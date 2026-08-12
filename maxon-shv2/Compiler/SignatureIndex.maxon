@@ -3010,10 +3010,20 @@ let ReservedTypeNamePrefix = b"__"
 // mints under some base. `noteArrayLiteralConformer` REPLACES the seed the moment a listed module declares
 // one, which every real compile does.
 //
-// ⚠ **THE TWO REMAINING DIRECT READERS ARE SENTENCES ABOUT THE SYNTHESIZED SURFACE**
-// (`twoArrayDeclarationsRefusal`, `surfaceRosterRefusal`'s array arm) — free functions with no index to
-// ask, quoting the name the compiler's own P1.7 roster is provided for. See `isArrayBaseName` for the
-// discovered set those sentences do NOT decide.
+// ⚠⚠ **AND SINCE ARRO IT HAS EXACTLY ONE READER: THIS SEED.** The two refusal sentences that still quoted it
+// were retired the way every other read was — by ASKING. `twoArrayDeclarationsRefusal` takes the contested
+// bare name from `arrayRecordDeclaredName`; the array roster refusal takes the RECEIVER's own declaration
+// from its instance, which is a strictly better answer than either constant, because that surface serves
+// every conformer the program declares and a `Bag` receiver was being told about an `Array`.
+//
+// ⛔ **THE SEED ITSELF IS NOT RETIRABLE, AND THAT IS A CONCLUSION RATHER THAN A GAP (ARRO).** With no listed
+// module declaring the record, `Array` is a SYNTHESIZED builtin container in exactly the sense
+// `SetBuiltinBaseName`, `ListBuiltinBaseName`, `MapBuiltinBaseName` and `VectorBuiltinBaseName` are — the
+// compiler owns the record, so the compiler owns the name, and there is nothing left to discover it FROM.
+// The user's directive puts `Array` outside the compiler *because it is a stdlib component*; in the compile
+// this line describes it is not one. Substituting a reserved spelling (`__ManagedMemory`) was considered and
+// rejected: it renames every emitted per-type symbol of a compile no corpus program performs, so it would
+// ship an untested behaviour change to buy the appearance of zero.
 export let ArrayBuiltinBaseName = b"Array"
 
 // The name `stdlib/Array.maxon` gives the `Array`'s sole type parameter — `export type Array uses Element`.
@@ -6463,6 +6473,29 @@ export type ProgramSignatures
 	// narrow which — its base may be a dotted `<Union>.unionCases` companion, and the enum registry is still
 	// growing while the sweep runs — so it is the whole-program set, walked once.
 	var sawEnumAllCasesAccess as bool
+	// ⭐⭐ **THE OTHER EIGHT BITS OF THE SAME KIND — AND THEY BECAME WHOLE-PROGRAM FOR A CORRECTNESS REASON,
+	// NOT THE THREE ABOVE'S MEASURED ONE (ARRO).** Each names a construct whose instance the compiler MINTS,
+	// because the source writes no type for it to be read from: a `[…]`, a `b"…"`, a `.bytes()`, a
+	// `Set`/`List`/`Vector from […]`, or a producer of one of the three compiler-owned types. The mint's base
+	// is the corpus's array record (`arrayRecordBaseName`), whose spelling the STDLIB/USER CONTEST may move —
+	// and the contest is decided BETWEEN the two halves of the sweep, so a per-file mint in a USER file asked
+	// before the answer existed and filed the program-wide memo under the pre-contest bare name. In a program
+	// that declares its own `type Array` that name is the PROGRAM's container, so `b"Hi!".isEmpty()` was
+	// refused as a member the program's own array does not have — a value whose type the reader never wrote.
+	// ⇒ The file NOTES; `internWellKnownContainerInstances` interns, once, after the contest.
+	var sawIntArrayLiteral as bool
+	var sawByteStringLiteral as bool
+	var sawStringArrayLiteral as bool
+	var sawSetFromConstruction as bool
+	var sawCharacterSetProducer as bool
+	var sawManagedFileProducer as bool
+	var sawManagedDirectoryProducer as bool
+	// The one need with a PAYLOAD rather than a bit: a vector's instance is keyed by its SIZE as well as its
+	// element, so the set of sizes the program constructs is what has to be carried (see
+	// `Parser.foldDeclaredSignaturesInto`'s `vectorFromSizes`). Accumulated across files with duplicates left
+	// in — interning is idempotent, and a `Set` here would trade a handful of repeated interns for a hash of
+	// every size in the program.
+	var vectorFromSizes as FixedSizeArray
 	// ⭐ Generic-instance TYPEALIAS name ⇒ its interned instance (P1.6-A) — `IntBox` ⇒ the giid for
 	// `Box with Integer`. THE door `Parser.parseQualifiedCall` resolves `IntBox.create` to `Box.create`
 	// through, and the one the instantiation checks read the base + args from. It carries no ids of its
@@ -7068,7 +7101,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: ArrayBuiltinBaseName, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: ArrayBuiltinBaseName, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -7247,26 +7280,33 @@ export type ProgramSignatures
 		return self.stdlibShadowRenameOf(self.corpusArrayRecordName) if readerIsStdlibSource else self.arrayRecordDeclaredName()
 	end 'arrayRecordBaseNameIn'
 
-	// ⭐⭐ **THE NAME THE DECLARATION ITSELF WRITES, BEFORE ANY CONTEST — and the base every compiler-MINTED
-	// array instance is interned under.** A `b"…"` literal, an `[1, 2, 3]`, `<Enum>.allCaseNames`,
-	// `String.split`'s result: the compiler makes those values and has to file them under some base.
+	// ⭐⭐ **THE NAME THE DECLARATION ITSELF WRITES, BEFORE ANY CONTEST — the record's spelling as a READER
+	// knows it.** It answers the questions whose subject is a NAME on the page: the CONFORMER an array
+	// instance reduces to (`conformerNameOfInstanceSpelling`, and through it every witness lookup and the
+	// hash-table key roster), and every diagnostic that has to quote the type. It is deliberately the
+	// pre-contest spelling for both: a refusal quoting this compile's mint would send a reader to a name no
+	// author wrote and `Parser.requireUnreservedName` forbids them from writing.
 	//
-	// ⛔ **IT IS THE DECLARED NAME AND NOT `arrayRecordBaseNameIn`'s, AND THE REASON IS AN ORDERING ONE.**
-	// Those instances are program-wide (`internArrayByteInstance` memoizes exactly one), so their base must
-	// be a single answer for the whole compile — and the CONTEST is decided between the two halves of the
-	// sweep, so a USER file interning one asks before the answer exists while a stdlib file asks after. A
-	// contest-sensitive name here would make the memo's value depend on which half happened to ask first.
-	// ⇒ Under a contest the corpus's own `ByteArray` and the compiler's minted byte instance are two ids of
-	// one record, exactly as they were before ARR5b. Moving the mint onto the post-contest name needs the
-	// contest decided ahead of the user fold, which needs the user half's declared names read from TOKENS —
-	// a second derivation of `noteUserDeclaredTypeNames`, and so its own rung.
+	// ⛔ **IT IS NOT THE BASE A COMPILER-MINTED INSTANCE IS INTERNED UNDER — that is `arrayRecordBaseName`,
+	// and the two were ONE until ARRO.** A `b"…"`, an `[1, 2, 3]`, `<Enum>.allCaseNames` and `String.split`'s
+	// result are all the CORPUS's record, so they must carry the base the corpus's own declaration is
+	// registered under; under a contest that declaration has MOVED and this name is the PROGRAM's container
+	// instead. See `internWellKnownContainerInstances` for the wrong answer that cost and for why interning
+	// after the contest — rather than deciding the contest earlier — is the fix.
 	export function arrayRecordDeclaredName() returns ByteArray
 		return self.corpusArrayRecordName
 	end 'arrayRecordDeclaredName'
 
-	// ⭐ **THE SAME NAME AS THE *STDLIB* SPELLS IT** — what `isArrayBaseName` recognizes as the corpus
-	// declaration MOVED, and what a reader with no file of its own (the conformance runtime, the reachability
-	// walk) has to use, because a corpus body is compiled under the stdlib's spelling.
+	// ⭐⭐ **THE SAME NAME AS THE *STDLIB* SPELLS IT — and THE base every compiler-MINTED array instance is
+	// interned under.** What `isArrayBaseName` recognizes as the corpus declaration MOVED; what a reader with
+	// no file of its own (the conformance runtime, the reachability walk) has to use, because a corpus body is
+	// compiled under the stdlib's spelling; and what the mint has to use, because a minted array IS the
+	// corpus's record and must share the gid of the corpus's own `ByteArray`.
+	//
+	// ⚠ **EVERY CALLER THAT INTERNS OR LOOKS UP AN INSTANCE READS THIS ONE**, on both sides of the sweep and
+	// in the real parse, so the sweep's write and the parser's read cannot land on two gids. The single thing
+	// that makes that possible is that no mint runs before the contest — see
+	// `internWellKnownContainerInstances`.
 	export function arrayRecordBaseName() returns ByteArray
 		return self.arrayRecordBaseNameIn(true)
 	end 'arrayRecordBaseName'
@@ -9747,8 +9787,8 @@ export type ProgramSignatures
 	// — the same sweep-writes/parser-reads discipline `internBuiltinIntegerInstance` states.
 	export function constArrayValueType(element ConstArrayElementKind) returns MaxonType
 		return match element 'e'
-			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(self.arrayRecordDeclaredName()))
-			string gives MaxonType.genericInstance(self.builtinInstanceForElement(self.arrayRecordDeclaredName(), element: MaxonType.string))
+			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(self.arrayRecordBaseName()))
+			string gives MaxonType.genericInstance(self.builtinInstanceForElement(self.arrayRecordBaseName(), element: MaxonType.string))
 		end 'e'
 	end 'constArrayValueType'
 
@@ -11913,7 +11953,7 @@ export type ProgramSignatures
 		// first to write it. It is OVER-interned exactly as this whole probe is (a file merely NAMING
 		// `__ManagedMemory` registers the layout), which is the sweep's standing discipline: over-register
 		// rather than miss.
-		_ = self.internBuiltinIntegerInstance(self.arrayRecordDeclaredName())
+		_ = self.internBuiltinIntegerInstance(self.arrayRecordBaseName())
 
 		if self.structTypes.contains(ManagedFileTypeName) 'alreadyRegistered'
 			return
@@ -14551,7 +14591,7 @@ export type ProgramSignatures
 
 		var args = MaxonTypeArray.create()
 		args.push(MaxonType.named(self.typeNames.intern(ByteElementTypeName)))
-		self.arrayByteInstance = self.genericInstances.intern(self.typeNames.intern(self.arrayRecordDeclaredName()), args: args)
+		self.arrayByteInstance = self.genericInstances.intern(self.typeNames.intern(self.arrayRecordBaseName()), args: args)
 		self.arrayByteInstanceComputed = true
 		return self.arrayByteInstance
 	end 'bareArrayByteInstance'
@@ -15358,7 +15398,7 @@ export type ProgramSignatures
 	export function internSynthesizedByteInstance() returns GenericInstanceId
 		var args = MaxonTypeArray.create()
 		args.push(MaxonType.named(self.typeNames.intern(SynthesizedByteElementName)))
-		return self.genericInstances.intern(self.typeNames.intern(self.arrayRecordDeclaredName()), args: args)
+		return self.genericInstances.intern(self.typeNames.intern(self.arrayRecordBaseName()), args: args)
 	end 'internSynthesizedByteInstance'
 
 	// ⭐⭐ **WHICH `Array` INSTANCE A `__ManagedMemory.create(count, elementSize)` YIELDS (R4.4)** — the one
@@ -15400,7 +15440,7 @@ export type ProgramSignatures
 			return self.internArrayByteInstance(readerFilePath)
 		end 'bytePacked'
 
-		return self.internBuiltinIntegerInstance(self.arrayRecordDeclaredName())
+		return self.internBuiltinIntegerInstance(self.arrayRecordBaseName())
 	end 'managedMemoryInstanceForElementSize'
 
 	// ⭐⭐ **CAN shv2 GIVE A BUFFER OF THIS ELEMENT WIDTH A TYPE AT ALL? (R4.4 review.)** The gate the answer
@@ -15644,13 +15684,13 @@ export type ProgramSignatures
 	// "interned here".
 	export function internLiteralContainerInstances()
 		if self.sawAggregateArrayLiteral 'aggregateArrayLiteral'
-			self.internAggregateElementInstances(self.arrayRecordDeclaredName())
+			self.internAggregateElementInstances(self.arrayRecordBaseName())
 		end 'aggregateArrayLiteral'
 
 		// A `List from […]` needs the same set one base over: the construction's element type is the SOURCE
 		// ARRAY's, which is exactly one of the names walked above. `List with integer` and `List with String`
-		// are interned per-file beside it (`foldDeclaredSignaturesInto`), as the `Set from` arm does — this
-		// walk is the aggregate half, and only it needs the whole program.
+		// are interned beside it by `internWellKnownContainerInstances`, as the `Set from` arm does — this
+		// walk is the aggregate half, and only it needs every declared type.
 		if self.sawListFromConstruction 'listFromConstruction'
 			self.internAggregateElementInstances(ListBuiltinBaseName)
 		end 'listFromConstruction'
@@ -15658,9 +15698,83 @@ export type ProgramSignatures
 		// `<Enum>.allCases` needs the ENUM half of that same set and nothing else — a case value is never a
 		// struct and never a String — so it asks for the enum loop rather than for the whole walk.
 		if self.sawEnumAllCasesAccess 'enumAllCases'
-			self.internEnumElementInstances(self.arrayRecordDeclaredName())
+			self.internEnumElementInstances(self.arrayRecordBaseName())
 		end 'enumAllCases'
 	end 'internLiteralContainerInstances'
+
+	// ⭐⭐⭐ **THE INSTANCES THE COMPILER MINTS BECAUSE THE SOURCE NAMED NO TYPE FOR THEM — ONCE PER PROGRAM,
+	// AFTER THE STDLIB/USER CONTEST (ARRO).** A `[…]`, a `b"…"`, a `.bytes()`, a `Set`/`List`/`Vector from […]`
+	// and the three compiler-owned types all produce a value whose type no declaration in the program spells,
+	// so the sweep interns it and the parser reads the giid back — the sweep-WRITES / parser-READS discipline
+	// `internBuiltinIntegerInstance` states.
+	//
+	// ⚠⚠ **THE POSITION IS A CORRECTNESS ONE AND NOT A COST ONE, WHICH IS WHAT SEPARATES IT FROM
+	// `internLiteralContainerInstances` ABOVE.** These interns used to run at the END OF EACH FILE'S FOLD.
+	// The array-record arms take their base from `arrayRecordBaseName`, whose spelling the contest may MOVE
+	// (`contestStdlibTypeName`), and the contest is decided BETWEEN the user and stdlib halves of the sweep —
+	// so a user file asked before the answer existed and filed a PROGRAM-WIDE memo (`bareArrayByteInstance`)
+	// under the pre-contest bare name. In a program declaring its own `type Array` that name is the PROGRAM's
+	// container: `b"Hi!".isEmpty()` was refused as a member the program's array does not have, against a
+	// bootstrap oracle that serves it. ⇒ ONE call, after both halves have folded, is the whole fix; nothing
+	// had to be derived a second time and the contest did not have to move.
+	//
+	// ⚠ **THE GIDS MOVE, AND THAT IS THE HOIST ABOVE'S ARGUMENT VERBATIM** — a gid is intern ORDER, nothing
+	// derives from its numeric value (`mangleGenericInstance` is structural), and the sweep only RECORDS
+	// between its last fold and this call, so no reader can observe "interned per file" from "interned here".
+	// It runs BEFORE `settleRangeScopedInstances` for the same reason it used to: the N2 split reads these
+	// instances, and the bare byte instance is the one every file-scoped answer is derived from.
+	export function internWellKnownContainerInstances()
+		if self.sawIntArrayLiteral 'intArrayLiteral'
+			_ = self.internBuiltinIntegerInstance(self.arrayRecordBaseName())
+		end 'intArrayLiteral'
+
+		if self.sawByteStringLiteral 'byteStringLiteral'
+			_ = self.bareArrayByteInstance()
+		end 'byteStringLiteral'
+
+		if self.sawStringArrayLiteral 'stringArrayLiteral'
+			_ = self.builtinInstanceForElement(self.arrayRecordBaseName(), element: MaxonType.string)
+		end 'stringArrayLiteral'
+
+		// A `Set from […]` infers its key type from the source array literal, which the sweep cannot see, so
+		// BOTH well-known keys are over-interned and the parser reads back whichever the array resolves to —
+		// exactly as `internLiteralContainerInstances` over-interns the array's own possible elements.
+		if self.sawSetFromConstruction 'setFromConstruction'
+			_ = self.internBuiltinIntegerInstance(SetBuiltinBaseName)
+			_ = self.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
+		end 'setFromConstruction'
+
+		// The `List from […]` twin. Its declared-type half is the aggregate walk one function up, which needs
+		// the whole type registry; these two scalars need only the base name.
+		if self.sawListFromConstruction 'listFromConstruction'
+			_ = self.internBuiltinIntegerInstance(ListBuiltinBaseName)
+			_ = self.builtinInstanceForElement(ListBuiltinBaseName, element: MaxonType.string)
+		end 'listFromConstruction'
+
+		// PER SIZE, because a vector's size is half of its instance's identity, and over the three element
+		// types a literal can give one (`Parser.requireVectorElementType` refuses every managed element, so
+		// there is no String or aggregate half to intern).
+		for size in self.vectorFromSizes 'eachVectorSize'
+			_ = self.vectorInstanceForElement(MaxonType.integer, size: size)
+			_ = self.vectorInstanceForElement(MaxonType.float, size: size)
+			_ = self.vectorInstanceForElement(MaxonType.boolean, size: size)
+		end 'eachVectorSize'
+
+		// The three compiler-owned TYPES ride the same call, and two of them for this function's own reason:
+		// `registerManagedFileType` and `registerManagedDirectoryType` intern the byte and word array
+		// instances themselves, so leaving them in the per-file fold would have left half the defect in place.
+		if self.sawCharacterSetProducer 'characterSetProducer'
+			self.registerCharacterSetType()
+		end 'characterSetProducer'
+
+		if self.sawManagedFileProducer 'managedFileProducer'
+			self.registerManagedFileType()
+		end 'managedFileProducer'
+
+		if self.sawManagedDirectoryProducer 'managedDirectoryProducer'
+			self.registerManagedDirectoryType()
+		end 'managedDirectoryProducer'
+	end 'internWellKnownContainerInstances'
 
 	// ⛔⛔ **EVERY ROW THIS WALK MINTS IS A GUESS, AND ONE READER TOOK THEM FOR FACTS (A4q).** The header above
 	// argues the rows are harmless because "a descriptor and a destructor are both synthesized on USAGE, and
@@ -15701,25 +15815,31 @@ export type ProgramSignatures
 		end 'eachEnum'
 	end 'internEnumElementInstances'
 
-	// This file materializes a `[<identifier>…]` array literal, whose element type the sweep's tokens cannot
-	// name. All the sweep does is remember that SOMETHING asked; the over-interning itself waits for the whole
-	// program (see `internLiteralContainerInstances`).
-	export function noteAggregateArrayLiteral()
-		self.sawAggregateArrayLiteral = true
-	end 'noteAggregateArrayLiteral'
+	// ⭐⭐ **WHAT ONE FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — recorded, never acted on (ARRO).** THE
+	// one door the sweep files a well-known instance need through, so no arm can be half-moved back into the
+	// per-file fold and no need can be noted twice under two spellings. Every parameter is a bit the sweep
+	// already holds as a local at the one point it calls this; the whole answer is a union across files, which
+	// is why each is OR-ed in rather than assigned.
+	//
+	// ⚠ **ELEVEN PARAMETERS AND NOT ELEVEN FUNCTIONS**: eleven one-line setters is eleven chances to add a
+	// twelfth need and wire it at ten of the eleven call sites. There is exactly one call site, so a need that
+	// is not passed does not compile.
+	export function noteWellKnownInstanceNeeds(intArrayLiteral bool, byteStringLiteral bool, stringArrayLiteral bool, aggregateArrayLiteral bool, enumAllCasesAccess bool, setFromConstruction bool, listFromConstruction bool, vectorSizes FixedSizeArray, characterSetProducer bool, managedFileProducer bool, managedDirectoryProducer bool)
+		self.sawIntArrayLiteral = self.sawIntArrayLiteral or intArrayLiteral
+		self.sawByteStringLiteral = self.sawByteStringLiteral or byteStringLiteral
+		self.sawStringArrayLiteral = self.sawStringArrayLiteral or stringArrayLiteral
+		self.sawAggregateArrayLiteral = self.sawAggregateArrayLiteral or aggregateArrayLiteral
+		self.sawEnumAllCasesAccess = self.sawEnumAllCasesAccess or enumAllCasesAccess
+		self.sawSetFromConstruction = self.sawSetFromConstruction or setFromConstruction
+		self.sawListFromConstruction = self.sawListFromConstruction or listFromConstruction
+		self.sawCharacterSetProducer = self.sawCharacterSetProducer or characterSetProducer
+		self.sawManagedFileProducer = self.sawManagedFileProducer or managedFileProducer
+		self.sawManagedDirectoryProducer = self.sawManagedDirectoryProducer or managedDirectoryProducer
 
-	// This file materializes a `List from […]` construction. Its `List with <T>` instance follows the source
-	// array literal's element type, so — like the aggregate array literal above — the over-interning waits for
-	// the whole program.
-	export function noteListFromConstruction()
-		self.sawListFromConstruction = true
-	end 'noteListFromConstruction'
-
-	// This file names `<Enum>.allCases`. Which enum's array it needs is a whole-program question (see the
-	// field), so all the sweep does is remember that something asked.
-	export function noteEnumAllCasesAccess()
-		self.sawEnumAllCasesAccess = true
-	end 'noteEnumAllCasesAccess'
+		for size in vectorSizes 'eachVectorSize'
+			self.vectorFromSizes.push(size)
+		end 'eachVectorSize'
+	end 'noteWellKnownInstanceNeeds'
 
 	// --- Layout-descriptor sizing (P1.6-B1) ---
 	//

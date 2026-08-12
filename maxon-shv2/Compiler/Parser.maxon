@@ -5699,7 +5699,7 @@ end 'rosterList'
 // ⭐ **ONE SENTENCE SHAPE FOR BOTH SURFACES** — the argument `rosterList` makes about the `/`-join, one
 // level up, where it had not yet been made: two full templates side by side are two spellings of one
 // sentence, free to drift in punctuation, in noun, and in what they call the thing they refuse, while each
-// stays perfectly "derived". They HAD so drifted — see `surfaceRosterRefusal`.
+// stays perfectly "derived". They HAD so drifted — see `requireSurfaceMember`, the one gate that renders it.
 //
 // ⚠ **THE NOUN IS `member`, NOT `method`, AND THAT IS NOT A WORDING PREFERENCE (found in review, A2k).** The
 // `Array` roster is derived from the ARMS, and one of those arms serves `managed`, which is a FIELD:
@@ -5745,13 +5745,6 @@ function rosterRefusalSentence(typeName ByteArray, member ByteArray, roster Byte
 	return "`{String.from(typeName)}` {noun} '{String.from(member)}' — {provider} provides {rosterList(roster)}; that list IS the surface, so nothing else is served here"
 end 'rosterRefusalSentence'
 
-// ⭐⭐ **THE TWO `Array` DECLARATIONS A CONTESTED COMPILE HAS, IN WORDS A READER CAN ACT ON (ARR2).** Neither
-// is ever spelled by its compiled name: the library's goes by this compile's own MINT (`__Array`), which is a
-// name no author wrote and one `Parser.requireUnreservedName` forbids them from writing, so quoting it would
-// send a reader to a spelling they cannot use.
-let ProgramsOwnArrayPhrase = "the `type Array` this program declares"
-let LibrarysOwnArrayPhrase = "the `Array` the standard library declares"
-
 // ⭐⭐ **WHY A MEMBER THAT PLAINLY EXISTS IS NOT SERVED ON THIS VALUE — the refusal `rosterRefusalSentence`
 // cannot word (ARR2).** A program declaring its own `type Array` makes the compile hold TWO of them
 // (`SignatureIndex.contestStdlibTypeName`), and a member call resolves against the RECEIVER's own declaration
@@ -5761,15 +5754,28 @@ let LibrarysOwnArrayPhrase = "the `Array` the standard library declares"
 //
 // ⚠ It states the RULE and not only the fact, because the fact on its own reads as a compiler defect: the
 // reader has to be told that the split is deliberate and which side of it they are standing on.
-function twoArrayDeclarationsRefusal(member ByteArray, roster ByteArrayArray, receiverIsTheProgramsOwn bool) returns String
-	let receiversOwn = ProgramsOwnArrayPhrase if receiverIsTheProgramsOwn else LibrarysOwnArrayPhrase
-	let theOther = LibrarysOwnArrayPhrase if receiverIsTheProgramsOwn else ProgramsOwnArrayPhrase
-	return "`{String.from(ArrayBuiltinBaseName)}` {SurfaceMemberNoun} '{String.from(member)}' — this value's type is {receiversOwn}, and '{String.from(member)}' is declared on {theOther}. Declaring an `{String.from(ArrayBuiltinBaseName)}` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides {rosterList(roster)}"
+//
+// ⭐⭐ **BOTH DECLARATIONS ARE QUOTED UNDER THE ONE BARE NAME THEY SHARE, AND IT IS THE CALLER'S TO SUPPLY
+// (ARRO).** A contest exists precisely because two declarations wrote the SAME name, so one spelling serves
+// both halves of the sentence. It arrives as a parameter rather than as a constant because which name the
+// corpus declares its record under is DISCOVERED (`ProgramSignatures.arrayRecordDeclaredName`), and a
+// constant here would state a second, unchecked opinion of it.
+//
+// ⚠ Neither declaration is ever spelled by its COMPILED name: the library's goes by this compile's own MINT
+// (`__Array`), a name no author wrote and one `Parser.requireUnreservedName` forbids them from writing, so
+// quoting it would send a reader to a spelling they cannot use.
+function twoArrayDeclarationsRefusal(typeName ByteArray, member ByteArray, roster ByteArrayArray, receiverIsTheProgramsOwn bool) returns String
+	let spelling = String.from(typeName)
+	let programsOwn = "the `type {spelling}` this program declares"
+	let librarys = "the `{spelling}` the standard library declares"
+	let receiversOwn = programsOwn if receiverIsTheProgramsOwn else librarys
+	let theOther = librarys if receiverIsTheProgramsOwn else programsOwn
+	return "`{spelling}` {SurfaceMemberNoun} '{String.from(member)}' — this value's type is {receiversOwn}, and '{String.from(member)}' is declared on {theOther}. Declaring an `{spelling}` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides {rosterList(roster)}"
 end 'twoArrayDeclarationsRefusal'
 
-// The noun `surfaceRosterRefusal` names a surface's entries by. Named rather than spelled at each arm
-// because all six arms share it: a literal repeated six times is six chances for one of them to be reworded
-// alone, which is the drift a shared sentence template removes one level up. Its `"static"` twin went with
+// The noun `requireSurfaceMember` names a surface's entries by. Named rather than spelled at each arm
+// because all seven surfaces share it: a literal repeated seven times is seven chances for one of them to be
+// reworded alone, which is the drift a shared sentence template removes one level up. Its `"static"` twin went with
 // the `stringStatic` surface (W55) — the only surface whose entries were a TYPE's rather than a VALUE's.
 let SurfaceMemberNoun = "member"
 
@@ -5793,52 +5799,40 @@ function rosterDriftMessage(dispatchName String, member ByteArray, roster ByteAr
 	return "{dispatchName}: '{String.from(member)}' is on this surface's roster ({rosterList(roster)}) and no arm served it. EITHER add the arm, or take the name back out of {rosterFuncs} — the gate at the top of that dispatch admits nothing else, so this line is unreachable while the two agree"
 end 'rosterDriftMessage'
 
-// The refusal for a member the receiver's surface does not have. ONE gate throws it, and the SURFACE picks
-// which sentence answers — because a roster must answer for the type it is shown about: a reader handed the
-// `Array` list for a `__ManagedMemory` receiver is sent to the wrong question entirely.
+// WHO provides the roster a surface serves — the one half of the refusal sentence that is a property of the
+// SURFACE. It used to supply a second, the TYPE the sentence answers for, and that half moved to the caller
+// (ARRO) for the reason the old header itself gave: *"a roster must answer for the type it is shown about"*.
 //
-// ⚠ Each surface supplies only the TWO things that genuinely differ — the TYPE it answers for and WHO
-// provides the roster. It used to supply a third, a trailing clause naming what was deliberately ABSENT, and
-// that clause was the one half of each sentence no gate could check; `rosterRefusalSentence` carries what
-// building `elementSize` measured about it.
+// ⛔⛔ **THE ARRAY SURFACE HAD NO ONE TYPE TO ANSWER FOR, AND SAYING `Array` WAS A WRONG NOUN.** Since ARR5b
+// that surface serves every `BuiltinArrayLiteral` conformer in the program, so a `type Bag uses Element
+// implements BuiltinArrayLiteral` receiver met *"`Array` member 'nosuchmember' — P1.7 provides managed/get/…"*
+// about a type its program does not name and its value is not. Only the DISPATCHER holds the receiver, so only
+// the dispatcher can name it; the five constant surfaces pass their own constant and lose nothing.
 //
-// ⚠⚠ **IT IS KEYED ON `MemberSurface`, WHICH IS THE POINT OF THAT ENUM AND WAS HALF-DONE (found in review,
-// A2q).** A2q introduced the enum as "the memo's key, the builder's selector and the refusal's subject at
-// once" and then wired only the first two: this function kept the `isManagedMemory bool` the enum was
-// introduced to REPLACE, and the three new surfaces spelled their refusals inline at their own gates — five
-// sentences in four homes, the shape `rosterList` and `rosterRefusalSentence` each exist to close one level
-// down. One home, one key, one `if`-chain that a seventh surface cannot silently fall through.
-function surfaceRosterRefusal(surface MemberSurface, member ByteArray, roster ByteArrayArray) returns String
+// ⚠ Each surface still supplies only what genuinely differs, and a seventh cannot silently fall through — the
+// property `MemberSurface` exists for (A2q). What A2q consolidated was five SENTENCES in four homes; there is
+// still exactly one sentence (`rosterRefusalSentence`), one noun and one provider table.
+//
+// ⚠ It also used to supply a THIRD thing, a trailing clause naming what was deliberately ABSENT, and that
+// clause was the one half of each sentence no gate could check; `rosterRefusalSentence` carries what building
+// `elementSize` measured about it.
+function surfaceRosterProvider(surface MemberSurface) returns String
 	if surface == MemberSurface.buffer 'bufferSurface'
-		return rosterRefusalSentence(ManagedMemoryTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "R4.4")
+		return "R4.4"
 	end 'bufferSurface'
 
 	if surface == MemberSurface.array 'arraySurface'
-		return rosterRefusalSentence(ArrayBuiltinBaseName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "P1.7")
+		return "P1.7"
 	end 'arraySurface'
 
-	if surface == MemberSurface.string 'stringSurface'
-		return rosterRefusalSentence(StringConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
-	end 'stringSurface'
+	// The other five are shv2's own synthesized surfaces and say so with one arm rather than five identical
+	// ones — a fall-through is still impossible, which is the property the split arms existed for.
+	if surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.map or surface == MemberSurface.cursor 'shv2sOwnSurface'
+		return "shv2"
+	end 'shv2sOwnSurface'
 
-	if surface == MemberSurface.character 'characterSurface'
-		return rosterRefusalSentence(CharacterConformerName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
-	end 'characterSurface'
-
-	if surface == MemberSurface.stringIndex 'stringIndexSurface'
-		return rosterRefusalSentence(StringIndexTypeName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
-	end 'stringIndexSurface'
-
-	if surface == MemberSurface.map 'mapSurface'
-		return rosterRefusalSentence(MapBuiltinBaseName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
-	end 'mapSurface'
-
-	if surface == MemberSurface.cursor 'cursorSurface'
-		return rosterRefusalSentence(ManagedMemoryCursorBuiltinBaseName, member: member, roster: roster, noun: SurfaceMemberNoun, provider: "shv2")
-	end 'cursorSurface'
-
-	panic("surfaceRosterRefusal: no refusal sentence for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then refuse with another type's roster")
-end 'surfaceRosterRefusal'
+	panic("surfaceRosterProvider: no provider for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then credit another slice's roster")
+end 'surfaceRosterProvider'
 
 // ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
 // beside the `Array` half above rather than in `SetRuntime.maxon`, where it used to sit holding the five
@@ -10209,9 +10203,9 @@ export type Parser
 		// SIZE as well as its element (`SignatureIndex.VectorBuiltinBaseName`), so — unlike every other
 		// container's `from` — one flag cannot say which instances the file can name: the size is per SITE.
 		// The sizes are collected here off the same token counter the parser will read back
-		// (`arrayLiteralElementCountAt`) and the three scalar element instances are interned per size after the
-		// walk, exactly as the `Set`/`List` arms intern theirs. A vector's element cannot be an aggregate
-		// (`requireVectorElementType`), so there is no whole-program half to defer.
+		// (`arrayLiteralElementCountAt`) and handed whole to the note below, which is why this one need
+		// carries a PAYLOAD where the others carry a bit. A vector's element cannot be an aggregate
+		// (`requireVectorElementType`), so there is no declared-type half to walk.
 		var vectorFromSizes = FixedSizeArray.create()
 		// ⚠ **`hasStringSplitCall` WAS HERE AND WENT WITH `String.split`** (W49 wave 5) — see
 		// `atStringSplitCall`'s grave for why the corpus's own `typealias StringArray` replaces it.
@@ -10363,89 +10357,17 @@ export type Parser
 
 		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
-		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
-		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
-		if hasIntArrayLiteral 'internArrayLiteral'
-			_ = index.internBuiltinIntegerInstance(index.arrayRecordDeclaredName())
-		end 'internArrayLiteral'
-
-		// Intern the `Array with Byte` instance if this file materializes a byte-string literal — after
-		// `foldFile`, exactly as the int-array literal instance above, so its giid follows the file's named
-		// generic instances (a stable, source-path-ordered assignment).
-		if hasByteStringLiteral or hasByteViewCall 'internByteStrLiteral'
-			_ = index.bareArrayByteInstance()
-		end 'internByteStrLiteral'
-
-		// Intern the managed-element literal instances — `Array with String` for a `["…"]`, plus every declared
-		// struct/union for a `[<identifier>…]` (whose element type the sweep cannot see). After `foldFile` so the
-		// aggregate loop reads the folded structs/unions and so the giids follow the file's named instances (P1.7 slice 3).
-		// `<Enum>.allCaseNames` materializes that same `Array with String` and has no typealias of its own to
-		// intern it from either, so it joins the arm rather than opening a second one.
-		if hasStringArrayLiteral or hasAllCaseNamesAccess 'internStringArrayLiteral'
-			_ = index.builtinInstanceForElement(index.arrayRecordDeclaredName(), element: MaxonType.string)
-		end 'internStringArrayLiteral'
-		// Only NOTED here, never performed: the over-interning is over every declared struct/union in the
-		// PROGRAM, so doing it at each such file re-walks tables that are still growing — O(files × types),
-		// measured (see `ProgramSignatures.internLiteralContainerInstances`). `queryProgramSignatures`
-		// performs it once, after the last file folds.
-		if hasAggregateArrayLiteral 'noteAggregateArrayLiteral'
-			index.noteAggregateArrayLiteral()
-		end 'noteAggregateArrayLiteral'
-		// `<Enum>.allCases` — NOTED for the same reason and performed at the same place: its `Array with <Enum>`
-		// instance is one per declared enum, and the registry is complete only after the last file folds.
-		if hasAllCasesAccess 'noteEnumAllCases'
-			index.noteEnumAllCasesAccess()
-		end 'noteEnumAllCases'
-
-		// Intern the `Set with integer` AND `Set with String` instances if this file materializes a `Set from […]`
-		// construction — its key type (int or String) is inferred from the array literal, which the sweep cannot
-		// see, so both are over-interned (the parser reads back whichever the source array resolves to), exactly as
-		// `internLiteralContainerInstances` over-interns the array's possible element instances. After
-		// `foldFile` so their giids follow the file's named generic instances (a stable, source-path-ordered assignment).
-		if hasSetFromLiteral 'internSetFromLiteral'
-			_ = index.internBuiltinIntegerInstance(SetBuiltinBaseName)
-			_ = index.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
-		end 'internSetFromLiteral'
-
-		// The `List from […]` twin of the arm above, plus the whole-program NOTE. A list's element type is not
-		// confined to the two scalars a set's key is, so the two well-known instances are interned here and the
-		// declared struct/union set is left to `internLiteralContainerInstances` — one walk after the last file
-		// folds, for the measured O(files × types) reason stated there.
-		if hasListFromLiteral 'internListFromLiteral'
-			_ = index.internBuiltinIntegerInstance(ListBuiltinBaseName)
-			_ = index.builtinInstanceForElement(ListBuiltinBaseName, element: MaxonType.string)
-			index.noteListFromConstruction()
-		end 'internListFromLiteral'
-
-		// The `Vector from […]` arm — PER SIZE, because a vector's size is half of its instance's identity, and
-		// over the three element types a literal can give a vector (`requireVectorElementType` refuses every
-		// managed one, so there is no String or aggregate half to intern). After `foldFile`, exactly as the
-		// arms above, so the giids follow the file's named generic instances.
-		for size in vectorFromSizes 'internVectorFromLiteral'
-			_ = index.vectorInstanceForElement(MaxonType.integer, size: size)
-			_ = index.vectorInstanceForElement(MaxonType.float, size: size)
-			_ = index.vectorInstanceForElement(MaxonType.boolean, size: size)
-		end 'internVectorFromLiteral'
-
-		// Register the compiler-owned `CharacterSet` type (and, with it, intern the `Set with Character` its
-		// members live in) if this file names a producer (P1.8 Slice D) — after `foldFile`, exactly as the
-		// instance interns above are, so a user declaration folded from this file is already in the registry
-		// when the reserved name is added.
-		if hasCharacterSetProducer 'registerCharacterSet'
-			index.registerCharacterSetType()
-		end 'registerCharacterSet'
-
-		// Register the compiler-owned `__ManagedFile` type if this file names it (R4.1) — after `foldFile`,
-		// exactly as the two registrations above are and for the same reasons.
-		if hasManagedFileProducer 'registerManagedFile'
-			index.registerManagedFileType()
-		end 'registerManagedFile'
-
-		// Register the compiler-owned `__ManagedDirectory` type if this file names it (R4.3) — after `foldFile`,
-		// exactly as the three registrations above are and for the same reasons.
-		if hasManagedDirectoryProducer 'registerManagedDirectory'
-			index.registerManagedDirectoryType()
-		end 'registerManagedDirectory'
+		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED (ARRO).**
+		// Every one of these instances is one the COMPILER mints because the source names no type for it, so
+		// each is a property of the PROGRAM and not of this file: a `b"…"` in two files asks for exactly what
+		// one does. `ProgramSignatures.internWellKnownContainerInstances` performs the whole set once, after
+		// both halves of the sweep have folded — which is what puts the array-record arms on the far side of
+		// the stdlib/user CONTEST, the ordering their base name needs and could not have here.
+		//
+		// A `.bytes()` byte VIEW joins the byte-string literal's bit because it constructs the same
+		// `Array with Byte`, and `<Enum>.allCaseNames` joins the string literal's for the same reason; neither
+		// has a typealias of its own to intern from, which is the property this whole set shares.
+		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, vectorSizes: vectorFromSizes, characterSetProducer: hasCharacterSetProducer, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -41535,7 +41457,7 @@ export type Parser
 	// mid-parse and the gid would depend on parse order. `ProgramSignatures.internEnumAllCasesInstances`
 	// interns one per declared enum for any program that names the member.
 	function emitEnumAllCases(layout EnumLayout, range SourceRange) returns ValueId throws ParseError
-		let giid = self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordDeclaredName(), element: layout.name)
+		let giid = self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordBaseName(), element: layout.name)
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 
 		for i in 0 upto layout.caseCount() 'eachCase'
@@ -41620,7 +41542,7 @@ export type Parser
 	// literal handed straight in would be released by an owner it never gave a reference to. `argBareLocal`
 	// is `false` and cannot be otherwise — the value was minted two lines up and names no binding to poison.
 	function emitEnumAllCaseNames(layout EnumLayout, memberTok Token, range SourceRange) returns ValueId throws ParseError
-		let giid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordDeclaredName(), element: MaxonType.string)
+		let giid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: MaxonType.string)
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 
 		for i in 0 upto layout.caseCount() 'eachCase'
@@ -43980,7 +43902,7 @@ export type Parser
 		// and is not yours to call" are different statements, and the gate must not turn the second into the
 		// first. `stdlib-only-string-methods.md` pins both directions — the real name gets the visibility
 		// refusal, a near miss of it gets this roster.
-		let roster = try self.requireSurfaceMember(MemberSurface.string, methodTok: methodTok)
+		let roster = try self.requireSurfaceMember(MemberSurface.string, typeName: StringConformerName, methodTok: methodTok)
 
 		// ⚠ **THE WHOLE P1.8 SLICE C BYTE/ASCII FAMILY USED TO SIT HERE AND NONE OF IT DOES** —
 		// `startsWith`/`endsWith` (W49 wave 1), `toLower`/`toUpper`/`replace`/`replaceFirst` (wave 2),
@@ -44647,7 +44569,7 @@ export type Parser
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
 		// The roster gate, `dispatchStringMethod`'s twin — see there for why it is asked ahead of every arm.
-		let roster = try self.requireSurfaceMember(MemberSurface.character, methodTok: methodTok)
+		let roster = try self.requireSurfaceMember(MemberSurface.character, typeName: CharacterConformerName, methodTok: methodTok)
 
 		if methodTok.value.equals(ByteViewMethod) 'bytes'
 			return try self.parseByteView(recv.value, methodTok: methodTok, range: range)
@@ -45330,7 +45252,7 @@ export type Parser
 		let range = SourceRange.between(recv.anchor, last: methodTok)
 
 		// The roster gate, `dispatchStringMethod`'s twin — see there for why it is asked ahead of every arm.
-		let roster = try self.requireSurfaceMember(MemberSurface.stringIndex, methodTok: methodTok)
+		let roster = try self.requireSurfaceMember(MemberSurface.stringIndex, typeName: StringIndexTypeName, methodTok: methodTok)
 
 		if methodTok.value.equals(StringIndexCharIndexMethod) 'charIndex'
 			try self.consumeEmptyArgList()
@@ -46126,7 +46048,7 @@ export type Parser
 	// that record is withheld for a bare-local source, so it answered differently for `[7 as N, …]` and
 	// `[v as N, …]` — the measurement is on that predicate.
 	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
-		return self.signatures.builtinInstanceForElement(self.signatures.arrayRecordDeclaredName(), element: try self.literalColumnTypeFor(elem, literalKind: ArrayLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: elemTok))
+		return self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: try self.literalColumnTypeFor(elem, literalKind: ArrayLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: elemTok))
 	end 'arrayLiteralInstanceFor'
 
 	// ⭐⭐ **THE TYPE A BRACKETED LITERAL'S VALUE FIXES FOR THE COLUMN IT SITS IN.** An array literal has ONE
@@ -47009,10 +46931,10 @@ export type Parser
 	// (`Array with integer` / `Array with String`) and both `Set` instances are pre-interned by the sweep, so
 	// these are pure reads.
 	function setInstanceForArrayLiteral(arrGid GenericInstanceId, setTok Token) returns GenericInstanceId throws ParseError
-		if arrGid == self.signatures.internBuiltinIntegerInstance(self.signatures.arrayRecordDeclaredName()) 'intKey'
+		if arrGid == self.signatures.internBuiltinIntegerInstance(self.signatures.arrayRecordBaseName()) 'intKey'
 			return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
 		end 'intKey'
-		if arrGid == self.signatures.builtinInstanceForElement(self.signatures.arrayRecordDeclaredName(), element: MaxonType.string) 'stringKey'
+		if arrGid == self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: MaxonType.string) 'stringKey'
 			return self.signatures.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
 		end 'stringKey'
 		throw ParseError.unsupported("`Set from […]` supports `int` and `String` keys — a struct / ByteArray literal is a later slice", line: setTok.line, column: setTok.column)
@@ -47068,7 +46990,7 @@ export type Parser
 		// `Array with <this set's key>` — the exact inverse of the pair `setInstanceForArrayLiteral` reads
 		// the other way round for `Set from […]`.
 		if methodTok.value.equals(MapMethod) 'map'
-			return try self.parseContainerMap(func, container: set, resultGiid: self.signatures.builtinInstanceForElement(self.signatures.arrayRecordDeclaredName(), element: self.signatures.setKeyType(giid)), callee: SetMapName, range: range)
+			return try self.parseContainerMap(func, container: set, resultGiid: self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: self.signatures.setKeyType(giid)), callee: SetMapName, range: range)
 		end 'map'
 
 		// ⚠ **`from`-CONSTRUCTION IS NOT A LATER SLICE AND HAS NOT BEEN SINCE P1.7b SLICE B** — this sentence
@@ -47433,7 +47355,7 @@ export type Parser
 		walkArgs.push(try self.columnCloneValue(self.signatures.mapKeyType(giid), anchor: anchor, range: range))
 		walkArgs.push(try self.columnCloneValue(self.signatures.mapValueType(giid), anchor: anchor, range: range))
 
-		return try self.emitMaterializedFill(self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordDeclaredName(), element: pair.name), callee: MapEntriesName, source: map, extraArgs: walkArgs, range: range)
+		return try self.emitMaterializedFill(self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordBaseName(), element: pair.name), callee: MapEntriesName, source: map, extraArgs: walkArgs, range: range)
 	end 'emitMapEntriesArray'
 
 	// ⭐ **THE ADDRESS OF A COLUMN'S DEEP-CLONE CALLEE, OR 0 FOR A TRIVIAL COLUMN — `columnDestroyValue`'s
@@ -47477,7 +47399,7 @@ export type Parser
 	// sentence — which still said this dispatch served six names — from having to be edited by hand here.
 	function dispatchMapMethod(func IrFunction, map ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
-		let roster = try self.requireSurfaceMember(MemberSurface.map, methodTok: methodTok)
+		let roster = try self.requireSurfaceMember(MemberSurface.map, typeName: MapBuiltinBaseName, methodTok: methodTok)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(map)
 
@@ -47863,7 +47785,7 @@ export type Parser
 	function dispatchCursorMethod(func IrFunction, cursor ValueId, giid GenericInstanceId, resultUsed bool, borrowSubjectName ByteArray) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
-		let roster = try self.requireSurfaceMember(MemberSurface.cursor, methodTok: methodTok)
+		let roster = try self.requireSurfaceMember(MemberSurface.cursor, typeName: ManagedMemoryCursorBuiltinBaseName, methodTok: methodTok)
 
 		// ⭐ **THE TWO INFALLIBLE READS.** `current()` yields the ELEMENT and goes through
 		// `emitContainerElementAccessor` — the compiler-emitted element-read door, one of the two the language
@@ -49152,18 +49074,21 @@ export type Parser
 	//
 	// ⚠ It was written out four times: fetch, membership test, `throw ParseError.unsupported(…)` with the
 	// surface's sentence inline. Four copies of one rule, differing only in the enum value — and one of them
-	// (`dispatchArrayMethod`'s) was already routing through `surfaceRosterRefusal` while the other three were
+	// (`dispatchArrayMethod`'s) was already routing through the shared sentence while the other three were
 	// not, which is exactly the asymmetry a fifth surface would copy from whichever neighbour it happened to
 	// read. The roster comes back so the caller's drift panic names the same list this gate admitted from.
 	//
-	// ⚠ The subject is a SURFACE and not a receiver — everything this gate does (pick the list, test the name,
-	// name the list in the refusal) is keyed on the surface rather than on a value. That is what once let the
-	// receiverless `String.from` STATIC door share it (A3g), and what costs nothing now that W55 has retired
-	// that door: a surface leaving is a deleted arm, not a reshaped gate.
-	function requireSurfaceMember(surface MemberSurface, methodTok Token) returns ByteArrayArray throws ParseError
+	// ⚠ **THE ROSTER IS THE SURFACE'S AND THE NOUN IS THE VALUE'S, WHICH IS WHY ONLY THE NOUN IS A PARAMETER
+	// (ARRO).** Picking the list and testing the name are keyed on the surface alone — that is what once let
+	// the receiverless `String.from` STATIC door share this gate (A3g), and it is untouched. What the surface
+	// cannot supply is the TYPE the refusal is shown about: the array surface serves every
+	// `BuiltinArrayLiteral` conformer the program declares, so the constant it used to name was a type the
+	// receiver need not be (see `surfaceRosterProvider`). A NAME is not a receiver — nothing here resolves,
+	// and no caller has to hold a value it did not already have.
+	function requireSurfaceMember(surface MemberSurface, typeName ByteArray, methodTok Token) returns ByteArrayArray throws ParseError
 		let roster = self.surfaceMemberNames(surface)
 		if not namesInclude(roster, name: methodTok.value) 'notASurfaceMember'
-			throw ParseError.unsupported(surfaceRosterRefusal(surface, member: methodTok.value, roster: roster), line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported(rosterRefusalSentence(typeName, member: methodTok.value, roster: roster, noun: SurfaceMemberNoun, provider: surfaceRosterProvider(surface)), line: methodTok.line, column: methodTok.column)
 		end 'notASurfaceMember'
 
 		return roster
@@ -49185,6 +49110,20 @@ export type Parser
 	//
 	// It is DEAD for every program in the corpus: `hasStdlibShadowRenames` is false unless something is
 	// contested, which is the one gate every cost of that mechanism sits behind.
+	// ⭐⭐ **WHAT AN ARRAY RECEIVER'S DECLARATION IS CALLED IN SOURCE (ARRO)** — the noun the roster refusal is
+	// shown about. It is the instance's base name in every case but one: under a contest the corpus's
+	// declaration is keyed under this compile's MINT, and a refusal quoting `__Array` would send the reader to
+	// a spelling `requireUnreservedName` forbids them from writing — the same rule
+	// `twoArrayDeclarationsRefusal` states one level down, applied to the one door that can meet a value of
+	// either declaration.
+	//
+	// ⚠ The two names are EQUAL for every uncontested compile, which is the whole corpus, so the test is one
+	// comparison and the answer is the base name.
+	function arrayReceiverDeclaredName(giid GenericInstanceId) returns ByteArray
+		let base = self.signatures.genericInstanceBaseName(giid)
+		return self.signatures.arrayRecordDeclaredName() if base.equals(self.signatures.arrayRecordBaseName()) else base
+	end 'arrayReceiverDeclaredName'
+
 	function refuseArrayMemberTheOtherDeclarationCarries(giid GenericInstanceId, methodTok Token, isManagedMemory bool) throws ParseError
 		// A BUFFER receiver is refused in the buffer's own words and has no second declaration to be confused
 		// with — `__ManagedMemory` is the compiler's own name and no file declares a member on it.
@@ -49202,7 +49141,7 @@ export type Parser
 		let receiversOwn = self.signatures.genericInstanceBaseName(giid)
 		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
 			if not declaration.equals(receiversOwn) and self.signatures.declaresCallee(qualifiedMethodName(declaration, methodName: methodTok.value)) 'theOtherDeclarationCarriesIt'
-				throw ParseError.unsupported(twoArrayDeclarationsRefusal(methodTok.value, roster: roster, receiverIsTheProgramsOwn: receiversOwn.equals(self.signatures.arrayRecordDeclaredName())), line: methodTok.line, column: methodTok.column)
+				throw ParseError.unsupported(twoArrayDeclarationsRefusal(self.signatures.arrayRecordDeclaredName(), member: methodTok.value, roster: roster, receiverIsTheProgramsOwn: receiversOwn.equals(self.signatures.arrayRecordDeclaredName())), line: methodTok.line, column: methodTok.column)
 			end 'theOtherDeclarationCarriesIt'
 		end 'eachArrayDeclaration'
 	end 'refuseArrayMemberTheOtherDeclarationCarries'
@@ -49517,7 +49456,7 @@ export type Parser
 		// `Array` path falling through to a hand-written literal at the end of the function — which was false
 		// in both directions (see `arraySurfaceMemberNames`). Two gates would have been two spellings of one
 		// rule; the surface picks the roster (`surfaceMemberNames`) and the roster answers for the type it is
-		// shown about (`surfaceRosterRefusal`).
+		// shown about (`requireSurfaceMember`, whose noun this door supplies).
 		//
 		// ⚠ **IT IS BEHAVIOUR-NEUTRAL FOR AN `Array` RECEIVER, and that is what the derived list guarantees**:
 		// every name off the `Array` roster reached the fall-through refusal before and is refused here now,
@@ -49529,7 +49468,10 @@ export type Parser
 		// still the question *"does this member exist?"*, answered more precisely for the one compile that can
 		// tell two answers apart.
 		try self.refuseArrayMemberTheOtherDeclarationCarries(giid, methodTok: methodTok, isManagedMemory: isManagedMemory)
-		let roster = try self.requireSurfaceMember(MemberSurface.buffer if isManagedMemory else MemberSurface.array, methodTok: methodTok)
+		// ⭐ **THE NOUN IS THE RECEIVER'S OWN DECLARATION, AND THIS IS THE ONLY DOOR THAT KNOWS IT (ARRO).** A
+		// buffer is the compiler's own `__ManagedMemory`; an array is whichever `BuiltinArrayLiteral` conformer
+		// the value's instance was built from, which since ARR5b may be a `Bag` the program declared.
+		let roster = try self.requireSurfaceMember(MemberSurface.buffer if isManagedMemory else MemberSurface.array, typeName: ManagedMemoryTypeName if isManagedMemory else self.arrayReceiverDeclaredName(giid), methodTok: methodTok)
 
 		// ⚠ **THE BUFFER-ONLY MEMBERS ARE GATED ON THAT ANSWER HERE TOO, or the E3019 rule names methods the
 		// receiver does not have** (found in review, R4.2). Ungated, `let a = IntArray.create()` followed by
