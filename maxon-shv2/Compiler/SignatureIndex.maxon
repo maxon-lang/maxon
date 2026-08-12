@@ -2535,8 +2535,11 @@ export typealias ParamReassignMap = Map with (ByteArray, ParamReassignInfo)
 // settled output of `ProgramSignatures.closeByRefForwarding`. A name with no entry answers false.
 export typealias ByRefForwardingMap = Map with (ByteArray, bool)
 // The BARE names (`reassign`, never `Forwarder.reassign`) that take at least one parameter by reference —
-// the closure's working set, and what a forwarding edge is matched against.
+// the closure's answer, and what a forwarding edge is matched against.
 export typealias ByRefBareNameSet = Set with ByteArray
+// A bare name -> its dense node in the forwarding graph `closeByRefForwarding` closes. The CSR key space must
+// be dense and 0-based (see `CsrGraph`), and a bare name is neither, so it is interned into one.
+typealias ByRefBareNameIndex = Map with (ByteArray, CsrIndex)
 
 // ⭐⭐ **A DEFAULT VALUE IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME (BATCH2 slice 4).**
 // `function greet(name String = "World")` declares a second function, `__paramDefault#greet#0`, whose whole
@@ -2793,15 +2796,27 @@ export union CalleeByRefParams
 	allByValue
 end 'CalleeByRefParams'
 
-// ⭐ **IS THE ARGUMENT AT `argIndex` PASSED BY REFERENCE?** — the call site's whole by-reference question in
-// one place, the exact twin of `calleeConsumesArgument`: the recorded columns, read at the position the
-// label→position mapping puts this argument at (`argSlotPosition`, the ONE home of that mapping), combined
-// with the program-wide gate by `isByRef` (the ONE combiner). `allByValue` is a callee with no recorded
-// entry — every runtime callee and, on a program that reassigns no parameter, every user function — and it
-// answers false without slotting anything.
-// Does any of `calleeNames` name something that takes a parameter by reference? One round's edge test,
-// split out so the fixpoint above reads as the rule it is. A linear scan of a handful of names against a
-// set, on a path that runs only for a program that reassigns a parameter somewhere.
+// `bareName`'s dense node in the forwarding graph `closeByRefForwarding` closes, minting one on first sight.
+// The three columns move together — the name, its node and its seed bit — because a node with no seed slot
+// would read a bit belonging to a different name, which is the one way a counting-sorted key space can be
+// corrupted silently.
+function internByRefNode(bareNames ByteArrayArray, nodeOfBareName ByRefBareNameIndex, seeds BoolArray, bareName ByteArray) returns CsrIndex
+	if let existing = try nodeOfBareName.get(bareName) 'alreadyANode'
+		return existing
+	end 'alreadyANode'
+
+	let node = bareNames.count()
+	bareNames.push(bareName)
+	seeds.push(false)
+	nodeOfBareName.upsert(bareName, value: node)
+	return node
+end 'internByRefNode'
+
+// Does any of `calleeNames` name something that takes a parameter by reference? Asked ONCE per recorded
+// function, against the SETTLED name set, to publish the per-registration-key answer — a linear scan of a
+// handful of names against a set, on a path that runs only for a program that reassigns a parameter
+// somewhere. (It used to be a round's edge test, asked once per function PER ROUND; see
+// `closeByRefForwarding` for what that cost.)
 function edgesReachAByRefName(calleeNames ByteArrayArray, byRefNames ByRefBareNameSet) returns bool
 	for calleeName in calleeNames 'eachEdge'
 		if byRefNames.contains(calleeName) 'reachesOne'
@@ -2811,6 +2826,12 @@ function edgesReachAByRefName(calleeNames ByteArrayArray, byRefNames ByRefBareNa
 	return false
 end 'edgesReachAByRefName'
 
+// ⭐ **IS THE ARGUMENT AT `argIndex` PASSED BY REFERENCE?** — the call site's whole by-reference question in
+// one place, the exact twin of `calleeConsumesArgument`: the recorded columns, read at the position the
+// label→position mapping puts this argument at (`argSlotPosition`, the ONE home of that mapping), combined
+// with the program-wide gate by `isByRef` (the ONE combiner). `allByValue` is a callee with no recorded
+// entry — every runtime callee and, on a program that reassigns no parameter, every user function — and it
+// answers false without slotting anything.
 export function calleeTakesArgumentByRef(byRef CalleeByRefParams, argIndex ParamCount, label ByteArray, forwardingIsLive bool) returns bool
 	return match byRef 'b'
 		allByValue gives false
@@ -6952,8 +6973,25 @@ export type ProgramSignatures
 	// as a cell address, and the call site, deciding whether to hand one over. Filled by `recordParamReassign`
 	// from each file's `scanReassignedParams`; last-wins on a duplicate name exactly as `funcParamConsumes` is.
 	// Only a function with something to state is recorded — the "absence is the answer" default
-	// `funcParamConsumes` rests on — so a program that reassigns no parameter carries an empty map.
+	// `funcParamConsumes` rests on.
+	//
+	// ⚠ **"SOMETHING TO STATE" INCLUDES MERELY FORWARDING, SO THIS MAP IS NOT EMPTY ON A PROGRAM THAT
+	// REASSIGNS NOTHING** — and this comment said it was. `Array.sort` handing `cmp` to `driftsortRange`
+	// earns an entry, so every program that links the stdlib carries a few hundred of them (219 at the
+	// scale-test ladder's rung 0). Its emptiness is therefore not a usable test for "does this program use
+	// pass-by-reference at all"; that is `sawParamReassignment` below, and `programTakesAParamByRef`'s own
+	// header records the red suite that reading this map's count instead produced.
 	var funcParamReassigns as ParamReassignMap
+	// ⚡ **HAS ANY RECORDED BODY REASSIGNED A PARAMETER OF ITS OWN?** — the forwarding closure's precondition,
+	// raised by `recordParamReassign` at the instant the fact arrives rather than re-derived by a pass over the
+	// map. Reachability from an empty seed set marks nothing, so a false here means `closeByRefForwarding` has
+	// nothing to close and returns without building its graph — which is every program written before PBR-2.
+	//
+	// ⚠ A stale TRUE would be harmless (the graph would be built and mark nothing) and a stale FALSE would be a
+	// wrong ABI, so note which way the one non-`record` writer runs: `copyDeclarationSweepEntries` only ever
+	// copies an info that `recordParamReassign` already saw, so it cannot introduce a reassignment this has not
+	// witnessed.
+	var sawParamReassignment as bool
 	// ⭐⭐ **PER FUNCTION: DOES ANY NAME IT FORWARDS A PARAMETER TO TAKE SOMETHING BY REFERENCE?** — the
 	// settled transitive half of the by-reference question, filled ONCE by `closeByRefForwarding` and empty
 	// until then. See `ParamReassignInfo` for why the sweep cannot decide this at fold time.
@@ -7354,7 +7392,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -8558,6 +8596,7 @@ export type ProgramSignatures
 	// `direct` column alone — one pass over the fact, at the moment it arrives.
 	function recordParamReassign(name ByteArray, info ParamReassignInfo)
 		self.funcParamReassigns.upsert(name, value: info)
+		self.sawParamReassignment = self.sawParamReassignment or info.reassignsAnyParam()
 
 		var state = mixBytes(mix(self.hash, value: DeclShapeParamByRef), bytes: name)
 		for i in 0 upto info.paramNames.count() 'eachName'
@@ -8603,61 +8642,111 @@ export type ProgramSignatures
 	// into "`outer`'s `x` is by reference too", transitively.**
 	//
 	// It runs ONCE, at the first read, because it needs every file's edges and the sweep folds files one at a
-	// time. A program that reassigns no parameter has an EMPTY `funcParamReassigns`, so this returns after one
-	// `count()` — which is what makes the whole feature free for every program written before this rung.
+	// time. A program that reassigns no parameter answers on one bool (`sawParamReassignment`), which is what
+	// makes the whole feature free for every program written before this rung.
+	//
+	// ⭐⭐ **IT IS A REACHABILITY QUESTION, SO IT IS ASKED OF THE REACHABILITY ENGINE** — `buildCsr` +
+	// `reverseReachabilityMark`, the shared O(nodes + edges) worklist the descriptor-need and array-feed
+	// fixpoints already close through. A bare name takes something by reference iff it REASSIGNS (the seed) or
+	// forwards into a name that does, which is exactly "reaches a seed over the forwarding edges".
+	//
+	// ⚠⚠ **IT WAS A ROUND-BASED FIXPOINT — RE-SCAN EVERY RECORDED FUNCTION UNTIL NOTHING CHANGES — AND THAT IS
+	// O(depth x recorded), WITH THE SOURCE PROGRAM'S OWN CALL DEPTH AS THE MULTIPLIER.** The recorded set is not
+	// small and is not the user's program: a function is recorded merely for HANDING A PARAMETER ON, so all of
+	// `stdlib` that forwards an argument is in it (`Array.sort` handing `cmp` to `driftsortRange` is the case
+	// `programTakesAParamByRef` already records), and every round re-walked all of it plus a
+	// `byRefForwardingLive` lookup per entry.
+	//
+	// MEASURED on the round-based version, at a CONSTANT 512-function program where only WHICH function each
+	// one forwards to changed — same tokens, same declarations, same emitted code:
+	//
+	//   forwarding depth    2      16      64     128     256     512
+	//   phase:parse CPU   199M    207M    229M    262M    322M    452M
+	//
+	// The cost doubled with the DEPTH at a fixed program size, which is the multiplier stated as a measurement;
+	// grown together (depth proportional to program) it read x2.9 per doubling against a flat control's x1.2.
+	// The scale-test ladder cannot see any of it, and that is the CORPUS's silence rather than the code's:
+	// COUNTED, not assumed — 191 function declarations across the 49 generated files, and not one reassigns a
+	// parameter, so `sawParamReassignment` is false at every rung and this returns before the graph exists.
 	//
 	// ⚠ **THE MATCH IS ON THE BARE NAME, DELIBERATELY** — see `ParamReassignInfo`. A recorded key is either a
 	// free function's bare name or `Type.method`, and an edge carries only what the source wrote before the
 	// `(`, so `Forwarder.reassign` is reached through `reassign`. Widening on the bare name is what lets this
-	// stay a fixpoint over recorded edges instead of a second overload resolver.
-	//
-	// It is a least fixpoint over a set that only grows, so it terminates: each round either adds a bare name
-	// to `byRefNames` or stops.
+	// stay a closure over recorded edges instead of a second overload resolver — and it is why the graph's NODE
+	// is a bare name while the published answer is per registration KEY.
 	function closeByRefForwarding()
 		if self.byRefForwardingClosed 'alreadySettled'
 			return
 		end 'alreadySettled'
 		self.byRefForwardingClosed = true
-		if self.funcParamReassigns.count() == 0 'nothingReassignsAnything'
+		// ⚡ **NO SEED, NO GRAPH — and the test is NEITHER `funcParamReassigns.count() == 0` NOR A SCAN.** A
+		// function is recorded merely for FORWARDING a parameter, so the map is non-empty on every program that
+		// links the stdlib (`Array.sort` hands `cmp` to `driftsortRange`); it is empty only of programs that call
+		// nothing with a bare parameter. What decides whether anything can become by-reference is whether some
+		// recorded body actually REASSIGNS one, and reachability from an empty seed set marks nothing — so the
+		// graph, its two edge columns and the BFS are all skipped for every program written before this rung.
+		//
+		// ⚡ **AND THE ANSWER IS A FLAG RAISED AT RECORD TIME, NOT A PASS OVER THE MAP** — see
+		// `sawParamReassignment`. MEASURED on the scale-test ladder, both steps: building the graph
+		// unconditionally cost +320 allocations at rung 0 rising to +865 at rung 5; asking the question with a
+		// scan instead of the flag cost one boxed map-iteration step per recorded function, which is 219 of them
+		// at rung 0 and 746 at rung 5, at a flat 16 bytes each.
+		if not self.sawParamReassignment 'everyForwardIsDead'
 			return
-		end 'nothingReassignsAnything'
+		end 'everyForwardIsDead'
 
-		// SEED: the bare names of every function that reassigns a parameter of its own. Only these can make a
-		// forward live, and a body that merely forwards cannot seed itself.
-		for (_, info) in self.funcParamReassigns 'eachSeed'
+		// The dense BARE-NAME key space the graph is built over, plus the SEED bit per name: does any function
+		// wearing it reassign a parameter of its own? Only a reassignment can seed — a body that merely forwards
+		// cannot make itself live — and two functions sharing a bare name share the node, which is the same
+		// widening every other reader of `byRefBareNames` already performs.
+		var bareNames = ByteArrayArray.create()
+		var nodeOfBareName = ByRefBareNameIndex.create()
+		var seeds = BoolArray.create()
+		for (_, info) in self.funcParamReassigns 'eachRecorded'
+			let node = internByRefNode(bareNames, nodeOfBareName: nodeOfBareName, seeds: seeds, bareName: info.bareName)
 			if info.reassignsAnyParam() 'reassignsItsOwn'
-				self.byRefBareNames.insert(info.bareName)
+				try seeds.set(node, value: true) otherwise panic("closeByRefForwarding: seeds.set OOB at {node} despite the node having just been interned")
 			end 'reassignsItsOwn'
-		end 'eachSeed'
+		end 'eachRecorded'
 
-		var grew = true
-		while grew 'untilStable'
-			grew = self.growByRefForwarding()
-		end 'untilStable'
+		// The forwarding edges, REVERSED — a forward `caller -> callee` is recorded as `callee -> caller`, so a
+		// seed's row lists the names that forward INTO it and the mark propagates back up the chain. An edge to
+		// a name no recorded function wears is dropped: nothing can ever make it by-reference.
+		var edgeCallee = CsrColumn.create()
+		var edgeForwarder = CsrColumn.create()
+		for (_, info) in self.funcParamReassigns 'eachForwarder'
+			if not info.forwardsAnyParam() 'carriesNothingAlong'
+				continue
+			end 'carriesNothingAlong'
+
+			let forwarder = try nodeOfBareName.get(info.bareName) otherwise panic("closeByRefForwarding: '{String.from(info.bareName)}' has no node — every recorded function's bare name was interned above")
+			for calleeName in info.calleeNames 'eachEdge'
+				if let callee = try nodeOfBareName.get(calleeName) 'namesARecordedFunction'
+					edgeCallee.push(callee)
+					edgeForwarder.push(forwarder)
+				end 'namesARecordedFunction'
+			end 'eachEdge'
+		end 'eachForwarder'
+
+		let takesByRef = reverseReachabilityMark(buildCsr(edgeCallee, to: edgeForwarder, nodeCount: bareNames.count()), seeds: seeds)
+		for node in 0 upto bareNames.count() 'publishNames'
+			let marked = try takesByRef.get(node) otherwise panic("closeByRefForwarding: takesByRef.get OOB at {node} below the node count it was built over")
+			if marked 'takesSomethingByRef'
+				self.byRefBareNames.insert(try bareNames.get(node) otherwise panic("closeByRefForwarding: bareNames.get OOB at {node} below its own count"))
+			end 'takesSomethingByRef'
+		end 'publishNames'
+
+		// The per-KEY answer, off the settled name set: `forwardingIsLiveFor` is asked under the REGISTRATION
+		// name, and two keys wearing one bare name may carry different edges. One pass over the edges, through
+		// the same `edgesReachAByRefName` a round used to ask — the difference is that it is now asked once per
+		// function instead of once per function per round.
+		for (name, info) in self.funcParamReassigns 'publishKeys'
+			if info.forwardsAnyParam() and edgesReachAByRefName(info.calleeNames, byRefNames: self.byRefBareNames) 'forwardsIntoOne'
+				self.byRefForwardingLive.upsert(name, value: true)
+			end 'forwardsIntoOne'
+		end 'publishKeys'
 	end 'closeByRefForwarding'
 
-	// One round of the closure: mark every function whose edges now reach a by-reference name, and answer
-	// whether the working set GREW. Split out so the fixpoint's loop is a statement of the rule rather than a
-	// nest — the shape `growStdlibBodyDemand` uses for the same reason.
-	function growByRefForwarding() returns bool
-		var grew = false
-		for (name, info) in self.funcParamReassigns 'eachFunction'
-			if (try self.byRefForwardingLive.get(name) otherwise false) or not info.forwardsAnyParam() 'settledOrCarriesNothing'
-				continue
-			end 'settledOrCarriesNothing'
-
-			if not edgesReachAByRefName(info.calleeNames, byRefNames: self.byRefBareNames) 'forwardsNowhereLive'
-				continue
-			end 'forwardsNowhereLive'
-
-			self.byRefForwardingLive.upsert(name, value: true)
-			// This function now takes something by reference itself, so ITS name can make a caller's forward
-			// live — which is exactly what makes the relation transitive.
-			self.byRefBareNames.insert(info.bareName)
-			grew = true
-		end 'eachFunction'
-		return grew
-	end 'growByRefForwarding'
 
 	// ⭐ **THE CALLEE'S BY-REFERENCE FACTS, or `allByValue`** — the door a CALL SITE asks once, then slots each
 	// argument against `info.paramNames`. `allByValue` (no recorded entry) is the overwhelming common case, so

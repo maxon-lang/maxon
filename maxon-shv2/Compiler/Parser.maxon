@@ -8729,39 +8729,6 @@ function calleesOf(methodNames ByteArrayArray, selfCallees SelfCalleesMap, calle
 	return try selfCallees.get(caller) otherwise panic("calleesOf: '{String.from(caller)}' is in `methodNames` with no `selfCallees` row — `scanDescriptorNeedsInto` writes both in one act")
 end 'calleesOf'
 
-// ⭐ **REVERSE-REACHABILITY BFS over a CSR adjacency** — return the bit per node that is set iff the node is a
-// seed OR reaches one over `graph`'s edges. The graph is the REVERSED relation (`buildCsr` with (callee,
-// caller) swapped), so a seed's row lists the nodes that point AT it and the BFS propagates the mark BACKWARD.
-// Each node enters the worklist at most once (the first time its bit flips on) and each edge is walked once,
-// for O(nodes + edges). The shared engine of the descriptor-need fixpoint (`Queries.foldDescriptorNeeds`) and
-// the transitive array-feed fixpoint (`solveAndPublishTransitiveFeeds`), so the two cannot drift on how
-// reachability is marked.
-function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
-	var marked = BoolArray.create()
-	var worklist = CsrColumn.create()
-	for i in 0 upto seeds.count() 'seed'
-		let isSeed = try seeds.get(i) otherwise panic("reverseReachabilityMark: seeds.get({i}) OOB")
-		marked.push(isSeed)
-		if isSeed 'root'
-			worklist.push(i)
-		end 'root'
-	end 'seed'
-
-	var head = 0 as CsrIndex
-	while head < worklist.count() 'drain'
-		let node = try worklist.get(head) otherwise panic("reverseReachabilityMark: worklist.get({head}) OOB")
-		head = head + 1
-		for k in 0 upto graph.degree(node) 'neighbour'
-			let nbr = graph.neighbour(node, k: k)
-			if not (try marked.get(nbr) otherwise panic("reverseReachabilityMark: marked.get({nbr}) OOB")) 'newlyMarked'
-				try marked.set(nbr, value: true) otherwise panic("reverseReachabilityMark: marked.set({nbr}) OOB")
-				worklist.push(nbr)
-			end 'newlyMarked'
-		end 'neighbour'
-	end 'drain'
-	return marked
-end 'reverseReachabilityMark'
-
 // An instance method's SOURCE parameter names with the receiver prepended — the call-aligned list every
 // by-name sweep fact is indexed by, so `bits[i]` / `direct[i]` name the same slot a receiver-prepending call
 // site does. Shared by the two callers that need the alignment for different facts (`callAlignedInstanceParams`

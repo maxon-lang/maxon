@@ -8,6 +8,7 @@
 //   • which values die at each op of a block     (RegisterAllocator.BlockDeaths)
 //   • which values feed each phi                 (PruneDeadBlockArgs, ElimTrivialBlockArgs)
 //   • which methods call a method                (Parser: descriptor-need + array-feed fixpoints)
+//   • which functions forward a parameter        (SignatureIndex.closeByRefForwarding, PBR-2)
 //   • which stdlib functions need the substrate  (StdlibSource.SubstrateFixpoint)
 //   • which instances a type argument denotes    (SignatureIndex.buildInstanceArgGraph)
 //
@@ -100,6 +101,50 @@ export function buildCsr(from CsrColumn, to CsrColumn, nodeCount CsrIndex) retur
 
 	return CsrGraph.create(start, list: list)
 end 'buildCsr'
+
+// ⭐ **REVERSE-REACHABILITY BFS over a CSR adjacency** — return the bit per node that is set iff the node is a
+// seed OR reaches one over `graph`'s edges. The graph is the REVERSED relation (`buildCsr` with (callee,
+// caller) swapped), so a seed's row lists the nodes that point AT it and the BFS propagates the mark BACKWARD.
+// Each node enters the worklist at most once (the first time its bit flips on) and each edge is walked once,
+// for O(nodes + edges).
+//
+// ⭐ **THE SHARED ENGINE OF EVERY TRANSITIVE-CLOSURE FIXPOINT IN THE COMPILER**, so they cannot drift on how
+// reachability is marked: the descriptor-need fixpoint (`Queries.foldDescriptorNeeds`), the transitive
+// array-feed fixpoint (`solveAndPublishTransitiveFeeds`) and PBR-2's by-reference forwarding closure
+// (`ProgramSignatures.closeByRefForwarding`). It lives HERE rather than beside the first two for the reason
+// `buildCsr` does — see this file's header: a walk over a CSR belongs with the CSR, and the third consumer
+// is in a file the other two's home cannot be reached from.
+//
+// ⚠ **A ROUND-BASED FIXPOINT IS NOT AN ALTERNATIVE SPELLING OF THIS, IT IS A DIFFERENT COMPLEXITY.**
+// "Re-scan every node until nothing changes" costs O(depth x (nodes + edges)) and the depth is the source
+// program's own — MEASURED on PBR-2's own closure before it asked here: at a CONSTANT 512-function program,
+// parse CPU ran 199M ticks at forwarding depth 2 and 452M at depth 512, doubling with the depth while not one
+// token of the program changed.
+export function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolArray
+	var marked = BoolArray.create()
+	var worklist = CsrColumn.create()
+	for i in 0 upto seeds.count() 'seed'
+		let isSeed = try seeds.get(i) otherwise panic("reverseReachabilityMark: seeds.get({i}) OOB")
+		marked.push(isSeed)
+		if isSeed 'root'
+			worklist.push(i)
+		end 'root'
+	end 'seed'
+
+	var head = 0 as CsrIndex
+	while head < worklist.count() 'drain'
+		let node = try worklist.get(head) otherwise panic("reverseReachabilityMark: worklist.get({head}) OOB")
+		head = head + 1
+		for k in 0 upto graph.degree(node) 'neighbour'
+			let nbr = graph.neighbour(node, k: k)
+			if not (try marked.get(nbr) otherwise panic("reverseReachabilityMark: marked.get({nbr}) OOB")) 'newlyMarked'
+				try marked.set(nbr, value: true) otherwise panic("reverseReachabilityMark: marked.set({nbr}) OOB")
+				worklist.push(nbr)
+			end 'newlyMarked'
+		end 'neighbour'
+	end 'drain'
+	return marked
+end 'reverseReachabilityMark'
 
 // ⭐ **WHICH NODES OF `graph` LIE ON A CYCLE** — Tarjan's strongly-connected components, in
 // O(nodes + edges). A node is on a cycle exactly when its component holds more than one node, or when it
