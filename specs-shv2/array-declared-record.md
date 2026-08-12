@@ -113,7 +113,7 @@ The two consequences point in opposite directions, and neither is an accident:
   side of the split the value is on rather than reciting the synthesized roster at a reader whose own
   declaration plainly has the member (`Parser.refuseArrayMemberTheOtherDeclarationCarries`).
 - **A VALUE IS *NOT* SCOPED, AND THAT IS THE `Array`-IS-ITS-BUFFER THESIS RATHER THAN A HOLE.**
-  `arrayNameIsItsOwnRecord` admits a declaration only in the SOLE-FIELD-AND-THAT-FIELD-THE-BUFFER
+  `declarationIsTheManagedRecord` admits a declaration only in the SOLE-FIELD-AND-THAT-FIELD-THE-BUFFER
   shape, so any two admitted `Array` declarations over one element denote ONE record — same bytes, same
   stride, same drop, same clone, because there is nothing else in either of them. So an `Array with T`
   is accepted at the other declaration's `Array with T` position, which is what lets a program with its
@@ -387,7 +387,62 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:10: Unsupported: `Array` implements `BuiltinArrayLiteral`, and an `Array` IS its `__ManagedMemory` — one record under two names — so its literal is an identity on the buffer its sole field names. This declaration has 2 field(s), and every one past the buffer would be silently dropped at construction and then read back past the record's end when the value is cloned or destroyed. Declare the buffer alone, or give the type a name the compiler owns no record for
+error E2015: <fragment>:8:10: Unsupported: `Array` implements `BuiltinArrayLiteral`, and a record whose first field IS its `__ManagedMemory` is that buffer — one record under two names — so its literal is an identity on the buffer that field names. This declaration has 2 field(s), and every one past the buffer would be silently dropped at construction and then read back past the record's end when the value is cloned or destroyed. Declare the buffer alone, or drop the literal marker so the declaration keeps the box its fields describe
+```
+
+<!-- test: error.a-sole-field-that-is-not-the-buffer -->
+⛔ **THE OTHER HALF OF THE SAME HAZARD, AND THE ONE THE NAME-KEYED ADMISSION LET THROUGH.** The
+admission used to be `isArrayBaseName(name)` plus a sole field the layout calls inline-managed — and
+that index is a question about the field's NAME and the declaration's MARKER, never about its TYPE. So
+this declaration was ADMITTED and the identity handed the raw `Num` back as the container; the only
+thing that refused it was a later type compare, whose sentence is about a return
+(`E3005 … Cannot return 'int' from function declared to return 'struct'`). The admission is the SHAPE
+now, so the refusal is positioned at the literal and names the field.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	export var managed as Num
+
+	export static function init(managed Num) returns Self
+		return Self{managed: managed}
+	end 'init'
+end 'Array'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:10: Unsupported: `Array` implements `BuiltinArrayLiteral` over the parameter `Element` it declares, so its record IS a `__ManagedMemory with Element` and its literal is an identity on that buffer — but its first field is not one. A value whose bytes are the buffer's and whose declared fields say otherwise has those fields discarded at construction and read back past the record's end when it is cloned or destroyed. Declare exactly one field, `managed as __ManagedMemory with Element`, or drop the marker so the declaration keeps the box its fields describe
+```
+
+<!-- test: error.a-generic-conformer-of-another-name-is-still-refused -->
+⛔ **THE BOUNDARY THE STRUCTURAL ADMISSION MUST NOT CROSS.** This declaration is generic over one
+parameter and its sole field IS a `__ManagedMemory` over that parameter — the whole shape — and it is
+still not the record, because `canonicalGenericBaseName` folds a written `__ManagedMemory` onto the
+RECORD DECLARATION's name and not onto `Bag`. So the field's instance is the record's, `Bag`'s own is
+not, and admitting the identity here would hand back a value of a type `Self` is not. It keeps the
+sentence about the names the compiler owns a record for; see
+`ProgramSignatures.declarationIsTheManagedRecord` for why that half of the test cannot leave until the
+fold learns its target from the conformance.
+```maxon
+type Bag uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+end 'Bag'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:10: Unsupported: `Bag` implements `BuiltinArrayLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
 ```
 
 <!-- test: error.a-conformer-of-another-name-is-still-refused -->

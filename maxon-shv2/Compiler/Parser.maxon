@@ -11903,7 +11903,7 @@ export type Parser
 		if self.kindAt(selfPos + 1) != TokenKind.leftBrace 'notALiteral'
 			return false
 		end 'notALiteral'
-		if not self.signatures.arrayNameIsItsOwnRecord(self.enclosingType) 'notTheOwnRecordArray'
+		if not self.signatures.declarationIsTheManagedRecord(self.enclosingType) 'notTheOwnRecordArray'
 			return false
 		end 'notTheOwnRecordArray'
 
@@ -20938,7 +20938,7 @@ export type Parser
 		// and `Array` is that same fact with a type parameter on it. The base `structRef` below is right only
 		// for a declaration that HAS a base box; `Array with T` is its `__ManagedMemory with T`, so a
 		// `structRef(Array)` would give `clone()`'s result a struct cascade over the buffer record.
-		if self.signatures.arrayNameIsItsOwnRecord(name) 'theCompilersOwnGenericRecord'
+		if self.signatures.declarationIsTheManagedRecord(name) 'theCompilersOwnGenericRecord'
 			return MaxonType.genericInstance(self.signatures.ownRecordSelfInstance(name))
 		end 'theCompilersOwnGenericRecord'
 
@@ -39619,7 +39619,7 @@ export type Parser
 		// retain on a record the default had just built. The NON-empty spelling (`Self{managed: m}`) keeps the
 		// ordinary path and reaches `emitFusedWrapperLiteral`'s identity arm, so the two forms stay the two
 		// statics they mirror — `create()` and `init(managed)`.
-		if self.signatures.arrayNameIsItsOwnRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `arrayNameIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
+		if self.signatures.declarationIsTheManagedRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `declarationIsTheManagedRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
 			return try self.emitOwnedContainerCreate(self.signatures.ownRecordSelfInstance(layout.name), aliasTok: typeTok, aliasName: layout.name, range: SourceRange.between(typeTok, last: rbraceTok))
 		end 'theEmptyContainer'
 
@@ -40339,16 +40339,25 @@ export type Parser
 	// ⚠ **AND THE REFUSAL BELOW STILL COVERS EVERY OTHER `BuiltinArrayLiteral` CONFORMER, BECAUSE THE HAZARD
 	// IT NAMES IS REAL FOR THEM AND VACUOUS HERE.** That hazard is that construction DISCARDS every declared
 	// field the fused record has no slot for. `stdlib/Array.maxon:104-106` declares exactly ONE field and it
-	// IS the record, so there is nothing to discard — which is precisely what `arrayLayoutIsItsOwnRecord`
-	// tests, structurally, rather than trusting the name alone. A conformer that declares a second field
-	// meets the unchanged sentence, because for it the sentence is still true.
+	// IS the record, so there is nothing to discard — which is precisely what
+	// `ProgramSignatures.firstFieldIsItsOwnBuffer` tests, structurally, rather than trusting the name alone.
+	// A conformer that declares a second field meets the unchanged sentence, because for it the sentence is
+	// still true.
+	//
+	// ⚠⚠ **THE GATE IS THE FIELD, NOT THE NAME, AND THAT IS ARR5's HALF OF THIS ARM.** It read
+	// `isArrayBaseName(layout.name)` and then admitted on a sole `managed` field — a question about the
+	// field's NAME and the declaration's MARKER, never about its TYPE. So `type Array uses Element
+	// implements BuiltinArrayLiteral` with `var managed as Num` took this arm and `coOwnAggregateAsTemp`
+	// handed the raw `Num` back AS the array. See `ProgramSignatures.declarationIsTheManagedRecord` for
+	// the two measurements. Keyed on the field, such a declaration never reaches the identity at all.
 	function emitFusedWrapperLiteral(layout StructLayout, fieldValues ValueIdArray, anchor Token, range SourceRange) returns ValueId throws ParseError
-		if self.signatures.isArrayBaseName(layout.name) 'theArrayRecord'
-			try self.requireArrayIsItsOwnRecord(layout, anchor: anchor)
-			let buffer = try fieldValues.get(0) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at 0 — `requireArrayIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")
+		if self.signatures.firstFieldIsItsOwnBuffer(layout) 'theBufferRecord'
+			try self.requireBufferIsItsOwnRecord(layout, anchor: anchor)
+			let buffer = try fieldValues.get(0) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at 0 — `requireBufferIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")
 			return self.coOwnAggregateAsTemp(buffer, range: range)
-		end 'theArrayRecord'
+		end 'theBufferRecord'
 
+		try self.requireArrayMarkerDeclaresTheBuffer(layout, anchor: anchor)
 		let tag = try self.requireFusedWrapperTag(layout, anchor: anchor)
 
 		let managedIndex = layout.inlineManagedFieldIndex()
@@ -40380,22 +40389,57 @@ export type Parser
 		return UnnamedTypeId
 	end 'fusedWrapperNameId'
 
-	// ⭐⭐ **IS THIS DECLARATION THE `Array` WHOSE RECORD IT ALREADY IS? (W57)** — the admission test for
-	// `emitFusedWrapperLiteral`'s identity arm. The predicate is TWO facts and its argument is written once, at
-	// its one home: `ProgramSignatures.arrayNameIsItsOwnRecord`.
+	// ⭐⭐ **A GENERIC `BuiltinArrayLiteral` CONFORMER WHOSE FIRST FIELD IS NOT THE BUFFER (ARR5)** — the
+	// third sentence in this family, and it exists because the other two are each about something this
+	// declaration does not get wrong.
+	//
+	// `requireBufferIsItsOwnRecord` is about a SECOND field, and there is only one here.
+	// `requireFusedWrapperTag` is about the two NAMES the compiler owns a byte record for, and it would say
+	// "a conformer of any other name" to a declaration whose name is beside the point — what is wrong is
+	// that its one field is a `Num`, or a `String`, where the record it claims requires a `__ManagedMemory`
+	// over the very parameter it declares. Under the old NAME-keyed admission this shape was ADMITTED and
+	// the identity handed the raw field value back as the container; the only thing that refused it was a
+	// later type compare, whose sentence is about a return
+	// (`ProgramSignatures.declarationIsTheManagedRecord` carries the measurement).
+	//
+	// ⚠ **THE TYPE-PARAMETER GATE IS THE WHOLE OF WHY THIS DOES NOT SWALLOW `Holder`.** A NON-generic
+	// conformer cannot be the buffer record at all — the record is generic over its element — so nothing
+	// about its field could be repaired and the name sentence is the right one for it. That is the boundary
+	// `array-declared-record.error.a-conformer-of-another-name-is-still-refused` pins.
+	function requireArrayMarkerDeclaresTheBuffer(layout StructLayout, anchor Token) throws ParseError
+		if not layout.requireBuiltinManagedWrapperInterfaceName().equals(BuiltinArrayLiteralInterfaceName) 'notTheArrayMarker'
+			return
+		end 'notTheArrayMarker'
+
+		if self.signatures.declaredFieldsBeginWithABuffer(layout) 'theFirstFieldIsABuffer'
+			return
+		end 'theFirstFieldIsABuffer'
+
+		// A declaration with no type parameter is `Holder`'s case, above: it is not this refusal's subject,
+		// and its element name — which the sentence has to spell — does not exist to be spelled.
+		let element = try self.signatures.structTypeParamsOf(layout.name).get(0) otherwise return
+
+		throw ParseError.unsupported("`{String.from(layout.name)}` implements `{String.from(BuiltinArrayLiteralInterfaceName)}` over the parameter `{String.from(element)}` it declares, so its record IS a `{String.from(ManagedMemoryTypeName)} with {String.from(element)}` and its literal is an identity on that buffer — but its first field is not one. A value whose bytes are the buffer's and whose declared fields say otherwise has those fields discarded at construction and read back past the record's end when it is cloned or destroyed. Declare exactly one field, `{String.from(InlineManagedFieldName)} as {String.from(ManagedMemoryTypeName)} with {String.from(element)}`, or drop the marker so the declaration keeps the box its fields describe", line: anchor.line, column: anchor.column)
+	end 'requireArrayMarkerDeclaresTheBuffer'
+
+	// ⭐⭐ **IS THIS DECLARATION THE BUFFER RECORD IT ALREADY IS? (W57, made structural by ARR5)** — the
+	// admission test for `emitFusedWrapperLiteral`'s identity arm, and the SECOND half of a shape the arm
+	// has already asked the first half of. The arm's gate is `ProgramSignatures.firstFieldIsItsOwnBuffer`;
+	// what is left to demand is that the buffer is the declaration's ONLY field.
 	//
 	// ⭐ **THIS IS ITS POSITIONED HALF — A REFUSAL WHOSE NOUN IS THE SHAPE, NOT THE NAME.**
 	// `requireFusedWrapperTag`'s sentence is about which NAMES the compiler owns a record for, and it would
-	// be actively misleading here: the name is right and the DECLARATION is what disagrees. A conformer named
-	// `Array` that declares a second field would have that field discarded by the identity — the very hazard
-	// the sibling sentence names — so it is refused with the field it is about.
-	function requireArrayIsItsOwnRecord(layout StructLayout, anchor Token) throws ParseError
-		if self.signatures.arrayNameIsItsOwnRecord(layout.name) 'itsOwnRecord'
+	// be actively misleading here: this declaration's first field IS the buffer, so the compiler owns its
+	// record and the extra FIELDS are what disagree. Such a declaration would have every field past the
+	// buffer discarded by the identity — the very hazard the sibling sentence names — so it is refused with
+	// the field it is about.
+	function requireBufferIsItsOwnRecord(layout StructLayout, anchor Token) throws ParseError
+		if layout.fieldCount() == 1 'itsOwnRecord'
 			return
 		end 'itsOwnRecord'
 
-		throw ParseError.unsupported("`{String.from(layout.name)}` implements `{String.from(layout.requireBuiltinManagedWrapperInterfaceName())}`, and an `{String.from(ArrayBuiltinBaseName)}` IS its `{String.from(ManagedMemoryTypeName)}` — one record under two names — so its literal is an identity on the buffer its sole field names. This declaration has {layout.fieldCount()} field(s), and every one past the buffer would be silently dropped at construction and then read back past the record's end when the value is cloned or destroyed. Declare the buffer alone, or give the type a name the compiler owns no record for", line: anchor.line, column: anchor.column)
-	end 'requireArrayIsItsOwnRecord'
+		throw ParseError.unsupported("`{String.from(layout.name)}` implements `{String.from(layout.requireBuiltinManagedWrapperInterfaceName())}`, and a record whose first field IS its `{String.from(ManagedMemoryTypeName)}` is that buffer — one record under two names — so its literal is an identity on the buffer that field names. This declaration has {layout.fieldCount()} field(s), and every one past the buffer would be silently dropped at construction and then read back past the record's end when the value is cloned or destroyed. Declare the buffer alone, or drop the literal marker so the declaration keeps the box its fields describe", line: anchor.line, column: anchor.column)
+	end 'requireBufferIsItsOwnRecord'
 
 	// ⭐⭐ **WHICH TAG A FUSED LITERAL PRODUCES — DECIDED BY THE TYPE'S NAME, AND A NAME THE COMPILER DOES NOT
 	// OWN THE RECORD FOR IS REFUSED OUTRIGHT.** The marker cannot decide it: keying on the marker alone gave
@@ -40422,9 +40466,11 @@ export type Parser
 	//
 	// ⚠ **THIS IS NOW REACHED ONLY BY A CONFORMER THE IDENTITY ARM DID NOT TAKE (W57).** The corpus's own
 	// `type Array` no longer arrives here at all: its record needs no producer, so it is served one door up by
-	// `arrayLayoutIsItsOwnRecord`. What still arrives is every OTHER `BuiltinArrayLiteral` conformer — a user
-	// type of another name, or an `Array` declaring a second field — and for each of those the three
-	// consequences above hold unchanged, so the sentence they meet is unchanged too.
+	// `ProgramSignatures.firstFieldIsItsOwnBuffer`. What still arrives is every OTHER `BuiltinArrayLiteral`
+	// conformer — a type whose first field is not the buffer over its own type parameter, whatever it is
+	// named — and for each of those the three consequences above hold unchanged, so the sentence they meet is
+	// unchanged too. (A conformer whose first field IS that buffer but which declares a SECOND one is served
+	// by `requireBufferIsItsOwnRecord`, whose noun is the extra field rather than the name.)
 	//
 	// ⇒ Only the two names the compiler already owns denote a builtin byte record: `String` and `Character`
 	// are on `TypeResolution.isCompilerOwnedTypeName`, which is what guarantees no USER file can mint one, so a
@@ -48720,10 +48766,10 @@ export type Parser
 	// any file declares — so a declared `Array.size()` got as far as `missingBaseLayout` and was refused
 	// *"a field access … `Array` is a BUILTIN whose runtime record shv2 synthesizes"*, about a METHOD, which
 	// is a WORSE sentence than the roster's. What admits it is `structLayoutOfType`'s own
-	// `arrayNameIsItsOwnRecord` arm — read that header for why the FIELD WALK's gate stays where it is.
+	// `declarationIsTheManagedRecord` arm — read that header for why the FIELD WALK's gate stays where it is.
 	//
 	// ⚠ The SHAPE is asked as well as the instance, and the two are not the same test — see
-	// `ProgramSignatures.arrayNameIsItsOwnRecord` for why either alone is a wrong answer. A declaration that
+	// `ProgramSignatures.declarationIsTheManagedRecord` for why either alone is a wrong answer. A declaration that
 	// fails it is a record this compiler does NOT own, and its members must keep meeting the roster sentence
 	// rather than being dispatched against a layout the value does not have.
 	//
@@ -48783,7 +48829,7 @@ export type Parser
 		end 'aStringIndex'
 		if self.signatures.isArrayInstanceAt(recv.tag, nameId: recv.nameId) and not self.valueIsBufferSurface(recv.value) 'anArraySurface'
 			let declaration = self.signatures.genericInstanceBaseName(recv.nameId)
-			if not self.signatures.arrayNameIsItsOwnRecord(declaration) 'notTheOwnRecordArray'
+			if not self.signatures.declarationIsTheManagedRecord(declaration) 'notTheOwnRecordArray'
 				return false
 			end 'notTheOwnRecordArray'
 
@@ -52356,7 +52402,7 @@ export type Parser
 		//
 		// ⭐⭐⭐ **EXCEPT FOR THE ONE SHAPE WHERE THE DECLARATION *IS* THE RECORD, AND THAT IS NOT A WEAKENING —
 		// IT IS THE OTHER HALF OF THE SAME ARGUMENT (W59).** The paragraph above refuses a declared `Array`
-		// because `structOf` hands back a field table the VALUE does not have. `arrayNameIsItsOwnRecord` is
+		// because `structOf` hands back a field table the VALUE does not have. `declarationIsTheManagedRecord` is
 		// exactly the test for the case where it does: the base is `Array`, the declaration has ONE field, and
 		// that field is the buffer — so field 0 at offset 0 IS the record, which is why `emitFieldLoad`'s
 		// inline-`managed` arm already answers it with the surface flip rather than a load. A second field is
@@ -52377,7 +52423,7 @@ export type Parser
 		// WRITE path and the field-chain walk. The two are the preconditions of two different queries — a
 		// layout to NAME a member, and a layout to ENUMERATE fields — exactly as that gate's own header says of
 		// its neighbour, so the admission is spent at the one door that needs it and nowhere else.
-		if tag == ValueTypeTag.genericInstance and not (self.signatures.genericInstanceHasBaseLayout(nameId) or self.signatures.arrayNameIsItsOwnRecord(typeName)) 'noBaseLayout'
+		if tag == ValueTypeTag.genericInstance and not (self.signatures.genericInstanceHasBaseLayout(nameId) or self.signatures.declarationIsTheManagedRecord(typeName)) 'noBaseLayout'
 			throw self.missingBaseLayout(typeName, baseTok: baseTok)
 		end 'noBaseLayout'
 
@@ -52659,7 +52705,7 @@ export type Parser
 			//     `managed.slice(0, len)`.
 			// One record with two surfaces is the whole of this wrapper, so the read is the surface flip and
 			// nothing else — which also means it allocates nothing where the String path allocates a record.
-			if self.signatures.arrayNameIsItsOwnRecord(layout.name) 'theRecordISTheBuffer'
+			if self.signatures.declarationIsTheManagedRecord(layout.name) 'theRecordISTheBuffer'
 				return self.bufferSurfaceOf(box, range: range)
 			end 'theRecordISTheBuffer'
 
@@ -55755,11 +55801,11 @@ export type Parser
 	end 'implicitSelfTakesTheByteRecordRoster'
 
 	// ⭐⭐ **THE `Array` HALF (W59) — THE SAME RULE ONE GENERICITY UP.** The enclosing declaration is told from
-	// every other by the SHAPE that makes its record the compiler's (`arrayNameIsItsOwnRecord`), never by the
+	// every other by the SHAPE that makes its record the compiler's (`declarationIsTheManagedRecord`), never by the
 	// name alone: `Array` is not a name the compiler reserves, and a user container of that name declaring
 	// anything else has no synthesized roster to win with.
 	function implicitSelfTakesTheArrayRoster(calleeTok Token) returns bool
-		if not self.signatures.arrayNameIsItsOwnRecord(self.enclosingType) 'notInsideTheOwnRecordArray'
+		if not self.signatures.declarationIsTheManagedRecord(self.enclosingType) 'notInsideTheOwnRecordArray'
 			return false
 		end 'notInsideTheOwnRecordArray'
 		return self.implicitSelfTakesTheRoster(MemberSurface.array, calleeTok: calleeTok)

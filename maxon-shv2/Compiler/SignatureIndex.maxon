@@ -12612,37 +12612,112 @@ export type ProgramSignatures
 	// `structRef` there would be the byte-record defect `Parser.requireFusedWrapperTag` documents, one
 	// genericity up: bytes of one record, identity of another.
 	//
-	// Precondition: `arrayNameIsItsOwnRecord` below, which is what establishes that the name is declared and
+	// Precondition: `declarationIsTheManagedRecord` below, which is what establishes that the name is declared and
 	// generic — so `structTypeParamsOf` is non-empty here and the instance has the arity its base was checked at.
 	export function ownRecordSelfInstance(name ByteArray) returns GenericInstanceId
 		return self.instanceOverScopeParams(name, scopeOwner: name, params: self.structTypeParamsOf(name))
 	end 'ownRecordSelfInstance'
 
-	// ⭐⭐ **IS `name` THE `Array` WHOSE RECORD THIS COMPILER ALREADY OWNS (W57)?** — TWO facts, because either
-	// alone is a wrong answer.
-	//   • **THE NAME**, because the identity rests on `Array with T` and `__ManagedMemory with T` being one
-	//     `GenericInstanceId`, which is a fact about that base name and no other.
-	//   • **THE SHAPE**, because the name is not the compiler's to reserve (`Array` is deliberately absent from
-	//     `TypeResolution.isCompilerOwnedTypeName`, exactly as `Map` is), so a user program may declare its own
-	//     container under it. Only the SOLE-FIELD-AND-THAT-FIELD-THE-BUFFER declaration is the record; anything
-	//     else is an ordinary struct that merely shares the name, and admitting it is the measured miscompile
-	//     `Parser.structLayoutOfType`'s header carries.
+	// ⭐⭐ **IS `name`'s DECLARATION THE `__ManagedMemory` RECORD THIS COMPILER ALREADY OWNS (W57, its SHAPE
+	// half made real by ARR5)?** — still TWO facts, but the second one is now a question about the FIELD
+	// rather than about the field's name.
+	//
+	// ⚠ **THE SHAPE HALF USED TO BE A QUESTION ABOUT A NAME, AND THAT IS WHAT COULD BE WRONG.** It asked
+	// `isArrayBaseName(name)` and then only that the declaration had a SOLE field which was
+	// `inlineManagedFieldIndex() == 0` — and that index is a question about the field's NAME (`managed`) and
+	// the declaration's MARKER, never about the field's TYPE (`StructLayout.isInlineManagedField`). So a
+	// `type Array uses Element implements BuiltinArrayLiteral` whose sole field is `var managed as Num`
+	// answered TRUE, and `Parser.emitFusedWrapperLiteral`'s identity arm handed the raw `Num` back as the
+	// array — bytes of one record, identity of another, which is the very hazard
+	// `Parser.requireFusedWrapperTag` documents. MEASURED on this tree before the change: that program was
+	// refused only by the accident of a later type compare, as
+	// **`E3005 … Cannot return 'int' from function declared to return 'struct'`**, a sentence about a
+	// RETURN in a program whose fault is a field.
+	//
+	// ⇒ **THE SHAPE IS NOW: a SOLE field, and that field a `__ManagedMemory` under a declaration generic
+	// enough to be one.** `firstFieldIsItsOwnBuffer` below is everything except the SOLE, split out because
+	// `Parser.emitFusedWrapperLiteral` needs it that way — a declaration that has that field AND a second one
+	// is the record with something extra bolted on, which earns its own positioned refusal rather than the
+	// "the compiler owns no record for this name" sentence a stranger meets.
+	//
+	// ⚠⚠ **THE NAME HALF STAYS, AND ARR5 MEASURED WHY IT CANNOT LEAVE YET.** It is not "is this declaration
+	// called `Array`" — it is "is this declaration the one `canonicalGenericBaseName` FOLDS `__ManagedMemory`
+	// ONTO", and today that fold's target is a constant, so the two coincide. Drop it and a stranger's
+	// `type Bag uses E implements BuiltinArrayLiteral` whose sole field is `__ManagedMemory with E` passes
+	// the shape — but its field's instance is `Array with E`, the RECORD declaration's, not `Bag with E`, so
+	// the identity arm hands back a value of a type `Self` is not and the clean positioned refusal
+	// `Parser.requireFusedWrapperTag` gives it today degrades to an `E3005` about a return. The half that
+	// CAN be structural has been made structural; the other half becomes so on the day the fold learns its
+	// target from the conformance rather than from a constant, and then this line is the one that goes.
 	//
 	// ⚠ **IT LIVES HERE, NOT IN THE PARSER, BECAUSE THE INDEX ITSELF HAS TO ASK IT (W59).** It began as
 	// `Parser.arrayNameIsItsOwnRecord`, serving the construction doors; `typeParamOwnershipProtocol` then needed
 	// the same fact to decide whether a DESCRIPTOR carries ownership words, and a second spelling of "is this
 	// declaration the record?" is exactly how the construction door and the descriptor stamp would come to
 	// disagree about one type — with the disagreement spending itself as a double free rather than a diagnostic.
-	export function arrayNameIsItsOwnRecord(name ByteArray) returns bool
-		if not self.isArrayBaseName(name) 'notTheArrayName'
-			return false
-		end 'notTheArrayName'
-
+	export function declarationIsTheManagedRecord(name ByteArray) returns bool
 		return match self.structOf(name) 'declaration'
-			declared(layout) gives layout.fieldCount() == 1 and layout.inlineManagedFieldIndex() == 0
+			declared(layout) gives layout.fieldCount() == 1 and self.firstFieldIsItsOwnBuffer(layout)
 			undeclared gives false
 		end 'declaration'
-	end 'arrayNameIsItsOwnRecord'
+	end 'declarationIsTheManagedRecord'
+
+	// ⭐⭐ **IS THIS DECLARATION'S FIRST FIELD A `__ManagedMemory`, UNDER A DECLARATION GENERIC ENOUGH TO BE
+	// ONE?** — the shape half of the predicate above, and the ADMISSION gate of
+	// `Parser.emitFusedWrapperLiteral`'s identity arm.
+	//
+	// ⚠⚠ **IT ASKS THE DECLARED SURFACE AND NOT THE FIELD'S `MaxonType`, AND THAT IS FORCED BY *WHEN* IT IS
+	// ASKED.** The same question arrives at three different resolution stages — the descriptor pre-scan
+	// (`Parser.scanDescriptorNeedsInto`), the declaration sweep (through `Parser.enclosingSelfType`) and the
+	// real parse — and the column holds a different thing at each. MEASURED on `stdlib/Array.maxon`'s own
+	// shape: at the pre-scan `fieldTypes[0]` is still `named('Array.ElementMemory')`, the INNER alias, because
+	// only a TOP-LEVEL generic alias is retyped by `resolveRecordedGenericAliasTypes`. A test over the
+	// resolved instance therefore answers "how far the index had got", which is the class of bug
+	// `Parser.declaredSurfaceAt` records for the tuple mask. The SURFACE is recorded from the SOURCE at
+	// declaration time and reads the same at all three (`SurfaceBitIsBuffer`, A2j/W43).
+	//
+	// ⚠ **THE TYPE-PARAMETER CLAUSE IS WHAT KEEPS A NON-GENERIC CONFORMER OUT.** The record is generic over
+	// its element by construction, so a `type Holder implements BuiltinArrayLiteral` whose field is the BARE
+	// `__ManagedMemory` — a genuine buffer surface — is still not it, and must go on meeting
+	// `Parser.requireFusedWrapperTag`'s sentence
+	// (`array-declared-record.error.a-conformer-of-another-name-is-still-refused` pins that boundary).
+	//
+	// ⚠ **WHAT IT DOES NOT SEPARATE, NAMED RATHER THAN LEFT UNSAID**: a generic declaration whose field is
+	// the bare `__ManagedMemory` (i.e. `Array with Byte`) also has the buffer surface, so it is admitted
+	// here and refused one step later by the type compare against `Self`
+	// (`Cannot return 'Array_Byte' from function declared to return 'Array_T…'`, MEASURED). That is a
+	// REFUSAL with a poor noun, not a miscompile: the value's bytes and its type agree, they simply are not
+	// the element the declaration promised. Separating it needs the alias's ARGUMENT, which is recorded on
+	// `GenericAliasEntry` and has no by-name reader today.
+	export function firstFieldIsItsOwnBuffer(layout StructLayout) returns bool
+		if not self.isArrayBaseName(layout.name) or self.structTypeParamsOf(layout.name).count() != ArrayTypeParamCount 'notTheRecordDeclaration'
+			return false
+		end 'notTheRecordDeclaration'
+
+		return self.declaredFieldsBeginWithABuffer(layout)
+	end 'firstFieldIsItsOwnBuffer'
+
+	// ⭐ **DOES THIS DECLARATION'S FIRST FIELD NAME A `__ManagedMemory` IN THE SOURCE?** — the surface half
+	// above, on its own, because `Parser.requireArrayMarkerDeclaresTheBuffer` asks exactly the NEGATION of it
+	// and must not re-spell it: that refusal's whole sentence is "your first field is not a buffer", and a
+	// second reading of "is it?" is how a refusal comes to be raised about a declaration that satisfies the
+	// door it was refused by.
+	export function declaredFieldsBeginWithABuffer(layout StructLayout) returns bool
+		// ⚠ **TWO HALVES, AND DROPPING EITHER IS A WRONG ANSWER.** `inlineManagedFieldIndex` is the LAYOUT
+		// half — is field 0 the one the envelope collapse embeds WHOLE, which it decides from the field's
+		// name and the declaration's marker (`StructLayout.isInlineManagedField`). The surface is the TYPE
+		// half — did the source name a `__ManagedMemory` there. A field named anything else has an 8-byte
+		// POINTER slot however it is typed, so an identity on it would hand back a buffer where the record
+		// holds a pointer to one; and a `managed` of any other type is the defect this predicate exists to
+		// close.
+		// ⚠ A FIELDLESS declaration answers 0 from `inlineManagedFieldIndex` too (it returns the count), and
+		// `fieldSurfaceOf` panics on an index its layout does not have — so the count is tested first.
+		if layout.fieldCount() == 0 or layout.inlineManagedFieldIndex() != 0 'field0IsNotEmbeddedWhole'
+			return false
+		end 'field0IsNotEmbeddedWhole'
+
+		return surfaceIsBuffer(self.fieldSurfaceOf(layout, index: 0))
+	end 'declaredFieldsBeginWithABuffer'
 
 	// ⭐⭐ **IS `id` THE INSTANCE `declarationName` MAKES OVER ITS OWN PARAMETERS — i.e. what `Self` denotes
 	// inside it? (W57)** The RECOGNIZER for what `ownRecordSelfInstance` MINTS, and it is a separate function
@@ -12695,7 +12770,7 @@ export type ProgramSignatures
 	// ⚠ **THE SPELLING MOVED; THE IDENTITY DID NOT, AND THE IDENTITY IS WHAT THIS ANSWERS.** It rests on
 	// `Array with T` and `__ManagedMemory with T` being one `GenericInstanceId`, a fact about the DECLARATION
 	// rather than about the six bytes it currently goes by. Both names answer true at once and must: the
-	// user's `Array` is a container it declared, and `arrayNameIsItsOwnRecord` tells the two apart by SHAPE,
+	// user's `Array` is a container it declared, and `declarationIsTheManagedRecord` tells the two apart by SHAPE,
 	// exactly as it already had to for a user `Array` with no contest at all.
 	//
 	// ⚠ **`Array` IS THE ONE CONTESTED NAME THIS BITES, WHICH IS WHY ITS SIBLINGS TAKE NO SUCH ARM.**
@@ -13673,7 +13748,7 @@ export type ProgramSignatures
 	// clause fires for a single-column container after all.
 	//
 	// ⚠ **IT IS ADMITTING THE RIGHT THING, WHICH IS WHY THE CURE IS THIS CORRECTION AND NOT A NARROWING.**
-	// `arrayNameIsItsOwnRecord` admits an `Array` declaration ONLY in the sole-field-and-that-field-the-buffer
+	// `declarationIsTheManagedRecord` admits an `Array` declaration ONLY in the sole-field-and-that-field-the-buffer
 	// shape, so two such declarations over one element denote one record to the byte — same stride, same drop,
 	// same clone — which is the very question this door exists to answer. Refusing the pair would leave a
 	// program with its own container unable to call `String.from`, `String.split` or `toByteArray` at all,
@@ -18204,9 +18279,9 @@ export type ProgramSignatures
 	//
 	// ⇒ The gate is "does a shared body read this block?", and a record-collapsed conformer answers yes. The
 	// size argument above is untouched: a program that does not DECLARE `type Array` gets `undeclared` from
-	// `arrayNameIsItsOwnRecord` and the same zero words it always had.
+	// `declarationIsTheManagedRecord` and the same zero words it always had.
 	function typeParamOwnershipProtocol(id GenericInstanceId, position TypeParamPosition) returns ExistentialOwnershipProtocol
-		if not (self.genericInstanceHasBaseLayout(id) or self.arrayNameIsItsOwnRecord(self.genericInstanceBaseName(id))) 'noSharedBodyReadsThisBlock'
+		if not (self.genericInstanceHasBaseLayout(id) or self.declarationIsTheManagedRecord(self.genericInstanceBaseName(id))) 'noSharedBodyReadsThisBlock'
 			return ExistentialOwnershipProtocol.none
 		end 'noSharedBodyReadsThisBlock'
 
