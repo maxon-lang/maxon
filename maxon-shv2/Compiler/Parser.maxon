@@ -10176,7 +10176,7 @@ export type Parser
 		// Intern the `Array with integer` literal instance if this file materializes one — after `foldFile`,
 		// so its giid follows the file's named generic instances (a stable, source-path-ordered assignment).
 		if hasIntArrayLiteral 'internArrayLiteral'
-			_ = index.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
+			_ = index.internBuiltinIntegerInstance(index.arrayRecordDeclaredName())
 		end 'internArrayLiteral'
 
 		// Intern the `Array with Byte` instance if this file materializes a byte-string literal — after
@@ -10192,7 +10192,7 @@ export type Parser
 		// `<Enum>.allCaseNames` materializes that same `Array with String` and has no typealias of its own to
 		// intern it from either, so it joins the arm rather than opening a second one.
 		if hasStringArrayLiteral or hasAllCaseNamesAccess 'internStringArrayLiteral'
-			_ = index.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
+			_ = index.builtinInstanceForElement(index.arrayRecordDeclaredName(), element: MaxonType.string)
 		end 'internStringArrayLiteral'
 		// Only NOTED here, never performed: the over-interning is over every declared struct/union in the
 		// PROGRAM, so doing it at each such file re-walks tables that are still growing — O(files × types),
@@ -15603,29 +15603,43 @@ export type Parser
 		return self.signatures.isVectorBaseName(name) or self.signatures.isArrayBaseName(name)
 	end 'baseStoresArgumentsInline'
 
-	// ⭐⭐ **`__ManagedMemory`'s FOLD TARGET IS THE NAME *THIS FILE* SPELLS `Array` UNDER (F31).**
-	// `canonicalGenericBaseName` mints `Array` from a CONSTANT, which makes it the one identifier in a stdlib
-	// file that `shadowRenamedTokens` never reached — it was never a token, so the contest's "uniform over
-	// stdlib source" argument does not cover it.
+	// ⭐⭐⭐ **THE WHOLE OF `__ManagedMemory`'s FOLD, AND ITS TARGET IS *DISCOVERED* (ARR5b).** A written
+	// `__ManagedMemory with T` and the array record's `<Name> with T` are ONE `GenericInstanceId` (W43, see
+	// `ManagedMemoryTypeName`); this decides which `<Name>`, and it reads the answer off the
+	// `BuiltinArrayLiteral` conformance rather than from a constant. Three arms, and each one is a different
+	// question:
 	//
-	// ⛔ **AND THAT GAP UNDOES THE VERY BINDING THE FOLD EXISTS FOR.** Under a user `type Array` the corpus
-	// declaration is `__Array`, so `stdlib/String.maxon`'s `typealias ByteBuffer = __ManagedMemory with Byte`
-	// folded to a bare `Array with Byte` — the USER's container — while the same file's
-	// `ByteArray = Array with Byte` had been rewritten to `__Array with Byte`. MEASURED: **`E3005
-	// stdlib/String.maxon:160:20: argument type mismatch for 'managed': expected '__ManagedMemory with Byte',
-	// got 'ByteBuffer'`**, i.e. one record with two ids, which is exactly what `canonicalGenericBaseName`'s
-	// header says the fold is there to prevent.
+	//   • **NOT the buffer spelling** — nothing to fold. Every other base name arrived as a TOKEN and has
+	//     already been through the stdlib rename, so it is returned untouched.
+	//   • **INSIDE A CONFORMER'S OWN BODY, the conformer.** `type Bag uses Element implements
+	//     BuiltinArrayLiteral` whose sole field is a `__ManagedMemory with Element` IS that record, so its
+	//     field's instance must be `Bag`'s own and not the corpus declaration's — otherwise the identity
+	//     `Parser.emitFusedWrapperLiteral` performs hands back a value of a type `Self` is not, which is why
+	//     `ProgramSignatures.declarationIsTheManagedRecord` had to keep a NAME clause until this arm existed.
+	//     `enclosingType` is the DECLARING TOKEN, so inside `stdlib/Array.maxon` under a contest it is already
+	//     `__Array` and this arm needs no rename of its own.
+	//   • **OTHERWISE, the corpus's declaration, as THIS FILE spells it (F31).** A user file spells it bare;
+	//     a stdlib file spells it under the contest's mint.
 	//
-	// ⚠ A USER file is untouched, because its TOKENS are untouched: there `Array` means the user's own
-	// declaration and the constant already names it. And the rename is applied only when the fold actually
-	// fired — every other base name arrived as a token and has already been through the rewrite.
+	// ⛔ **THE THIRD ARM MAY NOT BE THE ENCLOSING CONFORMER WIDENED TO THE FILE, AND THE MEASUREMENT IS
+	// F31's.** Under a user `type Array` the corpus declaration is `__Array`, so `stdlib/String.maxon`'s
+	// `typealias ByteBuffer = __ManagedMemory with Byte` folded to a bare `Array with Byte` — the USER's
+	// container — while the same file's `ByteArray = Array with Byte` had been rewritten to
+	// `__Array with Byte`. MEASURED: **`E3005 stdlib/String.maxon:160:20: argument type mismatch for
+	// 'managed': expected '__ManagedMemory with Byte', got 'ByteBuffer'`**, i.e. one record with two ids,
+	// which is exactly what the fold exists to prevent. A `__ManagedMemory` outside every conformer is the
+	// record the stdlib's own signatures are written against, and that is the corpus's declaration whatever
+	// else the program declares.
 	function canonicalGenericBaseNameInThisFile(baseName ByteArray) returns ByteArray
-		let canonical = canonicalGenericBaseName(baseName)
-		if not self.isStdlibSource or canonical.equals(baseName) 'noNameWasSynthesized'
-			return canonical
-		end 'noNameWasSynthesized'
+		if not baseName.equals(ManagedMemoryTypeName) 'notTheBufferSpelling'
+			return baseName
+		end 'notTheBufferSpelling'
 
-		return self.signatures.stdlibShadowRenameOf(canonical)
+		if self.signatures.isArrayBaseName(self.enclosingType) 'theConformersOwnBody'
+			return self.enclosingType
+		end 'theConformersOwnBody'
+
+		return self.signatures.arrayRecordBaseNameIn(self.isStdlibSource)
 	end 'canonicalGenericBaseNameInThisFile'
 
 	function readSizedBaseElementCount(baseTok Token) returns FixedElementCount throws ParseError
@@ -41062,7 +41076,7 @@ export type Parser
 	// mid-parse and the gid would depend on parse order. `ProgramSignatures.internEnumAllCasesInstances`
 	// interns one per declared enum for any program that names the member.
 	function emitEnumAllCases(layout EnumLayout, range SourceRange) returns ValueId throws ParseError
-		let giid = self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: layout.name)
+		let giid = self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordDeclaredName(), element: layout.name)
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 
 		for i in 0 upto layout.caseCount() 'eachCase'
@@ -41147,7 +41161,7 @@ export type Parser
 	// literal handed straight in would be released by an owner it never gave a reference to. `argBareLocal`
 	// is `false` and cannot be otherwise — the value was minted two lines up and names no binding to poison.
 	function emitEnumAllCaseNames(layout EnumLayout, memberTok Token, range SourceRange) returns ValueId throws ParseError
-		let giid = self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string)
+		let giid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordDeclaredName(), element: MaxonType.string)
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 
 		for i in 0 upto layout.caseCount() 'eachCase'
@@ -43852,14 +43866,14 @@ export type Parser
 	// withheld — but the only span to blame is the operator's, and there is no `equals` token to read a name
 	// off.
 	function requireArrayConformanceAvailable(giid GenericInstanceId, methodName ByteArray, anchor Token) throws ParseError
-		let interfaces = intrinsicConformanceProtocolNames(ArrayBuiltinBaseName)
+		let interfaces = intrinsicConformanceProtocolNames(self.signatures.arrayRecordDeclaredName())
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
-			throw ParseError.unsupported("'{String.from(ArrayBuiltinBaseName)}.{String.from(methodName)}' is a conditional extension method ({arrayWhereClause(interfaces)}), and this array's element type is not known here — it is the enclosing generic's own type parameter, and a compiler-owned `{String.from(methodName)}` cannot be given the element facts it needs from this body. Call it on an array of a concrete element type", line: anchor.line, column: anchor.column)
+			throw ParseError.unsupported("'{String.from(self.signatures.arrayRecordDeclaredName())}.{String.from(methodName)}' is a conditional extension method ({arrayWhereClause(interfaces)}), and this array's element type is not known here — it is the enclosing generic's own type parameter, and a compiler-owned `{String.from(methodName)}` cannot be given the element facts it needs from this body. Call it on an array of a concrete element type", line: anchor.line, column: anchor.column)
 		end 'opaqueElement'
 
 		match self.signatures.arrayElementConstraintCheck(giid, clauseInterfaces: interfaces) 'clause'
 			satisfied then return
-			unmet(unmetInterfaceName, bindingName) then throw ParseError.conditionalExtensionWithheld(String.from(ArrayBuiltinBaseName), methodName: String.from(methodName), clause: arrayWhereClause(interfaces), unmetInterfaceName: String.from(unmetInterfaceName), bindingName: String.from(bindingName), line: anchor.line, column: anchor.column)
+			unmet(unmetInterfaceName, bindingName) then throw ParseError.conditionalExtensionWithheld(String.from(self.signatures.arrayRecordDeclaredName()), methodName: String.from(methodName), clause: arrayWhereClause(interfaces), unmetInterfaceName: String.from(unmetInterfaceName), bindingName: String.from(bindingName), line: anchor.line, column: anchor.column)
 		end 'clause'
 	end 'requireArrayConformanceAvailable'
 
@@ -45647,7 +45661,7 @@ export type Parser
 	// that record is withheld for a bare-local source, so it answered differently for `[7 as N, …]` and
 	// `[v as N, …]` — the measurement is on that predicate.
 	function arrayLiteralInstanceFor(elem ValueId, elemTok Token) returns GenericInstanceId throws ParseError
-		return self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: try self.literalColumnTypeFor(elem, literalKind: ArrayLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: elemTok))
+		return self.signatures.builtinInstanceForElement(self.signatures.arrayRecordDeclaredName(), element: try self.literalColumnTypeFor(elem, literalKind: ArrayLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: elemTok))
 	end 'arrayLiteralInstanceFor'
 
 	// ⭐⭐ **THE TYPE A BRACKETED LITERAL'S VALUE FIXES FOR THE COLUMN IT SITS IN.** An array literal has ONE
@@ -45782,7 +45796,7 @@ export type Parser
 	// because everything it rejects used to abort the compiler.
 	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
 		if not self.closureCaptureScopes.isEmpty() 'insideALiftedClosure'
-			throw ParseError.unsupported("constructing an opaque type-parameter `{String.from(ArrayBuiltinBaseName)}` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the array in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice", line: range.line, column: range.column)
+			throw ParseError.unsupported("constructing an opaque type-parameter `{String.from(self.signatures.arrayRecordDeclaredName())}` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the array in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice", line: range.line, column: range.column)
 		end 'insideALiftedClosure'
 
 		let sizeVal = self.emitLiteral(LAYOUT_TYPE_PARAM_SLOT_BYTES as ParsedInt, valueType: MaxonType.integer, range: range)
@@ -46310,9 +46324,9 @@ export type Parser
 		// one added name admits every array a witness slot can actually be stamped for; an array whose
 		// element does not conform keeps its own unreduced spelling and is refused below.
 		let keyType = self.signatures.conformerTypeArgName(giid, position: HashTableKeyArgPosition).toByteArray()
-		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName) or keyType.equals(ArrayBuiltinBaseName)) 'unsupportedKey'
+		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName) or keyType.equals(self.signatures.arrayRecordDeclaredName())) 'unsupportedKey'
 			try self.requireArrayKeyElementConforms(giid, containerName: containerName, tok: tok)
-			throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be one of `{String.from(IntConformerName)}`, `{String.from(StringConformerName)}`, `{String.from(CharacterConformerName)}`, `{String.from(ArrayBuiltinBaseName)}` — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
+			throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be one of `{String.from(IntConformerName)}`, `{String.from(StringConformerName)}`, `{String.from(CharacterConformerName)}`, `{String.from(self.signatures.arrayRecordDeclaredName())}` — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
 		end 'unsupportedKey'
 	end 'requireHashTableKeyType'
 
@@ -46342,10 +46356,10 @@ export type Parser
 			return
 		end 'opaqueElement'
 
-		let interfaces = intrinsicConformanceProtocolNames(ArrayBuiltinBaseName)
+		let interfaces = intrinsicConformanceProtocolNames(self.signatures.arrayRecordDeclaredName())
 		match self.signatures.arrayElementConstraintCheck(keyArray, clauseInterfaces: interfaces) 'clause'
 			satisfied then return
-			unmet(unmetInterfaceName, bindingName) then throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, and `{String.from(ArrayBuiltinBaseName)}` supplies those only as a conditional extension ({arrayWhereClause(interfaces)}) — this {HashTableKeyColumnNoun}'s element '{String.from(bindingName)}' does not implement '{String.from(unmetInterfaceName)}'", line: tok.line, column: tok.column)
+			unmet(unmetInterfaceName, bindingName) then throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, and `{String.from(self.signatures.arrayRecordDeclaredName())}` supplies those only as a conditional extension ({arrayWhereClause(interfaces)}) — this {HashTableKeyColumnNoun}'s element '{String.from(bindingName)}' does not implement '{String.from(unmetInterfaceName)}'", line: tok.line, column: tok.column)
 		end 'clause'
 	end 'requireArrayKeyElementConforms'
 
@@ -46530,10 +46544,10 @@ export type Parser
 	// (`Array with integer` / `Array with String`) and both `Set` instances are pre-interned by the sweep, so
 	// these are pure reads.
 	function setInstanceForArrayLiteral(arrGid GenericInstanceId, setTok Token) returns GenericInstanceId throws ParseError
-		if arrGid == self.signatures.internBuiltinIntegerInstance(ArrayBuiltinBaseName) 'intKey'
+		if arrGid == self.signatures.internBuiltinIntegerInstance(self.signatures.arrayRecordDeclaredName()) 'intKey'
 			return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
 		end 'intKey'
-		if arrGid == self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string) 'stringKey'
+		if arrGid == self.signatures.builtinInstanceForElement(self.signatures.arrayRecordDeclaredName(), element: MaxonType.string) 'stringKey'
 			return self.signatures.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
 		end 'stringKey'
 		throw ParseError.unsupported("`Set from […]` supports `int` and `String` keys — a struct / ByteArray literal is a later slice", line: setTok.line, column: setTok.column)
@@ -46589,7 +46603,7 @@ export type Parser
 		// `Array with <this set's key>` — the exact inverse of the pair `setInstanceForArrayLiteral` reads
 		// the other way round for `Set from […]`.
 		if methodTok.value.equals(MapMethod) 'map'
-			return try self.parseContainerMap(func, container: set, resultGiid: self.signatures.builtinInstanceForElement(ArrayBuiltinBaseName, element: self.signatures.setKeyType(giid)), callee: SetMapName, range: range)
+			return try self.parseContainerMap(func, container: set, resultGiid: self.signatures.builtinInstanceForElement(self.signatures.arrayRecordDeclaredName(), element: self.signatures.setKeyType(giid)), callee: SetMapName, range: range)
 		end 'map'
 
 		// ⚠ **`from`-CONSTRUCTION IS NOT A LATER SLICE AND HAS NOT BEEN SINCE P1.7b SLICE B** — this sentence
@@ -46954,7 +46968,7 @@ export type Parser
 		walkArgs.push(try self.columnCloneValue(self.signatures.mapKeyType(giid), anchor: anchor, range: range))
 		walkArgs.push(try self.columnCloneValue(self.signatures.mapValueType(giid), anchor: anchor, range: range))
 
-		return try self.emitMaterializedFill(self.signatures.builtinInstanceForNamedElement(ArrayBuiltinBaseName, element: pair.name), callee: MapEntriesName, source: map, extraArgs: walkArgs, range: range)
+		return try self.emitMaterializedFill(self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordDeclaredName(), element: pair.name), callee: MapEntriesName, source: map, extraArgs: walkArgs, range: range)
 	end 'emitMapEntriesArray'
 
 	// ⭐ **THE ADDRESS OF A COLUMN'S DEEP-CLONE CALLEE, OR 0 FOR A TRIVIAL COLUMN — `columnDestroyValue`'s
@@ -48723,7 +48737,7 @@ export type Parser
 		let receiversOwn = self.signatures.genericInstanceBaseName(giid)
 		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
 			if not declaration.equals(receiversOwn) and self.signatures.declaresCallee(qualifiedMethodName(declaration, methodName: methodTok.value)) 'theOtherDeclarationCarriesIt'
-				throw ParseError.unsupported(twoArrayDeclarationsRefusal(methodTok.value, roster: roster, receiverIsTheProgramsOwn: receiversOwn.equals(ArrayBuiltinBaseName)), line: methodTok.line, column: methodTok.column)
+				throw ParseError.unsupported(twoArrayDeclarationsRefusal(methodTok.value, roster: roster, receiverIsTheProgramsOwn: receiversOwn.equals(self.signatures.arrayRecordDeclaredName())), line: methodTok.line, column: methodTok.column)
 			end 'theOtherDeclarationCarriesIt'
 		end 'eachArrayDeclaration'
 	end 'refuseArrayMemberTheOtherDeclarationCarries'
@@ -55046,7 +55060,7 @@ export type Parser
 		// element where the author wrote a buffer's alias — a refusal at the first buffer method, blaming the
 		// method rather than the declaration.
 		if self.signatures.aliasElementIsBufferSurface(aliasTok.value, readerFilePath: self.filePath) 'elementsAreBuffers'
-			throw ConstEvalError.defective(ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — its elements are `{String.from(ManagedMemoryTypeName)}` buffers, and a global is re-loaded at every use, so an element read out of it would carry the `{String.from(ArrayBuiltinBaseName)}` surface instead. Declare an array of buffers inside a function", line: aliasTok.line, column: aliasTok.column))
+			throw ConstEvalError.defective(ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — its elements are `{String.from(ManagedMemoryTypeName)}` buffers, and a global is re-loaded at every use, so an element read out of it would carry the `{String.from(self.signatures.arrayRecordDeclaredName())}` surface instead. Declare an array of buffers inside a function", line: aliasTok.line, column: aliasTok.column))
 		end 'elementsAreBuffers'
 
 		return ConstFoldedValue.containerCreate(giid)

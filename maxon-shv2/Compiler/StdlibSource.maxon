@@ -457,7 +457,7 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// seed happens at most once there is no third round to reach.
 	let demandsWitnessTable = drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 	if demandsWitnessTable 'aTableCanNameACorpusImpl'
-		for conformerName in conformersMintedWithoutTheirOwnMethods() 'eachSeededConformer'
+		for conformerName in conformersMintedWithoutTheirOwnMethods(signatures) 'eachSeededConformer'
 			markWitnessImplsOfConformer(conformerName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 		end 'eachSeededConformer'
 		_ = drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
@@ -496,11 +496,19 @@ end 'reachableMaxonFunctionNames'
 // in so many words — *"the day a LISTED module declares `extension <builtin> implements <Iface>` with a corpus
 // body, this key misses it … `stdlib/Array.maxon:637` … listing it is the change that would need this
 // revisited"* — and listing the module produced exactly that panic on `Array.hash`.
-function conformersMintedWithoutTheirOwnMethods() returns ByteArrayArray
+//
+// ⚠⚠ **THE ARRAY ENTRY IS THE CORPUS DECLARATION'S *COMPILED* NAME AND NOT THE BARE ONE (ARR5b).** This
+// seed names the qualifier a corpus body is registered under, and under a contest that is the mint
+// (`__Array.hash`, `Parser.shadowRenamedTokens`): the bare `Array` there is the USER's own container, which
+// declares no witness impl and so seeds nothing — leaving exactly the omission the paragraph above says
+// PANICS BY NAME. `arrayRecordBaseName` is the corpus declaration as the stdlib spells it, which is what
+// this walk reads. The other two names are uncontestable (`TypeResolution.isCompilerOwnedTypeName`), so
+// only this one moves.
+function conformersMintedWithoutTheirOwnMethods(signatures ProgramSignatures) returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(StringConformerName)
 	names.push(CharacterConformerName)
-	names.push(ArrayBuiltinBaseName)
+	names.push(signatures.arrayRecordBaseName())
 	return names
 end 'conformersMintedWithoutTheirOwnMethods'
 
@@ -1017,7 +1025,7 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	// scan below is: with no user edge into stdlib, the reached set IS a subset of user code. Gated on the
 	// corpus actually DECLARING one of the seed's conformances, so an unlisted declaring module leaves this
 	// scan — and every program's answer — exactly as it was.
-	if corpusDeclaresASeededConformance(project) and userCodeDemandsAWitnessTable(module, project: project, signatures: signatures, stdlib: stdlib) 'widensOrThreadsOne'
+	if corpusDeclaresASeededConformance(project, signatures: signatures) and userCodeDemandsAWitnessTable(module, project: project, signatures: signatures, stdlib: stdlib) 'widensOrThreadsOne'
 		return true
 	end 'widensOrThreadsOne'
 
@@ -1103,9 +1111,9 @@ end 'userCodeDemandsAWitnessTable'
 // already TRUE in every compile and adding `Array` to the list it reads cannot change one. What the shared
 // list buys is that the gate stays right for the reason it is written — the seed and its gate are ONE roster —
 // rather than staying right by accident of which two modules happen to be unconditionally listed.
-function corpusDeclaresASeededConformance(project Project) returns bool
+function corpusDeclaresASeededConformance(project Project, signatures ProgramSignatures) returns bool
 	let index = declaredConformanceIndex(project)
-	for conformerName in conformersMintedWithoutTheirOwnMethods() 'eachSeededConformer'
+	for conformerName in conformersMintedWithoutTheirOwnMethods(signatures) 'eachSeededConformer'
 		if index.contains(conformerName) 'declaresOne'
 			return true
 		end 'declaresOne'

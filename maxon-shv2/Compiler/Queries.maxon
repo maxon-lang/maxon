@@ -220,6 +220,13 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 		userPaths.push(path)
 	end 'eachFile'
 
+	// ⭐⭐ **AND WHICH DECLARATIONS CARRY THE ARRAY-LITERAL MARKER — AHEAD OF BOTH HALVES (ARR5b).** The fold
+	// itself asks (`Parser.canonicalGenericBaseNameInThisFile` decides what a written `__ManagedMemory`
+	// denotes, and `ProgramSignatures.isArrayBaseName` sits on every array question a swept declaration
+	// raises), so the answer cannot come from the fold — the same ordering argument the contest below makes,
+	// one step earlier because the USER half needs it too.
+	try discoverArrayLiteralConformers(project, signatures: signatures, userPaths: userPaths, stdlibPaths: stdlibPaths)
+
 	for path in userPaths 'eachUserFile'
 		try foldOneFileInto(project, signatures: signatures, path: path, isStdlibSource: false)
 	end 'eachUserFile'
@@ -406,6 +413,114 @@ function namespaceAnchorFor(project Project, cwd FilePath, isStdlibSource bool) 
 
 	return try root.parent() otherwise panic("namespaceAnchorFor: '{root.toString()}' has no parent — a single-file build's root is an absolute FILE path, resolved against the cwd on the line above")
 end 'namespaceAnchorFor'
+
+// ⭐⭐⭐ **FIND THE `BuiltinArrayLiteral` CONFORMERS — THE ONE PLACE THE COMPILER LEARNS WHICH NAME THE ARRAY
+// RECORD GOES BY (ARR5b).** The user's directive is *"there should be nothing array specific in the shv2
+// compiler"*, with the marker INTERFACES as the stated exception; this walk is that exception doing the
+// work, in place of `SignatureIndex.ArrayBuiltinBaseName` being read as a fact.
+//
+// ⚠ **BEFORE THE USER FOLD, AND THAT POSITION IS FORCED IN BOTH DIRECTIONS.** It must precede the fold
+// because the fold reads the answer; it cannot be moved into the fold because a `typealias NumBag =
+// Bag with Num` in one file is swept before the `type Bag` in another. It runs over BOTH halves for the
+// same reason the contest runs over one: an under-approximation here is a declaration silently treated as
+// an ordinary struct, and the walk is the only reader that precedes everything.
+//
+// ⚠ **IT READS TOKENS, LIKE THE CONTEST BELOW, AND ITS GRAMMAR IS AN ALLOW-LIST RATHER THAN A TERMINATOR
+// LIST.** A type HEADER is `type <Name> [uses …] [implements …] [where …]` and nothing else, so the scan
+// walks only the kinds a header can contain and stops at the first token that cannot be one. The
+// alternative — scanning until a known terminator — has to enumerate every keyword that could follow, and
+// the one it forgets makes the walk run on into a BODY and read a `BuiltinArrayLiteral` out of somewhere
+// that is not a conformance clause. `type` is legal as a parameter NAME (D8), so a spurious start is
+// expected and is what the allow-list stops: `f(type Foo)` reaches `returns` and ends, having seen no
+// `implements`.
+function discoverArrayLiteralConformers(project Project, signatures ProgramSignatures, userPaths MaxonSourcePathArray, stdlibPaths MaxonSourcePathArray) throws CompileError
+	try noteArrayLiteralConformersIn(project, signatures: signatures, paths: userPaths, isStdlibSource: false)
+	try noteArrayLiteralConformersIn(project, signatures: signatures, paths: stdlibPaths, isStdlibSource: true)
+end 'discoverArrayLiteralConformers'
+
+// One provenance half of the walk above. Split out so the two halves are one body rather than two copies of
+// it, exactly as `foldOneFileInto` is — and so the `isStdlibSource` bit the caller already knows is PASSED
+// rather than re-derived per file.
+function noteArrayLiteralConformersIn(project Project, signatures ProgramSignatures, paths MaxonSourcePathArray, isStdlibSource bool) throws CompileError
+	for path in paths 'eachFile'
+		// A memo MISS here and a HIT for every later reader of this file — the fold asks for the same tokens
+		// moments later, exactly as the contest's own walk is the miss for the stdlib half.
+		let tokens = try queryActiveTokens(project, path: path)
+		for i in 0 upto tokens.count() 'eachToken'
+			let tok = try tokens.get(i) otherwise panic("noteArrayLiteralConformersIn: tokens.get OOB at {i} below count {tokens.count()}")
+			if tok.kind != TokenKind.type 'notATypeKeyword'
+				continue
+			end 'notATypeKeyword'
+
+			let nameTok = try tokens.get(i + 1) otherwise break
+			if nameTok.kind != TokenKind.identifier 'malformedDeclaration'
+				continue
+			end 'malformedDeclaration'
+
+			if not headerDeclaresTheArrayLiteralMarker(tokens, headerStart: (i + 2) as TokenIndex) 'notAConformer'
+				continue
+			end 'notAConformer'
+
+			signatures.noteArrayLiteralConformer(nameTok.value, isStdlibSource: isStdlibSource)
+		end 'eachToken'
+	end 'eachFile'
+end 'noteArrayLiteralConformersIn'
+
+// Does the type header beginning at `headerStart` name `BuiltinArrayLiteral` as one of its OWN conformances?
+// The allow-list the caller's header argues for: the walk advances while the token could belong to a header
+// and stops the moment one could not, so it can never read past the declaration it was started on.
+//
+// ⚠ **A CONFORMANCE IS A LIST *HEAD* AT PAREN DEPTH 0, AND THE TWO NARROWINGS ARE DIFFERENT MISTAKES.**
+// Without the `implements` gate, `type Cell uses BuiltinArrayLiteral` — a type parameter spelled that way —
+// reads as a conformer. Without the head-position test, so does
+// `type Cell implements Holds with (BuiltinArrayLiteral, E)`, where the name is a conformance ARGUMENT: the
+// declaration conforms to `Holds`, not to the marker, and admitting it would hand a value of an ordinary
+// struct the managed record's identity.
+function headerDeclaresTheArrayLiteralMarker(tokens TokenArray, headerStart TokenIndex) returns bool
+	var atAConformanceHead = false
+	var pastImplements = false
+	var parenDepth = 0
+	for i in headerStart upto tokens.count() 'eachHeaderToken'
+		let tok = try tokens.get(i) otherwise panic("headerDeclaresTheArrayLiteralMarker: tokens.get OOB at {i} below count {tokens.count()}")
+		if not tokenKindBelongsInATypeHeader(tok.kind) 'theHeaderEnds'
+			return false
+		end 'theHeaderEnds'
+
+		if atAConformanceHead and tok.kind == TokenKind.identifier and tok.value.equals(BuiltinArrayLiteralInterfaceName) 'theMarker'
+			return true
+		end 'theMarker'
+
+		if tok.kind == TokenKind.leftParen 'intoAnArgumentList'
+			parenDepth = parenDepth + 1
+		end 'intoAnArgumentList'
+
+		if tok.kind == TokenKind.rightParen and parenDepth > 0 'outOfOne'
+			parenDepth = parenDepth - 1
+		end 'outOfOne'
+
+		if tok.kind == TokenKind.implements 'theConformanceListOpens'
+			pastImplements = true
+		end 'theConformanceListOpens'
+
+		// The NEXT token heads a conformance iff this one opened the list or separated two of its entries. A
+		// comma inside a `with (…)` separates ARGUMENTS, which is what the depth test keeps out; a comma
+		// before `implements` separates `uses` parameters, which is what `pastImplements` keeps out.
+		atAConformanceHead = tok.kind == TokenKind.implements or (pastImplements and parenDepth == 0 and tok.kind == TokenKind.comma)
+	end 'eachHeaderToken'
+
+	return false
+end 'headerDeclaresTheArrayLiteralMarker'
+
+// Every token kind a `type <Name> [uses …] [implements …] [where …]` header can contain. An ALLOW-list, for
+// the reason `discoverArrayLiteralConformers` gives: the complement is every keyword in the language and
+// forgetting one runs the scan into a type BODY.
+//
+// `intLiteral` is here for a sized base (`Vector with 3 Int`) and the three primitive-type keywords for a
+// primitive type argument (`Iterable with (int, IntIter)`) — both are ARGUMENTS inside the clause, so
+// leaving them out would end the scan in the middle of a conformance list.
+function tokenKindBelongsInATypeHeader(kind TokenKind) returns bool
+	return kind == TokenKind.identifier or kind == TokenKind.comma or kind == TokenKind.leftParen or kind == TokenKind.rightParen or kind == TokenKind.uses or kind == TokenKind.implements or kind == TokenKind.with or kind == TokenKind.where or kind == TokenKind.is or kind == TokenKind.and or kind == TokenKind.selfType or kind == TokenKind.intLiteral or kind == TokenKind.int or kind == TokenKind.float or kind == TokenKind.bool
+end 'tokenKindBelongsInATypeHeader'
 
 // ⭐⭐ **DECIDE THE STDLIB/USER SHADOW CONTEST — between the two halves of the sweep (A1s wave 2).** Every
 // NOMINAL type name a listed stdlib module declares is offered to `contestStdlibTypeName`, which keeps only

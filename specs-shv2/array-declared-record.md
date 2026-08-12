@@ -417,15 +417,52 @@ end 'main'
 error E2015: <fragment>:8:10: Unsupported: `Array` implements `BuiltinArrayLiteral` over the parameter `Element` it declares, so its record IS a `__ManagedMemory with Element` and its literal is an identity on that buffer — but its first field is not one. A value whose bytes are the buffer's and whose declared fields say otherwise has those fields discarded at construction and read back past the record's end when it is cloned or destroyed. Declare exactly one field, `managed as __ManagedMemory with Element`, or drop the marker so the declaration keeps the box its fields describe
 ```
 
-<!-- test: error.a-generic-conformer-of-another-name-is-still-refused -->
-⛔ **THE BOUNDARY THE STRUCTURAL ADMISSION MUST NOT CROSS.** This declaration is generic over one
-parameter and its sole field IS a `__ManagedMemory` over that parameter — the whole shape — and it is
-still not the record, because `canonicalGenericBaseName` folds a written `__ManagedMemory` onto the
-RECORD DECLARATION's name and not onto `Bag`. So the field's instance is the record's, `Bag`'s own is
-not, and admitting the identity here would hand back a value of a type `Self` is not. It keeps the
-sentence about the names the compiler owns a record for; see
-`ProgramSignatures.declarationIsTheManagedRecord` for why that half of the test cannot leave until the
-fold learns its target from the conformance.
+<!-- test: a-generic-conformer-of-another-name-is-the-record-too -->
+⭐⭐ **THE BOUNDARY THE STRUCTURAL ADMISSION USED TO STOP AT, AND THE NAME IS NOT WHERE IT LIES.** This
+declaration is generic over one parameter and its sole field IS a `__ManagedMemory` over that parameter
+— the whole shape — so it IS the record, and it is admitted although nothing about it is spelled
+`Array`. What used to refuse it was the fold: `canonicalGenericBaseName` mapped a written
+`__ManagedMemory` onto a CONSTANT, so `Bag`'s own field resolved to the record declaration's instance
+rather than to `Bag`'s, and the identity would have handed back a value of a type `Self` is not. The
+fold now learns its target from the conformance — inside a `BuiltinArrayLiteral` conformer's body a
+written `__ManagedMemory` is that conformer — so the field's instance IS `Bag`'s and the shape test is
+the whole test.
+```maxon
+typealias Num = int(0 to 1000)
+
+type Bag uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Bag'
+
+typealias NumBag = Bag with Num
+
+function main() returns ExitCode
+	var b = NumBag.create()
+	b.push(4 as Num)
+	b.push(5 as Num)
+	return (b.count() + try b.get(1) otherwise panic("get: index 1 was just pushed")) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: a-conformer-of-another-name-owns-its-managed-elements -->
+⭐ **AND ITS OWNERSHIP CASCADE IS ITS OWN.** The record identity decides the drop callee and the element
+descriptor, so a conformer admitted by SHAPE has to carry managed elements as correctly as the corpus's
+does — `__destruct_Bag_String` is a distinct symbol from the corpus array's and is built from `Bag`'s own
+instance. A leak or a double free here would exit 101 rather than fail an expectation, which is why the
+case pushes owned strings and reads one back.
 ```maxon
 type Bag uses Element implements BuiltinArrayLiteral
 	typealias ElementMemory = __ManagedMemory with Element
@@ -435,14 +472,66 @@ type Bag uses Element implements BuiltinArrayLiteral
 	export static function init(managed ElementMemory) returns Self
 		return Self{managed: managed}
 	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
 end 'Bag'
 
+typealias StringBag = Bag with String
+
 function main() returns ExitCode
-	return 0 as ExitCode
+	var b = StringBag.create()
+	b.push("alpha")
+	b.push("beta")
+	let second = try b.get(1) otherwise panic("get: index 1 was just pushed")
+	print(second)
+	return (b.count() + second.byteLength()) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:8:10: Unsupported: `Bag` implements `BuiltinArrayLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
+```stdout
+beta
+```
+```exitcode
+6
+```
+
+<!-- test: a-conformer-of-another-name-and-the-library-array-are-two-records-in-one-program -->
+⭐⭐ **TWO RECORDS, TWO GIDS, ONE PROGRAM — which is what the fold being per-DECLARATION rather than
+per-compile buys.** `Bag with String` is `Bag`'s own instance and `"a,bb,ccc".split(",")` is the corpus
+array's, and both carry the compiler's synthesized surface because both declarations carry the marker. A
+single canonical fold target would have merged them, which is the merge `ARR5` measured and refused.
+```maxon
+type Bag uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Bag'
+
+typealias StringBag = Bag with String
+
+function main() returns ExitCode
+	var mine = StringBag.create()
+	mine.push("xy")
+
+	var total = mine.count()
+	for part in "a,bb,ccc".split(",") 'librarysLoop'
+		total = total + part.byteLength()
+	end 'librarysLoop'
+
+	return total as ExitCode
+end 'main'
+```
+```exitcode
+7
 ```
 
 <!-- test: error.a-conformer-of-another-name-is-still-refused -->

@@ -2925,9 +2925,22 @@ end 'directCloneCalleeOf'
 // emptying it hangs the loop.
 let ReservedTypeNamePrefix = b"__"
 
-// The name of the builtin `Array` generic type (`Array with Integer`). Shared by the parser's
-// `Base with Args` check (which treats `Array` as a one-parameter generic without a `type` declaration)
-// and every `Array`-instance query — one speller, so the two cannot drift. See `isArrayBaseName`.
+// ⭐⭐ **THE NAME shv2 SYNTHESIZES THE ARRAY RECORD UNDER WHEN NO LISTED MODULE DECLARES ONE — AND SINCE
+// ARR5b THAT IS ALL IT IS.** It was the answer to *"which base is an `Array`?"*, read as a fact by 47 sites;
+// the answer is now DISCOVERED from the `BuiltinArrayLiteral` conformance
+// (`Queries.discoverArrayLiteralConformers` ⇒ `ProgramSignatures.arrayRecordDeclaredName`), which is the
+// user's own stated exception to *"nothing array specific in the shv2 compiler"*.
+//
+// ⚠ **IT IS A SEED, NOT A FALLBACK CONSTANT, AND THE DIFFERENCE IS THAT IT DESCRIBES A REAL COMPILE.**
+// shv2 minted this record with no declaration behind it for the whole of P1.7, before `stdlib/Array.maxon`
+// was listed; a corpus that declares no conformer is that compiler, and it still has to file the values it
+// mints under some base. `noteArrayLiteralConformer` REPLACES the seed the moment a listed module declares
+// one, which every real compile does.
+//
+// ⚠ **THE TWO REMAINING DIRECT READERS ARE SENTENCES ABOUT THE SYNTHESIZED SURFACE**
+// (`twoArrayDeclarationsRefusal`, `surfaceRosterRefusal`'s array arm) — free functions with no index to
+// ask, quoting the name the compiler's own P1.7 roster is provided for. See `isArrayBaseName` for the
+// discovered set those sentences do NOT decide.
 export let ArrayBuiltinBaseName = b"Array"
 
 // The name `stdlib/Array.maxon` gives the `Array`'s sole type parameter — `export type Array uses Element`.
@@ -3586,9 +3599,16 @@ export let ManagedMemoryTypeName = b"__ManagedMemory"
 // It is carried to the declaration sites separately (`GenericAliasEntry.baseIsBuffer` ⇒
 // `ProgramSignatures.aliasDenotesBufferSurface`), because a value's surface is a fact about the SPELLING and
 // the type is deliberately the same either way.
-export function canonicalGenericBaseName(baseName ByteArray) returns ByteArray
-	return ArrayBuiltinBaseName if baseName.equals(ManagedMemoryTypeName) else baseName
-end 'canonicalGenericBaseName'
+//
+// ⭐⭐⭐ **AND SINCE ARR5b THE TARGET IS DISCOVERED, NOT WRITTEN DOWN — SEE
+// `Parser.canonicalGenericBaseNameInThisFile`, WHICH IS THE WHOLE OF THE FOLD.** The rule that stood here
+// was `ArrayBuiltinBaseName if baseName.equals(ManagedMemoryTypeName) else baseName`, a constant, and it
+// made the compiler know the name `Array`. It now reads the target off the `BuiltinArrayLiteral`
+// conformance — the user's own stated exception to *"nothing array-specific in the compiler"* — which is
+// why the rule moved to the parser: the answer depends on the READER (a stdlib file spells the corpus's
+// declaration under the contest's mint) and on the ENCLOSING DECLARATION (inside a conformer's own body a
+// written `__ManagedMemory` is that conformer), and neither is a fact a free function over one name can
+// see.
 
 // ⭐⭐ **ONE DECLARED TYPE POSITION'S PRE-ERASURE `__ManagedMemory` SPELLING (A2j / A2m).** A parameter's
 // annotation, a struct field's, a return clause's: each is a place where the SOURCE said something no
@@ -6854,6 +6874,33 @@ export type ProgramSignatures
 	// `shadowRenameIsTaken` — a mint must not land on a name the stdlib ALREADY declares, which is the third
 	// claimant on the reserved space and the one no re-probe of the other two would ever notice.
 	var stdlibDeclaredTypeNames as DeclaredTypeNameSet
+	// ⭐⭐ **EVERY DECLARATION IN THIS PROGRAM THAT CARRIES THE ARRAY-LITERAL MARKER (ARR5b)** — filled from
+	// the TOKENS by `Queries.discoverArrayLiteralConformers` before the first file is folded, because the
+	// fold itself has to know the answer (`Parser.canonicalGenericBaseNameInThisFile`, `isArrayBaseName`).
+	// The declared spelling, not the post-contest one: the contest is decided between the two halves of the
+	// sweep and this runs ahead of both, so the rename is applied at the READ exactly as it is for the
+	// corpus name below.
+	//
+	// ⚠ **AN ARRAY AND NOT A SET, BECAUSE ONE READER NEEDS THE ORDER AND ALL OF THEM NEED IT STABLE.**
+	// `arrayDeclarationNames` feeds the descriptor pre-scan, which records one edge per serving declaration;
+	// a hash set's iteration order would make that edge order a function of the hash rather than of the
+	// program. A whole program declares one such type, or two under a contest, so membership is a scan of
+	// one or two names — cheaper than the hash it replaces and one representation instead of two.
+	var arrayLiteralConformers as ByteArrayArray
+	// Does any declaration OTHER than the corpus's carry the marker? The gate `isArrayBaseName` puts in front
+	// of the scan — false for every program that declares no container of its own, which is the whole
+	// existing corpus and every one of its goldens.
+	var hasNonCorpusArrayConformer as bool
+	// ⭐⭐ **THE NAME A LISTED STDLIB MODULE DECLARES THE RECORD UNDER — the fold target for every
+	// `__ManagedMemory` written OUTSIDE a conformer's own body.** `stdlib/Array.maxon:104` gives it today, so
+	// this reads `Array` and every emitted per-type symbol keeps the spelling it had.
+	//
+	// ⚠ **SEEDED WITH `ArrayBuiltinBaseName`, AND THAT SEED IS THE COMPILER'S SYNTHESIZED RECORD AND NOT A
+	// FALLBACK TO A CONSTANT.** shv2 minted the record under that name for the whole of P1.7, before
+	// `stdlib/Array.maxon` was listed; a program compiled against a corpus that declares no
+	// `BuiltinArrayLiteral` conformer at all is that program, and it still needs a name for the record it
+	// mints. Discovery REPLACES the seed the moment a listed module declares one.
+	var corpusArrayRecordName as ByteArray
 	// The contest's ANSWER: bare name ⇒ the reserved name the stdlib declaration is moved to. EMPTY for
 	// every program that shadows nothing, which is the whole existing corpus — and that emptiness is what
 	// makes this mechanism byte-neutral rather than merely cheap (see `Parser.shadowRenamedTokens`).
@@ -6948,7 +6995,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: ArrayBuiltinBaseName, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -7074,6 +7121,82 @@ export type ProgramSignatures
 			self.stdlibDeclaredTypeNames.insert(name)
 		end 'each'
 	end 'noteStdlibDeclaredTypeNames'
+
+	// ⭐⭐ **RECORD ONE `type <Name> … implements … BuiltinArrayLiteral` DECLARATION (ARR5b).** Called by
+	// `Queries.discoverArrayLiteralConformers`, once per such declaration, before the first file is folded.
+	//
+	// ⚠ **THE STDLIB'S IS SINGLED OUT BECAUSE IT ANSWERS A DIFFERENT QUESTION FROM THE OTHERS.** Every
+	// conformer is a name whose instances ARE the managed record (`isArrayBaseName`); exactly one of them is
+	// the record every stdlib SIGNATURE is written against, and that one is the fold target a
+	// `__ManagedMemory` written outside any conformer's body must reach. A user's own conformer cannot serve
+	// that role — a `ByteArray` handed back by `String.toByteArray()` is the corpus's record, and folding
+	// `__ManagedMemory` in a user file onto `Bag` would give one record two ids at every crossing.
+	//
+	// ⚠ **LAST STDLIB DECLARATION WINS, AND THE CORPUS HAS EXACTLY ONE.** `stdlib/Vector.maxon` also carries
+	// the marker and is deliberately NOT listed (`VectorBuiltinBaseName`'s header records why shv2
+	// synthesizes `Vector` instead), so the walk meets one. v1 handles the same ambiguity by PROBING THE NAME
+	// `"Array"` first (`maxon-selfhosted/Compiler/Parser.maxon:16043-16050`) under a comment claiming the
+	// compiler knows nothing about `Array` — the probe is the knowledge, and it is not ported.
+	export function noteArrayLiteralConformer(name ByteArray, isStdlibSource bool)
+		if not self.declaresTheArrayLiteralMarker(name) 'firstDeclarationOfThisName'
+			self.arrayLiteralConformers.push(name)
+		end 'firstDeclarationOfThisName'
+
+		if isStdlibSource 'theCorpusDeclaresTheRecord'
+			self.corpusArrayRecordName = name
+			return
+		end 'theCorpusDeclaresTheRecord'
+
+		self.hasNonCorpusArrayConformer = true
+	end 'noteArrayLiteralConformer'
+
+	// ⭐ **DOES A DECLARATION OF THIS NAME CARRY THE ARRAY-LITERAL MARKER?** THE one reader of the discovered
+	// list, so no caller can half-apply the "one or two names" rule the list's own header states.
+	export function declaresTheArrayLiteralMarker(name ByteArray) returns bool
+		for conformer in self.arrayLiteralConformers 'eachDeclaredConformer'
+			if conformer.equals(name) 'thisOne'
+				return true
+			end 'thisOne'
+		end 'eachDeclaredConformer'
+
+		return false
+	end 'declaresTheArrayLiteralMarker'
+
+	// ⭐⭐ **THE NAME THE CORPUS DECLARES THE MANAGED RECORD UNDER, AS `readerIsStdlibSource` SPELLS IT** —
+	// the fold target for every `__ManagedMemory` written outside a conformer's own body (F31), in ONE place
+	// so a caller cannot half-apply it. A stdlib file spells a contested corpus declaration under the
+	// contest's mint; a user file spells it bare, because there the bare name is what the user's own tokens
+	// already mean.
+	//
+	// ⚠ **THE RENAME IS APPLIED AT THE READ AND NOT AT DISCOVERY**, for `stdlibShadowRenameOf`'s own reason:
+	// the contest is decided between the two halves of the sweep and this is asked on both sides of it.
+	export function arrayRecordBaseNameIn(readerIsStdlibSource bool) returns ByteArray
+		return self.stdlibShadowRenameOf(self.corpusArrayRecordName) if readerIsStdlibSource else self.arrayRecordDeclaredName()
+	end 'arrayRecordBaseNameIn'
+
+	// ⭐⭐ **THE NAME THE DECLARATION ITSELF WRITES, BEFORE ANY CONTEST — and the base every compiler-MINTED
+	// array instance is interned under.** A `b"…"` literal, an `[1, 2, 3]`, `<Enum>.allCaseNames`,
+	// `String.split`'s result: the compiler makes those values and has to file them under some base.
+	//
+	// ⛔ **IT IS THE DECLARED NAME AND NOT `arrayRecordBaseNameIn`'s, AND THE REASON IS AN ORDERING ONE.**
+	// Those instances are program-wide (`internArrayByteInstance` memoizes exactly one), so their base must
+	// be a single answer for the whole compile — and the CONTEST is decided between the two halves of the
+	// sweep, so a USER file interning one asks before the answer exists while a stdlib file asks after. A
+	// contest-sensitive name here would make the memo's value depend on which half happened to ask first.
+	// ⇒ Under a contest the corpus's own `ByteArray` and the compiler's minted byte instance are two ids of
+	// one record, exactly as they were before ARR5b. Moving the mint onto the post-contest name needs the
+	// contest decided ahead of the user fold, which needs the user half's declared names read from TOKENS —
+	// a second derivation of `noteUserDeclaredTypeNames`, and so its own rung.
+	export function arrayRecordDeclaredName() returns ByteArray
+		return self.corpusArrayRecordName
+	end 'arrayRecordDeclaredName'
+
+	// ⭐ **THE SAME NAME AS THE *STDLIB* SPELLS IT** — what `isArrayBaseName` recognizes as the corpus
+	// declaration MOVED, and what a reader with no file of its own (the conformance runtime, the reachability
+	// walk) has to use, because a corpus body is compiled under the stdlib's spelling.
+	export function arrayRecordBaseName() returns ByteArray
+		return self.arrayRecordBaseNameIn(true)
+	end 'arrayRecordBaseName'
 
 	// ⭐ **DECIDE THE CONTEST FOR ONE NAME A LISTED STDLIB MODULE DECLARES.** A no-op unless a USER file
 	// declares it too; otherwise it mints the reserved name the stdlib declaration will be keyed under and
@@ -9551,8 +9674,8 @@ export type ProgramSignatures
 	// — the same sweep-writes/parser-reads discipline `internBuiltinIntegerInstance` states.
 	export function constArrayValueType(element ConstArrayElementKind) returns MaxonType
 		return match element 'e'
-			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(ArrayBuiltinBaseName))
-			string gives MaxonType.genericInstance(self.builtinInstanceForElement(ArrayBuiltinBaseName, element: MaxonType.string))
+			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(self.arrayRecordDeclaredName()))
+			string gives MaxonType.genericInstance(self.builtinInstanceForElement(self.arrayRecordDeclaredName(), element: MaxonType.string))
 		end 'e'
 	end 'constArrayValueType'
 
@@ -11717,7 +11840,7 @@ export type ProgramSignatures
 		// first to write it. It is OVER-interned exactly as this whole probe is (a file merely NAMING
 		// `__ManagedMemory` registers the layout), which is the sweep's standing discipline: over-register
 		// rather than miss.
-		_ = self.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
+		_ = self.internBuiltinIntegerInstance(self.arrayRecordDeclaredName())
 
 		if self.structTypes.contains(ManagedFileTypeName) 'alreadyRegistered'
 			return
@@ -12777,18 +12900,31 @@ export type ProgramSignatures
 	// `isMapBaseName` answers FALSE the moment the corpus declares a `Map`, because a corpus `Map` is an
 	// ordinary declared generic and nothing about it is served by name. An `Array` never stops being
 	// compiler-owned — its record IS its buffer — so its surface is served by name for as long as it exists.
+	//
+	// ⭐⭐ **AND SINCE ARR5b THE NAMES ARE DISCOVERED FROM THE MARKER, NOT SPELLED HERE.** The first arm is
+	// every `type <Name> … implements BuiltinArrayLiteral` the program declares — the corpus's, a user's own
+	// `Array` under a contest, and a conformer of any other name. The second is that corpus declaration
+	// MOVED, which is a name no declaration spells in its own source.
 	export function isArrayBaseName(name ByteArray) returns bool
-		if name.equals(ArrayBuiltinBaseName) 'theBareName'
+		if name.equals(self.corpusArrayRecordName) 'theRecordsOwnName'
 			return true
-		end 'theBareName'
+		end 'theRecordsOwnName'
 
-		// The shape test first, for `Parser.requireUnreservedName`'s measured reason: this predicate sits on
-		// every array question in the program, the table lookup is not free, and no ordinary name can reach it.
+		// ⚠ **THE SET IS BEHIND A BOOL, AND THAT BOOL IS FALSE FOR THE WHOLE EXISTING CORPUS.** This predicate
+		// sits on every array question in the program and the set lookup is not free, so a program that
+		// declares no conformer of its own pays one bool test for the widening — the same gate
+		// `hasStdlibShadowRenames` puts in front of the contest's own costs.
+		if self.hasNonCorpusArrayConformer and self.declaresTheArrayLiteralMarker(name) 'anotherDeclaredConformer'
+			return true
+		end 'anotherDeclaredConformer'
+
+		// The shape test, for `Parser.requireUnreservedName`'s measured reason: no ordinary name can reach the
+		// contest's mint, so the prefix rules the remaining question out before the map is consulted.
 		if not bytesStartWith(name, prefix: ReservedTypeNamePrefix) 'notAMintedName'
 			return false
 		end 'notAMintedName'
 
-		return name.equals(self.stdlibShadowRenameOf(ArrayBuiltinBaseName))
+		return name.equals(self.arrayRecordBaseName())
 	end 'isArrayBaseName'
 
 	// ⭐⭐ **THE NAME(S) AN `Array` DECLARATION GOES BY IN THIS COMPILE — the ENUMERATION behind the predicate
@@ -12803,9 +12939,16 @@ export type ProgramSignatures
 	// nothing reads, a missing one aborts the compiler.
 	export function arrayDeclarationNames() returns ByteArrayArray
 		var names = ByteArrayArray.create()
-		names.push(ArrayBuiltinBaseName)
-		let corpus = self.stdlibShadowRenameOf(ArrayBuiltinBaseName)
-		if not corpus.equals(ArrayBuiltinBaseName) 'theCorpusDeclarationMoved'
+		for name in self.arrayLiteralConformers 'eachDeclaredConformer'
+			names.push(name)
+		end 'eachDeclaredConformer'
+
+		if not self.declaresTheArrayLiteralMarker(self.corpusArrayRecordName) 'theCompilerMintsTheRecordItself'
+			names.push(self.corpusArrayRecordName)
+		end 'theCompilerMintsTheRecordItself'
+
+		let corpus = self.arrayRecordBaseName()
+		if not corpus.equals(self.corpusArrayRecordName) 'theCorpusDeclarationMoved'
 			names.push(corpus)
 		end 'theCorpusDeclarationMoved'
 
@@ -12943,7 +13086,7 @@ export type ProgramSignatures
 			return false
 		end 'opaqueElement'
 
-		return match self.arrayElementConstraintCheck(id, clauseInterfaces: intrinsicConformanceProtocolNames(ArrayBuiltinBaseName)) 'clause'
+		return match self.arrayElementConstraintCheck(id, clauseInterfaces: intrinsicConformanceProtocolNames(self.arrayRecordDeclaredName())) 'clause'
 			satisfied gives true
 			unmet gives false
 		end 'clause'
@@ -14335,7 +14478,7 @@ export type ProgramSignatures
 
 		var args = MaxonTypeArray.create()
 		args.push(MaxonType.named(self.typeNames.intern(ByteElementTypeName)))
-		self.arrayByteInstance = self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
+		self.arrayByteInstance = self.genericInstances.intern(self.typeNames.intern(self.arrayRecordDeclaredName()), args: args)
 		self.arrayByteInstanceComputed = true
 		return self.arrayByteInstance
 	end 'bareArrayByteInstance'
@@ -15142,7 +15285,7 @@ export type ProgramSignatures
 	export function internSynthesizedByteInstance() returns GenericInstanceId
 		var args = MaxonTypeArray.create()
 		args.push(MaxonType.named(self.typeNames.intern(SynthesizedByteElementName)))
-		return self.genericInstances.intern(self.typeNames.intern(ArrayBuiltinBaseName), args: args)
+		return self.genericInstances.intern(self.typeNames.intern(self.arrayRecordDeclaredName()), args: args)
 	end 'internSynthesizedByteInstance'
 
 	// ⭐⭐ **WHICH `Array` INSTANCE A `__ManagedMemory.create(count, elementSize)` YIELDS (R4.4)** — the one
@@ -15184,7 +15327,7 @@ export type ProgramSignatures
 			return self.internArrayByteInstance(readerFilePath)
 		end 'bytePacked'
 
-		return self.internBuiltinIntegerInstance(ArrayBuiltinBaseName)
+		return self.internBuiltinIntegerInstance(self.arrayRecordDeclaredName())
 	end 'managedMemoryInstanceForElementSize'
 
 	// ⭐⭐ **CAN shv2 GIVE A BUFFER OF THIS ELEMENT WIDTH A TYPE AT ALL? (R4.4 review.)** The gate the answer
@@ -15428,7 +15571,7 @@ export type ProgramSignatures
 	// "interned here".
 	export function internLiteralContainerInstances()
 		if self.sawAggregateArrayLiteral 'aggregateArrayLiteral'
-			self.internAggregateElementInstances(ArrayBuiltinBaseName)
+			self.internAggregateElementInstances(self.arrayRecordDeclaredName())
 		end 'aggregateArrayLiteral'
 
 		// A `List from […]` needs the same set one base over: the construction's element type is the SOURCE
@@ -15442,7 +15585,7 @@ export type ProgramSignatures
 		// `<Enum>.allCases` needs the ENUM half of that same set and nothing else — a case value is never a
 		// struct and never a String — so it asks for the enum loop rather than for the whole walk.
 		if self.sawEnumAllCasesAccess 'enumAllCases'
-			self.internEnumElementInstances(ArrayBuiltinBaseName)
+			self.internEnumElementInstances(self.arrayRecordDeclaredName())
 		end 'enumAllCases'
 	end 'internLiteralContainerInstances'
 
@@ -15753,7 +15896,7 @@ export type ProgramSignatures
 			// intrinsic row claims — which is exactly how a non-conforming `Array with E` goes on being
 			// refused through the ordinary E3017 door. This door holds no source spelling to answer with.
 			match self.instanceConformerReduction(typeNameIdOf(t)) 'reduction'
-				arrayBuiltin then return String.from(ArrayBuiltinBaseName)
+				arrayBuiltin then return String.from(self.arrayRecordDeclaredName())
 				declaredBase(baseName) then return String.from(baseName)
 				unreduced then return self.mangleTypeArg(t)
 			end 'reduction'
@@ -15894,7 +16037,7 @@ export type ProgramSignatures
 	// mangler). Either way the answer conforms to nothing, which is the part that decides the program.
 	function conformerNameOfInstanceSpelling(id GenericInstanceId, spelling ByteArray) returns String
 		match self.instanceConformerReduction(id) 'reduction'
-			arrayBuiltin then return String.from(ArrayBuiltinBaseName)
+			arrayBuiltin then return String.from(self.arrayRecordDeclaredName())
 			declaredBase(baseName) then return String.from(baseName)
 			unreduced then return String.from(spelling)
 		end 'reduction'
