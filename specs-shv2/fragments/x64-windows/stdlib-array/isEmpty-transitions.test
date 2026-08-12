@@ -44,7 +44,7 @@ func @main {
     x64.callDirect __managed_create
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_is_empty
+    x64.callDirect Array.isEmpty
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, e1
     x64.jmp ifcont
@@ -63,7 +63,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_push
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_is_empty
+    x64.callDirect Array.isEmpty
     x64.cmpRegImm32 r8, 1
     x64.jcc equal, e2
     x64.jmp ifcont
@@ -90,7 +90,7 @@ func @main {
     x64.jmp trycont
   trycont:
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_is_empty
+    x64.callDirect Array.isEmpty
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, e3
     x64.jmp ifcont
@@ -112,6 +112,19 @@ func @main {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.isEmpty {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, r8
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

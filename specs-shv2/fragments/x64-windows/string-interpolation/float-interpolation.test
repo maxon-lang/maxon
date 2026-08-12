@@ -139,6 +139,19 @@ func @Array.clone {
     x64.ret
 }
 
+func @Array.isEmpty {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.cmpRegImm32 r8, 0
+    x64.setccReg equal, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
 func @Array.slice {
   entry:
     x64.pushReg rbp
@@ -529,7 +542,7 @@ func @__float_bitsFromDecimal {
     x64.movRegReg rdx, r13
     x64.callDirect __bigSubtract
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_is_empty
+    x64.callDirect Array.isEmpty
     x64.xorRegImm32 r8, r8, 1
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 r8, 0
@@ -2213,7 +2226,7 @@ func @__bigToDecimalDigits {
     x64.jmp whilehdr
   whilehdr:
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_is_empty
+    x64.callDirect Array.isEmpty
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, eachGroup
@@ -2228,7 +2241,7 @@ func @__bigToDecimalDigits {
     x64.jmp whilehdr
   whileexit:
     x64.movRegReg rcx, r13
-    x64.callDirect __managed_is_empty
+    x64.callDirect Array.isEmpty
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, zero
     x64.jmp ifcont
@@ -2604,7 +2617,7 @@ func @__bigShiftLeft {
     x64.movRegReg r12, rdx
     x64.storeSlotReg slot39, r12
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_is_empty
+    x64.callDirect Array.isEmpty
     x64.movRegImm32 rax, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, critsplit
@@ -3194,7 +3207,7 @@ func @__bigBitLength {
     x64.prologue 104
     x64.movRegReg rbx, rcx
     x64.movRegReg rcx, rbx
-    x64.callDirect __managed_is_empty
+    x64.callDirect Array.isEmpty
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, zero
     x64.jmp ifcont

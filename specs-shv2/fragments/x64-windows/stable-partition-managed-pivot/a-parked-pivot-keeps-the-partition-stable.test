@@ -14,6 +14,13 @@ type Array uses Element implements BuiltinArrayLiteral
 		return Self{}
 	end 'create'
 
+	// `stdlib/Array.maxon:363`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
+	// container declared here declares it exactly as the library does — the transcription stays in step
+	// with `driftQuicksort.maxon`, whose receiver is that library `Array`.
+	export function clear()
+		managed.clear()
+	end 'clear'
+
 	export function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
 		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")
 		pivotHold.clear()
@@ -134,6 +141,24 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
+func @Array.clear {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_clear
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
 func @Array.stablePartition {
   entry:
     x64.pushReg rbp
@@ -240,7 +265,7 @@ func @Array.stablePartition {
     x64.ret
   tryok:
     x64.movRegReg rcx, r13
-    x64.callDirect __managed_clear
+    x64.callDirect Array.clear
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
     x64.callDirect __retain_type_param

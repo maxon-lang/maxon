@@ -42,7 +42,7 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 72
-    x64.leaRegRdata rbx, [rip + __str_rec_9]
+    x64.leaRegRdata rbx, [rip + __str_rec_17]
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
     x64.callDirect __managed_create
@@ -76,7 +76,7 @@ func @main {
     x64.jcc notEqual, tryerr
     x64.jmp tryok
   tryerr:
-    x64.leaRegRdata rcx, [rip + __str_rec_10]
+    x64.leaRegRdata rcx, [rip + __str_rec_18]
     x64.jmp trycont
   tryok:
     x64.movRegReg rcx, r8
@@ -85,7 +85,7 @@ func @main {
     x64.callDirect sizeOf
     x64.movRegReg rbx, r8
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_clear
+    x64.callDirect Array.clear
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
@@ -95,7 +95,7 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
-    x64.leaRegRdata rax, [rip + __str_rec_11]
+    x64.leaRegRdata rax, [rip + __str_rec_19]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
@@ -138,6 +138,24 @@ func @main {
     x64.popReg r14
     x64.popReg r13
     x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.clear {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_clear
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
