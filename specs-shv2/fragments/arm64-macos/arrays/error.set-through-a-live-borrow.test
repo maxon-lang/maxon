@@ -1,0 +1,13 @@
+// Test: error.set-through-a-live-borrow
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	let s = try arr.first() otherwise ""
+	try arr.set(0, value: "a second long string that also lives on the heap") otherwise 'oob'
+		return 9
+	end 'oob'
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:5:10: cannot mutate 'arr' via 'set' while it is borrowed by 's' (borrowed at line 4)

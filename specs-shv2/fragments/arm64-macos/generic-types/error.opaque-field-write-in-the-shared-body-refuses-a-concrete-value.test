@@ -1,0 +1,26 @@
+// Test: error.opaque-field-write-in-the-shared-body-refuses-a-concrete-value
+typealias Integer = int(i64.min to i64.max)
+type Label
+	export var n as Integer
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Label'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+	export function clobber()
+		self.value = Label.create(77)
+	end 'clobber'
+end 'Box'
+typealias IntBox = Box with Integer
+function main() returns ExitCode
+	var b = IntBox.create(5)
+	b.clobber()
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:15:8: cannot assign 'Label' to variable 'Box.value' of type 'type parameter'

@@ -1,0 +1,29 @@
+// Test: error.bare-generic-name-field-reassigned-in-the-shared-body
+type Cell uses T
+	export var v as T
+	export static function make(v T) returns Self
+		return Self{v: v}
+	end 'make'
+end 'Cell'
+
+type Holder uses T
+	export var cell as Cell
+	export static function create(cell Cell) returns Self
+		return Self{cell: cell}
+	end 'create'
+	export function replace(next Cell)
+		self.cell = next
+	end 'replace'
+end 'Holder'
+
+typealias StrCell = Cell with String
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	var h = StrHolder.create(StrCell.make("first string long enough to force a heap allocation"))
+	h.replace(StrCell.make("second string, longer still, and also heap allocated"))
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:8: Unsupported: reassigning 'cell' of 'Holder', whose type is a generic instance over this type's OWN parameters — the shared generic body compiles once for every instantiation, so the drop for the value being displaced is not one callee: it is `__mm_decref` here and something else at some instantiation. The box's own destructor releases the field correctly, so reassign it through a CONCRETE receiver instead; a descriptor slot carrying a nested instance's per-instantiation destructor is a later slice

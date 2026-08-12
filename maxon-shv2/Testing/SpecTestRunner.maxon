@@ -402,15 +402,20 @@ let ShBackslash = "\\"
 // fixture directory's spec files) turned two harmless declarations into the very thing the check
 // refuses, and FAILED the bootstrap build. One declaration, read from wherever it is needed.
 
-// PASS, or FAIL carrying a human-readable reason, or SKIPPED because this target cannot express the
-// case at all. A union (not a `bool` + a message field) so a passing result has no vestigial
-// empty-string message.
+// PASS, or FAIL carrying a human-readable reason, or one of the TWO ways a case can end up neither.
+// A union (not a `bool` + a message field) so a passing result has no vestigial empty-string message.
 //
 // ⚖ **THIS IS THE GATE, AND IT IS THE WHOLE GATE** (user, 2026-08-02: *"the gate is the spec tests
 // passing"*). A `fail` is an assertion about the PROGRAM that did not hold — a wrong exit code, wrong
 // stdout, a diagnostic that did not match, a compile that should have succeeded and did not. Nothing
 // about a committed golden reaches this union; drift travels beside it as `GoldenDrift`, which is a
 // different question asked of a different artifact and is REPORTED rather than judged.
+//
+// ⚠ **THE TWO NOT-RUN ARMS ARE DIFFERENT FACTS AND MUST NOT BE FOLDED TOGETHER.** `skipped` is about
+// the TARGET — the compiler has no lowering for the construct, so no binary exists. `notRunHere` is
+// about the HOST — the binary was linked and is fine, and this machine cannot spawn it. Folded into
+// one arm, a genuine E3104 regression would hide among three thousand host-limit entries on a cross
+// lane, which is the census this project keeps paying for losing.
 export union TestOutcome
 	pass
 	fail(reason String)
@@ -421,14 +426,40 @@ export union TestOutcome
 	// `refusals` is the compiler's own E3104 text, carried so the census can name the CONSTRUCT rather
 	// than only the count — see `targetRefusalIn` for why this may never be silent.
 	skipped(refusals String)
+	// ⭐⭐ **COMPILED HERE, CANNOT BE EXECUTED HERE** — the case built a perfectly good binary for a
+	// target whose instruction set or loader this machine has no runner for (a Mach-O on Windows). The
+	// COMPILE half of the case was checked in full and its emitted code was compared against the
+	// committed golden; only the execution is missing, so it is neither a pass nor a fail.
+	//
+	// ⚠ **IT CARRIES NO REASON, DELIBERATELY.** The reason is a property of the (target, host) PAIR and
+	// is identical for every case in the run — `externalRunnerFor` is the one table that states it. A
+	// per-case copy would be the same sentence written down once per test and shipped over a pipe.
+	notRunHere
 
 	export function isPass() returns bool
 		return match self 'p'
 			pass gives true
 			fail gives false
 			skipped gives false
+			notRunHere gives false
 		end 'p'
 	end 'isPass'
+
+	// ⭐ Did a COMPILE happen whose emitted code is worth pinning against the committed golden?
+	//
+	// ⚠ **THIS IS NOT `isPass()`, AND CONFLATING THE TWO IS WHAT MADE THE CROSS LANE WORTHLESS.** A
+	// `notRunHere` case compiled cleanly and emitted a full Target-IR module; comparing that module
+	// against the golden is the ONLY verification such a case can get on this host, and it is a large
+	// fraction of what a cross lane is for. A `fail` is excluded because a failing test's IR is noise,
+	// and a `skipped` because nothing was emitted at all.
+	export function pinsEmittedCode() returns bool
+		return match self 'p'
+			pass gives true
+			fail gives false
+			skipped gives false
+			notRunHere gives true
+		end 'p'
+	end 'pinsEmittedCode'
 end 'TestOutcome'
 
 // ⭐ What this test's committed golden had to say — the SECOND, INDEPENDENT axis, deliberately not an
@@ -441,18 +472,33 @@ end 'TestOutcome'
 // breath. This file has paid for that conflation once already: `isCrossTarget` answered three
 // different questions with one boolean until arm64-linux split them (see `needsExternalRunner`).
 //
-// ⚠ A `drifted` value only ever accompanies a PASSING outcome, and that is by construction rather than
-// by convention: `recordFragmentAndCleanup` skips the golden step entirely when behaviour already failed, because
-// a failing test's IR is noise. `SpecWorkerPool.recordLine` states the same invariant from the wire's
-// side, where it decides that three record kinds cover all four combinations.
+// ⚠ Only an outcome that PINS EMITTED CODE reaches this axis at all — `pass` and `notRunHere` — and
+// that is by construction rather than by convention: `recordFragmentAndCleanup` skips the golden step
+// entirely when behaviour already failed, because a failing test's IR is noise, and when nothing was
+// emitted. Everything else carries `notPinned`.
+//
+// ⭐⭐ **THE THREE "NO COMPARISON HAPPENED" ANSWERS ARE SEPARATE ARMS, AND THAT IS THIS RUNG'S POINT.**
+// They used to be one `none`, which read as "nothing to report" and was reported as nothing — so a run
+// that MINTED sixteen hundred first-time goldens and a run that COMPARED sixteen hundred committed ones
+// printed the identical trailer. Minting is not verification; a golden this host was not allowed to
+// write is not verification either; and only `matched` is. A reader has to be able to tell the three
+// apart, so the type does.
 export union GoldenDrift
-	// Nothing to report: the golden matched, was just minted, was regenerated under
-	// `--update-required`, or this case pins no golden at all.
-	none
+	// This case pins no golden: its verdict was a failure or a target skip, or the target emits no
+	// Target IR at all (wasm32 — see `emitsTargetIr`).
+	notPinned
+	// COMPARED against the committed golden, and equal. The only arm that is evidence of anything.
+	matched
 	// The committed golden differs from what the compiler just emitted. `detail` is the rendered
 	// difference and the golden's path — carried, not printed here, because the PARENT prints it in
 	// plan order (see `SpecWorkerPool`'s header on why a worker never reports).
 	drifted(detail String)
+	// There was no committed golden and this run WROTE one — a new case, or a regeneration under
+	// `--update-required`. NO PRIOR RECORD EXISTED, so nothing was checked.
+	minted
+	// There was no committed golden and this run was NOT ALLOWED to write one, because the verdict
+	// that would have validated it never happened here (`notRunHere`). See `recordFragmentAndCleanup`.
+	unrecorded
 end 'GoldenDrift'
 
 // One test's verdict and its golden's, tagged with which spec it came from for the report.
@@ -696,7 +742,7 @@ type TestRun
 	// Named rather than spelled at each site so "no compile happened" and "the compile reported
 	// nothing" cannot drift into two different tallies. Nothing compiled, so no golden was compared.
 	static function notCompiled(reason String) returns TestRun
-		return Self{outcome: TestOutcome.fail(reason), cpu: CompileCpu.unreported, golden: GoldenDrift.none}
+		return Self{outcome: TestOutcome.fail(reason), cpu: CompileCpu.unreported, golden: GoldenDrift.notPinned}
 	end 'notCompiled'
 end 'TestRun'
 
@@ -1033,6 +1079,57 @@ function outcomeOrTargetSkip(outcome TestOutcome, expectation SpecExpectation, c
 	end 'refusal'
 end 'outcomeOrTargetSkip'
 
+// ⭐⭐ **EVERY RESULT IN EXACTLY ONE COLUMN.** The four verdicts a run can produce, counted in one walk.
+//
+// ⛔ **A TEST THAT FALLS OUT OF EVERY COLUMN HAS BEEN DROPPED FROM THE REPORT**, and a type is what makes
+// that checkable: `total()` is computed from the four columns and `SpecVerdictSelfTest` asserts it equals
+// the number of results, so an outcome arm nobody counted disagrees loudly instead of vanishing. That is
+// the bootstrap's `TestSummary` rule (`SpecRunSelfTest.CheckEveryOutcomeIsCounted`) stated in shv2's terms;
+// before this type the counting was three `var`s inside the printing loop, where nothing could ask it
+// anything.
+export type ResultTally
+	export let passed as TestTally
+	export let failed as TestTally
+	export let skipped as TestTally
+	export let notRunHere as TestTally
+
+	export static function create(passed TestTally, failed TestTally, skipped TestTally, notRunHere TestTally) returns ResultTally
+		return Self{passed: passed, failed: failed, skipped: skipped, notRunHere: notRunHere}
+	end 'create'
+
+	export function total() returns TestTally
+		return self.passed + self.failed + self.skipped + self.notRunHere
+	end 'total'
+
+	// ⛔ **A RUN THAT PROVED NOTHING IS NOT GREEN**, whichever of the two not-run columns emptied it.
+	// The filter selecting nothing is refused one step earlier (`runSpecSuite`); this is the same failure
+	// arriving from the far side of the compile — every case refused by the target, or every case
+	// unexecutable on this host. Both would otherwise print `0 passed, 0 failed` and exit 0.
+	export function provedNothing() returns bool
+		return self.passed == 0 and self.failed == 0
+	end 'provedNothing'
+end 'ResultTally'
+
+// The one walk. EXPORTED because the reporter prints from it and the self-test asserts on it, and a
+// second count written inside either is a count that can disagree with the one a reader sees.
+export function tallyResults(results SpecTestResultArray) returns ResultTally
+	var passed = 0 as TestTally
+	var failed = 0 as TestTally
+	var skipped = 0 as TestTally
+	var notRunHere = 0 as TestTally
+
+	for result in results 'each'
+		match result.outcome 'tally'
+			pass then passed = passed + 1
+			fail then failed = failed + 1
+			skipped then skipped = skipped + 1
+			notRunHere then notRunHere = notRunHere + 1
+		end 'tally'
+	end 'each'
+
+	return ResultTally.create(passed, failed: failed, skipped: skipped, notRunHere: notRunHere)
+end 'tallyResults'
+
 // ⭐ THE CENSUS OF EVERYTHING THIS RUN DID NOT RUN, and the reason it may never be silent is in
 // `targetRefusalIn`'s header: a skip nobody counts is indistinguishable from a case that quietly
 // vanished. It names the COUNT, the TARGET and the CONSTRUCTS — the last one straight out of the
@@ -1050,6 +1147,7 @@ export function reportTargetSkips(results SpecTestResultArray, effectiveTarget T
 		match result.outcome 'verdict'
 			pass then continue
 			fail then continue
+			notRunHere then continue
 			skipped(refusals) then entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: indentedRefusals(refusals)))
 		end 'verdict'
 	end 'each'
@@ -1059,6 +1157,44 @@ export function reportTargetSkips(results SpecTestResultArray, effectiveTarget T
 	let headline = "note: {entries.count()} case(s) SKIPPED on {targetToString(effectiveTarget)} — NOT RUN and NOT PASSED. The compiler refused a construct this target has no implementation for ({ErrorCode.targetUnsupportedConstruct.rawValue}), which is a fact about the TARGET and not about the case:\n"
 	reportResultNote(entries, headline: headline)
 end 'reportTargetSkips'
+
+// ⭐⭐ **WHAT THIS HOST COULD NOT EXECUTE, AND THE ONE REASON ALL OF IT SHARES.**
+//
+// The reason is DERIVED, once, from the same table the run was routed by (`externalRunnerFor`) rather
+// than carried per case — it is a property of the (target, host) pair and is identical for every entry,
+// so a per-case copy would be one sentence shipped over a pipe several thousand times.
+//
+// ⚠ **IT NAMES THE COUNT AND NOT THE CASES**, which is the opposite choice from the skip census above,
+// and deliberately: a skip is a per-CASE fact (which construct did the compiler refuse?) that only the
+// entry can carry, while this is a per-RUN fact whose case list is simply "every case that needed to
+// run" — several thousand lines saying the same thing. What a reader needs is the number, the reason,
+// and the knowledge that these cases were NOT verified here.
+//
+// SILENT at zero, which is every lane this host can execute — the convention the other two trailers set.
+//
+// It takes the TALLY the summary already printed rather than re-walking the results: one count, printed
+// twice, is one count.
+export function reportUnrunHere(tally ResultTally, effectiveTarget Target)
+	if tally.notRunHere == 0 'everythingRan'
+		return
+	end 'everythingRan'
+
+	printError("note: {tally.notRunHere} case(s) COMPILED but NOT RUN on {targetToString(effectiveTarget)} — {unrunnableReasonFor(effectiveTarget)}. Their compiles and their committed goldens were checked in full; only the executions are missing, so they are NOT PASSED.\n")
+end 'reportUnrunHere'
+
+// The one sentence saying why this host cannot execute this target, read off the one runner table.
+//
+// A PANIC on every arm that names a runner: the caller has just counted at least one case the run
+// declined to execute, and only `unspawnable` produces those (`runStrategyFor`). Reaching another arm
+// means the counting and the routing disagree about the same target.
+function unrunnableReasonFor(effectiveTarget Target) returns String
+	return match externalRunnerFor(effectiveTarget) 'runner'
+		unspawnable(reason) gives reason
+		wasmtime panic("unrunnableReasonFor: {targetToString(effectiveTarget)} runs under wasmtime, so no case of it can be unrun — `runStrategyFor` and this census disagree")
+		orbstack panic("unrunnableReasonFor: {targetToString(effectiveTarget)} runs under OrbStack, so no case of it can be unrun — `runStrategyFor` and this census disagree")
+		wsl panic("unrunnableReasonFor: {targetToString(effectiveTarget)} runs under WSL, so no case of it can be unrun — `runStrategyFor` and this census disagree")
+	end 'runner'
+end 'unrunnableReasonFor'
 
 // One compiler diagnostic block, indented under the test it belongs to. EVERY line of it, because one
 // E3104 per offending call site is normal and the second one usually names a different construct than
@@ -1499,35 +1635,52 @@ end 'compileStagedTest'
 // skipped in three cases:
 //   (0) the case was SKIPPED — no binary was linked and no IR was emitted, so there is no artifact
 //       to compare and a "golden missing" note would blame the case for the target's gap. It rides
-//       the `not outcome.isPass()` test below, which is exactly the condition;
+//       the `pinsEmittedCode` test below, which is exactly the condition;
 //   (1) BEHAVIOUR already FAILED — a failing test's IR is noise, and a note about its golden on top
-//       would bury the real failure. This is also what makes `GoldenDrift.drifted` reachable only
-//       alongside a PASS, and it is what keeps a golden from being MINTED for a test that did not
-//       pass;
+//       would bury the real failure;
 //   (2) the target emits NO Target IR (wasm32 alone — see `emitsTargetIr`), so there is nothing
 //       to record; the RUN plus the worker-count byte-identity gate are the whole check for it.
 // ⚠ The second condition is `emitsTargetIr`, NOT "is this the host". A cross target that goes
 // through a register backend — arm64-linux — is pinned exactly like a host build; it was the old
 // single `cross` boolean here that would have silently dropped its golden.
+//
+// ⭐⭐ **THE GATE IS `pinsEmittedCode`, NOT `isPass`, AND THAT DIFFERENCE IS THE WHOLE VALUE OF A LANE
+// THIS HOST CANNOT EXECUTE.** A `notRunHere` case compiled cleanly and emitted a full module; comparing
+// it against the committed golden is the only verification available for it here, and gating on `isPass`
+// threw exactly that away. What `isPass` still decides is the OTHER half — whether a case with no
+// committed golden may MINT one — because that question really is "was this verdict established here":
+//
+// ⚖ **A GOLDEN IS ONLY WORTH THE VERDICT THAT VALIDATED IT** (the bootstrap's mint rule, user ruling
+// 2026-08-02, read in shv2's terms). A `notRunHere` case never ran, so a first golden minted from it
+// would record output nobody checked — and would then be the reference a LATER, genuine run on a real
+// host is compared against, silently blessing whatever it got wrong. That is not hypothetical here:
+// MEASURED on this tree, 810 committed `fragments/arm64-macos/*.test` carry `movImm x1, 4294967295`,
+// the WINDOWS `ExitCode` bound, on a target whose bound is 255 — minted from a Windows host, before
+// `bc21be3e1` fixed the stdlib host-leak, by a run that could not execute one of them. So the compare
+// happens and the MINT does not; the refusal is counted and named as `GoldenDrift.unrecorded`, never
+// silent. A `compilerError` case on such a target PASSES here and mints normally, which is the same
+// rule rather than an exception to it: its verdict really was established on this machine.
 function recordFragmentAndCleanup(compiled CompiledTest, outcome TestOutcome, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
-	if not outcome.isPass() or not emitsTargetIr(effectiveTarget) 'noFragment'
+	if not outcome.pinsEmittedCode() or not emitsTargetIr(effectiveTarget) 'noFragment'
 		cleanup(compiled.staged, exePath: compiled.exePath, irPath: compiled.irPath, metricsPath: compiled.metricsPath)
-		return TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.none)
+		return TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.notPinned)
 	end 'noFragment'
 
-	let fragment = checkTestFragment(fragmentDir, test: compiled.test, compile: compiled.compile, staged: compiled.staged, irText: compiled.irText, updateRequired: updateRequired)
+	let fragment = checkTestFragment(fragmentDir, test: compiled.test, compile: compiled.compile, staged: compiled.staged, irText: compiled.irText, updateRequired: updateRequired, mayMint: outcome.isPass())
 
 	cleanup(compiled.staged, exePath: compiled.exePath, irPath: compiled.irPath, metricsPath: compiled.metricsPath)
 
-	// ⚖ THE TWO ARMS THAT ARE NOT FAILURES, AND THE ONE THAT IS. `recorded` and `drifted` both leave
-	// the behaviour verdict exactly as the assertions left it — drift is reported, never judged.
-	// `notWritten` is the odd one out and stays a genuine failure: it is not a verdict about codegen
-	// at all but the harness being unable to write a file it was told to write, which is the same
-	// class as `stageTest`'s own "could not write fragment" and is failed for the same reason.
+	// ⚖ ONLY ONE ARM IS A FAILURE. `compared`, `drifted`, `minted` and `unrecorded` all leave the
+	// behaviour verdict exactly as the assertions left it — the goldens are reference, reported and
+	// never judged. `notWritten` is the odd one out and stays a genuine failure: it is not a verdict
+	// about codegen at all but the harness being unable to write a file it was told to write, which is
+	// the same class as `stageTest`'s own "could not write fragment" and is failed for the same reason.
 	return match fragment 'reference'
-		recorded gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.none)
+		compared gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.matched)
 		drifted(detail) gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.drifted(detail))
-		notWritten(reason) gives TestRun.create(TestOutcome.fail(reason), cpu: compiled.cpu, golden: GoldenDrift.none)
+		minted gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.minted)
+		unrecorded gives TestRun.create(outcome, cpu: compiled.cpu, golden: GoldenDrift.unrecorded)
+		notWritten(reason) gives TestRun.create(TestOutcome.fail(reason), cpu: compiled.cpu, golden: GoldenDrift.notPinned)
 	end 'reference'
 end 'recordFragmentAndCleanup'
 
@@ -1915,13 +2068,22 @@ function isSafeRelativeName(name String) returns bool
 	return true
 end 'isSafeRelativeName'
 
-// What the fragment step concluded. THREE outcomes, and only one of them is a failure — see
-// `recordFragmentAndCleanup`, which is the single place that decides what each means for the test.
+// What the fragment step concluded. Only ONE of these is a failure — see `recordFragmentAndCleanup`,
+// which is the single place that decides what each means for the test.
+//
+// ⚠ **"COMPARED" AND "WROTE" ARE SEPARATE ANSWERS**, and folding them into one `recorded` is what let a
+// run that verified nothing read exactly like a run that verified everything.
 union FragmentCheck
-	// Compared and equal, freshly minted, or regenerated under `--update-required`.
-	recorded
+	// Compared against a committed golden, and equal.
+	compared
 	// The committed golden and the fresh output differ. REFERENCE DRIFT: reported, never failed.
 	drifted(detail String)
+	// There was no committed golden (or `--update-required` asked for a fresh one) and this run wrote
+	// it. NOTHING WAS COMPARED.
+	minted
+	// There was no committed golden and this verdict may not write one — see `recordFragmentAndCleanup`
+	// for the rule. Nothing was compared and nothing was written.
+	unrecorded
 	// The file could not be written. An IO failure of the harness, not a verdict about codegen.
 	notWritten(reason String)
 end 'FragmentCheck'
@@ -1954,7 +2116,11 @@ end 'FragmentCheck'
 // C# suite, which batches a spec's tests into one module, is excluded there for exactly the reason
 // this runner does not need to be. ⚠ If shv2 ever compiles several tests together, that script's
 // exclusion list is the OTHER end of this invariant and must change with it.
-function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, staged StagedTest, irText String, updateRequired bool) returns FragmentCheck
+//
+// `mayMint` is the caller's verdict-derived permission to WRITE a first golden — see
+// `recordFragmentAndCleanup`, which is the one place it is decided. It gates both write doors, because
+// `--update-required` writes unvalidated content exactly as a first mint does.
+function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessCapture, staged StagedTest, irText String, updateRequired bool, mayMint bool) returns FragmentCheck
 	// The fragment records the CODE, so a run expectation contributes only its exit code and
 	// its IR — a pinned ```stderr is an assertion about the RUN, checked there, and adding
 	// it here would move every golden for nothing.
@@ -1965,17 +2131,18 @@ function checkTestFragment(fragmentDir FilePath, test SpecTest, compile ProcessC
 
 	let outPath = fragmentDir.join("{test.name}{FragmentExtension}")
 
-	// No committed fragment yet — a NEW test. Record it; there is nothing to compare against.
+	// No committed fragment yet — a NEW test, or a lane that has never seen this case. Record it if
+	// this verdict is allowed to; there is nothing to compare against either way.
 	let committed = try File.readText(outPath) otherwise 'noGolden'
-		return writeFragmentFile(outPath, content: content, what: "new")
+		return writeFragmentFile(outPath, content: content, what: "new", mayMint: mayMint)
 	end 'noGolden'
 
 	if updateRequired 'regenerate'
-		return writeFragmentFile(outPath, content: content, what: "updated")
+		return writeFragmentFile(outPath, content: content, what: "updated", mayMint: mayMint)
 	end 'regenerate'
 
 	if committed == content 'unchanged'
-		return FragmentCheck.recorded
+		return FragmentCheck.compared
 	end 'unchanged'
 
 	return FragmentCheck.drifted("{firstDifference(committed, actual: content)}\n    {outPath.toString()}")
@@ -1984,11 +2151,20 @@ end 'checkTestFragment'
 // Write one golden, turning the IO failure into the arm that says so. Both write sites go through it:
 // they differ only in the word the message uses, and spelling the failure twice is how the two could
 // come to disagree about whether it is a failure at all.
-function writeFragmentFile(outPath FilePath, content String, what String) returns FragmentCheck
+//
+// ⭐ **THE MINT PERMISSION IS CHECKED HERE FOR THAT SAME REASON** — it is a rule about WRITING, and
+// this is the one place a golden is written. A first mint and an `--update-required` regeneration are
+// both a fresh reference produced from this run's compile, so both are refused by exactly the verdict
+// that could not validate one (see `recordFragmentAndCleanup`).
+function writeFragmentFile(outPath FilePath, content String, what String, mayMint bool) returns FragmentCheck
+	if not mayMint 'unvalidatedHere'
+		return FragmentCheck.unrecorded
+	end 'unvalidatedHere'
+
 	try File.writeText(outPath, content: content) otherwise 'writeFailed'
 		return FragmentCheck.notWritten("could not write {what} golden fragment {outPath.toString()}")
 	end 'writeFailed'
-	return FragmentCheck.recorded
+	return FragmentCheck.minted
 end 'writeFragmentFile'
 
 // The first line at which the committed golden and the freshly generated fragment diverge, rendered
@@ -2155,24 +2331,46 @@ union ExternalRunner
 	wasmtime
 	orbstack
 	wsl
+	// ⭐⭐ **THERE IS NO PROGRAM ON THIS MACHINE THAT CAN RUN THAT BINARY — AND THAT IS AN ANSWER, NOT AN
+	// ABORT.** Every arm below used to be a `panic`, which answered the question this table is asked
+	// ("which program spawns a Mach-O here?" — none) correctly, and was then used to answer a DIFFERENT
+	// one one level up: "is any of this suite checkable here?". It is not the same question and the
+	// answer is not the same either. A `--target=arm64-macos` run on Windows can COMPILE every case,
+	// decide every `compilerError` case in full, and compare every emitted module against its committed
+	// golden; only the executions are missing. Killing the run at the preflight threw all of that away —
+	// and it threw it away for ~28 rungs, on the one lane that could have caught a wrong answer.
+	//
+	// `reason` is the sentence those panics carried, unchanged, now delivered per case (as
+	// `TestOutcome.notRunHere`) and once in the trailer instead of once as a stack trace.
+	unspawnable(reason String)
 end 'ExternalRunner'
 
-// Which external runner executes a binary built for `target`. The one table, per the note above.
+// Which external runner executes a binary built for `target`, or the statement that nothing here can.
+// The one table, per the note above.
 //
 // EXHAUSTIVE over `Os`, with no bare `default`: a host that cannot run its own target's binaries is
 // a contradiction, so the `windows`/`macos` arms are reachable only by cross-compiling to an OS this
-// harness has no runner for. They panic naming both targets rather than spawning an executable the
-// kernel will refuse in some less legible way. The `linux` arm is the one place `target.os` alone is
-// NOT the answer: a Linux ELF runs under WSL from Windows and OrbStack from macOS, so it defers to the
-// host (`linuxRunnerForHost`), which also needs the target to reject a CPU the host runner cannot execute.
+// harness has no runner for. The `linux` arm is the one place `target.os` alone is NOT the answer: a
+// Linux ELF runs under WSL from Windows and OrbStack from macOS, so it defers to the host
+// (`linuxRunnerForHost`), which also needs the target to reject a CPU the host runner cannot execute.
 function externalRunnerFor(target Target) returns ExternalRunner
 	return match target.os 'runner'
 		wasi gives ExternalRunner.wasmtime
 		linux gives linuxRunnerForHost(target)
-		windows panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a PE can only be spawned on Windows, so this suite must run its tests on that host")
-		macos panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a Mach-O can only be spawned on macOS, so this suite must run its tests on that host")
+		windows gives ExternalRunner.unspawnable(noRunnerReason(target, container: "PE", onlyHostOs: "Windows"))
+		macos gives ExternalRunner.unspawnable(noRunnerReason(target, container: "Mach-O", onlyHostOs: "macOS"))
 	end 'runner'
 end 'externalRunnerFor'
+
+// The sentence a target with no runner here is reported by — one wording for every such arm, because
+// the three of them differ only in WHICH container format and WHICH host could execute it, and three
+// hand-written copies are three chances for the arm a reader hits to be the one phrased differently.
+//
+// It names the target and the host with `targetToString`, which is also the spelling `--target` takes,
+// so the remedy in the sentence is typeable.
+function noRunnerReason(target Target, container String, onlyHostOs String) returns String
+	return "no runner for a {targetToString(target)} binary on a {targetToString(detectHostTarget())} host — a {container} can only be spawned on {onlyHostOs}, so only such a host can execute these cases"
+end 'noRunnerReason'
 
 // The runner for a Linux ELF, chosen by the HOST rather than the target: a Linux target is not one
 // thing to run but two ways to run it — WSL on a Windows host, an OrbStack VM on a macOS host. A Linux
@@ -2184,20 +2382,20 @@ function linuxRunnerForHost(target Target) returns ExternalRunner
 	return match host.os 'host'
 		windows gives windowsLinuxRunner(target, host: host)
 		macos gives ExternalRunner.orbstack
-		linux panic("SpecTestRunner: a Linux ELF for a foreign CPU cannot be run from a Linux host by this harness (host {targetToString(host)}) — run the suite on a host whose CPU matches the target")
+		linux gives ExternalRunner.unspawnable("a Linux ELF for a foreign CPU cannot be run from a Linux host by this harness (host {targetToString(host)}) — only a host whose CPU matches {targetToString(target)} can execute these cases")
 		wasi panic("SpecTestRunner: 'wasi' is not a host OS — detectHostTarget never returns it, so this arm is unreachable")
 	end 'host'
 end 'linuxRunnerForHost'
 
 // WSL runs only the HOST CPU's Linux binaries — there is no in-box binfmt/qemu cross-execution — so a
 // foreign-CPU Linux target (e.g. `arm64-linux` on an x86-64 Windows host) has NO runner here. Saying so
-// up front, at the preflight, beats letting the WSL probe pass and then every test fail with the
-// kernel's opaque "exec format error". The matching-CPU case (this rung's `x64-linux` on x64-windows) is
-// the one that returns a runner. macOS's OrbStack is not gated this way — it runs arm64-linux natively
-// and x64-linux under Rosetta — so only the WSL path carries this check.
+// as a classification, rather than letting the WSL probe pass and then every test fail with the
+// kernel's opaque "exec format error". The matching-CPU case (`x64-linux` on x64-windows) is the one
+// that returns a runner. macOS's OrbStack is not gated this way — it runs arm64-linux natively and
+// x64-linux under Rosetta — so only the WSL path carries this check.
 function windowsLinuxRunner(target Target, host Target) returns ExternalRunner
 	if target.cpu != host.cpu 'foreignCpu'
-		panic("SpecTestRunner: no runner for a {targetToString(target)} binary on a {targetToString(host)} host — WSL runs only the host CPU's Linux binaries (no in-box cross-CPU emulation), so build it on a matching host or drop {TargetFlagPrefix}{targetToString(target)}")
+		return ExternalRunner.unspawnable("no runner for a {targetToString(target)} binary on a {targetToString(host)} host — WSL runs only the host CPU's Linux binaries (no in-box cross-CPU emulation), so only a matching host can execute these cases")
 	end 'foreignCpu'
 	return ExternalRunner.wsl
 end 'windowsLinuxRunner'
@@ -2233,6 +2431,11 @@ function buildRunCommand(modulePath FilePath, effectiveTarget Target, programArg
 		// does which. This arm is what makes the two disagreeing a panic instead of a silent second
 		// answer: reaching it means a lane was routed here that `runStrategyFor` had claimed to batch.
 		wsl panic("SpecTestRunner: the {targetToString(effectiveTarget)} lane runs a whole spec in one {WslExecutableName} entry (see runWslBatch), so it has no per-test run command — `runStrategyFor` and `buildRunCommand` disagree about this target")
+		// ⛔ NOT A GAP EITHER, and the same disagreement said the other way round: nothing on this host
+		// can spawn such a binary, so `runStrategyFor` routes the whole lane to `unrunnableHere` and no
+		// execution is ever attempted. Reaching here means a run WAS attempted for a target the table
+		// had just said had no runner.
+		unspawnable panic("SpecTestRunner: nothing on this host can execute a {targetToString(effectiveTarget)} binary, so there is no run command to build — `runStrategyFor` and `buildRunCommand` disagree about this target")
 	end 'runner'
 
 	var argv = StringArray.create()
@@ -2319,10 +2522,15 @@ end 'buildLinuxVmRunCommand'
 // and no other. It is what a batch must produce for every test it could not account for, because the
 // pool's accounting is one record per test and an absence would be a missing record rather than a
 // failure anyone could read.
-union RunObservation
+export union RunObservation
 	notRequired
 	completed(capture ProcessCapture)
 	failed(reason String)
+	// ⭐ THE EXECUTION WAS REQUIRED AND THIS MACHINE CANNOT PERFORM IT — see `ExternalRunner.unspawnable`.
+	// Distinct from `failed`, which says a launch was ATTEMPTED and did not work: that is a defect in
+	// something (the binary, the runner, the OS) and must stay a FAIL. This one is a machine limit known
+	// before anything was attempted, and it carries no reason for `TestOutcome.notRunHere`'s reason.
+	notRunnableHere
 end 'RunObservation'
 
 typealias RunObservationArray = Array with RunObservation
@@ -2339,12 +2547,18 @@ typealias RunObservationArray = Array with RunObservation
 // shared script would have to reproduce each lane's cwd exactly, and only one of the two can be
 // verified from here. Batching a lane whose results cannot be diffed is how a speed change becomes a
 // silent behaviour change.
-union RunStrategy
+export union RunStrategy
 	individually
 	wslBatch
+	// ⭐ PERFORM NONE OF THEM. Not an absence of a strategy but a strategy: every test that needed its
+	// program run is told so, in its own record, exactly as the two executing lanes tell theirs.
+	noneHere
 end 'RunStrategy'
 
-function runStrategyFor(effectiveTarget Target) returns RunStrategy
+// EXPORTED because the verdict self-test asks it of every supported target — that guard's whole subject
+// is which lane this host routes each target to, and a second copy of the routing rule inside a test is
+// a test that can agree with itself while disagreeing with the runner.
+export function runStrategyFor(effectiveTarget Target) returns RunStrategy
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
 		return RunStrategy.individually
 	end 'hostSpawn'
@@ -2353,6 +2567,7 @@ function runStrategyFor(effectiveTarget Target) returns RunStrategy
 		wasmtime gives RunStrategy.individually
 		orbstack gives RunStrategy.individually
 		wsl gives RunStrategy.wslBatch
+		unspawnable gives RunStrategy.noneHere
 	end 'runner'
 end 'runStrategyFor'
 
@@ -2360,8 +2575,23 @@ function executeRuns(prepared PreparedTestArray, tempDir FilePath, runWorkingDir
 	return match runStrategyFor(effectiveTarget) 'strategy'
 		individually gives spawnEachRun(prepared, runWorkingDir: runWorkingDir, effectiveTarget: effectiveTarget)
 		wslBatch gives runWslBatch(prepared, tempDir: tempDir, runWorkingDir: runWorkingDir)
+		noneHere gives unperformedRuns(prepared)
 	end 'strategy'
 end 'executeRuns'
+
+// One observation per prepared test, saying of each that its execution did not happen here. The SAME
+// walk the two executing lanes make — `finished` still answers `notRequired`, because a test whose
+// verdict was settled at its compile is not waiting on anything and must not be reported as unrun.
+function unperformedRuns(prepared PreparedTestArray) returns RunObservationArray
+	var observations = RunObservationArray.create()
+	for step in prepared 'eachStep'
+		observations.push(match step 'phase'
+			finished gives RunObservation.notRequired
+			awaiting gives RunObservation.notRunnableHere
+		end 'phase')
+	end 'eachStep'
+	return observations
+end 'unperformedRuns'
 
 // One spawn per test — the host's own binaries, and the two external runners that are not batched.
 function spawnEachRun(prepared PreparedTestArray, runWorkingDir FilePath, effectiveTarget Target) returns RunObservationArray
@@ -2673,8 +2903,8 @@ function shQuoted(value String) returns String
 	return "{ShQuote}{value.replace(ShQuote, with: "{ShQuote}{ShBackslash}{ShQuote}{ShQuote}")}{ShQuote}"
 end 'shQuoted'
 
-// ⭐ CAN THIS HOST EXECUTE BINARIES BUILT FOR `effectiveTarget` AT ALL? Asked ONCE, by the parent,
-// before a single worker is spawned.
+// ⭐ IS THE RUNNER THIS RUN NEEDS ACTUALLY INSTALLED? Asked ONCE, by the parent, before a single
+// worker is spawned.
 //
 // A missing runner is not a property of any one test — it is a property of the RUN, and answering it
 // per test answers it 780 times and reports it as 780 unrelated failures (or, in the pool, as a dead
@@ -2685,40 +2915,30 @@ end 'shQuoted'
 // and `findWasmtimePath` already panics with its own fix when it cannot. The linux arm has to
 // actually ASK, because it is checking two things PATH cannot answer on its own: that OrbStack is
 // installed, and that the machine the run names exists and can execute something.
-// ⚖ `probeInstalled` SPLITS THE TWO HALVES, AND BOTH DOORS ASK THIS ONE FUNCTION. The classification —
-// "is there a runner for this target on this host AT ALL" — is `externalRunnerFor`, is pure, and costs
-// nothing; the PROBE that follows spawns a process to ask whether that runner is installed and its
-// machine reachable. Only the parent can afford the second, for the reason above. A worker asks with
-// `probeInstalled: false` and inherits the rest by never having started otherwise.
 //
-// ⚠ WHY A WORKER HAS TO ASK AT ALL — IT IS A SECOND DOOR ONTO THE GOLDEN WRITER, AND IT NEEDS NO FLAG.
-// `--worker-persistent` returns from `runSpecTest` before this preflight, deliberately (a worker's
-// stdout is a wire, not a report), and from there `runSinglesJob` reaches `checkTestFragment`, which
-// MINTS a golden for any test that has none. A run-expectation case is still refused per-test, because
-// `buildRunCommand` has to spawn something. A `maxoncstderr` CASE IS REFUSED BY NOTHING:
-// `checkCompilerError` compares the compiler's own stderr and never launches a binary, so it PASSES
-// and its golden is written. MEASURED on an arm64-macOS host before this parameter existed: deleting
-// `specs-shv2/fragments/x64-windows/expected-expression-error/let-rhs-missing.test` and feeding one
-// `JOB:singles:` line to `spec-test --worker-persistent --target=x64-windows` re-minted it — no flag,
-// no tree lock, no runner — from a compile nothing on this machine can execute.
-export function requireRunnerAvailable(effectiveTarget Target, probeInstalled bool)
+// ⛔ **A TARGET WITH NO RUNNER AT ALL IS NOT A REFUSAL HERE, AND THAT IS THIS RUNG.** This function
+// used to carry a second job — classifying the target and PANICKING when nothing on this machine could
+// spawn it — and that refusal killed a run in which every compile, every `compilerError` verdict and
+// every golden comparison was perfectly checkable. `unspawnable` is now an ANSWER the run carries
+// through to a per-case `TestOutcome.notRunHere` (see `runStrategyFor`), so there is nothing to probe
+// and nothing to refuse: a runner that does not exist cannot be missing from PATH.
+//
+// ⚠ **AND THE WORKERS NO LONGER ASK.** They used to, with a `probeInstalled: false` parameter whose
+// entire purpose was to reach this refusal from inside a worker — because a worker is a second door
+// onto the golden writer and a `maxoncstderr` case reaches it without launching anything. That door is
+// now guarded where the writing happens instead of by refusing the run: `recordFragmentAndCleanup` mints
+// only for a verdict that was established in full on this host (`TestOutcome.pinsEmittedCode` and the
+// `mayMint` argument beside it). The guard moved to the thing it guards, and the parameter went with it.
+export function requireRunnerAvailable(effectiveTarget Target)
 	if not needsExternalRunner(effectiveTarget) 'hostSpawn'
 		return
 	end 'hostSpawn'
 
-	// THE REFUSAL ITSELF: this is the one table, and it panics naming both targets for exactly the OS
-	// pairings this harness has no runner for. Read before the probe question so that half is asked on
-	// every path through here.
-	let runner = externalRunnerFor(effectiveTarget)
-
-	if not probeInstalled 'classifyOnly'
-		return
-	end 'classifyOnly'
-
-	match runner 'runner'
+	match externalRunnerFor(effectiveTarget) 'runner'
 		wasmtime then _ = findWasmtimePath()
 		orbstack then requireOrbMachineReachable(effectiveTarget)
 		wsl then requireWslAvailable(effectiveTarget)
+		unspawnable then break 'runner'
 	end 'runner'
 end 'requireRunnerAvailable'
 
@@ -2812,10 +3032,11 @@ end 'runPreconditions'
 //
 // `notRequired` is unreachable and says so: the executors mint it for exactly the tests that FINISHED
 // in the compile pass, and nothing but a `PendingRun` reaches here.
-function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, effectiveTarget Target) returns TestOutcome
+export function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, effectiveTarget Target) returns TestOutcome
 	return match observation 'observed'
 		notRequired panic("checkObservedRun: a pending run was handed the 'no execution needed' observation — `executeRuns` answers one observation per PREPARED test and mints that arm only for a test that finished at its compile")
 		failed(reason) gives TestOutcome.fail(reason)
+		notRunnableHere gives TestOutcome.notRunHere
 		completed(capture) gives runAssertions(expected, stderr: stderr, stdout: stdout, spawned: capture, effectiveTarget: effectiveTarget)
 	end 'observed'
 end 'checkObservedRun'

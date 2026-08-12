@@ -1,0 +1,35 @@
+// Test: first-class-function.error.different-enum-return-into-function-param
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+typealias Integer = int(i64.min to i64.max)
+typealias ShadeMaker = function() returns Shade
+
+function makeColor() returns Color
+	return Color.blue
+end 'makeColor'
+
+function useMaker(f ShadeMaker) returns Integer
+	let s = f()
+	match s 'k'
+		dark then return 10
+		light then return 20
+	end 'k'
+end 'useMaker'
+
+function main() returns ExitCode
+	print("{useMaker(makeColor)}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:30:10: argument type mismatch for 'f': expected 'fn() returns Shade', got 'fn() returns Color'

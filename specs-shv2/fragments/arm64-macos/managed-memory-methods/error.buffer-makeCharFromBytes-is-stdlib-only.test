@@ -1,0 +1,10 @@
+// Test: error.buffer-makeCharFromBytes-is-stdlib-only
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(2) otherwise return 2
+	let c = mm.makeCharFromBytes(0, len: 1000000000)
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:5:13: Unsupported: `__ManagedMemory` member 'makeCharFromBytes' — it is STDLIB-ONLY (`module function` in `stdlib/String.maxon`, which the reference compiler refuses to user code as a not-exported error) and this file is not under `stdlib/`. `toCString` hands back a raw address with no length, no owner and no refcount, so the copy it makes when the receiver's bytes are not already NUL-terminated is reclaimed by nothing; `makeCharFromBytes` trusts its caller for `pos + len <= length()` and reads off the end of the buffer otherwise. User code reaches a buffer's bytes through `byteAt`, which is bounds-checked and throwing

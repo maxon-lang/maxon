@@ -113,14 +113,24 @@ end 'TargetResolution'
 // accepting a spelling the compiler cannot name back. A spec that names none of them
 // is rejected; the list grows as backends land.
 function parseBuildTarget(spec String) returns TargetResolution
-	let supported = [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.x64, os: Os.linux), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.arm64, os: Os.linux), Target.create(CpuArch.wasm32, os: Os.wasi)]
-	for candidate in supported 'each'
+	for candidate in supportedTargets() 'each'
 		if targetToString(candidate) == spec 'match'
 			return TargetResolution.resolved(candidate)
 		end 'match'
 	end 'each'
 	return TargetResolution.unrecognized(spec)
 end 'parseBuildTarget'
+
+// ⭐ **EVERY TARGET THIS COMPILER CAN BUILD FOR — the one list.**
+//
+// It used to sit inline in the loop above, which was fine while the flag parser was the only thing that
+// wanted it. `SpecVerdictSelfTest` wants it too — its whole subject is which lane this host routes each
+// target to, and it must sweep ALL of them or it is a check scoped to whichever target its author
+// happened to think of. A second array spelled there would agree today and would then quietly stop
+// covering the next backend that lands, which is the one it would exist to catch.
+export function supportedTargets() returns TargetArray
+	return [Target.create(CpuArch.x64, os: Os.windows), Target.create(CpuArch.x64, os: Os.linux), Target.create(CpuArch.arm64, os: Os.macos), Target.create(CpuArch.arm64, os: Os.linux), Target.create(CpuArch.wasm32, os: Os.wasi)]
+end 'supportedTargets'
 
 // Resolve the optional `--target` flag shared by `build` and `spec-test`: the host target
 // (`detectHostTarget`) when the flag is empty, otherwise whatever `parseBuildTarget` makes of the
@@ -350,16 +360,12 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 	// protocol on stdin/stdout instead of running a suite and reporting on it. It must be checked
 	// before anything is printed — a worker's stdout is a wire, not a report.
 	if args.workerPersistent 'isPoolWorker'
-		// ⚖ THE ONE QUESTION A WORKER MUST STILL ASK: can this host execute what it is about to build?
-		// Everything below this branch is deliberately the parent's — but the worker is a SECOND DOOR
-		// onto the golden writer and it needs no flag to mint, and a `maxoncstderr` case reaches that
-		// writer without ever launching a binary, so nothing downstream refuses it. `probeInstalled:
-		// false` takes the classification and leaves the spawned probe to the parent, which is what
-		// makes this affordable per worker; see `requireRunnerAvailable`. It prints nothing on the
-		// success path, so the wire below stays untouched, and a refusal panics to stderr — which the
-		// parent drains and reports.
-		requireRunnerAvailable(effectiveTarget, probeInstalled: false)
-
+		// ⚠ A WORKER ASKS NOTHING BEFORE IT STARTS, and that is deliberate rather than an omission. It
+		// used to ask `requireRunnerAvailable` — because a worker is a second door onto the GOLDEN WRITER
+		// and a `maxoncstderr` case reaches that writer without ever launching a binary — and the point
+		// of asking was to PANIC for a target this host cannot execute. That refusal is gone (it threw
+		// away a whole lane's worth of checkable work), so the mint door is guarded where the writing
+		// happens instead: see `SpecTestRunner.writeFragmentFile`'s `mayMint`.
 		return runPersistentWorker(compilerExe, specDir: specDir, filter: args.filter, updateRequired: args.updateRequired, effectiveTarget: effectiveTarget)
 	end 'isPoolWorker'
 
@@ -374,11 +380,20 @@ function runSpecTest(args MaxonArgs) returns ExitCode
 		return freshnessExit
 	end 'staleBinary'
 
-	// Whether this host can EXECUTE what it is about to build, asked once and by the PARENT. A
-	// cross-target run whose runner is missing fails identically for every test, so discovering it
-	// per test turns one fact into hundreds of failures — and inside a worker, into a dead pipe whose
-	// real message is in another process's stderr. The workers inherit the answer by never starting.
-	requireRunnerAvailable(effectiveTarget, probeInstalled: true)
+	// Whether the RUNNER this target needs is installed, asked once and by the PARENT. A cross-target
+	// run whose runner is missing fails identically for every test, so discovering it per test turns
+	// one fact into hundreds of failures — and inside a worker, into a dead pipe whose real message is
+	// in another process's stderr. The workers inherit the answer by never starting.
+	//
+	// ⚠ A target with NO runner on this host at all is not refused here — it is a lane that compiles
+	// and compares everything and executes nothing, reported per case. See `requireRunnerAvailable`.
+	requireRunnerAvailable(effectiveTarget)
+
+	// ⭐ **AND THAT A VERDICT NOTHING RAN IS STILL COUNTED, REASONED AND NOT GREEN** — the mapping that
+	// lane rests on, asked in the same slot and for `requireRunnerAvailable`'s reason. It is pure and
+	// costs microseconds; see `SpecVerdictSelfTest` for why a lane whose whole job is reporting
+	// "not run" needs a guard that the reporting cannot quietly become "passed".
+	requireSpecVerdictMapping()
 
 	// The hand-built ladders' index against the ladders themselves, asked once and by the PARENT for
 	// `requireRunnerAvailable`'s reason. It rides the suite because the suite is the thing that already
@@ -454,6 +469,11 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, workerExe FilePath, comp
 	// the target here rather than being left to the reader to notice a missing line.
 	reportTargetSkips(run.results, effectiveTarget: effectiveTarget)
 
+	// ⭐ AND WHAT THIS HOST COULD NOT EXECUTE, in the same slot and for the same reason — the other way
+	// a case can be counted without having been verified. One sentence for the whole lane, because the
+	// reason is the (target, host) pair rather than anything about a case.
+	reportUnrunHere(tallyResults(run.results), effectiveTarget: effectiveTarget)
+
 	// AFTER the summary and BEFORE the exit branches, so a red run reports its cost too: a suite that
 	// went red because something got dramatically slower is exactly when the number is worth reading.
 	// STDERR, because stdout is the report and must stay byte-identical between worker counts — see
@@ -467,6 +487,7 @@ function runSpecSuite(args MaxonArgs, specDir FilePath, workerExe FilePath, comp
 	// for what a gate here cost us. Asked on every run, filtered included — a filtered run is exactly
 	// where an agent mints a new spec's goldens and never sees that they are untracked.
 	reportGoldenDrift(run.results)
+	reportGoldenCensus(run.results, effectiveTarget: effectiveTarget)
 	reportUntrackedGoldens(specDir)
 
 	if testsExit != 0 'someTestFailed'
@@ -604,49 +625,45 @@ end 'resolveCompilerUnderTest'
 // counted as one, printed as one, and the drift is reported separately and quietly on stderr
 // (`reportGoldenDrift`). `0 failed` means the spec tests passed, with no qualifications to read past.
 //
-// ⚠ **A SKIPPED CASE IS IN NEITHER NUMBER, AND ITS OWN LINE IS WHY THAT IS SAFE.** It did not run on
-// this target, so counting it as a pass would be a claim nothing supports and counting it as a failure
-// would redden every cross-target run over a gap that is not a defect. The summary line's shape is
-// deliberately untouched — several scripts read `^N passed, M failed` — so the count follows on a line
-// of its own, and the constructs behind it are named by `reportTargetSkips`'s note on stderr.
+// ⚠ **A CASE THAT DID NOT RUN IS IN NEITHER NUMBER, AND ITS OWN LINE IS WHY THAT IS SAFE.** Counting
+// it as a pass would be a claim nothing supports, and counting it as a failure would redden every
+// cross-target run over a machine limit that is not a defect. The summary line's shape is deliberately
+// untouched — several scripts read `^N passed, M failed` — so each count follows on a line of its own,
+// and the reason behind each is named by its own note on stderr (`reportTargetSkips` names the
+// constructs; `reportUnrunHere` names the host limit, once, because every case shares it).
 function reportResults(results SpecTestResultArray) returns ExitCode
-	var passed = 0
-	var failed = 0
-	var skipped = 0
-
 	for result in results 'each'
-		let label = "{result.specName}/{result.testName}"
-		print("{verdictLine(result.outcome, label: label)}\n")
-
-		match result.outcome 'tally'
-			pass then passed = passed + 1
-			fail then failed = failed + 1
-			skipped then skipped = skipped + 1
-		end 'tally'
+		print("{verdictLine(result.outcome, label: "{result.specName}/{result.testName}")}\n")
 	end 'each'
 
-	print("\n{passed} passed, {failed} failed\n")
+	let tally = tallyResults(results)
+	print("\n{tally.passed} passed, {tally.failed} failed\n")
 
 	// Silent at zero, which is the host lane and most of every other — the convention `reportGoldenDrift`
 	// already sets, where "no note" means none.
-	if skipped > 0 'anySkipped'
-		print("{skipped} skipped — NOT RUN on this target (see the note on stderr for the constructs)\n")
+	if tally.skipped > 0 'anySkipped'
+		print("{tally.skipped} skipped — NOT RUN on this target (see the note on stderr for the constructs)\n")
 	end 'anySkipped'
+
+	if tally.notRunHere > 0 'anyUnrunnable'
+		print("{tally.notRunHere} not run here — COMPILED and compared against their goldens, but this host cannot execute them (see the note on stderr)\n")
+	end 'anyUnrunnable'
 
 	// ⛔ **A RUN IN WHICH NOTHING RAN IS A FAILURE, AND IT IS THE SAME FAILURE `runSpecSuite`'s
 	// empty-selection guard refuses one step earlier.** There the filter selected nothing; here
-	// everything it selected was refused by the target. Both print `0 passed, 0 failed` and would
-	// otherwise exit 0 — a green run that tested nothing, which this runner already calls the most
-	// expensive lie it can tell — and the only difference between them is which side of the compile the
-	// emptiness arrived from. It is also the backstop on the skip mechanism itself: a compiler that
-	// started emitting E3104 everywhere would vanish the entire suite, and this is the line that refuses
-	// to call that green.
-	if passed == 0 and failed == 0 'nothingRan'
-		printError("error: every selected test was SKIPPED, so this run proved nothing — the note below names the constructs this target has no implementation for\n")
+	// everything it selected was refused by the target or unexecutable on this host. Both print
+	// `0 passed, 0 failed` and would otherwise exit 0 — a green run that tested nothing, which this
+	// runner already calls the most expensive lie it can tell — and the only difference between them is
+	// which side of the compile the emptiness arrived from. It is also the backstop on both not-run
+	// mechanisms: a compiler that started emitting E3104 everywhere, or a lane on which literally every
+	// case needs a runner this host lacks, would vanish the whole suite, and this is the line that
+	// refuses to call that green.
+	if tally.provedNothing() 'nothingRan'
+		printError("error: every selected test was SKIPPED or NOT RUN on this host, so this run proved nothing — the notes below name the constructs this target has no implementation for and the binaries this host cannot execute\n")
 		return 1
 	end 'nothingRan'
 
-	if failed > 0 'anyFailed'
+	if tally.failed > 0 'anyFailed'
 		return 1
 	end 'anyFailed'
 	return 0
@@ -658,12 +675,15 @@ end 'reportResults'
 //
 // A SKIP prints no reason: the reason is the compiler's E3104 diagnostic, which names an absolute
 // scratch path and is genuinely multi-line, and it is printed once per case in the stderr census
-// instead of being crammed onto a verdict line.
-function verdictLine(outcome TestOutcome, label String) returns String
+// instead of being crammed onto a verdict line. A NOTRUN prints none either, for the opposite reason —
+// every case on such a lane shares ONE reason, so it is stated once in the trailer instead of several
+// thousand times here.
+export function verdictLine(outcome TestOutcome, label String) returns String
 	return match outcome 'verdict'
 		pass gives "PASS {label}"
 		fail(reason) gives "FAIL {label}: {reason}"
 		skipped gives "SKIP {label}"
+		notRunHere gives "NOTRUN {label}"
 	end 'verdict'
 end 'verdictLine'
 

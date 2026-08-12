@@ -1,0 +1,43 @@
+// Test: error.a-conformer-of-another-name-under-a-contest-is-still-refused-under-its-own-name
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function at(index int) returns Element throws ArrayError
+		return try managed.get(index)
+	end 'at'
+end 'Array'
+
+type Bag uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Bag'
+
+typealias IntBag = Bag with int
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	b.push(7)
+	return b.at(0) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:39:11: Unsupported: `Bag` member 'at' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here

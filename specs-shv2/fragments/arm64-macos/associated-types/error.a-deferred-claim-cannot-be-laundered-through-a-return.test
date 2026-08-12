@@ -1,0 +1,46 @@
+// Test: error.a-deferred-claim-cannot-be-laundered-through-a-return
+typealias Integer = int(i64.min to i64.max)
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with Integer
+	let base as Integer
+
+	function take(e Integer) returns Integer
+		return base + e
+	end 'take'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+type Box uses T
+	typealias TakerOfT = Taker with T
+
+	let seed as Integer
+
+	export function pass(t Taker) returns TakerOfT
+		return t
+	end 'pass'
+
+	export function use(t TakerOfT, c T) returns Integer
+		return t.take(c) + self.seed
+	end 'use'
+
+	static function create(seed Integer) returns Self
+		return Self{seed: seed}
+	end 'create'
+end 'Box'
+
+typealias StrBox = Box with String
+
+function main() returns ExitCode
+	let b = StrBox.create(0)
+	return b.use(b.pass(Runner.create(20)), c: "hi") as ExitCode
+end 'main'
+---
+CompilerError:
+error E3127: <fragment>:42:11: cannot pass a value already held at the interface type 'Taker' as 't', which is declared at the existential type 'Taker' with its associated type 'Element' bound to 'T' — 'T' is a type parameter of the declaring type, so this site's binding was never settled against the conformances, and a value held at an interface does not say which conformer is inside it for the call to settle it against. Pass the concrete conformer, or declare 't' at 'Taker' with no `with` clause

@@ -116,14 +116,39 @@
 // Named, never inlined: these strings are a contract between two PROCESSES built from this one
 // file, and a typo in one half would be a deadlock rather than a compile error.
 let WorkerReadyMarker = "WORKER_READY"
-let WorkerPassMarker = "WORKER_SINGLE_RESULT:"
-let WorkerFailMarker = "WORKER_SINGLE_FAIL:"
-let WorkerDriftMarker = "WORKER_SINGLE_DRIFT:"
-let WorkerSkipMarker = "WORKER_SINGLE_SKIP:"
+let WorkerResultMarker = "WORKER_SINGLE_RESULT:"
 let WorkerJobCpuMarker = "WORKER_JOB_CPU:"
 let JobSinglesPrefix = "JOB:singles:"
 let ExitCommand = "EXIT"
 let ProtocolFieldSep = ":"
+
+// ⭐⭐ **ONE RECORD SHAPE, TWO TOKEN FIELDS — BECAUSE A RESULT IS TWO INDEPENDENT FACTS.**
+//
+// `WORKER_SINGLE_RESULT:<verdict>:<golden>:<spec>:<test>:<payload>`
+//
+// ⛔ **A MARKER PER COMBINATION DOES NOT SCALE, AND THAT IS MEASURED RATHER THAN PREDICTED.** The wire
+// carried four markers for four (verdict, golden) pairs. Adding ONE verdict (`notRunHere`) and the three
+// golden answers that were folded into a single `none` (compared / minted / unrecorded) turns those four
+// into TEN — the same distinction, drift, spelled once per verdict, in a decode chain where the copies
+// could only be kept in agreement by hand. The two facts are orthogonal in `SpecTestRunner`
+// (`TestOutcome` and `GoldenDrift` are deliberately separate types); they are orthogonal here too.
+//
+// ⚠ **THERE IS EXACTLY ONE PAYLOAD SLOT AND AT MOST ONE OWNER FOR IT, BY CONSTRUCTION.** A verdict owns
+// it when it carries text (`fail`'s reason, `skipped`'s refusals); the golden owns it when it drifted;
+// nothing owns it otherwise. The two can never both want it, because a case that FAILED or was SKIPPED
+// never reaches the golden step at all (`recordFragmentAndCleanup`). `recordPayload` asks the verdict
+// first and the golden second; `decodeWorkerLine` reads it back in the same order and PANICS on a
+// combination that claims two owners or leaves an unclaimed field non-empty — a protocol break between
+// two halves of this one file, not a field to be silently read by the wrong half.
+let VerdictPassToken = "PASS"
+let VerdictFailToken = "FAIL"
+let VerdictSkipToken = "SKIP"
+let VerdictNotRunToken = "NOTRUN"
+let GoldenNotPinnedToken = "NOPIN"
+let GoldenComparedToken = "SAME"
+let GoldenDriftedToken = "DRIFT"
+let GoldenMintedToken = "MINT"
+let GoldenUnrecordedToken = "NOREC"
 
 // How long the dispatcher parks when no worker has an answer ready.
 //
@@ -499,38 +524,56 @@ function runSinglesJob(compilerExe FilePath, specDir FilePath, specName String, 
 	print("{WorkerJobCpuMarker}{run.cpu.ticks}{ProtocolFieldSep}{run.cpu.reported}{ProtocolFieldSep}{run.cpu.unreported}\n")
 end 'runSinglesJob'
 
-// The wire line for ONE result — the one place the four record kinds are chosen between.
-//
-// ⚠ TWO INDEPENDENT FACTS, FOUR KINDS. The verdict and the golden are separate axes
-// (`TestOutcome` / `GoldenDrift`), which is six combinations on paper — but only a PASSING test
-// reaches the golden step at all (`recordFragmentAndCleanup` skips it for a failure, because a failing
-// test's IR is noise, and for a skip, because no IR was emitted), so `fail` and `skipped` always carry
-// `GoldenDrift.none` and the missing kinds are records nothing can emit. That is why those two arms
-// may read the verdict alone without dropping anything.
+// The wire line for ONE result — the one place a result becomes bytes. Its inverse is
+// `decodeWorkerLine`, which reads the same five fields back in the same order.
 function recordLine(specName String, result SpecTestResult) returns String
-	return match result.outcome 'verdict'
-		pass gives passOrDriftLine(specName, result: result)
-		fail(reason) gives payloadRecordLine(WorkerFailMarker, specName: specName, testName: result.testName, payload: reason)
-		skipped(refusals) gives payloadRecordLine(WorkerSkipMarker, specName: specName, testName: result.testName, payload: refusals)
-	end 'verdict'
+	let verdict = verdictToken(result.outcome)
+	let golden = goldenToken(result.golden)
+	return "{WorkerResultMarker}{verdict}{ProtocolFieldSep}{golden}{ProtocolFieldSep}{specName}{ProtocolFieldSep}{result.testName}{ProtocolFieldSep}{encodeRecordPayload(recordPayload(result))}"
 end 'recordLine'
 
-// A passing test's record: plain when its golden still matches, DRIFT when it does not. The drift
-// payload travels to the parent rather than being printed here because the parent is the only party
-// that can print in a deterministic order — see this file's header.
-function passOrDriftLine(specName String, result SpecTestResult) returns String
-	return match result.golden 'reference'
-		none gives "{WorkerPassMarker}{specName}{ProtocolFieldSep}{result.testName}"
-		drifted(detail) gives payloadRecordLine(WorkerDriftMarker, specName: specName, testName: result.testName, payload: detail)
-	end 'reference'
-end 'passOrDriftLine'
+function verdictToken(outcome TestOutcome) returns String
+	return match outcome 'verdict'
+		pass gives VerdictPassToken
+		fail gives VerdictFailToken
+		skipped gives VerdictSkipToken
+		notRunHere gives VerdictNotRunToken
+	end 'verdict'
+end 'verdictToken'
 
-// The wire form of a payload-carrying record — the exact mirror of `PayloadRecordSplit.of`, which
-// takes one apart. Both kinds are assembled here so the field order and the escaping cannot come to
-// be spelled two ways on the writing side while the reading side has only one.
-function payloadRecordLine(marker String, specName String, testName String, payload String) returns String
-	return "{marker}{specName}{ProtocolFieldSep}{testName}{ProtocolFieldSep}{encodeRecordPayload(payload)}"
-end 'payloadRecordLine'
+function goldenToken(golden GoldenDrift) returns String
+	return match golden 'reference'
+		notPinned gives GoldenNotPinnedToken
+		matched gives GoldenComparedToken
+		drifted gives GoldenDriftedToken
+		minted gives GoldenMintedToken
+		unrecorded gives GoldenUnrecordedToken
+	end 'reference'
+end 'goldenToken'
+
+// The record's one text field, taken from whichever axis owns it. The verdict is asked FIRST and the
+// golden only when the verdict declined it — the ownership rule in the protocol note above, executed
+// rather than restated: a verdict that carries text is one that never reached the golden step.
+function recordPayload(result SpecTestResult) returns String
+	return match result.outcome 'verdict'
+		fail(reason) gives reason
+		skipped(refusals) gives refusals
+		pass gives goldenPayload(result.golden)
+		notRunHere gives goldenPayload(result.golden)
+	end 'verdict'
+end 'recordPayload'
+
+// A golden's text, which only `drifted` has. Every other arm is a bare fact about whether a comparison
+// happened, and an empty field is exactly what "nothing to say" is on this wire.
+function goldenPayload(golden GoldenDrift) returns String
+	return match golden 'reference'
+		drifted(detail) gives detail
+		notPinned gives ""
+		matched gives ""
+		minted gives ""
+		unrecorded gives ""
+	end 'reference'
+end 'goldenPayload'
 
 // ============================================================================================
 // THE RECORD PAYLOAD — a multi-line message on a line-based wire
@@ -613,61 +656,106 @@ end 'sliceAfterPrefix'
 // DECODING A WORKER'S RECORDS
 // ============================================================================================
 
-// One decoded result record. FOUR cases, because the worker emits exactly four kinds — a line that
-// is none of them is a protocol break between two halves of this same file, so `decodeWorkerLine`
-// panics on it rather than modelling it as a fifth case a future arm could forget.
-union WorkerRecord
-	pass(specName String, testName String)
-	fail(specName String, testName String, reason String)
-	// PASSED, and its committed golden no longer matches. A record of its own rather than a field on
-	// `pass` so the two facts stay separable all the way to the report (see `SpecTestRunner
-	// .GoldenDrift`); `detail` is the rendered difference.
-	drift(specName String, testName String, detail String)
-	// DID NOT RUN on this target, because the compiler refused a construct it has no implementation
-	// for. `refusals` is that E3104 text, carried all the way to the trailer's census so the report
-	// can name the CONSTRUCT and not merely the count (see `SpecTestRunner.reportTargetSkips`).
-	skip(specName String, testName String, refusals String)
+// One decoded result record — the two axes and the names they are about. A TYPE rather than a union:
+// there are no longer several KINDS of record, only one shape whose two token fields each name an arm
+// of a union `SpecTestRunner` already owns. That is what stopped the kinds multiplying (see the
+// protocol note above), and it is also why the dispatcher's name check below reads two plain fields
+// instead of a match per accessor.
+type WorkerRecord
+	export let specName as String
+	export let testName as String
+	export let outcome as TestOutcome
+	export let golden as GoldenDrift
 
-	// The spec and the test this record is ABOUT, whatever its verdict — the two fields the
-	// dispatcher checks against its plan before it trusts anything else in the record.
-	export function spec() returns String
-		return match self 's'
-			pass(s, _) gives s
-			fail(s, _, _) gives s
-			drift(s, _, _) gives s
-			skip(s, _, _) gives s
-		end 's'
-	end 'spec'
-
-	export function test() returns String
-		return match self 't'
-			pass(_, t) gives t
-			fail(_, t, _) gives t
-			drift(_, t, _) gives t
-			skip(_, t, _) gives t
-		end 't'
-	end 'test'
+	static function create(specName String, testName String, outcome TestOutcome, golden GoldenDrift) returns WorkerRecord
+		return Self{specName: specName, testName: testName, outcome: outcome, golden: golden}
+	end 'create'
 end 'WorkerRecord'
 
+// `WORKER_SINGLE_RESULT:<verdict>:<golden>:<spec>:<test>:<payload>` — four structural cuts, then the
+// payload whole. Only the first four separators are structural; the payload keeps every colon it
+// contains, which a failure reason and a golden difference are both full of.
+//
+// Neither name field can contain the separator — a spec name is a FILE STEM and a test name comes from
+// a `<!-- test: NAME -->` marker — so the cuts are unambiguous.
 function decodeWorkerLine(line String) returns WorkerRecord
-	if line.startsWith(WorkerFailMarker) 'isFail'
-		return decodeFailRecord(line)
-	end 'isFail'
+	if not line.startsWith(WorkerResultMarker) 'notARecord'
+		panic("spec worker pool: a worker emitted a line that is not a {WorkerResultMarker} record: '{line}'")
+	end 'notARecord'
 
-	if line.startsWith(WorkerDriftMarker) 'isDrift'
-		return decodeDriftRecord(line)
-	end 'isDrift'
+	let verdict = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerResultMarker), expected: "golden", line: line)
+	let golden = splitAtFieldSep(verdict.rest, expected: "spec", line: line)
+	let spec = splitAtFieldSep(golden.rest, expected: "test", line: line)
+	let test = splitAtFieldSep(spec.rest, expected: "payload", line: line)
+	let payload = decodeRecordPayload(test.rest)
 
-	if line.startsWith(WorkerSkipMarker) 'isSkip'
-		return decodeSkipRecord(line)
-	end 'isSkip'
+	// ⚠ THE VERDICT IS ASKED FIRST, EXACTLY AS `recordPayload` WROTE IT. A verdict that owns the payload
+	// leaves the golden with none, and `decodeGolden` is told so — that is the ownership rule read back,
+	// and the only place it could be got wrong.
+	let outcome = decodeVerdict(verdict.field, payload: payload, line: line)
+	let claimed = match outcome 'claim'
+		fail gives true
+		skipped gives true
+		pass gives false
+		notRunHere gives false
+	end 'claim'
 
-	if line.startsWith(WorkerPassMarker) 'isPass'
-		return decodePassRecord(line)
+	return WorkerRecord.create(spec.field, testName: test.field, outcome: outcome, golden: decodeGolden(golden.field, payload: payload, verdictClaimedIt: claimed, line: line))
+end 'decodeWorkerLine'
+
+function decodeVerdict(token String, payload String, line String) returns TestOutcome
+	if token == VerdictPassToken 'isPass'
+		return TestOutcome.pass
 	end 'isPass'
 
-	panic("spec worker pool: a worker emitted a line that is none of the PASS, FAIL, DRIFT or SKIP records: '{line}'")
-end 'decodeWorkerLine'
+	if token == VerdictFailToken 'isFail'
+		return TestOutcome.fail(payload)
+	end 'isFail'
+
+	if token == VerdictSkipToken 'isSkip'
+		return TestOutcome.skipped(payload)
+	end 'isSkip'
+
+	if token == VerdictNotRunToken 'isNotRun'
+		return TestOutcome.notRunHere
+	end 'isNotRun'
+
+	panic("spec worker pool: '{token}' is not one of the {VerdictPassToken}/{VerdictFailToken}/{VerdictSkipToken}/{VerdictNotRunToken} verdict tokens: '{line}'")
+end 'decodeVerdict'
+
+// `verdictClaimedIt` is how the ONE payload slot stays unambiguous without a second copy of the rule:
+// a golden that would take the payload while the verdict already has it is the protocol break the note
+// above says cannot happen, so it is a panic rather than a silently duplicated field.
+function decodeGolden(token String, payload String, verdictClaimedIt bool, line String) returns GoldenDrift
+	if token == GoldenDriftedToken 'isDrift'
+		if verdictClaimedIt 'twoOwners'
+			panic("spec worker pool: a record claims BOTH a payload-carrying verdict and {GoldenDriftedToken}, so its one payload field has two owners: '{line}'")
+		end 'twoOwners'
+		return GoldenDrift.drifted(payload)
+	end 'isDrift'
+
+	if not verdictClaimedIt and not payload.isEmpty() 'unclaimedPayload'
+		panic("spec worker pool: a record carries a payload no field owns — neither its verdict nor its '{token}' golden takes one: '{line}'")
+	end 'unclaimedPayload'
+
+	if token == GoldenNotPinnedToken 'isNotPinned'
+		return GoldenDrift.notPinned
+	end 'isNotPinned'
+
+	if token == GoldenComparedToken 'isCompared'
+		return GoldenDrift.matched
+	end 'isCompared'
+
+	if token == GoldenMintedToken 'isMinted'
+		return GoldenDrift.minted
+	end 'isMinted'
+
+	if token == GoldenUnrecordedToken 'isUnrecorded'
+		return GoldenDrift.unrecorded
+	end 'isUnrecorded'
+
+	panic("spec worker pool: '{token}' is not one of the {GoldenNotPinnedToken}/{GoldenComparedToken}/{GoldenDriftedToken}/{GoldenMintedToken}/{GoldenUnrecordedToken} golden tokens: '{line}'")
+end 'decodeGolden'
 
 // One structural separator consumed: the field in front of it, and everything behind it.
 type RecordSplit
@@ -679,13 +767,13 @@ type RecordSplit
 	end 'create'
 end 'RecordSplit'
 
-// Cut `body` at its FIRST separator. A record is a run of these — PASS takes one cut, FAIL takes
-// two — so the field walk is written once here rather than once per record kind, where the two
-// copies would have to agree about what a field is.
+// Cut `body` at its FIRST separator. A record is a run of these — four structural cuts, then the
+// payload — so the field walk is written once here rather than once per field, where the copies would
+// have to agree about what a field is. The CPU record is a run of the same cuts.
 //
-// It cuts at the first separator ONLY, which is what makes it right for the FAIL payload: the
-// remainder after the last structural cut is an escaped compiler diagnostic, full of colons, and it
-// is carried out whole in `rest` rather than being split again.
+// It cuts at the first separator ONLY, which is what makes the last cut right: the remainder is an
+// escaped compiler diagnostic, full of colons, and it is carried out whole in `rest` rather than being
+// split again.
 //
 // `expected` names the field that should have followed the separator, so a malformed record reads
 // as the protocol break it is instead of a string-index failure.
@@ -695,53 +783,6 @@ function splitAtFieldSep(body String, expected String, line String) returns Reco
 
 	return RecordSplit.create(body.slice(body.startIndex(), endIndex: sep), rest: body.slice(restStart, endIndex: body.endIndex()))
 end 'splitAtFieldSep'
-
-// `WORKER_SINGLE_RESULT:<spec>:<test>`. Neither field can contain the separator — a spec name is a
-// FILE STEM and a test name comes from a `<!-- test: NAME -->` marker — so the one separator
-// between them is unambiguous.
-function decodePassRecord(line String) returns WorkerRecord
-	let spec = splitAtFieldSep(sliceAfterPrefix(line, prefix: WorkerPassMarker), expected: "test", line: line)
-	return WorkerRecord.pass(spec.field, testName: spec.rest)
-end 'decodePassRecord'
-
-// `WORKER_SINGLE_FAIL:<spec>:<test>:<payload>`. Only the FIRST TWO separators are structural; the
-// payload keeps every colon it contains.
-function decodeFailRecord(line String) returns WorkerRecord
-	let split = PayloadRecordSplit.of(line, marker: WorkerFailMarker, payloadName: "reason")
-	return WorkerRecord.fail(split.specName, testName: split.testName, reason: split.payload)
-end 'decodeFailRecord'
-
-// `WORKER_SINGLE_DRIFT:<spec>:<test>:<payload>` — the same three fields as a FAIL, carrying the
-// golden difference instead of a failure reason.
-function decodeDriftRecord(line String) returns WorkerRecord
-	let split = PayloadRecordSplit.of(line, marker: WorkerDriftMarker, payloadName: "detail")
-	return WorkerRecord.drift(split.specName, testName: split.testName, detail: split.payload)
-end 'decodeDriftRecord'
-
-// `WORKER_SINGLE_SKIP:<spec>:<test>:<payload>` — the same three fields again, carrying the compiler's
-// E3104 text.
-function decodeSkipRecord(line String) returns WorkerRecord
-	let split = PayloadRecordSplit.of(line, marker: WorkerSkipMarker, payloadName: "refusals")
-	return WorkerRecord.skip(split.specName, testName: split.testName, refusals: split.payload)
-end 'decodeSkipRecord'
-
-// The three fields of a payload-carrying record, already decoded. Its own type so the two kinds that
-// share the shape share the PARSE of it too — a second copy of the two structural cuts is a second
-// place the wire format could be got wrong.
-type PayloadRecordSplit
-	export let specName as String
-	export let testName as String
-	export let payload as String
-
-	// The two structural cuts and the unescape, in the one place both payload-carrying kinds reach
-	// them. `payloadName` is only what a malformed record is reported as missing.
-	export static function of(line String, marker String, payloadName String) returns PayloadRecordSplit
-		let spec = splitAtFieldSep(sliceAfterPrefix(line, prefix: marker), expected: "test", line: line)
-		let test = splitAtFieldSep(spec.rest, expected: payloadName, line: line)
-
-		return Self{specName: spec.field, testName: test.field, payload: decodeRecordPayload(test.rest)}
-	end 'of'
-end 'PayloadRecordSplit'
 
 // Take the job's CPU record OFF THE END of its drained lines, leaving only the result records.
 //
@@ -796,39 +837,18 @@ function resultsFromLines(lines StringArray, plan SpecPlan) returns SpecTestResu
 		let expectedTest = try plan.testNames.get(i) otherwise panic("resultsFromLines: testNames.get({i}) is in bounds by construction")
 		let record = decodeWorkerLine(line)
 
-		if record.spec() != plan.specName or record.test() != expectedTest 'wrongTest'
-			panic("spec worker pool: expected a record for '{plan.specName}/{expectedTest}', got '{record.spec()}/{record.test()}' — the parent and the worker disagree about which tests this spec runs, or in what order")
+		if record.specName != plan.specName or record.testName != expectedTest 'wrongTest'
+			panic("spec worker pool: expected a record for '{plan.specName}/{expectedTest}', got '{record.specName}/{record.testName}' — the parent and the worker disagree about which tests this spec runs, or in what order")
 		end 'wrongTest'
 
 		// Built from the PARENT's own names, which the check above has just proved equal to the
 		// worker's. The report is therefore assembled entirely from the parent's plan; nothing
 		// that crossed a pipe reaches the printed line but the failure reason.
-		results.push(SpecTestResult.create(plan.specName, testName: expectedTest, outcome: outcomeOf(record), golden: goldenOf(record)))
+		results.push(SpecTestResult.create(plan.specName, testName: expectedTest, outcome: record.outcome, golden: record.golden))
 	end 'eachRecord'
 
 	return results
 end 'resultsFromLines'
-
-// ⚖ A DRIFT RECORD IS A PASS. The golden it names is reference material, so it decides nothing about
-// the verdict — the difference it carries comes back out of `goldenOf` instead.
-function outcomeOf(record WorkerRecord) returns TestOutcome
-	return match record 'verdict'
-		pass gives TestOutcome.pass
-		fail(_, _, reason) gives TestOutcome.fail(reason)
-		drift gives TestOutcome.pass
-		skip(_, _, refusals) gives TestOutcome.skipped(refusals)
-	end 'verdict'
-end 'outcomeOf'
-
-function goldenOf(record WorkerRecord) returns GoldenDrift
-	return match record 'reference'
-		pass gives GoldenDrift.none
-		fail gives GoldenDrift.none
-		drift(_, _, detail) gives GoldenDrift.drifted(detail)
-		// Nothing was compiled here, so no golden was compared — see `recordFragmentAndCleanup`.
-		skip gives GoldenDrift.none
-	end 'reference'
-end 'goldenOf'
 
 // ============================================================================================
 // THE DRAIN — the one green thread in the design

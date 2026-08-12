@@ -1,0 +1,179 @@
+// Testing/SpecVerdictSelfTest.maxon — WHAT A SPEC TEST IS WORTH WHEN ITS BINARY NEVER STARTED.
+//
+// ⭐⭐ **THIS RUNG GAVE THE SUITE A LANE THAT DELIBERATELY RUNS NOTHING**, and the whole danger of such
+// a lane is that "we did not run it" is one careless simplification away from "it passed". A cross run
+// on a host with no runner reports thousands of cases it never executed; if any of them ever lands in
+// the passed column, or leaves a run that executed NOTHING reporting green, the lane stops being an
+// instrument and becomes a very expensive way of printing OK.
+//
+// ⛔ **AND THE OPPOSITE DIRECTION IS THE DANGEROUS ONE.** Excusing a launch that FAILED — on the host
+// lane, where the binary should have started — would wave through a program this compiler had just
+// emitted and could not execute. That is precisely what running the program is for, so the guard
+// asserts BOTH directions from the SAME synthesized observation, and only the target moves.
+//
+// ⭐ **IT IS THE BOOTSTRAP'S `SpecRunSelfTest` (maxon-sharp/Testing/SpecRunSelfTest.cs) RESTATED IN
+// shv2's OWN TERMS, AND IT HAD TO BE RATHER THAN EXTENDED.** That file asserts the mapping over C# types
+// in the C# compiler's process, against `TargetRunHost.WhyCannotRun`; it is run by `dotnet build` and it
+// stays exactly as it is. It structurally cannot reach `TestOutcome`, `RunObservation` or
+// `runStrategyFor`, which are the things this rung changed — a guard in the other compiler is not
+// coverage of this one. The three properties it pins are the three pinned here, and the rows are named
+// after its rows so the pair stays legible as one idea in two languages.
+//
+// ⚠ **NO SPEC CASE CAN REACH ANY OF THIS**, for the reason the C# one gives: a spec case is Maxon source
+// the runner compiles, it cannot ask which host it is on, and a case that could would be red on some
+// machine and green on another. So the assertions are made against SYNTHESIZED values — no compile, no
+// spawn, no filesystem — and they ride the SUITE, in the parent, beside the other tree-level guards
+// (`requireRunnerAvailable`, `requireLadderIndexComplete`, `requireBoardIdsUnique`). A check nobody runs
+// is a claim.
+
+// A synthesized case's names. They never reach a file: every row below is a pure function of a
+// `TestOutcome`, a `GoldenDrift` or a `Target`.
+let SelfTestSpecName = "self-test"
+let SelfTestName = "verdict-mapping"
+
+// How deep one failing row sits under the sentence that introduces it — `HarnessSelfTest`'s depth, for
+// its reason: a reader takes the two panics as one shape.
+let BrokenVerdictRowIndent = "\n  "
+
+// ⭐ **PROVE THE NOT-RUN VERDICT IS STILL COUNTED, REASONED AND NOT GREEN.** Called ONCE by the suite's
+// parent process, before a worker is spawned. It PANICS naming every row that failed — all of them
+// together rather than the first, because one careless edit to `TestOutcome` breaks several and a
+// report naming one sends the reader back for another sweep per remaining row.
+export function requireSpecVerdictMapping()
+	var broken = StringArray.create()
+
+	checkLaunchFailureVerdicts(broken)
+	checkNotRunHereIsNotGreen(broken)
+	checkEveryOutcomeIsCounted(broken)
+	checkOnlyAValidatedVerdictMints(broken)
+
+	if broken.isEmpty() 'everyRowHeld'
+		return
+	end 'everyRowHeld'
+
+	// ⚠ `panic` takes a STRING LITERAL — a `let`-bound String is rejected outright — so the list is
+	// built as text and INTERPOLATED. Same constraint `HarnessSelfTest` and `LadderIndex` document.
+	let report = indentedList(broken, indent: BrokenVerdictRowIndent)
+	panic("SpecVerdictSelfTest: {broken.count()} row(s) of the not-run verdict mapping no longer hold. A lane whose whole job is reporting what it did NOT run is one simplification away from reporting that it passed.{report}")
+end 'requireSpecVerdictMapping'
+
+// ⭐ ROW 1 — a run this lane could not perform is `notRunHere`; a launch that FAILED is a `fail`.
+//
+// ASKED OF THE ROUTING, NOT RESTATED BESIDE IT. Which targets this host can execute is
+// `runStrategyFor`'s answer (through `externalRunnerFor`, the one runner table), and spelling the rule
+// here as its own `host.os == target.os` would be a second copy that agrees only by coincidence — the
+// exact trap the C# row documents having sprung. So the EXPECTATION is derived from the strategy and
+// what is asserted is the CONSEQUENCE: the observation that lane produces, mapped to a verdict.
+function checkLaunchFailureVerdicts(broken StringArray)
+	for target in supportedTargets() 'eachTarget'
+		let key = targetToString(target)
+
+		// ⛔ THE DANGEROUS DIRECTION, ASSERTED FOR EVERY TARGET WITHOUT EXCEPTION. A launch that was
+		// ATTEMPTED and did not work is a defect in the binary, the runner or the OS, and it must be a
+		// FAIL — including on a lane whose OTHER cases are legitimately unrun. Excusing it is how a
+		// program this compiler had just emitted and could not start gets waved through.
+		let attempted = verdictOf(RunObservation.failed("the OS refused it"), target: target)
+		if not isFailVerdict(attempted) 'excusedAFailedLaunch'
+			broken.push("{key}: a binary that FAILED TO LAUNCH earned '{verdictLine(attempted, label: key)}' instead of a FAIL. A launch that was attempted and did not work is a defect, and running the program is what exists to catch it.\n")
+		end 'excusedAFailedLaunch'
+
+		let unperformed = match runStrategyFor(target) 'lane'
+			individually gives false
+			wslBatch gives false
+			noneHere gives true
+		end 'lane'
+
+		if not unperformed 'thisHostRunsIt'
+			continue
+		end 'thisHostRunsIt'
+
+		// The OTHER direction, and only for the lanes that have it: this host performs no execution for
+		// that target, so `executeRuns` answers `notRunnableHere` for every case that needed one. That
+		// observation must be NOTRUN — neither a pass (nothing was proved) nor a failure of the case
+		// (nothing about the case went wrong).
+		let verdict = verdictOf(RunObservation.notRunnableHere, target: target)
+		let named = match verdict 'v'
+			notRunHere gives true
+			pass gives false
+			fail gives false
+			skipped gives false
+		end 'v'
+
+		if not named 'wrongVerdict'
+			broken.push("{key}: this host has no runner for it, so every case needing one is unperformed — and an unperformed execution must be NOTRUN. It was '{verdictLine(verdict, label: key)}'.\n")
+		end 'wrongVerdict'
+	end 'eachTarget'
+end 'checkLaunchFailureVerdicts'
+
+// Is this the FAIL arm specifically? `not isPass()` would not do: it is also true of the two not-run
+// arms, which is exactly the confusion the row above exists to refuse.
+function isFailVerdict(outcome TestOutcome) returns bool
+	return match outcome 'v'
+		fail gives true
+		pass gives false
+		skipped gives false
+		notRunHere gives false
+	end 'v'
+end 'isFailVerdict'
+
+// The verdict one observation earns, through the runner's own conversion. A `run` expectation with the
+// simplest possible pins, because what is under test is the OBSERVATION arm and not the assertions.
+function verdictOf(observation RunObservation, target Target) returns TestOutcome
+	return checkObservedRun(SpecExitCode.unpinned, stderr: SpecStderr.unpinned, stdout: SpecStdout.unpinned, observation: observation, effectiveTarget: target)
+end 'verdictOf'
+
+// ⭐ ROW 2 — a test nothing ran is not a pass, and a run whose every case was unperformed is not green.
+// Asserted through `ResultTally`, which is where both facts are decided for every reporting path.
+function checkNotRunHereIsNotGreen(broken StringArray)
+	let tally = tallyResults(resultsOf(TestOutcome.notRunHere, golden: GoldenDrift.matched))
+
+	if tally.passed != 0 'countedAsPassing'
+		broken.push("a run of one NOTRUN case reports {tally.passed} passed. A test nothing executed is not a test that passed.\n")
+	end 'countedAsPassing'
+
+	if not tally.provedNothing() 'wouldExitGreen'
+		broken.push("a run whose only case was NOTRUN does not report that it proved nothing, so it would exit 0. A gate that could not run is not a gate that passed.\n")
+	end 'wouldExitGreen'
+end 'checkNotRunHereIsNotGreen'
+
+// ⭐ ROW 3 — every verdict lands in exactly one column. The totals come off ONE walk, so an outcome arm
+// nobody counted makes them disagree with the number of results rather than hiding.
+function checkEveryOutcomeIsCounted(broken StringArray)
+	var results = SpecTestResultArray.create()
+	results.append(resultsOf(TestOutcome.pass, golden: GoldenDrift.matched))
+	results.append(resultsOf(TestOutcome.fail("a synthesized reason"), golden: GoldenDrift.notPinned))
+	results.append(resultsOf(TestOutcome.skipped("a synthesized E3104"), golden: GoldenDrift.notPinned))
+	results.append(resultsOf(TestOutcome.notRunHere, golden: GoldenDrift.unrecorded))
+
+	let tally = tallyResults(results)
+	if tally.total() == results.count() 'allCounted'
+		return
+	end 'allCounted'
+
+	broken.push("{results.count()} results but {tally.total()} counted across passed/failed/skipped/not-run-here. A verdict that falls out of every column has been dropped from the report.\n")
+end 'checkEveryOutcomeIsCounted'
+
+// ⭐ ROW 4 — a verdict that was never established here may not WRITE a first golden, and one that was
+// must still be able to. This is the half the C# guard states as `TargetRunHost.MintRefusalFor`, and it
+// is the one that decides whether a cross lane's missing references get filled in with output nobody
+// checked (see `SpecTestRunner.recordFragmentAndCleanup` for the 810 measured cases where they were).
+function checkOnlyAValidatedVerdictMints(broken StringArray)
+	if TestOutcome.notRunHere.isPass() 'wouldMint'
+		broken.push("a NOTRUN verdict reports itself as a pass, so it would be allowed to MINT a golden from a program nobody executed — and that golden then becomes what a real run on a real host is compared against.\n")
+	end 'wouldMint'
+
+	if not TestOutcome.notRunHere.pinsEmittedCode() 'wouldNotCompare'
+		broken.push("a NOTRUN verdict does not pin its emitted code, so its committed golden would never be compared. That comparison is the ONLY verification such a case can get on this host, and it is what the whole lane is for.\n")
+	end 'wouldNotCompare'
+
+	if not TestOutcome.pass.pinsEmittedCode() 'passLostItsGolden'
+		broken.push("a PASSING verdict does not pin its emitted code, so no golden would be compared on any lane at all.\n")
+	end 'passLostItsGolden'
+end 'checkOnlyAValidatedVerdictMints'
+
+// One synthesized result, as the one-element list every row above works over.
+function resultsOf(outcome TestOutcome, golden GoldenDrift) returns SpecTestResultArray
+	var results = SpecTestResultArray.create()
+	results.push(SpecTestResult.create(SelfTestSpecName, testName: SelfTestName, outcome: outcome, golden: golden))
+	return results
+end 'resultsOf'

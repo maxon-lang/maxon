@@ -1,0 +1,19 @@
+// Test: error.a-buffer-alias-at-a-struct-field-refuses-an-array-member
+typealias Byte = int(0 to u8.max)
+typealias ByteBuffer = __ManagedMemory with Byte
+
+type Holder
+	export var buf as ByteBuffer
+
+	export static function create(buf ByteBuffer) returns Self
+		return Self{buf: buf}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.create("hello".toByteArray())
+	return h.buf.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:15: Unsupported: `__ManagedMemory` member 'count' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here

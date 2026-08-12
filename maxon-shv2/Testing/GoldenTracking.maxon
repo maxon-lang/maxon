@@ -75,7 +75,10 @@ export function reportGoldenDrift(results SpecTestResultArray)
 	var entries = StringArray.create()
 	for result in results 'eachResult'
 		match result.golden 'reference'
-			none then continue
+			notPinned then continue
+			matched then continue
+			minted then continue
+			unrecorded then continue
 			// The trailing newline is this caller's: a drift difference does not end in one, and
 			// `resultNoteEntry` emits `detail` verbatim rather than guessing.
 			drifted(detail) then entries.push(resultNoteEntry(result.specName, testName: result.testName, detail: "{detail}\n"))
@@ -89,6 +92,45 @@ export function reportGoldenDrift(results SpecTestResultArray)
 	let headline = "note: {entries.count()} golden fragment(s) no longer match what the compiler emits. GOLDENS ARE REFERENCE, NOT A GATE:\n{ResultNoteIndent}nothing failed on this and the exit code is unaffected. Read the differences below — they are the only\n{ResultNoteIndent}record of what your change did to the emitted code — then re-run with --update-required (paired with a\n{ResultNoteIndent}--filter) to refresh the files. That diff IS the review.\n"
 	reportResultNote(entries, headline: headline)
 end 'reportGoldenDrift'
+
+// ⭐⭐ **THE CENSUS — HOW MUCH OF THIS RUN'S CODEGEN WAS ACTUALLY CHECKED AGAINST A REFERENCE.**
+//
+// ⛔ **A COUNT OF DRIFTS IS NOT AN ANSWER WITHOUT THE DENOMINATOR, AND FOR MONTHS THERE WAS NO
+// DENOMINATOR.** `reportGoldenDrift` above says how many committed goldens no longer match; it cannot
+// say how many were compared at all, because until this rung a comparison, a first mint and "no golden
+// to speak of" were the same `GoldenDrift.none`. So a lane arriving with sixteen hundred goldens
+// MISSING printed the identical trailer as one where every single case was pinned and matched — and
+// the first is not evidence of anything. Minting is not verification.
+//
+// The four columns are the four things that can happen to one case's reference, and only the first two
+// involved a comparison. `unrecorded` is the one a reader must act on: those cases have NO committed
+// record on this lane and this host was not allowed to write one (see
+// `SpecTestRunner.recordFragmentAndCleanup`), so their emitted code is unreviewed anywhere.
+//
+// STDERR and never a verdict, exactly like the two reports around it — this is the same reference
+// material, counted rather than diffed. SILENT when nothing was pinned at all (the wasm lane).
+export function reportGoldenCensus(results SpecTestResultArray, effectiveTarget Target)
+	var compared = 0 as TestTally
+	var drifted = 0 as TestTally
+	var minted = 0 as TestTally
+	var unrecorded = 0 as TestTally
+
+	for result in results 'eachResult'
+		match result.golden 'reference'
+			notPinned then continue
+			matched then compared = compared + 1
+			drifted then drifted = drifted + 1
+			minted then minted = minted + 1
+			unrecorded then unrecorded = unrecorded + 1
+		end 'reference'
+	end 'eachResult'
+
+	if compared + drifted + minted + unrecorded == 0 'nothingPinned'
+		return
+	end 'nothingPinned'
+
+	printError("note: goldens on {targetToString(effectiveTarget)}: {compared + drifted} COMPARED against a committed reference ({drifted} of them differ, listed above), {minted} MINTED with nothing to compare against, {unrecorded} NOT RECORDED — no committed reference and this host may not write one, so their emitted code is unreviewed on this lane.\n")
+end 'reportGoldenCensus'
 
 // ⭐ **THE TRACKING REPORT — goldens this tree has on disk and never put under version control.**
 //

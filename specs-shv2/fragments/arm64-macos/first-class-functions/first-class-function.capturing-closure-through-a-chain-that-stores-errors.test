@@ -1,0 +1,32 @@
+// Test: first-class-function.capturing-closure-through-a-chain-that-stores-errors
+typealias Integer = int(i64.min to i64.max)
+typealias UnaryOp = function(Integer) returns Integer
+
+type Handler
+	export var op as UnaryOp
+
+	export static function create(op UnaryOp) returns Self
+		return Self{op: op}
+	end 'create'
+end 'Handler'
+
+function hop3(f UnaryOp) returns Handler
+	return Handler.create(f)
+end 'hop3'
+
+function hop2(f UnaryOp) returns Handler
+	return hop3(f)
+end 'hop2'
+
+function hop1(f UnaryOp) returns Handler
+	return hop2(f)
+end 'hop1'
+
+function main() returns ExitCode
+	let bump = 20
+	let h = hop1(function(n Integer) gives n + bump)
+	return h.op(21) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3099: <fragment>:27:10: cannot pass a closure that captures to 'hop1', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing

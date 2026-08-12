@@ -1,0 +1,38 @@
+// Test: error.a-name-the-scope-does-not-bind-binds-nothing
+typealias Integer = int(i64.min to i64.max)
+
+type Inner uses U
+	typealias UArr = Array with U
+	var v as UArr
+	export static function make(v UArr) returns Self
+		return Self{v: v}
+	end 'make'
+	export function first() returns U throws ArrayError
+		return try v.get(0)
+	end 'first'
+end 'Inner'
+
+type Outer uses T
+	typealias OArr = Array with T
+	var items as OArr
+	export static function create(items OArr) returns Self
+		return Self{items: items}
+	end 'create'
+	export function wrap() returns Inner
+		return Inner.make(items)
+	end 'wrap'
+end 'Outer'
+
+typealias O = Outer with Integer
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+	var a = IntArray.create()
+	a.push(7)
+	let o = O.create(a)
+	let w = o.wrap()
+	return (try w.first() otherwise panic("Inner binds nothing")) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:10: argument type mismatch for 'v': expected 'Inner.UArr', got 'Outer.OArr'
