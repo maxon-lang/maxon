@@ -2555,18 +2555,26 @@ end 'MethodReceiver'
 // was not updated at and let them drift on the refusal itself, whose sabotage note records that the wrong
 // answer is SILENT.
 //
-// ⚠ Its closing clause — *"no struct-typed field can be constructed yet"* — reads as a claim about the whole
-// language and is true only of what the METHOD door still refuses: a type on a cycle in the struct-field
-// graph, which genuinely has no constructible value. It is left BYTE-IDENTICAL because
-// `self-field-struct-typed.md` pins THREE of its four cases against this exact text (the fourth,
-// `error.scalar-field-base-is-not-a-struct`, pins the different not-a-struct refusal, which is what makes the
-// ORDER inside `requireStructBase` load-bearing), and that spec is not this change's to rewrite.
+// ⛔⛔ **ITS CLOSING CLAUSE WAS DELETED (PBR-1 review), BECAUSE IT HAD BECOME FALSE AT BOTH DOORS.** The
+// sentence used to end *"which arrives with the rung that gives a field a struct type — no struct-typed field
+// can be constructed yet"*, and both halves of that are now refuted by a program in this tree: `type Outer`'s
+// `var inner as Inner` IS constructed, by `Outer.make()`, and the bare `inner.get()` spelling **compiles and
+// runs** through the METHOD door (measured: exit 41) one function away from where `inner.x` still reports
+// this. So the promised rung is not what is missing — the method door already materializes the box
+// (`methodReceiverBinding`) and already narrows its refusal to types with no constructible value; what
+// `requireStructBase` lacks is that one materialization, not a language feature.
+//
+// ⚠ **WHAT SURVIVES IS THE HALF THAT IS TRUE AT BOTH DOORS, AND THE TEXT IS STILL SHARED FOR THE REASON
+// BELOW.** "Its box has to be loaded out of the receiver before it can be addressed" is the base door's
+// actual reason and is a true statement of what reaching the field requires at the method door too; the
+// method door merely refuses one step further on. A second SPELLING is still refused here — the paragraph
+// below is unchanged on that — so the fix is a shorter shared sentence, never two.
 //
 // It returns the STRING and each caller throws `ParseError.unsupported(…)` INLINE — never
 // `throw self.helperReturningAParseError(…)`, which leaks two allocations under the C#-emitted refcount
 // runtime (`floatPayloadMessage` records the family).
 function structTypedSelfFieldBaseMessage(fieldName ByteArray) returns String
-	return "a field access through '{String.from(fieldName)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)"
+	return "a field access through '{String.from(fieldName)}', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)"
 end 'structTypedSelfFieldBaseMessage'
 
 // **CAN A VALUE OF THIS TAG CARRY A `StructLayout`?** — a plain struct box, or a generic INSTANCE (whose
@@ -52298,20 +52306,39 @@ export type Parser
 		// `let s = try b.items.get(0) otherwise ""` + `wipe(b)` whose body is `b.items = StringArray.create()`
 		// compiled clean and faulted **0xC0000005**, where the oracle reports the conflict.
 		//
-		// ⚠ The subject is `b`, not `items` — `iterationSubjectNameAt` names the FIELD only for a `self`-rooted
-		// chain, where the receiver is not a subject anything can write through. The self-spelled door passes
-		// its own field token for exactly that reason; both are the one derivation, asked of their own base.
+		// ⚠⚠ **THE SUBJECT IS THE CHAIN BASE `b`, NOT THE FIELD — WHICH IS WHY THE TWO SEEDS BELOW ARE GATED
+		// DIFFERENTLY AND THE SIBLING DOOR'S TWO ARE NOT.** `iterationSubjectNameAt` names the FIELD only for a
+		// `self`-rooted chain, so `emitCheckedSelfFieldStore` gets per-field subjects for free: a write to
+		// `n` cannot collide with a borrow taken out of `items`, because they are two subjects. Here EVERY
+		// field of `b` collapses onto one subject, so an ungated note makes every store through `b` conflict
+		// with every live borrow rooted at `b` — including stores that free nothing. **MEASURED (review):**
+		// `let s = try b.items.get(0) otherwise ""` + `b.n = 5` was refused *"cannot mutate 'b' via '='"*
+		// where the oracle compiles it and prints `hello`. `borrow-liveness:a-scalar-field-store-is-not-a-
+		// conflict` is that program, and it is the store door's twin of the METHOD door's own over-rejection
+		// guard (`method-writing-a-non-array-field-is-not-a-conflict`).
+		//
+		// Both seeds are keyed on ONE subject derivation and ONE field-type read, bound here rather than
+		// spelled at each — the two gates differ, the facts they gate on do not.
+		let fieldType = self.signatures.fieldTypeOf(step.layout, index: index, into: self.artifact.typeNames)
 		let subjectName = self.borrowSubjectNameAt(baseIndex)
-		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
+
+		// ⛔ **THE NOTE'S GATE IS MANAGED-NESS, AND DELIBERATELY NOT THE `typeIsArrayInstance` ONE BESIDE
+		// IT.** `b.inner = other` frees a nested STRUCT and cascades to the arrays that struct owns, and a
+		// borrow taken through `b.inner.items.get(0)` carries this very same subject `b` — so array-gating
+		// the note would close the false rejection above by opening a real use-after-free. A scalar field
+		// frees nothing at all, which is the whole of what this gate excludes.
+		if self.functionHoldsABorrow(func) and self.signatures.typeIsManaged(fieldType, from: self.artifact.typeNames) 'mayConflictWithABorrow'
 			self.noteBorrowSubjectRebind(func, subjectName: subjectName, anchor: step.baseTok)
 		end 'mayConflictWithABorrow'
 
-		// ⚠ **GATED ON THE FIELD BEING AN ARRAY, which is E3070's SCOPE**, and `writtenParamMask` (E3019)
-		// deliberately stays untouched beside it — the row `IrFunction`'s table already carries for the
-		// field-chain write whose base is a parameter: **no / yes**. Setting E3019's column here would make
-		// `let state = …` + `clearAll(state)` an error, which is the very program
+		// ⚠ **THE MASK'S GATE IS NARROWER — THE FIELD BEING AN ARRAY, which is E3070's SCOPE** and the same
+		// line the sibling store draws: this column is read across a CALL (`BorrowCheck.mutationSiteWrites`),
+		// where the only borrow that survives into another function's summary is an array element's.
+		// `writtenParamMask` (E3019) deliberately stays untouched beside both — the row `IrFunction`'s table
+		// already carries for the field-chain write whose base is a parameter: **no / yes**. Setting E3019's
+		// column here would make `let state = …` + `clearAll(state)` an error, which is the very program
 		// `array-managed-field-reassign:reassign-empty-array-field` pins at exit 0.
-		if self.typeIsArrayInstance(self.signatures.fieldTypeOf(step.layout, index: index, into: self.artifact.typeNames)) 'arrayFieldStore'
+		if self.typeIsArrayInstance(fieldType) 'arrayFieldStore'
 			func.storageWrittenParamMask = func.storageWrittenParamMask or self.subjectStorageMask(func, subjectName: subjectName)
 		end 'arrayFieldStore'
 

@@ -1601,3 +1601,85 @@ end 'main'
 ```stdout
 44 tag! 1
 ```
+
+<!-- test: a-field-store-in-a-callee-freeing-its-parameters-array -->
+### A callee that STORES an array field of its parameter frees the borrowed element
+The direct-store twin of `a-free-callee-writing-a-field-of-its-parameter` above, and it exists
+because the two reach the storage by different doors: that one calls a mutating member ON the field
+(`bag.items.truncate(0)`, `Parser.noteReceiverWrite`), this one REPLACES the field
+(`b.items = <fresh>`, `Parser.parseFieldAssignment`), whose `emitFieldWrite` decrefs the record the
+field held and frees every element some other name still borrows.
+
+⚠ **This door had nothing to guard until PBR-1** — a field store through a PARAMETER was E2013, so no
+write here could reach a caller's record. Measured on the permission change with the seeds absent:
+this program compiled clean and faulted **0xC0000005**, where the oracle reports the conflict.
+```maxon
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+end 'Bag'
+
+function wipe(b Bag)
+	b.items = StringArray.create()
+end 'wipe'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	wipe(b)
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/a-field-store-in-a-callee-freeing-its-parameters-array.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```
+
+<!-- test: a-scalar-field-store-is-not-a-conflict -->
+### The over-rejection guard for the case above: storing a SCALAR field frees nothing
+The store door's twin of `method-writing-a-non-array-field-is-not-a-conflict`, and it needs its own
+case because the two doors key their subject DIFFERENTLY. A self-field store's subject is the FIELD
+(`iterationSubjectNameAt` names it), so a write to one field cannot collide with a borrow out of
+another; a `b.n = 5` store's subject is the chain BASE, `b`, which every field of `b` collapses onto.
+Ungated, the write conflicted with every live borrow rooted at `b` — including, as here, one it
+cannot possibly free — and this legal program was refused *"cannot mutate 'b' via '='"* where the
+oracle compiles it and prints `hello`.
+
+⚠ The gate is MANAGED-ness and deliberately not array-ness, which is the narrower gate the mask
+beside it uses: `b.inner = other` frees a nested struct and cascades to ITS arrays, and a borrow taken
+through `b.inner.items.get(0)` carries the same subject `b` — so array-gating the note would open a
+real use-after-free while closing this false rejection.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+	export var n as Integer
+
+	static function create() returns Self
+		return Self{items: StringArray.create(), n: 0}
+	end 'create'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("hello")
+	let s = try b.items.get(0) otherwise ""
+	b.n = 5
+	print("{s} {b.n}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello 5
+```

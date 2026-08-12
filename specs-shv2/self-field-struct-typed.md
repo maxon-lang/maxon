@@ -38,13 +38,29 @@ The fix is not a fourth guard. `requireStructBase` returns the **box together wi
 layout it proved beside a box it assumed.
 
 ⚠ **Why REFUSE rather than load it correctly.** Materializing the field first — `loadIndirect` the
-box out of the receiver, then address that — is one line. It is deliberately not taken: a
-struct-typed field cannot be **constructed** at this rung. `Self{next: …}` needs a `Node` to put
+box out of the receiver, then address that — is one line. It was deliberately not taken here: for
+`type Node` no value of the field's type could exist at all. `Self{next: …}` needs a `Node` to put
 there, and there is no `null` and no base case, so no program could observe the load being right.
 That is the `mintPhi` trap exactly — a mechanism handed a consumer and no reason to be right — and
-it is the same trap this rung's own self-field scaffold waited out for two rungs. It arrives with
-the rung that gives a field a struct type, which is the rung that already owes this one its
-receiver-ownership analysis (see `Parser.parseMethodCall`).
+it is the same trap this rung's own self-field scaffold waited out for two rungs.
+
+⛔⛔ **THAT ARGUMENT HOLDS FOR A TYPE ON A CYCLE AND FOR NOTHING ELSE, AND THE THREE CASES BELOW ARE
+ALL SUCH A TYPE — SO THIS FILE PINS LESS THAN ITS TITLE CLAIMS.** The refusal reads as *"a
+struct-typed field may not be a base"* and the language's answer is now narrower than that. The
+METHOD door already narrowed to constructibility (`ProgramSignatures.structTypeIsConstructible`) and
+already materializes the box (`Parser.methodReceiverBinding`): in a perfectly ordinary
+`type Outer { export var inner as Inner }`, the bare `inner.get()` **compiles and runs** — measured
+**exit 41**. The READ/WRITE door (`Parser.requireStructBase`) has not narrowed, because its box is
+the alias's `boundValue`, which is 0, which is the RECEIVER — so `inner.x` and `inner.x = 7` are
+still E2015 beside a sibling call that works, and the `self.inner.x = 7` spelling of that same write
+compiles and answers **7** (measured against the bootstrap, which answers 7 too).
+
+⇒ **What is missing is that one materialization at that one door, not a language feature**, and the
+message no longer promises otherwise: its old closing clause (*"which arrives with the rung that
+gives a field a struct type — no struct-typed field can be constructed yet"*) was deleted by PBR-1's
+review as false at both doors. Closing the gap opens a bare struct-field READ and WRITE and needs its
+own acceptance cases — including the E3070 seeds a write through a third base kind inherits — which
+is why PBR-1 measured it and reported it rather than building it.
 
 ⚠ **That rung also inherits a live ownership hole this one does not close**, recorded here because
 this is where it was found: `function link(other Node) → next = other` compiles today, to
@@ -79,7 +95,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)
+error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 ```
 
 <!-- test: error.struct-typed-field-method-call -->
@@ -108,7 +124,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)
+error E2015: <fragment>:10:10: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 ```
 
 <!-- test: error.struct-typed-field-write -->
@@ -134,7 +150,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:3: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed, which arrives with the rung that gives a field a struct type — no struct-typed field can be constructed yet)
+error E2015: <fragment>:10:3: Unsupported: a field access through 'next', which is a struct-typed FIELD of the enclosing type (its box has to be loaded out of the receiver before it can be addressed)
 ```
 
 <!-- test: error.scalar-field-base-is-not-a-struct -->
