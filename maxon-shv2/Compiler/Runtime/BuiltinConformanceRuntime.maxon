@@ -173,7 +173,17 @@ end 'emitEquatableWitnessEquals'
 // them (P1.7a slice 2b + P1.7b). Each impl NAME is `qualifiedMethodName(<conformer>, <method>)`, the SAME
 // construction `ensureWitnessTable` names its reloc target by, so the built function, the reloc, and the
 // dispatch cannot disagree on the symbol.
-export function installBuiltinConformanceRuntime(module StdModule, globalData GlobalDataTable, ordering EnumLayout)
+//
+// ⭐⭐ **`arrayConformerName` IS THE ONE SYMBOL HALF THIS FILE CANNOT SPELL (ARR6).** Five of the six
+// conformers are compiler-owned spellings — three keywords and two names no declaration may take — so their
+// impl symbols are joined from constants here. The SIXTH is the corpus's array record, whose name the
+// program's own `BuiltinArrayLiteral` declaration chooses (`ProgramSignatures.arrayRecordDeclaredName`), and
+// it was joined from the constant `b"Array"` while the witness slots that REFERENCE those symbols are
+// stamped with `conformerNameOfType`'s discovered answer. The two agreed only because `stdlib/Array.maxon`
+// declares the record as `Array`; under any other spelling the walk below would look for a symbol the module
+// never names and the referenced one would go unbuilt — a link failure, or worse a silently absent
+// conformance. Threaded in, the reference and the definition are one join of one name.
+export function installBuiltinConformanceRuntime(module StdModule, globalData GlobalDataTable, ordering EnumLayout, arrayConformerName ByteArray)
 	// The candidate list the reference walk matches against, built from the very `ByteArray`s the builders
 	// are installed under — one join per symbol, so the name the walk looks for and the name the function
 	// carries cannot be two joins that happen to agree.
@@ -202,8 +212,8 @@ export function installBuiltinConformanceRuntime(module StdModule, globalData Gl
 	let charHash = candidateImplName(impls, conformerName: CharacterConformerName, methodName: HashMethodName)
 	let charEquals = candidateImplName(impls, conformerName: CharacterConformerName, methodName: EqualsMethodName)
 	let charCompare = candidateImplName(impls, conformerName: CharacterConformerName, methodName: CompareMethodName)
-	let arrayHash = candidateImplName(impls, conformerName: ArrayBuiltinBaseName, methodName: HashMethodName)
-	let arrayEquals = candidateImplName(impls, conformerName: ArrayBuiltinBaseName, methodName: EqualsMethodName)
+	let arrayHash = candidateImplName(impls, conformerName: arrayConformerName, methodName: HashMethodName)
+	let arrayEquals = candidateImplName(impls, conformerName: arrayConformerName, methodName: EqualsMethodName)
 
 	// ⭐ ASKED ONCE, BEFORE THE FIRST INSTALL — which is what makes the answers independent of the order
 	// they are acted on in. A scan run BETWEEN installs would see the ops of the impls this very function

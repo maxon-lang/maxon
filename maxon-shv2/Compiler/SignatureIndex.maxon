@@ -3004,44 +3004,62 @@ let ReservedTypeNamePrefix = b"__"
 // (`Queries.discoverArrayLiteralConformers` ⇒ `ProgramSignatures.arrayRecordDeclaredName`), which is the
 // user's own stated exception to *"nothing array specific in the shv2 compiler"*.
 //
+// ⚠ **IT WAS CALLED `ArrayBuiltinBaseName` UNTIL ARR6, AND THE NAME IS WHAT KEPT IT BEING READ AS A FACT.**
+// A constant spelled like its four genuine siblings (`SetBuiltinBaseName`, `MapBuiltinBaseName`,
+// `ListBuiltinBaseName`, `VectorBuiltinBaseName`, each of which really IS the base of a container the
+// compiler owns end to end) invites the next reader to compare against it, which is exactly what the last
+// three readers did. Its role is a SEED and its name now says so, so a forty-eighth reader has to notice.
+//
 // ⚠ **IT IS A SEED, NOT A FALLBACK CONSTANT, AND THE DIFFERENCE IS THAT IT DESCRIBES A REAL COMPILE.**
 // shv2 minted this record with no declaration behind it for the whole of P1.7, before `stdlib/Array.maxon`
 // was listed; a corpus that declares no conformer is that compiler, and it still has to file the values it
 // mints under some base. `noteArrayLiteralConformer` REPLACES the seed the moment a listed module declares
 // one, which every real compile does.
 //
-// ⚠⚠ **SINCE ARRO IT HAS ONE READER IN THIS FILE — AND THREE OUTSIDE IT, WHICH IS A LIVE ONE-FACT-TWICE
-// AND NOT PROSE.** The two refusal sentences that quoted it were retired the way every other read was — by
-// ASKING. `twoArrayDeclarationsRefusal` takes the contested bare name from `arrayRecordDeclaredName`; the
-// array roster refusal takes the RECEIVER's own declaration from its instance, which is strictly better
-// than either constant, because that surface serves every conformer the program declares and a `Bag`
-// receiver was being told about an `Array`.
+// ⚠⚠ **SINCE ARR6 THE SEED BELOW IS ITS ONLY READER, ANYWHERE.** The two refusal sentences that quoted it
+// were retired the way every other read was — by ASKING. `twoArrayDeclarationsRefusal` takes the contested
+// bare name from `arrayRecordDeclaredName`; the array roster refusal takes the RECEIVER's own declaration
+// from its instance, which is strictly better than either constant, because that surface serves every
+// conformer the program declares and a `Bag` receiver was being told about an `Array`.
 //
-// ⛔ **BUT THREE CONFORMANCE READERS STILL COMPARE AGAINST THIS CONSTANT WHILE THEIR CALLERS PASS THE
-// DISCOVERED NAME** — `IR/Maxon/IrInterface.maxon:1780` (`isIntrinsicBuiltinConformance`) and
-// `Runtime/BuiltinConformanceRuntime.maxon:205-206` (`candidateImplName`). Since ARR5b the record's name is
-// DISCOVERED (`noteArrayLiteralConformer`) and `conformerNameOfType` returns that discovered name, so those
-// three agree with it ONLY BECAUSE THE CORPUS HAPPENS TO DECLARE THE RECORD AS `Array`. Under any other
-// declared name the conformer name and the constant part company, `isIntrinsicBuiltinConformance` answers
-// false, arrays SILENTLY STOP BEING `Hashable`/`Equatable`, and the runtime installs impls under a symbol
-// nothing looks up — a WRONG ANSWER, not a compile error. Unreachable today and untestable without editing
-// `stdlib/Array.maxon`, so it is named here rather than asserted away; the cure is the one ARRO already
-// used everywhere else — thread the discovered name in as a parameter, as `rosterRefusalSentence` now takes
-// its `typeName`. **Do not read this header as saying there is nothing left to retire.**
+// ⭐⭐ **AND THE LAST THREE — THE CONFORMANCE READERS — WERE A LIVE WRONG ANSWER, MEASURED (ARR6).** They
+// compared against this constant while their callers all arrived carrying `conformerNameOfType`'s DISCOVERED
+// answer, so they agreed with the program only because `stdlib/Array.maxon` declares the record as `Array`.
+// The previous reader called that *"unreachable today and untestable without editing `stdlib/Array.maxon`"*;
+// it is testable by respelling THIS CONSTANT, which is the same divergence from the other side and needs no
+// corpus edit at all. **MEASURED with it respelled: 5453/4 against a 5457/0 base** — three
+// `array-conditional-conformance-withheld` cases and `array-contains/bytearray-array-contains`, and one of
+// the three is a conformance GRANTED where the corpus pins a refusal (`intrinsicConformanceProtocolNames`
+// answering the empty list makes the `where` clause vacuous, so `hash()` is served for every element). The
+// cure is the one ARRO used everywhere else — the discovered fact threaded in as a parameter:
+// `IrInterface.isIntrinsicBuiltinConformance` now takes `typeNamesTheArrayRecord`, derived once by
+// `namesTheArrayRecordConformer`, and `installBuiltinConformanceRuntime` takes the record's name outright,
+// because it JOINS a symbol rather than comparing one.
 //
-// ⛔ **THE SEED ITSELF IS NOT RETIRABLE, AND THAT IS A CONCLUSION RATHER THAN A GAP (ARRO).** With no listed
-// module declaring the record, `Array` is a SYNTHESIZED builtin container in exactly the sense
-// `SetBuiltinBaseName`, `ListBuiltinBaseName`, `MapBuiltinBaseName` and `VectorBuiltinBaseName` are — the
-// compiler owns the record, so the compiler owns the name, and there is nothing left to discover it FROM.
-// The user's directive puts `Array` outside the compiler *because it is a stdlib component*; in the compile
-// this line describes it is not one. Substituting a reserved spelling (`__ManagedMemory`) was considered and
-// rejected: it renames every emitted per-type symbol of a compile no corpus program performs, so it would
-// ship an untested behaviour change to buy the appearance of zero.
-export let ArrayBuiltinBaseName = b"Array"
+// ⛔ **THE SEED ITSELF IS NOT RETIRABLE, AND THAT IS A CONCLUSION RATHER THAN A GAP (ARRO, RE-MEASURED AT
+// ARR6).** With no listed module declaring the record, `Array` is a SYNTHESIZED builtin container in exactly
+// the sense `SetBuiltinBaseName`, `ListBuiltinBaseName`, `MapBuiltinBaseName` and `VectorBuiltinBaseName`
+// are — the compiler owns the record, so the compiler owns the name, and there is nothing left to discover
+// it FROM. The user's directive puts `Array` outside the compiler *because it is a stdlib component*; in the
+// compile this line describes it is not one. Substituting a reserved spelling (`__ManagedMemory`) was
+// considered and rejected: it renames every emitted per-type symbol of a compile no corpus program performs,
+// so it would ship an untested behaviour change to buy the appearance of zero.
+//
+// ⚠⚠ **AND ITS VALUE IS UNOBSERVABLE IN EVERY COMPILE THE CORPUS PERFORMS — MEASURED, NOT ARGUED (ARR6).**
+// With the three readers retired, the suite was run with this line respelled `b"ArrayProbe"`: **5457 passed,
+// 0 failed**, byte-identical verdicts to the tree with `b"Array"`. That is the seed being REPLACED before
+// anything reads it, on every one of 5,457 compiles, and it follows structurally:
+// `StdlibLoader.whitelistedStdlibModules` lists `Array.maxon` unconditionally and `listWhitelistedModule`
+// hard-errors if the file is absent, so the stdlib half of `discoverArrayLiteralConformers` always finds a
+// declaration. ⇒ **The remaining read is dead in every compile that has a corpus, and it may not therefore be
+// replaced by a discovered-or-panic**: the compile it describes is the one with no corpus, which is the only
+// compile in which it is ever read at all. It is an INITIALIZER for a state that exists, not a fallback for a
+// state that does not.
+export let SynthesizedArrayRecordSeed = b"Array"
 
 // The name `stdlib/Array.maxon` gives the `Array`'s sole type parameter — `export type Array uses Element`.
 // shv2 declares no such type (the container is compiler-owned and synthesized, which is why
-// `ArrayBuiltinBaseName` exists at all), so a diagnostic that has to SPELL the parameter — the
+// `SynthesizedArrayRecordSeed` exists at all), so a diagnostic that has to SPELL the parameter — the
 // `where Element is Equatable` clause `contains` is withheld under — has nowhere to read it from and writes
 // it here, once.
 export let ArrayElementTypeParamName = b"Element"
@@ -3062,7 +3080,7 @@ let ByteElementTypeName = b"Byte"
 export let ArrayTypeParamCount = 1 as FieldIndex
 
 // The name of the builtin `Set` generic type (`Set with Element`, P1.7b slice A) — the hash-table twin of
-// `ArrayBuiltinBaseName`. `Set` has no `type Set uses Element` declaration (shv2 reads no stdlib; its
+// `SynthesizedArrayRecordSeed`. `Set` has no `type Set uses Element` declaration (shv2 reads no stdlib; its
 // runtime is synthesized like `Array`'s), so every `genericInstance*` query that would read a base
 // `StructLayout` (`baseLayoutOf`, box size, per-instance drop) special-cases a `Set` instance exactly as it
 // does an `Array` one — its box is the fixed `SetRecordBytes` fused record and it drops through
@@ -3120,8 +3138,8 @@ export let HashTableKeyArgPosition = 0 as TypeParamPosition
 export let MapValueArgPosition = 1 as TypeParamPosition
 
 // The name of the builtin `List` generic type (`List with Element`) — the linked-list twin of
-// `ArrayBuiltinBaseName`. Like `Array`, `Set` and `Map`, no file declares `type List uses Element` for shv2
-// to read: `stdlib/List.maxon` writes one, and `ListRuntime.maxon`'s header carries the MEASUREMENT that
+// `SynthesizedArrayRecordSeed`. Like `Array`, `Set` and `Map`, no file declares `type List uses Element` for
+// shv2 to read: `stdlib/List.maxon` writes one, and `ListRuntime.maxon`'s header carries the MEASUREMENT that
 // makes it uncompilable here (a generic type holding a compiler-owned container over its own type parameter
 // erases the element's managed-ness and access-violates at teardown). So every `genericInstance*` query that
 // would read a base `StructLayout` special-cases a `List` instance exactly as it does an `Array` one — its
@@ -3698,8 +3716,8 @@ export let ManagedMemoryTypeName = b"__ManagedMemory"
 //
 // ⭐⭐⭐ **AND SINCE ARR5b THE TARGET IS DISCOVERED, NOT WRITTEN DOWN — SEE
 // `Parser.canonicalGenericBaseNameInThisFile`, WHICH IS THE WHOLE OF THE FOLD.** The rule that stood here
-// was `ArrayBuiltinBaseName if baseName.equals(ManagedMemoryTypeName) else baseName`, a constant, and it
-// made the compiler know the name `Array`. It now reads the target off the `BuiltinArrayLiteral`
+// was `SynthesizedArrayRecordSeed if baseName.equals(ManagedMemoryTypeName) else baseName`, a constant, and
+// it made the compiler know the name `Array`. It now reads the target off the `BuiltinArrayLiteral`
 // conformance — the user's own stated exception to *"nothing array-specific in the compiler"* — which is
 // why the rule moved to the parser: the answer depends on the READER (a stdlib file spells the corpus's
 // declaration under the contest's mint) and on the ENCLOSING DECLARATION (inside a conformer's own body a
@@ -7014,8 +7032,8 @@ export type ProgramSignatures
 	// `__ManagedMemory` written OUTSIDE a conformer's own body.** `stdlib/Array.maxon:104` gives it today, so
 	// this reads `Array` and every emitted per-type symbol keeps the spelling it had.
 	//
-	// ⚠ **SEEDED WITH `ArrayBuiltinBaseName`, AND THAT SEED IS THE COMPILER'S SYNTHESIZED RECORD AND NOT A
-	// FALLBACK TO A CONSTANT.** shv2 minted the record under that name for the whole of P1.7, before
+	// ⚠ **SEEDED WITH `SynthesizedArrayRecordSeed`, AND THAT SEED IS THE COMPILER'S SYNTHESIZED RECORD AND NOT
+	// A FALLBACK TO A CONSTANT.** shv2 minted the record under that name for the whole of P1.7, before
 	// `stdlib/Array.maxon` was listed; a program compiled against a corpus that declares no
 	// `BuiltinArrayLiteral` conformer at all is that program, and it still needs a name for the record it
 	// mints. Discovery REPLACES the seed the moment a listed module declares one.
@@ -7114,7 +7132,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: ArrayBuiltinBaseName, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -7309,6 +7327,38 @@ export type ProgramSignatures
 	export function arrayRecordDeclaredName() returns ByteArray
 		return self.corpusArrayRecordName
 	end 'arrayRecordDeclaredName'
+
+	// ⭐⭐ **IS `name` THE CONFORMER EVERY CONFORMING ARRAY REDUCES TO? — the ONE comparison behind the
+	// intrinsic-conformance table's array row (ARR6).** Every door that asks *"does this conformer name the
+	// array record?"* asks it here: the E3017 where-constraint check, the witness-slot impl join, and the
+	// element clause. They were three comparisons against the constant `SynthesizedArrayRecordSeed` while their
+	// callers all arrived carrying `conformerNameOfType`'s DISCOVERED answer, so the three agreed with the
+	// program only because `stdlib/Array.maxon` happens to declare the record as `Array`.
+	//
+	// ⚠ **IT IS NOT `isArrayBaseName`, AND THE TWO MUST NOT BE COLLAPSED.** That predicate answers *"is this
+	// name an array DECLARATION in this compile?"* and is deliberately wide: a user's own
+	// `BuiltinArrayLiteral` conformer and the corpus declaration MOVED by the shadow contest both answer true
+	// there. A CONFORMER is narrower — `instanceConformerReduction` collapses every conforming instance,
+	// whatever declaration it came from, onto this single name — so admitting the wide set here would file a
+	// `Bag with Integer` under a conformer whose `Bag.hash` nothing installs.
+	export function namesTheArrayRecordConformer(name ByteArray) returns bool
+		return name.equals(self.arrayRecordDeclaredName())
+	end 'namesTheArrayRecordConformer'
+
+	// ⭐⭐ **THE ARRAY ROW OF THE INTRINSIC-CONFORMANCE TABLE, AS A LIST — `Hashable, Equatable`, fetched and
+	// never transcribed (ARR6).** It is BOTH halves of `extension Array implements Hashable, Equatable where
+	// Element is Hashable and Equatable`: the protocols the record supplies AND the clause its element must
+	// satisfy, which is not a coincidence but the shape of a container promising exactly what it demands of
+	// its element (see `IrInterface.isIntrinsicBuiltinConformance`'s array arm, which owns the row).
+	//
+	// ⚠ **IT EXISTS BECAUSE THE TWO ARGUMENTS ARE ONE FACT AND THREE DOORS NEEDED THEM PAIRED** — the
+	// withheld-method refusal, the hash-table key refusal (`Parser`) and the element clause
+	// (`arrayElementCarriesConformance`). Each wrote `intrinsicConformanceProtocolNames` out with the record's
+	// DISCOVERED name, and the row's key is now a question rather than a name, so the pairing of "the record's
+	// own spelling" with "this IS the record" is stated once here instead of agreed three times.
+	export function arrayConformanceProtocolNames() returns ByteArrayArray
+		return intrinsicConformanceProtocolNames(self.arrayRecordDeclaredName(), typeNamesTheArrayRecord: true)
+	end 'arrayConformanceProtocolNames'
 
 	// ⭐⭐ **THE SAME NAME AS THE *STDLIB* SPELLS IT — and THE base every compiler-MINTED array instance is
 	// interned under.** What `isArrayBaseName` recognizes as the corpus declaration MOVED; what a reader with
@@ -13191,7 +13241,7 @@ export type ProgramSignatures
 	export function arrayElementConstraintCheck(id GenericInstanceId, clauseInterfaces ByteArrayArray) returns ExtensionConstraintCheck
 		let element = self.containerElementConformerName(id).toByteArray()
 		for interfaceName in clauseInterfaces 'eachConstraint'
-			if not typeConformsTo(self.sweptConformanceIndex(), interfaces: self.interfaces, typeName: element, interfaceName: interfaceName) 'violates'
+			if not typeConformsTo(self.sweptConformanceIndex(), interfaces: self.interfaces, typeName: element, interfaceName: interfaceName, typeNamesTheArrayRecord: self.namesTheArrayRecordConformer(element)) 'violates'
 				return ExtensionConstraintCheck.unmet(interfaceName, bindingName: element)
 			end 'violates'
 		end 'eachConstraint'
@@ -13200,9 +13250,9 @@ export type ProgramSignatures
 	end 'arrayElementConstraintCheck'
 
 	// ⭐⭐ **DOES THIS ARRAY INSTANCE'S ELEMENT SATISFY `Array`'s CONDITIONAL CONFORMANCE (array-hashable)?**
-	// — `where Element is Hashable and Equatable`, read off `IrInterface.intrinsicConformanceProtocolNames`
-	// so the clause enforced here, the clause a withheld method is refused with, and the row
-	// `isIntrinsicBuiltinConformance` states for `Array` are one list.
+	// — `where Element is Hashable and Equatable`, read off `arrayConformanceProtocolNames` so the clause
+	// enforced here, the clause a withheld method is refused with, and the row
+	// `IrInterface.isIntrinsicBuiltinConformance` states for the array record are one list.
 	//
 	// ⚠ An OPAQUE element (`Array with T` inside a generic body) is refused rather than admitted: nothing
 	// here knows what `T` binds to, and answering `true` would file the instance under a conformer whose
@@ -13212,7 +13262,7 @@ export type ProgramSignatures
 			return false
 		end 'opaqueElement'
 
-		return match self.arrayElementConstraintCheck(id, clauseInterfaces: intrinsicConformanceProtocolNames(self.arrayRecordDeclaredName())) 'clause'
+		return match self.arrayElementConstraintCheck(id, clauseInterfaces: self.arrayConformanceProtocolNames()) 'clause'
 			satisfied gives true
 			unmet gives false
 		end 'clause'

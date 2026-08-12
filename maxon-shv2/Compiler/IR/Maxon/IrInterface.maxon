@@ -1735,7 +1735,7 @@ export let BoolConformerName = b"bool"
 // `hash`/`equals` through `__witness_String.*` slots, so all three doors land in the same two bodies — which
 // is why the reservation below (`TypeResolution.isCompilerOwnedTypeName`) had to cover `String` before any of
 // them could be trusted.
-export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray) returns bool
+export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray, typeNamesTheArrayRecord bool) returns bool
 	if typeName.equals(IntConformerName) 'int'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'int'
@@ -1764,9 +1764,8 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	// references declare it as an extension — `extension Array implements Hashable, Equatable where Element
 	// is Hashable and Equatable` (`stdlib/Array.maxon:635`) — and the two halves of that declaration name the
 	// SAME two protocols, which is not a coincidence: a container promises exactly what it demands of its
-	// element. `intrinsicConformanceProtocolNames(ArrayBuiltinBaseName)` is therefore the `where` clause as
-	// well as the `implements` list, and the doors that enforce the element constraint read it from here
-	// rather than transcribing it.
+	// element. The array row is therefore the `where` clause as well as the `implements` list, and the doors
+	// that enforce the element constraint read it from here rather than transcribing it.
 	//
 	// ⚠ **THE `where` HALF IS NOT ASKED HERE, AND CANNOT BE — this predicate sees a NAME, not an instance.**
 	// It is discharged one door earlier, by the reduction that produces the name: an `Array with E` reduces
@@ -1777,7 +1776,26 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	//
 	// ⚠ **`Comparable` IS ABSENT for `String`'s reason one shape up**: `Array.equals` is a byte compare, and
 	// bytes have no ordering; neither reference gives an array one.
-	if typeName.equals(ArrayBuiltinBaseName) 'array'
+	//
+	// ⭐⭐ **AND THIS ROW'S KEY IS THE ONE THE CALLER SUPPLIES, NOT A NAME THIS FILE HOLDS (ARR6).** The five
+	// rows above are keyed by COMPILER-OWNED spellings — three keywords and two names
+	// `TypeResolution.isCompilerOwnedTypeName` refuses to every declaration — so this file may state them.
+	// The array record's name is the CORPUS's to choose (`ProgramSignatures.arrayRecordDeclaredName`,
+	// discovered from the `BuiltinArrayLiteral` marker), and it was written here as the constant `b"Array"`
+	// while every caller arrived carrying the discovered answer. The two agreed only because
+	// `stdlib/Array.maxon` declares the record as `Array`; under any other spelling this arm answered FALSE,
+	// arrays silently stopped being `Hashable`/`Equatable` and the installer minted impls under a symbol
+	// nothing looks up — a wrong answer, never a compile error. MEASURED with the constant respelled: four
+	// cases across `array-conditional-conformance-withheld` and `array-contains`, one of them a conformance
+	// GRANTED where the corpus pins a refusal.
+	//
+	// ⚠ **IT IS A `bool` AND NOT THE NAME, BECAUSE ONE FAMILY OF CALLERS PROVABLY HAS NO PROGRAM TO ASK.**
+	// `builtinConformerMethod` and its siblings serve the DIRECT dispatch, whose conformer comes from
+	// `BuiltinConformer` — the four reserved spellings, never the record — and their own callers reach down
+	// from `MmRuntime.reservedCalleeReasonOf`, a per-callee predicate in the target lowering with no
+	// `ProgramSignatures` in reach. Handed a name they would have to invent one; handed the question they
+	// answer it exactly, with `false`, which is what their gate already guarantees.
+	if typeNamesTheArrayRecord 'array'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
 	end 'array'
 	return false
@@ -1978,16 +1996,35 @@ end 'isBuiltinConformanceImplName'
 export function isBuiltinConformanceQualifier(name ByteArray) returns bool
 	return match splitQualifiedName(name) 'parts'
 		notQualified gives false
-		parts(conformer, _) gives conformer.equals(IntConformerName) or conformer.equals(FloatConformerName) or conformer.equals(BoolConformerName) or conformer.equals(StringConformerName)
+		parts(conformer, _) gives namesADirectDispatchConformer(conformer)
 	end 'parts'
 end 'isBuiltinConformanceQualifier'
+
+// ⭐⭐ **THE CONFORMER SPELLINGS A DIRECT `<value>.<method>()` DISPATCH CAN BE EMITTED UNDER — `BuiltinConformer`'s
+// cases as NAMES, in ONE place.** The two predicates on either side of it both need the set and both wrote
+// it out: the QUALIFIER question above and the SYMBOL question below, which is exactly the pair W55 measured
+// diverging one level up. Why the set is SOUND — two different arguments, neither covering the other — is
+// `isBuiltinConformanceImplName`'s header, not repeated here.
+//
+// ⛔ **THE ARRAY RECORD IS NOT IN IT AND MAY NOT JOIN**, though the compiler does mint `Array.hash` /
+// `Array.equals`: its name is the CORPUS's to choose and a user program may take it, so neither argument
+// covers it and admitting it would wave a USER's own `Array.hash` past E3004. That is the same bound
+// `builtinConformerMethod` states as its reason for carrying no array row.
+//
+// ⚠ **IT COMPARES THE FOUR SPELLINGS RATHER THAN WALKING THE ENUM, AND THAT IS A COST CONSTRAINT.** It sits
+// on `MmRuntime.reservedCalleeReasonOf`'s per-callee path (`SemanticCheck.validateCall`,
+// `LowerMaxonToStd.lowerCall`), which that function's header requires to be allocation-free; mapping
+// `<BuiltinConformer>.allCases` through `builtinConformerName` would allocate a case array per call.
+function namesADirectDispatchConformer(name ByteArray) returns bool
+	return name.equals(IntConformerName) or name.equals(FloatConformerName) or name.equals(BoolConformerName) or name.equals(StringConformerName)
+end 'namesADirectDispatchConformer'
 
 // Does the compiler SYNTHESIZE `<conformer>.<methodName>`? True exactly when the conformer is one the
 // parser can emit a direct dispatch under AND the ragged table supplies that method for it — one lookup,
 // so this predicate and the installer that builds the body cannot come to disagree about which symbols
 // exist.
 function isSynthesizedConformerImpl(conformer ByteArray, methodName ByteArray) returns bool
-	if not (conformer.equals(IntConformerName) or conformer.equals(FloatConformerName) or conformer.equals(BoolConformerName) or conformer.equals(StringConformerName)) 'notABuiltinConformer'
+	if not namesADirectDispatchConformer(conformer) 'notABuiltinConformer'
 		return false
 	end 'notABuiltinConformer'
 
@@ -2022,10 +2059,10 @@ end 'builtinConformableProtocolNames'
 // its element must satisfy (see `isIntrinsicBuiltinConformance`'s `Array` arm), so the availability check,
 // the sentence a withheld method is refused with, and this predicate's answer are one list. Written out as
 // `[Hashable, Equatable]` at those doors it would be the copy that stops matching the day the row moves.
-export function intrinsicConformanceProtocolNames(typeName ByteArray) returns ByteArrayArray
+export function intrinsicConformanceProtocolNames(typeName ByteArray, typeNamesTheArrayRecord bool) returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
-		if isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName) 'conforms'
+		if isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName, typeNamesTheArrayRecord: typeNamesTheArrayRecord) 'conforms'
 			names.push(protocolName)
 		end 'conforms'
 	end 'eachProtocol'
@@ -2043,8 +2080,18 @@ end 'intrinsicConformanceProtocolNames'
 //     formal TYPES (which the `Self`-argument check reads) and its RETURN TYPE (which types the call's
 //     result) — all three fetched off the one declaration instead of respelled at the dispatch site, the
 //     same "fetch, don't describe" rule `requireBuiltinInterface` exists for.
+//
+// ⭐⭐ **AND IT IS ASKED ONLY OF THE FOUR *RESERVED* CONFORMERS, WHICH IS WHY IT CARRIES NO ARRAY ROW
+// (ARR6).** Every caller's `typeName` is `builtinConformerName`'s — `BuiltinConformer` is a closed,
+// payload-free enum of `int`/`float`/`bool`/`String` — or one of those two spellings written out. The array
+// record is deliberately not among them and may not become one: its direct `arr.hash()` / `a == b` dispatch
+// calls `__managed_hash`/`__managed_eq`, not `Array.<method>` (see `BuiltinConformanceRuntime`'s `Array`
+// note), and `namesADirectDispatchConformer` states the same bound from the reserved-callee side, where
+// admitting a name a user program may TAKE would wave that user's own `Array.hash` past E3004.
+// ⇒ `typeNamesTheArrayRecord: false` here and in the list below is that bound, not a convenience: these
+// callers hold no program to read the record's discovered name from, and they must not.
 export function builtinConformerMethod(typeName ByteArray, methodName ByteArray) returns BuiltinConformerMethodLookup
-	for protocolName in intrinsicConformanceProtocolNames(typeName) 'eachProtocol'
+	for protocolName in intrinsicConformanceProtocolNames(typeName, typeNamesTheArrayRecord: false) 'eachProtocol'
 		// A DIRECT scan of the protocol's own methods, and deliberately not `interfaceWitnessSlots`: a
 		// synthesized protocol declares no `extends` (`singleMethodInterface`/`markerInterface` build them all
 		// with an empty list), so there is no chain to walk — and this dispatch wants the SIGNATURE, never a
@@ -2076,9 +2123,12 @@ end 'builtinConformerMethod'
 // the day `String` gains `Comparable` its `compare()` joins gate, message and dispatch together. Rendering
 // first and re-reading the prose would be parsing a diagnostic; re-walking the protocols beside it would be
 // a second copy of this answer.
+//
+// ⚠ It carries no array row for the reason `builtinConformerMethod` states in full — the walk it is derived
+// from serves the four reserved direct-dispatch conformers and nothing else.
 export function builtinConformerMethodNameList(typeName ByteArray) returns ByteArrayArray
 	var names = ByteArrayArray.create()
-	for protocolName in intrinsicConformanceProtocolNames(typeName) 'eachProtocol'
+	for protocolName in intrinsicConformanceProtocolNames(typeName, typeNamesTheArrayRecord: false) 'eachProtocol'
 		let iface = requireBuiltinInterface(protocolName)
 		for method in iface.methods 'eachMethod'
 			names.push(method.name)

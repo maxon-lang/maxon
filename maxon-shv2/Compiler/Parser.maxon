@@ -44347,7 +44347,7 @@ export type Parser
 	// withheld — but the only span to blame is the operator's, and there is no `equals` token to read a name
 	// off.
 	function requireArrayConformanceAvailable(giid GenericInstanceId, methodName ByteArray, anchor Token) throws ParseError
-		let interfaces = intrinsicConformanceProtocolNames(self.signatures.arrayRecordDeclaredName())
+		let interfaces = self.signatures.arrayConformanceProtocolNames()
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
 			throw ParseError.unsupported("'{String.from(self.signatures.arrayRecordDeclaredName())}.{String.from(methodName)}' is a conditional extension method ({arrayWhereClause(interfaces)}), and this array's element type is not known here — it is the enclosing generic's own type parameter, and a compiler-owned `{String.from(methodName)}` cannot be given the element facts it needs from this body. Call it on an array of a concrete element type", line: anchor.line, column: anchor.column)
 		end 'opaqueElement'
@@ -46798,6 +46798,11 @@ export type Parser
 	// admitted key type moves the sentence by being admitted. A hand-written roster that has to be edited
 	// beside the test is this project's most frequent single rot — the sentence stays true only until someone
 	// widens the test and not the prose, and nothing fails to say so.
+	//
+	// ⚠ The FOURTH entry is the exception that proves it: the test asks
+	// `ProgramSignatures.namesTheArrayRecordConformer` while the sentence renders
+	// `arrayRecordDeclaredName()`, because the record's spelling is the corpus's and not a constant this file
+	// may hold (ARR6). They are still one fact — the predicate IS that comparison, in its one home.
 	function requireHashTableKeyType(giid GenericInstanceId, containerName String, tok Token) throws ParseError
 		// ⭐⭐ **`Array` IS THE FOURTH ADMITTED KEY, AND IT NEEDED NO SECOND PREDICATE (array-hashable)** —
 		// which is the reduction doing its job. An `Array with E` reduces to the conformer `Array` exactly
@@ -46805,7 +46810,7 @@ export type Parser
 		// one added name admits every array a witness slot can actually be stamped for; an array whose
 		// element does not conform keeps its own unreduced spelling and is refused below.
 		let keyType = self.signatures.conformerTypeArgName(giid, position: HashTableKeyArgPosition).toByteArray()
-		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName) or keyType.equals(self.signatures.arrayRecordDeclaredName())) 'unsupportedKey'
+		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName) or self.signatures.namesTheArrayRecordConformer(keyType)) 'unsupportedKey'
 			try self.requireArrayKeyElementConforms(giid, containerName: containerName, tok: tok)
 			throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be one of `{String.from(IntConformerName)}`, `{String.from(StringConformerName)}`, `{String.from(CharacterConformerName)}`, `{String.from(self.signatures.arrayRecordDeclaredName())}` — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
 		end 'unsupportedKey'
@@ -46837,7 +46842,7 @@ export type Parser
 			return
 		end 'opaqueElement'
 
-		let interfaces = intrinsicConformanceProtocolNames(self.signatures.arrayRecordDeclaredName())
+		let interfaces = self.signatures.arrayConformanceProtocolNames()
 		match self.signatures.arrayElementConstraintCheck(keyArray, clauseInterfaces: interfaces) 'clause'
 			satisfied then return
 			unmet(unmetInterfaceName, bindingName) then throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, and `{String.from(self.signatures.arrayRecordDeclaredName())}` supplies those only as a conditional extension ({arrayWhereClause(interfaces)}) — this {HashTableKeyColumnNoun}'s element '{String.from(bindingName)}' does not implement '{String.from(unmetInterfaceName)}'", line: tok.line, column: tok.column)

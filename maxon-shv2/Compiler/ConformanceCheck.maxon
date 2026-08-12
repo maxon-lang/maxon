@@ -411,7 +411,8 @@ function checkOneHeldBinding(project Project, signatures ProgramSignatures, decl
 	// `conformerNameOfDeclaredName` is the ONE reducer every other conformance door already goes through, and
 	// this site was simply not going through it — the arguments are not lost by that, they are checked at the
 	// instantiation SITE by `checkOneInstantiation`'s E3017, which is where a base's `where` clause lives.
-	if typeConformsTo(declared, interfaces: project.interfaces, typeName: signatures.conformerNameOfDeclaredName(binding).toByteArray(), interfaceName: heldAt) 'widensIntoTheHolding'
+	let boundConformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
+	if typeConformsTo(declared, interfaces: project.interfaces, typeName: boundConformer, interfaceName: heldAt, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(boundConformer)) 'widensIntoTheHolding'
 		return
 	end 'widensIntoTheHolding'
 
@@ -741,7 +742,7 @@ function checkStructInstantiationConstraints(project Project, signatures Program
 		end 'opaqueArgument'
 
 		let conformerType = signatures.conformerTypeArgName(site.gid, position: constraint.typeParamIndex).toByteArray()
-		if not typeConformsTo(declared, interfaces: project.interfaces, typeName: conformerType, interfaceName: constraint.interfaceName) 'violates'
+		if not typeConformsTo(declared, interfaces: project.interfaces, typeName: conformerType, interfaceName: constraint.interfaceName, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(conformerType)) 'violates'
 			reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 		end 'violates'
 	end 'eachConstraint'
@@ -779,8 +780,15 @@ end 'constrainedTypeParamName'
 // is the CANONICAL conformer name (`conformerTypeArgName`); the registry is keyed by the declared struct name,
 // which a ranged-int alias's `int` or a `String` argument's `String` never collides with, so the OR is
 // unambiguous.
-export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
-	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName) 'intrinsic'
+//
+// ⚠ **`typeNamesTheArrayRecord` IS THE INTRINSIC TABLE'S ARRAY ROW, AND EVERY CALLER DERIVES IT THROUGH
+// `ProgramSignatures.namesTheArrayRecordConformer` (ARR6)** — never by comparing against a name of its own.
+// The row's key is the spelling the CORPUS declares the record under, discovered from the
+// `BuiltinArrayLiteral` marker, and it is the same discovered answer `conformerNameOfType` already reduced
+// `typeName` to. Asking one home means the reduction and the row cannot come to disagree about which
+// conformer an array is.
+export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray, typeNamesTheArrayRecord bool) returns bool
+	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, typeNamesTheArrayRecord: typeNamesTheArrayRecord) 'intrinsic'
 		return true
 	end 'intrinsic'
 	return typeDeclaresInterface(declared, interfaces: interfaces, typeName: typeName, interfaceName: interfaceName)
@@ -809,7 +817,7 @@ export function receiverMeetsExtensionConstraints(signatures ProgramSignatures, 
 		// label are both filed under (`conformerTypeArgName`); the MESSAGE prints the source spelling, which
 		// is `checkOneInstantiation`'s split applied at the other end of the same mechanism.
 		let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
-		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName) 'violates'
+		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(conformer)) 'violates'
 			return ExtensionConstraintOnReceiver.unmet(constraint.interfaceName, argDisplayName: signatures.instanceArgDisplayName(gid, position: constraint.typeParamIndex))
 		end 'violates'
 	end 'eachConstraint'
@@ -941,7 +949,7 @@ export function checkExtensionConstraints(signatures ProgramSignatures, constrai
 		let constraint = try constraints.get(i) otherwise panic("checkExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
 		let binding = try bindings.get(constraint.typeParamIndex) otherwise return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: UnboundAssociatedTypePhrase)
 		let conformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
-		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName) 'violates'
+		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(conformer)) 'violates'
 			return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: binding)
 		end 'violates'
 	end 'eachConstraint'
@@ -999,7 +1007,8 @@ export function valueWidensToInterface(project Project, signatures ProgramSignat
 		return interfaceNameOfType(valueType, typeNames: project.typeNames).equals(interfaceName)
 	end 'alreadyExistential'
 
-	return typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: signatures.conformerNameOfType(valueType, idsFrom: project.typeNames).toByteArray(), interfaceName: interfaceName)
+	let conformer = signatures.conformerNameOfType(valueType, idsFrom: project.typeNames).toByteArray()
+	return typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: conformer, interfaceName: interfaceName, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(conformer))
 end 'valueWidensToInterface'
 
 // Build the DECLARED-conformance index from `project.conformances` — a type NAME to the set of interfaces it
