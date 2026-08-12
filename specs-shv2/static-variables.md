@@ -136,8 +136,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: static-var-basic -->
-<!-- P1.1 structs — a `static var` field in a `type` -->
+<!-- test: static-var-basic -->
 ```maxon
 type Counter
 	static var count = 0
@@ -152,8 +151,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: static-var-increment -->
-<!-- P1.1 structs — a `static var` field in a `type` -->
+<!-- test: static-var-increment -->
 ```maxon
 type Counter
 	static var count = 0
@@ -174,8 +172,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: static-let-basic -->
-<!-- P1.1 structs — a `static let` field in a `type` -->
+<!-- test: static-let-basic -->
 ```maxon
 type Config
 	static let MAX_SIZE = 42
@@ -189,8 +186,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: static-var-multiple-types -->
-<!-- P1.1 structs — a `static var` field in a `type` -->
+<!-- test: static-var-multiple-types -->
 ```maxon
 type TypeA
 	static var value = 10
@@ -210,8 +206,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: static-and-instance-fields -->
-<!-- P1.1 structs — static AND instance fields -->
+<!-- test: static-and-instance-fields -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -234,6 +229,233 @@ end 'main'
 ```
 ```exitcode
 32
+```
+
+### A static member IS a top-level binding whose name carries a dot
+
+shv2 makes `static let MAX = 100` inside `type Config` a top-level binding named `Config.MAX` — the same
+storage key both reference compilers use (`maxon-sharp/Compiler/2-Parser.cs:7812` builds
+`$"{typeName}.{fieldName}"`; v1 keys a `static let` "by its enclosing type",
+`maxon-selfhosted/Compiler/Project.maxon:187`). Everything below follows from that one sentence rather
+than from machinery of its own: per-type identity is the qualifier, the initializer obeys the top-level
+initializer grammar exactly, a `static let` refuses a write through the same E2013 door a file-scope `let`
+does, and a static member takes no slot in the instance layout because it never joins one.
+
+<!-- test: error.static-let-reassign -->
+Assigning to a `static let` is E2013, in the same words a top-level `let` gets
+(`top-level-let-scalar-reassign-error`) and naming the qualified binding the author actually wrote. Both
+reference compilers refuse this program; only the sentence differs, and the bootstrap's is
+`E3003: 'Config' is a type and cannot be used directly as a value` — a noun about the base rather than
+about the `let`, which is the "sends the reader hunting for a typo" shape that spec case exists to argue
+against.
+```maxon
+type Config
+	static let MAX_SIZE = 42
+end 'Config'
+
+function main() returns ExitCode
+	Config.MAX_SIZE = 7
+	return Config.MAX_SIZE
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:7:2: cannot assign to immutable variable: 'Config.MAX_SIZE'
+```
+
+<!-- test: error.static-member-undeclared -->
+⭐ **THE NEGATIVE CONTROL FOR THE STATIC-MEMBER ARM**: a member the type never declared must NOT be
+claimed by it. The declaring type is right there, so a probe keyed on the BASE alone would have taken this
+and then had no binding to read; keying on the QUALIFIED name is what makes the arm decline and the
+statement fall through to the reading it had before static members existed — the sized numeric bound,
+which is the last resort for any dotted form nothing else claims.
+
+⚠ The sentence is therefore that arm's, and it is unchanged and pre-existing: it says `min or max` about
+a base that is a declared `type` rather than a sized numeric one. The runnable oracle answers the same
+program `E3003: 'Config' is a type and cannot be used directly as a value`, which is a better noun; the
+two are recorded as they are rather than reconciled here, because changing the last-resort arm's wording
+moves every dotted refusal in the corpus and belongs to whichever rung owns that arm.
+```maxon
+type Config
+	static let MAX_SIZE = 42
+end 'Config'
+
+function main() returns ExitCode
+	return Config.MIN_SIZE
+end 'main'
+```
+```maxoncstderr
+error E2010: <fragment>:7:16: Expected 'min or max' but got 'MIN_SIZE'
+```
+
+<!-- test: static-let-cross-file -->
+Cross-file: the storage key is the qualified name and nothing else, so an `export static let` read from
+another file resolves through the very probe an `export let` at file scope does. This is where a
+name-keying mistake would show — a key that carried the declaring FILE would make the reader's lookup
+miss, and one that dropped the type would make two types' `MAX_SIZE` one slot.
+```maxon
+// --- file: api/limits.maxon
+export type Config
+	export static let MAX_SIZE = 40
+	export static var used = 2
+end 'Config'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	Config.used = Config.used + Config.MAX_SIZE
+	return Config.used
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: error.static-binding-in-an-extension -->
+An `extension` body declares no storage. Its members are re-parsed once per conforming type, so a binding
+written there has no declaration to belong to — and the declaration sweep, which is what builds the
+conformer list, cannot know that list while it is reading the extension. Refused at the keyword rather
+than admitted into a slot the sweep never recorded.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Widget implements Tagged
+	export var v as Integer
+end 'Widget'
+
+extension Tagged
+	static let LIMIT = 4
+
+	export function tag() returns Integer
+		return 1
+	end 'tag'
+end 'Tagged'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:13:9: Unsupported: a `let` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it in the `type` body as a `static let`
+```
+
+### A static member's initializer is the TOP-LEVEL initializer grammar, not a subset of it
+
+Nothing about a static member's initializer is its own: it is read by the one top-level binding reader and
+folded by the one constant evaluator, so every form a file-scope `let`/`var` admits a static member admits,
+and every form it refuses a static member refuses in the same words. In particular the initializer is **not
+restricted to literals** — a user static FACTORY CALL is built by `__module_init` before `main` exactly as
+`top-level-factory-globals.md` describes it, and a managed one is released by `__maxon_global_cleanup`
+(these cases are leak-gated: a missed drop is exit 101).
+
+⚠ The form neither this spec nor its file-scope twin admits is a bare STRUCT LITERAL
+(`static let ws = CharacterSet{chars: …}` — `E2004 Undefined constant 'CharacterSet'`), and that is a
+property of the top-level initializer grammar rather than of `static`: `let origin = Point{x: 42}` at file
+scope is refused identically. `specs/lazy-static.md` is the spec that admits it, and closing it is that
+file's rung.
+
+<!-- test: static-factory-initializer -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Row
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Row'
+
+type Cache
+	static var head = Row.create(42)
+end 'Cache'
+
+function main() returns ExitCode
+	return Cache.head.n as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: static-managed-members -->
+A `String` static and an array static in one type: both materialize once before `main`, both are read
+through their qualified names, the array's record is MUTATED in place through a method call written as a
+statement, and both are freed at exit.
+```maxon
+type Names
+	static let GREETING = "hi"
+	static var items = [1, 2, 3]
+end 'Names'
+
+function main() returns ExitCode
+	Names.items.push(9)
+	print("{Names.GREETING}{Names.items.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi4
+```
+
+<!-- test: error.static-let-array-mutate -->
+⭐⭐ **THE WRITE-THROUGH-AN-IMMUTABLE-STATIC GUARD, AND IT WAS MEASURED FAILING.** A receiver-writing method
+on a `static let` array is E3019 — the SAME `requireMutableReceiver` rule
+`error.top-level-let-array-mutate` pins for a file-scope `let`, now naming the qualified binding.
+
+Before the static read was routed through the receiver door it fell out to `parsePostfix`, whose receiver
+is deliberately nameless (it serves literals and call results, which are bound to no name), so the blame
+name never reached the check: this exact program COMPILED CLEAN and returned **5** — a mutation of a
+binding declared `let`, with no diagnostic anywhere — while its file-scope twin was refused. The runnable
+oracle refuses the whole shape from further back (`E3003: 'Cache' is a type and cannot be used directly as
+a value`), so it could not have caught this one for us.
+```maxon
+type Cache
+	static let xs = [1, 2, 3]
+end 'Cache'
+
+function main() returns ExitCode
+	let v = try Cache.xs.pop() otherwise 0
+	return (v + Cache.xs.count()) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:7:23: cannot pass 'Cache.xs' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: static-struct-member-field-write -->
+A field STORE through a struct-valued static goes through the ordinary field-chain door, rooted at the
+qualified name. The read side worked from the moment the static arm existed (the value falls out and
+`parsePostfix` takes the hop); the WRITE reaches the chain resolver, where the base `Cache` is neither a
+value in scope nor a bare global and fell to the tail as `E2004: Undefined variable 'Cache'` — a name
+defined four lines up. Both spellings now root at `Cache.head`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Row
+	export var n as Integer
+
+	export static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'Row'
+
+type Cache
+	static var head = Row.create(1)
+end 'Cache'
+
+function main() returns ExitCode
+	Cache.head.n = 42
+	return Cache.head.n as ExitCode
+end 'main'
+```
+```exitcode
+42
 ```
 
 <!-- test: static-var-bool -->

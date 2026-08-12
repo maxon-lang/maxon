@@ -7765,6 +7765,18 @@ enum NamePosition
 	enumCase
 end 'NamePosition'
 
+// ⭐ **WHICH MEMBER LIST A TYPE MEMBER IS BEING READ FROM (W65)** — the ONE thing the two bodies that share
+// `parseTypeMember` disagree about: a `type` body may declare STORAGE (`static let` / `static var`), an
+// `extension` body may not, because an extension adds methods to types other declarations named and has no
+// declaration of its own for a slot to belong to.
+//
+// A named enum rather than a bool, for `NamePosition`'s reason in its readability half: the call sites read
+// `parseTypeMember(MemberList.extensionBody)`, where `parseTypeMember(false)` would not say what was false.
+enum MemberList
+	typeBody
+	extensionBody
+end 'MemberList'
+
 // ⭐⭐ **WHICH SENTENCE AN E3005 STORAGE-SLOT MISMATCH IS TOLD IN.** The VERDICT is one rule and this does not
 // touch it (`checkDeclaredType` for a trivial slot, `requireManagedValueMatches` for a managed one, both
 // shared with every assignment door); what differs is the PLACE the value failed to enter, and the two kinds
@@ -10402,7 +10414,7 @@ export type Parser
 			end 'bytesToken'
 
 			if depth == 0 and self.atTopLevelBindingKeyword() 'isTopLevelBinding'
-				self.recordScannedBinding(bindings)
+				self.recordScannedBinding(bindings, qualifier: EmptySourceText, modifierAnchor: self.pos)
 				continue
 			end 'isTopLevelBinding'
 
@@ -10437,7 +10449,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, bindingOut: bindings)
 				continue
 			end 'isTypeDecl'
 
@@ -10831,9 +10843,19 @@ export type Parser
 	// `readTopLevelConstant` — the routine the real parse reads with — so the two cannot drift on where
 	// an initializer ends. That routine consumes the `let` keyword before it can fail, so the cursor
 	// always advances and the caller's loop cannot spin.
-	function recordScannedBinding(bindings TopLevelDeclArray)
-		let visibility = self.visibilityBefore(self.pos)
-		let decl = try self.readTopLevelBinding(visibility) otherwise return
+	// ⚠ `qualifier` is what makes this ONE routine serve both the file-scope sweep arm and
+	// `recordScannedType`'s `static` member arm (W65) — empty for the first, the enclosing type's name for
+	// the second. A second recorder for static members would be a second answer to "what does the sweep
+	// file this declaration under", and `declaredOutcome`'s drift guard PANICS when the real parse's answer
+	// and the sweep's differ.
+	//
+	// ⚠ `modifierAnchor` is the declaration's FIRST keyword — the `let`/`var` at file scope, the `static`
+	// inside a type body — because that is the token a visibility modifier sits immediately before. Handed
+	// in rather than derived from the cursor for `visibilityBefore`'s own stated reason: the static form puts
+	// a second modifier between the tier and the keyword this reader starts at.
+	function recordScannedBinding(bindings TopLevelDeclArray, qualifier ByteArray, modifierAnchor TokenIndex)
+		let visibility = self.visibilityBefore(modifierAnchor)
+		let decl = try self.readTopLevelBinding(visibility, qualifier: qualifier) otherwise return
 		bindings.push(decl)
 	end 'recordScannedBinding'
 
@@ -13607,7 +13629,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, bindingOut TopLevelDeclArray)
 		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
 		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
 		// cursor arrives here already on the `type` keyword. Read forwards it would answer `file` for every
@@ -13710,6 +13732,27 @@ export type Parser
 				layout.recordWhereConstraints(try self.readWhereClause() otherwise break)
 				continue
 			end 'isWhere'
+
+			// ⭐⭐ **`static let` / `static var` — A TYPE-QUALIFIED TOP-LEVEL BINDING (W65), swept exactly as a
+			// file-scope one is.** It has to be recorded HERE and not by the caller's depth-0 gate for
+			// `recordScannedType`'s own reason: this walk consumes the whole `type` declaration, so its members
+			// are never offered to the outer loop — and the outer loop could not qualify the name in any case,
+			// because only this walk knows which type encloses it.
+			//
+			// Gated on depth 0 like every other member arm, so a `static` token inside a METHOD BODY is left to
+			// the token-by-token walk. `recordScannedBinding` is tolerant like every other reader on this walk:
+			// a malformed declaration records nothing and the real parse reports it with a position.
+			if depth == 0 and self.staticBindingKeywordAt(self.pos) 'isStaticBinding'
+				// The `static` keyword's index is the anchor the visibility is read backwards from: `export
+				// static let X` puts `static` where the modifier would otherwise be, exactly as it does for a
+				// method (`declaredFunctionVisibility`). The cursor is then seated on the `let`/`var` itself,
+				// which is where the shared binding reader begins — the outer walk arrives here on whichever
+				// of the three tokens opens the declaration.
+				let modifierAnchor = self.pastVisibilityModifier(self.pos)
+				self.pos = (modifierAnchor + 1) as TokenIndex
+				self.recordScannedBinding(bindingOut, qualifier: self.enclosingType, modifierAnchor: modifierAnchor)
+				continue
+			end 'isStaticBinding'
 
 			if depth == 0 and self.atStructFieldKeyword() 'isField'
 				// Captured BEFORE the read so the field's own index is exact rather than derived from a
@@ -14719,6 +14762,20 @@ export type Parser
 		return (index + 1) as TokenIndex if self.visibilityModifierAt(index) else index
 	end 'pastVisibilityModifier'
 
+	// ⭐ **DOES A MEMBER DECLARATION OPENING AT `index` DECLARE TYPE-QUALIFIED MODULE STORAGE — `[export]
+	// static (let|var)` (W65)?** The `static` prefix is the whole difference between this and
+	// `structFieldKeywordAt` one door up, which is why the two are written as siblings: a `let`/`var`
+	// WITHOUT `static` is a per-instance FIELD and one WITH it is one copy for the type, and the predicates
+	// that tell a member list which it is read the same head from the same index.
+	//
+	// It defers to `structFieldKeywordAt` for the keyword half rather than respelling `let or var`, for
+	// that predicate's own reason: the set of keywords that introduce a binding lives in ONE place, so a
+	// keyword taught to one reader and not another cannot put two readers of one grammar a token apart.
+	function staticBindingKeywordAt(index TokenIndex) returns bool
+		let afterModifier = self.pastVisibilityModifier(index)
+		return self.kindAt(afterModifier) == TokenKind.static and self.structFieldKeywordAt((afterModifier + 1) as TokenIndex)
+	end 'staticBindingKeywordAt'
+
 	// Read one field declaration into `layout`. THE one field reader, shared by the sweep and the
 	// real parse, so `StructLayout`'s field ORDER (which IS the box's slot order — see
 	// `StructLayout.offsetOfField`) is read exactly once from one grammar. Two readers would be free
@@ -15141,7 +15198,7 @@ export type Parser
 			// (`ProgramSignatures.declaredGlobals`), and its every read and write is emitted at the USE
 			// site. So there is nothing for the real parse to build here either way, only something for
 			// it to REPORT.
-			let decl = try self.readTopLevelBinding(visibility)
+			let decl = try self.readTopLevelBinding(visibility, qualifier: EmptySourceText)
 			try self.raiseBindingFailure(decl)
 		end 'isBinding' else 'notADeclaration'
 			let tok = self.current()
@@ -15318,10 +15375,21 @@ export type Parser
 	// keyword and in nothing else: `static-variables.md` states that a top-level `var`'s initializer
 	// obeys the same constant-expression rules as a `let`'s, so the same token range feeds the same
 	// evaluator. The mutability is simply carried through to the decl, where it decides storage.
-	function readTopLevelBinding(visibility Visibility) returns TopLevelDecl throws ParseError
+	//
+	// ⭐⭐ **AND A `static let` / `static var` MEMBER OF A `type` BODY READS THROUGH IT TOO (W65), WHICH IS
+	// THE WHOLE OF THAT FEATURE'S STORAGE MODEL.** `qualifier` is empty at file scope and the enclosing
+	// type's name inside a `type` body, so a static member is a top-level binding whose NAME is
+	// `Counter.count` — and every downstream mechanism (the constant evaluator, the `.data` arena, the
+	// `__module_init` store, dead-global elimination, the read and write doors) is keyed by that name and
+	// needed no teaching at all. See `declaredBindingName` for why the qualification IS the per-type
+	// identity rather than something built beside it.
+	function readTopLevelBinding(visibility Visibility, qualifier ByteArray) returns TopLevelDecl throws ParseError
 		let mutable = self.at(TokenKind.var)
 		try self.consume(TokenKind.var if mutable else TokenKind.let)
 		let nameTok = try self.consume(TokenKind.identifier)
+		// The BARE name is what the reserved test sees, exactly as `parseFunction` checks `create` rather
+		// than `Point.create`: the qualifier is the compiler's, not the author's, and a `__`-prefixed
+		// member is the mistake being looked for.
 		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
 		try self.consume(TokenKind.equals)
 
@@ -15329,8 +15397,25 @@ export type Parser
 		let initEnd = self.initializerEndIndex(initStart)
 		self.pos = initEnd
 
-		return TopLevelDecl.create(nameTok.value, mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column)
+		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column)
 	end 'readTopLevelBinding'
+
+	// ⭐ **THE STORAGE NAME A BINDING DECLARATION CLAIMS — bare at file scope, `Type.member` inside a `type`
+	// body (W65).** The same construction `declaredMethodName` gives a method, because a static member and a
+	// static method are qualified by the same thing for the same reason: the enclosing type is the scope the
+	// name lives in. Both references key a static field exactly this way — the bootstrap's `ParseStaticField`
+	// builds `$"{typeName}.{fieldName}"` (`maxon-sharp/Compiler/2-Parser.cs:7812`) and v1 keys a `static let`
+	// "by its enclosing type" (`maxon-selfhosted/Compiler/Project.maxon:187`) — so `TypeA.value` and
+	// `TypeB.value` are two slots BY CONSTRUCTION, with no per-type disambiguation left to get wrong.
+	//
+	// ⚠ It deliberately does NOT route through `declaredMethodName`, which also applies the free-function
+	// DIRECTORY CONTEST (N1c). That rule is about two directories declaring one callable name; a top-level
+	// binding's name is flat and project-wide by ruling (`ProgramSignatures.isRedeclaredBinding`), so
+	// borrowing the contest here would give a static member a directory-qualified spelling no read door
+	// looks it up under.
+	function declaredBindingName(qualifier ByteArray, nameTok Token) returns ByteArray
+		return nameTok.value if qualifier.isEmpty() else qualifiedMethodName(qualifier, methodName: nameTok.value)
+	end 'declaredBindingName'
 
 	// One past the last token of a top-level initializer: an initializer runs to the END OF ITS LINE.
 	// Maxon has no statement terminator, so the newline IS the boundary — the bootstrap reads it the
@@ -16847,7 +16932,7 @@ export type Parser
 				continue
 			end 'isField'
 
-			try self.parseTypeMember()
+			try self.parseTypeMember(MemberList.typeBody)
 		end 'members'
 
 		try self.consume(TokenKind.end)
@@ -16969,9 +17054,10 @@ export type Parser
 				end 'theConformerDeclaresItsOwn'
 
 				// An extension member is a TYPE member — same visibility, same `static`, same `function`.
-				// A `var`/`let` is refused by that reader (E2001 at the keyword), which is the right answer:
-				// an extension adds behaviour, never storage, so there is no layout for a field to join.
-				try self.parseTypeMember()
+				// A `var`/`let` is refused by that reader (`requireMemberListDeclaresStorage`), which is the
+				// right answer: an extension adds behaviour, never storage, so there is no layout for a field
+				// to join and no declaration for a `static` binding's slot to belong to.
+				try self.parseTypeMember(MemberList.extensionBody)
 			end 'members'
 
 			self.closeTypeParamScope()
@@ -18855,13 +18941,32 @@ export type Parser
 	// The receiver is passed down as a flag and NOT recorded as one: `parseFunction` turns it into
 	// a parameter named `SelfParamName` at position 0, and every later reader asks
 	// `FuncSignature.takesReceiver`, which reads that name back. See there — one fact, one home.
-	function parseTypeMember() throws ParseError
+	//
+	// ⭐ **`static` ALSO PREFIXES A `let`/`var`, WHICH DECLARES MODULE STORAGE RATHER THAN A MEMBER (W65)** —
+	// see the `staticBinding` arm below. `memberList` is what tells the two bodies that reach this reader
+	// apart: a `type` body may declare it, an `extension` body may not.
+	function parseTypeMember(memberList MemberList) throws ParseError
 		let visibility = try self.consumeOptionalVisibility()
 
 		let isStatic = self.at(TokenKind.static)
 		if isStatic 'staticMember'
 			self.advance()
 		end 'staticMember'
+
+		// ⭐⭐ **`static var count = 0` / `static let MAX = 100` — A TYPE-QUALIFIED TOP-LEVEL BINDING (W65).**
+		// It is not a field and takes no slot in the instance layout (`atStructFieldKeyword` never sees it —
+		// that predicate looks past a VISIBILITY modifier, not past `static`); it is one copy for the TYPE,
+		// which is exactly what a top-level binding already is. So it is READ by the top-level binding reader
+		// and REPORTED by the top-level binding's own failure door, under the name `Counter.count` — the whole
+		// mechanism, and the reason nothing downstream of the parser learned that static members exist.
+		//
+		// ⚠ The cursor sits on `let`/`var` here — `static` is consumed above — which is precisely where
+		// `readTopLevelBinding` expects to begin, so the sweep's arm and this one enter it identically.
+		if self.atTopLevelBindingKeyword() 'staticBinding'
+			try self.requireMemberListDeclaresStorage(memberList)
+			try self.raiseBindingFailure(try self.readTopLevelBinding(visibility, qualifier: self.enclosingType))
+			return
+		end 'staticBinding'
 
 		// A NESTED (inner) typealias (P1.6-C) — `export typealias Idx = int(0 to u64.max)`. The
 		// `export` (visibility) is already consumed above; a nested typealias takes no `static`. Its
@@ -18896,6 +19001,31 @@ export type Parser
 
 		try self.parseFunction(visibility, takesReceiver: not isStatic)
 	end 'parseTypeMember'
+
+	// ⭐ **ONLY A `type` BODY MAY DECLARE STORAGE (W65).** An `extension` adds BEHAVIOUR to types other
+	// declarations named — its members are re-parsed once per conformer — so a binding written there has no
+	// declaration to belong to and no single file that owns its slot. This is the refusal the member-list
+	// header already promised back when the reader simply had no `let`/`var` arm to reach; opening that arm
+	// for a `type` body is what makes it a rule that has to be stated.
+	//
+	// ⚠ **AND IT MUST STAY A REFUSAL RATHER THAN BECOMING A FEATURE HERE, because the SWEEP cannot record
+	// it.** `recordScannedExtension` consumes an extension declaration whole and cannot know its conformer
+	// list (the conformance index is what that sweep is building), so a binding admitted here would be one
+	// the sweep never filed — and `declaredOutcome`'s drift guard PANICS on exactly that, on a program with
+	// no error in it. Neither reference declares storage in an extension either.
+	//
+	// ⚠ **A BARE `let`/`var` (no `static`) REACHES THIS TOO, AND ONLY FROM AN EXTENSION.** In a `type` body
+	// `atStructFieldKeyword` claims it as a FIELD one door up, so a member list reaching the `staticBinding`
+	// arm at all is either an extension's or carries the `static` the arm is named for. The message names
+	// the keyword the author wrote, so both spellings read as the mistake they are.
+	function requireMemberListDeclaresStorage(memberList MemberList) throws ParseError
+		if memberList == MemberList.typeBody 'aTypeBody'
+			return
+		end 'aTypeBody'
+
+		let tok = self.current()
+		throw ParseError.unsupported("a `{tok.kind.rawValue}` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it in the `type` body as a `static {tok.kind.rawValue}`", line: tok.line, column: tok.column)
+	end 'requireMemberListDeclaresStorage'
 
 	// Parse a function: `[static] function <name>(<params>) [returns <Type>] <body> end
 	// [label]`. M5 adds parameters (`name type`, comma-separated); there is still no
@@ -21977,7 +22107,18 @@ export type Parser
 			// (The BARE spelling, `count = 5`, matches `assignsAt` and is routed above — see there
 			// for why the scan finding `count` is harmless.)
 			try self.parseExplicitSelfFieldAssignment(func, block: block)
-		end 'selfFieldAssign' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
+		end 'selfFieldAssign' else if self.staticMemberAssignsAt(self.pos) 'staticMemberAssign'
+			// `Counter.count = 42` — a store to a static member's module storage (W65). Its own arm, ahead of
+			// `fieldAssignsAt`, whose token shape it shares EXACTLY: what tells the two apart is that this base
+			// names a TYPE and that one a VALUE, which is the same separation `methodCallsAt` draws between
+			// `c.increment()` and `Point.create()`. Left to the field arm it reaches `requireStructBase` and is
+			// refused as a chain through a binding nothing declared.
+			//
+			// `assignedBindingsIn` reads only `assignsAt`, and must not see this one for `fieldAssignsAt`'s
+			// reason: it assigns no BINDING, so a loop writing a static must mint no header phi for it — every
+			// read of the slot is a fresh `loadIndirect` (`emitGlobalLoad`), exactly as for a file-scope `var`.
+			try self.parseStaticMemberAssignment(func, block: block)
+		end 'staticMemberAssign' else if self.fieldAssignsAt(self.pos) 'fieldAssign'
 			// `p.x = 5` — a store THROUGH a binding rather than a rebinding of one. Its own
 			// predicate, and `assignedBindingsIn` reads only `assignsAt`: see `assignsAt` for why
 			// widening that one instead would have minted the loop's phi for the FIELD's name.
@@ -22000,7 +22141,14 @@ export type Parser
 			// this is the chain case, dispatched for effect (`resultUsed: false`). A function field's trailing
 			// `(args)` goes through `parsePostfix` exactly as the one-hop `methodCallStmt` above.
 			_ = try self.parseFieldChainCall(func, resultUsed: false)
-		end 'fieldChainMethodStmt' else if self.voidStaticCallsAt(self.pos) 'voidStaticStmt'
+		end 'fieldChainMethodStmt' else if self.staticMemberCallsAt(self.pos) 'staticMemberCallStmt'
+			// `Names.items.push(9)` — a method called for its EFFECT on a static member's record (W65). The
+			// expression door reaches the same reader through `parseDottedPrimary`'s static arm; a statement
+			// has no arm that claims a dotted form, so it needs one of its own — exactly as
+			// `methodCallStmt` and `fieldChainMethodStmt` each do. Without it the canonical spelling of the
+			// only mutation a managed static supports died as `E2015: Unsupported: identifier statement`.
+			_ = try self.parseStaticMemberAccess(func, baseTok: try self.typeBaseTokenAt(self.pos), resultUsed: false)
+		end 'staticMemberCallStmt' else if self.voidStaticCallsAt(self.pos) 'voidStaticStmt'
 			// ⭐ `__Builtins.sleep(ms)` / `__ManagedFile.statFree(buffer)` — A VOID COMPILER-OWNED STATIC
 			// CALLED FOR ITS EFFECT, and `statFree` is the case that makes the position load-bearing rather
 			// than a convenience: it is the ONLY thing that can release the raw block `stat` hands back, and
@@ -22897,7 +23045,7 @@ export type Parser
 			// error, and a DIFFERENT error from "undefined"). LOCAL FIRST, exactly as
 			// `parseVariableReference` resolves a read: a local `var` shadows a top-level one, so the
 			// top level is consulted only once the name has failed to resolve as a local.
-			try self.parseTopLevelAssignment(func, block: block, nameTok: nameTok, nameIndex: nameIndex)
+			try self.parseTopLevelAssignment(func, block: block, nameTok: nameTok)
 			return
 		end 'undeclared'
 
@@ -23428,12 +23576,35 @@ export type Parser
 	// statement is the only asker of, so the `mutable` bit rides the lookup and the refusal happens here.
 	// Without it `let xs = [1, 2]` would silently accept `xs = [3, 4]` — an accepted write that should have
 	// been refused, which is a wrong answer rather than a compile error.
-	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token, nameIndex TokenIndex) throws ParseError
+	// ⭐ **AND A STATIC MEMBER'S STORE IS THE SAME STATEMENT (W65)**, reached with a name token spelling
+	// `Counter.count` (`staticMemberNameToken`). Every arm below is the answer it needs: a `static var` finds
+	// its slot, a `static let` is an inlined constant and gets the E2013 a top-level `let` gets, and a
+	// misspelled member is undefined. Nothing here distinguishes the two spellings, which is the point.
+	function parseTopLevelAssignment(func IrFunction, block IrBlock, nameTok Token) throws ParseError
 		match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
-			found(label, valueType, mutable) then try self.storeToGlobal(func, block: block, nameTok: nameTok, nameIndex: nameIndex, label: label, valueType: valueType, mutable: mutable)
+			found(label, valueType, mutable) then try self.storeToGlobal(func, block: block, nameTok: nameTok, label: label, valueType: valueType, mutable: mutable)
 			notFound then try self.rejectNonGlobalAssignment(nameTok)
 		end 'global'
 	end 'parseTopLevelAssignment'
+
+	// `Counter.count = 42` — consume the `<Type> . <member> =` head and hand the store to the module-storage
+	// writer under the qualified name (W65). The base is read through `typeBaseTokenAt`, the ONE reader of a
+	// type-naming base, so `Self.count = 1` inside a static method is the same statement written the other
+	// way and needs no arm of its own.
+	//
+	// `staticMemberAssignsAt` has already established the shape and the resolution, so the reads below cannot
+	// fail — the `otherwise panic` says so rather than inventing a second refusal for a program the
+	// dispatcher would never have sent here.
+	function parseStaticMemberAssignment(func IrFunction, block IrBlock) throws ParseError
+		let baseTok = try self.typeBaseTokenAt(self.pos) otherwise panic("parseStaticMemberAssignment: the base at the cursor does not name a type, but `staticMemberAssignsAt` read it as one to resolve this member")
+		let nameTok = self.staticMemberNameToken(baseTok, memberTok: self.tokenAt(self.pos + TokensPerQualifierSegment))
+
+		// Past `<base> . <member>` — the base token, then one qualifier segment.
+		self.pos = (self.pos + TokensPerQualifierSegment + 1) as TokenIndex
+		try self.consume(TokenKind.equals)
+
+		try self.parseTopLevelAssignment(func, block: block, nameTok: nameTok)
+	end 'parseStaticMemberAssignment'
 
 	// Write a top-level global, or refuse because it is immutable — an array `let`, the one binding that has
 	// a slot and still refuses the write (P1.7 slice 2b).
@@ -23444,7 +23615,7 @@ export type Parser
 	// choose between E2013 and E2004. This one is holding the resolution that proves the name is declared,
 	// so the question is already answered and re-asking it through a kind-filtered door would report a
 	// declared name as undefined.
-	function storeToGlobal(func IrFunction, block IrBlock, nameTok Token, nameIndex TokenIndex, label ByteArray, valueType MaxonType, mutable bool) throws ParseError
+	function storeToGlobal(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType, mutable bool) throws ParseError
 		if not mutable 'immutableGlobal'
 			throw assignToImmutableError(nameTok)
 		end 'immutableGlobal'
@@ -23452,10 +23623,16 @@ export type Parser
 		// ⭐ **E3070's REBIND DOOR FOR MODULE STORAGE — the same write as `arr = other`, one anchoring out.**
 		// The store below DECREFS the record the slot was holding (`emitCheckedGlobalStore`), so every element
 		// borrowed out of it is freed: MEASURED **0xC0000005** on `let s = try g.get(0) otherwise ""` +
-		// `g = StringArray.create()` + `print("{s}")`. The subject comes through `borrowSubjectNameAt` like
-		// every other door's, off the target's own token — the derivation, not the token's text.
+		// `g = StringArray.create()` + `print("{s}")`.
+		//
+		// ⚠ **THE SUBJECT IS THE TARGET'S STORAGE NAME, TAKEN OFF THE RESOLVED NAME RATHER THAN OFF A TOKEN
+		// INDEX (W65).** A static member's target is `Counter.count`, which no single token spells — a
+		// token-index derivation (`borrowSubjectNameAt`) would read the BASE and answer `Counter`, which names
+		// no storage, so the note would be silently dropped and every borrow taken out of a managed static
+		// would be left unguarded. Both callers reach this door having already established the name is not a
+		// local, which is the only thing the index-based derivation adds.
 		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
-			self.noteBorrowSubjectRebind(func, subjectName: self.borrowSubjectNameAt(nameIndex), anchor: nameTok)
+			self.noteBorrowSubjectRebind(func, subjectName: self.moduleStorageSubjectName(nameTok.value), anchor: nameTok)
 		end 'mayConflictWithABorrow'
 
 		try self.emitCheckedGlobalStore(func, block: block, nameTok: nameTok, label: label, valueType: valueType)
@@ -31243,8 +31420,16 @@ export type Parser
 			return baseName
 		end 'bindingOfThisFrame'
 
-		return baseName if self.namesWritableModuleStorage(baseName) else EmptySourceText
+		return self.moduleStorageSubjectName(baseName)
 	end 'borrowSubjectNameAt'
+
+	// ⭐ **THE BORROW SUBJECT A MODULE-STORAGE NAME IS — itself, once it denotes storage a write can reach.**
+	// Split out of the token-index derivation above so the STATIC MEMBER write door can ask it of a name no
+	// single token spells (W65, `storeToGlobal`); a second spelling of "is this global a subject" would be
+	// free to admit an immutable binding, and the header below says what admitting one costs.
+	function moduleStorageSubjectName(name ByteArray) returns ByteArray
+		return name if self.namesWritableModuleStorage(name) else EmptySourceText
+	end 'moduleStorageSubjectName'
 
 	// Does `name` denote a top-level `var` — module storage a body can BORROW an element out of and can
 	// WRITE? An immutable top-level binding is excluded on purpose rather than for tidiness: every write
@@ -41632,6 +41817,20 @@ export type Parser
 			return try self.parseQualifiedCall(func, resultUsed: resultUsed)
 		end 'qualifiedCall'
 
+		// ⭐ **`Counter.count` — A READ OF A STATIC MEMBER (W65), which is a read of a top-level binding whose
+		// NAME happens to carry a dot.** So it routes to `topLevelBindingReference`, the very door a bare
+		// global name uses: a `static let` INLINES its folded value and a `static var` LOADS from its `.data`
+		// slot, through the same two probes and the same emitted ops. Nothing about this arm is static-member
+		// machinery — it only spells the name.
+		//
+		// Placed with the type-based arms and BELOW the call shapes, which is the precedence
+		// `top-level-let-name-shadowed-by-type` already pins: a form that names a TYPE is tried before the
+		// managed-global fallback beneath it, and a base bound to a VALUE has already claimed the whole
+		// expression above.
+		if self.namesStaticMemberAt(baseTok, memberIndex: self.pos + TokensPerQualifierSegment) 'staticMemberRead'
+			return try self.parseStaticMemberAccess(func, baseTok: baseTok, resultUsed: resultUsed)
+		end 'staticMemberRead'
+
 		// ⭐ **A BASE NAMING A TYPE THIS FILE MAY NOT SEE BINDS NOTHING HERE (N1a)** — not a value, not a type
 		// — so it is the same mistake as a misspelled name and takes the same diagnostic, which is the
 		// reference's answer for it (`export-keyword/error.non-exported-enum-cross-file`).
@@ -41731,6 +41930,118 @@ export type Parser
 	// `dottedChainLengthAt` has accepted the shape, so the joins are paid by a real dotted call or a real
 	// dotted TYPE reference and by nothing else — the two callers of the walk above, sharing its assembly for
 	// the same reason they share its predicate.
+	// ⭐⭐ **THE SYNTHETIC NAME TOKEN A `Type.member` STATIC ACCESS DENOTES (W65)** — `value` is the storage
+	// key `Counter.count`, built by the one join every member name in this file is built by, and the SPAN is
+	// the whole chain the author wrote (`baseTok`'s first byte through `memberTok`'s last), so a diagnostic
+	// or a `SourceRange` taken off it points at the source rather than at half of it.
+	//
+	// ⭐ **SYNTHESIZING A TOKEN IS WHAT MAKES THE TWO STATIC-MEMBER DOORS ONE LINE EACH.** The whole
+	// top-level binding machinery — the constant probe, the slot probe, the load, the checked store, E2013,
+	// E2004, E3070's rebind subject, the blame name a bare argument carries — is keyed by a token's `value`
+	// and anchored on its position. A static member differs from a file-scope global in NOTHING but how its
+	// name is spelled, so spelling it is the entire adaptation; the alternative was threading a second
+	// "which name did you mean" parameter through six shared functions, where the token and the name would
+	// have been free to disagree.
+	//
+	// ⚠ It is `identifier`-kinded for `typeBaseTokenAt`'s reason, one door along: the token IS a name now,
+	// and every reader downstream asks what it spells rather than which keyword produced it.
+	function staticMemberNameToken(baseTok Token, memberTok Token) returns Token
+		return Token.create(TokenKind.identifier, line: baseTok.line, column: baseTok.column, value: qualifiedMethodName(baseTok.value, methodName: memberTok.value), startByte: baseTok.startByte, endByte: memberTok.endByte)
+	end 'staticMemberNameToken'
+
+	// ⭐⭐ **`Counter.count` AND `Names.items.push(9)` — THE ONE READER OF A STATIC-MEMBER ACCESS (W65).**
+	// The cursor sits on the base; `baseTok` is what `typeBaseTokenAt` made of it, so `Self.count` inside the
+	// declaring type arrives here as `Counter.count` and needs no arm of its own.
+	//
+	// ⭐⭐ **THE TWO SHAPES ARE SPLIT ON WHETHER A MEMBER CALL FOLLOWS, AND THAT SPLIT IS A SOUNDNESS FIX
+	// RATHER THAN A CONVENIENCE.** A plain read hands back a value; a read that RECEIVES a method must arrive
+	// at the dispatcher wearing the four facts a NAME carries, and the E3019 blame name is the one that
+	// matters. **MEASURED before this split existed**: `type Cache { static let xs = [1, 2, 3] }` plus
+	// `try Cache.xs.pop()` COMPILED CLEAN and returned 5 — a mutation of a binding declared `let` — because
+	// the value fell out to `parsePostfix`, whose receiver is deliberately nameless ("A postfix receiver is
+	// bound to no name"), which is true of a literal and a call result and false of this. The identical
+	// program spelled with a file-scope `let xs = [1, 2, 3]` is E3019, and now both are.
+	//
+	// ⭐ So the call form goes to `dispatchOnManagedReceiver` — the SAME door a bare top-level managed
+	// receiver uses (`parseMethodCall`'s `managedTopLevelBase` arm) — with the qualified name as the
+	// binding's. That also makes `Names.items.push(9)` legal as a STATEMENT, which the runnable oracle
+	// refuses outright (`E3003: 'Names' is a type and cannot be used directly as a value`, measured): a
+	// managed static you may declare and may not call a method on is a slot nothing can use, and shv2 has
+	// the receiver door to hand.
+	//
+	// ⚠ **A SCALAR `static let` REACHES THE `none` ARM AND FALLS BACK TO THE PLAIN READ**, which is the right
+	// answer rather than a gap: an inlined scalar constant has no slot and no record, so there is nothing a
+	// method could mutate and no ownership for a blame name to protect. Its member (if any) is then served by
+	// `parsePostfix`'s value receiver exactly as an integer literal's is.
+	function parseStaticMemberAccess(func IrFunction, baseTok Token, resultUsed bool) returns ValueId throws ParseError
+		let memberTok = self.tokenAt(self.pos + TokensPerQualifierSegment)
+		let nameTok = self.staticMemberNameToken(baseTok, memberTok: memberTok)
+
+		// ON the member token, not past it: `dispatchMethodOnBinding` advances once off the receiver's LAST
+		// token and lets `dispatchMethodOnReceiver` consume the `.` — the arrangement every receiver door
+		// shares, and the whole reason the cursor is moved here rather than past the pair.
+		self.pos = self.pos + TokensPerQualifierSegment
+
+		if self.memberCallFollows(self.pos + 1) 'aMethodOnTheMember'
+			match self.managedReceiverBindingOf(nameTok) 'binding'
+				constant(bytes, kind) then return try self.dispatchOnManagedReceiver(func, baseTok: nameTok, value: try self.emitManagedConstant(bytes, kind: kind, range: SourceRange.ofToken(nameTok)), varType: self.signatures.managedConstValueType(kind, elementFilePath: self.filePath), mutable: false, resultUsed: resultUsed)
+				global(label, valueType, mutable) then return try self.dispatchOnManagedReceiver(func, baseTok: nameTok, value: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(nameTok)), varType: valueType, mutable: mutable, resultUsed: resultUsed)
+				none then break 'binding'
+			end 'binding'
+		end 'aMethodOnTheMember'
+
+		self.advance()
+		return try self.topLevelBindingReference(nameTok)
+	end 'parseStaticMemberAccess'
+
+	// ⭐ **DOES `<baseTok>.<member at memberIndex>` NAME A DECLARED STATIC MEMBER (W65)?** — the ONE
+	// recognizer both the read arm (`parseDottedPrimary`) and the write arm (`staticMemberAssignsAt`) ask,
+	// so an expression `Counter.count` and a statement `Counter.count = 1` cannot come to disagree about
+	// which spellings are static members. They would: only one of them would then take the static route, and
+	// the other would be refused as a malformed sized-numeric bound or as a field chain through a binding
+	// that does not exist.
+	//
+	// ⚠⚠ **THE `containsStruct` GATE IN FRONT IS THE COST, and it is `containsEnum`'s gate for exactly its
+	// reason.** This runs on every dotted expression that reaches it — `v == u64.max` among them — and the
+	// probe below ALLOCATES the joined name plus the union box each lookup door returns. `containsStruct` is
+	// a set membership on bytes already in hand, allocating nothing, and a `false` from it is FINAL: a static
+	// member is declared in a `type` body, so its base is a declared struct by construction and `u16` never
+	// pays the join.
+	function namesStaticMemberAt(baseTok Token, memberIndex TokenIndex) returns bool
+		if not self.signatures.containsStruct(baseTok.value) 'notADeclaredTypeBase'
+			return false
+		end 'notADeclaredTypeBase'
+
+		// D8 lets a declaration take a keyword as its name, so the member half is `tokenCanBeAName` rather
+		// than `identifier` — the same asymmetry `dottedChainLengthAt` draws between a chain's head and its
+		// trailing segments, and for the same reason.
+		if not tokenCanBeAName(self.tokenAt(memberIndex)) 'notAMemberName'
+			return false
+		end 'notAMemberName'
+
+		return self.namesTopLevelBinding(qualifiedMethodName(baseTok.value, methodName: self.tokenAt(memberIndex).value))
+	end 'namesStaticMemberAt'
+
+	// Does `name` denote a top-level binding this file may read — a `let` it would INLINE, or a slot it
+	// would LOAD? Asked as ONE question because the two doors are disjoint by construction (one storage key
+	// holds one decl) and a caller routing on it does not care which of them answered:
+	// `topLevelBindingReference` asks them again in that same order and materializes whichever hit.
+	function namesTopLevelBinding(name ByteArray) returns bool
+		let isConstant = match self.signatures.constantValueOf(name, readerFilePath: self.filePath) 'constant'
+			found to foundManaged gives true
+			notFound gives false
+		end 'constant'
+
+		if isConstant 'inlined'
+			return true
+		end 'inlined'
+
+		return match self.signatures.globalDeclFor(name, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
+			found gives true
+			notFound gives false
+		end 'global'
+	end 'namesTopLevelBinding'
+
 	function assembleDottedChainAt(index TokenIndex, dots ElementCount) returns ByteArray
 		// The first pair is joined outside the loop so the accumulator starts OWNED (a `var` may not adopt a
 		// borrowed token field — E3078); the caller's `dots > 0` guarantees there is one, and a one-dot chain
@@ -43256,7 +43567,9 @@ export type Parser
 	function parseMethodCall(func IrFunction, resultUsed bool) returns ValueId throws ParseError
 		let baseTok = self.current()
 		if self.scope.contains(self.baseBindingName(baseTok)) 'localReceiver'
-			return try self.dispatchMethodOnBinding(func, binding: self.scope.getInfo(self.baseBindingName(baseTok)), baseTok: baseTok, resultUsed: resultUsed)
+			// The subject is read at the cursor, which still sits on the base — the derivation this door made
+			// internally until a receiver arrived whose storage no single token spells (see there).
+			return try self.dispatchMethodOnBinding(func, binding: self.scope.getInfo(self.baseBindingName(baseTok)), baseTok: baseTok, subjectName: self.borrowSubjectNameAt(self.pos), resultUsed: resultUsed)
 		end 'localReceiver'
 
 		// A CAPTURED enclosing receiver (P1.5-A2b-2): `b.doubled()` inside a closure that captures the
@@ -43331,8 +43644,13 @@ export type Parser
 	// exemption from silently admitting a write to a `let`-bound constant. Two arms building their own
 	// would be two chances for one of those to drift.
 
+	// ⚠ **THE E3070 SUBJECT COMES OFF THE BINDING'S NAME, NOT OFF THE CURSOR'S TOKENS (W65).** Every receiver
+	// this door serves is module storage the base is not a local for, so the token-index derivation's scope
+	// arm is dead here and only its tail applies. Deriving it from the name is also what lets a STATIC
+	// MEMBER through: its storage is `Names.items`, which no single token spells, so a token read would
+	// answer `Names` — a name that denotes no storage — and silently drop the note.
 	function dispatchOnManagedReceiver(func IrFunction, baseTok Token, value ValueId, varType MaxonType, mutable bool, resultUsed bool) returns ValueId throws ParseError
-		return try self.dispatchMethodOnBinding(func, binding: VarInfo.createValueBinding(baseTok.value, varType: varType, mutable: mutable, boundValue: value), baseTok: baseTok, resultUsed: resultUsed)
+		return try self.dispatchMethodOnBinding(func, binding: VarInfo.createValueBinding(baseTok.value, varType: varType, mutable: mutable, boundValue: value), baseTok: baseTok, subjectName: self.moduleStorageSubjectName(baseTok.value), resultUsed: resultUsed)
 	end 'dispatchOnManagedReceiver'
 
 	// ⭐ **BUILD THE RECEIVER A BINDING DENOTES AND HAND IT TO THE ONE DISPATCHER.** The cursor sits ON the
@@ -43348,12 +43666,14 @@ export type Parser
 	// field read through the SAME switch instead of growing a parallel arm per type (the shape
 	// `IrInterface.maxon:570-573` already prescribes for the builtin-conformer door: "to keep the two
 	// dispatch spellings from disagreeing").
-	function dispatchMethodOnBinding(func IrFunction, binding VarInfo, baseTok Token, resultUsed bool) returns ValueId throws ParseError
-		// The receiver's own token, captured before the cursor leaves it: a method call on a container hands
-		// the receiver to E3070's conflict check as the implicit ARGUMENT 0 it is, and the subject comes
-		// through the one shared derivation (`borrowSubjectNameAt`) like every other door's.
-		let baseIndex = self.pos
-
+	// ⚠ **`subjectName` IS THE CALLER'S, and it is E3070's: a method call on a container hands the receiver
+	// to the conflict check as the implicit ARGUMENT 0 it is.** It used to be derived here from `self.pos` —
+	// which is exact for a receiver that IS one token and wrong for one that is not. A static member's
+	// receiver is `Names.items` (W65), three tokens, and the cursor-based read answered `Names`: a name
+	// denoting no storage, so the borrow was recorded under nothing and could never meet the rebind. Each
+	// caller holds the fact directly — a local's from the cursor, module storage's from its own name — so
+	// the derivation is stated where it is known rather than guessed from a position.
+	function dispatchMethodOnBinding(func IrFunction, binding VarInfo, baseTok Token, subjectName ByteArray, resultUsed bool) returns ValueId throws ParseError
 		// The receiver must be LIVE (a moved-from String / Array / Set / struct touched through a method is
 		// use-after-move, E3102), checked before the method name is even resolved. It was written once per
 		// dispatcher and is asked ONCE here — the question is about the BINDING, and every arm past this
@@ -43417,7 +43737,6 @@ export type Parser
 			let servesTheRecord = try self.selfFieldIsInlineManaged(binding, baseTok: baseTok)
 			if servesTheRecord 'inlineManagedServesTheRecord'
 				let record = try self.selfFieldValueBinding(binding, baseTok: baseTok, value: try self.requireReceiverValue(baseTok))
-				let subjectName = self.borrowSubjectNameAt(baseIndex)
 
 				self.advance()
 				try self.consume(TokenKind.dot)
@@ -43428,7 +43747,7 @@ export type Parser
 		let held = try self.methodReceiverBinding(binding, baseTok: baseTok)
 
 		self.advance()
-		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(self.bindingValue(held, range: SourceRange.ofToken(baseTok)), tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex), owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
+		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(self.bindingValue(held, range: SourceRange.ofToken(baseTok)), tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: subjectName, owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
 	// Is this self-field alias the INLINE `managed` of a fused byte-record wrapper — the one field whose
@@ -52481,6 +52800,36 @@ export type Parser
 			end 'captured'
 		end 'valueBase'
 
+		// ⭐ **A STATIC MEMBER IS THE FOURTH BASE (W65)** — `Cache.head.n = 42`, where `Cache.head` is module
+		// storage keyed by its declaring type. `consumeChainBaseToken` has taken the TYPE name; the `.` and the
+		// member are consumed here, and what the chain walks from is the SYNTHETIC qualified token — so the rest
+		// of this door, `requireStructBase` and the immutable-write rule included, sees exactly the global base
+		// the arm below already serves.
+		//
+		// ⚠ **THE READ SIDE ALREADY WORKED AND THE WRITE SIDE DID NOT, which is the asymmetry this closes.**
+		// `Cache.head.n` in expression position is `parseDottedPrimary`'s static arm plus `parsePostfix`;
+		// `Cache.head.n = 42` reaches THIS door, where the base `Cache` is neither a value nor a global and fell
+		// to the tail as **`E2004: Undefined variable 'Cache'`** (measured) — a name that is defined, and the
+		// "sends the reader hunting for a typo" noun `top-level-let-scalar-reassign-error` exists to argue
+		// against.
+		//
+		// Asked with the type-based readings and BEFORE the managed-global arm, the precedence
+		// `chainBaseNamesAValue` states: a name that is both a declared type and a global keeps its type reading.
+		if self.namesStaticMemberAt(baseTok, memberIndex: self.pos + 1) 'staticMemberBase'
+			try self.consume(TokenKind.dot)
+			let nameTok = self.staticMemberNameToken(baseTok, memberTok: try self.consumeMemberNameToken())
+			match self.managedReceiverBindingOf(nameTok) 'binding'
+				// A managed CONSTANT (a `String`, a `b"…"`) and an INLINED scalar have no field to chain
+				// through, so both take the `undefinedVariable` an unknown base does — the arm below's own
+				// choice, spelled at the QUALIFIED name because that is what this chain is rooted at.
+				constant then break 'binding'
+				global(label, valueType, mutable) then return try self.resolveGlobalFieldChain(nameTok, label: label, valueType: valueType, mutable: mutable)
+				none then break 'binding'
+			end 'binding'
+
+			throw ParseError.undefinedVariable(String.from(nameTok.value), line: nameTok.line, column: nameTok.column)
+		end 'staticMemberBase'
+
 		// ⭐ **A TOP-LEVEL MANAGED GLOBAL IS THE THIRD BASE** (spec-port `map-struct-bytearray`) —
 		// `db.sourceFiles.contains(key)`. The slot's occupant is LOADED and wrapped in the same synthetic
 		// `VarInfo` a global METHOD receiver already wears (`dispatchOnManagedReceiver`), so the layout
@@ -60548,6 +60897,62 @@ export type Parser
 		let chainEnd = self.fieldChainEndAfter(index, minHops: FieldStoreMinHops)
 		return chainEnd != index and self.kindAt(chainEnd) == TokenKind.equals
 	end 'fieldAssignsAt'
+
+	// **The token shape of a STATIC MEMBER STORE (W65)** — `<Type> . <member> =`, where the base names a
+	// declared type rather than a value and the qualified name is a binding the program declared.
+	//
+	// ⭐ **A VALUE IN SCOPE OUTRANKS THE TYPE READING, and that test is why this is not merely a name probe.**
+	// A local called `Counter` shadows `Counter.` exactly as a local `OFFSET` shadows a top-level constant of
+	// that name — the rule `baseNamesAValueInScope` carries — so `Counter.count = 1` with such a local in
+	// scope is a FIELD store on that local and must fall through to `fieldAssignsAt` below. `Self` is
+	// excluded from the shadowing test by that same function, which is what makes `Self.count = 1` inside a
+	// static method reach here.
+	//
+	// The `=` is what separates a store from a read: `Counter.count + 1` has no trailing `=` and belongs to
+	// the expression arm, and `Counter.count == 1` lexes its operator as one `equalsEquals` token. It is
+	// asked FIRST, ahead of the resolution: it is a token-kind compare that allocates nothing, and
+	// everything inside `staticMemberBaseAt` joins a name and boxes two lookups.
+	function staticMemberAssignsAt(index TokenIndex) returns bool
+		return self.kindAt(index + TokensPerQualifierSegment + 1) == TokenKind.equals and self.staticMemberBaseAt(index)
+	end 'staticMemberAssignsAt'
+
+	// **The token shape of a METHOD CALL ON A STATIC MEMBER (W65)** — `<Type> . <member> . <method> (`, the
+	// STATEMENT half of the form `parseDottedPrimary`'s static arm already serves in expression position.
+	// The trailing member call is what makes it a statement at all: a bare `Names.items` on a line of its
+	// own computes nothing and stays the `Unsupported: identifier statement` it has always been.
+	//
+	// The tail asks `memberCallFollows`, the predicate every other `<base> . <member> (` dispatcher asks, so
+	// this door cannot disagree with the rest of the file about what a member call looks like — and it is
+	// asked first for `staticMemberAssignsAt`'s cost reason.
+	function staticMemberCallsAt(index TokenIndex) returns bool
+		return self.memberCallFollows(index + TokensPerQualifierSegment + 1) and self.staticMemberBaseAt(index)
+	end 'staticMemberCallsAt'
+
+	// ⭐ **DOES A ONE-HOP DOTTED FORM AT `index` ROOT AT A STATIC MEMBER — the half the two STATEMENT
+	// dispatchers share (W65)?** They differ only in the token that must FOLLOW the pair, and everything
+	// before that is one question: the `.`, the shadowing rule, the type-naming base and the qualified
+	// resolution. Written once so the store door and the call door cannot come to disagree about which
+	// spellings are static members — a disagreement that would be silent, each falling through to a
+	// different arm's refusal of the same program.
+	//
+	// ⭐ **A VALUE IN SCOPE OUTRANKS THE TYPE READING, and that test is why this is not merely a name probe.**
+	// A local called `Counter` shadows `Counter.` exactly as a local `OFFSET` shadows a top-level constant of
+	// that name — the rule `baseNamesAValueInScope` carries — so `Counter.count = 1` with such a local in
+	// scope is a FIELD store on that local and must fall through to `fieldAssignsAt`. `Self` is excluded from
+	// the shadowing test by that same function, which is what makes `Self.count = 1` inside a static method
+	// reach here.
+	function staticMemberBaseAt(index TokenIndex) returns bool
+		if self.kindAt(index + 1) != TokenKind.dot 'notADottedForm'
+			return false
+		end 'notADottedForm'
+
+		if self.baseNamesAValueInScope(self.tokenAt(index)) 'aValueBase'
+			return false
+		end 'aValueBase'
+
+		let baseTok = try self.typeBaseTokenAt(index) otherwise return false
+		return self.namesStaticMemberAt(baseTok, memberIndex: index + TokensPerQualifierSegment)
+	end 'staticMemberBaseAt'
 
 	// **The token shape of an EXPLICIT self-field store** — `self . <field> =`.
 	//
