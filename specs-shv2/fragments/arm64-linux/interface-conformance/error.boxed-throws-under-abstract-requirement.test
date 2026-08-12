@@ -1,0 +1,30 @@
+// Test: error.boxed-throws-under-abstract-requirement
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+end 'BoxedError'
+
+interface Digest
+	function digest() returns Code throws Error
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws BoxedError
+		if self.x < 10 'small'
+			throw BoxedError.withMessage("nope")
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:12:6: Method 'Point.digest' throws 'BoxedError' but interface 'Digest' declares it 'throws Error', which declares no case to decode — a witness dispatch catches such a requirement through the SCALAR error-flag ABI, while a payload-carrying union is handed over as a heap box pointer that would be decoded as an ordinal and never released. Throw a payload-free enum, or declare the requirement as 'BoxedError' itself

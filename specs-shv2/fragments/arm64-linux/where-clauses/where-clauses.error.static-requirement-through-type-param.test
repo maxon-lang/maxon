@@ -1,0 +1,44 @@
+// Test: where-clauses.error.static-requirement-through-type-param
+typealias Code = int(0 to u32.max)
+
+interface Origin
+	static function origin() returns Code
+	function digest() returns Code
+end 'Origin'
+
+type Widget implements Origin
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export static function origin() returns Code
+		return 7
+	end 'origin'
+
+	export function digest() returns Code
+		return self.seed
+	end 'digest'
+end 'Widget'
+
+type Box uses T where T is Origin
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.origin()
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(7)).go() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3116: <fragment>:33:20: 'Origin.origin' is a `static` requirement, and a `static` member has no receiver to dispatch on — so a value of type parameter 'T' cannot reach it. Call a `static` member on a concrete type

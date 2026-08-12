@@ -1,0 +1,29 @@
+// Test: error.associated-return-bound-to-a-managed-type
+typealias Integer = int(i64.min to i64.max)
+
+interface Maker uses Element
+	function make() returns Element
+end 'Maker'
+
+type Runner implements Maker with String
+	let base as String
+
+	function make() returns String
+		return base
+	end 'make'
+
+	static function create(base String) returns Self
+		return Self{base: base}
+	end 'create'
+end 'Runner'
+
+function useIt(m Maker) returns Integer
+	return m.make() + 11
+end 'useIt'
+
+function main() returns ExitCode
+	return useIt(Runner.create("hello")) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3120: <fragment>:8:6: 'Runner' binds 'Maker's associated type 'Element' to 'String', and 'Element' is the RETURN type of one of 'Maker's requirements. A dispatch's result type flows on into the code around it — which instruction the arithmetic picks, and whether the value is OWNED and released — and no dispatch through it holds a receiver that says which binding it is, so that is chosen while the interface is still only a NAME. Declare such a receiver at 'Maker with <binding>', which settles the result type at the site; or bind it to an `int`, a ranged typealias or a payload-free enum; or take the value as a PARAMETER instead, where the binding IS resolved

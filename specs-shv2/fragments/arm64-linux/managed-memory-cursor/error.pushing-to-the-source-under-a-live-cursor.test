@@ -1,0 +1,14 @@
+// Test: error.pushing-to-the-source-under-a-live-cursor
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10)
+	let cursor = try arr.managed.createCursor() otherwise return 99
+	arr.push(20)
+	return cursor.current()
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:9:6: cannot mutate 'arr' via 'push' while it is borrowed by 'cursor' (borrowed at line 8)

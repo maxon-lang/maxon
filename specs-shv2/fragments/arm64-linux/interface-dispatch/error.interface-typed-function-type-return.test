@@ -1,0 +1,19 @@
+// Test: error.interface-typed-function-type-return
+typealias Integer = int(i64.min to i64.max)
+
+interface Shape
+	function area() returns Integer
+end 'Shape'
+
+typealias MakeFn = function(Integer) returns Shape
+
+function apply(f MakeFn) returns Integer
+	return f(1).area()
+end 'apply'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:8:38: Unsupported: a function type's return type declared at the interface type 'Shape' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a call through a function value carries its whole signature on the call op (`callIndirect`), where there is room for ONE result — so the second register is never read and the witness half is dropped. Declare the return at a concrete type, or hand the interface back from a NAMED function called DIRECTLY, whose second return register carries the witness half

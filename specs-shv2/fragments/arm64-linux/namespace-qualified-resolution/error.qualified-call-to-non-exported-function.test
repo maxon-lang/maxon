@@ -1,0 +1,19 @@
+// Test: error.qualified-call-to-non-exported-function
+// --- file: utils/helper.maxon
+typealias Integer = int(0 to 125)
+
+function hiddenHelper() returns Integer
+	return 7
+end 'hiddenHelper'
+
+export function seen() returns Integer
+	return hiddenHelper()
+end 'seen'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return utils.hiddenHelper()
+end 'main'
+---
+CompilerError:
+error E3008: app/<fragment>:15:9: function 'hiddenHelper' is not exported

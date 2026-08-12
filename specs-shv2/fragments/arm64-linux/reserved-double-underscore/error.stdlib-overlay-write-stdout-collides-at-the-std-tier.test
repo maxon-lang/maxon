@@ -1,0 +1,15 @@
+// Test: error.stdlib-overlay-write-stdout-collides-at-the-std-tier
+// --- stdlib-overlay: Builtins.maxon
+export typealias WrittenByteCount = int(0 to u64.max)
+
+export function __write_stdout(value String) returns WrittenByteCount
+	return value.byteLength()
+end '__write_stdout'
+// --- file: main.maxon
+function main() returns ExitCode
+	print("hi")
+	return 0
+end 'main'
+---
+CompilerError:
+error E4015: <fragment>:5:17: declaration of '__write_stdout' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it

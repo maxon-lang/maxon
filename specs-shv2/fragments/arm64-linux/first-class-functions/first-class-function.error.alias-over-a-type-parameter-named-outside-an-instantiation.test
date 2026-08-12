@@ -1,0 +1,39 @@
+// Test: first-class-function.error.alias-over-a-type-parameter-named-outside-an-instantiation
+typealias Integer = int(i64.min to i64.max)
+
+type Holder uses Element
+	export var value as Element
+
+	export static function create(v Element) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Holder'
+
+export extension Holder
+	typealias Transform = function(Element) returns Element
+
+	export function apply(f Transform) returns Element
+		return f(self.value)
+	end 'apply'
+end 'Holder'
+
+typealias IntHolder = Holder with Integer
+
+function twice(n Integer) returns Integer
+	return n * 2
+end 'twice'
+
+function callAtFileScope(f Transform) returns Integer
+	return f(21)
+end 'callAtFileScope'
+
+function main() returns ExitCode
+	let h = IntHolder.create(4)
+	let viaMethod = h.apply(twice)
+	let viaFileScope = callAtFileScope(twice)
+	print("{viaMethod} {viaFileScope}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:33:21: argument type mismatch for 'f': expected 'fn(type parameter) returns type parameter', got 'fn(int) returns int'

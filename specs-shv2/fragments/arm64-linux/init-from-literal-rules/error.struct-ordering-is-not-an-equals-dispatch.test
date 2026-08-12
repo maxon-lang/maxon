@@ -1,0 +1,26 @@
+// Test: error.struct-ordering-is-not-an-equals-dispatch
+typealias Count = int(0 to 100)
+
+type Box
+	export let n as Count
+
+	export static function make(n Count) returns Box
+		return Box{n: n}
+	end 'make'
+
+	export function equals(other Box) returns bool
+		return n == other.n
+	end 'equals'
+end 'Box'
+
+function main() returns ExitCode
+	let a = Box.make(1)
+	let b = Box.make(2)
+	if a < b 'lt'
+		return 1
+	end 'lt'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:19:7: type mismatch: 'cannot compare struct with struct'

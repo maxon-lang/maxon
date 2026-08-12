@@ -1,0 +1,30 @@
+// Test: error.opaque-field-write-on-a-concrete-instance-refuses-another-struct
+typealias Integer = int(i64.min to i64.max)
+type Label
+	export var text as String
+	export var n as Integer
+	export static function create(t String, n Integer) returns Self
+		return Self{text: t, n: n}
+	end 'create'
+end 'Label'
+type Other
+	export var k as Integer
+	export static function create(k Integer) returns Self
+		return Self{k: k}
+	end 'create'
+end 'Other'
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias LabelBox = Box with Label
+function main() returns ExitCode
+	var b = LabelBox.create(Label.create("hi", n: 3))
+	b.value = Other.create(99)
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:25:4: cannot assign 'Other' to variable 'Box.value' of type 'Label'

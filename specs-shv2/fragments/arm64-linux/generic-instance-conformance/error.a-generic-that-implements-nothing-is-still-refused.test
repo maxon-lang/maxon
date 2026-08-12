@@ -1,0 +1,32 @@
+// Test: error.a-generic-that-implements-nothing-is-still-refused
+typealias Integer = int(i64.min to i64.max)
+
+interface Named
+	function label() returns String
+end 'Named'
+
+type Plain uses T
+	export var v as T
+
+	export static function create(v T) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Plain'
+
+type Holder uses N where N is Named
+	export var item as N
+
+	export static function create(item N) returns Self
+		return Self{item: item}
+	end 'create'
+end 'Holder'
+
+typealias PlainBox = Plain with Integer
+typealias WrapHolder = Holder with PlainBox
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3017: <fragment>:25:11: Type 'PlainBox' does not satisfy constraint 'Named' required by type parameter 'N' of 'Holder'

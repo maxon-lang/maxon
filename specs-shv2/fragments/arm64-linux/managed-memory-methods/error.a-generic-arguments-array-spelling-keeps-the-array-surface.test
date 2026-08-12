@@ -1,0 +1,24 @@
+// Test: error.a-generic-arguments-array-spelling-keeps-the-array-surface
+type Cell uses U
+	export var slot as U
+
+	export static function make(slot U) returns Self
+		return Self{slot: slot}
+	end 'make'
+
+	export function get() returns U
+		return slot
+	end 'get'
+end 'Cell'
+
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+typealias BytesCell = Cell with ByteArray
+
+function main() returns ExitCode
+	let c = BytesCell.make("hello".toByteArray())
+	return c.get().length() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:20:17: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here

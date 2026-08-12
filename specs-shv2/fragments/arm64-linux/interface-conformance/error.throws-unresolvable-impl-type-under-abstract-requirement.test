@@ -1,0 +1,23 @@
+// Test: error.throws-unresolvable-impl-type-under-abstract-requirement
+typealias Code = int(0 to u32.max)
+
+interface Digest
+	function digest() returns Code throws Error
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws Bogus
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:8:6: Method 'Point.digest' throws 'Bogus' but interface 'Digest' declares it 'throws Error', and 'Bogus' names no declared enum or union — the narrowing an abstract requirement permits is granted only to an error type whose flag SHAPE the compiler can see, and an unresolvable name is a mistake rather than a licence. Declare 'Bogus', or name 'Error' itself

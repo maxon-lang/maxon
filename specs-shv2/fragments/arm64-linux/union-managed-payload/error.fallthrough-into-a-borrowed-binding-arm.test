@@ -1,0 +1,23 @@
+// Test: error.fallthrough-into-a-borrowed-binding-arm
+typealias Code = int(0 to 255)
+
+union U
+	a(x String)
+	b(y Code)
+end 'U'
+
+function show(u U) returns Code
+	match u 'k'
+		a(s) then print(s) and fallthrough
+		b(n) then return n
+	end 'k'
+	return 0
+end 'show'
+
+function main() returns ExitCode
+	let u = U.a("a heap string long enough to be a real allocation")
+	return show(u) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:12:3: Unsupported: `and fallthrough` into the payload-binding arm 'b' of `union U` — the preceding arm matched a DIFFERENT case, so on that edge these bindings would destructure a case the value does not hold (reading another case's slots, or a slot that arm already moved out and nulled). Fall through into a payload-free arm, or give this arm its own body

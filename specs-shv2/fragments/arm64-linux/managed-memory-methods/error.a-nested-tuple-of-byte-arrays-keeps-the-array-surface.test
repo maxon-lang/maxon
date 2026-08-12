@@ -1,0 +1,16 @@
+// Test: error.a-nested-tuple-of-byte-arrays-keeps-the-array-surface
+typealias Int = int(i64.min to i64.max)
+typealias Byte = int(0 to u8.max)
+typealias ByteArray = Array with Byte
+
+function nested() returns ((ByteArray, Int), Int)
+	return (("hello".toByteArray(), 7), 9)
+end 'nested'
+
+function main() returns ExitCode
+	let p = nested()
+	return p.0.0.length() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:12:15: Unsupported: `Array` member 'length' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here

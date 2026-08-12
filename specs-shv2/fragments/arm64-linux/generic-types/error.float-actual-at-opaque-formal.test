@@ -1,0 +1,16 @@
+// Test: error.float-actual-at-opaque-formal
+typealias Integer = int(i64.min to i64.max)
+type Box uses T
+	export var value as T
+	export static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+end 'Box'
+typealias IntBox = Box with Integer
+function main() returns ExitCode
+	let b = IntBox.create(1.5)
+	return b.value
+end 'main'
+---
+CompilerError:
+error E3009: <fragment>:11:10: argument 'v': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)

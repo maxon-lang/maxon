@@ -1,0 +1,43 @@
+// Test: error.static-requirement-not-supplied
+typealias Code = int(0 to u32.max)
+
+interface Wide
+	static function tag() returns Code
+	function digest() returns Code
+end 'Wide'
+
+type Point implements Wide
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+
+	export function digest() returns Code
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Wide
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function run() returns Code
+		return self.item.digest()
+	end 'run'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let p = Point.create(42)
+	let b = PointBox.create(p)
+	return b.run()
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:9:6: Partial interface implementation: type 'Point' is missing 1 method(s):
+  - static tag() returns Code

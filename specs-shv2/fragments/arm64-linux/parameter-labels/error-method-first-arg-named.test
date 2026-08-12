@@ -1,0 +1,29 @@
+// Test: error-method-first-arg-named
+
+typealias Integer = int(i64.min to i64.max)
+
+// A CONCRETE-STRUCT method call rejects a named first arg, exactly like a
+// free-function call. The parser defers E2052 for all method calls (the
+// receiver type isn't known at parse time), and TypeResolution re-applies it
+// once the receiver resolves to a concrete struct. Interface / type-parameter
+// receivers are exempt (see interface-dispatch/dispatch-named-first-arg).
+type Pair
+	let a as Integer
+	let b as Integer
+
+	function combine(first Integer, second Integer) returns Integer
+		return a + b + first + second
+	end 'combine'
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.create(1, b: 2)
+	return p.combine(first: 3, second: 4)
+end 'main'
+---
+CompilerError:
+error E2052: <fragment>:25:19: the first argument cannot be named; only the second and later arguments take 'name:' labels

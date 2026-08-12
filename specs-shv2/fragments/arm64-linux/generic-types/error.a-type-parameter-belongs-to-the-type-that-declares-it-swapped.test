@@ -1,0 +1,44 @@
+// Test: error.a-type-parameter-belongs-to-the-type-that-declares-it-swapped
+typealias Num = int(0 to 1000)
+typealias Nums = Array with Num
+typealias Strs = Array with String
+
+type HoldB uses V
+	typealias Items = Array with V
+	export var items as Items
+
+	static function of(first V) returns HoldB
+		var xs = Items.create()
+		xs.push(first)
+		return HoldB{items: xs}
+	end 'of'
+end 'HoldB'
+
+type HoldA uses U
+	typealias Items = Array with U
+	export var items as Items
+
+	static function of(first U) returns HoldA
+		var xs = Items.create()
+		xs.push(first)
+		return HoldA{items: xs}
+	end 'of'
+
+	export function total(other Nums) returns Num
+		return other.count()
+	end 'total'
+end 'HoldA'
+
+typealias HoldANum = HoldA with Num
+typealias HoldBStr = HoldB with String
+
+function main() returns ExitCode
+	let a = HoldANum.of(42)
+	let b = HoldBStr.of("hello")
+	var s = Strs.create()
+	s.push("names the type the refusal quotes")
+	return a.total(b.items)
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:40:11: argument type mismatch for 'other': expected 'Nums', got 'Strs'

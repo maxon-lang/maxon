@@ -1,0 +1,47 @@
+// Test: where-clauses.error.no-constraint-declares-method
+typealias Code = int(0 to u32.max)
+
+interface Base
+	function label() returns Code
+end 'Base'
+
+interface Derived extends Base
+	function extra() returns Code
+end 'Derived'
+
+type Widget implements Derived
+	export var seed as Code
+
+	export static function create(seed Code) returns Self
+		return Self{ seed: seed }
+	end 'create'
+
+	export function label() returns Code
+		return self.seed
+	end 'label'
+
+	export function extra() returns Code
+		return 1
+	end 'extra'
+end 'Widget'
+
+type Box uses T where T is Derived
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{ item: item }
+	end 'create'
+
+	export function go() returns Code
+		return self.item.missing()
+	end 'go'
+end 'Box'
+
+typealias WidgetBox = Box with Widget
+
+function main() returns ExitCode
+	return WidgetBox.create(Widget.create(7)).go() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:36:20: Unsupported: no requirement named 'missing' is provided by the constraints on type parameter 'T' — a method call on a value whose type is an interface, or on a constrained type parameter, dispatches through a witness table, so the method has to be one that interface declares

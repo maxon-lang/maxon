@@ -1,0 +1,17 @@
+// Test: error.a-field-chain-through-a-builtin-instance-field-is-still-refused
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+type Holder
+	export var a as IntArray
+	export static function create(a IntArray) returns Self
+		return Self{a: a}
+	end 'create'
+end 'Holder'
+function main() returns ExitCode
+	let h = Holder.create([1, 2, 3])
+	print("{h.a.value}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3018: <fragment>:12:14: type 'Array' has no field named 'value'

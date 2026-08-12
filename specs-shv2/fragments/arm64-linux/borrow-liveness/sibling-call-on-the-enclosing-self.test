@@ -1,0 +1,31 @@
+// Test: sibling-call-on-the-enclosing-self
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function reset()
+		items.clear()
+	end 'reset'
+
+	function bad() returns Integer
+		let s = try items.get(0) otherwise ""
+		reset()
+		return s.byteLength()
+	end 'bad'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	print("{b.bad()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:18:3: cannot mutate 'items' via 'reset' while it is borrowed by 's' (borrowed at line 17)

@@ -1,0 +1,25 @@
+// Test: error.a-try-merge-keeps-every-link-of-a-composed-chain
+typealias StringArray = Array with String
+
+type Holder
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: ["alpha string long enough for heap allocation"]}
+	end 'create'
+end 'Holder'
+
+typealias HolderArray = Array with Holder
+
+function main() returns ExitCode
+	var arr = HolderArray.create()
+	arr.push(Holder.create())
+	let p = try arr.get(0) otherwise Holder.create()
+	let s = try p.items.get(0) otherwise ""
+	p.items.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:19:10: cannot mutate 'p' via 'clear' while it is borrowed by 's' (borrowed at line 18)

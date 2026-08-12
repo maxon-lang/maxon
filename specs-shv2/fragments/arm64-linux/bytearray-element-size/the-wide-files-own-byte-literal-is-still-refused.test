@@ -1,0 +1,16 @@
+// Test: the-wide-files-own-byte-literal-is-still-refused
+// --- file: wide.maxon
+typealias Byte = int(0 to 1000)
+
+export function widen() returns int
+	var a = b"hi"
+	return try a.get(0) otherwise 0
+end 'widen'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return widen() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:6:10: Unsupported: a `b"…"` byte-string literal in a program whose `Byte` is a 2-byte range: the literal's blob is byte-PACKED, so its record would stride 1 while every `Array with Byte` built by `.create()` strides 2 — two values of one type that behave differently. Declare `Byte` as `int(0 to u8.max)` (or any range that fits one byte), or build the array with `.create()` + `push`

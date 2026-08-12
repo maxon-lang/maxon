@@ -1,0 +1,13 @@
+// Test: error.stdlib-overlay-module-init-collides-with-the-compilers-own
+// --- stdlib-overlay: Builtins.maxon
+export function __module_init()
+end '__module_init'
+// --- file: main.maxon
+var banner = "hello"
+
+function main() returns ExitCode
+	return banner.byteLength() as ExitCode
+end 'main'
+---
+CompilerError:
+error E4015: <fragment>:3:17: declaration of '__module_init' collides with a symbol the compiler EMITS into this program, and a program cannot hold two functions of one name. The compiler's own definition is the one its emitted code is bound to — the entry stub's calls, the runtime's own call sites, and every call it lowers to that name — so the declaration is the side that must move: rename it

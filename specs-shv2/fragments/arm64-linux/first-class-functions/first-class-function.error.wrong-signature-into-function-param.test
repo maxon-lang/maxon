@@ -1,0 +1,21 @@
+// Test: first-class-function.error.wrong-signature-into-function-param
+
+typealias Real = float(f64.min to f64.max)
+typealias Integer = int(i64.min to i64.max)
+typealias FloatFn = function(x Real) returns Real
+
+function intish(x Real) returns Integer
+	return trunc(x) + 14
+end 'intish'
+
+function use(f FloatFn) returns Real
+	return f(1.0)
+end 'use'
+
+function main() returns ExitCode
+	let r = use(intish)
+	return trunc(r) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:16:10: argument type mismatch for 'f': expected 'fn(float) returns float', got 'fn(float) returns int'

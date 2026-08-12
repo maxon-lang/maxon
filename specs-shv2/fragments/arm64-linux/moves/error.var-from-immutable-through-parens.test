@@ -1,0 +1,28 @@
+// Test: error.var-from-immutable-through-parens
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(Inner.create(5))
+	var i = (o).inner
+	i.value = 9
+	return o.inner.value
+end 'main'
+---
+CompilerError:
+error E3078: <fragment>:22:6: cannot assign from immutable variable to mutable binding 'i'; use 'let' instead of 'var', or use clone()

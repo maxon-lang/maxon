@@ -1,0 +1,57 @@
+// Test: error.associated-type-bound-to-an-existential-alias
+typealias Integer = int(i64.min to i64.max)
+
+interface Seq uses Element
+	function current() returns Element
+	function advance() throws IterationError
+end 'Seq'
+
+type Upto implements Seq with Integer
+	var pos as Integer
+	let limit as Integer
+
+	export static function create(limit Integer) returns Self
+		return Self{pos: 1, limit: limit}
+	end 'create'
+
+	export function current() returns Integer
+		return self.pos
+	end 'current'
+
+	export function advance() throws IterationError
+		if self.pos >= self.limit 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		self.pos = self.pos + 1
+	end 'advance'
+end 'Upto'
+
+typealias IntegerSeq = Seq with Integer
+
+interface Taker uses Element
+	function take(e Element) returns Integer
+end 'Taker'
+
+type Runner implements Taker with IntegerSeq
+	let base as Integer
+
+	export static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
+
+	export function take(e IntegerSeq) returns Integer
+		return self.base + e.current()
+	end 'take'
+end 'Runner'
+
+function useIt(t Taker) returns Integer
+	return t.take(Upto.create(11))
+end 'useIt'
+
+function main() returns ExitCode
+	print("{useIt(Runner.create(20))}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3120: <fragment>:35:6: 'Runner' binds 'Taker's associated type 'Element' to the interface type 'Seq', and 'Element' reaches the calling convention of a requirement this program DISPATCHES through a receiver that does not say which binding it holds — a value held at an interface type is a two-word fat pointer `(value, witness)`, and a witness call carries one machine word per argument and one per result — so the second word is dropped and the impl reads a witness that was never passed. Bind the associated type to a concrete type

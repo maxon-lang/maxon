@@ -1,0 +1,35 @@
+// Test: witness-throws.error.impl-throws-scalar-where-interface-boxes
+typealias Code = int(0 to u32.max)
+
+union BoxedError implements Error
+	withMessage(msg String)
+	plain
+end 'BoxedError'
+
+enum ScalarError implements Error
+	oops
+end 'ScalarError'
+
+interface Digest
+	function digest() returns Code throws BoxedError
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code throws ScalarError
+		if self.x < 10 'small'
+			throw ScalarError.oops
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:17:6: Method 'Point.digest' throws 'ScalarError' but interface 'Digest' declares it 'throws BoxedError' — a witness dispatch types its caught error off the INTERFACE, so the impl's error would be decoded as 'BoxedError'

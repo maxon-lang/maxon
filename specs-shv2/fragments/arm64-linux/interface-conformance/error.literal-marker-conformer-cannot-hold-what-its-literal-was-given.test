@@ -1,0 +1,24 @@
+// Test: error.literal-marker-conformer-cannot-hold-what-its-literal-was-given
+type Wrapped implements BuiltinStringLiteral
+	var managed as __ManagedMemory
+	var flag as bool
+
+	export static function init(value __ManagedMemory) returns Self
+		return Self{managed: value, flag: false}
+	end 'init'
+
+	export function readFlag() returns bool
+		return self.flag
+	end 'readFlag'
+end 'Wrapped'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(4, elementSize: 1) otherwise return 1
+	try mm.setLength(1) otherwise return 2
+	try mm.setByte(0, 65) otherwise return 3
+	let w = Wrapped.init(mm)
+	return (7 if w.readFlag() else 9) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:7:10: Unsupported: `Wrapped` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end

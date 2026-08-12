@@ -1,0 +1,23 @@
+// Test: managed-payload-through-Self-under-a-Self-named-parameter
+typealias Num = int(0 to 100)
+
+union Msg
+	text(s String)
+	silent
+
+	export function shout(Self Num) returns Msg
+		return Self.text("hi")
+	end 'shout'
+end 'Msg'
+
+function main() returns ExitCode
+	let m = Msg.silent
+	let n = m.shout(1)
+	return match n 'k'
+		text(s) gives s.byteLength() as ExitCode
+		silent gives 1
+	end 'k'
+end 'main'
+---
+CompilerError:
+error E3012: <fragment>:8:24: unused variable: 'Self'

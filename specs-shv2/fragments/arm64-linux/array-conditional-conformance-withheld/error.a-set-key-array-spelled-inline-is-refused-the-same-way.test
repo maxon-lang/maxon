@@ -1,0 +1,20 @@
+// Test: error.a-set-key-array-spelled-inline-is-refused-the-same-way
+typealias Val = int(i64.min to i64.max)
+
+type Opaque
+	export var x as Val
+
+	static function create(x Val) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Opaque'
+
+typealias OpaqueArrSet = Set with (Array with Opaque)
+
+function main() returns ExitCode
+	var s = OpaqueArrSet.create()
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:10: Unsupported: `Set` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, and `Array` supplies those only as a conditional extension (where Element is Hashable and Equatable) — this key's element 'Opaque' does not implement 'Hashable'

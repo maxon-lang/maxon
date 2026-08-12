@@ -1,0 +1,17 @@
+// Test: error.a-sole-field-that-is-not-the-buffer
+typealias Num = int(0 to 1000)
+
+type Array uses Element implements BuiltinArrayLiteral
+	export var managed as Num
+
+	export static function init(managed Num) returns Self
+		return Self{managed: managed}
+	end 'init'
+end 'Array'
+
+function main() returns ExitCode
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:8:10: Unsupported: `Array` implements `BuiltinArrayLiteral` over the parameter `Element` it declares, so its record IS a `__ManagedMemory with Element` and its literal is an identity on that buffer — but its first field is not one. A value whose bytes are the buffer's and whose declared fields say otherwise has those fields discarded at construction and read back past the record's end when it is cloned or destroyed. Declare exactly one field, `managed as __ManagedMemory with Element`, or drop the marker so the declaration keeps the box its fields describe

@@ -1,0 +1,17 @@
+// Test: error-default-on-overloaded-name
+typealias Integer = int(i64.min to i64.max)
+
+function show(n Integer = 1) returns Integer
+	return n
+end 'show'
+
+function show(s String) returns Integer
+	return 2
+end 'show'
+
+function main() returns ExitCode
+	return show()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:8:10: Unsupported: overloading 'show' — one of its declarations gives a parameter a DEFAULT VALUE, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which overload's default to supply. The argument is filled when the call is parsed and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names, or drop the default

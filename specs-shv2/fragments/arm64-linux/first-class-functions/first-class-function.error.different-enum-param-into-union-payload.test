@@ -1,0 +1,46 @@
+// Test: first-class-function.error.different-enum-param-into-union-payload
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+typealias ColorFn = function(Color) returns Color
+
+union Holder
+	held(f ColorFn)
+	empty
+end 'Holder'
+
+function shadeFn(s Shade) returns Color
+	match s 'k'
+		dark then return Color.red
+		light then return Color.green
+	end 'k'
+end 'shadeFn'
+
+function call(h Holder) returns Color
+	return match h 'm'
+		held(f) gives f(Color.blue)
+		empty gives Color.red
+	end 'm'
+end 'call'
+
+function main() returns ExitCode
+	let c = call(Holder.held(shadeFn))
+	match c 'k'
+		red then print("red\n")
+		green then print("green\n")
+		blue then print("blue\n")
+	end 'k'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:36:22: function type mismatch storing into union payload 'f': expected 'fn(Color) returns Color', got 'fn(Shade) returns Color'

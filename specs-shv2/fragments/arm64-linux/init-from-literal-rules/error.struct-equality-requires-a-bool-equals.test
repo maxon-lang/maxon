@@ -1,0 +1,25 @@
+// Test: error.struct-equality-requires-a-bool-equals
+typealias Count = int(0 to 100)
+
+type Box
+	export let n as Count
+
+	export static function make(n Count) returns Box
+		return Box{n: n}
+	end 'make'
+
+	export function equals(other Box) returns String
+		return "not-a-bool"
+	end 'equals'
+end 'Box'
+
+function main() returns ExitCode
+	let a = Box.make(1)
+	let b = Box.make(1)
+	let r = a == b
+	print("{r}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:19:12: Operator '==' dispatches 'Box.equals', which returns 'String' — an equality operator requires the 'bool' result 'Equatable' declares

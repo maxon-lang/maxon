@@ -1,0 +1,34 @@
+// Test: witness-closure-inheritance.static-function-has-no-witness-to-lend
+typealias Code = int(0 to u32.max)
+
+interface Digest
+	function digest() returns Code
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+	export static function create(x Code) returns Self
+		return Self{ x: x }
+	end 'create'
+	export function digest() returns Code
+		return self.x * 31
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+	export static function digestOf(v T) returns Code
+		let f = function(w T) gives w.digest()
+		return f(v)
+	end 'digestOf'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	print("d={PointBox.digestOf(Point.create(3))}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:21:33: Unsupported: a closure that dispatches through the type's `where` constraints, written inside a `static function` (or a field-default helper) that carries no witness tables of its own — the closure inherits its table through its environment from the function that built it, and a static has no receiver to source one from. Write the closure in an instance method, or take the operation as a function parameter
