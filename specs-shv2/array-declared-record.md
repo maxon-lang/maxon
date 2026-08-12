@@ -1318,6 +1318,68 @@ true
 2
 ```
 
+<!-- test: error.a-conformer-of-another-name-under-a-contest-is-still-refused-under-its-own-name -->
+⛔⛔ **THE TWO-DECLARATIONS SENTENCE IS ABOUT TWO `Array`s, SO A RECEIVER THAT IS NEITHER MAY NOT BE
+HANDED IT.** Found in review of ARRO, and it is the cure one door up applied everywhere EXCEPT its own
+twin: `refuseArrayMemberTheOtherDeclarationCarries` gated only on whether a CONTEST exists, never on
+whether the receiver is one of the two `Array`s. Since ARR5b the array surface serves every
+`BuiltinArrayLiteral` conformer, so this program — a contested `type Array` AND a `Bag`, asking a `Bag`
+for a member the OTHER declaration carries — met *"this value's type is the `Array` the standard library
+declares"*. `receiverIsTheProgramsOwn` was `false` for the WRONG REASON, so it took the library arm and
+**the whole sentence frame was false, not merely its noun** — which is why naming the receiver would have
+fixed the first word and left the claim standing.
+
+A conformer of another name now falls through to the roster refusal, which states what the SURFACE
+serves — and the surface is exactly what such a receiver has.
+
+⚠ The three conditions are all load-bearing and no earlier case has them together: the sibling above
+declares no `Array`, so the contest gate returns before the defect; every other two-declaration case has
+an `Array` receiver.
+```maxon
+type Array uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function at(index int) returns Element throws ArrayError
+		return try managed.get(index)
+	end 'at'
+end 'Array'
+
+type Bag uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+end 'Bag'
+
+typealias IntBag = Bag with int
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	b.push(7)
+	return b.at(0) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:39:11: Unsupported: `Bag` member 'at' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
+```
+
 <!-- test: error.a-conformer-of-another-name-is-refused-under-its-own-name -->
 ⛔ **THE ROSTER REFUSAL NAMES THE TYPE THE VALUE ACTUALLY HAS.** Since a conformer of any name IS the
 record, the array surface serves more than one declaration — so the refusal cannot name a constant. This

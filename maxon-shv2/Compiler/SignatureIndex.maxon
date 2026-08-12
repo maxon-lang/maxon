@@ -3010,11 +3010,24 @@ let ReservedTypeNamePrefix = b"__"
 // mints under some base. `noteArrayLiteralConformer` REPLACES the seed the moment a listed module declares
 // one, which every real compile does.
 //
-// ⚠⚠ **AND SINCE ARRO IT HAS EXACTLY ONE READER: THIS SEED.** The two refusal sentences that still quoted it
-// were retired the way every other read was — by ASKING. `twoArrayDeclarationsRefusal` takes the contested
-// bare name from `arrayRecordDeclaredName`; the array roster refusal takes the RECEIVER's own declaration
-// from its instance, which is a strictly better answer than either constant, because that surface serves
-// every conformer the program declares and a `Bag` receiver was being told about an `Array`.
+// ⚠⚠ **SINCE ARRO IT HAS ONE READER IN THIS FILE — AND THREE OUTSIDE IT, WHICH IS A LIVE ONE-FACT-TWICE
+// AND NOT PROSE.** The two refusal sentences that quoted it were retired the way every other read was — by
+// ASKING. `twoArrayDeclarationsRefusal` takes the contested bare name from `arrayRecordDeclaredName`; the
+// array roster refusal takes the RECEIVER's own declaration from its instance, which is strictly better
+// than either constant, because that surface serves every conformer the program declares and a `Bag`
+// receiver was being told about an `Array`.
+//
+// ⛔ **BUT THREE CONFORMANCE READERS STILL COMPARE AGAINST THIS CONSTANT WHILE THEIR CALLERS PASS THE
+// DISCOVERED NAME** — `IR/Maxon/IrInterface.maxon:1780` (`isIntrinsicBuiltinConformance`) and
+// `Runtime/BuiltinConformanceRuntime.maxon:205-206` (`candidateImplName`). Since ARR5b the record's name is
+// DISCOVERED (`noteArrayLiteralConformer`) and `conformerNameOfType` returns that discovered name, so those
+// three agree with it ONLY BECAUSE THE CORPUS HAPPENS TO DECLARE THE RECORD AS `Array`. Under any other
+// declared name the conformer name and the constant part company, `isIntrinsicBuiltinConformance` answers
+// false, arrays SILENTLY STOP BEING `Hashable`/`Equatable`, and the runtime installs impls under a symbol
+// nothing looks up — a WRONG ANSWER, not a compile error. Unreachable today and untestable without editing
+// `stdlib/Array.maxon`, so it is named here rather than asserted away; the cure is the one ARRO already
+// used everywhere else — thread the discovered name in as a parameter, as `rosterRefusalSentence` now takes
+// its `typeName`. **Do not read this header as saying there is nothing left to retire.**
 //
 // ⛔ **THE SEED ITSELF IS NOT RETIRABLE, AND THAT IS A CONCLUSION RATHER THAN A GAP (ARRO).** With no listed
 // module declaring the record, `Array` is a SYNTHESIZED builtin container in exactly the sense
@@ -7518,7 +7531,7 @@ export type ProgramSignatures
 		// the identity-remap early return below, which no by-name fold may sit after. They are only
 		// ACCUMULATED: the declarations behind them are read once the last file has folded, because a
 		// requirement's rendered type depends on the whole program (see `InterfaceDeclSite`) — the same
-		// "noted here, performed later" split `noteAggregateArrayLiteral` uses.
+		// "noted here, performed later" split `noteWellKnownInstanceNeeds` uses.
 		for site in interfaceSites 'eachInterfaceSite'
 			self.interfaceDeclSites.push(site)
 		end 'eachInterfaceSite'

@@ -6131,7 +6131,7 @@ let AllCaseNamesProducerBit = 8 as ProducerMask
 // type.** What it registers is an `Array with <Enum>` instance PER DECLARED ENUM, which the sweep cannot
 // narrow to one: the member's base may be a dotted companion (`Shape.unionCases.allCases`) and the enum
 // registry is still being built while this walk runs. So the bit is only NOTED here and the over-interning
-// waits for the whole program, exactly as `noteAggregateArrayLiteral`'s does and for the same measured
+// waits for the whole program, exactly as `noteWellKnownInstanceNeeds`' do and for the same measured
 // O(files × types) reason (`ProgramSignatures.internLiteralContainerInstances`).
 let AllCasesProducerBit = 16 as ProducerMask
 let AllProducerBits = 31 as ProducerMask
@@ -10197,7 +10197,7 @@ export type Parser
 		// A bare `List` identifier followed by `from` is a `List from […]` construction. Its element type is the
 		// array literal's, which the sweep cannot see, so the well-known scalar instances are interned here and
 		// the AGGREGATE ones — one per declared struct/union — wait for the whole program
-		// (`noteListFromConstruction`), exactly as the array literal's own do. Set here, acted on after the walk.
+		// (`noteWellKnownInstanceNeeds`), exactly as the array literal's own do. Set here, acted on after the walk.
 		var hasListFromLiteral = false
 		// ⭐ **THE SIZES OF THIS FILE'S `Vector from […]` CONSTRUCTIONS.** A vector's instance is keyed by its
 		// SIZE as well as its element (`SignatureIndex.VectorBuiltinBaseName`), so — unlike every other
@@ -49094,6 +49094,20 @@ export type Parser
 		return roster
 	end 'requireSurfaceMember'
 
+	// ⭐⭐ **WHAT AN ARRAY RECEIVER'S DECLARATION IS CALLED IN SOURCE (ARRO)** — the noun the roster refusal is
+	// shown about. It is the instance's base name in every case but one: under a contest the corpus's
+	// declaration is keyed under this compile's MINT, and a refusal quoting `__Array` would send the reader to
+	// a spelling `requireUnreservedName` forbids them from writing — the same rule
+	// `twoArrayDeclarationsRefusal` states one level down, applied to the one door that can meet a value of
+	// either declaration.
+	//
+	// ⚠ The two names are EQUAL for every uncontested compile, which is the whole corpus, so the test is one
+	// comparison and the answer is the base name.
+	function arrayReceiverDeclaredName(giid GenericInstanceId) returns ByteArray
+		let base = self.signatures.genericInstanceBaseName(giid)
+		return self.signatures.arrayRecordDeclaredName() if base.equals(self.signatures.arrayRecordBaseName()) else base
+	end 'arrayReceiverDeclaredName'
+
 	// ⭐⭐ **THE `Array` ROSTER REFUSAL IS A WRONG ANSWER IN EXACTLY ONE PROGRAM, AND THIS IS IT (ARR2).** When a
 	// user program declares its own `type Array` the compile holds TWO `Array` declarations — the user's under
 	// the bare name, `stdlib/Array.maxon`'s under this compile's mint — and a member call resolves against the
@@ -49110,20 +49124,6 @@ export type Parser
 	//
 	// It is DEAD for every program in the corpus: `hasStdlibShadowRenames` is false unless something is
 	// contested, which is the one gate every cost of that mechanism sits behind.
-	// ⭐⭐ **WHAT AN ARRAY RECEIVER'S DECLARATION IS CALLED IN SOURCE (ARRO)** — the noun the roster refusal is
-	// shown about. It is the instance's base name in every case but one: under a contest the corpus's
-	// declaration is keyed under this compile's MINT, and a refusal quoting `__Array` would send the reader to
-	// a spelling `requireUnreservedName` forbids them from writing — the same rule
-	// `twoArrayDeclarationsRefusal` states one level down, applied to the one door that can meet a value of
-	// either declaration.
-	//
-	// ⚠ The two names are EQUAL for every uncontested compile, which is the whole corpus, so the test is one
-	// comparison and the answer is the base name.
-	function arrayReceiverDeclaredName(giid GenericInstanceId) returns ByteArray
-		let base = self.signatures.genericInstanceBaseName(giid)
-		return self.signatures.arrayRecordDeclaredName() if base.equals(self.signatures.arrayRecordBaseName()) else base
-	end 'arrayReceiverDeclaredName'
-
 	function refuseArrayMemberTheOtherDeclarationCarries(giid GenericInstanceId, methodTok Token, isManagedMemory bool) throws ParseError
 		// A BUFFER receiver is refused in the buffer's own words and has no second declaration to be confused
 		// with — `__ManagedMemory` is the compiler's own name and no file declares a member on it.
@@ -49139,6 +49139,23 @@ export type Parser
 		// The receiver's own declaration has already been asked and declined (`memberBelongsToTheCorpus` runs
 		// ahead of this dispatcher), so any declaration that carries the name here is by construction the other.
 		let receiversOwn = self.signatures.genericInstanceBaseName(giid)
+
+		// ⛔⛔ **THIS SENTENCE IS ABOUT TWO `Array`s, SO A RECEIVER THAT IS NEITHER MAY NOT BE HANDED IT** —
+		// found in review, and it is the cure one door up applied everywhere EXCEPT its own twin. The gate
+		// above asks only whether a CONTEST exists; since ARR5b the array surface serves every
+		// `BuiltinArrayLiteral` conformer, so in a program holding `type Array` AND a `Bag`, a **`Bag`**
+		// receiver reached here and was told *"this value's type is the `Array` the standard library
+		// declares"*. `receiverIsTheProgramsOwn` is then `false` for the WRONG REASON, so it takes the library
+		// arm and the whole sentence frame is false — not merely its noun, which is why passing
+		// `arrayReceiverDeclaredName` here would fix the first word and leave the claim.
+		//
+		// A conformer of another name falls through to the roster refusal, which `surfaceRosterProvider`
+		// already makes say `Bag`. That refusal is the right one: it states what the SURFACE serves, and the
+		// surface is exactly what such a receiver has.
+		if not receiversOwn.equals(self.signatures.arrayRecordDeclaredName()) and not receiversOwn.equals(self.signatures.arrayRecordBaseName()) 'receiverIsNeitherArrayDeclaration'
+			return
+		end 'receiverIsNeitherArrayDeclaration'
+
 		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
 			if not declaration.equals(receiversOwn) and self.signatures.declaresCallee(qualifiedMethodName(declaration, methodName: methodTok.value)) 'theOtherDeclarationCarriesIt'
 				throw ParseError.unsupported(twoArrayDeclarationsRefusal(self.signatures.arrayRecordDeclaredName(), member: methodTok.value, roster: roster, receiverIsTheProgramsOwn: receiversOwn.equals(self.signatures.arrayRecordDeclaredName())), line: methodTok.line, column: methodTok.column)
