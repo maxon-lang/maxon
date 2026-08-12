@@ -252,7 +252,7 @@ func @main {
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 2
     x64.jcc notEqual, badCount
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   badCount:
     x64.movRegImm32 r12, 99
     x64.movRegReg rcx, rbx
@@ -266,15 +266,15 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegImm32 rdx, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
     x64.leaRegRdata rbx, [rip + __str_rec_10]
     x64.movRegImm32 rcx, 8
     x64.leaRegFunc rdx, [rip + __str_decref]
@@ -302,17 +302,17 @@ func @main {
     x64.movRegReg rdx, r12
     x64.callDirect Record.create
     x64.movRegReg rbx, r8
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#5
+  tryok#3:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#5
+  trycont#5:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 2
     x64.jcc notEqual, badLines
-    x64.jmp ifcont
+    x64.jmp ifcont#7
   badLines:
     x64.movRegImm32 r12, 98
     x64.movRegReg rcx, rbx
@@ -328,25 +328,25 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#7:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#9
+    x64.jmp tryok#8
+  tryerr#9:
     x64.leaRegRdata rcx, [rip + __str_rec_11]
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#10
+  tryok#8:
     x64.movRegReg rcx, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#10
+  trycont#10:
     x64.leaRegRdata rdx, [rip + __str_rec_6]
     x64.callDirect __str_eq
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, correct
-    x64.jmp ifcont
+    x64.jmp ifcont#12
   correct:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
@@ -362,7 +362,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#12:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Record

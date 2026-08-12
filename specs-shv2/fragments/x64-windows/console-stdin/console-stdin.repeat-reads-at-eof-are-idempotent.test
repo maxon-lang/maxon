@@ -138,7 +138,7 @@ func @Stdin.fillOnce {
     x64.loadRegBaseDisp.byte rax, [rbx + 8]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, alreadyEof
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   alreadyEof:
     x64.epilogue 40
     x64.popReg r13
@@ -146,7 +146,7 @@ func @Stdin.fillOnce {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegImm32 rcx, 4096
     x64.callDirect __con_read_stdin
     x64.movRegReg r12, r8
@@ -154,7 +154,7 @@ func @Stdin.fillOnce {
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 0
     x64.jcc equal, eofNow
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   eofNow:
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.byte [rbx + 8], rax
@@ -166,7 +166,7 @@ func @Stdin.fillOnce {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.movRegReg rcx, r12
     x64.callDirect __mm_retain
     x64.movRegReg r13, r8
@@ -205,13 +205,13 @@ func @Stdin.readLine {
     x64.movRegReg rcx, rbx
     x64.callDirect Stdin.findNewline
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#5
+    x64.jmp tryok#4
+  tryerr#5:
     x64.movRegReg rcx, rbx
     x64.callDirect Stdin.fillOnce
     x64.jmp whilehdr
-  tryok:
+  tryok#4:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect Stdin.takePrefix
@@ -240,9 +240,9 @@ func @Stdin.readLine {
     x64.movRegReg rcx, rbx
     x64.callDirect Stdin.findNewline
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#7
+    x64.jmp tryok#6
+  tryerr#7:
     x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 0
@@ -278,7 +278,7 @@ func @Stdin.readLine {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#6:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r8
     x64.callDirect Stdin.takePrefix
@@ -514,7 +514,7 @@ func @stripTrailingCR {
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r12, 0
     x64.jcc equal, empty
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   empty:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
@@ -525,14 +525,14 @@ func @stripTrailingCR {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.leaRegRegImm32 rdx, r12, -1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
     x64.leaRegRdata rcx, [rip + __str_blob_10]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -543,10 +543,10 @@ func @stripTrailingCR {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#3:
     x64.cmpRegImm32 r8, 13
     x64.jcc notEqual, noCR
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   noCR:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
@@ -557,7 +557,7 @@ func @stripTrailingCR {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#6:
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 0
     x64.callDirect __managed_create
@@ -574,9 +574,9 @@ func @stripTrailingCR {
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#11
+    x64.jmp tryok#10
+  tryerr#11:
     x64.leaRegRdata rcx, [rip + __str_blob_11]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -587,7 +587,7 @@ func @stripTrailingCR {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#10:
     x64.movRegReg rcx, r13
     x64.movRegReg rdx, r8
     x64.callDirect __managed_push

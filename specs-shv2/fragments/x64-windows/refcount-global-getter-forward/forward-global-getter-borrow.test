@@ -306,7 +306,7 @@ func @buildFor {
     x64.xorRegImm32 rbx, rbx, 1
     x64.cmpRegImm32 rbx, 0
     x64.jcc notEqual, native
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   native:
     x64.movRegReg r8, r12
     x64.epilogue 40
@@ -317,12 +317,12 @@ func @buildFor {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.leaRegGlobal rax, __data_mergedDone
     x64.loadRegBaseDisp.byte rax, [rax + 0]
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, cached
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   cached:
     x64.leaRegGlobal rax, __data_cachedMerged
     x64.loadRegBaseDisp.word64 rcx, [rax + 0]
@@ -339,7 +339,7 @@ func @buildFor {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.leaRegRdata rcx, [rip + __layout_Box_Item]
     x64.callDirect Box.create
     x64.movRegReg rbx, r8

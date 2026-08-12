@@ -94,9 +94,9 @@ func @checkFirst {
   trycont:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#5
     x64.jmp matchnext
-  matcharm:
+  matcharm#5:
     x64.movRegImm32 rbx, 99
     x64.callDirect __destruct_IrOp
     x64.movRegReg r8, rbx
@@ -106,9 +106,9 @@ func @checkFirst {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#4
     x64.jmp matchdead
-  matcharm:
+  matcharm#4:
     x64.loadRegBaseDisp.word64 rbx, [rcx + 8]
     x64.callDirect __destruct_IrOp
     x64.movRegReg r8, rbx
@@ -150,9 +150,9 @@ func @checkMid {
   trycont:
     x64.loadRegBaseDisp.word64 rax, [rcx + 0]
     x64.cmpRegImm32 rax, 0
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#4
     x64.jmp matchnext
-  matcharm:
+  matcharm#4:
     x64.movRegImm32 rbx, 1
     x64.callDirect __destruct_IrOp
     x64.movRegReg r8, rbx
@@ -162,9 +162,9 @@ func @checkMid {
     x64.ret
   matchnext:
     x64.cmpRegImm32 rax, 1
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#5
     x64.jmp matchdead
-  matcharm:
+  matcharm#5:
     x64.movRegImm32 rbx, 0
     x64.callDirect __destruct_IrOp
     x64.movRegReg r8, rbx
@@ -249,7 +249,7 @@ func @main {
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 5
     x64.jcc notEqual, badCount
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   badCount:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
@@ -261,12 +261,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegReg rcx, rbx
     x64.callDirect checkFirst
     x64.cmpRegImm32 r8, 10
     x64.jcc notEqual, wrong
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   wrong:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
@@ -278,12 +278,12 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.movRegReg rcx, rbx
     x64.callDirect checkMid
     x64.cmpRegImm32 r8, 1
     x64.jcc notEqual, wrongMid
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   wrongMid:
     x64.movRegImm32 r12, 3
     x64.movRegReg rcx, rbx
@@ -295,7 +295,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#6:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref

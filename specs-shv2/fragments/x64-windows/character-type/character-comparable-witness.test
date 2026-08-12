@@ -130,12 +130,12 @@ func @main {
     x64.callDirect Pair.lt
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, ordered
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   ordered:
     x64.leaRegRdata rcx, [rip + __str_rec_21]
     x64.callDirect print
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.leaRegRdata rax, [rip + __str_rec_20]
     x64.leaRegRdata rbx, [rip + __str_rec_19]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
@@ -184,12 +184,12 @@ func @main {
     x64.callDirect Pair.lt
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, reversed
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   reversed:
     x64.leaRegRdata rcx, [rip + __str_rec_22]
     x64.callDirect print
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#4
+  ifcont#4:
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Pair_Character
@@ -236,11 +236,11 @@ func @Character.compare {
     x64.jcc less, min_check
     x64.jmp critsplit
   min_check:
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   critsplit:
     x64.movRegReg r14, r8
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#2
+  ifcont#2:
     x64.movRegImm32 r13, 0
     x64.jmp forhdr
   forhdr:
@@ -254,9 +254,9 @@ func @Character.compare {
     x64.callDirect __managed_byte_at
     x64.storeSlotReg slot3, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
     x64.leaRegRdata rcx, [rip + __str_blob_30]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -268,7 +268,7 @@ func @Character.compare {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#7:
     x64.movRegReg rcx, r12
     x64.callDirect __str_bytes_view
     x64.movRegReg r15, r8
@@ -277,9 +277,9 @@ func @Character.compare {
     x64.callDirect __managed_byte_at
     x64.movRegReg r13, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
     x64.movRegReg rcx, r15
     x64.callDirect __managed_decref
     x64.leaRegRdata rcx, [rip + __str_blob_31]
@@ -293,13 +293,13 @@ func @Character.compare {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#9:
     x64.movRegReg rcx, r15
     x64.callDirect __managed_decref
     x64.loadRegSlot rax, slot3
     x64.cmpRegReg rax, r13
     x64.jcc less, byte_lt
-    x64.jmp ifcont
+    x64.jmp ifcont#12
   byte_lt:
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -310,11 +310,11 @@ func @Character.compare {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#12:
     x64.loadRegSlot rax, slot3
     x64.cmpRegReg rax, r13
     x64.jcc greater, byte_gt
-    x64.jmp ifcont
+    x64.jmp ifcont#14
   byte_gt:
     x64.movRegImm32 r8, 2
     x64.epilogue 72
@@ -325,7 +325,7 @@ func @Character.compare {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#14:
     x64.jmp forstep
   forstep:
     x64.loadRegSlot rax, slot2
@@ -337,7 +337,7 @@ func @Character.compare {
     x64.loadRegSlot rcx, slot1
     x64.cmpRegReg rax, rcx
     x64.jcc less, len_lt
-    x64.jmp ifcont
+    x64.jmp ifcont#16
   len_lt:
     x64.movRegImm32 r8, 0
     x64.epilogue 72
@@ -348,12 +348,12 @@ func @Character.compare {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#16:
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot1
     x64.cmpRegReg rax, rcx
     x64.jcc greater, len_gt
-    x64.jmp ifcont
+    x64.jmp ifcont#18
   len_gt:
     x64.movRegImm32 r8, 2
     x64.epilogue 72
@@ -364,7 +364,7 @@ func @Character.compare {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#18:
     x64.movRegImm32 r8, 1
     x64.epilogue 72
     x64.popReg r15

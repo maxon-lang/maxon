@@ -35,7 +35,7 @@ func @main {
     x64.callDirect int.hash
     x64.cmpRegReg r12, r8
     x64.jcc notEqual, chainDiffers
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   chainDiffers:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
@@ -43,14 +43,14 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegImm32 rdx, 42
     x64.movRegReg rcx, r12
     x64.callDirect int.equals
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, hashValueEquals
-    x64.jmp ifcont
+    x64.jmp ifcont#4
   hashValueEquals:
     x64.movRegImm32 r8, 2
     x64.epilogue 32
@@ -58,36 +58,36 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#4:
     x64.movRegImm32 rdx, 41
     x64.movRegReg rcx, r12
     x64.callDirect int.compare
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#5
+    x64.jmp matchnext#9
+  matcharm#5:
     x64.movRegImm32 r8, 3
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#9:
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#6
+    x64.jmp matchnext#10
+  matcharm#6:
     x64.movRegImm32 r8, 4
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  matchnext:
+  matchnext#10:
     x64.cmpRegImm32 r8, 2
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#7
     x64.jmp matchdead
-  matcharm:
+  matcharm#7:
     x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12

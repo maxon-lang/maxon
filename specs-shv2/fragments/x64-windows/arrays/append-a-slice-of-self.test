@@ -52,9 +52,9 @@ func @main {
     x64.callDirect Array.slice
     x64.movRegReg r12, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 r12, 1
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -66,7 +66,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
     x64.callDirect __managed_append
@@ -84,15 +84,15 @@ func @main {
     x64.movRegReg rdx, r14
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#7
+    x64.jmp tryok#6
+  tryerr#7:
     x64.movRegImm32 rax, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#8
+  tryok#6:
     x64.movRegReg rax, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#8
+  trycont#8:
     x64.leaRegRegReg r13, r13, rax
     x64.leaRegRegImm32 r14, r14, 1
     x64.jmp whilehdr
@@ -101,40 +101,40 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
     x64.movRegImm32 r14, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#11
+  tryok#9:
     x64.movRegReg r14, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#11
+  trycont#11:
     x64.cmpRegImm32 r13, 9
     x64.movRegImm32 rax, 0
-    x64.jcc equal, andrhs
-    x64.jmp critsplit
-  andrhs:
+    x64.jcc equal, andrhs#12
+    x64.jmp critsplit#18
+  andrhs#12:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_count
     x64.cmpRegImm32 r8, 5
     x64.setccReg equal, rax
-    x64.jmp scmerge
-  critsplit:
-    x64.jmp scmerge
-  scmerge:
+    x64.jmp scmerge#13
+  critsplit#18:
+    x64.jmp scmerge#13
+  scmerge#13:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 rax, 0
-    x64.jcc notEqual, andrhs
-    x64.jmp critsplit
-  andrhs:
+    x64.jcc notEqual, andrhs#14
+    x64.jmp critsplit#19
+  andrhs#14:
     x64.cmpRegImm32 r14, 1
     x64.setccReg equal, rax
-    x64.jmp scmerge
-  critsplit:
+    x64.jmp scmerge#15
+  critsplit#19:
     x64.movRegReg rax, rcx
-    x64.jmp scmerge
-  scmerge:
+    x64.jmp scmerge#15
+  scmerge#15:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, ok
     x64.jmp ifcont

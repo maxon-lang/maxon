@@ -54,9 +54,9 @@ func @main {
     x64.movRegReg rcx, r12
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.leaRegRdata rcx, [rip + __str_blob_15]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -66,53 +66,53 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
     x64.movRegImm32 r13, 0
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#5
+  tryok#3:
     x64.movRegReg r13, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#5
+  trycont#5:
     x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __managed_get
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#7
+    x64.jmp tryok#6
+  tryerr#7:
     x64.movRegImm32 rax, 1
-    x64.jmp trycont
-  tryok:
+    x64.jmp trycont#8
+  tryok#6:
     x64.movRegReg rax, r8
-    x64.jmp trycont
-  trycont:
+    x64.jmp trycont#8
+  trycont#8:
     x64.movRegImm32 rcx, 0
     x64.cmpRegImm32 r13, 0
     x64.jcc notEqual, o
-    x64.jmp critsplit
+    x64.jmp critsplit#16
   o:
     x64.leaRegRegImm32 rcx, rcx, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#10
+  critsplit#16:
+    x64.jmp ifcont#10
+  ifcont#10:
     x64.cmpRegImm32 rax, 0
     x64.jcc notEqual, c
-    x64.jmp critsplit
+    x64.jmp critsplit#17
   c:
     x64.leaRegRegImm32 r13, rcx, 10
-    x64.jmp ifcont
-  critsplit:
+    x64.jmp ifcont#12
+  critsplit#17:
     x64.movRegReg r13, rcx
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#12
+  ifcont#12:
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg rcx, rbx

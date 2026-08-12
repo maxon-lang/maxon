@@ -34,23 +34,23 @@ func @main {
     x64.callDirect __managed_mem_create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
     x64.movRegImm32 r8, 1
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#1:
     x64.movRegImm32 rdx, 8
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
     x64.movRegImm32 r12, 2
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref
@@ -60,7 +60,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#3:
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_capacity
     x64.cmpRegImm32 r8, 8
@@ -81,9 +81,9 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_mem_grow
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
     x64.leaRegRegImm32 rax, r10, -1
     x64.cmpRegImm32 rax, 4
     x64.jcc equal, matcharm
@@ -107,7 +107,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#7:
     x64.movRegImm32 r12, 5
     x64.movRegReg rcx, rbx
     x64.callDirect __managed_decref

@@ -103,7 +103,7 @@ func @Array.equals {
     x64.callDirect __managed_count
     x64.cmpRegReg r13, r8
     x64.jcc notEqual, len
-    x64.jmp ifcont
+    x64.jmp ifcont#2
   len:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -114,7 +114,7 @@ func @Array.equals {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#2:
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_retain
     x64.movRegReg r14, r8
@@ -135,9 +135,9 @@ func @Array.equals {
     x64.callDirect __managed_byte_at
     x64.movRegReg r15, r8
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
     x64.leaRegRdata rcx, [rip + __str_blob_19]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -149,14 +149,14 @@ func @Array.equals {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#7:
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, r14
     x64.callDirect __managed_byte_at
     x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
     x64.leaRegRdata rcx, [rip + __str_blob_20]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
@@ -168,10 +168,10 @@ func @Array.equals {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  tryok:
+  tryok#9:
     x64.cmpRegReg r15, r8
     x64.jcc notEqual, ne
-    x64.jmp ifcont
+    x64.jmp ifcont#12
   ne:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -182,7 +182,7 @@ func @Array.equals {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#12:
     x64.jmp forstep
   forstep:
     x64.leaRegRegImm32 r14, r14, 1

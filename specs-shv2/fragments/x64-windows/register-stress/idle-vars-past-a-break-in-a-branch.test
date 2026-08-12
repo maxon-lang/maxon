@@ -110,7 +110,7 @@ func @idleVarsPastABreak {
     x64.callDirect gate
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, guard
-    x64.jmp critsplit
+    x64.jmp critsplit#8
   guard:
     x64.loadRegSlot rax, slot3
     x64.loadRegSlot rcx, slot4
@@ -118,25 +118,25 @@ func @idleVarsPastABreak {
   whilehdr:
     x64.cmpRegImm32 rcx, 100
     x64.jcc less, loop
-    x64.jmp critsplit
+    x64.jmp critsplit#9
   loop:
     x64.leaRegRegReg rax, rax, rcx
     x64.leaRegRegImm32 rcx, rcx, 1
     x64.cmpRegImm32 rcx, 3
     x64.jcc greater, done
-    x64.jmp ifcont
+    x64.jmp ifcont#6
   done:
     x64.jmp whileexit
-  ifcont:
+  ifcont#6:
     x64.jmp whilehdr
-  critsplit:
+  critsplit#9:
     x64.jmp whileexit
   whileexit:
-    x64.jmp ifcont
-  critsplit:
+    x64.jmp ifcont#7
+  critsplit#8:
     x64.loadRegSlot rax, slot3
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#7
+  ifcont#7:
     x64.leaRegRegReg rax, rax, rbx
     x64.leaRegRegReg rax, rax, r12
     x64.leaRegRegReg rax, rax, r13

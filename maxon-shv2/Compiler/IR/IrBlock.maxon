@@ -245,16 +245,15 @@ end 'IrBlock'
 
 export typealias IrBlockArray = Array with IrBlock
 
-// Resolve a block's label by its BlockId. Used by IR printers across
-// all phases to display branch targets by name rather than raw IDs.
-export function resolveBlockLabel(blockId BlockId, blocks IrBlockArray) returns ByteArray
-	for block in blocks 'search'
-		if block.id == blockId 'found'
-			return block.label
-		end 'found'
-	end 'search'
-	return "block_{blockId}".toByteArray()
-end 'resolveBlockLabel'
+// ⛔ There is deliberately NO `resolveBlockLabel(blockId, blocks)` here any more.
+//
+// It answered a branch target with the target block's `label`, which is NOT a block's identity: a
+// label is minted per CONSTRUCT (`ifcont`, `tryerr`, `__rc_panic`), so one function holds several
+// blocks of one name and the answer could not name which. Naming a block for PRINTING is the
+// printer's own concern and needs the whole function in view to disambiguate — it lives in
+// `TargetPrinter.buildBlockPrintNames`, which builds one injective table per function and is read by
+// the block header and every branch operand alike. That also retired this scan, which ran once per
+// branch operand and made printing a function quadratic in its own block count.
 
 // Insert ONE op reference at `at`, which must name a position INSIDE the block or one
 // past its end.

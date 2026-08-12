@@ -388,26 +388,129 @@ export function isRuntimeFunction(func IrFunction) returns bool
 	return (bytesStartWith(func.name, prefix: b"mrt_") or bytesStartWith(func.name, prefix: b"__")) and func.sourceFilePath.isEmpty()
 end 'isRuntimeFunction'
 
-// Serialize one function: `func @<name> {`, then each block as `<label>:` followed
-// by its ops (and terminator) one per line, then the closing brace.
+// --- Block names: the ONE derivation a header and a branch target both read ---
+
+// What separates a colliding block label from the BlockId that disambiguates it. No block label
+// can contain it: a source label is an identifier (`'each'`) and every compiler-minted one is a
+// lowercase word (`ifcont`, `tryerr`, `__rc_panic`), so a disambiguated name can never be mistaken
+// for a bare one. `buildBlockPrintNames` does not take that on trust — it PROVES the whole set is
+// injective before returning it.
+let BlockNameIdSeparator = "#"
+
+// How many of a function's blocks share one label — the count that decides whether a name needs
+// disambiguating at all.
+typealias BlockLabelOccurrences = Map with (ByteArray, ElementCount)
+
+// Every block's printed name, KEYED BY ITS BlockId. A map rather than an id-indexed array because a
+// function's live ids are sparse (passes delete blocks), so an array would need a filler in the gaps
+// — and any filler is a sentinel that a lookup could return instead of failing.
+typealias BlockPrintNames = Map with (BlockId, String)
+
+// The names already handed out, so the injectivity claim above is CHECKED rather than asserted.
+typealias BlockPrintNameSet = Set with String
+
+// ⛔⛔ **A BLOCK'S `label` IS NOT ITS IDENTITY, AND PRINTING IT AS ONE MADE THE DUMP LIE.**
+//
+// Labels are minted per CONSTRUCT, not per block: `parseIf` names every continuation `ifcont`, a
+// `try` names every pair `tryerr`/`tryok`, the range-check names every trio `__rc_chk`/`__rc_ok`/
+// `__rc_panic`. One function therefore routinely holds several blocks of one name. The printer used
+// to render `block.label` in the header AND resolve a branch target to `block.label` too — a LOSSY
+// KEY USED AS AN IDENTITY, and not merely ambiguous: in `buildFor`
+// (`specs-shv2/refcount-global-getter-forward.md`) two blocks are both `ifcont` and the FIRST ends
+// in `jmp ifcont` targeting the SECOND, so the only reading available to a reader — the label above
+// the jump — says self-loop where the code is a forward jump.
+//
+// MEASURED when this was fixed: **4,505 of 16,250 committed `.test` goldens** held at least one
+// such function (15,272 functions; `ifcont` 9,606, `tryerr`/`tryok` 6,273 each, `critsplit` 4,385).
+//
+// The disambiguator is the block's own `id`, which IS injective — it is minted per function, and
+// `PruneDeadBlockArgs.buildBlockIdIndex` already treats `func.nextBlockId` as that id space's bound.
+// ⭐ **A label that is UNIQUE in its function still prints bare**, which is why the other 11,745
+// goldens are untouched and why a reader only ever sees a `#id` a real collision earned.
+//
+// It is built ONCE per function and read by BOTH the block header and every branch operand. That is
+// the point, and it is this file's own stated discipline (see `printTargetModule`'s note on two
+// readers of one question): a second derivation of "what is this block called" is exactly how a
+// header and a jump could come to disagree.
+function buildBlockPrintNames(funcBlocks IrBlockArray) returns BlockPrintNames
+	var occurrences = BlockLabelOccurrences.create()
+	for block in funcBlocks 'countLabels'
+		var seen = 0 as ElementCount
+		if let counted = try occurrences.get(block.label) 'known'
+			seen = counted
+		end 'known'
+		occurrences.upsert(block.label, value: seen + 1)
+	end 'countLabels'
+
+	var names = BlockPrintNames.create()
+	var taken = BlockPrintNameSet.create()
+
+	for block in funcBlocks 'nameEach'
+		let shared = try occurrences.get(block.label) otherwise panic("buildBlockPrintNames: label '{String.from(block.label)}' was counted and is now unreadable")
+		let name = blockNameFor(block, shared: shared)
+
+		// The claim in this table's header, CHECKED. It can only fail if a block label spells the
+		// separator, which nothing in the compiler or the surface language mints today — so a failure
+		// here is the day that stopped being true, reported at the one place that can still say so.
+		if taken.contains(name) 'notInjective'
+			panic("buildBlockPrintNames: two blocks of one function would both print as '{name}' — a block label spelling '{BlockNameIdSeparator}' has collided with a disambiguated name, so a branch target could not be resolved from the printed text")
+		end 'notInjective'
+		taken.insert(name)
+
+		// `insert` throws on a key already present, which makes "two blocks of one function share an
+		// id" a reported invariant break rather than a silently dropped name.
+		try names.insert(block.id, value: name) otherwise panic("buildBlockPrintNames: two blocks of the function being printed both claim id {block.id}")
+	end 'nameEach'
+
+	return names
+end 'buildBlockPrintNames'
+
+// One block's printed name: bare when its label is the function's only one of that spelling, and
+// suffixed with the block's own id when it is not. `shared` is how many blocks of the function carry
+// this label — the caller counts it once for the whole function rather than re-deriving it per block.
+function blockNameFor(block IrBlock, shared ElementCount) returns String
+	let label = String.from(block.label)
+
+	if shared > 1 'collides'
+		return "{label}{BlockNameIdSeparator}{block.id}"
+	end 'collides'
+
+	return label
+end 'blockNameFor'
+
+// The printed name of a branch target — the ONE spelling every branch operand resolves through.
+//
+// A target that is not one of the function's own blocks is BROKEN IR (a branch names a block of its
+// own function, and `printTargetFunction` builds the table from exactly those blocks), so it panics
+// rather than rendering the `block_<id>` placeholder the old resolver returned. That placeholder was
+// a sentinel wearing a name: it reads like a block that exists, and it never appeared in any of the
+// 16,250 committed goldens, so nothing was relying on it.
+function blockPrintName(blockId BlockId, names BlockPrintNames) returns String
+	return try names.get(blockId) otherwise panic("blockPrintName: branch target block {blockId} is not a block of the function being printed — a branch can only name a block of its own function")
+end 'blockPrintName'
+
+// Serialize one function: `func @<name> {`, then each block as `<name>:` (see
+// `buildBlockPrintNames` — NOT its raw label, which is not unique) followed by
+// its ops (and terminator) one per line, then the closing brace.
 function printTargetFunction(module TargetModule, func IrFunction, cpu CpuArch) returns String
 	var sb = StringBuilder.create()
 	sb.append("{FuncHeaderPrefix}{String.from(func.name)} {OpenBrace}\n")
 
 	// The function's blocks in `blockRefs` order — the same public-API walk the
 	// backend's `emitFunctionChunk` uses. Collected once so branch targets can be
-	// resolved to labels against it.
+	// resolved to names against it.
 	let funcBlocks = resolveFuncBlocks(module.blocks, blockRefs: func.blockRefs)
+	let names = buildBlockPrintNames(funcBlocks)
 
 	for block in funcBlocks 'eachBlock'
-		sb.append("{BlockLabelIndent}{String.from(block.label)}:\n")
+		sb.append("{BlockLabelIndent}{blockPrintName(block.id, names: names)}:\n")
 
 		for opIdx in block.opRefs 'eachOp'
-			sb.append(printOpLine(module, opIdx: opIdx, blocks: funcBlocks, cpu: cpu))
+			sb.append(printOpLine(module, opIdx: opIdx, names: names, cpu: cpu))
 		end 'eachOp'
 
 		if block.hasTerminatorOp() 'hasTerm'
-			sb.append(printOpLine(module, opIdx: block.terminatorIndex(), blocks: funcBlocks, cpu: cpu))
+			sb.append(printOpLine(module, opIdx: block.terminatorIndex(), names: names, cpu: cpu))
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -418,9 +521,9 @@ end 'printTargetFunction'
 // One op, indented, ISA-prefixed, newline-terminated. An out-of-range op index
 // is an invariant violation (a block references an op not in `module.ops`), not
 // a user error, so it panics rather than printing a sentinel.
-function printOpLine(module TargetModule, opIdx OpIndex, blocks IrBlockArray, cpu CpuArch) returns String
+function printOpLine(module TargetModule, opIdx OpIndex, names BlockPrintNames, cpu CpuArch) returns String
 	let op = try module.ops.get(opIdx) otherwise panic("printOpLine: op index {opIdx} out of range in module.ops")
-	return "{OpIndent}{opIsaPrefix(cpu)}{formatTargetOp(op, blocks: blocks, cpu: cpu)}\n"
+	return "{OpIndent}{opIsaPrefix(cpu)}{formatTargetOp(op, names: names, cpu: cpu)}\n"
 end 'printOpLine'
 
 // The ISA namespace ops print under — the whole module's, not the op's. A module is single-target
@@ -492,13 +595,13 @@ end 'x64DivideOpName'
 // a compile error here, not a silent `??`. `cpu` names the module's ISA so the SHARED ops render their
 // operands against the right register file (`sharedVregName`); the x64/arm64-specific arms need no
 // dispatch (they only ever appear in their own ISA's modules).
-function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns String
+function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns String
 	return match op 'op'
 		prologue(stackSize) gives "prologue {stackSize}"
 		epilogue(stackSize) gives "epilogue {stackSize}"
 		ret gives "ret"
-		jmp(targetBlockId) gives "jmp {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
-		jcc(cond, targetBlockId) gives "jcc {condCodeName(cond)}, {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
+		jmp(targetBlockId) gives "jmp {blockPrintName(targetBlockId, names: names)}"
+		jcc(cond, targetBlockId) gives "jcc {condCodeName(cond)}, {blockPrintName(targetBlockId, names: names)}"
 		movRegImm(dest, value) gives "movRegImm {vregName(dest)}, {value}"
 		movRegImm32(dest, value) gives "movRegImm32 {vregName(dest)}, {value}"
 		movRegReg(destReg, srcReg) gives "movRegReg {sharedVregName(destReg, cpu: cpu)}, {sharedVregName(srcReg, cpu: cpu)}"
@@ -585,10 +688,10 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		// name), and each condition through the `Arm64CondCode` member name. The mnemonics are the
 		// arm64 spellings; the `arm64.` namespace is added by `opIsaPrefix` at the print site.
 		arm64Ret gives "ret"
-		arm64Branch(targetBlockId) gives "b {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
-		arm64CondBranch(cond, targetBlockId) gives "b.{cond.name} {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
-		arm64Cbz(reg, targetBlockId) gives "cbz {arm64VregName(reg)}, {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
-		arm64Cbnz(reg, targetBlockId) gives "cbnz {arm64VregName(reg)}, {String.from(resolveBlockLabel(targetBlockId, blocks: blocks))}"
+		arm64Branch(targetBlockId) gives "b {blockPrintName(targetBlockId, names: names)}"
+		arm64CondBranch(cond, targetBlockId) gives "b.{cond.name} {blockPrintName(targetBlockId, names: names)}"
+		arm64Cbz(reg, targetBlockId) gives "cbz {arm64VregName(reg)}, {blockPrintName(targetBlockId, names: names)}"
+		arm64Cbnz(reg, targetBlockId) gives "cbnz {arm64VregName(reg)}, {blockPrintName(targetBlockId, names: names)}"
 		arm64MovImm(dest, value) gives "movImm {arm64VregName(dest)}, {value}"
 		// The frame-record offset is rendered ONLY when the frame has an outgoing stack-argument region to push
 		// it past — which is what having one MEANS, and which no function in the corpus does. Rendering an
@@ -654,8 +757,8 @@ function formatTargetOp(op TargetOp, blocks IrBlockArray, cpu CpuArch) returns S
 		// The jump tables render the biased index, the default, and the slot→target table run-length
 		// encoded (`[lo..hi]=label`), so a range/`or` arm's several identical slots collapse to one entry
 		// and the table stays readable even at the span cap.
-		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={String.from(resolveBlockLabel(defaultTarget, blocks: blocks))} [{formatJumpTableSlots(caseTargets, blocks: blocks)}] @{String.from(tableLabel)}"
-		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={String.from(resolveBlockLabel(defaultTarget, blocks: blocks))} [{formatJumpTableSlots(caseTargets, blocks: blocks)}] @{String.from(tableLabel)}"
+		x64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
+		arm64JumpTable(indexReg, defaultTarget, caseTargets, tableLabel) gives "jumpTable {sharedVregName(indexReg, cpu: cpu)}, default={blockPrintName(defaultTarget, names: names)} [{formatJumpTableSlots(caseTargets, names: names)}] @{String.from(tableLabel)}"
 		callMem(baseReg, disp) gives "callMem [{vregName(baseReg)} + {disp}]"
 		// The arm64 stack-argument pair renders the SLOT, not an address, because a slot is all either op
 		// carries — the address is a frame fact the encoder (outgoing) or the prologue pass (incoming) adds.
@@ -678,7 +781,7 @@ end 'formatTargetOp'
 // become one `[lo..hi]=label` entry (or `[i]=label` for a single slot), so a range arm's several slots
 // read as one span and an all-distinct table reads as one entry per slot. Keeps the dump legible without
 // losing which slot routes where.
-function formatJumpTableSlots(caseTargets BlockIdArray, blocks IrBlockArray) returns String
+function formatJumpTableSlots(caseTargets BlockIdArray, names BlockPrintNames) returns String
 	if caseTargets.count() == 0 'empty'
 		return ""
 	end 'empty'
@@ -690,22 +793,22 @@ function formatJumpTableSlots(caseTargets BlockIdArray, blocks IrBlockArray) ret
 	for i in 1 upto caseTargets.count() 'each'
 		let target = try caseTargets.get(i) otherwise panic("formatJumpTableSlots: caseTargets.get OOB at {i}")
 		if target != runTarget 'runEnd'
-			appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: i - 1, target: runTarget, blocks: blocks)
+			appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: i - 1, target: runTarget, names: names)
 			afterFirst = true
 			runStart = i
 			runTarget = target
 		end 'runEnd'
 	end 'each'
-	appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: caseTargets.count() - 1, target: runTarget, blocks: blocks)
+	appendJumpTableRun(out, afterFirst: afterFirst, runStart: runStart, runEnd: caseTargets.count() - 1, target: runTarget, names: names)
 
 	return out.build()
 end 'formatJumpTableSlots'
 
-function appendJumpTableRun(out StringBuilder, afterFirst bool, runStart ElementCount, runEnd ElementCount, target BlockId, blocks IrBlockArray)
+function appendJumpTableRun(out StringBuilder, afterFirst bool, runStart ElementCount, runEnd ElementCount, target BlockId, names BlockPrintNames)
 	if afterFirst 'separator'
 		out.append(", ")
 	end 'separator'
-	let label = String.from(resolveBlockLabel(target, blocks: blocks))
+	let label = blockPrintName(target, names: names)
 	if runStart == runEnd 'single'
 		out.append("[{runStart}]={label}")
 	end 'single' else 'span'

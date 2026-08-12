@@ -83,23 +83,23 @@ func @Pair.isLess {
     x64.movRegReg rcx, rax
     x64.callMem [rbx + 24]
     x64.cmpRegImm32 r8, 0
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext#5
+  matcharm#1:
     x64.movRegImm32 r8, 1
     x64.jmp matchcont
-  matchnext:
+  matchnext#5:
     x64.cmpRegImm32 r8, 1
-    x64.jcc equal, matcharm
-    x64.jmp matchnext
-  matcharm:
+    x64.jcc equal, matcharm#2
+    x64.jmp matchnext#6
+  matcharm#2:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
-  matchnext:
+  matchnext#6:
     x64.cmpRegImm32 r8, 2
-    x64.jcc equal, matcharm
+    x64.jcc equal, matcharm#3
     x64.jmp matchdead
-  matcharm:
+  matcharm#3:
     x64.movRegImm32 r8, 0
     x64.jmp matchcont
   matchcont:
@@ -155,25 +155,25 @@ func @main {
     x64.callDirect Pair.isLess
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, ok
-    x64.jmp critsplit
+    x64.jmp critsplit#10
   ok:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#5
+  critsplit#10:
+    x64.jmp ifcont#5
+  ifcont#5:
     x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
     x64.movRegReg rcx, r13
     x64.callDirect Pair.opLess
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, ok2
-    x64.jmp critsplit
+    x64.jmp critsplit#11
   ok2:
     x64.leaRegRegImm32 r12, r12, 1
-    x64.jmp ifcont
-  critsplit:
-    x64.jmp ifcont
-  ifcont:
+    x64.jmp ifcont#7
+  critsplit#11:
+    x64.jmp ifcont#7
+  ifcont#7:
     x64.leaRegRegImm32 rbx, rbx, 1
     x64.movRegReg rcx, r13
     x64.callDirect __mm_decref
@@ -181,7 +181,7 @@ func @main {
   whileexit:
     x64.cmpRegImm32 r12, 200
     x64.jcc equal, all
-    x64.jmp ifcont
+    x64.jmp ifcont#9
   all:
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -190,7 +190,7 @@ func @main {
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
-  ifcont:
+  ifcont#9:
     x64.movRegImm32 r8, 1
     x64.epilogue 40
     x64.popReg r13
