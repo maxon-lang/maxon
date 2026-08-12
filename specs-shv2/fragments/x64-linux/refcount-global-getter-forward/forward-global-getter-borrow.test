@@ -1,0 +1,457 @@
+// Test: forward-global-getter-borrow
+typealias Count = int(0 to 1000)
+
+type Item
+	export var v as String
+
+	export static function create(s String) returns Item
+		return Self{v: s}
+	end 'create'
+end 'Item'
+
+export type Box uses Elem
+	typealias ElemArray = Array with Elem
+
+	export var items as ElemArray = ElemArray.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function add(e Elem)
+		items.push(e)
+	end 'add'
+
+	export function size() returns Count
+		return items.count()
+	end 'size'
+end 'Box'
+
+typealias ItemBox = Box with Item
+
+var cachedBase = ItemBox.create()
+var baseLoaded = false
+var cachedMerged = ItemBox.create()
+var mergedDone = false
+
+// Mirrors loadRuntimeModule: returns a BORROW of the cachedBase global.
+function loadBase() returns ItemBox
+	if baseLoaded 'hit'
+		return cachedBase
+	end 'hit'
+	var b = ItemBox.create()
+	b.add(Item.create("first base item"))
+	b.add(Item.create("second base item"))
+	b.add(Item.create("third base item"))
+	cachedBase = b
+	baseLoaded = true
+	return cachedBase
+end 'loadBase'
+
+// Mirrors buildRuntimeModuleForTarget: `let base = loadBase()` then a multi-path
+// return — the native arm forwards `base`, the merged arm returns a DIFFERENT global.
+function buildFor(wantMerged bool) returns ItemBox
+	let base = loadBase()
+	if not wantMerged 'native'
+		return base
+	end 'native'
+	if mergedDone 'cached'
+		return cachedMerged
+	end 'cached'
+	var merged = ItemBox.create()
+	merged.add(Item.create("merged item"))
+	cachedMerged = merged
+	mergedDone = true
+	return cachedMerged
+end 'buildFor'
+
+// Mirrors augmentWithRuntime: borrow the result, read it, never release.
+function augment(wantMerged bool) returns Count
+	let rt = buildFor(wantMerged)
+	return rt.size()
+end 'augment'
+
+function main() returns ExitCode
+	// native arm forwards the cachedBase global (3 items)
+	return augment(false)
+end 'main'
+---
+ExitCode: 3
+---
+data {
+  __data_cachedBase@0 = i64 0
+  __data_cachedMerged@8 = i64 0
+  __slab_cursor@16 = i64 0
+  __slab_end@24 = i64 0
+  __mm_alloc_count@32 = i64 0
+  __data_baseLoaded@40 = i1 0
+  __data_mergedDone@41 = i1 0
+}
+
+func @Item.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __fieldDefault#Box#items
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.add {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __managed_push
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Box.size {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __managed_count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_8]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @loadBase {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.leaRegGlobal rax, __data_baseLoaded
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, hit
+    x64.jmp ifcont
+  hit:
+    x64.leaRegGlobal rax, __data_cachedBase
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_retain
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rcx, [rip + __layout_Box_Item]
+    x64.callDirect Box.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_4]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect Item.create
+    x64.leaRegRdata rax, [rip + __layout_Box_Item]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Box.add
+    x64.leaRegRdata rax, [rip + __str_rec_5]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect Item.create
+    x64.leaRegRdata rax, [rip + __layout_Box_Item]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Box.add
+    x64.leaRegRdata rax, [rip + __str_rec_6]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect Item.create
+    x64.leaRegRdata rax, [rip + __layout_Box_Item]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Box.add
+    x64.leaRegGlobal rax, __data_cachedBase
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __destruct_Box_Item
+    x64.leaRegGlobal rax, __data_cachedBase
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.movRegImm32 rax, 1
+    x64.leaRegGlobal rcx, __data_baseLoaded
+    x64.storeBaseDispReg.byte [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_cachedBase
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_retain
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @buildFor {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.callDirect loadBase
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot0, r12
+    x64.xorRegImm32 rbx, rbx, 1
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc notEqual, native
+    x64.jmp ifcont#2
+  native:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.leaRegGlobal rax, __data_mergedDone
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, cached
+    x64.jmp ifcont#4
+  cached:
+    x64.leaRegGlobal rax, __data_cachedMerged
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Box_Item
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.leaRegRdata rcx, [rip + __layout_Box_Item]
+    x64.callDirect Box.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_7]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect Item.create
+    x64.leaRegRdata rax, [rip + __layout_Box_Item]
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect Box.add
+    x64.leaRegGlobal rax, __data_cachedMerged
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __destruct_Box_Item
+    x64.leaRegGlobal rax, __data_cachedMerged
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.movRegImm32 rax, 1
+    x64.leaRegGlobal rcx, __data_mergedDone
+    x64.storeBaseDispReg.byte [rcx + 0], rax
+    x64.leaRegGlobal rax, __data_cachedMerged
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Box_Item
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @augment {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect buildFor
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect Box.size
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Box_Item
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect augment
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_9]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @__fieldDefault#Box#items {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __managed_create
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

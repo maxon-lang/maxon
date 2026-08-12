@@ -1,0 +1,603 @@
+// Test: forward-param-field-borrow
+enum IterErr implements Error
+	stop
+end 'IterErr'
+
+type Tok
+	export var line as int
+
+	static function make(l int) returns Tok
+		return Self{line: l}
+	end 'make'
+end 'Tok'
+
+typealias TokBuf = Array with Tok
+typealias TokCur = ArrayIterator with Tok
+
+type Lex
+	var toks as TokBuf
+	var cur as TokCur
+	var counter as int
+
+	static function create() returns Self throws IterErr
+		var toks = TokBuf.create()
+		for i in 0 upto 200 'fill'
+			toks.push(Tok.make(i))
+		end 'fill'
+		let cur = try toks.cursor() otherwise throw IterErr.stop
+		return Self{toks: toks, cur: cur, counter: 0}
+	end 'create'
+
+	// Returns cur.current() (a borrow of the self-field-owned token array). The
+	// counter arithmetic keeps this over the inline budget so it stays a standalone
+	// borrow-returning function, mirroring the large real Parser.consume.
+	function consume() returns Tok throws IterErr
+		counter = counter + 1
+		counter = counter + 2
+		counter = counter + 3
+		counter = counter + 4
+		counter = counter + 5
+		counter = counter + 6
+		counter = counter + 7
+		counter = counter + 8
+		counter = counter + 9
+		counter = counter + 10
+		let t = cur.current()
+		try cur.advance() otherwise throw IterErr.stop
+		return t
+	end 'consume'
+
+	// Mirrors Parser.consumeExpecting: `return try consume()`. Bloated so it stays
+	// standalone and the returned-borrow retain would land in its own body.
+	function consumeExpecting(tag int) returns Tok throws IterErr
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		counter = counter + tag
+		return try consume()
+	end 'consumeExpecting'
+end 'Lex'
+
+function run() returns int throws IterErr
+	var lex = try Lex.create()
+	var sum = 0
+	for _ in 0 upto 40 'loop'
+		let a = try lex.consumeExpecting(1)
+		sum = sum + a.line
+	end 'loop'
+	let b = try lex.consumeExpecting(2)
+	let c = try lex.consumeExpecting(3)
+	let d = try lex.consumeExpecting(4)
+	sum = sum + b.line + c.line + d.line
+	return sum
+end 'run'
+
+function main() returns ExitCode
+	// The borrowed token fields sum to 903; the exit code checks the value
+	// AND, via the leak gate, that no forwarded token leaked (a leak would
+	// exit 101 instead of 903 mod 256 = 135).
+	let s = try run() otherwise 0
+	return s mod 256
+end 'main'
+---
+ExitCode: 135
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Tok.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Lex.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 r12, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 r12, 200
+    x64.jcc less, fill
+    x64.jmp forexit
+  fill:
+    x64.movRegReg rcx, r12
+    x64.callDirect Tok.make
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __managed_push
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r12, r12, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Array.cursor
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.leaRegRegImm32 r10, r12, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.storeBaseDispReg.word64 [r8 + 16], r13
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Lex.consume {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 2
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 3
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 4
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 5
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 6
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 7
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 8
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 9
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rbx + 16]
+    x64.leaRegRegImm32 rax, rax, 10
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.leaRegRdata rdx, [rip + __layout_ArrayIterator_Tok]
+    x64.callDirect ArrayIterator.current
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.callDirect ArrayIterator.advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.leaRegRegImm32 r10, rbx, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Lex.consumeExpecting {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 16]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.storeBaseDispReg.word64 [rcx + 16], rax
+    x64.callDirect Lex.consume
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @run {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.callDirect Lex.create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 r13, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 r13, 40
+    x64.jcc less, loop
+    x64.jmp forexit
+  loop:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect Lex.consumeExpecting
+    x64.movRegReg r14, r10
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, tryerr#8
+    x64.jmp tryok#7
+  tryerr#8:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Lex
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r14
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#7:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.leaRegRegReg r12, r12, rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.jmp forstep
+  forstep:
+    x64.leaRegRegImm32 r13, r13, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect Lex.consumeExpecting
+    x64.movRegReg r13, r8
+    x64.movRegReg r14, r10
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Lex
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r14
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#9:
+    x64.movRegImm32 rdx, 3
+    x64.movRegReg rcx, rbx
+    x64.callDirect Lex.consumeExpecting
+    x64.movRegReg r14, r8
+    x64.movRegReg r15, r10
+    x64.cmpRegImm32 r15, 0
+    x64.jcc notEqual, tryerr#12
+    x64.jmp tryok#11
+  tryerr#12:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Lex
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#11:
+    x64.movRegImm32 rdx, 4
+    x64.movRegReg rcx, rbx
+    x64.callDirect Lex.consumeExpecting
+    x64.movRegReg r15, r10
+    x64.cmpRegImm32 r15, 0
+    x64.jcc notEqual, tryerr#14
+    x64.jmp tryok#13
+  tryerr#14:
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Lex
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#13:
+    x64.loadRegBaseDisp.word64 rax, [r13 + 0]
+    x64.leaRegRegReg rax, r12, rax
+    x64.loadRegBaseDisp.word64 rcx, [r14 + 0]
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegBaseDisp.word64 rcx, [r8 + 0]
+    x64.leaRegRegReg r12, rax, rcx
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Lex
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect run
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rax, r8
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 rcx, 256
+    x64.cqo
+    x64.idivReg rcx
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rdx, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_41]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, rdx
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.cursor {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect ArrayIterator.create
+    x64.movRegReg r12, r8
+    x64.movRegReg r13, r10
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.callDirect __managed_cursor_create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.advance {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
