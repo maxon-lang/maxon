@@ -451,8 +451,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: field-assign-struct-in-if-scope -->
-<!-- mutating a parameter struct field (shv2 forbids by design, E2013 - needs a local shadow) -->
+<!-- test: field-assign-struct-in-if-scope -->
 Struct allocated in if-block scope and assigned to parameter field must survive scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -496,8 +495,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: field-assign-with-func-call-in-struct -->
-<!-- mutating a parameter struct field (shv2 forbids by design, E2013 - needs a local shadow) -->
+<!-- test: field-assign-with-func-call-in-struct -->
 Struct literal with function call result as field, assigned to parameter field.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
