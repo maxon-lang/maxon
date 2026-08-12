@@ -1,0 +1,79 @@
+// Test: pass-by-reference.enum-float-backed-ref
+
+enum Ratio
+	half = 0.5
+	quarter = 0.25
+end 'Ratio'
+
+function switchRatio(r Ratio)
+	r = Ratio.quarter
+end 'switchRatio'
+
+function main() returns ExitCode
+	var r = Ratio.half
+	switchRatio(r)
+	if r == Ratio.quarter 'changed'
+		return 1
+	end 'changed'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @switchRatio {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm rax, 4598175219545276416
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm rbx, 4602678819172646912
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect switchRatio
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.movRegImm rcx, 4598175219545276416
+    x64.cmpRegReg rax, rcx
+    x64.jcc equal, changed
+    x64.jmp ifcont
+  changed:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rbx, 0
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
