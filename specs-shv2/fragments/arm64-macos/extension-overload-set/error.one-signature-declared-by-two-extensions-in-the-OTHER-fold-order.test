@@ -1,0 +1,41 @@
+// Test: error.one-signature-declared-by-two-extensions-in-the-OTHER-fold-order
+// --- file: a.maxon
+typealias Integer = int(i64.min to i64.max)
+
+export interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+export extension Tagged
+	export function pick(flag bool) returns bool
+		return not flag
+	end 'pick'
+end 'Tagged'
+
+export type Five implements Tagged
+	export static function make() returns Self
+		return Self{}
+	end 'make'
+
+	export function tag() returns Integer
+		return 5
+	end 'tag'
+end 'Five'
+
+// --- file: b.maxon
+export extension Tagged
+	export function pick(flag bool) returns bool
+		return flag and tag() > 0
+	end 'pick'
+end 'Tagged'
+
+function main() returns ExitCode
+	let f = Five.make()
+	if f.pick(true) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+---
+CompilerError:
+error E3006: <fragment>:27:18: duplicate definition of function 'Five.pick#bool' — 'Five.pick' is declared by an `extension` in more than one FILE, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names

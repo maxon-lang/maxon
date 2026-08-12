@@ -1,0 +1,28 @@
+// Test: error.wrong-enum-into-an-enum-field
+
+enum Color
+	red
+	green
+end 'Color'
+
+enum Shade
+	dark
+	light
+end 'Shade'
+
+type Holder
+	export var c as Color
+
+	static function create() returns Self
+		return Self{c: Color.red}
+	end 'create'
+end 'Holder'
+
+function main() returns ExitCode
+	var h = Holder.create()
+	h.c = Shade.light
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:23:4: cannot assign 'Shade' to variable 'Holder.c' of type 'Color'

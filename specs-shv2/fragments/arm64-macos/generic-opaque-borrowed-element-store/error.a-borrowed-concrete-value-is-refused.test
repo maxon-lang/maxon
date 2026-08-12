@@ -1,0 +1,30 @@
+// Test: error.a-borrowed-concrete-value-is-refused
+typealias Idx = int(0 to u64.max)
+
+type Bag uses Element
+	typealias Items = Array with Element
+	export var items as Items
+
+	export static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function count() returns Idx
+		return items.count()
+	end 'count'
+
+	export function pushLiteral()
+		items.push("a concrete literal written inside a shared generic body")
+	end 'pushLiteral'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	b.pushLiteral()
+	return b.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:17:14: Unsupported: storing a borrowed value of a CONCRETE type into an `Array with <type parameter>` in a shared generic body — the body compiles once for every instantiation, so nothing here can check the value against the element type the caller chose, and the reference the container needs would be taken through a descriptor written for a different type. Store a value of the element's own type parameter (a `get`/`first`/`last` read, an opaque field read, a `for` element, or a parameter the method consumes), or write the store in a method of a concrete instantiation

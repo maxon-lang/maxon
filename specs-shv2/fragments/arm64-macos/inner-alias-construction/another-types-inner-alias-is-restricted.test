@@ -1,0 +1,31 @@
+// Test: another-types-inner-alias-is-restricted
+typealias ExitCode = int(0 to 125)
+typealias Count = int(0 to u64.max)
+
+type Owner
+	typealias Nums = Array with ExitCode
+
+	static function own() returns Count
+		var n = Nums{}
+		return n.count()
+	end 'own'
+end 'Owner'
+
+type Other
+	static function make() returns Count
+		var n = Nums{}
+		return n.count()
+	end 'make'
+end 'Other'
+
+function main() returns ExitCode
+	let a = Owner.own()
+	let b = Other.make()
+	if a == b 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+---
+CompilerError:
+error E3076: <fragment>:16:16: type 'Nums' can only be constructed from within its own methods; use a static factory method instead

@@ -1,0 +1,21 @@
+// Test: error.user-generic-instance-create-not-returning-self-at-file-scope
+typealias Count = int(0 to u64.max)
+
+type Box uses T
+	export var n as Count
+
+	static function create() returns Count
+		return 5
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Count
+
+var b = IntBox.create()
+
+function main() returns ExitCode
+	return 3
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:14:9: Unsupported: a top-level `IntBox.create()` — `Box.create` does not return `Self`, and a global declared this way holds the INSTANCE its alias names. A generic's layout descriptor and witnesses are read off what its `create()` hands back, so only a `Self`-returning one can build `IntBox`. Build the value inside a function
