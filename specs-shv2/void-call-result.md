@@ -214,7 +214,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.unknown-set-method-in-value-position -->
@@ -264,7 +264,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:8:14: Unsupported: `Array` member 'grow' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.array-void-mutator-in-value-position -->
@@ -385,7 +385,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:8:14: Function 'clear' does not return a value
+error E2004: <fragment>:8:14: Function 'Array.clear' does not return a value
 ```
 
 <!-- test: error.array-insert-in-value-position -->

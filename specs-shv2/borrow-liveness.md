@@ -1045,6 +1045,135 @@ end 'main'
 error E3070: specs/fragments/borrow-liveness/receiver-method-writes-transitively.test:24:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 23)
 ```
 
+<!-- test: receiver-method-writing-its-own-field-through-a-corpus-member -->
+### … and the write reaches the caller through a member the COMPILER does not serve
+⛔⛔ **THE SAME WRITE, SPELLED THROUGH A CORPUS-DECLARED MEMBER, AND IT WAS A USE-AFTER-FREE ON THIS
+TREE.** Every case above writes through `clear`, which `Parser.arraySurfaceMemberNames` still serves —
+so the parser settles the write itself and stamps the enclosing method's `storageWrittenParamMask`
+directly. `truncate` has NEVER been on that roster: it is `stdlib/Array.maxon:426`, an ordinary
+declared function, and the enclosing method's bit then had to arrive through the call graph instead.
+It did not. `SemanticCheck.collectCallParamEdges` records an edge only for an argument that IS one of
+the caller's own parameters, and `items` is a FIELD of one — so `wipe` was summarised as writing
+nothing and `b.wipe()` was waved through.
+
+**MEASURED on the tree that shipped it, with the suite green over it: this program compiled clean and
+printed `4557430888798830399`** — `__mm_free`'s `0x3F` poison read back as a length — where 44 is
+correct and the oracle prints 44. It is the exact symptom `receiver-method-writing-its-own-field`
+records from before the roster door existed, reappearing one member over.
+
+⇒ The edge set the STORAGE column is closed over now carries a second edge kind: *"the caller's
+parameter `p` owns the ARRAY this call's receiver denotes"*, recorded at the one ordinary-call
+receiver door (`Parser.prependReceiverArg`). It is storage-only — feeding it into E3019's column
+would refuse a `let` receiver for a method writing its own field, which is the ruling
+`self-keyword.md:self-with-params` pins.
+
+⚠ **THIS IS THE RETIREMENT CHAIN'S OWN HAZARD, AND IT IS WHY THE CASE IS WRITTEN OVER `truncate`
+RATHER THAN OVER A NAME THAT JUST LEFT.** Every member struck from the roster moves from the door
+that settles the write to the door that had to infer it, so the hole was opened by `insert` (ARR1) and
+`reserve` (ARR2) and would have been re-opened by `clear` (ARR4). Pinning it on a member that was
+NEVER on the roster is what keeps it pinned after the roster empties.
+```maxon
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function wipe()
+		items.truncate(0)
+	end 'wipe'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	b.wipe()
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/receiver-method-writing-its-own-field-through-a-corpus-member.test:20:4: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```
+
+<!-- test: a-free-callee-writing-a-field-of-its-parameter -->
+### … and the same hole through a FREE callee, where the field's base is an ordinary parameter
+The receiver of the corpus call is `bag.items` — a field of parameter 0 rather than a field of `self`
+— so the edge is recorded off the same `subjectStorageMask` derivation and not off a second one. It
+matters because the two spellings reach `prependReceiverArg` by different receiver paths and a rule
+taught to one of them is exactly the half nobody re-runs.
+```maxon
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+end 'Bag'
+
+function wipe(bag Bag)
+	bag.items.truncate(0)
+end 'wipe'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	wipe(b)
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/a-free-callee-writing-a-field-of-its-parameter.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```
+
+<!-- test: a-corpus-served-read-only-member-is-not-a-conflict -->
+### The over-rejection guard for the two above: a corpus member that only READS is still callable
+The new edge is recorded at every ordinary member call whose receiver's storage reaches a parameter,
+WITHOUT asking whether the callee writes — that answer belongs to the fixpoint, which has not run yet.
+So the guard is the fixpoint's own filter: `Array.capacity` writes nothing, no bit travels the edge,
+and `b.room()` stays legal while `s` is live. Recorded on a member that is corpus-served for the same
+reason the two above are — `capacity` left the roster at X-array-retire — because a guard written over
+a rostered member would not exercise the edge at all.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+
+	function room() returns Integer
+		return items.capacity()
+	end 'room'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	let n = b.room()
+	print("{s.byteLength()} {n > 0}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+44 true
+```
+
 <!-- test: receiver-method-that-writes-nothing -->
 ### A method that does NOT write the field stays callable while the borrow is live
 The over-rejection guard for the five above, and the one this fix is one step away from breaking: a

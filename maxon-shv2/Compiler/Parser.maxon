@@ -4374,7 +4374,7 @@ end 'requireAbiParamCount'
 // ⚠ **IT WAS `StringByteLengthMethod` UNTIL THE MEMBER IT WAS NAMED FOR RETIRED, AND THE NAME WAS THE LAST
 // THING SAYING OTHERWISE.** `String.byteLength` is `stdlib/String.maxon:253`'s now, so a constant carrying
 // `String` in its name and served on `Character` alone pointed a reader at the one surface that no longer
-// uses it. Renamed to match its surface-neutral siblings `ByteAtMethod` / `IsEmptyMethod` /
+// uses it. Renamed to match its surface-neutral siblings `ByteAtMethod` / `ClearMethod` /
 // `CloneMethodName`, each of which is one spelling shared by whichever surfaces still serve it — the same
 // arrangement `ByteViewMethod` below records for `bytes`.
 let ByteLengthMethod = b"byteLength"
@@ -4745,8 +4745,12 @@ let ClearMethod = b"clear"
 // reason and the block's own rule: it is `Cloneable`'s method name, `IrInterface` already declares the
 // protocol with it and now advertises it, so the two files held one spelling twice — see
 // `IrInterface.CloneMethodName`, which every dispatcher here reads.
+// ⭐ **`isEmpty` LEFT THIS BLOCK WITH ITS ROSTER ENTRY AND ITS RUNTIME (ARR4), AND IT IS THE ONLY STRIKE IN
+// THE CHAIN THAT DELETED ALL THREE.** `stdlib/Array.maxon:162` is `managed.length() == 0` — the same answer
+// `__managed_is_empty` gave through two return blocks — and no other surface ever served the spelling, so
+// there was nothing left for a constant to name. Every other retired name kept its constant because some
+// other surface still matches on it (`ClearMethod` is the buffer's, `CountMethod` the `Map`'s).
 let CountMethod = b"count"
-let IsEmptyMethod = b"isEmpty"
 
 // `map(transform)` — the element-wise transform BOTH an `Array` and a `Set` serve, so it belongs in this
 // shared block for the block's own reason: one spelling, two dispatchers.
@@ -4842,7 +4846,12 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	// buffer member and nothing else now, exactly like `swap`, and its `Array` caller is
 	// `stdlib/Array.maxon:327`'s `managed.remove(at)`, whose own receiver-write this same answer records
 	// one frame down.
-	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod) or name.equals(ManagedMemorySwapMethod) or name.equals(ManagedMemoryShiftRightMethod) or name.equals(ManagedMemoryShiftLeftMethod) or name.equals(RemoveMethod)) 'managedMemoryMutator'
+	// ⚠ **`clear` JOINED THEM AT ARR4, BECAUSE THE `Array` SPELLING LEFT THE ROSTER** — it is a buffer member
+	// and nothing else now, exactly like `remove`, and its `Array` caller is `stdlib/Array.maxon:363`'s
+	// `managed.clear()`, whose own receiver-write this same answer records one frame down. The four cases the
+	// `Array` spelling used to answer for — `Bag.wipe()` clearing its own field — are
+	// `BorrowCheck.StorageReachEdge`'s now, and they were a use-after-free until it existed.
+	if isManagedMemory and (name.equals(ManagedMemorySetLengthMethod) or name.equals(ManagedMemorySetByteMethod) or name.equals(ManagedMemoryGrowMethod) or name.equals(ManagedMemorySwapMethod) or name.equals(ManagedMemoryShiftRightMethod) or name.equals(ManagedMemoryShiftLeftMethod) or name.equals(RemoveMethod) or name.equals(ClearMethod)) 'managedMemoryMutator'
 		return true
 	end 'managedMemoryMutator'
 
@@ -4860,7 +4869,7 @@ function arrayMethodMutatesReceiver(name ByteArray, isManagedMemory bool) return
 	// ⚠ **`reserve` LEFT THE SAME WAY AT ARR2**, and its two are `arrays.error.reserve-on-a-let-array` and
 	// `.reserve-through-a-live-borrow` — both codes and both COLUMNS predicted from `insert`'s pair and
 	// written down BEFORE the strike ran, so the run could contradict them. It did not.
-	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayResizeMethod) or name.equals(ClearMethod)
+	return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(AppendMethod) or name.equals(AppendMemoryMethod) or name.equals(ArrayResizeMethod)
 end 'arrayMethodMutatesReceiver'
 
 // ⭐ **WHICH PARAMETER THE APPEND REFUSAL NAMES — READ OFF THE SPELLING THE AUTHOR WROTE.** One operation, two
@@ -5041,39 +5050,92 @@ end 'cursorSurfaceMemberNames'
 // WITNESS slot and the `==` OPERATOR name. What retired there is the `Array` SPELLING, which is exactly what
 // a roster is.
 //
-// ⚠⚠ **WHAT STAYED, STAYED FOR A MEASURED REASON, AND EACH IS RECORDED AT ITS OWN LINE OR HERE.** Three
-// classes, and only the first is about this file:
-//   • **A COMPILE-TIME RULE THE CORPUS CANNOT STATE** — `resize` is E3106 (a managed element has no zero),
-//     `first` and `get` are BORROW SOURCES for E3070 (`borrow-liveness.first-is-a-borrow-source`), and `clear`
-//     carries the receiver-write mask that answers *"does `Bag.wipe()` free what the caller borrowed?"* —
-//     MEASURED, five `borrow-liveness` cases stop being refused when `clear` goes, and the rest move column.
-//     ⭐ **RE-MEASURED AT ARR2 AND `clear` HOLDS EXACTLY AS FILED**: struck alone against the ARR2 tip, the
-//     same five (`receiver-method-writing-its-own-field`, `-explicit-self-spelling`, `-writes-transitively`,
-//     `sibling-call-on-the-enclosing-self`, `sibling-call-explicit-self-spelling`) report *"expected a
-//     compile error but compilation succeeded"*. It is on BOTH this bullet and the next, and this one is
-//     the binding half.
-//   • **A DECLARED-OWN-`Array` DEPENDS ON IT** — `count`, `isEmpty`, `clear`, `appendMemory`; see ARR3a's
-//     line below for `appendMemory`, which joined this class by measurement.
-//     ⭐⭐⭐ **ARR2 SPLIT THIS BULLET IN TWO AND CLOSED THE HALF IT WAS NAMED FOR.** It said one thing —
-//     *"a declaration of the user's REPLACES the corpus's for the whole compile INCLUDING stdlib"* — and
-//     that half is simply no longer true: the corpus declaration is RENAMED, not replaced, and a member call
-//     now resolves against the RECEIVER's own declaration, so a stdlib body reaches `stdlib/Array.maxon`
-//     wherever the roster gives a name up. `reserve` retired on exactly that (see its line above).
-//     ⚠ **WHAT IS LEFT IS A DIFFERENT QUESTION WEARING THE SAME WORDS, AND IT IS `ARR4`'S**: this roster is
-//     the ENTIRE surface of a program's own bare `type Array`, which declares nothing but its buffer. Struck
-//     ALONE against this tip, `isEmpty` costs ONE case and `count` costs ELEVEN — every one of them a
-//     program declaring its own container and calling a member only the roster ever gave it — plus, for
-//     `count`, `array-declared-record.a-bare-call-to-a-roster-member-takes-the-roster` reading **99 for an
-//     expected 3**, which is that case's own discriminator saying the roster stopped winning. Neither is a
-//     stdlib-reachability failure any more, and neither is a defect: they are the language question
-//     `ARR4` exists to decide.
-//   • **THE CORPUS BODY IS WRONG OR THE CALL TO IT IS** — `contains` (see its line, a fault), `push` and
-//     `append`; ARR3a's block below records what each one measured, because that third bullet
-//     used to name all eight of the members it was briefed on under ONE diagnosis, and the diagnosis was
-//     wrong about seven — including which BULLET two of them belong to (`get` and `set` are the first).
+// ⭐⭐⭐ **ARR4 IS THE TERMINAL STRIKE, AND ITS PRODUCT IS THIS TABLE: EVERY REMAINING NAME RE-MEASURED
+// ALONE AGAINST ONE TREE, ON ONE DAY, WITH A PROGRAM THAT WAS RUN.** The eleven were struck ONE AT A TIME
+// from the list below — build, full suite, classify — and the counts are FULL-SUITE failures with the
+// expectation-TEXT ones (this refusal rendering its own list, ~25 of them every time) subtracted out. Two
+// left; NINE stayed, and not one of them stayed because nobody tried.
+//
+// | name | failures | of them REAL | what refuses |
+// |---|---|---|---|
+// | `appendMemory` | 26 | **0** | nothing in the corpus — see its own line below, where the PROBE refuses |
+// | `isEmpty` | 26 | 1 | ⭐ **RETIRED** |
+// | `clear` | 33 | 7 | ⭐ **RETIRED**, once the 5 were fixed rather than accepted |
+// | `first` | 30 | 6 | it is a BORROW SOURCE |
+// | `resize` | 30 | 5 | E3106, a lost COW detach, a lost abort code |
+// | `append` | 30 | 5 | the value-set argument admission |
+// | `set` | 35 | 9 | a declared-own `Array`, `.rdata` COW, an emitted-runtime body |
+// | `count` | 48 | 21 | a declared-own `Array`, and the nested-element copy gate |
+// | `push` | 72 | 28 | five mechanisms, including a LEAK and a compiler PANIC |
+// | `get` | 79 | ~55 | it is a BORROW SOURCE |
+// | `managed` | **1442** | — | it is the bridge the whole surface is reached through |
+//
+// ⚠ **THE COUNTS MOVED SINCE ARR2/ARR3c, AND WHICH LANDED RUNG MOVED EACH ONE IS PART OF THE READING.**
+// `appendMemory` went 21-with-1-real to 26-with-NONE because ARR2's module-scoped resolution cured the
+// `stdlib/String.maxon:823` case it was held by; `set` went 38-panics to ZERO panics because ARRG drew the
+// cross-type descriptor edge; `count` and `push` grew because ARR5b added `Bag` cases, not because anything
+// regressed.
+//
+// ⭐⭐ **AND THE LANGUAGE QUESTION `ARR4` WAS MINTED TO DECIDE IS DECIDED: A DECLARED-OWN CONFORMER IS OWED
+// THE RESIDUAL ROSTER AND NOTHING MORE.** A program's own `type Array` (or `Bag` — the marker, not the name,
+// is what admits it) already cannot call `clone`, `last`, `pop`, `insert`, `reserve`, `slice`, `remove`,
+// `capacity`, `contains`, `map`, `hash` or `equals`: twelve names left before this rung and every one of
+// them narrowed that surface. So the roster is not an API a conformer is promised — it is the RESIDUE of
+// what could not retire, and it shrinks. ⇒ a case that used a retiring member INCIDENTALLY is edited
+// (`array-declared-record.the-empty-literal-is-the-empty-container` asks `count()` where it asked
+// `isEmpty()`, and the two `stable-partition-managed-pivot` transcriptions declare the one-line `clear`
+// `stdlib/Array.maxon:363` declares); a case whose SUBJECT is the member is what keeps the member.
+// **`a-bare-call-to-a-roster-member-takes-the-roster` is the second kind** — its whole assertion is that the
+// roster's `count` beats a declaration answering 99, and `count` is the only roster member that can carry it
+// (the roster's `get` hands back an opaque `Element` no concrete return type can be compared against). That
+// is one of `count`'s reasons for staying, and it is why `isEmpty` could go while `count` could not.
+//
+// ⚠⚠ **WHAT EACH OF THE NINE ACTUALLY MEASURED, in the four classes ARR3a's diagnosis split into. A name
+// may be in more than one; every name is in at least one.**
+//   • **A COMPILE-TIME RULE THE CORPUS CANNOT STATE** — `first` and `get` are BORROW SOURCES for E3070
+//     (`emitContainerElementAccessor` mints the borrow; a corpus body cannot, because a borrow does not
+//     COMPOSE through a call). MEASURED at ARR4 with `first` struck: `borrow-liveness.first-is-a-borrow-source`
+//     plus the four `arrays.error.*-through-a-live-borrow` cases — which take their borrow through
+//     `arr.first()` — all stop being refused. `resize` is E3106 (a managed element has no zero):
+//     `array-slots.error.resize-struct-element` and `.error.resize-string-element` stop being refused.
+//     ⛔ **`clear` WAS ON THIS BULLET AND IS NOT ANY MORE, BECAUSE THE RULE IT CARRIED TURNED OUT TO BE
+//     BROKEN EVERYWHERE ELSE.** Its five `borrow-liveness` cases were the receiver-write mask reaching a
+//     caller — and a member the roster does NOT serve never reached it at all, so `Bag.wipe()` over
+//     `items.truncate(0)` was a **measured use-after-free on this tree, printing the free poison**. Fixed at
+//     the summary (`BorrowCheck.StorageReachEdge`), where it protects every already-retired mutator too, and
+//     `clear` then retired with the five green.
+//   • **A CORPUS BODY IS NOT THE SAME OPERATION** — `resize` again, twice over, and this is new at ARR4:
+//     `arrays.every-mutator-detaches-a-view` and `byte-string-literal.negative-resize-aborts` both change
+//     ANSWER (exit 0 → 1, exit 73 → 1). `__managed_resize` COW-detaches and zero-fills; `stdlib/Array.maxon`'s
+//     `reserve` + `setLength` does neither and panics where the runtime aborted. `resize` is the one name on
+//     this list whose corpus body is not a slower spelling of its arm.
+//   • **THE ARGUMENT RULE IS THE OPERATION'S, NOT THE PARAMETER'S** — `append` and `appendMemory`.
+//     `ProgramSignatures.arrayAppendArgAdmits` admits by VALUE SET because append COPIES, which no nominal
+//     `other Self` / `source ElementMemory` parameter can carry. Struck, `append` loses
+//     `arrays.append-empty-to-nonempty`, `.append-wider-element-array-takes-a-narrower-one` and
+//     `.append-reads-the-value-set-never-the-alias-name` to `E3005`. It is not a defect on either side.
+//   • **A DECLARED-OWN `Array` DEPENDS ON IT** — `count` (19 cases) and `set` (2 `stable-partition` plus one
+//     `generic-opaque-element-borrow-liveness`), which is the class the paragraph above rules on: a COST,
+//     paid where the member is incidental, and a REASON where the case's subject is the member itself.
+//   • **THE EMITTED CODE OR THE COMPILER ITSELF BREAKS** — `push` and `set` and `count`. `push` is five
+//     independent mechanisms: `interface-extensions/stdlib-map-on-map-with-function` exits **101**,
+//     `generic-type-nested-array-typealias/static-forward-keeps-its-constructor-feed` PANICS in
+//     `LayoutDescriptor`, four `tuples` cases lose their element coercion, `byte-enum-comparison` loses
+//     enum→`Byte`, and three `generic-opaque-element-borrow-liveness` cases lose a refusal. `set` moves two
+//     `codegen-internals/rdata-global-*-array-cow` goldens at BYTE 0 and breaks
+//     `emitted-runtime-body/error-ordinal-in-an-emitted-body`. `count` drags
+//     `ownership-edge-cases/rc-deep-container-of-containers` and
+//     `generic-type-substitution/bare-generic-name-managed-field-as-array-element` into
+//     `requireOpaqueArrayCopyable` — programs that COPY NOTHING, refused because routing `count()` to the
+//     corpus makes `stdlib/Array.maxon`'s own `clone`→`slice` answerable for their instantiation.
+//     ⚠ **THAT LAST ONE IS NOT THIS RUNG'S TO CURE AND IT IS NOT HYPOTHETICAL EITHER** — the identical
+//     program written over `grid.truncate(0)`, a member that was never on this roster, is refused on `main`
+//     TODAY. It is P1.7 slice 3b-vi-b's deferred half (a per-instance cloner for a managed-element array),
+//     named in the refusal's own text.
 //   • **AN OPAQUE-ELEMENT RECEIVER CANNOT REACH A CORPUS BODY AT ALL** — `set`'s class, and ARR1's finding;
 //     see `set`'s own line on the roster below. ⭐ **ARRG CLOSED TWO OF ITS THREE SHAPES** (the compiler
-//     panic and the loop-store move); the third turned out to belong to the second bullet.
+//     panic and the loop-store move) and ARR4 re-measured the third at THREE cases, all of them the
+//     declared-own bullet above.
 //
 // ⭐⭐⭐ **ARR3a STRUCK ONE MORE — `slice` — AND ITS MEASUREMENT RETIRED THE SENTENCE ABOVE AS MUCH AS THE
 // MEMBER.** It was briefed to strike EIGHT (`get`, `set`, `slice`, `clone`, `push`, `insert`, `append`,
@@ -5194,7 +5256,15 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	names.push(ArraySetMethod)
 	names.push(ArrayFirstMethod)
 	names.push(CountMethod)
-	names.push(IsEmptyMethod)
+	// ⭐⭐⭐ **`isEmpty` LEFT AT ARR4 AND IS THE CHEAPEST STRIKE THE CHAIN HAS TAKEN: 26 failures, ONE of them
+	// real.** The other 25 were this refusal rendering its own list. The one was
+	// `array-declared-record.the-empty-literal-is-the-empty-container`, which asked `isEmpty()` of a program's
+	// own bare `type Array` to say a thing `count()` says just as exactly — an INCIDENTAL use, which is the
+	// half of the declared-own question this rung rules a cost rather than a wall (see the block above).
+	// Probed against the corpus body before and after the strike: `true false false` over an empty, a filled
+	// and a `String`-element container, unchanged, with the exit code pinned. It is the only strike in the
+	// chain that took a RUNTIME with it (`__managed_is_empty`), because it is the only one whose emission no
+	// other surface and no other caller shared.
 	names.push(ArrayPushMethod)
 	// ⭐⭐⭐ **`reserve` LEFT AT ARR2, AND THE CLAIM IT WAS HELD BY WAS TRUE AND HAS BEEN CLOSED.**
 	// X-array-retire recorded: *"a program may declare its OWN `type Array`, and that declaration REPLACES the
@@ -5208,11 +5278,49 @@ function arraySurfaceMemberNames() returns ByteArrayArray
 	// rendering its own list, one the `Function 'reserve'` → `Function 'Array.reserve'` qualification that
 	// `insert` already set the precedent for (`void-call-result.error.array-insert-in-value-position`).
 	names.push(ArrayResizeMethod)
-	names.push(ClearMethod)
+	// ⭐⭐⭐ **`clear` LEFT AT ARR4, AND THE THING THAT HELD IT WAS A USE-AFTER-FREE IN A RULE NOBODY WAS
+	// LOOKING AT.** Struck alone it cost 33 failures, 7 real: two `stable-partition-managed-pivot`
+	// transcriptions (the declared-own class, which now declare the one-line `clear` the library declares) and
+	// **five `borrow-liveness` cases reporting "expected a compile error but compilation succeeded"** — the
+	// receiver-write mask that answers *"does `Bag.wipe()` free what the caller borrowed?"*. Filed at ARR2 as
+	// a compile-time rule the corpus cannot state, and re-measured identical at ARR2 and ARR3c, which is
+	// exactly what a wall looks like from outside.
+	//
+	// ⛔⛔ **IT WAS NOT A WALL. IT WAS A HOLE, AND IT WAS ALREADY OPEN.** The mask reaches a caller only
+	// through `noteReceiverWrite`, which is a ROSTER door — so a member the roster does not serve never set
+	// it, and `SemanticCheck.collectCallParamEdges` could not carry the fact either (it records an edge for an
+	// argument that IS a parameter, and `self.items` is a FIELD of one). MEASURED on the tree ARR4 received,
+	// with no strike at all: `Bag.wipe()` over `items.truncate(0)` — `truncate` has NEVER been on this roster
+	// — compiled clean and printed **4557430888798830399**, `__mm_free`'s poison, where the oracle prints 44.
+	// `insert` (ARR1) and `reserve` (ARR2) had already opened it. `BorrowCheck.StorageReachEdge` closes it for
+	// every member the chain has struck and every one it will, and only then did `clear` retire, with those
+	// five green and two new cases pinning the shape on a member that was never rostered.
+	//
+	// ⚠ It keeps its arm and its `__managed_clear`: `clear` is a `__ManagedMemory` member too
+	// (`bufferSurfaceMemberNames`), so the arm is gated on the buffer surface exactly as `remove`'s and
+	// `slice`'s are, and `stdlib/Array.maxon:363`'s `managed.clear()` is what an `Array` receiver now reaches.
 	names.push(AppendMethod)
 	// ⚠ **THE `Array` SURFACE'S OWN, AND THE ONE THE CORPUS ACTUALLY DECLARES** (`stdlib/Array.maxon:272`).
 	// It sits beside `append` because `append` is its CALLER — `:262`'s whole body is
 	// `appendMemory(other.managed)` — so the roster shows the pair in the order the corpus builds them.
+	//
+	// ⭐⭐⭐ **ARR4 RE-MEASURED IT AT 26 FAILURES AND **ZERO** REAL ONES — AND IT STILL DOES NOT GO, BECAUSE
+	// THE SUITE'S SILENCE WAS THE CORPUS'S BLIND SPOT AND NOT AN ANSWER.** ARR2 cured the one case that used
+	// to hold it (`stdlib/String.maxon:823` under a declared-own `Array`), so every one of the 26 is now this
+	// refusal rendering its own list, plus the `Function 'appendMemory'` → `Function 'Array.appendMemory'`
+	// qualification `insert` and `reserve` already set the precedent for. On the suite alone it is a clean
+	// retirement.
+	//
+	// ⛔ **A PROBE SAYS OTHERWISE, AND THE PREDICTION WAS WRITTEN DOWN BEFORE THE RUN.** `append` stays for the
+	// value-set argument admission (`ProgramSignatures.arrayAppendArgAdmits` — sound *because append COPIES*,
+	// which no nominal parameter type can carry), and `appendMemory` is the SAME operation through the SAME
+	// admission: `parseArrayAppend` serves both from one arm. Predicted: struck, a `Bytes` into a `Smalls`
+	// through `s.appendMemory(b.managed)` becomes `E3005 … expected 'Smalls', got 'Bytes'` at the argument,
+	// naming the formal `source`. MEASURED with the strike, exactly that — where the unstruck compiler runs it
+	// and answers **249**. Retiring one of the pair would leave one rule holding for one of its two spellings,
+	// which is the hazard this project keeps naming, and no committed case would have said so.
+	// `arrays.appendMemory-wider-element-array-takes-a-narrower-one` is that program, added here so the rule
+	// is pinned on BOTH spellings rather than on the one that happened to be exercised.
 	names.push(AppendMemoryMethod)
 	// ⭐⭐ **`contains` LEFT THIS ROSTER AT ARR3b, AND THE FAULT THAT KEPT IT WAS NOT THE ONE FILED HERE.**
 	// X-array-retire recorded *"COMPILES AND THEN FAULTS — 0xC0000005 on `[10].contains(10)`"* and blamed
@@ -49295,10 +49403,6 @@ export type Parser
 			try self.consumeEmptyArgList()
 			return self.emitRuntimeCall(ManagedElementSizeName, args: singletonArgs(arr), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'elementSize'
-		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
-			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(ManagedIsEmptyName, args: singletonArgs(arr), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-		end 'isEmpty'
 		// ⭐ **THE VOID MUTATORS — AND EACH REFUSES VALUE POSITION FROM INSIDE ITS OWN ARM
 		// (`requireVoidMethodIsStatement`, whose header carries the D11 measurement).** The refusal used to
 		// be one call HERE, ahead of them all, which an UNKNOWN name reached too — so a typo was told the
@@ -49316,7 +49420,13 @@ export type Parser
 			let n = try self.parseArrayOneArg(func)
 			return self.emitArrayVoidCall(ManagedResizeName, args: pairArgs(arr, second: n), receiver: arr, range: range)
 		end 'resize'
-		if methodTok.value.equals(ClearMethod) 'clear'
+		// ⭐ **`clear` IS BUFFER-SURFACE ONLY SINCE ARR4**, for `remove`'s reason above and by its gate. The
+		// `Array` spelling is `stdlib/Array.maxon:363`'s, whose whole body is this same `managed.clear()` — one
+		// runtime, reached from source instead of from an arm. What the strike had to wait for was NOT this
+		// arm: it was that a `Bag.wipe()` clearing its own field must still refuse a caller's live borrow, and
+		// the fact only reached the caller through `noteReceiverWrite`, which a corpus-served member does not
+		// pass. `BorrowCheck.StorageReachEdge` carries it now, and carries the measurement.
+		if isManagedMemory and methodTok.value.equals(ClearMethod) 'clear'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 			try self.consumeEmptyArgList()
 			return self.emitArrayVoidCall(ManagedClearName, args: singletonArgs(arr), receiver: arr, range: range)
@@ -56946,8 +57056,59 @@ export type Parser
 	// and the runnable oracle anchors `insert` at the method too.
 	function prependReceiverArg(func IrFunction, callee ByteArray, callAnchor Token, receiverTok Token, id ValueId, immutableName ByteArray, subjectName ByteArray, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray) throws ParseError
 		self.noteReceiverBorrowSubjects(func, callee: callee, display: EmptySourceText, anchor: callAnchor, argColumn: args.count(), id: id, subjectName: subjectName)
+		self.noteStorageReachingCall(func, callee: callee, argColumn: args.count(), id: id, subjectName: subjectName)
 		pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: id, label: EmptySourceText, range: SourceRange.ofToken(receiverTok), immutableName: immutableName)
 	end 'prependReceiverArg'
+
+	// ⭐⭐⭐ **RECORD THAT THIS CALL HANDS A CALLER'S OWN ARRAY TO A DECLARED CALLEE (ARR4).** The write half
+	// of the ordinary-call receiver door: `noteReceiverBorrowSubjects` above records the write against THIS
+	// body's outstanding borrows, and this records the fact a CALLER's borrow needs — that the storage the
+	// receiver denotes belongs to one of this function's parameters, so a callee that writes it writes what
+	// this function was handed. `StorageReachEdge` carries the measurement and the ruling; the fixpoint that
+	// drains it is `SemanticCheck.buildParamMutationSummary`.
+	//
+	// Three gates, and each one is the difference between an edge and a wrong answer:
+	//
+	//   • **THE RECEIVER MUST BE AN ARRAY.** E3070 tracks array elements and nothing else, so a `String` or
+	//     `Set` field write must record NOTHING here — the same line `noteReceiverWrite`'s two
+	//     `receiverStorage: NoParamPositions` call sites draw and `emitCheckedSelfFieldStore`'s own
+	//     `typeIsArrayInstance` gate draws, for the measured reason those record:
+	//     `borrow-liveness.method-writing-a-string-or-set-field-is-not-a-conflict` is a legal program.
+	//   • **THE STORAGE MUST REACH A PARAMETER.** A local, a temporary and a top-level `var` reach no
+	//     caller — `subjectStorageMask` is the one derivation that answers this, shared with the roster
+	//     door, so the two cannot come to disagree about which storages a receiver stands for.
+	//   • **A RECEIVER THAT *IS* A PARAMETER IS ALREADY AN EDGE.** `collectCallParamEdges` records it off
+	//     the argument value itself; a second row would say the same thing twice and travel the same bit.
+	function noteStorageReachingCall(func IrFunction, callee ByteArray, argColumn ParamCount, id ValueId, subjectName ByteArray)
+		if id < func.paramCount 'theArgumentIsTheParameterAndTheEdgeExists'
+			return
+		end 'theArgumentIsTheParameterAndTheEdgeExists'
+
+		if not self.valueIsArrayInstance(func, value: id) 'notAnArrayReceiver'
+			return
+		end 'notAnArrayReceiver'
+
+		let reach = self.subjectStorageMask(func, subjectName: subjectName)
+		if reach == NoParamPositions 'reachesNoParametersStorage'
+			return
+		end 'reachesNoParametersStorage'
+
+		var facts = self.borrowFactsOf(func)
+		facts.storageReach.push(StorageReachEdge.create(callee, argColumn: argColumn, callerParams: reach))
+	end 'noteStorageReachingCall'
+
+	// Is the value at `id` an `Array` instance? The two-part test `typeIsArrayInstance` makes of a DECLARED
+	// type, asked here of a VALUE off the published per-value columns — `TypeNameId` and `GenericInstanceId`
+	// share a numeric space, so the tag is not optional (that function's ⚠ block carries the measurement).
+	function valueIsArrayInstance(func IrFunction, value ValueId) returns bool
+		if value >= func.valueTags.count() 'noPublishedTagForThisValue'
+			return false
+		end 'noPublishedTagForThisValue'
+
+		let tag = try func.valueTags.get(value) otherwise panic("valueIsArrayInstance: valueTags.get OOB at {value} inside its own count()")
+		let nameId = try func.valueNameIds.get(value) otherwise panic("valueIsArrayInstance: valueNameIds.get OOB at {value} — the two per-value columns are pushed in lockstep")
+		return self.signatures.isArrayInstanceAt(tag, nameId: nameId)
+	end 'valueIsArrayInstance'
 
 	// ⭐⭐ **WHICH STORAGES A RECEIVER STANDS FOR — and `self` stands for MORE THAN ONE.** An ordinary
 	// receiver denotes one binding, so it records one site. The ENCLOSING `self` denotes the whole receiver,

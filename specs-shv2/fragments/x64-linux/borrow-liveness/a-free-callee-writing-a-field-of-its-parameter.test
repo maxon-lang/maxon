@@ -1,0 +1,26 @@
+// Test: a-free-callee-writing-a-field-of-its-parameter
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: StringArray.create()}
+	end 'create'
+end 'Bag'
+
+function wipe(bag Bag)
+	bag.items.truncate(0)
+end 'wipe'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	wipe(b)
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)

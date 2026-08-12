@@ -1071,6 +1071,44 @@ end 'main'
 error E3070: <fragment>:5:6: cannot mutate 'arr' via 'reserve' while it is borrowed by 's' (borrowed at line 4)
 ```
 
+<!-- test: error.clear-on-a-let-array -->
+### … and `clear` is the FIFTH, retired at ARR4 with its five borrow cases fixed rather than accepted
+⚠ `clear` shortens the array and RELEASES every element on the way out, so an immutable binding must refuse
+it exactly as `push` and `set` do. Both codes and both COLUMNS were written down from `reserve`'s pair
+BEFORE the strike was run, so the run could disagree with them; it did not.
+
+⛔ **THE MEMBER IS ALSO THE ONE WHOSE RETIREMENT FOUND A USE-AFTER-FREE**, and the direct pair below is not
+what found it: `clear` carried a rule about a write reaching a CALLER through a method's own field, which
+`borrow-liveness.receiver-method-writing-its-own-field-through-a-corpus-member` now pins on a member that
+was never rostered. These two are the local half, and they are the half the corpus declaration's own write
+mask carries.
+```maxon
+function main() returns ExitCode
+	let arr = [1, 2, 3]
+	arr.clear()
+	return arr.count()
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:4:6: cannot pass 'arr' to function that mutates parameter 'self' (in main)
+```
+
+<!-- test: error.clear-through-a-live-borrow -->
+The borrow half of the same pair. `clear` DESTROYS every element, so a live borrow of one is looking at a
+freed record — the same hazard `reserve` has through reallocation, arrived at by the shorter route.
+```maxon
+function main() returns ExitCode
+	var arr = ["hello world this is a long string for heap allocation"]
+	let s = try arr.first() otherwise ""
+	arr.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: <fragment>:5:6: cannot mutate 'arr' via 'clear' while it is borrowed by 's' (borrowed at line 4)
+```
+
 ### Set is bounded by the LIVE LENGTH, not by the capacity
 
 `set` refuses every index at or past `count()`, and the bound is the array's own rather than the storage
@@ -2283,6 +2321,41 @@ function main() returns ExitCode
 	var s = Smalls.create()
 	s.push(150)
 	s.append(b)
+	let first = try s.get(0) otherwise 0
+	let second = try s.get(1) otherwise 0
+	return first + second
+end 'main'
+```
+```exitcode
+249
+```
+
+<!-- test: appendMemory-wider-element-array-takes-a-narrower-one -->
+### … and the rule is the OPERATION's, so the `appendMemory` spelling admits it identically
+⭐⭐ **THE SAME PROGRAM ONE SPELLING OVER, AND IT IS WHY `appendMemory` IS STILL ON THE SYNTHESIZED
+SURFACE.** `ProgramSignatures.arrayAppendArgAdmits` is ONE rule over ONE operation — `parseArrayAppend`
+serves `append`, `appendMemory` and the buffer's `append` from a single arm — and it admits by VALUE SET
+because append COPIES. The corpus declares `appendMemory(source ElementMemory)`, a NOMINAL parameter that
+cannot carry that fact, so serving this call from `stdlib/Array.maxon` refuses it.
+
+⛔ **MEASURED AT ARR4, WITH THE PREDICTION WRITTEN FIRST**: struck from `arraySurfaceMemberNames`,
+`appendMemory` costs **26 suite failures and NOT ONE of them real** — every one this surface's own refusal
+rendering its list. On the suite alone it is a clean retirement. This program is what the suite could not
+see: unstruck it answers **249**, struck it is `E3005 … expected 'Smalls', got 'Bytes'` naming the formal
+`source`. A rule pinned on one of an operation's two spellings is the shape this project keeps finding, and
+this case is the second pin.
+```maxon
+typealias Byte = int(0 to 100)
+typealias Small = int(0 to 200)
+typealias Bytes = Array with Byte
+typealias Smalls = Array with Small
+
+function main() returns ExitCode
+	var b = Bytes.create()
+	b.push(99)
+	var s = Smalls.create()
+	s.push(150)
+	s.appendMemory(b.managed)
 	let first = try s.get(0) otherwise 0
 	let second = try s.get(1) otherwise 0
 	return first + second

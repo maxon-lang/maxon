@@ -390,10 +390,18 @@ export type IrFunction
 	//
 	// Seeded by the PARSER at the same two doors — `Parser.noteReceiverWrite`, which already decides whether
 	// a receiver may be written at all, and `Parser.emitCheckedSelfFieldStore`, the one self-field store —
-	// and closed under the call graph by the SAME least fixpoint over the SAME edges
-	// (`buildParamMutationSummary`), so `wipe()` calling a `reset()` that clears the field inherits the bit.
-	// Read only by `BorrowCheck.mutationSiteWrites`, to answer "does handing this borrowed array — as an
-	// argument or as a RECEIVER — reach a write of it?". Zero for a Std-phase function.
+	// and closed under the call graph by the SAME least fixpoint (`buildParamMutationSummary`), so `wipe()`
+	// calling a `reset()` that clears the field inherits the bit. Read only by
+	// `BorrowCheck.mutationSiteWrites`, to answer "does handing this borrowed array — as an argument or as a
+	// RECEIVER — reach a write of it?". Zero for a Std-phase function.
+	//
+	// ⚠⚠ **IT IS CLOSED OVER A WIDER EDGE SET THAN THE MASK ABOVE, AND THIS COMMENT SAID "THE SAME EDGES"
+	// UNTIL ARR4 MEASURED A USE-AFTER-FREE THROUGH THE DIFFERENCE.** The two doors above are the roster's;
+	// a member served from `stdlib/Array.maxon` reaches neither, and `SemanticCheck.collectCallParamEdges`
+	// records an edge only for an argument that IS a parameter — which `self.items` is not. `wipe()` whose
+	// body is `items.truncate(0)` was therefore summarised as writing nothing. `BorrowCheck.StorageReachEdge`
+	// is the third route the parser records and the fourth row of the table above in edge form; every member
+	// the `Array` retirement chain strikes moves onto it.
 	export var storageWrittenParamMask as ParamPositionMask
 
 	// ⭐ **THE E3070 BORROW FACTS THIS BODY RECORDED (`BorrowCheck`)** — which storages it borrowed an

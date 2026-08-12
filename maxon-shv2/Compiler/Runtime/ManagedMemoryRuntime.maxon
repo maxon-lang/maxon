@@ -284,15 +284,14 @@ export let ManagedSetName = b"__managed_set"
 export let ManagedCountName = b"__managed_count"
 export let ManagedCapacityName = b"__managed_capacity"
 
-// ⭐⭐ **`__managed_element_size(arr) -> element_size@24` — THE RECORD'S OWN STRIDE, HANDED TO THE PROGRAM
-// (`arr.managed.elementSize()`).** It reads the field and nothing else, exactly as `__managed_count` reads
-// `length@8`, and it is the ONE way a program can observe an array's REPRESENTATION.
-//
-// ⚠ **THE VALUE IS SIGNED, AND THAT IS WHAT THE SPECS PIN.** A positive answer is a byte stride, a negative
-// one is `-(bits per element)` — so `ranged-int-bit-packing` reads `-2` off an `Array with int(0 to 3)` and
-// `-1` off an `Array with bool`, and `boundary-16-is-byte` reads `1`. The field is stored as a full machine
-// word, so the two's-complement negative comes back as one and needs no decoding here.
-export let ManagedIsEmptyName = b"__managed_is_empty"
+// ⭐⭐⭐ **`__managed_is_empty` IS GONE (ARR4), AND ITS ABSENCE IS THE ONLY RUNTIME THIS ROSTER STRIKE
+// DELETED.** It answered `length@8 == 0` through two return blocks, and its ONE emitter was
+// `dispatchArrayMethod`'s `isEmpty` arm. `stdlib/Array.maxon:162` says the same thing in Maxon
+// (`managed.length() == 0`) and is now the only provider, so what a program emits for `arr.isEmpty()` is a
+// call to that body over `__managed_count` rather than a second, byte-identical length read of the
+// compiler's own. Every other name struck from `arraySurfaceMemberNames` kept its runtime, because every
+// other one has a non-`Array` caller (`ManagedClearName` is `stdlib/Array.maxon:363`'s AND the BUFFER
+// surface's, which is exactly why `clear` left the `Array` roster and stayed on the buffer's).
 export let ManagedReserveName = b"__managed_reserve"
 export let ManagedResizeName = b"__managed_resize"
 export let ManagedFirstName = b"__managed_first"
@@ -449,6 +448,18 @@ export let ManagedSetByteName = b"__managed_set_byte"
 //     `__managed_set`'s.
 export let ManagedMemGrowName = b"__managed_mem_grow"
 export let ManagedByteAtName = b"__managed_byte_at"
+
+// ⭐⭐ **`__managed_element_size(arr) -> element_size@24` — THE RECORD'S OWN STRIDE, HANDED TO THE PROGRAM
+// (`arr.managed.elementSize()`).** It reads the field and nothing else, exactly as `__managed_count` reads
+// `length@8`, and it is the ONE way a program can observe an array's REPRESENTATION.
+//
+// ⚠ **THE VALUE IS SIGNED, AND THAT IS WHAT THE SPECS PIN.** A positive answer is a byte stride, a negative
+// one is `-(bits per element)` — so `ranged-int-bit-packing` reads `-2` off an `Array with int(0 to 3)` and
+// `-1` off an `Array with bool`, and `boundary-16-is-byte` reads `1`. The field is stored as a full machine
+// word, so the two's-complement negative comes back as one and needs no decoding here.
+//
+// ⚠ This paragraph sat above `ManagedIsEmptyName` — two screens up, decorating a different function — until
+// ARR4 deleted that name and had to decide where it belonged. It is here now, over the name it describes.
 export let ManagedElementSizeName = b"__managed_element_size"
 
 // ⭐⭐ **THE THREE RELOCATORS — `swap`, `shiftRight`, `shiftLeft`.** They are what `stdlib/Array.maxon` builds
@@ -1014,7 +1025,6 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedCount(module)
 	buildManagedCapacity(module)
 	buildManagedElementSize(module)
-	buildManagedIsEmpty(module)
 	buildManagedReserve(module)
 	buildManagedResize(module)
 	buildManagedFirst(module)
@@ -2836,26 +2846,6 @@ function buildManagedCapacity(module StdModule)
 	module.setTerminator(entry, op: StdOp.ret(capacity))
 	module.functions.push(func)
 end 'buildManagedCapacity'
-
-// `__managed_is_empty(arr) -> bool` — length == 0, materialized to 0/1 through two return blocks (there is no
-// `setcc` in the tier).
-function buildManagedIsEmpty(module StdModule)
-	var func = IrFunction.createFromStd(ManagedIsEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-	var entry = module.addBlock(func, label: b"entry")
-	var yes = module.addBlock(func, label: b"yes")
-	var no = module.addBlock(func, label: b"no")
-	emitParams(module, block: entry, count: 1)
-	let length = emitLoadField(module, block: entry, record: 0 as ValueId, offset: ManagedRecordLengthOffset, ids: ids)
-	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: length, b: zero, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: yes.id, elseBlockId: no.id))
-	let trueVal = emitConst(module, block: yes, value: 1, ids: ids)
-	module.setTerminator(yes, op: StdOp.ret(trueVal))
-	let falseVal = emitConst(module, block: no, value: 0, ids: ids)
-	module.setTerminator(no, op: StdOp.ret(falseVal))
-	module.functions.push(func)
-end 'buildManagedIsEmpty'
 
 // `__managed_reserve(arr, n)` — ensure capacity ≥ n. `__managed_grow` is a no-op when capacity already suffices.
 function buildManagedReserve(module StdModule)

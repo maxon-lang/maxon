@@ -130,6 +130,12 @@ value is a run-time record, and here the record is one thing under two names.
 `Self{}` inside `type Array` builds the EMPTY container, which is the answer `<InnerAlias>{}` already
 gets: the sole field IS the record, so an empty literal leaves no slot unwritten. Before this it was
 `E3086 field 'managed' … is not initialized by this literal, and it has no default value`.
+
+⚠ **THE EMPTINESS IS ASKED THROUGH `count()` AND WAS ASKED THROUGH `isEmpty()` UNTIL ARR4 RETIRED THAT
+NAME.** The two say the same thing about this program and only one of them is still on the synthesized
+surface, so the edit costs the case nothing — which is exactly what makes it the INCIDENTAL half of the
+declared-own question (`Parser.arraySurfaceMemberNames` carries the ruling). A declaration of its own
+would have worked too and would have tested the declaration rather than the literal.
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -150,7 +156,7 @@ typealias NumArray = Array with Num
 
 function main() returns ExitCode
 	var a = NumArray.create()
-	if not a.isEmpty() 'notEmpty'
+	if a.count() != 0 'notEmpty'
 		return 1
 	end 'notEmpty'
 	a.push(7 as Num)
@@ -814,7 +820,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — P1.7 provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:22:11: Unsupported: `Array` member 'nosuch' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: a-corpus-served-managed-element-balances-across-a-loop -->
@@ -1205,7 +1211,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:21:7: Unsupported: `Array` member 'truncate' — this value's type is the `type Array` this program declares, and 'truncate' is declared on the `Array` the standard library declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory
+error E2015: <fragment>:21:7: Unsupported: `Array` member 'truncate' — this value's type is the `type Array` this program declares, and 'truncate' is declared on the `Array` the standard library declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/push/resize/append/appendMemory
 ```
 
 <!-- test: error.a-program-only-member-is-not-served-on-a-library-array -->
@@ -1239,5 +1245,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:22:14: Unsupported: `Array` member 'at' — this value's type is the `Array` the standard library declares, and 'at' is declared on the `type Array` this program declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/isEmpty/push/resize/clear/append/appendMemory
+error E2015: <fragment>:22:14: Unsupported: `Array` member 'at' — this value's type is the `Array` the standard library declares, and 'at' is declared on the `type Array` this program declares. Declaring an `Array` of your own does not replace the library's: yours answers for the bare name in YOUR files, the library's goes on answering inside `stdlib/`, and they are two different types — so a member declared on one is not served on a value of the other. What both share is the compiler's synthesized surface, which provides managed/get/set/first/count/push/resize/append/appendMemory
 ```

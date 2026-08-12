@@ -60,7 +60,12 @@ export function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// call site to refuse an immutable binding handed to a parameter the callee writes. It reads the same
 	// index the two summaries above do; a duplicate function name was refused where that index was BUILT,
 	// which is now before this pass runs at all (`PassPipeline.run`, A2l) rather than in the middle of it.
-	let mutationSummary = buildParamMutationSummary(funcNames, edges: callEdges, byCallee: edgesByCallee)
+	// ⭐ **AND THE STORAGE COLUMN IS CLOSED OVER A WIDER SET** — the edges above plus the parser's
+	// `StorageReachEdge`s, which say "the caller's parameter owns the ARRAY this call's receiver denotes".
+	// Built off the same walk's result rather than by a second one, and IDENTICAL to it (same object) for a
+	// program that recorded none. See `collectStorageReachEdges`.
+	let storageEdges = collectStorageReachEdges(callEdges, module: module, funcSignatures: project.funcSignatures, funcIndexByName: funcNames.byName)
+	let mutationSummary = buildParamMutationSummary(funcNames, edges: callEdges, byCallee: edgesByCallee, storageEdges: storageEdges)
 	checkCalls(project, module: module, signatures: signatures, funcNames: funcNames, throwsMap: throwsMap, escapeSummary: escapeSummary, mutationSummary: mutationSummary)
 	// The RETURN half of the interface-widening rule (P1.7a slice 2). After `checkCalls` so a program with
 	// both a bad argument and a bad return reports the argument first, in the order the reader meets them.
@@ -1279,8 +1284,9 @@ export type ParamMutationSummary
 	// One mask per function of the merged module, by function index. Zero for the overwhelming majority.
 	export let masks as ParamPositionMaskArray
 	// ⭐⭐ **THE SECOND COLUMN, ANSWERING THE SECOND QUESTION** — see `IrFunction`'s table, where the pair is
-	// defined and the ruling that separates them is cited. Same index space, same edges, same fixpoint; only
-	// the SEED differs, and it differs in exactly one case (a method writing a field of its own receiver).
+	// defined and the ruling that separates them is cited. Same index space and the same fixpoint; the SEED
+	// differs (a method writing a field of its own receiver) and so does the EDGE SET — this one closes over
+	// `StorageReachEdge`s as well, which is what carries a write through a member the parser does not serve.
 	// Two columns and one index rather than two summaries, for the reason the first one is a dense column
 	// and not a map: the name resolution is already paid for.
 	export let storageMasks as ParamPositionMaskArray
@@ -1371,17 +1377,27 @@ end 'CallParamEdges'
 // backend emits code, so the tie-break could change which body was summarised but not what any program MEANT
 // — which is a fine argument for the answer being harmless and no argument at all for it being made
 // silently. `FunctionNameIndex` refuses the duplicate instead, so there is nothing left to break a tie over.
-function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph) returns ParamMutationSummary
+function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamEdges, byCallee CsrGraph, storageEdges CallParamEdges) returns ParamMutationSummary
 	let funcIndexByName = funcNames.byName
 
-	// ⭐⭐ **TWO SEEDS, ONE GRAPH, ONE FIXPOINT RUN TWICE — and since W58 the graph serves a THIRD seed one
-	// caller up.** The parser records both per-function facts at the same doors (`Parser.noteReceiverWrite`,
+	// ⭐⭐ **TWO SEEDS, ONE FIXPOINT RUN TWICE — and since W58 the graph serves a THIRD seed one caller up.**
+	// The parser records both per-function facts at the same doors (`Parser.noteReceiverWrite`,
 	// `Parser.emitCheckedSelfFieldStore`); the CLOSURE is identical for all of them — "a callee that does X to
 	// what it was handed makes its caller do X to what IT was handed" is one statement about one call graph —
-	// so the edges and the CSR are built ONCE, by `semanticCheck`, and drained here twice and in
-	// `buildEscapeSummary` a third time. That is also what makes the transitive case work without a second
-	// rule: `wipe()` calling a `reset()` that clears the receiver's field inherits the bit through the very
-	// same edge E3019's column travels.
+	// so the walk that finds the edges runs ONCE, in `semanticCheck`, and is drained here twice and in
+	// `buildEscapeSummary` a third time. That is what makes the transitive case work without a second rule:
+	// `wipe()` calling a `reset()` that clears the receiver's field inherits the bit through the very same
+	// edge E3019's column travels.
+	//
+	// ⚠⚠ **THE STORAGE COLUMN'S EDGE SET IS A SUPERSET, AND THIS PARAGRAPH SAID "SAME EDGES" UNTIL ARR4
+	// MEASURED A USE-AFTER-FREE THROUGH THE DIFFERENCE.** E3019 asks about the ARGUMENT (is this value the
+	// caller's parameter?); E3070 asks about the STORAGE (does the caller's parameter OWN the array this
+	// receiver denotes?), and `self.items` answers no to the first and yes to the second. The extra rows are
+	// `StorageReachEdge`'s — recorded by the parser, added by `collectStorageReachEdges`, and deliberately
+	// absent from the owner column, where they would refuse a `let` receiver for a method writing its own
+	// field. The two lists are the same OBJECT for a program that records none — no claim is made about how
+	// often that is (any program reaching `stdlib/String.maxon`'s builder widens it), only that the identity
+	// is exact when it holds, which is what lets the CSR be shared rather than guessed at.
 	// Seeded from the INDEX's own array, not the module's, and the two are the same array: the masks are
 	// addressed by POSITION and `funcIndexByName` resolves a name TO that position, so a seed walk over any
 	// other array would leave every edge pointing at the wrong function's mask (A2l — the staleness
@@ -1394,9 +1410,79 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 	end 'seed'
 
 	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
-	propagateParamMasks(storageMasks, edges: edges, byCallee: byCallee)
+
+	// The CSR over the WIDER set is built HERE and not in `semanticCheck`, because this is its only reader.
+	// A program that recorded no storage-reach edge closes both columns over one relation, so it reuses the
+	// adjacency already built rather than paying for a byte-identical second one — the `is` is the identity
+	// `collectStorageReachEdges` returns its own argument to make answerable, not a length comparison that
+	// would be true by coincidence.
+	let oneRelationForBothColumns = storageEdges is edges
+	var storageByCallee = byCallee
+	if not oneRelationForBothColumns 'aWiderRelation'
+		storageByCallee = storageEdges.byCallee(funcNames.functions.count())
+	end 'aWiderRelation'
+
+	propagateParamMasks(storageMasks, edges: storageEdges, byCallee: storageByCallee)
 	return ParamMutationSummary.create(masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName)
 end 'buildParamMutationSummary'
+
+// ⭐⭐⭐ **THE STORAGE COLUMN'S EDGE SET: the argument-is-a-parameter edges above, PLUS the parser's
+// receiver-owns-a-parameter's-array edges (ARR4).** `StorageReachEdge` carries the measurement — a
+// use-after-free that compiled clean with the suite green over it — and the ruling that keeps these rows off
+// E3019's column.
+//
+// ⚠ **THE BASE SET IS RETURNED UNCHANGED WHEN THERE IS NOTHING TO ADD**, which is not an optimisation
+// dressed as a shortcut: the two columns then genuinely close over one relation and the caller's `is` test
+// says so, where a copy would be a second list nothing keeps equal to the first.
+function collectStorageReachEdges(base CallParamEdges, module MaxonModule, funcSignatures FuncSignatureMap, funcIndexByName FuncIndexByName) returns CallParamEdges
+	var anyRecorded = false
+	for func in module.functions 'anyToAdd'
+		anyRecorded = anyRecorded or func.borrowFacts.storageReach.count() > 0
+	end 'anyToAdd'
+
+	if not anyRecorded 'theTwoColumnsCloseOverOneRelation'
+		return base
+	end 'theTwoColumnsCloseOverOneRelation'
+
+	var edges = CallParamEdges.create()
+	for k in 0 upto base.count() 'copyTheSharedRows'
+		let callee = try base.calleeIndices.get(k) otherwise panic("collectStorageReachEdges: calleeIndices.get OOB at {k} inside count()")
+		let caller = try base.callerIndices.get(k) otherwise panic("collectStorageReachEdges: callerIndices.get OOB at {k} — the four columns are parallel by construction")
+		let callerParam = try base.callerParams.get(k) otherwise panic("collectStorageReachEdges: callerParams.get OOB at {k} — the four columns are parallel by construction")
+		let calleeParam = try base.calleeParams.get(k) otherwise panic("collectStorageReachEdges: calleeParams.get OOB at {k} — the four columns are parallel by construction")
+		edges.record(callee, callerIndex: caller, callerParam: callerParam, calleeParam: calleeParam)
+	end 'copyTheSharedRows'
+
+	for i in 0 upto module.functions.count() 'eachFunc'
+		let func = try module.functions.get(i) otherwise panic("collectStorageReachEdges: functions.get OOB at {i}")
+		for reach in func.borrowFacts.storageReach 'eachReach'
+			addStorageReachEdges(reach, callerIndex: i, callerParamCount: func.paramCount, funcSignatures: funcSignatures, funcIndexByName: funcIndexByName, edges: edges)
+		end 'eachReach'
+	end 'eachFunc'
+	return edges
+end 'collectStorageReachEdges'
+
+// One parser-recorded reach, expanded into one edge per caller parameter that owns the receiver's storage.
+// Slotted through the shared `argSlotPosition` for `addCallParamEdges`' reason — a call summarised against
+// one slotting and checked against another is the disagreement this whole rung is written to avoid — and the
+// label is empty because a prepended receiver never carries one.
+//
+// A callee with no signature is skipped exactly as it is there: it is compiler-internal or undeclared, and
+// either way has no mask for a bit to travel to.
+function addStorageReachEdges(reach StorageReachEdge, callerIndex FuncIndex, callerParamCount ParamCount, funcSignatures FuncSignatureMap, funcIndexByName FuncIndexByName, edges CallParamEdges)
+	let sig = try funcSignatures.get(reach.callee) otherwise return
+	let calleeIndex = try funcIndexByName.get(reach.callee) otherwise return
+	let pos = argSlotPosition(sig.paramNames, argIndex: reach.argColumn, label: EmptySourceText)
+	if pos >= sig.paramCount() 'unslottable'
+		return
+	end 'unslottable'
+
+	for param in 0 upto callerParamCount 'eachCallerParam'
+		if maskHasParam(reach.callerParams, param: param) 'thisParameterOwnsTheStorage'
+			edges.record(calleeIndex, callerIndex: callerIndex, callerParam: param, calleeParam: pos)
+		end 'thisParameterOwnsTheStorage'
+	end 'eachCallerParam'
+end 'addStorageReachEdges'
 
 // Walk every call in the program and record one edge per argument that IS one of the caller's own
 // parameters. A caller with no parameters contributes none (nothing of its own can be passed on), which is

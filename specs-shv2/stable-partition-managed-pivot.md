@@ -72,6 +72,13 @@ type Array uses Element implements BuiltinArrayLiteral
 		return Self{}
 	end 'create'
 
+	// `stdlib/Array.maxon:363`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
+	// container declared here declares it exactly as the library does — the transcription stays in step
+	// with `driftQuicksort.maxon`, whose receiver is that library `Array`.
+	export function clear()
+		managed.clear()
+	end 'clear'
+
 	export function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
 		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")
 		pivotHold.clear()
@@ -221,6 +228,13 @@ type Array uses Element implements BuiltinArrayLiteral
 	export static function create() returns Self
 		return Self{}
 	end 'create'
+
+	// `stdlib/Array.maxon:363`'s own one-line body. `clear` left the synthesized surface at ARR4, so a
+	// container declared here declares it exactly as the library does — the transcription stays in step
+	// with `driftQuicksort.maxon`, whose receiver is that library `Array`.
+	export function clear()
+		managed.clear()
+	end 'clear'
 
 	export function stablePartition(lo Small, hi Small, pivotIndex Small, scratch Self, pivotHold Self, cmp Cmp) returns Small
 		let pivotAtHome = try managed.get(pivotIndex) otherwise panic("get OOB at pivot")

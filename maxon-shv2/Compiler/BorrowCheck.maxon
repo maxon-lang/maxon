@@ -181,6 +181,52 @@ end 'MutationSite'
 
 export typealias MutationSiteArray = Array with MutationSite
 
+// ⭐⭐⭐ **"THE CALLER'S PARAMETER `p` OWNS THE ARRAY THIS CALL'S RECEIVER DENOTES" — the SECOND edge kind
+// the storage column is closed over, and the one without which a retired member's write stops reaching
+// the caller (ARR4).**
+//
+// `SemanticCheck.collectCallParamEdges` records an edge only for an argument that IS one of the caller's
+// own parameters, because that is the whole of what E3019's column needs. E3070's column needs more: a
+// write reaches a caller through any array the caller's parameter OWNS, and `self.items` is such an array
+// while being a FIELD LOAD rather than a parameter value. While every array mutator was a roster arm the
+// gap was invisible — `Parser.noteReceiverWrite` stamped the enclosing method's bit directly, off a
+// `receiverStorage` mask the parser had already derived. A member served from `stdlib/Array.maxon` reaches
+// no such door, and nothing carried the fact.
+//
+// ⛔ **MEASURED — a use-after-free with the suite green over it.** `type Bag`'s `wipe()` whose body is
+// `items.truncate(0)`, called while the caller holds `let s = try b.items.get(0) otherwise ""`, compiled
+// clean and printed **4557430888798830399** (`__mm_free`'s `0x3F` poison read back as a byte length) where
+// the oracle prints 44. `truncate` has never been on `Parser.arraySurfaceMemberNames`, so this was live on
+// `main` with no roster strike at all; `insert` (ARR1) and `reserve` (ARR2) opened it and `clear` (ARR4)
+// would have widened it. `borrow-liveness.receiver-method-writing-its-own-field-through-a-corpus-member`
+// and `.a-free-callee-writing-a-field-of-its-parameter` are the two programs, seen RED before the edge.
+//
+// ⚠ **STORAGE-ONLY, AND THAT IS THE RULING RATHER THAN A CONSERVATISM.** Feeding this edge into
+// `writtenParamMask` would make a caller's `let b` an E3019 for a method writing its own field — the
+// answer `specs-shv2/self-keyword.md:self-with-params` and
+// `parameter-mutation:let-struct-with-array-field-to-mutating-method-ok` both pin the other way. See
+// `IrFunction`'s two-mask table, whose first row is exactly this write.
+//
+// ⚠ **IT SAYS NOTHING ABOUT WHETHER THE CALLEE WRITES** — that is the fixpoint's answer, arrived at
+// through this edge, and asking it here would need a summary that does not exist until every file is
+// parsed. `borrow-liveness.a-corpus-served-read-only-member-is-not-a-conflict` is the over-rejection
+// guard: `items.capacity()` records an edge and no bit ever travels it.
+export type StorageReachEdge
+	// The callee this receiver was handed to, as the call op spells it.
+	export let callee as ByteArray
+	// The argument column the RECEIVER fills in the call op's own columns — the index `argSlotPosition`
+	// maps to a parameter POSITION of the callee, exactly as `MutationSite.argColumn` is.
+	export let argColumn as ParamCount
+	// Which of the CALLER's parameters own the storage that receiver denotes (`Parser.subjectStorageMask`).
+	export let callerParams as ParamPositionMask
+
+	export static function create(callee ByteArray, argColumn ParamCount, callerParams ParamPositionMask) returns StorageReachEdge
+		return Self{callee: callee, argColumn: argColumn, callerParams: callerParams}
+	end 'create'
+end 'StorageReachEdge'
+
+export typealias StorageReachEdgeArray = Array with StorageReachEdge
+
 // ⭐ **THE PER-FUNCTION BORROW FACTS — written by the PARSER, read HERE.** They ride on `IrFunction`
 // for the reason `writtenParamMask` does: the parser holds the only view in which a binding exists,
 // and the merged module is the only place the whole program does.
@@ -198,9 +244,15 @@ export type BorrowFacts
 	export var pending as PendingBorrowArray
 	export var borrows as BorrowRecordArray
 	export var mutations as MutationSiteArray
+	// ⚠ **THE ONE COLUMN HERE THAT IS NOT ABOUT THIS BODY'S OWN BORROWS** — see `StorageReachEdge`. It
+	// rides on the same record for the same reason the rest do (the parser holds the only view in which a
+	// binding exists) and, unlike them, it is recorded whether or not this body borrows anything: the
+	// borrow it protects belongs to a CALLER. It is empty for every function that calls no array member on
+	// storage a parameter owns, which is nearly all of them, so the shared-empty gate still pays for itself.
+	export var storageReach as StorageReachEdgeArray
 
 	export static function create() returns BorrowFacts
-		return Self{subjects: VarInfoArray.create(), pending: PendingBorrowArray.create(), borrows: BorrowRecordArray.create(), mutations: MutationSiteArray.create()}
+		return Self{subjects: VarInfoArray.create(), pending: PendingBorrowArray.create(), borrows: BorrowRecordArray.create(), mutations: MutationSiteArray.create(), storageReach: StorageReachEdgeArray.create()}
 	end 'create'
 end 'BorrowFacts'
 
