@@ -1683,3 +1683,81 @@ end 'main'
 ```stdout
 hello 5
 ```
+
+<!-- test: error.a-borrow-taken-out-of-a-borrow-holds-the-root -->
+### A borrow of a borrow holds the ROOT storage, not just the value it was read from
+`c.current()` reads an element out of the CURSOR, and the cursor is itself a standing borrow of
+`xs`. Keyed only on `c`, the element's borrow expires with `c`'s own last use while the element it
+names still points into `xs` — measured **0xC0000005** on exactly this program, which
+`dispatchArrayMethod`'s `createCursor` arm predicted in as many words and left to this rung. A
+borrow therefore composes: minting one on storage that is ITSELF borrowed mints one on its base
+too, up to the root.
+```maxon
+function main() returns ExitCode
+	var xs = ["hello world this is a long string for heap allocation"]
+	let c = try xs.managed.createCursor() otherwise return 1
+	let s = c.current()
+	xs.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/error.a-borrow-taken-out-of-a-borrow-holds-the-root.test:6:5: cannot mutate 'xs' via 'clear' while it is borrowed by 's' (borrowed at line 5)
+```
+
+<!-- test: a-composed-borrow-expires-at-its-own-last-use -->
+### A composed borrow is still NLL — it expires with the borrower, not with the chain
+The same chain with the element read BEFORE the write is safe and must stay compilable: composing
+the borrow up to the root may not turn the root into a lexical lock. This is the over-rejection
+guard for the case above.
+```maxon
+function main() returns ExitCode
+	var xs = ["hello world this is a long string for heap allocation"]
+	let c = try xs.managed.createCursor() otherwise return 1
+	let s = c.current()
+	print("[{s}]\n")
+	xs.clear()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[hello world this is a long string for heap allocation]
+```
+
+<!-- test: error.a-try-merge-keeps-every-link-of-a-composed-chain -->
+### A `try … otherwise` merge retargets EVERY link of a composed borrow, not just one
+`try p.items.get(0) otherwise ""` binds the merge PHI, not the accessor's result, so each link the
+composition minted has to move onto that phi. Retargeting only the first left the OTHER link keyed
+on a value no binding claims — and which link survived depended on push order alone. Here the
+surviving question is the INTERMEDIATE one: `p` is itself an element borrowed out of `arr`, and
+`p.items.clear()` frees what `s` names.
+```maxon
+typealias StringArray = Array with String
+
+type Holder
+	export var items as StringArray
+
+	static function create() returns Self
+		return Self{items: ["alpha string long enough for heap allocation"]}
+	end 'create'
+end 'Holder'
+
+typealias HolderArray = Array with Holder
+
+function main() returns ExitCode
+	var arr = HolderArray.create()
+	arr.push(Holder.create())
+	let p = try arr.get(0) otherwise Holder.create()
+	let s = try p.items.get(0) otherwise ""
+	p.items.clear()
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/error.a-try-merge-keeps-every-link-of-a-composed-chain.test:19:10: cannot mutate 'p' via 'clear' while it is borrowed by 's' (borrowed at line 18)
+```

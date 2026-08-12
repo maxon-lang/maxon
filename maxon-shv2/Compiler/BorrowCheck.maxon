@@ -42,6 +42,21 @@
 //     op (`ExpireBorrows`, :164-171, with no empty-set guard); neither is ported. v1 is debugged,
 //     not fast.
 //
+// ⭐⭐ **A BORROW COMPOSES THROUGH A BORROW, AND NOT THROUGH A CALL — the two halves of "the borrow set
+// does not compose", which were ONE SENTENCE until they were measured apart (ARR-borrow).**
+//
+//   • **THROUGH A BORROW: closed here**, at `composePendingBorrowOntoBases`. An element read out of storage
+//     that is itself borrowed is a borrow of that storage's base too, to the root. It is a real
+//     use-after-free — measured `0xC0000005` — and the mint is the only place with the binding in hand.
+//   • **THROUGH A CALL: deliberately NOT modelled, and it is not a hazard.** `arr.last()` is served from
+//     `stdlib/Array.maxon`, whose `returns Element` is a borrowed opaque return, so the CALLEE discharges a
+//     real `+1` (`Parser.emitOwnedValueReturn` → `coOwnBorrowedOpaque`) and the caller holds an owned value
+//     that cannot dangle. What is missing is a LANGUAGE RULE rather than a reference: `/specs/borrow-checker.md`
+//     pins E3070 on that program and the runnable oracle raises it — the bootstrap RETAINS too and refuses
+//     anyway. shv2 therefore ACCEPTS `arr.last()` under a live write where the oracle refuses it, today,
+//     with no roster strike involved. `Parser.arraySurfaceMemberNames`' first bullet carries that
+//     measurement and the design of the column that closes it; it is the half `get`/`first` retire behind.
+//
 // ⚠ **WHAT IS NOT MODELLED, AND IT IS THE REFERENCES' LIMIT TOO: a LOOP makes source order lie.**
 // A use textually BEFORE a mutation but inside the same loop body happens after it at run time,
 // and a token-ordered last use cannot say so. Both references approximate with a linear op index
@@ -447,6 +462,81 @@ function reportFirstLiveBorrow(project Project, func IrFunction, facts BorrowFac
 end 'reportFirstLiveBorrow'
 
 // The one indexed read of the borrow column, so the two walks above share its bound message.
-function borrowAt(facts BorrowFacts, index CsrIndex) returns BorrowRecord
+export function borrowAt(facts BorrowFacts, index CsrIndex) returns BorrowRecord
 	return try facts.borrows.get(index) otherwise panic("BorrowCheck: borrows.get OOB at {index} — the subject buckets are built over this very column")
 end 'borrowAt'
+
+// The one indexed read of the pending-claim column — `borrowAt`'s twin, and for its reason: four walks
+// index this list (`Parser.retargetPendingBorrow`, `.attachPendingBorrows`, and the two halves of the
+// composition rule below) and each had spelled its own bound message.
+export function pendingAt(facts BorrowFacts, index PendingBorrowCount) returns PendingBorrow
+	return try facts.pending.get(index) otherwise panic("BorrowCheck: pending.get OOB at {index} — every walk of this list is bounded by its own count()")
+end 'pendingAt'
+
+// ⭐⭐⭐ **THE COMPOSITION RULE: A BORROW OF STORAGE THAT IS ITSELF BORROWED IS A BORROW OF ITS BASE TOO,
+// UP TO THE ROOT.** Given the entries `Parser.mintPendingBorrow` has just pushed from `firstPending` on,
+// push one more for every storage those subjects are themselves borrowed out of.
+//
+// ⛔ **MEASURED 0xC0000005 WITHOUT IT, on a program `dispatchArrayMethod`'s `createCursor` arm predicted in
+// as many words and left to this rung**: `let c = try xs.managed.createCursor()`, `let s = c.current()`,
+// `xs.clear()`, `print(s)`. `c`'s borrow of `xs` is NLL and dies at `c`'s last use — line 4, above the
+// write — while `s`, keyed on `c` alone, names an element still living inside `xs`. Neither borrow refused
+// the write and the element was freed under `s`.
+// `borrow-liveness.error.a-borrow-taken-out-of-a-borrow-holds-the-root` is that program, seen RED first.
+//
+// ⭐ **IT IS THE ONE HOME OF THE RULE, AND IT IS THE MINT AND NOT THE RESOLVER.** Composing here means a
+// composed borrow is an ORDINARY `BorrowRecord` from the instant it exists — same bucket, same activation
+// order, same NLL expiry, same diagnostic — so `reportFirstLiveBorrow` needs no second notion of a borrow
+// and `a-composed-borrow-expires-at-its-own-last-use` (the over-rejection guard) holds by construction
+// rather than by a second rule agreeing with the first. v1 composes at the other end, as a per-VALUE
+// `baseOf` chain re-derived per function in the Std IR (`StdLiveness.maxon:236-267`); shv2 has the binding
+// in hand at the mint and no liveness pass to re-derive it in, so the chain is walked once, where it is
+// created, over a relation the parser already holds.
+//
+// ⚠ **IT IS A WALK OVER PENDINGS AND NOT A `baseOf` CHAIN, because a binding may borrow MORE THAN ONE
+// STORAGE** — `let s = match m 'p' first gives try a.get(0) … second gives try b.get(0) … end 'p'` leaves
+// `s` borrowing both (`attachPendingBorrows`'s ⚠ block, which is why that walk runs past its first match).
+// A single-successor `baseOf` would silently drop one of the two arms, waving through a write to it.
+//
+// ⚠ **A FUNCTION THAT HOLDS NO BORROW PAYS ONE COMPARISON.** `facts.borrows` is empty in almost every body,
+// so the inner walk does nothing and the outer loop runs exactly once over the entry just pushed — the same
+// reading `functionHoldsABorrow`'s gate states, at the one door that cannot be gated on it (a mint happens
+// precisely when no borrow exists yet).
+export function composePendingBorrowOntoBases(facts BorrowFacts, firstPending PendingBorrowCount, borrowValue ValueId, range SourceRange)
+	var scan = firstPending
+	while scan < facts.pending.count() 'eachLinkOfTheChain'
+		let borrowedStorage = try facts.subjects.get(pendingAt(facts, index: scan).subject) otherwise panic("composePendingBorrowOntoBases: subjects.get OOB at the subject of pending {scan} — a subject id is minted by `Parser.borrowSubjectIdOf` against this very column")
+		for k in 0 upto facts.borrows.count() 'eachBorrowOfThisBody'
+			let base = borrowAt(facts, index: k)
+
+			// Object identity, the key `borrowSubjectIdOf` mints its ids under: this is "is the storage that
+			// element came out of the SAME BINDING some earlier borrow named as its borrower?".
+			if not (base.borrower is borrowedStorage) 'someOtherBorrower'
+				continue
+			end 'someOtherBorrower'
+
+			// Already on this chain. The test is what makes the walk terminate at all — a `var` rebound to
+			// something borrowed out of its own borrower is a CYCLE in this relation, and without it the loop
+			// would push for ever. It also keeps one base from being pushed twice when two links share it.
+			if pendingCarriesSubject(facts, from: firstPending, subject: base.subject) 'alreadyOnTheChain'
+				continue
+			end 'alreadyOnTheChain'
+
+			// The BORROW LINE stays the reading's own — the element the user is about to hold was read HERE,
+			// and `borrowed at line N` must send them to the line they wrote, never to the base's own mint.
+			facts.pending.push(PendingBorrow.create(base.subject, borrowValue: borrowValue, borrowLine: range.line))
+		end 'eachBorrowOfThisBody'
+		scan = scan + 1
+	end 'eachLinkOfTheChain'
+end 'composePendingBorrowOntoBases'
+
+// Does the chain built from `from` on already name `subject`? See the ⚠ block above — this is the
+// termination condition, not a tidiness check.
+function pendingCarriesSubject(facts BorrowFacts, from PendingBorrowCount, subject BorrowSubjectId) returns bool
+	for k in from upto facts.pending.count() 'eachLinkSoFar'
+		if pendingAt(facts, index: k).subject == subject 'alreadyNamed'
+			return true
+		end 'alreadyNamed'
+	end 'eachLinkSoFar'
+	return false
+end 'pendingCarriesSubject'

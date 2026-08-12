@@ -5102,9 +5102,32 @@ end 'cursorSurfaceMemberNames'
 // may be in more than one; every name is in at least one.**
 //   • **A COMPILE-TIME RULE THE CORPUS CANNOT STATE** — `first` and `get` are BORROW SOURCES for E3070
 //     (`emitContainerElementAccessor` mints the borrow; a corpus body cannot, because a borrow does not
-//     COMPOSE through a call). MEASURED at ARR4 with `first` struck: `borrow-liveness.first-is-a-borrow-source`
-//     plus the four `arrays.error.*-through-a-live-borrow` cases — which take their borrow through
-//     `arr.first()` — all stop being refused. `resize` is E3106 (a managed element has no zero):
+//     COMPOSE through a call). REPRODUCED at ARR-borrow with `first` struck, and the OBSERVATION holds
+//     exactly — 34 failures, **SIX** of them real (not four): `borrow-liveness.first-is-a-borrow-source`
+//     plus **FIVE** `arrays.error.*-through-a-live-borrow` cases (`appendMemory`, `insert`, `set`,
+//     `reserve`, `clear`), all *"expected a compile error but compilation succeeded"*.
+//     ⛔⛔ **BUT THE CAUSE WRITTEN HERE WAS WRONG, AND IT IS THE DIFFERENCE BETWEEN A UAF AND A RULE.**
+//     This bullet said the corpus route leaves a hazard unreported. IT DOES NOT: a corpus body's
+//     `returns Element` is a BORROWED opaque return, so `emitOwnedValueReturn`'s `borrowedOpaqueReturn` arm
+//     runs `coOwnBorrowedOpaque` and the callee hands back a real `+1` — the same thing that turned four
+//     `for … in` refusals into plain safe programs when the loop took the cursor form (see this file's
+//     header). MEASURED with `first` struck, on `first-is-a-borrow-source`'s own program and on a
+//     slot-reuse hardening of it (build a 40-byte String at RUNTIME, `first()`, `clear()`, refill short,
+//     `clear()`, refill long, read back): **exit 0, 40 bytes, no fault, no 101**. What the strike loses is
+//     therefore not memory safety — it is a LANGUAGE RULE. `/specs/borrow-checker.md` pins it and the
+//     runnable oracle enforces it: the bootstrap RETAINS on `get` and refuses the program anyway.
+//     ⭐⭐ **AND THE RULE IS ALREADY BROKEN ON `main`, WITH NO ROSTER STRIKE AT ALL.** `last` left this
+//     roster at ARR-pre2 and its corpus body forwards to `get`, so `let s = try arr.last() otherwise ""`
+//     then `arr.push(…)` — which the ORACLE refuses with E3070 — **compiles and runs on this tree**. It is
+//     the same missing mechanism, reachable today, and it is what identifies that mechanism precisely: not
+//     a UAF cure but a whole-program *"which parameter's container is my return value an ELEMENT of"*
+//     column, seeded by the parser where a returned value still carries a pending borrow, closed over the
+//     ARGUMENT edges `buildParamMutationSummary` already walks (which is what carries `get`'s answer to
+//     `first` and `last`), and settled at the call site against a callee whose DECLARED return is a bare
+//     type parameter. That last gate is what keeps it to the oracle's own boundary, MEASURED: the oracle
+//     accepts a user forwarder `firstOf(a StringArray) returns String` and a user method `Bag.head()
+//     returns String` over the identical write, and both are excluded by it. `resize` is E3106 (a managed
+//     element has no zero):
 //     `array-slots.error.resize-struct-element` and `.error.resize-string-element` stop being refused.
 //     ⛔ **`clear` WAS ON THIS BULLET AND IS NOT ANY MORE, BECAUSE THE RULE IT CARRIED TURNED OUT TO BE
 //     BROKEN EVERYWHERE ELSE.** Its five `borrow-liveness` cases were the receiver-write mask reaching a
@@ -5188,8 +5211,12 @@ end 'cursorSurfaceMemberNames'
 //     not the third. Struck alone, the three `array-realloc-dangling-ref` cases stopped being refused at all
 //     (*"expected a compile error but compilation succeeded"*): the arm mints the E3070 borrow through
 //     `emitContainerElementAccessor` and a corpus body cannot, because a borrow does not COMPOSE through a
-//     call. That is the transitive-liveness rung `dispatchArrayMethod`'s `createCursor` arm already names (v1
-//     does it as a per-value `baseOf` chain, `StdLiveness.maxon:236-267`), and it is not a line here.
+//     call. ⚠ **ARR-borrow SPLIT THAT SENTENCE IN TWO AND CLOSED ONE HALF.** *"A borrow does not compose"*
+//     was TWO mechanisms wearing one name: through a BORROW (a borrow read out of storage that is itself
+//     borrowed) — a real, measured `0xC0000005`, now closed at the mint
+//     (`BorrowCheck.composePendingBorrowOntoBases`); and through a CALL, which is this line and is NOT a
+//     UAF at all (the corpus body retains — see the FIRST bullet above, which carries the measurement, the
+//     `last` divergence it also found, and the design of the column that closes it).
 //   • **`set`** — ⛔ **THE RANGE-CHECK BLOCKER THIS BULLET NAMED IS CLOSED (ARRR) AND `set` STILL DOES NOT
 //     GO. ARR1 STRUCK IT AND MEASURED WHY: AN OPAQUE-ELEMENT RECEIVER CANNOT REACH A CORPUS BODY AT ALL.**
 //     Both range halves arrive for free through `recordOpaqueArgRangeChecks` — verified struck, the E3005 and
@@ -30862,7 +30889,14 @@ export type Parser
 		// The id is minted FIRST because `borrowSubjectIdOf` is what copy-on-writes the facts off the shared
 		// empty — so the push below is always into this function's own.
 		let subject = self.borrowSubjectIdOf(func, subjectName: subjectName)
+		let firstPending = func.borrowFacts.pending.count()
 		func.borrowFacts.pending.push(PendingBorrow.create(subject, borrowValue: borrowValue, borrowLine: range.line))
+
+		// ⭐⭐ **AND THE STORAGE IT CAME OUT OF MAY ITSELF BE BORROWED, in which case this is a borrow of that
+		// base too** — the composition rule, stated once in `BorrowCheck.composePendingBorrowOntoBases` and
+		// applied at the ONE mint every borrow in the language leaves through, so a source of borrows added
+		// later composes without being told. It carries the measured 0xC0000005 this closes.
+		composePendingBorrowOntoBases(func.borrowFacts, firstPending: firstPending, borrowValue: borrowValue, range: range)
 	end 'mintPendingBorrow'
 
 	// ⭐⭐ **MOVE A PENDING BORROW ONTO THE VALUE A `try` MERGE HANDS BACK.** `let s = try arr.get(0)
@@ -30874,20 +30908,29 @@ export type Parser
 	// correctly get none: `otherwise return`/`throw`/`panic` leave the accessor's own result as the try's
 	// value, and so does a propagating `try`.
 	function retargetPendingBorrow(func IrFunction, from ValueId, to ValueId)
-		// Scanned from the END and stopped at the match, for the reason `attachPendingBorrows` states: a
-		// value id is DEFINED ONCE, so at most one entry can carry it, and the one a merge is retargeting was
-		// almost always minted by the very expression the merge closes. Both walks are over a list one
-		// statement long (`dropUnclaimedPendingBorrows`), so neither can grow with the body.
+		// Scanned from the END, because the entry a merge is retargeting was almost always minted by the very
+		// expression the merge closes. The walk is over a list one statement long
+		// (`dropUnclaimedPendingBorrows`), so it cannot grow with the body.
+		//
+		// ⚠⚠ **IT RUNS ON PAST THE FIRST MATCH, AND THIS SAID THE OPPOSITE UNTIL ARR-borrow.** The old reason
+		// was *"a value id is DEFINED ONCE, so at most one entry can carry it"* — true of the id, and never
+		// the claim that mattered. SEVERAL entries carry ONE id whenever a borrow COMPOSES
+		// (`BorrowCheck.composePendingBorrowOntoBases`): a read out of borrowed storage files one pending per
+		// link of the chain, all keyed on the same accessor result. Stopping at the first left every other
+		// link pointing at the pre-merge id, which no binding then claims — so `try p.items.get(0)
+		// otherwise ""` silently dropped one end of its own chain and the write to it was waved through.
+		// Which end survived depended only on push order, which is not a rule.
+		// It is the same correction, for the same reason, that `attachPendingBorrows`'s ⚠ block already
+		// carries about ITS walk.
 		var k = func.borrowFacts.pending.count()
 		while k > 0 'each'
 			k = k - 1
-			let pending = try func.borrowFacts.pending.get(k) otherwise panic("retargetPendingBorrow: pending.get OOB at {k} inside count()")
+			let pending = pendingAt(func.borrowFacts, index: k)
 			if pending.borrowValue == from 'thisOne'
 				// The entry is REBUILT rather than written through: a `for … in` element is an immutable binding
 				// and a field store through one is E2013, which is the language's rule and not a limitation to
 				// route around.
 				try func.borrowFacts.pending.set(k, value: PendingBorrow.create(pending.subject, borrowValue: to, borrowLine: pending.borrowLine)) otherwise panic("retargetPendingBorrow: pending.set OOB at {k}, the index just read")
-				return
 			end 'thisOne'
 		end 'each'
 	end 'retargetPendingBorrow'
@@ -30971,7 +31014,7 @@ export type Parser
 		var k = facts.pending.count()
 		while k > 0 'findTheValueThisNameBinds'
 			k = k - 1
-			let pending = try facts.pending.get(k) otherwise panic("attachPendingBorrows: pending.get OOB at {k} inside count()")
+			let pending = pendingAt(facts, index: k)
 			if pending.borrowValue != boundValue 'someOtherValue'
 				continue
 			end 'someOtherValue'
@@ -50019,16 +50062,21 @@ export type Parser
 			// cannot dangle — and wrong here, because what the cursor holds is a position into the CONTAINER,
 			// and a container can be emptied under a position whatever its elements are.
 			//
-			// ⚠⚠ **THE LOCK IS ONE HOP DEEP, AND THE MISSING HOP IS E3070's RATHER THAN THIS TYPE'S.** A value
-			// read OUT of a cursor borrows the CURSOR (`emitContainerElementAccessor`, one function down), and
-			// the borrow set does not compose — so after the cursor's own last use its lock on the source
-			// expires while that value still points inside it: `let s = c.current()` then `xs.clear()` then
-			// `print(s)` faults. It is NOT this rung's to fix, and that is measured rather than assumed: the
-			// identical shape over a nested `Array with (Array with String)` — `outer.get(0)` then
-			// `.get(0)` then `outer.clear()` — faults the same way with no cursor anywhere. Composing borrows
-			// transitively is a change to what E3070 means for every container (v1 does it as a per-value
-			// liveness EXTENSION, `StdLiveness.maxon:236-267`'s `baseOf[result] = receiver` chain), so it is a
-			// rung and not a line here.
+			// ⭐⭐ **THE LOCK USED TO BE ONE HOP DEEP AND IS NOT ANY MORE (ARR-borrow).** This block read *"a
+			// value read OUT of a cursor borrows the CURSOR, and the borrow set does not compose — so after the
+			// cursor's own last use its lock on the source expires while that value still points inside it:
+			// `let s = c.current()` then `xs.clear()` then `print(s)` faults"*, and called it a rung rather than
+			// a line. It was right about the fault — **0xC0000005, reproduced on that exact program before the
+			// cure** — and the rung is done: a borrow minted on storage that is ITSELF borrowed now mints one on
+			// its base too, up to the root (`BorrowCheck.composePendingBorrowOntoBases`, called from the ONE
+			// mint). Nothing here changed; the cursor's borrow simply became a link in a chain rather than the
+			// end of one. `borrow-liveness.error.a-borrow-taken-out-of-a-borrow-holds-the-root` is that program
+			// and `.a-composed-borrow-expires-at-its-own-last-use` is its over-rejection guard.
+			//
+			// ⚠ **THE NESTED-CONTAINER SHAPE THE OLD NOTE CITED AS THE SAME FAULT CANNOT BE WRITTEN TODAY**, so
+			// it is no longer evidence either way: `Array with (Array with String)` is refused outright at
+			// `stdlib/Array.maxon:145` (*"a managed-element array … per-instance cloner is a later slice"*,
+			// P1.7 slice 3b-vi-b). When that slice lands, the composition rule is already in front of it.
 			//
 			// ⚠ **A SOURCE NOTHING CAN NAME MINTS NOTHING, AND THAT IS SAFE FOR A SECOND REASON.**
 			// `makeBuffer().managed.createCursor()` has no subject to key a borrow on — and needs none: no
