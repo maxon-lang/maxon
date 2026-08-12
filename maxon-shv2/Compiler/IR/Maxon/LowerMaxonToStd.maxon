@@ -335,6 +335,14 @@ end 'maxonCmpOpToStdPred'
 // a function TYPE and an interface REQUIREMENT both describe their parameters without saying how they are
 // passed, and the sweep records by-reference columns per DECLARATION. `paramIsByRef` answers false for it,
 // which is the right answer rather than a fallback.
+//
+// ⚠ **IT IS A SECOND SPELLING OF `EmptySourceText`, AND THE REASON IS A LANGUAGE RESTRICTION RATHER THAN A
+// PREFERENCE — MEASURED, because the PBR-2 review tried the alias first.** `let NoNamedCallee =
+// EmptySourceText` is `error E2004: Undefined constant 'EmptySourceText'` at this line: a module-level `let`
+// initializer cannot name another module's constant, though a function BODY in this same file reads it
+// freely (`currentFuncName: EmptySourceText`, in `create`). So the duplicate literal is forced here, and the
+// two spellings are of the EMPTY SLICE — a value with no state to drift. Fold this into `EmptySourceText`
+// the day a top-level initializer can name one.
 let NoNamedCallee = b""
 
 function paramFloatMask(paramTypes MaxonTypeArray) returns ArgFloatMask
@@ -3088,7 +3096,6 @@ type MaxonToStdLowering
 		if not self.anyArgCrossesTheFloatDomain(argIds, paramTypes: paramTypes) 'everyArgAlreadyInItsDomain'
 			return argIds
 		end 'everyArgAlreadyInItsDomain'
-
 
 		var crossed = ValueIdArray.create()
 		for i in 0 upto argIds.count() 'eachArg'

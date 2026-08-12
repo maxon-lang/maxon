@@ -2266,7 +2266,7 @@ export typealias TypeParamOwnerMap = Map with (TypeParamId, TypeParamOwner)
 //
 // ⚠ **IT USED TO BE READ OFF `ParamConsumeInfo.isInstanceMethod()`, AND THAT WAS A LOSSY KEY.** It happened to
 // be exact while the recognizer saw only `self`-headed stores: `Self{f: p}` feeds were marked for receiverless
-// functions only (`scanConsumeBits`'s `detectFieldStores`) and array/field-reassign feeds only under a literal
+// functions only (`scanBodyParamFacts`'s `detectFieldStores`) and array/field-reassign feeds only under a literal
 // `self` token, so "is there a receiver" and "which sink" agreed by accident. A STATIC that pushes its
 // type-parameter argument into a LOCAL `Array with T` and hands that array to the `Self` it returns feeds
 // callee storage with no receiver at all, and there the accident stops holding — so the fact is recorded
@@ -8747,7 +8747,6 @@ export type ProgramSignatures
 		end 'publishKeys'
 	end 'closeByRefForwarding'
 
-
 	// ⭐ **THE CALLEE'S BY-REFERENCE FACTS, or `allByValue`** — the door a CALL SITE asks once, then slots each
 	// argument against `info.paramNames`. `allByValue` (no recorded entry) is the overwhelming common case, so
 	// the call site's fast path is a single `match` with nothing to slot. `consumeOf`'s twin.
@@ -8756,10 +8755,6 @@ export type ProgramSignatures
 		return CalleeByRefParams.takesByRef(info)
 	end 'byRefOf'
 
-	// ⭐ **DOES ANY FUNCTION IN THE PROGRAM TAKE A PARAMETER BY REFERENCE?** The whole-program skip, read by
-	// the parser before it prescans a body for cell-resident locals: with nothing by-reference anywhere, no
-	// local can ever need a cell for a call, and the prescan is not worth walking. One `count()`, and it is
-	// zero for every program written before this rung.
 	// ⭐⭐ **DOES ANY FUNCTION SPELLED `bareName` TAKE A PARAMETER BY REFERENCE?** — the door the parser's
 	// LOCAL-CELL prescan asks, and the reason it is a BARE-name question is that the prescan reads its callee
 	// out of tokens (see `byRefBareNames`). Over-approximate by construction: every `reassign` in the program

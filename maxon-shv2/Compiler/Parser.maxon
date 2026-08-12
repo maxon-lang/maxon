@@ -1769,7 +1769,7 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 // The module-level shared empty CALL-ALIGNED parameter-name list the declaration sweep leaves in hand for a
 // declaration it does not walk the parameters of — a NON-GENERIC instance method, which needs neither the
 // consume scan (its direct field stores are the callee-side refusal's business, `detectFieldStores: false`)
-// nor the opaque-parameter record (it has no `uses` list for a parameter to name). `scanConsumeBits` returns
+// nor the opaque-parameter record (it has no `uses` list for a parameter to name). `scanBodyParamFacts` returns
 // at once on an empty list, which is exactly the "not walked" behaviour, so the one shared array is what
 // makes that single call site able to serve every declaration shape. Never mutated; ONE allocation for the
 // whole compile, the discipline every `sharedEmpty*` here states.
@@ -11013,11 +11013,11 @@ export type Parser
 		// ⚠ **THE OPAQUE-`T` FEED SHAPES ARE SCANNED FOR ON BOTH SIDES, and W10 is why.** They used to be probed
 		// only under a literal `self` token, which made them an instance method's business by construction; a
 		// `static` that pushes its type-parameter argument into a LOCAL `Array with T` and hands that array to
-		// the `Self` it returns feeds just as durably, so `scanConsumeBits` probes for them whichever kind of
+		// the `Self` it returns feeds just as durably, so `scanBodyParamFacts` probes for them whichever kind of
 		// declaration it was handed.
 		//
 		// ⚠ **ONE CALL, NOT A BRANCH, AND THE NON-GENERIC INSTANCE METHOD IS COVERED BY ITS EMPTY NAME LIST
-		// RATHER THAN BY A GATE.** `scanConsumeBits` returns immediately on an empty `paramNames`, and that is
+		// RATHER THAN BY A GATE.** `scanBodyParamFacts` returns immediately on an empty `paramNames`, and that is
 		// exactly the declaration shape the walk above declines to read — so the two spellings of "do not scan
 		// this one" have become one.
 		//
@@ -11191,7 +11191,6 @@ export type Parser
 		return callAlignedFrom(self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true))
 	end 'callAlignedInstanceParams'
 
-
 	// ⭐ **THE CONSUME SCAN (P1.4a wave 2)** — one entry per function whose body MOVES a parameter into
 	// durable storage (a struct-literal field value). A peek-only walk of the body from `bodyStart` to its
 	// matching `end`: it tracks the bracket stack (a struct literal is `{…}`, a call is `(…)`), and when a
@@ -11316,13 +11315,13 @@ export type Parser
 						// heap (`Box with String`) and borrows it otherwise (`Box with Point`, byte-identical to A).
 						// The sink is the CONSTRUCTED VALUE: the store lands in a field of the `Self` this call
 						// RETURNS, so the caller's value owns it and this frame must not be enrolled its owner.
-						try feeds.set(idx, value: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue)) otherwise panic("scanConsumeBits: feeds.set OOB at {idx} despite idx < paramNames.count()")
+						try feeds.set(idx, value: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue)) otherwise panic("scanBodyParamFacts: feeds.set OOB at {idx} despite idx < paramNames.count()")
 						any = true
 					end 'typeParamField' else 'plainField'
 						// A NON-type-parameter field store (a monomorphic `Self{value: v}` into an `Integer` field,
 						// or a direct `String`/struct field) — the callee OWNS it whatever the concrete type, so the
 						// plain consume bit is set. A scalar argument makes it inert at the call site anyway.
-						try consumed.set(idx, value: true) otherwise panic("scanConsumeBits: consumed.set OOB at {idx} despite idx < paramNames.count()")
+						try consumed.set(idx, value: true) otherwise panic("scanBodyParamFacts: consumed.set OOB at {idx} despite idx < paramNames.count()")
 						any = true
 					end 'plainField'
 				end 'isParam'
@@ -11385,8 +11384,7 @@ export type Parser
 		end 'takesOrForwardsAByRefParam'
 	end 'scanBodyParamFacts'
 
-
-	// The type-parameter-feed array `scanConsumeBits` starts from: the SHARED empty array outside a generic
+	// The type-parameter-feed array `scanBodyParamFacts` starts from: the SHARED empty array outside a generic
 	// type (no feed is possible, ⚡ no allocation), or a fresh `count`-long array pre-filled with `none` inside
 	// one (which the feed branch then `set`s). Single-assignment, so it needs no cross-block `var`.
 	function initialTypeParamFeeds(count ParamCount, genericScope bool) returns TypeParamFeedArray
@@ -11421,7 +11419,7 @@ export type Parser
 	// records a POSITION and this walks it once the index is whole. That is also what makes the answer
 	// independent of declaration order, which a descriptor parameter must be.
 	//
-	// The same framework `scanConsumeBits` uses (`opensBlockAt` / `closesBlockAt`) delimits each method body;
+	// The same framework `scanBodyParamFacts` uses (`opensBlockAt` / `closesBlockAt`) delimits each method body;
 	// a named `function <ident>` opens one (a closure is `function(` — no name, no `end`). Peek-only: the
 	// cursor is positioned from the site and the `Parser` this runs on parses nothing.
 	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap)
@@ -12598,7 +12596,7 @@ export type Parser
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			let kind = self.kindAt(q)
 			// `<receiver>.push/set/insert(param)` is a DIRECT feed wherever its receiver lives (W10) — probed at
-			// every token, exactly as `scanConsumeBits` probes it, so the two seedings cannot disagree about what a
+			// every token, exactly as `scanBodyParamFacts` probes it, so the two seedings cannot disagree about what a
 			// direct feed is.
 			_ = self.markOpaqueArrayMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds)
 			if kind == TokenKind.self 'selfToken'
@@ -12975,7 +12973,7 @@ export type Parser
 	// `,`, so the walk reads the list as finished and never sees `item`. A short parameter list is a
 	// well-formed one, so nothing downstream notices: what is lost is the per-parameter OWNERSHIP fact those
 	// walks exist to publish. MEASURED (`specs-shv2/param-default-list-walks.md`): with `item` dropped from
-	// `scanConsumeBits`' view, a `Box uses T` constructor's type-parameter FEED went unrecorded, the concrete
+	// `scanBodyParamFacts`' view, a `Box uses T` constructor's type-parameter FEED went unrecorded, the concrete
 	// call site did not consume the `String` it passed, caller and box both owned it — and the program died
 	// with an access violation, against a control identical but for the default that answered 6.
 	//
@@ -27019,7 +27017,7 @@ export type Parser
 
 					// The BOX, freed explicitly rather than through `emitDecref` — see `allocateCell` for why the
 					// tag-routed drop would run the CONTENT's destructor over an 8-byte cell.
-					self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(binding.cellValue), range: SourceRange.ofToken(anchor))
+					self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(binding.boundValue), range: SourceRange.ofToken(anchor))
 					continue
 				end 'aCellOwnsTwoThings'
 
@@ -54085,13 +54083,13 @@ export type Parser
 	// VALUE is a different machine class is collapsed here so the load is minted at the right register class.
 	function emitCellLoad(binding VarInfo, range SourceRange) returns ValueId
 		let cellType = self.resolveFloatAliasType(binding.varType)
-		return self.emitIndirectLoad(cellType, box: binding.cellValue, offset: CellContentOffset, storageType: self.wordSlotStorageType(cellType), range: range)
+		return self.emitIndirectLoad(cellType, box: binding.boundValue, offset: CellContentOffset, storageType: self.wordSlotStorageType(cellType), range: range)
 	end 'emitCellLoad'
 
 	// ⭐⭐ **WRITE A CELL-RESIDENT BINDING (PBR-2)** — the rebind, which for this binding kind is a store and
 	// not a `Scope.setValue`. That is the whole of what makes a caller observe a callee's `x = 99`.
 	function emitCellStore(binding VarInfo, value ValueId, range SourceRange)
-		self.emitIndirectStore(binding.cellValue, offset: CellContentOffset, value: value, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(binding.varType)), range: range)
+		self.emitIndirectStore(binding.boundValue, offset: CellContentOffset, value: value, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(binding.varType)), range: range)
 	end 'emitCellStore'
 
 	function emitIndirectStore(box ValueId, offset ByteOffset, value ValueId, storageType MaxonType, range SourceRange)
@@ -54275,7 +54273,7 @@ export type Parser
 				// here, which is also how the call site learns its request was taken.
 				if self.cellArgumentTokenIndex == nameIndex 'handOverTheCell'
 					self.cellArgumentTokenIndex = NoCellArgumentRequest
-					return binding.cellValue
+					return binding.boundValue
 				end 'handOverTheCell'
 
 				return self.emitCellLoad(binding, range: SourceRange.ofToken(tok))
@@ -54468,7 +54466,7 @@ export type Parser
 		// is every capture in the corpus — `closure-capture-by-ref`'s `let x = 42` included, because a `let`
 		// never needs a cell.
 		if binding.isCellBinding 'capturedByItsCell'
-			let cell = self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(self.captureSlotFor(name, enclosingValue: binding.cellValue, captureType: MaxonType.integer)), storageType: self.wordSlotStorageType(MaxonType.integer), range: range)
+			let cell = self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: MaxonType.integer)), storageType: self.wordSlotStorageType(MaxonType.integer), range: range)
 			return self.emitIndirectLoad(captureType, box: cell, offset: CellContentOffset, storageType: self.wordSlotStorageType(captureType), range: range)
 		end 'capturedByItsCell'
 
@@ -58270,8 +58268,13 @@ export type Parser
 		// between two arguments of one call. Asked inside the loop they were an allocation per argument of
 		// every call in the program; hoisted, a program that uses no pass-by-reference pays one `count()` per
 		// call and builds nothing.
-		let calleeByRef = self.signatures.byRefOf(callee) if self.signatures.programTakesAParamByRef() else CalleeByRefParams.allByValue
-		let calleeForwardingIsLive = self.signatures.forwardingIsLiveFor(callee)
+		// ⚡ ONE gate for BOTH, and the second half was ungated until the PBR-2 review: `forwardingIsLiveFor`
+		// is a `ByteArray`-keyed map lookup returning a boxed optional, so every call in every program paid it
+		// — while `calleeTakesArgumentByRef` cannot read it at all once `calleeByRef` is `allByValue`, which
+		// is exactly when the gate is shut. Hoisting it under the same `count()` is answer-preserving.
+		let programUsesByRef = self.signatures.programTakesAParamByRef()
+		let calleeByRef = self.signatures.byRefOf(callee) if programUsesByRef else CalleeByRefParams.allByValue
+		let calleeForwardingIsLive = programUsesByRef and self.signatures.forwardingIsLiveFor(callee)
 
 		var argIndex = 0 as ParamCount
 		while true 'argLoop'
@@ -58311,6 +58314,19 @@ export type Parser
 			// fresh call result, or a binding that is not cell-resident (a `let`, which `checkImmutableArgToMutatingParam`
 			// refuses with E3019 a phase later — the spill keeps the IR well-formed until that diagnostic is
 			// reported, exactly as every other recovery here does).
+			//
+			// ⚠⚠ **`let` IS NOT THE ONLY NON-CELL BINDING THAT LANDS HERE, AND THE OTHERS ARE NOT REFUSED —
+			// THEY LOSE THE WRITE SILENTLY.** A MODULE-LEVEL `var` and a SELF-FIELD alias are both mutable, so
+			// no diagnostic fires, and neither is cell-resident: `collectCellLocalNames` decides LOCAL names
+			// and `declareCellLocal` installs a cell only at a local `var`'s declaration. Each therefore
+			// spills its VALUE into a scratch cell the callee then writes and the caller never reads back.
+			// MEASURED on this tree: `var g = 0` at module level plus `setTo99(g)` prints `g=0`, and a
+			// `setTo99(count)` on a self field leaves the field 0.
+			//
+			// ⚠ **IT IS NOT A PBR-2 REGRESSION — the C# bootstrap answers `g=0` and `field=0` on the identical
+			// two programs**, so the gap is the language's, shared with the reference, and predates the cell
+			// design. It is recorded HERE because this is the line that decides it, and because the shape the
+			// two storage kinds need is a WRITE-BACK or a cell of their own — a rung, not a clause.
 			let passed = try self.byRefArgumentValue(value, byRefPosition: byRefPosition, handedTheCell: handedTheCell, anchor: valueTok)
 
 			// ⭐ **E3077's ARGUMENT DOOR.** `f(x)` may write `x` — whether it does is the callee's
@@ -59989,25 +60005,9 @@ export type Parser
 		return index == 0 or self.kindAt(index - 1) != TokenKind.dot
 	end 'rebindsANameAt'
 
-	// ⭐ **IS THE TOKEN AT `index` A BARE NAME STANDING ALONE AS A CALL ARGUMENT?** — PBR-2's forwarding probe
-	// (`scanBodyParamFacts`), and the token-level twin of what `argWasBareName` asks of the real parse: an
-	// argument names a binding only if it IS that name and nothing else.
-	//
-	// Four conditions, and the bracket one is what tells an ARGUMENT from a grouping paren's contents or a
-	// struct literal's field value: the innermost open bracket must be a `(`. A struct literal is `{…}` and is
-	// excluded by it, which is right — a field store is a CONSUME (the column above), never a forward.
-	//
-	// ⚠ **A PARAMETER'S NAME MAY BE A KEYWORD (D8)**, so this asks `tokenCanBeAName` rather than
-	// `== identifier`, for the reason `consumedParamAfterColon` states with its measurement. Claiming nothing
-	// extra: the name is looked up in the parameter list by the caller, and a keyword naming no parameter is
-	// dropped exactly as an unrelated identifier is.
-	//
-	// ⚠ It over-detects a GROUPING paren whose whole contents are one name — `(x)` reads as an argument. The
-	// edge it records then carries whatever name preceded the paren, which no function wears, so
-	// `noteForwardCallee` drops it and only the parameter's own `forwarded` bit is set. Harmless: a forwarded
-	// bit with no live edge never widens anything.
 	// ⭐ **THE BRACKET BOOKKEEPING BOTH PEEK-ONLY BODY WALKS KEEP** — `scanBodyParamFacts` (the sweep's, over a
-	// whole declaration) and `localNeedsACell` (the parse's, over one binding's remaining scope). They ask
+	// whole declaration) and `collectCellLocalNames` (the parse's, over one body, ONCE — never over one
+	// binding's remaining scope, which is the Θ(vars × tokens) shape that header rejects by name). They ask
 	// different questions and need the identical state, and a second copy of a push/pop pair is a second chance
 	// for the two columns to fall out of lockstep — at which point `openCallees`' top names the wrong call and
 	// a forwarding edge is recorded against a function that never saw the argument.
@@ -60168,6 +60168,23 @@ export type Parser
 		return after == TokenKind.comma or after == TokenKind.rightParen
 	end 'argumentIsExactlyANameAt'
 
+	// ⭐ **IS THE TOKEN AT `index` A BARE NAME STANDING ALONE AS A CALL ARGUMENT?** — PBR-2's forwarding probe
+	// (`scanBodyParamFacts`), and the token-level twin of what `argWasBareName` asks of the real parse: an
+	// argument names a binding only if it IS that name and nothing else.
+	//
+	// Four conditions, and the bracket one is what tells an ARGUMENT from a grouping paren's contents or a
+	// struct literal's field value: the innermost open bracket must be a `(`. A struct literal is `{…}` and is
+	// excluded by it, which is right — a field store is a CONSUME (the column above), never a forward.
+	//
+	// ⚠ **A PARAMETER'S NAME MAY BE A KEYWORD (D8)**, so this asks `tokenCanBeAName` rather than
+	// `== identifier`, for the reason `consumedParamAfterColon` states with its measurement. Claiming nothing
+	// extra: the name is looked up in the parameter list by the caller, and a keyword naming no parameter is
+	// dropped exactly as an unrelated identifier is.
+	//
+	// ⚠ It over-detects a GROUPING paren whose whole contents are one name — `(x)` reads as an argument. The
+	// edge it records then carries whatever name preceded the paren, which no function wears, so
+	// `noteForwardCallee` drops it and only the parameter's own `forwarded` bit is set. Harmless: a forwarded
+	// bit with no live edge never widens anything.
 	function bareCallArgumentAt(index TokenIndex, braceStack BoolArray) returns bool
 		if braceStack.count() == 0 or self.braceStackInnermostIsBrace(braceStack) 'notInsideACallsParens'
 			return false
