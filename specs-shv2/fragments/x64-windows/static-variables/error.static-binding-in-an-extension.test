@@ -1,0 +1,25 @@
+// Test: error.static-binding-in-an-extension
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged
+	function tag() returns Integer
+end 'Tagged'
+
+type Widget implements Tagged
+	export var v as Integer
+end 'Widget'
+
+extension Tagged
+	static let LIMIT = 4
+
+	export function tag() returns Integer
+		return 1
+	end 'tag'
+end 'Tagged'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:13:9: Unsupported: a `let` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it in the `type` body as a `static let`

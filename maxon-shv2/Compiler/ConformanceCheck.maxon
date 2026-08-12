@@ -1146,6 +1146,12 @@ end 'checkOneConformance'
 // binding either. So R6 changes which sentence the parenthesized spelling gets, never accept into reject.
 // The forward-compatibility obligation is recorded where it can be acted on — `Parser.conformanceUsesArity`,
 // which also states why the transitive count cannot simply be walked at parse time today.
+//
+// ⚠ **W60 CHANGES THE NEIGHBOURING CASE AND DELIBERATELY NOT THIS ONE.** An inherited `uses` name is now
+// bound when the SAME `implements` clause also conforms to the interface that declared it
+// (`implements Cursor with Pos, BiCursor`); it is still bound by nothing when the clause writes the
+// argument on the DESCENDANT instead (`implements BiCursor with Pos`), which is the shape above and which
+// both references also refuse. See `collectInterfaceMethods` for the measurement that separates them.
 function checkOneInterfaceConformance(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
 	if entry.withArgs.count() < iface.associatedTypeNames.count() 'unboundAssociatedType'
 		let unbound = try iface.associatedTypeNames.get(entry.withArgs.count()) otherwise panic("checkOneInterfaceConformance: associatedTypeNames.get OOB at {entry.withArgs.count()} below count {iface.associatedTypeNames.count()}")
@@ -1182,7 +1188,7 @@ end 'checkOneInterfaceConformance'
 // INSTANCE method) and wrong about how far that reaches: the fix is to make the lookup receiver-aware
 // (`signatureMatches`' staticness test), not to stop asking.
 function checkInterfaceMethods(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
-	let collected = collectInterfaceMethods(project, iface: iface, associatedTypeNames: iface.associatedTypeNames, boundTypeNames: entry.withArgs)
+	let collected = collectInterfaceMethods(project, conformance: conformance, entry: entry, iface: iface)
 
 	var missing = StringArray.create()
 	var wrongSignature = StringArray.create()
@@ -1201,8 +1207,8 @@ function checkInterfaceMethods(project Project, functionsByName FunctionNameInde
 	end 'hasWrongSignature'
 end 'checkInterfaceMethods'
 
-// The interface's requirements, transitively through `extends`, each SUBSTITUTED under this conformance's
-// associated-type bindings.
+// The interface's requirements, transitively through `extends`, each SUBSTITUTED under what this
+// conformance bound the associated types of the interface that DECLARED it.
 //
 // ⭐⭐ **THE WALK ITSELF IS `IrInterface.interfaceWitnessSlots` AND IS NO LONGER WRITTEN HERE (R10c).** It
 // answers "which requirement is slot `i` of this interface?", and the witness-table BUILDER and the
@@ -1219,54 +1225,168 @@ end 'checkInterfaceMethods'
 // `formatMethodSig` both read it) and deliberately NOT the bootstrap's, which substitutes twice off one
 // dict — `ResolveInterfaceTypeName` inside `SignatureMatches` and `FormatResolved` at the message
 // (`2-Parser.cs:3577`, `MlirType.cs`). Under the two-site shape a substitution that reaches the comparison
-// and misses the message yields a CORRECT VERDICT WITH A WRONG SENTENCE, which no positive test can see.
+// and misses the message yields a CORRECT VERDICT WITH A WRONG SENTENCE, which no positive test can see —
+// which is why `error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type` asserts
+// the SENTENCE of a still-rejected program and not merely its code.
 //
-// The binding pair is the ROOT conformance's, threaded unchanged into every parent: an `extends` parent
-// that re-declares the same `uses` NAME is substituted by it (substitution is by name, which is the only
-// vocabulary the two interfaces share), and a parent declaring a name of its own is left denoting itself —
-// exactly as before this rung. `boundTypeNames` is indexable at every position `associatedTypeNames` has,
-// because `checkOneInterfaceConformance` returned early otherwise.
+// ⭐⭐ **A REQUIREMENT IS SUBSTITUTED UNDER TWO PAIRS, NOT ONE, AND THE SECOND IS W60's WHOLE CONTENT.**
+// The CLAUSE pair is the entry the walk started from — the pre-existing rule, and it is the one that
+// survives verbatim: an `extends` parent that RE-DECLARES the same `uses` NAME is substituted by it,
+// because substitution is by name and that spelling is the only vocabulary the two interfaces share
+// (`interface Derived extends Base uses Element`, which
+// `associated-types.extends-projected-associated-type-single-conformer` writes and which a
+// declaring-interface-only rule REGRESSES — measured, mid-rung, as
+// `E3016 … take(e float) (expected take(e Element))`).
 //
-// An interface declaring no associated type — every conformance in the corpus outside
-// `specs-shv2/associated-types.md` — hands the slot list straight back, so the common path allocates
-// nothing beyond the walk's own list. That guard sits HERE rather than inside `substituteAssociatedTypes`
-// (where it used to, and where it is now unreachable) because only here can it also skip rebuilding the
-// ARRAY, which is the larger of the two allocations it saves.
-function collectInterfaceMethods(project Project, iface IrInterface, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns CollectedInterfaceMethodArray
+// The DECLARING pair is consulted for what the clause pair does not spell: a name introduced by an
+// ANCESTOR that the root interface does not re-declare is bound by this same type's conformance to that
+// ancestor. `Element` is *Cursor's* `uses` name, so what it denotes is what `implements … Cursor with Pos`
+// bound it to — whichever entry of the clause wrote that, and in whatever order.
+//
+// ⚠ **CLAUSE FIRST, DECLARER SECOND, AND THE ORDER IS NOT ARBITRARY.** When both spell one name they are
+// the same conformance seen from two ends, except in the one shape E3111 exists for —
+// `implements Child with Whole, Parent with Real`, where they DISAGREE. Taking the clause's answer is what
+// keeps the two routes to `Parent`'s slot comparing DIFFERENT requirements, which is what lets them select
+// different members and be caught; declarer-first collapses both routes onto one binding and E3111 can no
+// longer fire. That is also the whole reason this is a two-pair lookup rather than the bootstrap's single
+// clause-wide dictionary, which cannot represent the disagreement at all.
+//
+// ⛔ **THE MISSING HALF WAS INVISIBLE BECAUSE TWO INDIVIDUALLY-CORRECT RULES NEVER MET.**
+// `Parser.conformanceUsesArity` counts an interface's OWN `uses` names and deliberately not its inherited
+// ones, so for `implements … BiCursor` the root's `associatedTypeNames` is EMPTY and the guard below took
+// the "nothing to substitute" path — while the slot list it hands back has, since R10c, included every
+// requirement `Cursor` declares. MEASURED: `type Walker implements Cursor with Pos, BiCursor` was
+// `E3016 … current() returns Pos (expected current() returns Element)`, and striking `, BiCursor` — which
+// REMOVES a conformance — made the same program compile and print 7. Conforming to a DESCENDANT destroyed
+// the binding of its ANCESTOR. The bootstrap accepts both spellings (it merges the whole clause into one
+// dictionary); shv2 keeps the entries apart, which is what lets E3111 tell two routes to one slot apart, so
+// the join has to be made HERE, per slot, rather than by flattening the clause.
+//
+// ⚖ **AND THE ABSENCE OF A SIBLING ENTRY BINDS NOTHING — MEASURED AGAINST BOTH REFERENCES, NOT ASSUMED.**
+// `implements BiCursor` alone and `implements BiCursor with Pos` are BOTH rejected by the bootstrap with the
+// identical `expected get() returns Element` sentence shv2 already gives them, so neither an inherited-arity
+// rule (v1's `findInheritedBindings`, which shv2 does not have — see `Parser.conformanceUsesArity`) nor a
+// silent default belongs here: a name no entry of this clause binds is left denoting ITSELF, which is what
+// `error.inherited-uses-name-unparenthesized-is-still-a-signature-error` pins and what this rung must not move.
+//
+// ⚠ **THE FAST PATH IS NOW "THIS CLAUSE BINDS NOTHING AT ALL", WHICH IS BOTH WIDER AND EXACT.** It has to
+// move, because "the ROOT interface declares no associated type" is precisely the wrong question after the
+// paragraph above. Asking whether ANY entry wrote a `with` argument is one pass over a handful of entries,
+// allocates nothing, needs no interface lookup, and is a sufficient condition by construction: every binding
+// this function can apply comes from one of those lists. Every conformance in the corpus outside
+// `specs-shv2/associated-types.md` binds nothing, so it still hands the slot list straight back.
+function collectInterfaceMethods(project Project, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface) returns CollectedInterfaceMethodArray
 	let slots = interfaceWitnessSlots(project.interfaces, iface: iface)
-	if associatedTypeNames.count() == 0 'noAssociatedTypes'
+	if conformanceBindsNothing(conformance) 'noBindingsAnywhere'
 		return slots
-	end 'noAssociatedTypes'
+	end 'noBindingsAnywhere'
 
+	let clauseNames = pairableAssociatedTypeNames(iface.associatedTypeNames, boundTypeNames: entry.withArgs)
 	var substituted = CollectedInterfaceMethodArray.create()
 	for i in 0 upto slots.count() 'eachSlot'
 		let slot = try slots.get(i) otherwise panic("collectInterfaceMethods: slots.get OOB at {i} below count {slots.count()}")
-		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), sourceInterfaceName: slot.sourceInterfaceName))
+		let declaredArgs = boundArgumentsFor(conformance, entry: entry, interfaceName: slot.sourceInterfaceName)
+		let declaredNames = pairableAssociatedTypeNames(associatedTypeNamesDeclaredBy(project, iface: iface, interfaceName: slot.sourceInterfaceName), boundTypeNames: declaredArgs)
+		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, clauseNames: clauseNames, clauseArgs: entry.withArgs, declaredNames: declaredNames, declaredArgs: declaredArgs), sourceInterfaceName: slot.sourceInterfaceName))
 	end 'eachSlot'
 
 	return substituted
 end 'collectInterfaceMethods'
 
+// Did this `implements` clause write a `with` argument anywhere? A clause that wrote none can bind nothing,
+// whichever interface declared a requirement — the allocation-free gate above.
+function conformanceBindsNothing(conformance ConformanceDecl) returns bool
+	for candidate in conformance.interfaces 'eachEntry'
+		if candidate.withArgs.count() != 0 'writesABinding'
+			return false
+		end 'writesABinding'
+	end 'eachEntry'
+
+	return true
+end 'conformanceBindsNothing'
+
+// The `uses` names `interfaceName` DECLARES — the list a requirement it declared is substituted against.
+// The root interface is answered from the declaration already in hand; a parent costs the one lookup
+// `interfaceWitnessSlots` itself already made to reach that slot, and only on a clause that binds something.
+//
+// A `notFound` is unreachable rather than tolerated: this name came off a slot the walk produced, and the
+// walk produces a slot only for an interface it RESOLVED through this same door.
+function associatedTypeNamesDeclaredBy(project Project, iface IrInterface, interfaceName ByteArray) returns ByteArrayArray
+	if interfaceName.equals(iface.name) 'itsOwnRequirement'
+		return iface.associatedTypeNames
+	end 'itsOwnRequirement'
+
+	match lookupInterface(project.interfaces, name: interfaceName) 'declaring'
+		found(declaring) then return declaring.associatedTypeNames
+		notFound then panic("associatedTypeNamesDeclaredBy: interface '{String.from(interfaceName)}' declared a requirement collected for '{String.from(iface.name)}' but no longer resolves — `interfaceWitnessSlots` reached it through this same registry moments ago")
+	end 'declaring'
+end 'associatedTypeNamesDeclaredBy'
+
+// What THIS `implements` clause bound `interfaceName`'s `uses` names to: the entry the walk started from
+// when that is the declaring interface, else the clause's own entry for it — searched, because
+// `implements BiCursor, Cursor with Pos` writes the two in either order and the bootstrap accepts both
+// (measured). The FIRST matching entry settles it, the order `checkTypeSymbolNamespace` and
+// `AssociatedAbiBinding.disagreed` already report a contested claim in; a clause that names one interface
+// twice with different arguments is rejected either way, and where the two selections MEET it is E3111.
+function boundArgumentsFor(conformance ConformanceDecl, entry InterfaceConformance, interfaceName ByteArray) returns ByteArrayArray
+	if interfaceName.equals(entry.interfaceName) 'theEntryBeingChecked'
+		return entry.withArgs
+	end 'theEntryBeingChecked'
+
+	for candidate in conformance.interfaces 'eachEntry'
+		if candidate.interfaceName.equals(interfaceName) 'conformsToTheDeclaringInterface'
+			return candidate.withArgs
+		end 'conformsToTheDeclaringInterface'
+	end 'eachEntry'
+
+	return sharedEmptyDeclaredConformances
+end 'boundArgumentsFor'
+
+// ⛔ **A NAME LIST WITH NO ARGUMENT LIST TO PAIR AGAINST BINDS NOTHING — AND IT IS THE *NAMES* THAT MUST BE
+// EMPTIED, NOT THE ARGUMENTS.** `boundTypeName` is driven by the NAME list, so a short argument list left
+// beside a full name list is not "no substitution", it is a subscript past the end of the arguments:
+// MEASURED as `panic: boundTypeName: boundTypeNames.get OOB at 0 below associated-type count 1` on the
+// harness's own `refusal/runtime-name-parsed-from-source` fixture, from the first cut of this rung which
+// emptied the arguments instead. `pairableConformanceBindings` states the same positional rule for the
+// registry copy of these lists, and states why a list of a different length has no positional meaning at all.
+//
+// The gate is a no-op for the entry being checked — `checkOneInterfaceConformance` reported a short one and
+// returned before any requirement was collected — and it is what makes it true for a SIBLING entry too,
+// which has had no such gate yet (its own check reports E3016 separately). Stating it HERE rather than
+// relying on the remote guarantee is what turns `boundTypeName`'s panic into an unreachable invariant.
+function pairableAssociatedTypeNames(associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns ByteArrayArray
+	return sharedEmptyDeclaredConformances if boundTypeNames.count() < associatedTypeNames.count() else associatedTypeNames
+end 'pairableAssociatedTypeNames'
+
 // One requirement with every associated type replaced by what the conformance bound it to (R5) — the
-// substitution the header above says happens exactly once. Reached only when the interface declares at
-// least one associated type; the "declares none" fast path is its caller's (see there for why).
-function substituteAssociatedTypes(method InterfaceMethodSig, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns InterfaceMethodSig
+// substitution the header above says happens exactly once. The two pairs are threaded as four arrays rather
+// than merged into one, because merging them is not free of meaning: their lengths are what pairs them
+// positionally, so a concatenation would have to be two arrays anyway, and it would allocate a pair per
+// requirement of every binding conformance to say what four already-built lists say.
+function substituteAssociatedTypes(method InterfaceMethodSig, clauseNames ByteArrayArray, clauseArgs ByteArrayArray, declaredNames ByteArrayArray, declaredArgs ByteArrayArray) returns InterfaceMethodSig
 	var paramTypeNames = ByteArrayArray.create()
 	for i in 0 upto method.paramTypeNames.count() 'eachParam'
-		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames))
+		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs))
 	end 'eachParam'
 
-	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames), paramIsBuffer: method.paramIsBuffer)
+	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs), paramIsBuffer: method.paramIsBuffer)
 end 'substituteAssociatedTypes'
 
 // What ONE written type name in a requirement denotes under this conformance's bindings: the argument bound
-// at the associated type's position, or the name itself when it names no associated type. The scan that
-// decides WHICH `uses` parameter a name is lives in `IrInterface.namePositionIn` — one statement of
-// it, because the witness-call lowering asks the same question for a different reason (see there).
-function boundTypeName(name ByteArray, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns ByteArray
-	if let position = try namePositionIn(associatedTypeNames, name: name) 'isAssociatedType'
-		return try boundTypeNames.get(position) otherwise panic("boundTypeName: boundTypeNames.get OOB at {position} below associated-type count {associatedTypeNames.count()} — `checkOneInterfaceConformance` reports a short argument list and returns before any requirement is collected")
-	end 'isAssociatedType'
+// at the associated type's position, or the name itself when neither pair spells it. The CLAUSE pair is
+// asked first and the DECLARING interface's second — see `collectInterfaceMethods` for why that order is a
+// rule and not a preference. The scan that decides WHICH `uses` parameter a name is lives in
+// `IrInterface.namePositionIn` — one statement of it, because the witness-call lowering asks the same
+// question for a different reason (see there).
+function boundTypeName(name ByteArray, clauseNames ByteArrayArray, clauseArgs ByteArrayArray, declaredNames ByteArrayArray, declaredArgs ByteArrayArray) returns ByteArray
+	if let clausePosition = try namePositionIn(clauseNames, name: name) 'boundByTheClause'
+		return try clauseArgs.get(clausePosition) otherwise panic("boundTypeName: clauseArgs.get OOB at {clausePosition} below name count {clauseNames.count()} — `pairableAssociatedTypeNames` empties the NAME list whenever the arguments cannot pair with it positionally, so a name reaching this point always has an argument at its own index")
+	end 'boundByTheClause'
+
+	if let declaredPosition = try namePositionIn(declaredNames, name: name) 'boundByItsDeclarer'
+		return try declaredArgs.get(declaredPosition) otherwise panic("boundTypeName: declaredArgs.get OOB at {declaredPosition} below name count {declaredNames.count()} — the same `pairableAssociatedTypeNames` gate applies to the declaring interface's pair")
+	end 'boundByItsDeclarer'
+
 	return name
 end 'boundTypeName'
 
@@ -1275,10 +1395,10 @@ end 'boundTypeName'
 // relation is compared by NAME (`requireSameErrorType`), so an unsubstituted clause would reject a
 // conforming impl. v1 substitutes it too, and says why in one line (`substituteThrowsName`,
 // `TypeResolution.maxon:1249-1252`).
-function substituteThrowsClause(clause ThrowsClause, associatedTypeNames ByteArrayArray, boundTypeNames ByteArrayArray) returns ThrowsClause
+function substituteThrowsClause(clause ThrowsClause, clauseNames ByteArrayArray, clauseArgs ByteArrayArray, declaredNames ByteArrayArray, declaredArgs ByteArrayArray) returns ThrowsClause
 	match clause 'declared'
 		none then return ThrowsClause.none
-		throwing(name) then return ThrowsClause.throwing(String.from(boundTypeName(name.toByteArray(), associatedTypeNames: associatedTypeNames, boundTypeNames: boundTypeNames)))
+		throwing(name) then return ThrowsClause.throwing(String.from(boundTypeName(name.toByteArray(), clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs)))
 	end 'declared'
 end 'substituteThrowsClause'
 

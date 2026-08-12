@@ -361,8 +361,12 @@ end 'main'
 ```
 
 
-<!-- disabled-test: character-element-type -->
-<!-- TWO blockers, and the FIRST one is NOT the associated-type gap. MEASURED: `E2015 … `Character` member 'codepoints' — shv2 provides bytes/byteLength …`, raised in `main` before conformance is ever checked. Past that it needs the substitution rung as well, its `implements CharSource with Character` binding `Element := Character` exactly as the cases above do. Both, in that order. -->
+<!-- test: character-element-type -->
+BOTH of the blockers this case was disabled for are gone, and it was disabled for one of them long after
+that one had been closed. MEASURED at W60 on the untouched compiler: it compiles, runs, and exits **65**.
+The `Character` half (`E2015 … member 'codepoints'`) closed with the `Character` slice; the
+"substitution rung" half was never a blocker at all — `CharSource` declares no `extends`, so
+`implements CharSource with Character` is the ordinary root-entry binding every case above it already used.
 ```maxon
 // character is a grapheme cluster type, use codepoints() to access codepoint values
 interface CharSource uses Element
@@ -3184,4 +3188,380 @@ end 'main'
 ```
 ```maxoncstderr
 error E3127: specs/fragments/associated-types/error.held-position-nested-binding-disagreement.test:67:39: cannot widen 'BadBag' into 'b', which is declared at the existential type 'Bag' with its associated type 'Iter' held at 'Cursor', and that holding's own 'Item' bound to 'Integer' — 'BadBag' binds 'Iter' to 'TextCur', which binds 'Item' to 'String'. A dispatch through this value is emitted against the binding the site claims and would reach an impl written for the other one. Write the binding the conformer declares, or widen a conformer that binds 'Item' to 'Integer'
+```
+
+
+### An INHERITED requirement is substituted by the conformance to the interface that DECLARED it (W60)
+
+⭐⭐ **CONFORMING TO A DESCENDANT MUST NOT DESTROY THE ANCESTOR'S BINDING.** `Element` is *Cursor's*
+`uses` name, so a requirement that mentions it means whatever this type's conformance to **Cursor**
+bound it to — including when the requirement arrives in `BiCursor`'s slot list through `extends`.
+It did not: `collectInterfaceMethods` substituted every slot under the ROOT entry's bindings, and
+`BiCursor` declares no `uses` of its own, so the inherited `current() returns Element` was compared
+raw. MEASURED before the fix: `E3016 … current() returns Pos (expected current() returns Element)` —
+against a program the bootstrap compiles and runs.
+
+<!-- test: associated-types.extends.inherited-requirement-substituted-by-a-sibling-conformance -->
+```maxon
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+interface BiCursor extends Cursor
+	function retreat()
+end 'BiCursor'
+
+typealias Pos = int(0 to 100)
+
+type Walker implements Cursor with Pos, BiCursor
+	var pos as Pos
+
+	export static function create(p Pos) returns Self
+		return Self{pos: p}
+	end 'create'
+
+	export function current() returns Pos
+		return pos
+	end 'current'
+
+	export function retreat()
+		pos = pos - 1
+	end 'retreat'
+end 'Walker'
+
+function main() returns ExitCode
+	var w = Walker.create(8)
+	w.retreat()
+	print("{w.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+
+### …and the clause may be written in either order
+
+The lookup is a SEARCH of the whole `implements` clause and not a look-behind, because an author may
+write the descendant first. The bootstrap accepts this spelling too (measured: exit 0, `7`), so an
+order-dependent answer here would be shv2's alone.
+
+<!-- test: associated-types.extends.the-sibling-conformance-may-be-written-after-the-descendant -->
+```maxon
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+interface BiCursor extends Cursor
+	function retreat()
+end 'BiCursor'
+
+typealias Pos = int(0 to 100)
+
+type Walker implements BiCursor, Cursor with Pos
+	var pos as Pos
+
+	export static function create(p Pos) returns Self
+		return Self{pos: p}
+	end 'create'
+
+	export function current() returns Pos
+		return pos
+	end 'current'
+
+	export function retreat()
+		pos = pos - 1
+	end 'retreat'
+end 'Walker'
+
+function main() returns ExitCode
+	var w = Walker.create(8)
+	w.retreat()
+	print("{w.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+
+### …and the NEGATIVE CONTROL: the ancestor conformance alone, which already worked
+
+The case above with `, BiCursor` struck — the `BiCursor` interface still declared and `retreat()` still
+present, so the only thing removed is a CONFORMANCE. It passed before W60 and passes after, which is what
+attributes a future regression to the `extends` half rather than to conformance generally.
+
+<!-- test: associated-types.extends.the-ancestor-conformance-alone-still-answers -->
+```maxon
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+interface BiCursor extends Cursor
+	function retreat()
+end 'BiCursor'
+
+typealias Pos = int(0 to 100)
+
+type Walker implements Cursor with Pos
+	var pos as Pos
+
+	export static function create(p Pos) returns Self
+		return Self{pos: p}
+	end 'create'
+
+	export function current() returns Pos
+		return pos
+	end 'current'
+
+	export function retreat()
+		pos = pos - 1
+	end 'retreat'
+end 'Walker'
+
+function main() returns ExitCode
+	var w = Walker.create(8)
+	w.retreat()
+	print("{w.current()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+
+### …and a name NO entry of the clause binds still denotes itself
+
+⚖ The binding comes from a conformance, never from an inheritance of ARITY: `implements BiCursor` writes
+no conformance to `Cursor` at all, so `Element` is bound by nothing and the requirement is compared as
+written. MEASURED — the bootstrap rejects this program with the same sentence, as it does the
+`implements BiCursor with Pos` spelling one file over
+(`error.inherited-uses-name-unparenthesized-is-still-a-signature-error`). v1 is the outlier here
+(`findInheritedBindings`); shv2 follows the bootstrap, and `Parser.conformanceUsesArity` records why.
+
+<!-- test: error.extends.no-sibling-conformance-leaves-the-inherited-name-unbound -->
+```maxon
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+interface BiCursor extends Cursor
+	function retreat()
+end 'BiCursor'
+
+typealias Pos = int(0 to 100)
+
+type Walker implements BiCursor
+	var pos as Pos
+
+	export static function create(p Pos) returns Self
+		return Self{pos: p}
+	end 'create'
+
+	export function current() returns Pos
+		return pos
+	end 'current'
+
+	export function retreat()
+		pos = pos - 1
+	end 'retreat'
+end 'Walker'
+
+function main() returns ExitCode
+	var w = Walker.create(8)
+	w.retreat()
+	print("{w.current()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: specs/fragments/associated-types/error.extends.no-sibling-conformance-leaves-the-inherited-name-unbound.test:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+  - current() returns Pos (expected current() returns Element)
+```
+
+
+### …and a GENUINELY wrong signature still says so — naming the SUBSTITUTED type
+
+⛔ **THE CASE THAT PINS "CORRECT VERDICT, WRONG SENTENCE".** The substitution is made ONCE, at collection,
+so the string `signatureMatches` decides on and the string `formatInterfaceMethodSignature` prints are the
+same string (`collectInterfaceMethods`' header). A fix that reached the comparison and missed the message
+would leave this program rejected — correctly — while telling its author the requirement is
+`returns Element`, a name their program cannot satisfy and no positive test can see. So the assertion here
+is the SENTENCE, not the code.
+
+⚠ **BOTH LINES ARE THE MEASURED OUTPUT AND THE DUPLICATION IS PRE-EXISTING.** `Cursor`'s slot is reached
+by two entries of one clause, and each entry reports its own verdict — before W60 it reported the same
+defect twice with two DIFFERENT expected types (`Pos` from the `Cursor` entry, `Element` from the
+`BiCursor` one). What this rung changes is that the two now agree; de-duplicating a rejection the way
+`recordWitnessSlotImpl` de-duplicates an ACCEPTANCE is a separate question, and it needs a home on
+`Project` beside that map.
+
+<!-- test: error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type -->
+```maxon
+interface Cursor uses Element
+	function current() returns Element
+end 'Cursor'
+
+interface BiCursor extends Cursor
+	function retreat()
+end 'BiCursor'
+
+typealias Pos = int(0 to 100)
+
+type Walker implements Cursor with Pos, BiCursor
+	var pos as Pos
+
+	export static function create(p Pos) returns Self
+		return Self{pos: p}
+	end 'create'
+
+	export function current() returns String
+		return "no"
+	end 'current'
+
+	export function retreat()
+		pos = pos - 1
+	end 'retreat'
+end 'Walker'
+
+function main() returns ExitCode
+	var w = Walker.create(8)
+	w.retreat()
+	print("{w.current()}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: specs/fragments/associated-types/error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type.test:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+  - current() returns String (expected current() returns Pos)
+error E3016: specs/fragments/associated-types/error.extends.wrong-signature-under-an-inherited-binding-names-the-substituted-type.test:12:6: Partial interface implementation: type 'Walker' has 1 method(s) with wrong signature:
+  - current() returns String (expected current() returns Pos)
+```
+
+
+### An interface-scoped `typealias` in a requirement (W61) — BLOCKED, and the plan for it needs a ruling
+
+⛔ **NOT DISABLED FOR "shv2 cannot do it yet". Disabled because WHAT IT SHOULD DO IS AN OPEN DESIGN
+QUESTION, and both cases below are MEASURED.** `interface Holder uses Element` declaring
+`typealias ElementArray = Array with Element` renders its requirement's parameter as the qualified NAME
+`Holder.ElementArray` — `Parser.readInterfaceDeclaration` accepts the alias and DISCARDS its right-hand
+side (the declaration sweep reads no interface BODY, so the name is keyed in no whole-program registry),
+while the conformer's own `ElementArray` IS keyed and resolves to the instance `Array_T…`. So the two
+sides of one requirement are compared as an unresolved name against a resolved instance:
+
+```
+E3016 … - absorb(value Array_T779624e88745be2b) returns void (expected absorb(value Holder.ElementArray) returns void)
+```
+
+⚠ **AND THE TWO REFERENCES DO NOT EXPAND THE ALIAS EITHER — THEY MATCH ITS SPELLING.** Measured on the
+bootstrap: the first case below (both sides spelling the alias `ElementArray`) COMPILES; the second
+(the conformer spelling its alias `NumStore` over the identical right-hand side) is REFUSED, with
+`absorb(value NumStore) returns void (expected absorb(value ElementArray) returns void)`. v1 throws the
+line away outright (`Parser.maxon:6578-6585`). So `stdlib/Set.maxon` and `stdlib/List.maxon` conform
+through `InitableFromArrayLiteral` **only because both files happen to write the same member name** —
+which is the mechanism, in both references, and not an accident of these examples.
+
+⇒ **Two shapes, and the choice is a RULING rather than a port.** (a) NAME-MATCHING — a requirement's
+`<Interface>.<member>` denotes the conformer's `<Conformer>.<member>`, which is `substituteSelf` one level
+up and reachable from `ConformanceCheck` alone; it reproduces both references, and the second case below
+stays REFUSED. (b) RIGHT-HAND-SIDE EXPANSION — `Holder.ElementArray` becomes
+`Array with <whatever this conformance bound Element to>`, which is strictly better and which neither
+reference has; it needs the interface's discarded right-hand side to be recorded, i.e.
+`Parser.readInterfaceDeclaration`, and it makes the second case PASS. Enable whichever the ruling picks,
+and delete the other's `exitcode` block.
+
+<!-- disabled-test: w61.interface-scoped-alias-in-a-requirement -->
+<!-- BATCH36 W61 — blocked on the ruling above, not on a missing mechanism. -->
+```maxon
+typealias Num = int(0 to 1000)
+
+interface Holder uses Element
+	typealias ElementArray = Array with Element
+	function absorb(value ElementArray)
+end 'Holder'
+
+interface Maker
+	static function spawn() returns Self
+end 'Maker'
+
+type Bag uses Element implements Holder with Element, Maker
+	typealias ElementArray = Array with Element
+	var items as ElementArray = ElementArray.create()
+
+	export static function spawn() returns Self
+		return Self{}
+	end 'spawn'
+
+	export function absorb(value ElementArray)
+		items = value.clone()
+	end 'absorb'
+
+	export function count() returns Num
+		return items.count()
+	end 'count'
+end 'Bag'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- disabled-test: w61.conformer-names-the-alias-differently -->
+<!-- BATCH36 W61 — the case that SEPARATES the two shapes. Under (a) it must stay refused (which is what the bootstrap does today); under (b) it must print 2. Do not enable it without the ruling. -->
+```maxon
+typealias Num = int(0 to 1000)
+
+interface Holder uses Element
+	typealias ElementArray = Array with Element
+	function absorb(value ElementArray)
+end 'Holder'
+
+typealias NumStore = Array with Num
+
+type Crate implements Holder with Num
+	var items as NumStore = NumStore.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function absorb(value NumStore)
+		items = value.clone()
+	end 'absorb'
+
+	export function count() returns Num
+		return items.count()
+	end 'count'
+end 'Crate'
+
+function main() returns ExitCode
+	var c = Crate.create()
+	var v = NumStore.create()
+	v.push(4)
+	v.push(9)
+	c.absorb(v)
+	print("{c.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
 ```
