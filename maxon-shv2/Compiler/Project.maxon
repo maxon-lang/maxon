@@ -556,11 +556,42 @@ export type VarInfo
 	// bit only keeps the append once-per-binding instead of once-per-mention.
 	export var mutabilityExercised as bool
 
+	// ⭐⭐ **THIS NAME LIVES IN A HEAP CELL, NOT IN AN SSA VALUE (PBR-2) — the third memory-resident binding
+	// kind, beside the self-field alias and the payload binding.**
+	//
+	// A cell is an 8-byte `__mm_alloc` box holding the binding's CURRENT value. A read is a `loadIndirect`
+	// through `cellValue` at offset 0 and a rebind is a `storeIndirect`, so the name aliases no SSA value at
+	// all and `boundValue` holds the CELL rather than the contents — which is why every reader of
+	// `boundValue` on this path must test this bit first, exactly as the self-field alias made them test
+	// `isSelfField`.
+	//
+	// ⭐ **WHY A BINDING WOULD WANT ONE, and both reasons are "another frame must see the writes":**
+	//
+	//   * it is passed to a parameter some callee REASSIGNS, so the callee is handed `cellValue` and its
+	//     `x = 99` lands in this frame's cell (`ProgramSignatures.paramIsByRef`);
+	//   * it is captured by a closure AND assigned, so the env slot holds `cellValue` and the closure's read
+	//     is two loads deep — capture stays BY VALUE for every binding that is not cell-resident, and that
+	//     value is now the cell's address rather than a snapshot.
+	//
+	// ⚠ **IT IS ALSO WHAT TAKES THE BINDING OUT OF THE PHI-TRACKED CLASS, AND THAT IS LOAD-BEARING RATHER
+	// THAN INCIDENTAL.** `assignedBindingsIn` decides a loop's carried vars by scanning tokens for
+	// `identifier =`, which cannot see the write a callee performs through a by-reference argument
+	// (`bindParameters`' tripwire states the hazard). A cell-resident binding needs no phi: the POINTER is
+	// loop-invariant and the value is read out of memory at each use, so the phi the scan cannot mint is one
+	// nothing wanted. This is why the design is cells and not a call-site write-back.
+	//
+	// ⚠ A PARAMETER that is by-reference is cell-resident too, and its cell is the CALLER's — `cellValue` is
+	// the incoming parameter value itself. That is the one cell this frame does not own and must not drop.
+	export var isCellBinding as bool
+	// The cell's address — an `__mm_alloc` box this frame owns for a local, or the incoming parameter value
+	// for a by-reference parameter. 0 and unread unless `isCellBinding`.
+	export var cellValue as ValueId
+
 	// ⭐⭐ **THE ONE PLACE A `VarInfo` LITERAL IS SPELLED.** Every constructor below names ONLY the fields
 	// its binding kind actually differs on; everything else — the whole inert tail, and every per-path bit
 	// that starts cleared — comes from a default here.
 	//
-	// ⚠ **IT IS A DEFENCE, NOT A TIDY-UP.** This record has nineteen fields and six constructors, so the
+	// ⚠ **IT IS A DEFENCE, NOT A TIDY-UP.** This record has twenty-one fields and seven constructors, so the
 	// literal was written out six times, and a field given the WRONG default in ONE of them is not a
 	// compile error and not a crash — it is a binding that quietly claims to be a parameter, or a payload
 	// binding pointing at box 0, in exactly one code path. (The rung that replaced four payload fields had
@@ -571,8 +602,8 @@ export type VarInfo
 	// `mutabilityExercised` take no parameter at all: they are per-path STATE the parser writes as it goes,
 	// and every binding starts with them clear. A constructor argument for one of them would be a way to
 	// start a binding already moved-from, which nothing means.
-	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false) returns VarInfo
-		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false}
+	static function make(name ByteArray, varType MaxonType, mutable bool, slot VarSlot = 0, boundValue ValueId = 0, isSelfField bool = false, fieldIndex FieldIndex = 0, isPayloadBinding bool = false, payloadScrutBox ValueId = 0, payloadSlotOffset ByteOffset = 0, payloadStorage MaxonType = NoPayloadStorage, isParameter bool = false, namesModuleStorage bool = false, isCellBinding bool = false, cellValue ValueId = 0) returns VarInfo
+		return Self{name: name, varType: varType, mutable: mutable, slot: slot, boundValue: boundValue, ownership: OwnershipKind.trivial, movedFrom: false, partiallyMoved: false, isSelfField: isSelfField, fieldIndex: fieldIndex, isPayloadBinding: isPayloadBinding, payloadScrutBox: payloadScrutBox, payloadSlotOffset: payloadSlotOffset, payloadStorage: payloadStorage, payloadSlotVacated: false, isParameter: isParameter, lastUseToken: 0, namesModuleStorage: namesModuleStorage, referenced: false, mutabilityExercised: false, isCellBinding: isCellBinding, cellValue: cellValue}
 	end 'make'
 
 	export static function create(name ByteArray, varType MaxonType, mutable bool, slot VarSlot) returns VarInfo
@@ -641,6 +672,25 @@ export type VarInfo
 	export static function createParameterBinding(name ByteArray, varType MaxonType, mutable bool, boundValue ValueId) returns VarInfo
 		return Self.make(name, varType: varType, mutable: mutable, boundValue: boundValue, isParameter: true)
 	end 'createParameterBinding'
+
+	// The value binding a CELL-RESIDENT name gets (PBR-2) — see `isCellBinding` for what a cell is and which
+	// two kinds of binding want one.
+	//
+	// ⭐ **`boundValue` IS THE CELL, NOT THE CONTENTS, AND THAT IS DELIBERATE RATHER THAN A SHORTCUT.** The
+	// scope-exit drop (`Parser.emitScopeDrops`), the owned-binding enrolment and the alias scans all key on
+	// `boundValue`, and for a cell-resident binding the object this frame owns IS the cell — so pointing
+	// `boundValue` at it makes every one of them right by construction, where a `boundValue` holding a stale
+	// snapshot of the contents would have each of them acting on a value the binding no longer holds. The
+	// contents are never a fact the binding carries; they are read out of memory at each use.
+	//
+	// `mutable` is the caller's: a LOCAL cell is always a `var` (only a `var` can be rebound or handed to a
+	// reassigning parameter), while a by-reference PARAMETER is bound immutable like every other parameter —
+	// its rebind is permitted by the cell rank in `requireMutableBinding`, not by this flag. `isParameter`
+	// rides for the same reason it does on `createParameterBinding`: it answers "may the container this name
+	// denotes be written?", which a by-reference parameter still needs.
+	export static function createCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool) returns VarInfo
+		return Self.make(name, varType: varType, mutable: mutable, boundValue: cell, isParameter: isParameter, isCellBinding: true, cellValue: cell)
+	end 'createCellBinding'
 
 	// ⭐ **IS THIS BINDING A LIVE NAME OF `value`?** — the predicate every symbol-table scan over "who else
 	// is reading this value" filters on, and it lives on the binding because it is a fact ABOUT one.

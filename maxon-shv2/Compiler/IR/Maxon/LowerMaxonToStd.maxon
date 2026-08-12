@@ -329,6 +329,14 @@ end 'maxonCmpOpToStdPred'
 // trailing uniform-ABI env pointer is an i64 no parameter describes, so the walk over the parameters alone
 // leaves its bit clear, which is exactly right; a witness call's RECEIVER is covered the same way, by the
 // `integer` its formal list is seeded with.
+// ⭐ **THE CALLEE NAME AN INDIRECT CALL HAS NOT GOT** — what `crossFloatDomainArgs` is handed by a function
+// value's call and by a witness dispatch. Named rather than passed as a bare empty slice, because the reader
+// has to know it is a STATEMENT and not an omission: neither shape can reach a by-reference parameter, since
+// a function TYPE and an interface REQUIREMENT both describe their parameters without saying how they are
+// passed, and the sweep records by-reference columns per DECLARATION. `paramIsByRef` answers false for it,
+// which is the right answer rather than a fallback.
+let NoNamedCallee = b""
+
 function paramFloatMask(paramTypes MaxonTypeArray) returns ArgFloatMask
 	var mask = 0 as ArgFloatMask
 	for k in 0 upto paramTypes.count() 'eachParam'
@@ -689,6 +697,11 @@ type MaxonToStdLowering
 	// instance's `(baseId, args)` payload: `ensureLayoutDescriptor` sizes and mangles a descriptor
 	// through `genericInstanceBoxSize` / `genericInstanceSoleArgLogicalSize` / `mangleGenericInstance`.
 	var signatures as ProgramSignatures
+	// PBR-2: the current function's by-reference parameter mask and parameter count — see `stdTypeOf`. Both
+	// are re-pointed per function beside `valueTags`, and both are 0 for a function with no by-reference
+	// parameter, which is every function in a program that reassigns none.
+	var currentByRefParams as ParamPositionMask
+	var currentParamCount as ParamCount
 	// The Maxon module's CHECKED name index (`FunctionNameIndex`, A2l), built once for the whole pipeline
 	// and threaded in. `buildLayoutNeedingFuncs` derives its FILTERED set by walking `funcNames.functions`,
 	// so that set's key space is provably the duplicate-free one rather than whatever the module happened to
@@ -838,7 +851,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -851,9 +864,32 @@ type MaxonToStdLowering
 
 	// The Std type a VALUE computes in — the truth the arith band's `operandType` carries, and a
 	// single indexed read of the column `lower` pointed at this function.
+	//
+	// ⭐⭐ **EXCEPT FOR A BY-REFERENCE PARAMETER, WHICH IS AN ADDRESS AND SO IS ALWAYS THE MACHINE WORD
+	// (PBR-2).** Its DECLARED type is the type of what the cell holds, and every tier above this one wants
+	// that type — the argument check judges a forwarded `cur` against `Node`, the accessor gate sees a
+	// `named` value, the field base finds a layout. Only the machine representation differs, and this is the
+	// one place that answers for it: `valueTags` keeps the declared type and the REPRESENTATION is decided
+	// here, where the ABI already lives (`func.reassignedParamMask`, the same mask that types the callee's
+	// parameter slot in `transferFuncs`).
+	//
+	// ⚠ **THE FLOAT CASE IS WHY THIS CANNOT BE LEFT TO THE TAG.** A by-reference `float(f64.min to f64.max)`
+	// parameter would compute in `f64`, so the register allocator colors the CELL'S ADDRESS into an XMM
+	// register while the callee's parameter slot is a GP one — MEASURED as
+	// `a register-to-register move from xmm0 to rcx crosses register files` out of the x64 emitter.
 	function stdTypeOf(value ValueId) returns StdType
+		if self.valueIsByRefParam(value) 'anAddressRatherThanAValue'
+			return StdType.i64
+		end 'anAddressRatherThanAValue'
+
 		return valueTagToStdType(self.valueTagOf(value))
 	end 'stdTypeOf'
+
+	// Is `value` one of the CURRENT function's by-reference parameters? Parameter `i` owns ValueId `i` (the
+	// parser's dense numbering), which is what makes this two scalar reads rather than a lookup.
+	function valueIsByRefParam(value ValueId) returns bool
+		return value < self.currentParamCount and maskHasParam(self.currentByRefParams, param: value)
+	end 'valueIsByRefParam'
 
 	function lower(project Project) returns StdModule
 		// Which functions carry a hidden layout-descriptor parameter (P1.6-B1) — computed ONCE, up front,
@@ -890,8 +926,19 @@ type MaxonToStdLowering
 		for i in 0 upto self.maxonModule.functions.count() 'transferFuncs'
 			var func = try self.maxonModule.functions.get(i) otherwise panic("lowerMaxonToStd: maxonModule.functions.get OOB at {i}")
 			var stdParams = StdTypeArray.create()
-			for paramType in func.maxonParamTypes 'eachParam'
-				stdParams.push(maxonTypeToStdType(paramType))
+			for k in 0 upto func.maxonParamTypes.count() 'eachParam'
+				// ⭐⭐ **A BY-REFERENCE PARAMETER CARRIES AN ADDRESS, WHATEVER ITS DECLARED TYPE SAYS (PBR-2).**
+				// The declared type is the type of the VALUE the cell holds; the parameter itself is the cell's
+				// address, which is the machine word. Nothing in `maxonParamTypes` can say so — a
+				// `float(f64.min to f64.max)` parameter is spelled exactly the same whether it arrives by value
+				// or by reference — so the mask the parser stamped is the only thing that can.
+				//
+				// ⚠ **THIS IS THE ONE PLACE THE DISTINCTION IS NOT COSMETIC.** `maxonTypeToStdType` would answer
+				// `f64` and put the cell's ADDRESS in an XMM register, where the callee's `loadIndirect` expects a
+				// GP one — a pointer reinterpreted as a double at the ABI boundary, on every target.
+				// `pass-by-reference.mutate-float-ref` is the case that pins it.
+				let paramType = try func.maxonParamTypes.get(k) otherwise panic("lowerMaxonToStd: maxonParamTypes.get OOB at {k} inside its own count()")
+				stdParams.push(StdType.i64 if maskHasParam(func.reassignedParamMask, param: k) else maxonTypeToStdType(paramType))
 			end 'eachParam'
 			// The uniform ABI's companion environment parameters (P1.5-A2b-2) sit PAST the user parameters:
 			// `paramCount` counts them, `maxonParamTypes` does not (each is an i64 pointer with no source type).
@@ -939,6 +986,10 @@ type MaxonToStdLowering
 			// Point the type oracle at THIS function before any of its ops are lowered — the
 			// column is dense per function, so every `stdTypeOf` below reads the right one.
 			self.valueTags = srcFunc.valueTags
+			// PBR-2: which of THIS function's parameters are cell ADDRESSES rather than values. It travels with
+			// the type column because it is a correction TO that column — see `stdTypeOf`.
+			self.currentByRefParams = srcFunc.reassignedParamMask
+			self.currentParamCount = srcFunc.paramCount
 			// The closure-environment column travels with it (P1.5-A2b-2): `appendCalleeEnvArgs` threads a
 			// function-value argument's env from here.
 			self.valueClosureEnv = srcFunc.valueClosureEnv
@@ -1330,7 +1381,7 @@ type MaxonToStdLowering
 	// constraint (P1.7a slice 2a), in the `[user][env][layout][witness_0..k]` order the parser reserved them
 	// at — so the caller's argument registers and the callee's `param` ops meet.
 	function finalizeCallArgsWithLayout(argIds ValueIdArray, sig FuncSignature, callee ByteArray, result ValueId, dstBlock IrBlock) returns ValueIdArray
-		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, dstBlock: dstBlock)
+		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, callee: callee, dstBlock: dstBlock)
 		let needsLayout = self.layoutNeedingFuncs.contains(callee)
 		let witnessCount = self.witnessParamCountForCallee(callee, sig: sig)
 		// The SUPPLY side of the reserve/supply pair — the SAME counter `Parser.parseFunction` reserves with.
@@ -2564,7 +2615,7 @@ type MaxonToStdLowering
 	// A helper because `lowerIndirectCall`'s arm must hand `args` to a function and touch it no other way.
 	function appendCallIndirect(dstBlock IrBlock, result ValueId, callee ValueId, args ValueIdArray)
 		let declaredParams = self.indirectCalleeParamTypes(callee)
-		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.callIndirect(result, calleeReg: callee, resultType: StdReturnType.value(self.indirectResultType(result)), argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, callee: NoNamedCallee, dstBlock: dstBlock)))
 	end 'appendCallIndirect'
 
 	// ⭐ **THE DECLARED PARAMETER TYPES OF THE FUNCTION VALUE BEING CALLED — the one fact an indirect call's
@@ -2851,7 +2902,7 @@ type MaxonToStdLowering
 	function appendWitnessCall(dstBlock IrBlock, result ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessCall(result, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, callee: NoNamedCallee, dstBlock: dstBlock)))
 	end 'appendWitnessCall'
 
 	// The throwing twin of `appendWitnessCall`, sharing its result typing (`witnessCallResultType`) verbatim —
@@ -2861,7 +2912,7 @@ type MaxonToStdLowering
 	function appendWitnessTryCall(dstBlock IrBlock, result ValueId, errorFlag ValueId, args ValueIdArray, witness ValueId, methodIndex WitnessMethodIndex, interfaceDeclIndex InterfaceDeclIndex, isVoid bool)
 		let resultType = self.witnessCallResultType(result, isVoid: isVoid)
 		let declaredParams = self.witnessFormalTypes(methodIndex, interfaceDeclIndex: interfaceDeclIndex, receiver: witnessDispatchReceiver(args))
-		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, dstBlock: dstBlock)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.witnessTryCall(result, errorFlagId: errorFlag, witnessAddr: witness, methodIndex: methodIndex, resultType: resultType, argFloatMask: paramFloatMask(declaredParams), args: self.crossFloatDomainArgs(args, paramTypes: declaredParams, callee: NoNamedCallee, dstBlock: dstBlock)))
 	end 'appendWitnessTryCall'
 
 	// The Std return type a witness call CAPTURES its result in — the result value's own type, or `void` for
@@ -3015,7 +3066,15 @@ type MaxonToStdLowering
 	// merely to hand the same values back. A DIRECT call never takes this path: `slotCallArgs` returns
 	// exactly one ordered argument per parameter, so the counts are equal and nothing is skipped. Too FEW
 	// arguments is a program error `SemanticCheck` has already refused (E3036) for both shapes.
-	function crossFloatDomainArgs(argIds ValueIdArray, paramTypes MaxonTypeArray, dstBlock IrBlock) returns ValueIdArray
+	// ⚠⚠ **A BY-REFERENCE POSITION CROSSES NO DOMAIN, AND WITHOUT THIS THE FLOAT CASE IS A BACKEND PANIC
+	// (PBR-2).** The argument at such a position is the ADDRESS of a cell, an integer; the callee's declared
+	// type is the type of what the cell HOLDS. Compared naively the two disagree in exactly the way an
+	// int-at-a-float-parameter does, so the widening fired on a pointer — MEASURED as
+	// `a register-to-register move from xmm0 to rcx crosses register files` out of the x64 emitter, on
+	// `pass-by-reference.mutate-float-ref`. `callee` is threaded in for this one question; an INDIRECT call
+	// cannot reach a by-reference parameter at all (a function TYPE carries no by-reference-ness), which is
+	// why `paramFloatMask`'s two indirect callers need no equivalent.
+	function crossFloatDomainArgs(argIds ValueIdArray, paramTypes MaxonTypeArray, callee ByteArray, dstBlock IrBlock) returns ValueIdArray
 		// FAST PATH, and it is what keeps this allocation-neutral on the hot call-lowering path: a call
 		// whose arguments are already in the domain their parameters want returns them verbatim — no
 		// `ValueIdArray` built, no op emitted. Without it every lowered call allocates a fresh array it
@@ -3030,6 +3089,7 @@ type MaxonToStdLowering
 			return argIds
 		end 'everyArgAlreadyInItsDomain'
 
+
 		var crossed = ValueIdArray.create()
 		for i in 0 upto argIds.count() 'eachArg'
 			let argId = try argIds.get(i) otherwise panic("crossFloatDomainArgs: argIds.get OOB at {i}")
@@ -3037,6 +3097,13 @@ type MaxonToStdLowering
 				crossed.push(argId)
 				continue
 			end 'pastDeclaredParams'
+			// The scalar gate first, for `Parser.bindParameters`' measured reason: `paramIsByRef` returns a
+			// union, and this loop runs per argument of every call that crosses the float domain.
+			if self.signatures.programTakesAParamByRef() and self.signatures.paramIsByRef(callee, index: i) 'anAddressRatherThanAValue'
+				crossed.push(argId)
+				continue
+			end 'anAddressRatherThanAValue'
+
 			let paramType = try paramTypes.get(i) otherwise panic("crossFloatDomainArgs: paramTypes.get OOB at {i} — the bound was just tested")
 			crossed.push(self.floatDomainCrossedArg(argId, paramType: paramType, dstBlock: dstBlock))
 		end 'eachArg'
@@ -3051,6 +3118,10 @@ type MaxonToStdLowering
 	// An argument past the last declared parameter passes through untouched (the enclosing header says why an
 	// indirect call has one), so the scan stops at the shorter of the two columns rather than asking about a
 	// position no parameter describes.
+	// ⚠ The gate and the loop must agree about by-reference positions, or the fast path returns the argument
+	// list verbatim for a call whose only crossing was one this pass must NOT perform — which is the correct
+	// answer, so the gate deliberately does NOT ask about them: a by-reference position that "crosses" here
+	// simply means the loop below will decline it. Over-answering costs one array build on such a call.
 	function anyArgCrossesTheFloatDomain(argIds ValueIdArray, paramTypes MaxonTypeArray) returns bool
 		let declared = paramTypes.count()
 		for i in 0 upto argIds.count() 'eachArg'
@@ -3157,8 +3228,8 @@ type MaxonToStdLowering
 	// then a companion environment appended per function parameter (P1.5-A2b-2). They are independent (a
 	// parameter is float, function, or neither), and widening preserves the arg count, so the env append's
 	// per-position scan stays aligned with the signature.
-	function finalizeCallArgs(argIds ValueIdArray, sig FuncSignature, dstBlock IrBlock) returns ValueIdArray
-		return self.appendCalleeEnvArgs(self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, dstBlock: dstBlock), sig: sig, dstBlock: dstBlock)
+	function finalizeCallArgs(argIds ValueIdArray, sig FuncSignature, callee ByteArray, dstBlock IrBlock) returns ValueIdArray
+		return self.appendCalleeEnvArgs(self.crossFloatDomainArgs(argIds, paramTypes: sig.paramTypes, callee: callee, dstBlock: dstBlock), sig: sig, dstBlock: dstBlock)
 	end 'finalizeCallArgs'
 
 	function appendCalleeEnvArgs(argIds ValueIdArray, sig FuncSignature, dstBlock IrBlock) returns ValueIdArray

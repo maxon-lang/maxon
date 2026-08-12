@@ -247,12 +247,7 @@ end 'main'
 computing
 ```
 
-<!-- disabled-test: impure-mutating-param -->
-<!-- MEASURED 2026-07-28: the P1.9 `as` cast and the `_ =` discard binding BOTH work. The real
-     blocker is parameter mutability: shv2 rejects `x = x * 2` on a value parameter with
-     `E2013: cannot assign to immutable variable: 'x'`, where the oracle treats a value
-     parameter as a mutable local copy and runs to exit 0. An ORACLE DIVERGENCE in its own
-     right — see PLAN.md's bootstrap/divergence notes; not a ranged-typealias gap. -->
+<!-- test: impure-mutating-param -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

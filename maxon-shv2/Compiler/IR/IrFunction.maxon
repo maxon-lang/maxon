@@ -404,6 +404,31 @@ export type IrFunction
 	// the `Array` retirement chain strikes moves onto it.
 	export var storageWrittenParamMask as ParamPositionMask
 
+	// ⭐⭐ **THE PARAMETERS THIS FUNCTION TAKES BY REFERENCE (PBR-2) — an ABI fact, and the ONE of the three
+	// masks on this record that is not a diagnostic's seed.**
+	//
+	// Bit `i` set iff parameter `i` arrives as the address of an 8-byte cell rather than as a value: the
+	// callee's reads of it are `loadIndirect`s and its `x = 99` a `storeIndirect`, so the write lands in the
+	// caller's frame. Every caller of this function must agree, which is why — unlike the two masks above —
+	// it is NOT closed over the call graph here and NOT derived from this body's ops at all.
+	//
+	// ⚠ **IT IS COPIED DOWN FROM `ProgramSignatures.paramIsByRef`, WHICH IS THE AUTHORITY, AND THAT IS THE
+	// WHOLE POINT.** The ABI has to be settled before ANY body is parsed — a caller in another file emits its
+	// argument long before this function's own body is read — so the fact is decided by the whole-program
+	// declaration sweep and merely RECORDED here, by `Parser.bindParameters`, for the tiers below the parser
+	// that cannot reach the sweep. `LowerMaxonToStd` is the reader that needs it: a by-reference `float`
+	// parameter carries an ADDRESS, so its machine type is the integer word and not `f64`, and nothing in the
+	// declared type says so.
+	//
+	// ⚠ **DO NOT FEED IT INTO THE E3019 FIXPOINT, AND DO NOT DERIVE IT FROM ONE.** Whether a `let` argument
+	// is refused is `writtenParamMask`'s question and is deliberately WIDER (it is closed over the call graph
+	// from a body's own writes); this is narrower and is not a closure of anything. The two agree on most
+	// functions and are different facts, exactly as the two masks above are.
+	//
+	// Zero for a Std-phase function and for the overwhelming majority of Maxon ones — on a program that
+	// reassigns no parameter it is zero everywhere, which is what makes the feature free.
+	export var reassignedParamMask as ParamPositionMask
+
 	// ⭐ **THE E3070 BORROW FACTS THIS BODY RECORDED (`BorrowCheck`)** — which storages it borrowed an
 	// element out of, which binding took each borrow, and every write it saw go through one. It rides
 	// here for the reason `writtenParamMask` above does, and it is the SAME reason: the fact is the
@@ -472,6 +497,7 @@ export type IrFunction
 			isPure: true,
 			closureSubCounter: 0,
 			writtenParamMask: 0,
+			reassignedParamMask: 0,
 			storageWrittenParamMask: 0,
 			borrowFacts: sharedEmptyBorrowFacts
 		}
@@ -519,6 +545,7 @@ export type IrFunction
 			isPure: true,
 			closureSubCounter: 0,
 			writtenParamMask: 0,
+			reassignedParamMask: 0,
 			storageWrittenParamMask: 0,
 			borrowFacts: sharedEmptyBorrowFacts
 		}
@@ -561,6 +588,7 @@ export type IrFunction
 			isPure: src.isPure,
 			closureSubCounter: src.closureSubCounter,
 			writtenParamMask: src.writtenParamMask,
+			reassignedParamMask: src.reassignedParamMask,
 			storageWrittenParamMask: src.storageWrittenParamMask,
 			borrowFacts: src.borrowFacts
 		}

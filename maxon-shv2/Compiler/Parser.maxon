@@ -3274,6 +3274,34 @@ end 'isQualifiedUnderTypeName'
 // thing to get wrong on the day it stops being 0.
 export let TrivialDestructor = 0 as ParsedInt
 
+// ⭐ **A CELL HOLDS EXACTLY ONE VALUE, AT OFFSET 0 (PBR-2).** Named rather than spelled as a bare `0` at the
+// four sites that address one, for the reason a global's read names its own: the offset field is not dead
+// weight — it is what says the address is already the exact one, so a reader can tell "the whole of this box"
+// from "a slot inside it".
+export let CellContentOffset = 0 as ByteOffset
+
+// The local NAMES of one function body that must live in a cell (PBR-2) — see
+// `Parser.collectCellLocalNames`. Keyed by name and not by binding, because it is decided from TOKENS
+// before a single binding exists.
+typealias CellLocalNameSet = Set with ByteArray
+
+// ⭐ THE ONE EMPTY set every body that needs no cell answers with — so a program with no pass-by-reference
+// and no closure allocates nothing per function. NEVER mutated: `collectCellLocalNames` builds a fresh set
+// the moment it has something to put in one.
+let sharedEmptyCellLocalNames = CellLocalNameSet.create()
+
+// ⭐ **THE TOKEN INDEX AT WHICH A CALL ARGUMENT HAS ASKED FOR A BINDING'S CELL RATHER THAN ITS CONTENTS**
+// — see `Parser.cellArgumentTokenIndex`. Zero is the "nothing pending" answer and is not a sentinel dressed
+// as an index: token 0 of any file is its first declaration keyword, which is not inside a call's argument
+// list, so no real request can wear it.
+let NoCellArgumentRequest = 0 as TokenIndex
+
+// The size of a cell's payload — one machine word, because a cell holds one value and every value a binding
+// can hold is a word (a scalar, or the pointer a managed record IS). The same word an env slot occupies, and
+// it is stated separately for the reason `envSlotOffset`'s stride is: they are two slot kinds that happen to
+// agree, not one constant with two readers.
+export let CellPayloadBytes = 8 as ParsedInt
+
 // An array literal's elements must all have the FIRST element's type — one rule, so one wording, read by
 // the two walks over that grammar: the emitting one in a function body (`requireArrayLiteralElementMatches`)
 // and the folding one at top level (`evalConstArrayLiteral`, P1.7 slice 2b). Two copies would let the same
@@ -8734,6 +8762,35 @@ function reverseReachabilityMark(graph CsrGraph, seeds BoolArray) returns BoolAr
 	return marked
 end 'reverseReachabilityMark'
 
+// An instance method's SOURCE parameter names with the receiver prepended — the call-aligned list every
+// by-name sweep fact is indexed by, so `bits[i]` / `direct[i]` name the same slot a receiver-prepending call
+// site does. Shared by the two callers that need the alignment for different facts (`callAlignedInstanceParams`
+// for the consume/feed columns, `byRefScanParamNames` for the by-reference ones), because an alignment written
+// twice is two chances to disagree about where `self` sits.
+function callAlignedFrom(sourceNames ByteArrayArray) returns ByteArrayArray
+	var paramNames = ByteArrayArray.create()
+	paramNames.push(SelfParamName)
+	for sourceName in sourceNames 'eachSource'
+		paramNames.push(sourceName)
+	end 'eachSource'
+	return paramNames
+end 'callAlignedFrom'
+
+// Record a forwarding edge, de-duplicated. The list is per BODY and a body forwards to a handful of names,
+// so a linear membership test beats a set's allocation — the same trade `captureSlotFor` makes one column over.
+function noteForwardCallee(callees ByteArrayArray, name ByteArray)
+	if name.isEmpty() 'notACall'
+		return
+	end 'notACall'
+
+	for existing in callees 'each'
+		if existing.equals(name) 'alreadyRecorded'
+			return
+		end 'alreadyRecorded'
+	end 'each'
+	callees.push(name)
+end 'noteForwardCallee'
+
 export type Parser
 	var tokens as TokenArray
 	var pos as TokenIndex
@@ -9750,6 +9807,24 @@ export type Parser
 	// closure nested inside a closure detects a capture of any enclosing frame, not just its immediate
 	// parent — which is what stops an outer local silently resolving to a same-named global.
 	var closureCaptureScopes as ScopeArray
+	// ⭐⭐ **THE LOCAL NAMES THIS BODY MUST GIVE A CELL (PBR-2)** — filled once per function by
+	// `collectCellLocalNames` and read at every `var` declaration. Points at `sharedEmptyCellLocalNames` for
+	// every body that needs none, which is every body in a program that neither reassigns a parameter nor
+	// captures a mutated `var`.
+	var cellLocalNames as CellLocalNameSet
+	// ⭐ **DOES THIS FILE SPELL A CLOSURE LITERAL AT ALL?** The per-FILE gate on the capture half of the cell
+	// decision, computed once (`scanForClosureLiterals`) rather than re-derived per function: without a
+	// closure in the file no binding can be captured, so the per-body walk is not worth taking.
+	var fileHasClosureLiteral as bool
+	// ⭐⭐ **A CALL ARGUMENT AT A BY-REFERENCE POSITION HAS ASKED FOR THE CELL ITSELF (PBR-2).** Set by
+	// `parseCallArgs` to the argument's first token when that argument is exactly a name, and CONSUMED by
+	// `parseVariableReference`'s cell arm, which then hands back the cell's ADDRESS instead of loading it.
+	//
+	// ⚠ **IT IS KEYED ON THE TOKEN INDEX, AND A BARE BOOLEAN WOULD BE A WRONG ANSWER.** `f(x + 1)` at a
+	// by-reference position parses `x` through the same read door, and a flag would hand the cell's address to
+	// the `+`. The index says WHICH read may take it — the one standing on the argument's own first token —
+	// and every nested read sees a request that is not for it.
+	var cellArgumentTokenIndex as TokenIndex
 	// ⭐ **THE PARAMETER TYPE THE CURRENT CALL POSITION OFFERS AN UNTYPED CLOSURE LITERAL** — see
 	// `ClosureParamTypeHint`. `none` everywhere except across the one `parseExpression` that reads a
 	// container `map`'s transform argument, and `parseClosureExpression` TAKES it (reads and clears) at
@@ -10042,6 +10117,9 @@ export type Parser
 			lastFieldReadOffset: 0,
 			closureReturns: FuncReturnTypeMap.create(),
 			closureCaptureScopes: ScopeArray.create(),
+			cellLocalNames: sharedEmptyCellLocalNames,
+			fileHasClosureLiteral: false,
+			cellArgumentTokenIndex: NoCellArgumentRequest,
 			closureParamHint: ClosureParamTypeHint.none,
 			emptyMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()),
 			isStdlibSource: isStdlibSource,
@@ -10072,6 +10150,11 @@ export type Parser
 		// the uses. Set HERE rather than at `create`, because it is a property of which ENTRY POINT was
 		// called and not of how the parser was built — the sweep and the real parse are built alike.
 		self.collectsTypeNameUses = true
+		// ⭐ **THE PER-FILE HALF OF PBR-2's CELL GATE.** One linear pass, here, so the per-BODY walk it gates
+		// (`collectCellLocalNames`) is skipped outright in a file that spells no closure — which is nearly
+		// every file, and every file at all in a program that also reassigns no parameter. Set on the REAL
+		// parse only: the declaration sweep binds no locals and asks nothing of it.
+		self.fileHasClosureLiteral = self.scanForClosureLiterals()
 
 		while true 'top'
 			self.skipNewlines()
@@ -10092,6 +10175,22 @@ export type Parser
 		self.reportUnusedTypeAliases()
 		return self.artifact
 	end 'parseModule'
+
+	// ⭐ **DOES THIS FILE SPELL A CLOSURE LITERAL?** — `function` immediately followed by `(`, which is what
+	// tells an anonymous closure from a DECLARATION (`function name(…)`, whose `function` is followed by the
+	// name). One pass over the file's tokens, once, before anything is parsed.
+	//
+	// ⚠ It over-detects nothing it needs to be exact about: a false NEGATIVE would leave a captured-and-mutated
+	// `var` without a cell, which is the wrong answer this rung exists to fix, so the test is the LOOSE half of
+	// the closure grammar deliberately — any `function (` at all, wherever it stands.
+	function scanForClosureLiterals() returns bool
+		for q in 0 upto self.tokens.count() 'eachToken'
+			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.leftParen 'aClosureLiteral'
+				return true
+			end 'aClosureLiteral'
+		end 'eachToken'
+		return false
+	end 'scanForClosureLiterals'
 
 	// ⭐ **WHAT AN ABORTED PARSE STILL KNOWS — and it is exactly ONE thing.** A `ParseError` stops the
 	// file mid-way, so its module, its spans and its value origins are half-built and must be thrown
@@ -10157,6 +10256,7 @@ export type Parser
 		// from the SAME token walk. `recordScannedSignature` fills one entry per function whose body moves a
 		// parameter into a struct field, so a call site can decide whether an owned argument is moved.
 		var paramConsumes = ParamConsumeEntryArray.create()
+		var paramReassigns = ParamReassignEntryArray.create()
 		// ⭐ Per-function parameter DEFAULTS (BATCH2 slice 4) — the call-site dual of the return type, from
 		// the SAME token walk. One entry per function that declares at least one default, so a call site can
 		// decide whether an omitted argument is legal and which helper produces it.
@@ -10332,7 +10432,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
 				continue
 			end 'isFunction'
 
@@ -10354,7 +10454,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
 				continue
 			end 'isTypeDecl'
 
@@ -10364,7 +10464,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -10391,7 +10491,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED (ARRO).**
 		// Every one of these instances is one the COMPILER mints because the source names no type for it, so
@@ -10809,7 +10909,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -10953,8 +11053,35 @@ export type Parser
 		// RATHER THAN BY A GATE.** `scanConsumeBits` returns immediately on an empty `paramNames`, and that is
 		// exactly the declaration shape the walk above declines to read — so the two spellings of "do not scan
 		// this one" have become one.
-		self.scanConsumeBits(funcName, paramNames: scannedParamNames, typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, detectFieldStores: not takesReceiver)
+		//
+		// ⭐⭐ **AND PBR-2's BY-REFERENCE COLUMNS COME OUT OF THE SAME WALK, OFF A SECOND NAME LIST.** They must
+		// be read for an INSTANCE method too — a method that forwards a parameter into a reassigning one is as
+		// much a forwarder as a free function is, and three of `specs/pass-by-reference.md`'s transitive cases
+		// are exactly that program — whereas the consume half deliberately declines to read one. Hence two
+		// lists into one walk rather than a second walk of the same tokens.
+		self.scanBodyParamFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, paramsStart: paramsStart, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, detectFieldStores: not takesReceiver)
 	end 'recordScannedSignature'
+
+	// ⭐ **THE CALL-ALIGNED PARAMETER NAMES PBR-2's SCAN IS INDEXED BY.** For everything the consume scan
+	// already reads names for — a receiver-less declaration, a generic type's method — that list IS the
+	// call-aligned one and is handed straight back, so the common declaration costs nothing extra.
+	//
+	// The one shape it has to read for itself is a NON-GENERIC INSTANCE METHOD, which the consume scan skips
+	// (see there). Only the PARAMETER LIST is walked for it, never the body — the body walk is the one both
+	// facts share — and a method with no user parameters is left with an empty list, which ends the walk at
+	// `scanBodyParamFacts`' own guard rather than pushing `__self` alone through it.
+	function byRefScanParamNames(scannedParamNames ByteArrayArray, paramsStart TokenIndex, takesReceiver bool) returns ByteArrayArray
+		if not takesReceiver or scannedParamNames.count() != 0 'alreadyCallAligned'
+			return scannedParamNames
+		end 'alreadyCallAligned'
+
+		let sourceNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: self.emptyTypeParamPositions, collectTypeParamFlags: false)
+		if sourceNames.count() == 0 'nothingToForward'
+			return sourceNames
+		end 'nothingToForward'
+
+		return callAlignedFrom(sourceNames)
+	end 'byRefScanParamNames'
 
 	// ⭐ **THE DECLARATION'S OPAQUE-PARAMETER RECORD, OR THE SHARED "NONE" (ARRR)** — see `OpaqueParamInfo`
 	// for what a call site does with it. An info is built only when at least one parameter genuinely names a
@@ -11094,14 +11221,9 @@ export type Parser
 	// double-free at the concrete call site).
 	function callAlignedInstanceParams(paramsStart TokenIndex, typeParamPositionsOut TypeParamPositionArray) returns ByteArrayArray
 		typeParamPositionsOut.push(self.enclosingTypeParams.count())
-		let sourceNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true)
-		var paramNames = ByteArrayArray.create()
-		paramNames.push(SelfParamName)
-		for sourceName in sourceNames 'eachSource'
-			paramNames.push(sourceName)
-		end 'eachSource'
-		return paramNames
+		return callAlignedFrom(self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true))
 	end 'callAlignedInstanceParams'
+
 
 	// ⭐ **THE CONSUME SCAN (P1.4a wave 2)** — one entry per function whose body MOVES a parameter into
 	// durable storage (a struct-literal field value). A peek-only walk of the body from `bodyStart` to its
@@ -11131,8 +11253,15 @@ export type Parser
 		return self.paramTypeParamPositionAt(positions, index: index) < self.enclosingTypeParams.count()
 	end 'paramIsTypeParamTyped'
 
-	function scanConsumeBits(funcName ByteArray, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, detectFieldStores bool)
-		if paramNames.count() == 0 'noParams'
+	function scanBodyParamFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, detectFieldStores bool)
+		// ⚠ **TWO NAME LISTS, AND THEY ARE NOT THE SAME LIST.** The CONSUME half reads `paramNames`, which the
+		// caller leaves EMPTY for a non-generic instance method (a direct `Self{f: p}` store there is left to the
+		// callee-side borrowed-value refusal — see the call site). The BY-REFERENCE half reads `byRefParamNames`,
+		// which is call-aligned and filled for every declaration, because an instance method that forwards a
+		// parameter into a reassigning one is exactly as much a forwarder as a free function is
+		// (`pass-by-reference.transitive-reassign-through-sibling-methods` is that program). So the walk runs when
+		// EITHER has something to look for.
+		if paramNames.count() == 0 and byRefParamNames.count() == 0 'noParams'
 			return
 		end 'noParams'
 
@@ -11140,6 +11269,16 @@ export type Parser
 		for _ in 0 upto paramNames.count() 'initBits'
 			consumed.push(false)
 		end 'initBits'
+		// The two by-reference columns — see `SignatureIndex.ParamReassignInfo` for what each means and why the
+		// sweep records them separately instead of combining them here.
+		var reassignedDirect = BoolArray.create()
+		var reassignedForwarded = BoolArray.create()
+		for _ in 0 upto byRefParamNames.count() 'initByRefBits'
+			reassignedDirect.push(false)
+			reassignedForwarded.push(false)
+		end 'initByRefBits'
+		var forwardCallees = ByteArrayArray.create()
+		var statesByRef = false
 		// The type-parameter FEED map is a fresh array pre-filled with `none` ONLY inside a generic type's
 		// body — a feed requires a type-parameter-typed field, so a top-level function and a non-generic type's
 		// method (all of them on the generics-free corpus) keep the SHARED empty array (⚡ no per-function
@@ -11151,6 +11290,11 @@ export type Parser
 		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`/`[`. The innermost open
 		// bracket being a `{` is what distinguishes a struct-field `:` from a labelled-call-argument one.
 		var braceStack = BoolArray.create()
+		// ⭐ **THE CALLEE NAME OF EACH OPEN `(`, IN LOCKSTEP WITH `braceStack`** — what the forwarding probe
+		// records as an edge. It is captured when the bracket OPENS (the token before it), which is O(1) and
+		// exact; walking left from an argument to its own `(` would mean re-balancing brackets backwards at every
+		// candidate. A `{` and a grouping paren push an EMPTY name, which no function ever wears.
+		var openCallees = ByteArrayArray.create()
 		var blockDepth = 0 as BlockDepth
 
 		var q = bodyStart
@@ -11161,15 +11305,36 @@ export type Parser
 			end 'funcEnd'
 
 			let kind = self.kindAt(q)
-			if kind == TokenKind.leftBrace 'openBrace'
-				braceStack.push(true)
-			end 'openBrace'
-			if kind == TokenKind.leftParen 'openParen'
-				braceStack.push(false)
-			end 'openParen'
-			if (kind == TokenKind.rightBrace or kind == TokenKind.rightParen) and braceStack.count() > 0 'close'
-				_ = try braceStack.pop() otherwise panic("scanConsumeBits: braceStack.pop on non-empty stack failed")
-			end 'close'
+			self.trackBracketAt(q, braceStack: braceStack, openCallees: openCallees)
+
+			// ⭐⭐ **PBR-2's SEED: `p =` AT STATEMENT POSITION.** Asked through `assignsAt` — the SAME predicate the
+			// loop-phi scan decides a loop's carried vars by — so "what does a rebind look like in tokens" has one
+			// answer in this compiler. A write form taught to one is taught to both.
+			//
+			// ⚠ It still over-detects a `let cur = …` that SHADOWS a parameter, which is safe in the only
+			// direction that matters: the consequence is a parameter passed by reference that did not have to
+			// be — wasteful, never wrong, because a cell is a legal way to hold any value and both ends read
+			// this one column. The FIELD-store shape (`p.x = 5` where a parameter is named `x`) is excluded
+			// exactly, by `rebindsANameAt`; see there for the golden it moved.
+			if self.rebindsANameAt(q) 'rebindsAName'
+				let target = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
+				if target < byRefParamNames.count() 'ofOwnParameter'
+					try reassignedDirect.set(target, value: true) otherwise panic("scanBodyParamFacts: reassignedDirect.set OOB at {target} despite target < byRefParamNames.count()")
+					statesByRef = true
+				end 'ofOwnParameter'
+			end 'rebindsAName'
+
+			// ⭐⭐ **PBR-2's FORWARDING EDGE: this parameter handed on as a bare argument.** The parameter's bit and
+			// the callee's NAME are recorded together; whether the edge is LIVE is settled whole-program by
+			// `ProgramSignatures.closeByRefForwarding`, which is the only party that can see what the callee does.
+			if self.bareCallArgumentAt(q, braceStack: braceStack) 'handedOn'
+				let forwarded = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
+				if forwarded < byRefParamNames.count() 'ofOwnParameter'
+					try reassignedForwarded.set(forwarded, value: true) otherwise panic("scanBodyParamFacts: reassignedForwarded.set OOB at {forwarded} despite forwarded < byRefParamNames.count()")
+					noteForwardCallee(forwardCallees, name: try openCallees.get(openCallees.count() - 1) otherwise panic("scanBodyParamFacts: openCallees is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`"))
+					statesByRef = true
+				end 'ofOwnParameter'
+			end 'handedOn'
 
 			if detectFieldStores and kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldSep'
 				let idx = self.consumedParamAfterColon(q, paramNames: paramNames)
@@ -11236,13 +11401,7 @@ export type Parser
 				end 'fedField'
 			end 'maybeOpaqueFeed'
 
-			if self.opensBlockAt(q) 'opensBlock'
-				blockDepth = blockDepth + 1
-			end 'opensBlock' else 'notOpener'
-				if blockDepth > 0 and self.closesBlockAt(q) 'closesBlock'
-					blockDepth = blockDepth - 1
-				end 'closesBlock'
-			end 'notOpener'
+			blockDepth = self.blockDepthAfter(q, depth: blockDepth)
 
 			q = q + 1
 		end 'walk'
@@ -11250,7 +11409,15 @@ export type Parser
 		if any 'consumes'
 			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds)))
 		end 'consumes'
-	end 'scanConsumeBits'
+
+		// A body that neither reassigns nor forwards a parameter states nothing, exactly as a non-consuming one
+		// does — which is every function in every program written before PBR-2, so the whole-program map stays
+		// empty and `programTakesAParamByRef` answers false after one `count()`.
+		if statesByRef 'takesOrForwardsAByRefParam'
+			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(byRefParamNames, direct: reassignedDirect, forwarded: reassignedForwarded, calleeNames: forwardCallees, bareName: funcBareName)))
+		end 'takesOrForwardsAByRefParam'
+	end 'scanBodyParamFacts'
+
 
 	// The type-parameter-feed array `scanConsumeBits` starts from: the SHARED empty array outside a generic
 	// type (no feed is possible, ⚡ no allocation), or a fresh `count`-long array pre-filled with `none` inside
@@ -13122,6 +13289,18 @@ export type Parser
 		// declaration's parameter type: a silently wrong value, of a possibly wrong type, at run time. It is
 		// also what makes the helper's own name unique by construction (`paramDefaultHelperName` keys on the
 		// source name, which every member of an overload set shares).
+		// ⭐⭐ **A BY-REFERENCE PARAMETER (PBR-2) — the same unattributable-sweep-fact shape as the four above,
+		// and the one whose consequence is not a wrong diagnostic but a wrong ABI.** The declaration sweep
+		// publishes by-reference columns under the name the SOURCE wrote, and the caller decides whether to
+		// hand over an ADDRESS or a VALUE when the call is PARSED — a whole pass before `resolveOverloadedCalls`
+		// picks a member. So an overload set whose members disagree would have every call site compiled
+		// against whichever declaration the by-name sweep recorded last: the callee would dereference an
+		// integer, or read a pointer as its declared type. Nothing downstream can repair it, and unlike the
+		// four above there is no diagnostic to be missing — the program simply runs wrong.
+		if self.signatures.calleeTakesAnyParamByRef(base) 'byReferenceOverload'
+			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations REASSIGNS a parameter (or hands one to something that does), so that parameter is passed by REFERENCE, and the whole-program declaration sweep publishes that under the name the source wrote. A call to this name cannot be told which overload's parameter is an address, and the choice is made when the call is PARSED while the overload is resolved a whole pass later. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+		end 'byReferenceOverload'
+
 		if self.signatures.declaresParamDefaults(base) 'defaultedOverload'
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations gives a parameter a DEFAULT VALUE, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which overload's default to supply. The argument is filled when the call is parsed and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names, or drop the default", line: nameTok.line, column: nameTok.column)
 		end 'defaultedOverload'
@@ -13394,7 +13573,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
 		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
 		// cursor arrives here already on the `type` keyword. Read forwards it would answer `file` for every
@@ -13519,7 +13698,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 				continue
 			end 'isMethod'
 
@@ -13769,6 +13948,7 @@ export type Parser
 	export function foldExtensionDeclarationInto(index ProgramSignatures, site ExtensionDeclSite)
 		var entries = FuncReturnTypeEntryArray.create()
 		var paramConsumes = ParamConsumeEntryArray.create()
+		var paramReassigns = ParamReassignEntryArray.create()
 		var paramDefaults = ParamDefaultEntryArray.create()
 		var throwsEntries = ThrowsClauseEntryArray.create()
 		var methodInnerAliasParamOut = MethodInnerAliasParamEntryArray.create()
@@ -13949,7 +14129,7 @@ export type Parser
 				end 'theConformerDeclaresItsOwn'
 
 				match verdict 'verdict'
-					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName)
 				end 'verdict'
 				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
@@ -13964,7 +14144,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -14209,13 +14389,13 @@ export type Parser
 	// The published name is noted so `conformerDeclaresOwnMethod` can tell a conformer's own declaration from
 	// an extension's the next time it is asked — see that door for why the distinction is what keeps the
 	// verdict independent of fold order.
-	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		if shadowed 'theConformerDeclaresItsOwn'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
 			return
 		end 'theConformerDeclaresItsOwn'
 
-		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 		// The DECLARING FILE rides along because a SECOND file publishing this same name is what makes the two
 		// an overload set rather than a duplicate (X-contains) — see `ProgramSignatures.contestedExtensionMethods`.
 		index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath)
@@ -14225,7 +14405,7 @@ export type Parser
 	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
 	// lets the call site say something better than "no such method".
 	function foldWithheldExtensionMethod(index ProgramSignatures, conformer ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray)
-		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
 		index.recordConditionalExtensionSkip(qualifiedMethodName(conformer, methodName: methodName), skip: ConditionalExtensionSkip.create(conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName))
 	end 'foldWithheldExtensionMethod'
 
@@ -14250,7 +14430,7 @@ export type Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
 		// read this modifier forwards.
 		let visibility = self.visibilityBefore(self.pos)
@@ -14280,7 +14460,7 @@ export type Parser
 				self.pos = self.enumMethodKeywordIndex(self.pos)
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 				continue
 			end 'method'
 
@@ -19083,7 +19263,10 @@ export type Parser
 		// overload's mangled registration name. `overloadRegistrationNameFor` refuses an overload set whose
 		// name has consume facts at all, precisely so that this per-name answer cannot be one sibling's read
 		// as another's.
-		try self.bindParameters(sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
+		// ⭐ PBR-2: which of this body's local names need a cell, decided from tokens before the body is parsed
+		// (see `collectCellLocalNames` for why it is one walk per body and not one per declaration).
+		self.collectCellLocalNames(self.pos)
+		try self.bindParameters(func, funcName: sourceName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
 
 		self.skipNewlines()
 		// ⭐⭐ **A STDLIB BODY NO PATH FROM `main` REACHES IS SKIPPED WHOLE — the ops, and with them every
@@ -19600,12 +19783,27 @@ export type Parser
 	// ⚠ **THE BINDING IT THEN MARKS MAY BE A `let` THAT SHADOWS THAT `var`, AND THAT IS CORRECT.** The
 	// verdict is name-scoped (see `mutabilityExercisedNames`), so what matters is that the NAME lands in
 	// the list — which excuses the outer `var`, exactly as both references' per-name sets do.
+	// ⚠⚠ **THE GATE ASKS THE SCOPE, NOT `mutableVars`, AND PBR-2 IS WHY.** It used to ask
+	// `innermostMutableVarPosition` — membership in the loop-phi tracking list — as a cheap stand-in for "is
+	// this name a `var`?". A CELL-RESIDENT `var` is deliberately never pushed into that list (its pointer is
+	// loop-invariant, so it must mint no phi — see `declareCellLocal`), so the stand-in started answering NO
+	// for exactly the bindings pass-by-reference exists to serve: MEASURED as E3077 *"variable 'n' is never
+	// reassigned; use 'let' instead of 'var'"* on `var n = 0` + `setTo99(n)`, on nine cases at once.
+	//
+	// The scope answers the question that was always being asked, and answers it for both representations. It
+	// is equivalent for every binding the old test admitted: a `let`, a parameter and a self-field alias are
+	// all `mutable: false`, and a top-level `var` is not in scope here at all.
 	function markNameMutabilityExercised(name ByteArray)
-		if self.innermostMutableVarPosition(name) == NoMutableVar 'namesNoVarInScope'
+		if not self.scope.contains(name) 'namesNoLocalBinding'
+			return
+		end 'namesNoLocalBinding'
+
+		let binding = self.scope.getInfo(name)
+		if not binding.mutable 'namesNoVarInScope'
 			return
 		end 'namesNoVarInScope'
 
-		self.markMutabilityExercised(self.scope.getInfo(name))
+		self.markMutabilityExercised(binding)
 	end 'markNameMutabilityExercised'
 
 	// Does `names` hold this name? A linear scan because these lists are short (one entry per binding that
@@ -20301,7 +20499,25 @@ export type Parser
 	// is where that refusal becomes E3006, anchored on the PARAMETER's own name token, which is
 	// the declaration that has to change. The bootstrap reports the identical program at the
 	// identical token.
-	function bindParameters(funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, paramTypeStarts TokenIndexColumn) throws ParseError
+	// Install one parameter's binding — cell-resident when it arrives by reference, an ordinary value binding
+	// otherwise. One fork, at the one site that binds a parameter, so "what kind of binding is a parameter?"
+	// has a single answer and the `ScopeError` both kinds can raise is caught once at the caller.
+	function declareParameterOrCellBinding(paramName ByteArray, paramType MaxonType, paramIsMutable bool, paramIsByRef bool, paramValue ValueId) returns VarInfo throws ScopeError
+		if paramIsByRef 'arrivesAsACellAddress'
+			// ⚠ **THE FLOAT ALIAS IS COLLAPSED HERE AND NOWHERE LATER.** A `var` local's `varType` is the type
+			// of its INITIALIZER, which is already resolved; a parameter's is the DECLARED spelling, so a
+			// `typealias Float = float(…)` parameter arrives as `named(Float)`. Every reader of a cell
+			// binding's type — the load's mint, the store's width, the assignment's coercion — needs the
+			// machine class, and `x = 99.0` on such a parameter was E3009 ("cannot implicitly convert 'float'
+			// to 'int'") until this resolved it. A ranged INT alias stays `named` on purpose: its NAME is what
+			// carries the signedness `valueIsUnsigned` reads.
+			return try self.scope.declareCellBinding(paramName, varType: self.resolveFloatAliasType(paramType), mutable: paramIsMutable, cell: paramValue, isParameter: true)
+		end 'arrivesAsACellAddress'
+
+		return try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: paramValue)
+	end 'declareParameterOrCellBinding'
+
+	function bindParameters(func IrFunction, funcName ByteArray, paramNames ByteArrayArray, paramTypes MaxonTypeArray, paramRanges SourceRangeArray, paramSurfaces DeclaredSurfaceArray, paramTypeStarts TokenIndexColumn) throws ParseError
 		for i in 0 upto paramNames.count() 'eachParam'
 			let paramName = try paramNames.get(i) otherwise panic("bindParameters: paramNames.get OOB at {i}")
 			let paramType = try paramTypes.get(i) otherwise panic("bindParameters: paramTypes.get OOB at {i}")
@@ -20328,6 +20544,64 @@ export type Parser
 			// `x += 1`) has to be taught to `parseStatement`, and `assignsAt`'s comment is the
 			// standing instruction to teach the scan in the same edit. A mutating parameter is the
 			// case that instruction cannot reach, because it is not a statement at all.
+			// ⭐⭐ **IS THIS PARAMETER PASSED BY REFERENCE (PBR-2)?** The whole-program answer, asked of the
+			// declaration sweep under the name the SOURCE wrote — exactly as the consume facts below are, and for
+			// the identical reason: the sweep never sees an overload's mangled registration name.
+			// `requireOverloadableName` refuses an overload set that states by-reference facts at all, so this
+			// per-name answer can never be one sibling's read as another's.
+			//
+			// ⚠ **IT IS ASKED AT POSITION `i` OF THE CALL-ALIGNED LIST, WHICH IS THIS LOOP'S OWN INDEX.** An
+			// instance method's `paramNames` already carries `__self` at 0 by the time it reaches here
+			// (`parseFunction` prepends it), which is the same alignment the sweep recorded and the same one a
+			// receiver-prepending call site slots against.
+			// ⚡ **THE SCALAR GATE IS ASKED FIRST, AND THAT IS THE MEASURED SHAPE THIS FILE ALREADY WARNS
+			// ABOUT ONE COLUMN OVER.** `paramIsByRef` is a whole-program map lookup that returns a UNION, and
+			// `paramFeedOf`'s header records what that costs when asked per parameter per function: two
+			// allocations EVERY TIME, on a corpus that uses none of the feature. `programTakesAParamByRef` is
+			// a `count()` on a set that is EMPTY for every program written before this rung, so the
+			// overwhelmingly common function pays one integer comparison per parameter and nothing else.
+			let paramIsByRef = self.signatures.programTakesAParamByRef() and self.signatures.paramIsByRef(funcName, index: i)
+			if paramIsByRef 'arrivesAsACellAddress'
+				func.reassignedParamMask = maskWithParam(func.reassignedParamMask, param: i)
+			end 'arrivesAsACellAddress'
+
+			// ⭐⭐ **E3019's SEED FOR A PLAIN REASSIGNMENT (PBR-2).** `writtenParamMask` answers *"does passing
+			// an immutable binding HERE make it an error?"*, and a body that REBINDS the name is the plainest
+			// possible yes: `let n = 5` handed to a `setTo99(x)` whose body is `x = 99` must be refused, which
+			// is `pass-by-reference.let-to-mutating-param-error`. From there the existing machinery does the
+			// rest — `buildParamMutationSummary` closes it over the call graph and
+			// `checkImmutableArgToMutatingParam` reports it — so this rung adds a SEED and no new check.
+			//
+			// ⚠ **THE *DIRECT* COLUMN, NEVER `paramIsByRef`.** A forwarder takes its parameter by reference
+			// without writing anything of its own, and the fixpoint is what carries the callee's write back to
+			// it; seeding from the wider column would refuse a `let` at every forwarding position in the
+			// program. It is the same asymmetry PBR-1 established at the other door — a FIELD WRITE through a
+			// parameter deliberately does NOT feed this column, because the oracle accepts
+			// `let s = State.make()` handed to a `scan(state)` that writes `state.flag`.
+			// Gated on `paramIsByRef` rather than asked on its own: a DIRECT reassignment implies by-reference
+			// by construction (`isByRef` returns true on the direct column alone), so a parameter that failed
+			// the test above cannot pass this one — and the gate spares every other parameter in the program a
+			// second union-returning lookup.
+			if paramIsByRef and self.signatures.paramIsDirectlyReassigned(funcName, index: i) 'rebindsThisParameter'
+				func.writtenParamMask = maskWithParam(func.writtenParamMask, param: i)
+			end 'rebindsThisParameter'
+			// ⚠ **THE VALUE COLUMN KEEPS THE DECLARED TYPE, DELIBERATELY.** ValueId `i` physically holds a
+			// cell's ADDRESS, and an earlier cut of this rung retyped it to `integer` to say so — which made
+			// every tier above the lowering read a `Node` parameter as an `int`, and `SemanticCheck.checkArgTypes`
+			// refused all five transitive cases with `expected 'Node', got 'int'`. The representation is the
+			// LOWERING's to know (`LowerMaxonToStd.stdTypeOf`, off `reassignedParamMask`); the type is
+			// everyone else's.
+
+			// ⚠ THE LOOP-PHI TOKEN SCAN STILL DEPENDS ON THIS BEING FALSE, AND PBR-2 DID NOT CHANGE THAT — IT
+			// REMOVED THE NEED TO.
+			//
+			// A by-reference parameter is NOT bound mutable. It is bound CELL-RESIDENT (below), which takes it
+			// out of the phi-tracked class altogether: its name denotes a heap cell whose POINTER is
+			// loop-invariant, and its value is read out of memory at each use rather than carried by a block
+			// argument. So the phi `assignedBindingsIn` cannot mint for `mutate(p)` at a call site is a phi
+			// nothing wants, and the hazard below is answered by construction instead of by widening the scan.
+			// That is why the tripwire stands unchanged: it still catches the thing it was written to catch, and
+			// a real `var` parameter would still be wrong for exactly the reason it says.
 			let paramIsMutable = ParametersAreMutable
 			if paramIsMutable 'writesThisScanCannotSee'
 				panic("bindParameters: parameter '{String.from(paramName)}' is being bound MUTABLE, but `assignedBindingsIn` finds a loop's carried vars by scanning tokens for `identifier =` — and a `var` parameter is written by `mutate(p)` at the CALL SITE, leaving no `=` for that scan to find. The loop would mint no phi and the parameter would silently reset to its entry value every iteration. Teach `assignsAt`/`assignedBindingsIn` the new write form before binding a parameter mutable.")
@@ -20364,8 +20638,18 @@ export type Parser
 			// this returns (`skipUnreachedFunctionBody`), and emitting into its entry block would leave an
 			// op in a body nothing parses — the same byte-neutrality rule `lowerMaxonToStd` and
 			// `insertRangeChecks` both shut their doors onto.
-			let paramValue = self.narrowSignedParamValue(i as ValueId, paramType: paramType, range: paramRange)
-			let binding = try self.scope.declareParameterBinding(paramName, varType: paramType, mutable: paramIsMutable, value: paramValue) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
+			// ⚠ **A BY-REFERENCE PARAMETER TAKES ITS RAW SLOT AND SKIPS THE SIGN EXTENSION, WHICH IS NOT AN
+			// OPTIMIZATION.** The extension exists to widen a value that arrived out of a NARROW SIGNED SLOT;
+			// a by-reference parameter carries an ADDRESS, so extending it would sign-extend a pointer. It is
+			// also unnecessary: the value is read out of a cell that stores a full machine word
+			// (`wordSlotStorageType`), so nothing narrows it on the way in.
+			let paramValue = i if paramIsByRef else self.narrowSignedParamValue(i as ValueId, paramType: paramType, range: paramRange)
+			// ⭐⭐ **A BY-REFERENCE PARAMETER'S VALUE *IS* THE CELL** — the caller allocated it and the caller owns
+			// it, so this frame binds the name to that address and never drops it. Reads become `loadIndirect`
+			// through it and the rebind a `storeIndirect`, which is what makes the caller observe the write.
+			// `isParameter` still rides: it answers "may the container this name denotes be written?", which is
+			// a question a by-reference parameter answers exactly as any other parameter does.
+			let binding = try self.declareParameterOrCellBinding(paramName, paramType: paramType, paramIsMutable: paramIsMutable, paramIsByRef: paramIsByRef, paramValue: paramValue) otherwise throw ParseError.localShadowsSelfField(String.from(paramName), typeName: String.from(self.enclosingType), line: paramRange.line, column: paramRange.column)
 			// ⭐ **E3012 CANDIDATE: A DECLARED PARAMETER MUST BE READ** (`reportUnusedBindings`). Two names are
 			// not candidates and neither is a policy choice: `__self` is the RECEIVER the parser itself pushed,
 			// which no source token declares and a bare field read never mentions, so every instance method
@@ -20409,7 +20693,13 @@ export type Parser
 			// signature — the same boundary the transitive-consume fixpoint sits on. So a `match` on a consumed
 			// union parameter must RETAIN its payload rather than null the slot, or an incref-transferring caller
 			// re-reads a hole (measured on the sibling shapes; see `OwnedHeapExclusivity`).
-			if self.signatures.paramIsConsumed(funcName, index: i) and self.valueIsManagedHeap(i as ValueId) 'consumedManaged'
+			// ⚠ **A BY-REFERENCE PARAMETER IS NEVER ENROLLED OWNED, AND THE `not paramIsByRef` IS LOAD-BEARING
+			// RATHER THAN BELT-AND-BRACES.** The cell belongs to the CALLER's frame; dropping it here would free
+			// the caller's storage out from under it. The retype above already makes `valueIsManagedHeap` answer
+			// false for it — the value is an `integer` now — but that is a consequence of how the address is
+			// typed, not a statement of the ownership rule, and a future retype would silently take the guard with
+			// it. The rule is stated where it is decided.
+			if not paramIsByRef and self.signatures.paramIsConsumed(funcName, index: i) and self.valueIsManagedHeap(i as ValueId) 'consumedManaged'
 				self.markValueOwnsHeap(i as ValueId, exclusivity: OwnedHeapExclusivity.coOwned)
 				self.ownedBindings.push(binding)
 			end 'consumedManaged'
@@ -22006,6 +22296,19 @@ export type Parser
 			boundBareLocal = false
 		end 'promoteBorrowedBinding'
 
+		// ⭐⭐ **A `var` ANOTHER FRAME MUST BE ABLE TO WRITE LIVES IN A CELL FROM ITS DECLARATION (PBR-2).**
+		// Taken here, before the ordinary value binding, because the cell has to dominate every read of the
+		// name — there is no later point at which the representation could be changed, since the reads
+		// already emitted would be reading an SSA value nobody writes to.
+		//
+		// ⚠ A `let` never qualifies and the gate is not merely an optimization: an immutable binding cannot
+		// be reassigned by its own frame, and passing one to a parameter a callee reassigns is E3019 — so a
+		// cell for it would be storage nothing could ever legally write.
+		if mutable and self.cellLocalNames.contains(nameTok.value) 'livesInACell'
+			try self.declareCellLocal(func, nameTok: nameTok, boundValue: boundValue, rhsWasBareLocal: boundBareLocal)
+			return
+		end 'livesInACell'
+
 		// A local taking the name of a field of the enclosing type is E3006, not a shadow — see
 		// `Scope.declareValueBinding`. Anchored on the LOCAL's name token: the field is fine, the
 		// local is what has to be renamed.
@@ -22645,6 +22948,16 @@ export type Parser
 			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: self.valueDisplayTypeName(value), expected: self.displayTypeNameOf(declaredTag, nameId: typeNameIdOf(binding.varType)), line: nameTok.line, column: nameTok.column)
 		end 'aggregateReassignMismatch'
 
+		// ⭐⭐ **A CELL-RESIDENT BINDING IS REBOUND BY STORING, NOT BY `Scope.setValue` (PBR-2).** It never
+		// reaches `reassignBindingValue`: that routine's whole job is to move a binding from one SSA value to
+		// another and release what the old one owned, and a cell binding holds no SSA value to move — its
+		// contents live in memory, where a later read will find them. The release of the displaced occupant is
+		// the same obligation, discharged against the memory rather than against a value id.
+		if binding.isCellBinding 'livesInACell'
+			try self.reassignCellBinding(binding, nameTok: nameTok, value: assigned, rhsWasBareLocal: rhsWasBareLocal)
+			return
+		end 'livesInACell'
+
 		try self.reassignBindingValue(func, binding: binding, nameTok: nameTok, value: assigned, rhsWasBareLocal: rhsWasBareLocal)
 
 		// ⭐ A MATCH-ARM PAYLOAD BINDING IS ALSO A PLACE IN THE SCRUTINEE'S BOX, so the rebind above is only
@@ -22774,6 +23087,145 @@ export type Parser
 	// owned heap copy — the SAME fused-record copy a borrowed `return` makes (`promoteToOwnedString`) —
 	// keeps every reassignment of an owned binding a uniform owned→owned: the binding never moves, and
 	// an `if`/loop merge is handled by the phi machinery exactly as for any other carried value.
+	// ⭐ **ALLOCATE A CELL — one machine word on the heap, with the trivial destructor every shv2 box carries.**
+	// The ONE allocation site, shared by a cell-resident LOCAL and an r-value SCRATCH cell, so the two cannot
+	// come to disagree about a cell's size or its drop.
+	//
+	// ⚠ **HEAP AND NOT A STACK SLOT, WHICH IS THE RUNG'S RULED DESIGN AND NOT A CONVENIENCE.** shv2 has no
+	// addressable locals — a binding is an SSA value, there is no `stackAddr` and no mem2reg — so there is no
+	// stack address to hand a callee; and `wasm32-wasi` cannot take the address of a local at all, so both
+	// reference compilers' stack-slot design would have to box into linear memory there anyway.
+	// ⭐⭐ **THE CELL VALUE IS TYPED AS WHAT IT HOLDS, NOT AS THE POINTER IT IS — AND THAT IS THE DECISION
+	// THAT KEEPS EVERY TYPE RULE IN THE COMPILER WORKING ON A CELL-RESIDENT BINDING.** The cell stands for the
+	// binding, and the binding's type is its declared one, so `SemanticCheck.checkArgTypes` compares a `Node`
+	// against a `Node` at a by-reference argument, `enumAccessorFieldAt` still sees a `named` value where an
+	// enum accessor is legal, and `requireStructBase` still finds a layout. MEASURED as the alternative:
+	// tagged `integer`, every one of those read the ADDRESS's type and answered about the wrong thing —
+	// `argument type mismatch for 'cur': expected 'Node', got 'int'` on six cases and
+	// `a field access on 'c', which is declared 'int'` on a seventh.
+	//
+	// ⚠ **THE ONE READER THAT MUST NOT BELIEVE IT IS THE DROP ROUTER, AND IT IS HANDLED WHERE IT LIVES.**
+	// `decrefCalleeFor` routes on the tag, so a `Node`-tagged cell would be freed through `__destruct_Node` —
+	// running a struct's cascade over an 8-byte box. `emitScopeDrops`' cell arm therefore frees the box
+	// EXPLICITLY (`__mm_decref`) instead of asking the router, and releases the occupant through the router
+	// by LOADING it first — which is the value the router is actually right about.
+	//
+	// The ABI is unaffected: which parameters are addresses is `IrFunction.reassignedParamMask`'s answer, and
+	// the lowering reads that rather than a tag.
+	function allocateCell(declared MaxonType, range SourceRange) returns ValueId
+		return self.emitBoxAlloc(self.emitLiteral(CellPayloadBytes, valueType: MaxonType.integer, range: range), resultTag: maxonTypeTag(declared), resultNameId: typeNameIdOf(declared), range: range)
+	end 'allocateCell'
+
+	// Move `value` into a freshly allocated cell and hand the cell back — the shared body of the two things
+	// that put a value into one for the first time: a cell-resident LOCAL's initializer and an r-value
+	// SCRATCH cell's spill. Both owe the identical three steps (allocate, take ownership, store), and the
+	// ownership step is the one that must not be written twice: a managed value moved into durable storage
+	// has to be de-listed from the statement's pending drops, or the statement end frees what the cell holds.
+	function fillFreshCell(value ValueId, declared MaxonType, rhsWasBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+		let cell = self.allocateCell(declared, range: range)
+		var stored = value
+		if self.signatures.typeIsManaged(declared, from: self.artifact.typeNames) 'cellTakesOwnership'
+			stored = try self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(declared)), anchor: anchor, range: range)
+		end 'cellTakesOwnership'
+
+		self.emitIndirectStore(cell, offset: CellContentOffset, value: stored, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(declared)), range: range)
+		return cell
+	end 'fillFreshCell'
+
+	// ⭐⭐ **DECLARE A CELL-RESIDENT LOCAL (PBR-2).** The cell is this frame's: it is enrolled in
+	// `ownedBindings`, so `emitScopeDrops` releases what it holds and then frees it — the two-step drop that
+	// header describes.
+	//
+	// ⚠ **IT IS DELIBERATELY NOT PUSHED INTO `mutableVars`, AND THAT IS THE POINT OF THE WHOLE DESIGN.** A
+	// loop header mints a phi for every mutable binding in scope that the token scan sees assigned; a cell
+	// binding must mint NONE, because its name denotes a pointer that never changes and its value lives in
+	// memory. Tracking it would hand `installLoopPhi` a binding whose `boundValue` is the CELL and let the
+	// header rebind that — turning the address into a phi of addresses, one per iteration, of which only the
+	// first is real.
+	//
+	// ⚠ The E3012 candidacy and the pending-borrow attachment are owed exactly as they are by a value
+	// binding: it is the same declaration wearing a different representation, and neither diagnostic asks
+	// anything about how a name is stored.
+	// ⚠ It returns NOTHING, deliberately. It used to hand the binding back and its one caller — a VOID
+	// function — wrote `return try self.declareCellLocal(…)`, which produced an owned `VarInfo` that nothing
+	// dropped: MEASURED as `MM leak: 7 allocation(s) remain` in the COMPILER, on every program that declared a
+	// cell-resident local. Nothing wants the binding back; the scope and `ownedBindings` both hold it.
+	function declareCellLocal(func IrFunction, nameTok Token, boundValue ValueId, rhsWasBareLocal bool) throws ParseError
+		let range = SourceRange.ofToken(nameTok)
+		let declared = self.typeOf(boundValue)
+		let cell = try self.fillFreshCell(boundValue, declared: declared, rhsWasBareLocal: rhsWasBareLocal, anchor: nameTok, range: range)
+		var binding = try self.scope.declareCellBinding(nameTok.value, varType: declared, mutable: true, cell: cell, isParameter: false) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
+		self.attachPendingBorrows(func, borrower: binding, boundValue: boundValue, liveUntil: self.pos)
+
+		// `sole` — a fresh `__mm_alloc` three lines up whose pointer nothing else has been handed. The BOX is
+		// what this frame owns; what it holds is released through it (`emitScopeDrops`).
+		self.markValueOwnsHeap(cell, exclusivity: OwnedHeapExclusivity.sole)
+		self.ownedBindings.push(binding)
+	end 'declareCellLocal'
+
+	// ⭐⭐ **SPILL AN R-VALUE INTO A SCRATCH CELL FOR A BY-REFERENCE ARGUMENT (PBR-2)** — `reassign(41)`,
+	// `reassign(makeVal())`, `reassign(Node.create(1))`. An r-value has no caller-side binding and therefore no
+	// cell, but the callee's ABI still expects an address, so the caller materializes one.
+	//
+	// ⭐ **THE SLOT IS AN ANONYMOUS CELL BINDING, NOT A THIRD KIND OF TEMPORARY**, which is what gives it a
+	// correct drop for free: `emitScopeDrops` already releases a cell's occupant and then the cell, so the
+	// FINAL occupant — whether the callee replaced it or not — is released exactly once. That is precisely the
+	// discipline `specs/refcount-byref-rvalue-scratch-slot.md` describes, and both of v1's bugs there were in
+	// the machinery this shape does not need: it identifies the slot by WHAT IT IS rather than by an id
+	// ordering (`isByRefRvalueScratchSlot`'s `slotId >= slotMaxonTypes.count()`), so there is no sweep to
+	// widen and no uninitialised stack to decref — the cell is written by the spill before anything can read
+	// it, and it is a fresh allocation rather than a slot the entry zero-init loop might or might not cover.
+	// `buildClosureEnv`'s env block is the same "anonymous owned thing on the binding stack" shape.
+	//
+	// ⚠ It drops at the enclosing BLOCK's exit rather than at the statement's, which is later than strictly
+	// needed and is the conservative direction: the callee may have stored the argument somewhere the caller
+	// still reads through this statement, and a block is the smallest region the drop machinery indexes.
+	function materializeByRefScratchCell(value ValueId, anchor Token) returns ValueId throws ParseError
+		let range = SourceRange.ofToken(anchor)
+		let declared = self.typeOf(value)
+		// An r-value is not a bare local reference by construction — the call site only reaches here when the
+		// argument did NOT resolve to a cell-resident binding — so it moves nothing out of another name.
+		let cell = try self.fillFreshCell(value, declared: declared, rhsWasBareLocal: false, anchor: anchor, range: range)
+		self.markValueOwnsHeap(cell, exclusivity: OwnedHeapExclusivity.sole)
+		self.ownedBindings.push(VarInfo.createCellBinding(EmptySourceText, varType: declared, mutable: false, cell: cell, isParameter: false))
+		return cell
+	end 'materializeByRefScratchCell'
+
+	// ⭐⭐ **REBIND A CELL-RESIDENT BINDING (PBR-2) — THE WRITE A CALLER OBSERVES.** The exact shape
+	// `emitCheckedGlobalStore` already uses for module storage, one storage kind over, and for the same reason:
+	// a durable slot's write is THREE things and not one — take ownership of the new value, RELEASE the record
+	// the slot was holding, then store.
+	//
+	// ⚠ **THE ORDER IS LOAD-BEARING IN BOTH DIRECTIONS.** The release must come AFTER the new value is settled
+	// (`n = Node.create(n.value + 1)` reads the old occupant while building the new one) and BEFORE the store
+	// overwrites the only pointer to it. `reassignBindingValue`'s own header states the same rule for a `var`:
+	// *"release the overwritten allocation BEFORE the rebind, while `oldValue` still names it"*.
+	//
+	// ⚠ **UNLIKE THE GLOBAL STORE, THE DISPLACED VALUE IS LOADED RATHER THAN REMEMBERED.** A cell's occupant
+	// may have been written by a CALLEE through the very pointer this binding holds, so an SSA value the parser
+	// captured earlier is not what the cell contains — releasing that would free a record the cell no longer
+	// holds and leak the one it does. The load is what the cell actually holds at this instant, which is the
+	// only thing a release may act on. (`emitOpaqueSlotReleases` reaches the identical conclusion for a
+	// writable tuple slot.)
+	//
+	// ⚠ **A SCALAR CELL IS A BARE STORE.** No release is owed and none is emitted, so a by-reference `int`,
+	// `float`, `bool`, byte or enum parameter costs exactly one `storeIndirect` per rebind.
+	function reassignCellBinding(binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
+		let range = SourceRange.ofToken(nameTok)
+		if not self.signatures.typeIsManaged(binding.varType, from: self.artifact.typeNames) 'scalarCell'
+			self.emitCellStore(binding, value: value, range: range)
+			return
+		end 'scalarCell'
+
+		// The cell is DURABLE STORAGE, exactly as a global's slot or a struct field is, so the new value moves
+		// IN: a borrowed RHS (an element read out of a container, a String literal) is promoted to something the
+		// cell may own and drop, and an owned temporary is de-listed from the statement's pending drops so the
+		// statement end does not free what the cell now holds.
+		let owned = try self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(binding.varType)), anchor: nameTok, range: range)
+		self.emitDecref(self.emitCellLoad(binding, range: range), range: range)
+		self.emitCellStore(binding, value: owned, range: range)
+	end 'reassignCellBinding'
+
 	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
 		let oldValue = binding.boundValue
 
@@ -23061,7 +23513,21 @@ export type Parser
 		//
 		// `binding.mutable` implies `bindingStorageIsWritable`, so the conjunction is exactly the
 		// "declared `var` and not iteration-locked" this door has always asked.
-		if not (self.bindingStorageIsWritableHere(binding) and binding.mutable) 'immutable'
+		// ⭐⭐ **AND PBR-2 ADDS THE CELL RANK BESIDE THE `var` ONE, WHICH IS A THIRD ANSWER RATHER THAN A
+		// RELAXATION OF THE SECOND.** A by-reference parameter is bound IMMUTABLE — `ParametersAreMutable` is
+		// still false and the `bindParameters` tripwire still stands — yet `x = 99` on it is exactly what the
+		// language means by pass-by-reference. It is legal because the write is not a REBIND of an SSA name at
+		// all: it is a `storeIndirect` into the caller's cell, so the loop-phi exhaustiveness argument
+		// `binding.mutable` protects is not engaged.
+		//
+		// ⚠ **THE ITERATION LOCK STILL BINDS IT, AND THAT IS WHY THE CONJUNCT IS ADDED INSIDE AND NOT AROUND.**
+		// `bindingStorageIsWritableHere` is asked of a cell binding exactly as of any other — a `for … in`
+		// walking the record a name denotes refuses a write through it whatever the name's representation, and
+		// `for-iterated-self-field`'s four E2013 pins are that rule.
+		//
+		// A LOCAL cell is always a `var`, so it satisfies both conjuncts and this changes nothing for it; the
+		// only binding the second conjunct admits that the first did not is a by-reference PARAMETER.
+		if not (self.bindingStorageIsWritableHere(binding) and (binding.mutable or binding.isCellBinding)) 'immutable'
 			throw assignToImmutableError(nameTok)
 		end 'immutable'
 
@@ -26570,6 +27036,26 @@ export type Parser
 			// moved-out value drop exactly once. This one guard serves every exit that funnels through
 			// here — `return`, a block fall-through, a `break`/`continue`.
 			if not binding.movedFrom 'liveOwner'
+				// ⭐⭐ **A CELL IS DROPPED IN TWO STEPS, BECAUSE IT OWNS TWO THINGS (PBR-2)** — the record it holds
+				// and the one-word box holding it. The occupant is LOADED rather than remembered, for
+				// `reassignCellBinding`'s reason: a callee may have replaced it through the very pointer this
+				// binding hands out, so the value the parser last saw is not what the cell contains. Releasing that
+				// would free a record the cell no longer holds and leak the one it does — which is exactly the leak
+				// `refcount-byref-rvalue-scratch-slot` was written to pin.
+				//
+				// ⚠ Only a cell this frame OWNS reaches here: a by-reference PARAMETER's cell is the caller's and is
+				// never enrolled (`bindParameters`), so `ownedBindings` holds only locals and r-value scratch cells.
+				if binding.isCellBinding 'aCellOwnsTwoThings'
+					if self.signatures.typeIsManaged(binding.varType, from: self.artifact.typeNames) 'cellHoldsAManagedRecord'
+						self.emitDecref(self.emitCellLoad(binding, range: SourceRange.ofToken(anchor)), range: SourceRange.ofToken(anchor))
+					end 'cellHoldsAManagedRecord'
+
+					// The BOX, freed explicitly rather than through `emitDecref` — see `allocateCell` for why the
+					// tag-routed drop would run the CONTENT's destructor over an 8-byte cell.
+					self.emitOwnershipRuntimeCall(MmDecrefName, args: singletonArgs(binding.cellValue), range: SourceRange.ofToken(anchor))
+					continue
+				end 'aCellOwnsTwoThings'
+
 				self.emitDecref(binding.boundValue, range: SourceRange.ofToken(anchor))
 			end 'liveOwner'
 		end 'eachOwned'
@@ -42900,14 +43386,14 @@ export type Parser
 
 				self.advance()
 				try self.consume(TokenKind.dot)
-				return try self.dispatchArrayMethod(func, arr: record.boundValue, giid: self.signatures.internSynthesizedByteInstance(), resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(record, baseTok: baseTok), borrowSubjectName: subjectName, receiverOwner: owner, receiverStorage: self.subjectStorageMask(func, subjectName: subjectName), viaManagedField: true)
+				return try self.dispatchArrayMethod(func, arr: self.bindingValue(record, range: SourceRange.ofToken(baseTok)), giid: self.signatures.internSynthesizedByteInstance(), resultUsed: resultUsed, immutableReceiverName: self.immutableReceiverNameOf(record, baseTok: baseTok), borrowSubjectName: subjectName, receiverOwner: owner, receiverStorage: self.subjectStorageMask(func, subjectName: subjectName), viaManagedField: true)
 			end 'inlineManagedServesTheRecord'
 		end 'aCalledManagedFieldMember'
 
 		let held = try self.methodReceiverBinding(binding, baseTok: baseTok)
 
 		self.advance()
-		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(held.boundValue, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex), owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
+		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(self.bindingValue(held, range: SourceRange.ofToken(baseTok)), tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: self.borrowSubjectNameAt(baseIndex), owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
 	// Is this self-field alias the INLINE `managed` of a fused byte-record wrapper — the one field whose
@@ -48645,11 +49131,11 @@ export type Parser
 		end 'nothingToInherit'
 
 		let slot = self.inheritedWitnessSlotFor(constraintIndex)
-		// The read side of the env slot pair, derived through the SAME `envSlotStorageType` the store side
+		// The read side of the env slot pair, derived through the SAME `wordSlotStorageType` the store side
 		// (`buildClosureEnv`) asks — see `emitCaptureRead`, whose loads this deliberately mirrors rather than
 		// re-deriving a width. A witness table is a plain machine word, so the declared type IS the storage
 		// type; going through the shared door anyway is what keeps that true if either ever changes.
-		return self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.envSlotStorageType(MaxonType.integer), range: SourceRange.ofToken(anchor))
+		return self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.wordSlotStorageType(MaxonType.integer), range: SourceRange.ofToken(anchor))
 	end 'witnessValueForConstraint'
 
 	// The env slot carrying constraint `constraintIndex`'s inherited witness in the closure now being parsed,
@@ -53001,7 +53487,7 @@ export type Parser
 			throw ParseError.unsupported(structTypedSelfFieldBaseMessage(baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'structTypedField'
 
-		return StructBase.create(try self.structLayoutOfType(baseTag, nameId: baseTypeNameId, baseTok: baseTok), box: binding.boundValue, immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)
+		return StructBase.create(try self.structLayoutOfType(baseTag, nameId: baseTypeNameId, baseTok: baseTok), box: self.bindingValue(binding, range: SourceRange.ofToken(baseTok)), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)
 	end 'requireStructBase'
 
 	// The `StructLayout` a struct-typed (tag, nameId) pair names — the guarded layout half of
@@ -53596,6 +54082,51 @@ export type Parser
 	// the offset-and-width derivation a box's stores must agree on lives in one place (a literal storing
 	// `y` at one width and an assignment storing it at another would corrupt the box silently — see
 	// `emitFieldStore`).
+	// ⭐⭐ **THE VALUE A BINDING CURRENTLY HOLDS — THE ONE DOOR EVERY CONSUMER OF A BINDING'S VALUE ASKS
+	// (PBR-2).**
+	//
+	// For nearly every binding this is `boundValue`, the SSA value the name aliases. For a CELL-resident one
+	// it is a fresh `loadIndirect`, because `boundValue` holds the cell's ADDRESS and handing that to a
+	// consumer would give it a pointer where the source asked for a value.
+	//
+	// ⚠⚠ **THIS IS THE SAME CENSUS THE SELF-FIELD ALIAS ONCE OWED, AND THAT ONE COST THREE WRONG ANSWERS.**
+	// `VarInfo.boundValue`'s header records them: three readers took an alias's unset 0 for a real id, and
+	// each was a silent miscompile rather than a compile error — `return count` compiling to `return self`.
+	// A cell binding is the same hazard with the opposite sign: `boundValue` is a REAL id, so nothing panics;
+	// the consumer simply acts on the box instead of on what is in it. Every site that wants a binding's
+	// VALUE goes through here. The sites that legitimately want `boundValue` itself are the ones asking about
+	// OWNERSHIP or IDENTITY — the drop at scope exit, the owned-binding scans, the move/alias searches — and
+	// for a cell binding the thing this frame owns and the thing another name could alias IS the cell.
+	//
+	// ⚠ The loop-phi and merge-snapshot writers (`boundValue = phiId`) are not in either group and need no
+	// arm: a cell binding is never pushed into `mutableVars` (`declareCellLocal`), so no phi machinery can
+	// reach one.
+	function bindingValue(binding VarInfo, range SourceRange) returns ValueId
+		if binding.isCellBinding 'livesInACell'
+			return self.emitCellLoad(binding, range: range)
+		end 'livesInACell'
+
+		return binding.boundValue
+	end 'bindingValue'
+
+	// ⭐⭐ **READ A CELL-RESIDENT BINDING (PBR-2)** — the one load, paired with the one store below. A cell
+	// holds exactly one value at offset 0, so unlike an env slot there is no index to get wrong; what MUST
+	// agree is the WIDTH, which is why both sides ask `wordSlotStorageType` rather than spelling a width.
+	//
+	// The declared type goes through `resolveFloatAliasType` for `emitCaptureRead`'s reason: a ranged INT alias
+	// must stay `named` (its NAME carries the signedness `valueIsUnsigned` reads), while the one alias whose
+	// VALUE is a different machine class is collapsed here so the load is minted at the right register class.
+	function emitCellLoad(binding VarInfo, range SourceRange) returns ValueId
+		let cellType = self.resolveFloatAliasType(binding.varType)
+		return self.emitIndirectLoad(cellType, box: binding.cellValue, offset: CellContentOffset, storageType: self.wordSlotStorageType(cellType), range: range)
+	end 'emitCellLoad'
+
+	// ⭐⭐ **WRITE A CELL-RESIDENT BINDING (PBR-2)** — the rebind, which for this binding kind is a store and
+	// not a `Scope.setValue`. That is the whole of what makes a caller observe a callee's `x = 99`.
+	function emitCellStore(binding VarInfo, value ValueId, range SourceRange)
+		self.emitIndirectStore(binding.cellValue, offset: CellContentOffset, value: value, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(binding.varType)), range: range)
+	end 'emitCellStore'
+
 	function emitIndirectStore(box ValueId, offset ByteOffset, value ValueId, storageType MaxonType, range SourceRange)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.storeIndirect(box, offset: offset, value: value, valueType: storageType), range: range)
 	end 'emitIndirectStore'
@@ -53739,6 +54270,9 @@ export type Parser
 	// `bareArgImmutableName`). Each arm that can answer sets it, through the same `immutableReceiverNameOf`
 	// a receiver asks, so an argument and a receiver naming the same binding get the same verdict.
 	function parseVariableReference() returns ValueId throws ParseError
+		// Captured before the cursor leaves it: a by-reference call argument identifies the ONE read that may
+		// take a cell's address by the token it stands on (`cellArgumentTokenIndex`).
+		let nameIndex = self.pos
 		// A KEYWORD-named binding is read here too (D8) — `return type` inside `function identity(type Integer)`.
 		// `parsePrimary`'s keyword arm has already established that the name RESOLVES, so this consume never
 		// admits a keyword the resolution below would then have to reject.
@@ -53762,6 +54296,24 @@ export type Parser
 			let binding = self.scope.getInfo(tok.value)
 			try self.requireBindingLive(binding, nameTok: tok)
 			self.lastBareBindingImmutableName = self.immutableReceiverNameOf(binding, baseTok: tok)
+
+			// ⭐⭐ **A CELL-RESIDENT NAME ALIASES NO SSA VALUE (PBR-2), so its read is a LOAD** — the same shape
+			// the self-field alias two arms up already takes, and for the same reason: `boundValue` holds the
+			// CELL, and handing that back would give the caller a pointer where the source asked for a value.
+			// Reading through memory at every use is exactly what makes a write from another frame visible here.
+			if binding.isCellBinding 'livesInACell'
+				// ⭐⭐ **A BY-REFERENCE ARGUMENT ASKED FOR THE CELL ITSELF, so this read hands over the ADDRESS
+				// and emits no load at all.** Keyed on the token index rather than on a flag — see
+				// `cellArgumentTokenIndex` for the `f(x + 1)` wrong answer a flag would give — and CLEARED
+				// here, which is also how the call site learns its request was taken.
+				if self.cellArgumentTokenIndex == nameIndex 'handOverTheCell'
+					self.cellArgumentTokenIndex = NoCellArgumentRequest
+					return binding.cellValue
+				end 'handOverTheCell'
+
+				return self.emitCellLoad(binding, range: SourceRange.ofToken(tok))
+			end 'livesInACell'
+
 			return binding.boundValue
 		end 'local'
 
@@ -53932,8 +54484,29 @@ export type Parser
 		// asks. That the two ask ONE routine is the invariant, not a tidiness: a slot filled at one
 		// width and read at another corrupts the environment silently.
 		let captureType = self.resolveFloatAliasType(binding.varType)
+		let range = SourceRange.ofToken(anchor)
+
+		// ⭐⭐ **A CELL-RESIDENT BINDING IS CAPTURED BY ITS CELL, AND THAT IS WHAT MAKES CAPTURE BY REFERENCE
+		// (PBR-2).** The env slot holds the cell's ADDRESS rather than a snapshot of its contents, so the read
+		// is TWO loads deep — out of the env, then out of the cell — and sees whatever the enclosing frame has
+		// written since. This is exactly v1's model (`sys.stackAddr` into the env, two indirect loads back);
+		// what differs is only WHERE the storage lives, since shv2 has no addressable locals.
+		//
+		// ⚠ **THE ENV SLOT'S TYPE IS THE POINTER'S, NOT THE CONTENT'S**, and `buildClosureEnv`'s store reads
+		// back the same recorded type — so a captured `float` cell stores and loads its ADDRESS as a machine
+		// word and only the second load is float-typed. Recording the content type here would have the env
+		// store put a pointer through an f64 slot.
+		//
+		// ⚠ It costs nothing for every OTHER capture: a binding that is not cell-resident is unchanged, which
+		// is every capture in the corpus — `closure-capture-by-ref`'s `let x = 42` included, because a `let`
+		// never needs a cell.
+		if binding.isCellBinding 'capturedByItsCell'
+			let cell = self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(self.captureSlotFor(name, enclosingValue: binding.cellValue, captureType: MaxonType.integer)), storageType: self.wordSlotStorageType(MaxonType.integer), range: range)
+			return self.emitIndirectLoad(captureType, box: cell, offset: CellContentOffset, storageType: self.wordSlotStorageType(captureType), range: range)
+		end 'capturedByItsCell'
+
 		let slot = self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: captureType)
-		return self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.envSlotStorageType(captureType), range: SourceRange.ofToken(anchor))
+		return self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.wordSlotStorageType(captureType), range: range)
 	end 'emitCaptureRead'
 
 	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
@@ -54816,6 +55389,10 @@ export type Parser
 		let savedDroppedOpaqueWithoutDescriptor = self.functionDroppedOpaqueWithoutDescriptor
 		let savedStoredOpaqueWithoutDescriptor = self.functionStoredOpaqueWithoutDescriptor
 		let savedClosureEnvParamId = self.closureEnvParamId
+		// PBR-2: the closure body computes its OWN cell-resident local names (`collectCellLocalNames`, below), so
+		// the enclosing function's set has to come back with the rest of its parse state — otherwise every `var`
+		// declared after the closure would be tested against the closure's answer.
+		let savedCellLocalNames = self.cellLocalNames
 		// ⭐⭐ **THE RANGE-CHECK ACCUMULATORS SWAP TOO, AND THEY DID NOT UNTIL THE P1.9 REVIEW.** They are
 		// per-function for the reason every column above is: a site names a ValueId AND a BlockId in the
 		// SSA/CFG space of the function being parsed, and a closure gets its OWN `IrFunction` with its own
@@ -54980,7 +55557,11 @@ export type Parser
 		let entry = self.artifact.module.addBlockAt(lifted, label: b"entry", filePath: self.filePath.toString(), firstLine: givesTok.line)
 		self.currentBlock = entry
 
-		try self.bindParameters(closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
+		// PBR-2: a closure body is a body like any other — its own locals may need cells, and its `cellLocalNames`
+		// must not be the enclosing function's. Saved and restored with the rest of the closure's parse state
+		// (`savedCellLocalNames` above).
+		self.collectCellLocalNames(self.pos)
+		try self.bindParameters(lifted, funcName: closureName, paramNames: paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts)
 
 		// Parse the single body expression, then close the lifted function like a value `return`: the body
 		// IS the closure's returned value, so `emitOwnedValueReturn` promotes a borrowed String to owned and
@@ -55062,6 +55643,7 @@ export type Parser
 
 		// --- Restore the enclosing function's parse context. ---
 		_ = try self.closureCaptureScopes.pop() otherwise panic("parseClosureExpression: closureCaptureScopes underflow — the enclosing scope pushed at entry is missing")
+		self.cellLocalNames = savedCellLocalNames
 		self.scope = savedScope
 		self.valueIds = savedValueIds
 		self.mutableVars = savedMutableVars
@@ -55181,7 +55763,7 @@ export type Parser
 			// The WIDTH comes from `fieldStorageType` and the OFFSET from `envSlotOffset`, because
 			// `emitCaptureRead` reads the slot back through those same two — and `capType` is the
 			// SOURCE type it recorded, which for a ranged alias is `named` and has no width of its own.
-			self.emitIndirectStore(env, offset: envSlotOffset(i), value: capValue, storageType: self.envSlotStorageType(capType), range: range)
+			self.emitIndirectStore(env, offset: envSlotOffset(i), value: capValue, storageType: self.wordSlotStorageType(capType), range: range)
 		end 'storeEach'
 
 		// `sole` — a fresh `__mm_alloc` four lines up, whose pointer nothing else has been handed.
@@ -55190,9 +55772,10 @@ export type Parser
 		self.markCapturingClosure(closureValue, env: env)
 	end 'buildClosureEnv'
 
-	// ⭐ **THE WIDTH OF ONE ENV SLOT — `fieldStorageType`, except that an `exitCode` capture occupies a FULL
-	// MACHINE WORD.** The one door for the STORE (`buildClosureEnv`) and the READ (`emitCaptureRead`); they
-	// address the same slot, so a second spelling is a silent environment corruption.
+	// ⭐ **THE WIDTH OF ONE FULL-WORD SLOT — `fieldStorageType`, except that an `exitCode` occupies a FULL
+	// MACHINE WORD.** The one door for every store and load into a slot that has no neighbour to pack against:
+	// a closure ENV slot (`buildClosureEnv` / `emitCaptureRead`) and a PBR-2 CELL (`emitCellLoad` /
+	// `emitCellStore`). They address the same kind of slot, so a second spelling is a silent corruption of it.
 	//
 	// An env slot is `EnvSlotBytes` wide BY CONSTRUCTION — `envSlotOffset` strides by it — so unlike a struct
 	// field there is no packing to respect: a scalar capture has a whole word to itself whatever its declared
@@ -55220,11 +55803,11 @@ export type Parser
 	// Pinned by `closure-capture.capture-exitcode-from-alias-call`, `.capture-exitcode-from-interface-method`
 	// and `.capture-exitcode-wide-value` — the last because the first two carry `9`, which survives even a
 	// 1-byte slot, so they pin THAT the capture works and not the width it works at.
-	function envSlotStorageType(declared MaxonType) returns MaxonType
+	function wordSlotStorageType(declared MaxonType) returns MaxonType
 		let stored = self.fieldStorageType(declared)
 
 		return MaxonType.integer if maxonTypeTag(stored) == ValueTypeTag.exitCode else stored
-	end 'envSlotStorageType'
+	end 'wordSlotStorageType'
 
 	// `globalAddr <label>` then `loadIndirect <addr> 0` — the two ops a global's read is.
 	//
@@ -57715,6 +58298,14 @@ export type Parser
 			return
 		end 'noArgs'
 
+		// ⚡ **THE CALLEE'S BY-REFERENCE FACTS ARE READ ONCE PER CALL, NOT ONCE PER ARGUMENT** — `byRefOf`
+		// returns a union (a heap box) and `forwardingIsLiveFor` is a map lookup, and neither answer can change
+		// between two arguments of one call. Asked inside the loop they were an allocation per argument of
+		// every call in the program; hoisted, a program that uses no pass-by-reference pays one `count()` per
+		// call and builds nothing.
+		let calleeByRef = self.signatures.byRefOf(callee) if self.signatures.programTakesAParamByRef() else CalleeByRefParams.allByValue
+		let calleeForwardingIsLive = self.signatures.forwardingIsLiveFor(callee)
+
 		var argIndex = 0 as ParamCount
 		while true 'argLoop'
 			// The argument's leading token — the label token when labelled, else the
@@ -57723,6 +58314,19 @@ export type Parser
 			let label = try self.consumeArgLabel(argIndex, rule: rule)
 			let valueTok = self.current()
 			let valueStart = self.pos
+			// ⭐⭐ **PBR-2: DOES THIS POSITION TAKE ITS ARGUMENT BY REFERENCE?** Asked BEFORE the value is
+			// parsed, because the answer changes what the parse must produce — an address rather than a value —
+			// and a read that has already materialized the contents cannot be un-emitted. The label and the
+			// column are both in hand here, which is what makes the position answerable this early.
+			let byRefPosition = calleeTakesArgumentByRef(calleeByRef, argIndex: args.count(), label: label, forwardingIsLive: calleeForwardingIsLive)
+			// Only an argument that is EXACTLY a name can hand over a cell; anything else is an r-value and
+			// gets a scratch cell below. Requesting it here (rather than testing afterwards) is what lets the
+			// read door skip its load entirely.
+			var requestedTheCell = false
+			if byRefPosition and self.argumentIsExactlyANameAt(valueStart) 'mayHandOverACell'
+				self.cellArgumentTokenIndex = valueStart
+				requestedTheCell = true
+			end 'mayHandOverACell'
 			// ⚠ The blame name is CLEARED before the argument is parsed — by `parseValueExpression` itself,
 			// which is the one door every value expression comes through and therefore the one place that
 			// clear can be stated once. See `bareArgImmutableName` for what the clear is for.
@@ -57730,6 +58334,17 @@ export type Parser
 			// `parseExpression`: an argument is parsed INSIDE an expression that has already seeded
 			// `currentBlock`, and re-seeding it would discard a short-circuit an EARLIER argument performed.
 			let value = try self.parseValueExpression(func)
+			// The read CLEARS the request when it takes it, so this is how the call site learns whether it was
+			// handed a cell. Cleared unconditionally either way: a request the read declined (the name was not
+			// cell-resident) must not outlive this argument.
+			let handedTheCell = requestedTheCell and self.cellArgumentTokenIndex == NoCellArgumentRequest
+			self.cellArgumentTokenIndex = NoCellArgumentRequest
+
+			// ⭐⭐ **AN R-VALUE AT A BY-REFERENCE POSITION GETS A SCRATCH CELL** — a literal, an expression, a
+			// fresh call result, or a binding that is not cell-resident (a `let`, which `checkImmutableArgToMutatingParam`
+			// refuses with E3019 a phase later — the spill keeps the IR well-formed until that diagnostic is
+			// reported, exactly as every other recovery here does).
+			let passed = try self.byRefArgumentValue(value, byRefPosition: byRefPosition, handedTheCell: handedTheCell, anchor: valueTok)
 
 			// ⭐ **E3077's ARGUMENT DOOR.** `f(x)` may write `x` — whether it does is the callee's
 			// `writtenParamMask`, a whole-program fact SemanticCheck settles a phase after this diagnostic is
@@ -57750,7 +58365,7 @@ export type Parser
 			// `argSlotPosition` maps to a parameter position (`noteBorrowSubjectCallArg`).
 			self.noteBorrowSubjectCallArg(func, callee: callee, anchor: anchor, argColumn: args.count(), argLabel: label, valueStart: valueStart)
 
-			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: value, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
+			pushCallArg(args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, value: passed, label: label, range: SourceRange.ofToken(argFirstTok), immutableName: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
 			argIndex = argIndex + 1
 
 			if not self.at(TokenKind.comma) 'endArgs'
@@ -57759,6 +58374,18 @@ export type Parser
 			try self.consume(TokenKind.comma)
 		end 'argLoop'
 	end 'parseCallArgs'
+
+	// What this argument actually hands the callee: the value as parsed when the position takes it by value,
+	// the binding's own cell when the read handed one over, and a fresh SCRATCH cell when the position is
+	// by-reference and there was no cell to hand. Split out so the argument loop states the rule once and the
+	// three outcomes are named rather than nested.
+	function byRefArgumentValue(value ValueId, byRefPosition bool, handedTheCell bool, anchor Token) returns ValueId throws ParseError
+		if not byRefPosition or handedTheCell 'nothingToMaterialize'
+			return value
+		end 'nothingToMaterialize'
+
+		return try self.materializeByRefScratchCell(value, anchor: anchor)
+	end 'byRefArgumentValue'
 
 	// ⭐⭐ **THE NAME AN E3019 WOULD BLAME FOR THE ARGUMENT JUST PARSED — and the ONE token that makes the
 	// question answerable.** An argument names an immutable binding only if it IS that name and nothing
@@ -59372,6 +59999,241 @@ export type Parser
 		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.equals
 	end 'assignsAt'
 
+	// ⭐⭐ **`assignsAt` PLUS THE ONE QUALIFIER A *REBIND* NEEDS AND A LOOP PHI DOES NOT (PBR-2): a name
+	// preceded by `.` is a FIELD, not a binding.** `hh.op = op` writes a field OF `hh` and rebinds nothing
+	// called `op` — but the token `op` is followed by `=`, so the bare textual test answers yes.
+	//
+	// ⚠ **MEASURED, and it was not merely wasteful.** `first-class-function.capturing-closure-name-not-leaked`
+	// declares `storeIt(h Handler, op UnaryOp)` whose body is `hh.op = op`: the field name and the PARAMETER
+	// name coincide, so the seed marked `op` reassigned. That opened the program-wide gate, made `op`
+	// by-reference, and put a cell under a parameter nothing ever writes — correct output, moved codegen, and
+	// a golden that drifted for no reason a reader could find.
+	//
+	// ⚠ **IT IS NOT FOLDED INTO `assignsAt`, BECAUSE THAT PREDICATE ANSWERS A DIFFERENT QUESTION.** The
+	// loop-phi scan asks "does this token sequence look like a write to a carried name", where a false
+	// positive costs a phi that `ElimTrivialBlockArgs` folds away; this asks "does this body REBIND its own
+	// parameter", where a false positive costs an ABI. Same tokens, different tolerance — so the shared half
+	// stays shared and the qualifier lives with the stricter reader.
+	function rebindsANameAt(index TokenIndex) returns bool
+		if not self.assignsAt(index) 'notAnAssignmentAtAll'
+			return false
+		end 'notAnAssignmentAtAll'
+
+		return index == 0 or self.kindAt(index - 1) != TokenKind.dot
+	end 'rebindsANameAt'
+
+	// ⭐ **IS THE TOKEN AT `index` A BARE NAME STANDING ALONE AS A CALL ARGUMENT?** — PBR-2's forwarding probe
+	// (`scanBodyParamFacts`), and the token-level twin of what `argWasBareName` asks of the real parse: an
+	// argument names a binding only if it IS that name and nothing else.
+	//
+	// Four conditions, and the bracket one is what tells an ARGUMENT from a grouping paren's contents or a
+	// struct literal's field value: the innermost open bracket must be a `(`. A struct literal is `{…}` and is
+	// excluded by it, which is right — a field store is a CONSUME (the column above), never a forward.
+	//
+	// ⚠ **A PARAMETER'S NAME MAY BE A KEYWORD (D8)**, so this asks `tokenCanBeAName` rather than
+	// `== identifier`, for the reason `consumedParamAfterColon` states with its measurement. Claiming nothing
+	// extra: the name is looked up in the parameter list by the caller, and a keyword naming no parameter is
+	// dropped exactly as an unrelated identifier is.
+	//
+	// ⚠ It over-detects a GROUPING paren whose whole contents are one name — `(x)` reads as an argument. The
+	// edge it records then carries whatever name preceded the paren, which no function wears, so
+	// `noteForwardCallee` drops it and only the parameter's own `forwarded` bit is set. Harmless: a forwarded
+	// bit with no live edge never widens anything.
+	// ⭐ **THE BRACKET BOOKKEEPING BOTH PEEK-ONLY BODY WALKS KEEP** — `scanBodyParamFacts` (the sweep's, over a
+	// whole declaration) and `localNeedsACell` (the parse's, over one binding's remaining scope). They ask
+	// different questions and need the identical state, and a second copy of a push/pop pair is a second chance
+	// for the two columns to fall out of lockstep — at which point `openCallees`' top names the wrong call and
+	// a forwarding edge is recorded against a function that never saw the argument.
+	//
+	// `openCallees` carries the callee name of each open `(` (EMPTY for a `{` and for a grouping paren), which
+	// is what makes "which call is this argument in?" an O(1) read of the top rather than a backwards walk.
+	function trackBracketAt(index TokenIndex, braceStack BoolArray, openCallees ByteArrayArray)
+		let kind = self.kindAt(index)
+		if kind == TokenKind.leftBrace 'openBrace'
+			braceStack.push(true)
+			openCallees.push(EmptySourceText)
+		end 'openBrace'
+
+		if kind == TokenKind.leftParen 'openParen'
+			braceStack.push(false)
+			openCallees.push(self.calleeNameOpeningAt(index))
+		end 'openParen'
+
+		if (kind == TokenKind.rightBrace or kind == TokenKind.rightParen) and braceStack.count() > 0 'close'
+			_ = try braceStack.pop() otherwise panic("trackBracketAt: braceStack.pop on non-empty stack failed")
+			_ = try openCallees.pop() otherwise panic("trackBracketAt: openCallees.pop failed — it is pushed and popped in lockstep with braceStack")
+		end 'close'
+	end 'trackBracketAt'
+
+	// The BLOCK-DEPTH bookkeeping those same two walks keep, for `trackBracketAt`'s reason. Depth 0 is the walk's
+	// own starting level, so a `closesBlockAt` there is the walk's terminator and is left for the caller to see.
+	function blockDepthAfter(index TokenIndex, depth BlockDepth) returns BlockDepth
+		if self.opensBlockAt(index) 'opensBlock'
+			return depth + 1
+		end 'opensBlock'
+
+		if depth > 0 and self.closesBlockAt(index) 'closesBlock'
+			return depth - 1
+		end 'closesBlock'
+
+		return depth
+	end 'blockDepthAfter'
+
+	// ⭐⭐ **WHICH OF THIS BODY'S LOCAL NAMES HAVE TO LIVE IN A CELL (PBR-2)?** — the caller-side half of the
+	// decision the sweep makes for parameters, and it has to be made before the body is parsed, because a cell
+	// has to dominate every read of the name it holds.
+	//
+	// TWO reasons, and they are independent — a program can need either without the other:
+	//
+	//   • the name is handed to a call that takes that argument BY REFERENCE, so the callee's write must land
+	//     in this frame;
+	//   • the name is CAPTURED by a closure AND assigned, so the closure must see the assignment. Capture is
+	//     by value (`emitCaptureRead`), and a captured cell's env slot holds the POINTER — which is what makes
+	//     `pass-by-reference.closure-capture-after-mutation` return 99 instead of the 10 it returned before.
+	//
+	// ⚠⚠ **ONE WALK PER BODY, NOT ONE PER DECLARATION, AND THAT IS A SCALING RULE RATHER THAN A TIDY-UP.**
+	// Asked at each `var` over the rest of its scope this is Θ(vars × tokens) — the exact shape
+	// `Parse Θ(vars × constructs)` was found and closed as, and it bends in CPU while reading FLAT in
+	// allocations, so the memory column could not have caught it. The names are collected once, here, and every
+	// declaration below is a set membership test.
+	//
+	// ⚠ **IT IS A TOKEN SCAN AND SO OVER-APPROXIMATES, IN THE ONE DIRECTION THAT IS SAFE.** A name inside a
+	// grouping paren reads as an argument; a name mentioned anywhere after a `function` token reads as
+	// captured; a callee is matched by its BARE name, so every `reassign` in the program answers for every
+	// other; and the set is keyed by NAME, so an inner block's shadowing `var` of the same name is promoted
+	// with it. Each costs a cell that was not needed — an allocation and a load per read — and none can produce
+	// a wrong answer, because a cell is a legal home for any value and only the CALLEE's own ABI decides
+	// whether an argument is read as an address.
+	//
+	// ⚡ **THE GATE IS WHY NO EXISTING PROGRAM PAYS FOR THIS.** Parameter reassignment was E2013 before this
+	// rung, so `programTakesAParamByRef` is false for every corpus program and every `stdlib` compile; the
+	// closure half then costs one linear walk per body, and only in a FILE that spells a closure literal at
+	// all. A body that reaches neither test is answered before a token is read.
+	function collectCellLocalNames(bodyStart TokenIndex)
+		self.cellLocalNames = sharedEmptyCellLocalNames
+		if not self.signatures.programTakesAParamByRef() and not self.fileHasClosureLiteral 'nothingCouldWantACell'
+			return
+		end 'nothingCouldWantACell'
+
+		var handedOverByReference = CellLocalNameSet.create()
+		var assigned = CellLocalNameSet.create()
+		var mentionedInsideAClosure = CellLocalNameSet.create()
+		// ⭐⭐ **THE CLOSURE BODY IS BOUNDED, AND A LOOSER RULE WAS A MEASURED REGRESSION.** "Mentioned anywhere
+		// after a `function` token" reads the name that HOLDS a closure as one the closure CAPTURES:
+		// `var f = function(n) gives n + bump` … `return f(2)` promoted `f` itself, which turned
+		// `first-class-function.capturing-closure-across-if-merge-errors` from the merge refusal it pins into
+		// the generic escaping-store one (the cell's `storeIndirect` reaches that backstop first). Two cases,
+		// both E3099, both wrong.
+		//
+		// So the body is delimited: it opens at the `gives` of a `function (` header and closes at the first
+		// statement end, or as soon as the bracket depth falls below the one it opened at — which is what ends
+		// `apply(function() gives x)` at its `)`. Over-approximate still (a nested closure just re-opens it),
+		// and now over-approximate in a direction that costs a cell rather than a diagnostic.
+		var sawClosureHeader = false
+		var insideAClosureBody = false
+		var closureBodyDepth = 0 as ElementCount
+		var braceStack = BoolArray.create()
+		var openCallees = ByteArrayArray.create()
+		var blockDepth = 0 as BlockDepth
+
+		var q = bodyStart
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			if blockDepth == 0 and self.closesBlockAt(q) 'bodyEnds'
+				break
+			end 'bodyEnds'
+
+			self.trackBracketAt(q, braceStack: braceStack, openCallees: openCallees)
+
+			// A closure LITERAL, not a declaration: `function` followed by `(` (a declaration puts its name
+			// between the two). The same test `scanForClosureLiterals` gates the whole walk on.
+			if self.kindAt(q) == TokenKind.function and self.kindAt(q + 1) == TokenKind.leftParen 'aClosureHeader'
+				sawClosureHeader = true
+			end 'aClosureHeader'
+
+			if sawClosureHeader and self.kindAt(q) == TokenKind.gives 'closureBodyOpens'
+				sawClosureHeader = false
+				insideAClosureBody = true
+				closureBodyDepth = braceStack.count()
+			end 'closureBodyOpens'
+
+			if insideAClosureBody and (self.kindAt(q) == TokenKind.newline or braceStack.count() < closureBodyDepth) 'closureBodyCloses'
+				insideAClosureBody = false
+			end 'closureBodyCloses'
+
+			if tokenCanBeAName(self.tokenAt(q)) 'aName'
+				let name = self.tokenAt(q).value
+				if insideAClosureBody 'capturedByThatClosure'
+					mentionedInsideAClosure.insert(name)
+				end 'capturedByThatClosure'
+
+				if self.rebindsANameAt(q) 'reassigned'
+					assigned.insert(name)
+				end 'reassigned'
+
+				if self.bareCallArgumentAt(q, braceStack: braceStack) and self.signatures.bareNameTakesAParamByRef(try openCallees.get(openCallees.count() - 1) otherwise EmptySourceText) 'handedToAByRefPosition'
+					handedOverByReference.insert(name)
+				end 'handedToAByRefPosition'
+			end 'aName'
+
+			blockDepth = self.blockDepthAfter(q, depth: blockDepth)
+			q = q + 1
+		end 'walk'
+
+		self.cellLocalNames = handedOverByReference
+		for name in mentionedInsideAClosure 'eachCapture'
+			if assigned.contains(name) 'capturedAndWritten'
+				self.cellLocalNames.insert(name)
+			end 'capturedAndWritten'
+		end 'eachCapture'
+	end 'collectCellLocalNames'
+
+	// Is the argument beginning at `index` EXACTLY one name and nothing else? The by-reference call site's
+	// pre-parse question — asked before the value is parsed, because handing over a cell means the read must
+	// not materialize its contents in the first place. `bareCallArgumentAt` above answers the same shape from
+	// inside a walk that already knows where it is; this one is asked at a cursor that is standing on the
+	// argument's first token, so the bracket state is the caller's own and needs no stack.
+	function argumentIsExactlyANameAt(index TokenIndex) returns bool
+		if not tokenCanBeAName(self.tokenAt(index)) 'notAName'
+			return false
+		end 'notAName'
+
+		let after = self.kindAt(index + 1)
+		return after == TokenKind.comma or after == TokenKind.rightParen
+	end 'argumentIsExactlyANameAt'
+
+	function bareCallArgumentAt(index TokenIndex, braceStack BoolArray) returns bool
+		if braceStack.count() == 0 or self.braceStackInnermostIsBrace(braceStack) 'notInsideACallsParens'
+			return false
+		end 'notInsideACallsParens'
+
+		if not tokenCanBeAName(self.tokenAt(index)) 'notAName'
+			return false
+		end 'notAName'
+
+		let before = self.kindAt(index - 1)
+		if before != TokenKind.leftParen and before != TokenKind.comma and before != TokenKind.colon 'notAnArgumentsFirstToken'
+			return false
+		end 'notAnArgumentsFirstToken'
+
+		let after = self.kindAt(index + 1)
+		return after == TokenKind.comma or after == TokenKind.rightParen
+	end 'bareCallArgumentAt'
+
+	// The callee name of the `(` at `index`, or EMPTY when the paren opens no call — PBR-2's forwarding EDGE.
+	// It is the token immediately before, which for `reassign(…)`, `f.reassign(…)` and `Type.create(…)` alike
+	// is the BARE name, exactly the spelling `ProgramSignatures.closeByRefForwarding` matches against.
+	//
+	// ⭐ **CAPTURED WHEN THE BRACKET OPENS, WHICH IS WHY IT IS O(1).** The alternative — walking left from an
+	// argument to its own `(` — means re-balancing brackets backwards at every candidate token, a quadratic
+	// shape inside a scan that already walks every token of every body.
+	function calleeNameOpeningAt(index TokenIndex) returns ByteArray
+		if index == 0 or not tokenCanBeAName(self.tokenAt(index - 1)) 'aGroupingParen'
+			return EmptySourceText
+		end 'aGroupingParen'
+
+		return self.tokenAt(index - 1).value
+	end 'calleeNameOpeningAt'
+
 	// ⭐⭐ **E3067 — THE TWO DEGENERATE ASSIGNMENT STATEMENTS, REFUSED AT ONE DOOR, PURELY TEXTUALLY.**
 	//
 	// THE RULE, STATED SO THAT ITS FALSE-REJECT SURFACE IS OBVIOUS. The statement beginning at `index` is
@@ -59742,11 +60604,15 @@ export type Parser
 		try self.requireBindingLive(baseBinding, nameTok: baseTok)
 
 		let range = SourceRange.between(baseTok, last: memberTok)
-		let layout = requireEnumLayout(self.enumMatchFor(baseBinding.boundValue))
+		// ONE read of the binding, serving both questions below: a cell-resident base would otherwise be
+		// loaded twice, and the second load is not merely wasteful — the two would be different SSA values
+		// describing one enum.
+		let baseValue = self.bindingValue(baseBinding, range: range)
+		let layout = requireEnumLayout(self.enumMatchFor(baseValue))
 
 		// QUESTION 1 — where the tag is, asked through the door the `match` dispatch asks it through, and the
 		// one thing this spelling knows that the type-qualified one does not: there IS a value here.
-		return try self.emitEnumInstanceAccessor(layout, tag: self.emitEnumTagOf(baseBinding.boundValue, layout: layout, range: range), memberTok: memberTok, range: range)
+		return try self.emitEnumInstanceAccessor(layout, tag: self.emitEnumTagOf(baseValue, layout: layout, range: range), memberTok: memberTok, range: range)
 	end 'parseEnumAccessor'
 
 	// ⭐⭐ **THE ANSWER ITSELF, ONCE THE TAG IS IN HAND — shared by the two SPELLINGS of an enum member read.**

@@ -230,9 +230,21 @@ export type Scope
 		return try self.declareBinding(VarInfo.createParameterBinding(name, varType: varType, mutable: mutable, boundValue: value))
 	end 'declareParameterBinding'
 
-	// The shared body of the three value-binding declarations above: refuse a name that would shadow a
-	// self-field alias, then install. One home, so a local, a parameter and a match-arm payload binding
-	// cannot come to disagree about whether shadowing a field is legal.
+	// Declare a CELL-RESIDENT binding (PBR-2): `name` denotes the 8-byte heap cell `cell`, so a read is a
+	// `loadIndirect` through it and a rebind a `storeIndirect` — see `VarInfo.isCellBinding`. A named sibling
+	// to `declarePayloadValueBinding` rather than fields set on a returned `VarInfo`, because a binding that
+	// was installed as one kind and mutated into another is a kind no single site declares, and the parser's
+	// merge snapshots and loop-phi list hold these objects BY REFERENCE.
+	//
+	// It shares `declareBinding` with the three above, so the self-field shadow rule stays the one rule for
+	// every name a scope installs.
+	export function declareCellBinding(name ByteArray, varType MaxonType, mutable bool, cell ValueId, isParameter bool) returns VarInfo throws ScopeError
+		return try self.declareBinding(VarInfo.createCellBinding(name, varType: varType, mutable: mutable, cell: cell, isParameter: isParameter))
+	end 'declareCellBinding'
+
+	// The shared body of the four value-binding declarations above: refuse a name that would shadow a
+	// self-field alias, then install. One home, so a local, a parameter, a match-arm payload binding and a
+	// cell-resident binding cannot come to disagree about whether shadowing a field is legal.
 	function declareBinding(info VarInfo) returns VarInfo throws ScopeError
 		if self.isSelfField(info.name) 'shadow'
 			throw ScopeError.shadowsSelfField(String.from(info.name))
