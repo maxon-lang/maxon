@@ -481,7 +481,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: static-var-bool-adjacent-globals -->
+<!-- test: static-var-bool-adjacent-globals -->
 <!-- P1.2 String — the `print` builtin -->
 Bool global followed by non-zero global must not bleed adjacent data.
 
@@ -506,7 +506,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-enum-initializer -->
-<!-- P1.1 enums + `match` -->
+<!-- The reason is NOT "P1.1 enums + `match`", which both landed long ago; RE-MEASURED 2026-08-12 (BATCH36 W65). The blocker is the CONSTANT EVALUATOR's missing enum-member arm, and it says so itself, positioned at the initializer: `E2015: Unsupported: `Color.Green` in a constant initializer - a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else`. Correctly disabled, wrongly explained: the marker sent a reader to the enum/match rungs, which are done, instead of to the one arm that is missing. -->
 ```maxon
 enum Color
 		Red
@@ -541,7 +541,7 @@ end 'main'
 ```
 
 <!-- disabled-test: top-level-var-enum-initializer-cross-file -->
-<!-- P1.1 enums + `match` -->
+<!-- The reason is NOT "P1.1 enums + `match`", which both landed long ago; RE-MEASURED 2026-08-12 (BATCH36 W65). The blocker is the CONSTANT EVALUATOR's missing enum-member arm, and it says so itself, positioned at the initializer: `E2015: Unsupported: `Color.Green` in a constant initializer - a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else`. Correctly disabled, wrongly explained: the marker sent a reader to the enum/match rungs, which are done, instead of to the one arm that is missing. -->
 Cross-file: enum defined in one file, top-level var initialized with it in another.
 ```maxon
 // --- file: api/defs.maxon
@@ -1393,7 +1393,7 @@ end 'main'
 error E2013: <fragment>:5:2: cannot assign to immutable variable: 'origin'
 ```
 
-<!-- disabled-test: top-level-let-struct-reassign-error -->
+<!-- test: top-level-let-struct-reassign-error -->
 <!-- P1.1 structs — the `let` holds a `Point.create(...)`, a runtime initializer -->
 Reassigning an immutable top-level `let` struct variable should error.
 ```maxon
