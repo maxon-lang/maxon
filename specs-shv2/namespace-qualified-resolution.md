@@ -1033,3 +1033,71 @@ end 'main'
 ```maxoncstderr
 error E3055: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-throws-is-not-inherited.test:18:10: try requires a throwing function: 'beta.pick' does not throw'
 ```
+
+
+<!-- test: contested-free-function-caller-location-slots-are-not-renamed -->
+**A CONTESTED FUNCTION'S CALLER-LOCATION SLOTS ARE SKIPPED BY THE RENAME, AND ITS HELPER SLOT IS NOT.**
+The sibling case above pins that a contested declaration's synthesized default helpers follow it onto
+its directory-qualified registration name. W72 gave the language a SECOND kind of default —
+`__file__` / `__line__`, which synthesize nothing and are materialized at the caller — so
+`renameParamDefaultHelpers` now walks a column with four answers and must move exactly one of them.
+
+A caller-location slot has no synthesized function anywhere to rename. Renamed anyway, the four
+column moves each find nothing and `ParamDefaultInfo.renameHelper` INVENTS a helper at that slot that
+the drain never declared: the call site then emits a `call` to `__paramDefault#alpha.note#2`, a symbol
+no file produced. Skipped along with the undefaulted slots, the caller supplies the constant itself.
+
+This is the combination nothing else runs. `source-location-defaults.md` is flat — every file of it
+sits at the compile root, so `registrationName` equals `bareName` and the rename never fires — and the
+sibling case here carries only an ordinary helper default, so neither reaches a caller-location arm.
+
+3/5 again, so an aliased pair cannot pass by coincidence: the LEVELS prove each helper followed its own
+declaration, while `__file__`/`__line__` prove the two skipped slots still answer for the CALLER —
+`app/main.maxon` when main calls, each directory's own file when the sibling inside it does.
+```maxon
+// --- file: alpha/a.maxon
+typealias Severity = int(0 to 9)
+
+export function note(tag String, level Severity = 3, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
+	print("{tag} lvl={level} {file}:{at}\n")
+	return at
+end 'note'
+
+export function fromAlpha() returns SourceLineNumber
+	return note("inAlpha")
+end 'fromAlpha'
+
+// --- file: beta/b.maxon
+typealias Severity = int(0 to 9)
+
+export function note(tag String, level Severity = 5, file String = __file__, at SourceLineNumber = __line__) returns SourceLineNumber
+	print("{tag} lvl={level} {file}:{at}\n")
+	return at
+end 'note'
+
+export function fromBeta() returns SourceLineNumber
+	return note("inBeta")
+end 'fromBeta'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let a = alpha.note("a")
+	let b = beta.note("b")
+	let c = alpha.note("c", level: 8)
+	let ia = alpha.fromAlpha()
+	let ib = beta.fromBeta()
+	print("sum={a}:{b}:{c}:{ia}:{ib}\n")
+	return (a * 10 + b) as ExitCode
+end 'main'
+```
+```exitcode
+23
+```
+```stdout
+a lvl=3 app/main.maxon:2
+b lvl=5 app/main.maxon:3
+c lvl=8 app/main.maxon:4
+inAlpha lvl=3 alpha/a.maxon:9
+inBeta lvl=5 beta/b.maxon:9
+sum=2:3:4:9:9
+```
