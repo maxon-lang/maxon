@@ -776,6 +776,8 @@ shared body — the instantiation set — rather than of an element type there i
 <!-- test: error.a-managed-instantiation-of-a-vector-field-is-refused -->
 A type parameter can be instantiated at a managed type, so a fixed-size vector over one is refused at
 the `create()` that would publish its slots — not at the instantiation, and not at run time.
+
+⚠ **THIS REFUSES A PROGRAM THE ORACLE ACCEPTS, AND THAT IS A STATED POSITION RATHER THAN AN OVERSIGHT — COORDINATOR-MEASURED 2026-08-13.** The bootstrap compiles this exact source and **runs it to exit 4**: `count()` answers 4 because four slots were published, and nothing here ever READS one. It is the read that is unsound — a zeroed slot is a value for a trivial element and a NULL for a managed one — so the oracle's exit 4 is the hazard not yet triggered, not a disagreement about whether the hazard exists. shv2 refuses at compile time what both compilers otherwise break on at run time; the same shape with a `for … in` read **SEGFAULTS (139)** on an ungated shv2, and the bootstrap dies in `__ArrayIterator_String.current` with `mm_incref called with NULL pointer`. ⇒ this extends the position shv2 already holds for a CONCRETE managed element (see `error.a-concrete-managed-element-is-refused` below) to the instantiated case, so the two arms of one rule agree. **The divergence itself is owned by the `Vector` retirement chain**, whose corpus `stdlib/Vector.maxon` is generic over its element where shv2's synthesized vector is scalar-only — not by this case.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
