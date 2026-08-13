@@ -753,6 +753,22 @@ export enum UnusedBindingKind
 	// `declareInitializedBinding`, and a name the source cannot spell can be the subject of no sentence
 	// telling the author what to change — the identical line E3078 draws at the same three doors.
 	mutableLocal
+	// ⭐ **THE OPTIONAL `(e)` OF A DIVERGENT `otherwise` — `otherwise (e) panic("…")` /
+	// `otherwise (e) throws E.case`, AND NOTHING ELSE.** It is checked where a body `let` deliberately is
+	// not, and the difference is that this binding is OPTIONAL: an author who declares one and never reads it
+	// wrote the parentheses for nothing, which is a different sentence from the general unused-`let` rule the
+	// kind above defers. `/specs/try-block-otherwise-divergent.md` states the rule for exactly this binding.
+	//
+	// ⚠⚠ **THE NAME IS THIS NARROW ON PURPOSE — IT IS ONE OF FOUR DOORS THAT DECLARE A CAUGHT ERROR, AND THE
+	// OTHER THREE ARE NOT CHECKED.** `otherwise (e) 'h' … end 'h'` (block form and single-call alike) and a
+	// catching `if`'s `else (e) 'err'` all bind one and all still accept it unread, which the ORACLE also
+	// does. A name like `caughtError` would read as a class and make the gap look like an oversight for
+	// someone to "finish" — widening the enrolment to `declareCaughtError` would newly refuse programs the
+	// oracle accepts, which is a rung and not a tidy-up.
+	//
+	// ⚠ It is never `mutable`, so E3077's scan over this same list skips it without needing a kind test —
+	// the filter there is `binding.mutable`, and a caught error is bound immutably at every catching door.
+	divergentHandlerBinding
 end 'UnusedBindingKind'
 
 // ⭐ **ONE DECLARATION THE UNUSED CHECK (E3012) MUST ACCOUNT FOR** — paired with the span of the NAME the

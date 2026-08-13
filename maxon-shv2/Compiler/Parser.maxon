@@ -7990,13 +7990,74 @@ typealias ErrorUnionBindingArray = Array with ErrorUnionBinding
 // error-union diagnostic bypasses by naming the MEMBER enum the author actually wrote.
 let SynthesizedErrorUnionName = b"__ErrorUnion"
 
-// ⭐ **WHICH FORM OF CATCH IS BEING PARSED — the one thing `parseOtherwiseBlock` cannot see for itself, and
-// the two facts that hang off it.** The single-call forms (`try f() otherwise (e) 'h' … end` and
-// `if try f() … else (e) 'h' … end`) catch ONE call's error: the binding is that callee's declared enum, and
-// the handler may do whatever it likes with it. A BLOCK form's handler is shared by every routed edge, so it
-// MUST discriminate — that is E3084, and it is the reference's rule too — and when the body routed two or
-// more error types the binding is the synthesized union rather than any declared enum. Both facts travel as
-// one value so a call site cannot state half of the form.
+// ⭐⭐ **THE OPTIONAL `(e)` BINDER, PARSED ONCE FOR THE TWO FORMS THAT MAKE IT OPTIONAL** — a catching
+// `if`'s `else (e) 'err'` and a block-form `try`'s divergent `otherwise (e) panic(…)` /
+// `otherwise (e) throws E.case`. Both may omit it entirely, both hand the result to the same declaration
+// door (`declareCaughtError`), and both attribute their diagnostics and their emitted drops to the NAME when
+// one is written. It was written out twice, line for line, until the review put the two side by side.
+//
+// ⚠ `parseOtherwiseBinding` is a THIRD spelling and stays its own: its binding is MANDATORY, so it has no
+// absent case and consumes the parenthesis unconditionally — there is no optionality for it to share.
+// A FOURTH is `otherwiseOpensBlock`, which reads the same `( <name> )` in TOKEN-INDEX form for the
+// block-extent scan; it moves no cursor and must answer before the parse, so it is a lookahead over this
+// grammar rather than a parse of it and legitimately cannot share code.
+type CaughtErrorBinder
+	export let name as ByteArray
+	export let hasBinding as bool
+	// What a diagnostic and an emitted drop are attributed to: the binding NAME when one is written, else
+	// whatever the caller decided stands for the handler (its `if`, its `panic`/`throws` keyword).
+	export let anchor as Token
+
+	export static function create(name ByteArray, hasBinding bool, anchor Token) returns CaughtErrorBinder
+		return Self{name: name, hasBinding: hasBinding, anchor: anchor}
+	end 'create'
+end 'CaughtErrorBinder'
+
+// ⭐ **WHICH OF THE THREE `otherwise` FORMS FOLLOWS A BLOCK-FORM `try`**, decided once by
+// `requireTryBlockOtherwise` and consumed once by `parseTryBlockHandler` — so the peek that ADMITS a handler
+// and the fork that PARSES it are one reading of the grammar rather than two that could disagree about which
+// form was written.
+//
+// The two TERMINAL forms collapse to one shape because everything past the fork is common to them: the
+// optional binding, its declaration, its drop, and its diverging tail. Only the last token differs, and that
+// is `parseDivergingTerminalForm`, which a match arm's `default` shares.
+union TryBlockHandlerShape
+	blockHandler
+	divergent
+end 'TryBlockHandlerShape'
+
+// ⛔⛔ **DOES THIS TOKEN OPEN A DIVERGING TERMINAL FORM?** — `panic("…")` and `throws E.case`, the pair, in
+// ONE place. THREE readers, and the third is why this exists rather than an `at()` chain at each: a
+// block-form `try`'s divergent `otherwise` admits the pair at both positions its optional binding can leave
+// the cursor in (`requireTryBlockOtherwise`), and a match arm's `default` admits exactly the same pair
+// (`parseMatchCommon`). All three then parse it through the one `parseDivergingTerminalForm`.
+//
+// ⚠ **THE MATCH-`default` READER IS THE ONE THIS WAS MISSING**, and the review found it: the keywords were
+// spelled in three places, of which only two were coupled, so a third diverging form added to `default`
+// would have left the `otherwise` copy silently unable to spell it.
+//
+// ⚠ **THE BLOCK-EXTENT SCAN NEEDS NO SHARE OF THIS, AND THAT IS A PROPERTY RATHER THAN AN OVERSIGHT.**
+// `otherwiseOpensBlock` is a POSITIVE test for the handler's block LABEL — a `charLiteral`, either straight
+// after `otherwise` or after `( <name> )` — so every terminal form is excluded by construction, whatever
+// keyword opens it. A roster shared with the scan would be the weaker arrangement: it would have to be
+// extended for a third terminal form, where the label test simply keeps answering. That matters here because
+// a spelling the grammar takes as terminal while the scan counts it as a block opener runs the enclosing
+// construct's extent past its real `end` — `assertScanAligned`'s panic on a correct program, which this file
+// records twice already for `otherwise` alone.
+function divergentHandlerOpensAt(kind TokenKind) returns bool
+	return kind == TokenKind.panic or kind == TokenKind.throws
+end 'divergentHandlerOpensAt'
+
+// ⭐ **WHICH FORM OF CATCH IS BEING PARSED — the one thing the declaration door cannot see for itself.** A
+// SINGLE-CALL form (`try f() otherwise (e) …`, `if try f() … else (e) …`) catches ONE call's error, so the
+// binding is that callee's declared enum and can never be a union. A BLOCK form's handler is shared by every
+// routed edge, so when the body routed two or more error types the binding is the synthesized union instead.
+// That is the whole of what this carries.
+//
+// ⚠ **IT DOES NOT SAY WHETHER E3084 APPLIES, and a case that claimed to was deleted by review.** The
+// obligation is armed by `parseOtherwiseBlock` alone — it sets `tryBindingName`/`tryBindingMatched` around
+// its own body and checks them at its end — so a handler that never calls it never owes it. A divergent
+// handler is exactly that, and says so at `parseDivergentOtherwise`, where the exemption actually happens.
 union CaughtErrorForm
 	singleCall
 	blockForm(errorUnion ErrorUnionMatch)
@@ -8004,6 +8065,13 @@ end 'CaughtErrorForm'
 
 // The synthesized error union this catch binds — `notAUnion` for a single-call form, which catches one
 // callee's declared enum and can never be a union, and for a block form whose body routed one error type.
+//
+// ⚠ **BOTH OF A BLOCK FORM'S HANDLERS ANSWER THROUGH THIS ONE CASE, and a THIRD case for the divergent one
+// was DELETED BY REVIEW.** It carried the same payload and every live consumer gave it the same answer, so
+// it was two redundant arms wearing a distinction — and the ⚠ it hung on `tryBlockBindingToMatch` described
+// a call that cannot happen (a divergent handler never reaches `parseOtherwiseBlock`, which is that
+// routine's only caller). The E3084 exemption is real; it is stated at `parseDivergentOtherwise`, where it
+// actually occurs.
 function caughtErrorUnionMatch(form CaughtErrorForm) returns ErrorUnionMatch
 	return match form 'f'
 		singleCall gives ErrorUnionMatch.notAUnion
@@ -20327,6 +20395,9 @@ export type Parser
 				parameter gives true
 				loopVariable gives false
 				mutableLocal gives false
+				// A divergent `otherwise`'s `(e)` is the author's own and OPTIONAL — no contract can force it
+				// to be declared, so there is nothing for the interface waiver to excuse.
+				divergentHandlerBinding gives false
 			end 'candidateKind'
 			if waivable and self.parametersAreInterfaceDictated(methodName) 'contractDictatedTheList'
 				continue
@@ -27397,7 +27468,7 @@ export type Parser
 		let bodyMoveMark = self.captureMoveMark()
 		self.installCarriedPhis(phiVars)
 
-		try self.requireTryBlockOtherwise(tryTok)
+		let shape = try self.requireTryBlockOtherwise(tryTok)
 		// ⚠ Re-fetched by ID rather than reusing the `errBlock` alias minted before the body — NOT because an
 		// `IrBlock` alias can go stale (it cannot: blocks are reference objects, and `bodyEnd` is held across
 		// this whole handler parse for exactly that reason). It is fetched by id because the id is what the
@@ -27418,7 +27489,7 @@ export type Parser
 		// has recorded its own args.**
 		let errorUnion = self.synthesizeErrorUnion(ctx, errBlock: self.currentBlock)
 
-		let handler = try self.parseOtherwiseBinding(func, flag: flagPhi, errorType: self.tryErrorEnumType(ctx.throwsClause), form: CaughtErrorForm.blockForm(errorUnion))
+		let handler = try self.parseTryBlockHandler(func, shape: shape, flag: flagPhi, errorType: self.tryErrorEnumType(ctx.throwsClause), errorUnion: errorUnion)
 		var errEnd = self.currentBlock
 		let handlerMoveMark = self.captureMoveMark()
 
@@ -27540,8 +27611,20 @@ export type Parser
 	// for a routed error to reach, and the error block would be an unterminated orphan. The reference
 	// bootstrap refuses the same program with the same code (`2-Parser.cs:9651`).
 	//
-	// The BINDING is required for the same reason it is there: `parseOtherwiseBinding` consumes the `(e)`,
-	// and the handler's whole job is to tell the routed errors apart, which needs a name to `match` on.
+	// ⭐⭐ **AND IT CLASSIFIES THE HANDLER, because the three forms diverge at the token after `otherwise`
+	// and nowhere else.** `/specs/try-block-otherwise-divergent.md` gives the construct three handlers:
+	//   • `otherwise (e) 'h' … end 'h'` — a BLOCK handler. Its binding is REQUIRED: the handler's whole job
+	//     is to tell the routed errors apart, which needs a name to `match` on.
+	//   • `otherwise [(e)] panic("…")` and `otherwise [(e)] throws E.case` — TERMINAL handlers, a single
+	//     expression with no `end` of their own, whose binding is OPTIONAL because nothing has to be
+	//     dispatched on it.
+	// The SHAPE is returned rather than re-derived at the call site: the same peek deciding admission and then
+	// deciding routing would be one grammar written twice, free to admit a form it then declines to parse.
+	//
+	// ⚠ Whether a binder is PRESENT is deliberately not carried with it. That question belongs to
+	// `parseOptionalCaughtErrorBinder`, which two constructs share and which must ask it for itself — the
+	// catching `if` reaches that routine with no shape at all. Carrying it here would un-share the binder to
+	// save one token test.
 	//
 	// ⭐ **TWO SPELLINGS OF ONE HANDLER, AND BOTH ARE CANONICAL.** The handler may be ATTACHED to the body's
 	// closer — `end 'work' otherwise (e) 'h'`, which `/specs/map-try-otherwise-block.md` uses and
@@ -27553,7 +27636,7 @@ export type Parser
 	// ⚠ **THE CURSOR MOVES ONLY WHEN AN `otherwise` IS ACTUALLY THERE.** Skipping the newlines first and
 	// then testing would consume the layout ahead of an ordinary following statement, and the E2050 this
 	// routine raises would be anchored past it.
-	function requireTryBlockOtherwise(tryTok Token) throws ParseError
+	function requireTryBlockOtherwise(tryTok Token) returns TryBlockHandlerShape throws ParseError
 		let handlerIndex = self.indexPastNewlines(self.pos)
 		if self.kindAt(handlerIndex) != TokenKind.otherwise 'noHandler'
 			throw ParseError.tryBlockMissingOtherwise(false, line: tryTok.line, column: tryTok.column)
@@ -27561,11 +27644,183 @@ export type Parser
 		self.pos = handlerIndex
 
 		try self.consume(TokenKind.otherwise)
+
+		// UNBOUND: the terminal forms are the only ones that may omit the binding.
 		if not self.at(TokenKind.leftParen) 'noBinding'
+			if divergentHandlerOpensAt(self.kindAt(self.pos)) 'terminalWithoutABinding'
+				return TryBlockHandlerShape.divergent
+			end 'terminalWithoutABinding'
+
 			let tok = self.current()
 			throw ParseError.tryBlockMissingOtherwise(true, line: tok.line, column: tok.column)
 		end 'noBinding'
+
+		// BOUND: `( <name> )` followed by the LABEL of a block handler, or by the keyword of a terminal one.
+		// All FOUR positions are read, exactly as `otherwiseOpensBlock` reads them for the extent scan — so
+		// this classification and that one are looking at the same shape rather than at one offset of it, and
+		// the offsets carry names instead of arithmetic.
+		//
+		// ⚠ A MIS-SHAPEN binder (`otherwise (a, b) panic …`, `otherwise () panic …`) falls through to
+		// `blockHandler` and is reported by `parseOtherwiseBinding`'s own positioned `consume` — which is the
+		// right answer for it: the author wrote something that is neither form, and the parser blames the
+		// token that is wrong rather than guessing which form was meant.
+		let binderIsWellFormed = self.kindAt(self.pos + 1) == TokenKind.identifier and self.kindAt(self.pos + 2) == TokenKind.rightParen
+		if binderIsWellFormed and divergentHandlerOpensAt(self.kindAt(self.pos + 3)) 'terminalWithABinding'
+			return TryBlockHandlerShape.divergent
+		end 'terminalWithABinding'
+
+		return TryBlockHandlerShape.blockHandler
 	end 'requireTryBlockOtherwise'
+
+	// Parse an OPTIONAL `( <name> )` caught-error binder at the cursor — see `CaughtErrorBinder` for who
+	// shares this and who cannot. `fallbackAnchor` is what the absent case is attributed to.
+	function parseOptionalCaughtErrorBinder(fallbackAnchor Token) returns CaughtErrorBinder throws ParseError
+		if not self.at(TokenKind.leftParen) 'noBinder'
+			return CaughtErrorBinder.create(EmptySourceText, hasBinding: false, anchor: fallbackAnchor)
+		end 'noBinder'
+
+		try self.consume(TokenKind.leftParen)
+		let eNameTok = try self.consume(TokenKind.identifier)
+		// ⛔ **A CAUGHT ERROR IS A DECLARATION, SO IT ASKS THE DECLARATION DOOR** — `requireUnreservedName`'s
+		// header gives the reason at length, and BOTH of this routine's callers measured it independently:
+		// `otherwise (__x) panic(…)` and `end 'c' else (__e) 'err'` each declared a `__`-prefixed local and RAN
+		// where the oracle refuses it E2051.
+		try self.requireUnreservedName(eNameTok, declaredName: eNameTok.value)
+		try self.consume(TokenKind.rightParen)
+		return CaughtErrorBinder.create(eNameTok.value, hasBinding: true, anchor: eNameTok)
+	end 'parseOptionalCaughtErrorBinder'
+
+	// ⭐⭐ **`panic("…")` / `throws E.case` — THE TWO DIVERGING TERMINAL FORMS, PARSED ONCE.** Two constructs
+	// spell this pair and mean the same by it: a match arm's `default`, and a block-form `try`'s divergent
+	// `otherwise`. Both admit it through `divergentHandlerOpensAt`, both seat it in a block their caller
+	// chose, and both rely on it TERMINATING that block. The fork was written twice before the review; the
+	// two LEAF routines were always shared, which is what made the copy easy to miss.
+	//
+	// ⚠ **THE SINGLE-CALL `try f() otherwise throw E.x` IS DELIBERATELY NOT ONE OF THEM.** It spells `throw`,
+	// not `throws`, and it lives in `parseUnboundOtherwiseForm` beside `ignore`, `return`/`break`/`continue`
+	// and a fallback VALUE — none of which these two admit. Same leaves, different grammar; folding it in
+	// would make this the fork for a keyword set it does not have.
+	function parseDivergingTerminalForm(func IrFunction, block IrBlock) throws ParseError
+		if self.at(TokenKind.throws) 'rethrow'
+			self.currentBlock = block
+			let throwsTok = try self.consume(TokenKind.throws)
+			try self.emitThrowError(func, anchor: throwsTok)
+			return
+		end 'rethrow'
+
+		if self.at(TokenKind.panic) 'abort'
+			try self.parsePanicStatement(func, block: block)
+			return
+		end 'abort'
+
+		panic("parseDivergingTerminalForm: the token here is neither `throws` nor `panic` — every caller admits this form through `divergentHandlerOpensAt`, which is the one roster of the two keywords")
+	end 'parseDivergingTerminalForm'
+
+	// ⭐⭐ **PARSE THE HANDLER THE SHAPE NAMED.** One fork, at the one point both handler kinds have their
+	// error TYPE and their synthesized UNION in hand — so what a divergent handler's optional `(e)` binds is
+	// the same thing a block handler's required one binds, by construction rather than by two agreeing copies.
+	function parseTryBlockHandler(func IrFunction, shape TryBlockHandlerShape, flag ValueId, errorType MaxonType, errorUnion ErrorUnionMatch) returns TryHandler throws ParseError
+		match shape 'shape'
+			blockHandler then return try self.parseOtherwiseBinding(func, flag: flag, errorType: errorType, form: CaughtErrorForm.blockForm(errorUnion))
+			divergent then return try self.parseDivergentOtherwise(func, flag: flag, errorType: errorType, errorUnion: errorUnion)
+		end 'shape'
+	end 'parseTryBlockHandler'
+
+	// ⭐⭐ **`otherwise [(e)] panic("…")` / `otherwise [(e)] throws E.case` — THE TERMINAL HANDLERS.** Both
+	// DIVERGE, so the construct has exactly one live edge past it (the body's), and both are a single
+	// expression with no `end` of their own.
+	//
+	// ⭐ **THE OPTIONAL BINDING GOES THROUGH `declareCaughtError`, THE SAME DOOR THE BLOCK FORM USES**, so
+	// what `(e)` means here is what it means there — a scalar enum's decoded ordinal or a boxed union's
+	// pointer — rather than a second answer that could drift from it. Its binder is `parseOptionalCaughtErrorBinder`,
+	// shared with the catching `if`'s `else (e)`, for the same reason one level down.
+	//
+	// ⭐⭐ **E3084 DOES NOT APPLY HERE, AND THE MECHANISM IS THIS ROUTINE'S SILENCE.** A block handler owes a
+	// `match` on its binding because it RUNS: one that never discriminates has swallowed every error the body
+	// can raise. A divergent handler aborts or re-throws, so it swallows nothing and owes nothing. The
+	// obligation is armed by `parseOtherwiseBlock` — which sets `tryBindingName`/`tryBindingMatched` around
+	// its own body and checks them at its end — and this routine never calls it and never touches either
+	// field, so the rule simply never arms. ⚠ It is stated HERE because that is where it happens: a
+	// `CaughtErrorForm` case for it looked like documentation and was a redundant arm on a call that cannot
+	// occur (review found it), since `tryBlockBindingToMatch` is reached only from `parseOtherwiseBlock`.
+	//
+	// ⚠ **AND THE TWO FIELDS ARE DELIBERATELY NOT SAVED AND RESTORED.** A divergent handler is still
+	// lexically inside any ENCLOSING handler's body, so a `match e` written in its panic message or throw
+	// expression legitimately discharges that enclosing handler's obligation. Only a CLOSURE crosses a
+	// function boundary, and that is where the reset lives.
+	//
+	// ⚠ **THE CAUGHT ERROR STILL OWES ITS DROP, WHICH IS WHY THE SCOPE FRAME IS HERE.** A boxed error
+	// reaching a `panic` or a re-throw is a live heap box this frame received ownership of; `declareCaughtError`
+	// enrols it (NAMED, or ANONYMOUS when the form binds nothing), the terminating form's own
+	// `emitScopeDrops`/`emitHandoffExitDrops` releases it on the way out, and `dropArmScopedOwned` drains it
+	// off the owned list either way. This is `parseOtherwiseHandler`'s bracket around the single-call
+	// terminal forms, applied to the block form's — one rule, two constructs.
+	function parseDivergentOtherwise(func IrFunction, flag ValueId, errorType MaxonType, errorUnion ErrorUnionMatch) returns TryHandler throws ParseError
+		let binder = try self.parseOptionalCaughtErrorBinder(self.current())
+		try self.rejectDivergentBindingOverErrorUnion(binder, errorUnion: errorUnion)
+
+		let ownedFloor = self.ownedBindings.count()
+		let unionBindingDepth = self.errorUnionBindings.count()
+		self.scope.pushScope()
+		try self.declareCaughtError(flag, errorType: errorType, bindingName: binder.name, hasBinding: binder.hasBinding, form: CaughtErrorForm.blockForm(errorUnion), anchor: binder.anchor)
+
+		// ⭐ **E3012 — A DECLARED-BUT-UNREAD `(e)` IS REFUSED, and the spec asks for it by name.** The binding
+		// is optional; declaring one and never reading it says the author meant to use the error and did not.
+		// It is enrolled as its own candidate KIND because a body `let` deliberately is not one
+		// (`UnusedBindingKind.mutableLocal` carries the measured 82-case reason) — this is the one binding
+		// `/specs/try-block-otherwise-divergent.md` states the rule for, not the general unused-`let` rung.
+		if binder.hasBinding 'checkedForUse'
+			self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(binder.name), nameRange: SourceRange.ofToken(binder.anchor), kind: UnusedBindingKind.divergentHandlerBinding))
+		end 'checkedForUse'
+
+		// ⚠ **A SYNTHESIZED UNION'S BOX IS RELEASED HERE FOR THE REASON A `default` ARM'S IS.** Over a union
+		// the binding owns nothing at all — the flag is an ordinal on some incoming edges and a box POINTER on
+		// others, so `declareErrorUnionBinding` gives it no type and no drop, and the box is released by
+		// whichever ARM names the member. A divergent handler names none, which is exactly a `default`'s
+		// position, so it reuses that routine rather than inventing a second release.
+		//
+		// ⛔ **IT RUNS BEFORE THE FORM PARSES, AND THAT IS ONLY SOUND BECAUSE THE BINDING IS REFUSED ABOVE.**
+		// The release `__destruct_`s the in-flight box; a binding readable AFTERWARDS would be naming a freed
+		// one. `rejectDivergentBindingOverErrorUnion` is what makes "readable afterwards" impossible — remove
+		// it and this ordering becomes a wrong VALUE, which is exactly what review measured.
+		self.currentBlock = self.emitErrorUnionDefaultCleanup(func, union: errorUnion, entry: self.currentBlock, flag: flag, anchor: binder.anchor)
+
+		try self.parseDivergingTerminalForm(func, block: self.currentBlock)
+
+		self.scope.popScope()
+		while self.errorUnionBindings.count() > unionBindingDepth 'closeUnionScope'
+			_ = try self.errorUnionBindings.pop() otherwise panic("parseDivergentOtherwise: errorUnionBindings.pop failed above the depth this handler recorded")
+		end 'closeUnionScope'
+		self.dropArmScopedOwned(ownedFloor, exitBlock: self.currentBlock, anchor: binder.anchor)
+		return TryHandler.terminated
+	end 'parseDivergentOtherwise'
+
+	// ⛔⛔ **A DIVERGENT `otherwise` MAY NOT BIND THE ERROR WHEN THE BODY ROUTES TWO OR MORE ERROR TYPES —
+	// and the alternative measured as a MEANINGLESS VALUE at both compilers.** `(e)` would name shv2's
+	// synthesized error union, which has NO value form: it is a dispatch table over `(member, case)` pairs
+	// (`ErrorUnionInfo`), the binding carries the raw flag typed `integer`, and only a `match` ARM recovers a
+	// member's own type from it. Every other form that binds such a union is a `match` away from a real type;
+	// this is the first that is not, because E3084 does not reach it.
+	//
+	// ⭐ **MEASURED BEFORE REFUSING, and the oracle is no better.** `otherwise (e) panic("failed: {e}")` over
+	// a body throwing two distinct error types prints **`failed: 1`** on the C# bootstrap — the raw
+	// `ordinal + bias` flag, an internal ABI value with no meaning to the author. shv2's would be worse than
+	// meaningless: its fused ordinal on a BOXED member's edge is the numeric value of a pointer the union
+	// cleanup one statement below has already freed. There is nothing to match, so this refuses instead — a
+	// diagnostic naming what is missing beats a silent answer that is stable at neither compiler.
+	//
+	// It rejects nothing any spec requires: `/specs/try-block-otherwise-divergent.md` binds only over a
+	// single error type, and every one of its multi-type cases is UNBOUND — which stays legal, and is exactly
+	// the shape the union cleanup exists for.
+	function rejectDivergentBindingOverErrorUnion(binder CaughtErrorBinder, errorUnion ErrorUnionMatch) throws ParseError
+		if not binder.hasBinding or not errorUnionIsSynthesized(errorUnion) 'nothingToRefuse'
+			return
+		end 'nothingToRefuse'
+
+		throw ParseError.unsupported("binding the caught error of a DIVERGENT `otherwise` whose body routes TWO OR MORE error types — `(e)` would name the synthesized error union, which has no value form: it is a dispatch table over the `(member, case)` pairs, so the binding could carry only the raw error flag and neither a message nor a payload could say which error occurred (the reference bootstrap prints that flag verbatim). Bind it in a block handler, whose `match` arms recover each member's own type (`otherwise (e) 'h' … match e … end 'h'`), or drop the binding — `otherwise panic(…)` and `otherwise throws E.case` catch every member", line: binder.anchor.line, column: binder.anchor.column)
+	end 'rejectDivergentBindingOverErrorUnion'
+
+
 
 	// ⭐ **WHERE CONTROL GOES AFTER THE CONSTRUCT — FOUR SHAPES FROM TWO INDEPENDENT FACTS**: whether the
 	// BODY fell through, and whether the HANDLER did. Each is settled by its own block's terminator, so
@@ -27586,7 +27841,7 @@ export type Parser
 		let handlerFellThrough = match handler 'h'
 			terminated gives false
 			fellThrough gives true
-			value panic("finishTryBlock: a block-form `try`'s handler is parsed by `parseOtherwiseBinding`, which reaches only `parseOtherwiseBlock` — a `value` handler is the single-call form's `otherwise <expr>` fallback and cannot arrive here")
+			value panic("finishTryBlock: a block-form `try`'s handler is parsed by `parseTryBlockHandler`, whose two routes are `parseOtherwiseBinding` (reaching only `parseOtherwiseBlock`, which answers `terminated`/`fellThrough`) and `parseDivergentOtherwise` (which answers `terminated` unconditionally) — a `value` handler is the single-call form's `otherwise <expr>` fallback and cannot arrive from either")
 		end 'h'
 
 		if bodyFellThrough and handlerFellThrough 'bothEdges'
@@ -30256,29 +30511,19 @@ export type Parser
 		let ownedFloor = self.ownedBindings.count()
 		self.scope.pushScope()
 
-		var bindingName = EmptySourceText
-		var hasBinding = false
 		// With no `else` written there is no token on this branch to anchor its release to, so the `if` that
 		// caught the error is what the drop is attributed to — the construct a reader would look at to ask
-		// where the error went.
-		var anchor = ifTok
+		// where the error went. With an `else` but no binder it is the token after `else`.
+		var binder = CaughtErrorBinder.create(EmptySourceText, hasBinding: false, anchor: ifTok)
 		if elseWritten 'openElse'
 			try self.consume(TokenKind.else)
-			anchor = self.current()
-			// `else (e) 'err'` — the caught error, named. The same binder `otherwise (e) 'err'` spells, and
-			// the same decode, because it is the same caught flag.
-			if self.at(TokenKind.leftParen) 'errorBinder'
-				try self.consume(TokenKind.leftParen)
-				let eNameTok = try self.consume(TokenKind.identifier)
-				// The same declaration door `parseOtherwiseBinding` asks, and for the same measured reason —
-				// `end 'c' else (__e) 'err'` compiled here too. Same binder, same rule, asked at both.
-				try self.requireUnreservedName(eNameTok, declaredName: eNameTok.value)
-				try self.consume(TokenKind.rightParen)
-				bindingName = eNameTok.value
-				hasBinding = true
-				anchor = eNameTok
-			end 'errorBinder'
+			// `else (e) 'err'` — the caught error, named. The same OPTIONAL binder a divergent `otherwise`
+			// spells, parsed by the same routine, because it is the same grammar over the same caught flag.
+			binder = try self.parseOptionalCaughtErrorBinder(self.current())
 		end 'openElse'
+		let bindingName = binder.name
+		let hasBinding = binder.hasBinding
+		let anchor = binder.anchor
 
 		// The decode (and, for a boxed error, the enrolment) belongs at the TOP of the error edge — before a
 		// nested `else if`'s own condition, and before the written body's first statement.
@@ -34121,13 +34366,9 @@ export type Parser
 				// default; a scalar match may use it too. A PLAIN `default` (then/gives) stays E2046 on an
 				// enum match (a catch-all would silently mask a case added later) and a real body on a
 				// scalar match. A diverging default terminates its body and so reaches no merge.
-				if self.at(TokenKind.throws) 'defaultThrows'
-					self.currentBlock = defaultBody
-					let throwsTok = try self.consume(TokenKind.throws)
-					try self.emitThrowError(func, anchor: throwsTok)
-				end 'defaultThrows' else if self.at(TokenKind.panic) 'defaultPanic'
-					try self.parsePanicStatement(func, block: defaultBody)
-				end 'defaultPanic' else 'plainDefault'
+				if divergentHandlerOpensAt(self.kindAt(self.pos)) 'divergingDefault'
+					try self.parseDivergingTerminalForm(func, block: defaultBody)
+				end 'divergingDefault' else 'plainDefault'
 					if isErrorUnionMatch 'errorUnionPlainDefault'
 						throw ParseError.errorUnionMatchDefaultMustThrow(defTok.line, column: defTok.column)
 					end 'errorUnionPlainDefault'
