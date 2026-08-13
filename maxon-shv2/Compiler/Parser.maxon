@@ -54220,17 +54220,27 @@ export type Parser
 		// instance whose base carries no layout of its own.
 		let layout = try self.structLayoutOfType(baseTag, nameId: baseTypeNameId, baseTok: baseTok)
 
-		// ⚠ **`immutableName` IS ASKED OF THE MATERIALIZED BINDING, NEVER OF THE ALIAS.** Every self-field
-		// alias is built `mutable: false` (a rebind of the alias is never legal) and is not a parameter, so
-		// asking the alias reports "immutable" against an `export var` field — the false E3019 `baseBoxOf`'s
-		// header measures. `baseBindingOf` carries the FIELD's own `var`/`let` in that column.
 		let box = try self.baseBoxOf(binding, baseTok: baseTok)
 
-		// ⚠ E3070's subject is EMPTY here and that is not an exemption — a field CHAIN's borrow subject is
-		// derived by its own caller from the base's token index (`parseFieldChainCall`'s
-		// `borrowSubjectNameAt`, `parseFieldAssignment`'s), because only the token index can tell a
-		// `self`-rooted chain's FIELD subject from the receiver. Neither caller of this function reads the
-		// `subjectName` a `StructBase` carries; both take only the box and the layout.
+		// ⚠⚠ **NEITHER NAME COLUMN OF THE RECORD HAS A READER ON THIS DOOR'S PATH, AND THAT IS A PROPERTY OF
+		// THE TWO CALLERS RATHER THAN AN OMISSION — CENSUSED (W66 review).** `resolveFieldChain` and
+		// `resolveGlobalFieldChain` take only the box and the layout off the `StructBase`; `immutableName`'s
+		// ONE reader is `dispatchMethodOnBase`, and the only producers that reach it are
+		// `structBaseOfReceiver` and `capturedStructBase`, never this one. **Do not read either column here
+		// in a later rung without moving its derivation** — a field CHAIN answers both questions elsewhere
+		// and HAS to: its E3019 blame name is `parseFieldChainCall`'s `iterationLockNameOf`, its E3070
+		// subject that same `borrowSubjectNameAt`, and its WRITE permission `parseFieldAssignment`'s
+		// `requireWritableInstance`, asked of the binding `resolveFieldChain` threads on. All three are keyed
+		// on the base's TOKEN INDEX or on that binding, because only those can tell a `self`-rooted chain's
+		// FIELD subject from the receiver; a name answered from HERE could not, which is the whole reason
+		// `subjectName` is empty rather than derived.
+		//
+		// ⚠ `immutableName` is still filled with the TRUE answer instead of that same empty, and the
+		// asymmetry is deliberate: `EmptySourceText` in THAT column MEANS "writable" (`immutableReceiverNameOf`),
+		// so a future reader would be told the permissive thing by a door that never asked. Asking the
+		// MATERIALIZED binding is what keeps the value right if one ever arrives — every self-field alias is
+		// built `mutable: false` and is not a parameter, so asking the ALIAS would report "immutable" against
+		// an `export var` field, the false E3019 `baseBoxOf`'s header measures.
 		return StructBase.create(layout, box: box, immutableName: self.immutableReceiverNameOf(try self.baseBindingOf(binding, baseTok: baseTok, box: box), baseTok: baseTok), subjectName: EmptySourceText)
 	end 'requireStructBase'
 

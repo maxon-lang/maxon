@@ -94,8 +94,21 @@ nowhere to store it"*, which is still false as written.
 
 <!-- test: error.struct-typed-field-read -->
 `next.a` inside `type Node`'s own method. Refused at the BASE token — `next` is what cannot be
-addressed, not `a`. Sabotage it by deleting the `isSelfField` arm of `requireStructBase` and this
-case does not merely go red: it goes **green with the wrong code**, silently returning `self.a`.
+addressed, not `a`.
+
+⛔ **ITS SABOTAGE NOTE EXPIRED WITH W66, AND WHAT REPLACES IT IS THE MEASUREMENT.** The note read
+*"delete the `isSelfField` arm of `requireStructBase` and this case does not merely go red: it goes
+**green with the wrong code**, silently returning `self.a`"* — true of the door that handed back
+`binding.boundValue`, which is 0, which is the receiver. **That door materializes now, so there is
+no 0 left to return.** Measured on this tree (W66 review) with the constructibility test disabled at
+both doors: this case and the two below all answer
+**`error E4014: <fragment>:5:6: type 'Node' contains a reference cycle (via Node → next: Node)`** —
+a clean refusal one stage later, from `TypeCycleCheck`, whose graph is a strict SUPERSET of
+`structTypeIsConstructible`'s (it walks container element types and union payloads too). The other
+four cases stayed green. ⇒ **these three pin WHICH diagnostic wins, not whether the program is
+refused**, and the parser's wins only because it runs first — the runnable oracle reports E4014 on
+this very program, so the E2015 below is also where shv2 and the oracle part company. See
+`error.scalar-field-base-is-not-a-struct` for the sabotage on this file that IS still live.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -177,7 +190,10 @@ error E2015: <fragment>:10:3: Unsupported: a field access through 'next', which 
 field's alias is not a struct base either, but it is not a struct-typed field and must not be told
 it is: the `structRef` gate is asked FIRST, so `count.x` reports what is actually wrong with it.
 Move the `isSelfField` arm above the `structRef` gate — the tidy-looking edit, since both reject —
-and this case goes red while the three above stay green.
+and this case goes red while the three above stay green. **RUN, not predicted (W66 review):** the
+hoisted arm reads 6 passed / 1 failed, this one alone, with `count` told
+*"a field access through 'count', which is a struct-typed FIELD of the enclosing type"* — a scalar
+blamed on a struct it is not.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -326,4 +342,124 @@ end 'main'
 ```
 ```maxoncstderr
 error E2013: <fragment>:17:3: cannot assign to immutable variable: 'inner'
+```
+
+<!-- test: managed-field-write-through-the-base -->
+**THE WRITE PATH WITH A MANAGED FIELD AT THE END OF IT, which is where a materialized base could
+lose a refcount and nothing else in this file would notice.** `inner.name = n` reaches
+`parseFieldAssignment`'s `emitFieldWrite` through the box loaded out of the receiver, and that store
+MOVES the new `String` in before dropping the one it displaces. The bare-self-field twin
+(`heap-field-assignment.md`'s `memory.self-field-overwrite-frees-old`) pins the same store one
+indirection IN; nothing pinned it through a struct-typed base until W66 made one reachable. The
+`self.`-spelled write is here beside it so the two cannot come to disagree, and the field is
+overwritten twice so a missed decref is a leak (exit 101) rather than a number that still reads
+right. Returns `112` — `11` after the alias write, `2` after the `self.` one.
+
+⭐ **THE GOLDEN IS WHERE THE REAL ASSERTION LIVES: `Outer.setViaAlias` and `Outer.setViaSelf` emit
+BYTE-IDENTICAL BODIES**, instruction for instruction and register for register — one
+`loadRegBaseDisp [rcx + 0]` for the box (spilled to `slot0` across the allocation), the new `String`
+built, `__str_decref` on the one it displaces, then the store. Move-in-then-drop, one load, no
+refcount taken on the borrowed struct box. Diff those two functions when this fragment moves: the
+two spellings coming apart is the failure this case is watching for, and the exit code alone cannot
+see it.
+```maxon
+
+typealias Small = int(0 to 1000)
+
+type Inner
+	export var name as String
+
+	static function create(n String) returns Self
+		return Self{name: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	export function setViaAlias(n String)
+		inner.name = n
+	end 'setViaAlias'
+
+	export function setViaSelf(n String)
+		self.inner.name = n
+	end 'setViaSelf'
+
+	export function lenViaAlias() returns Small
+		return inner.name.byteLength() as Small
+	end 'lenViaAlias'
+
+	static function create(i Inner) returns Self
+		return Self{inner: i}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var o = Outer.create(Inner.create("abc"))
+	o.setViaAlias("hello world")
+	let a = o.lenViaAlias()
+	o.setViaSelf("hi")
+	let b = o.lenViaAlias()
+	return a * 10 + b
+end 'main'
+```
+```exitcode
+112
+```
+
+<!-- test: error.an-iterated-container-reached-through-the-base-is-not-writable -->
+⛔ **THE ITERATION LOCK MUST SURVIVE THE MATERIALIZATION, AND IT SURVIVES ONLY BECAUSE
+`selfFieldValueBinding` ASKS THE ALIAS.** `baseBindingOf` MINTS A FRESH `VarInfo`, the lock is keyed
+on OBJECT IDENTITY, and that fresh object is not the one `iterationLockedBindings` holds — so the
+permission has to be computed from the ALIAS still in hand (`selfFieldIsWritable`, whose header
+states exactly this) and carried into the new binding's `mutable` column. Every case in
+`for-iterated-self-field` uses a BARE self field, so none of them crosses a materialized base; this
+is the only case in the suite whose WRITE does.
+
+**SABOTAGE RUN, not predicted (W66 review):** make `selfFieldIsWritable` ask the lock of a FRESH
+`VarInfo` instead of the alias it was handed — the exact drift `baseBindingOf` invites, since it
+mints one — rebuild, and `--filter=self-field` reads **48 passed / 3 failed**: this case
+*"expected a compile error but compilation succeeded"*, together with
+`for-iterated-self-field`'s two bare-**CALL** cases. The four bare-**ASSIGN** cases stay RED and
+catch nothing, because `parseSelfFieldAssignment` never materializes a binding at all. ⇒ the lock's
+survival across a materialized base is pinned HERE and by nothing else on the write side.
+```maxon
+
+typealias Small = int(0 to 1000)
+typealias StringArray = Array with String
+
+type Inner
+	export var items as StringArray
+
+	static function create() returns Self
+		var a = StringArray.create()
+		a.push("x")
+		return Self{items: a}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	export function probe() returns Small
+		var n = 0 as Small
+		for it in inner.items 'loop'
+			inner.items = StringArray.create()
+			n = n + it.byteLength() as Small
+		end 'loop'
+		return n
+	end 'probe'
+
+	static function create(i Inner) returns Self
+		return Self{inner: i}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var o = Outer.create(Inner.create())
+	return o.probe()
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:22:4: cannot assign to immutable variable: 'inner'
 ```
