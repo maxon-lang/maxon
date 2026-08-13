@@ -305,6 +305,20 @@ let ConstShapeContainerValue = 70 as ContentHash
 // the reason stated above — and deliberately not the arguments, which reach only `__module_init`.
 let ConstShapeFactoryValue = 71 as ContentHash
 
+// A top-level binding that folded to a `CharacterSet` PRESET (spec-port `lazy-static`). Its own
+// discriminator for `ConstShapeContainerValue`'s reason: the slot's TYPE is the compiler-owned
+// `CharacterSet` box, so `var ws = CharSet.create()` becoming `var ws = CharacterSet.whitespaces()` retypes
+// every reader's use even though the label and the load are unchanged.
+//
+// ⚠ **THE CATEGORY MASK RIDES AND THE MEMBERS DO NOT, which is the array-literal arm's rule with the mask
+// standing in for the element kind.** Every preset gives the slot the same type and every reader emits the
+// same `globalAddr` + `loadIndirect`, so by that rule neither half would strictly have to ride; the mask
+// does because it is one integer and it is what makes this hash a function of the ACCESSOR the author
+// wrote — the property `ConstShapeFactoryValue` gets for free from its callee name, and the thing a future
+// reader-visible difference between two presets would need. The MEMBERS are left out because they reach
+// only `__module_init`, which is rebuilt from this arena whenever the query misses.
+let ConstShapeCharacterSetValue = 72 as ContentHash
+
 // A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
 // are the same name and the same number and compile to COMPLETELY different code — one inlines
 // as a literal, the other loads from `.data` — so a reader's parse memo must move when one
@@ -704,7 +718,7 @@ export union TopLevelConstant
 	//
 	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
 	// and fails to compile until it has been visited and decided.
-	containerValue(giid GenericInstanceId)
+	containerValue(giid GenericInstanceId, elements ConstArrayElementArray)
 	// ⭐ **IT EVALUATED TO A USER STATIC FACTORY CALL — `var db = Database.create(…)`** (spec-port
 	// `map-struct-bytearray`). Its own arm because it is the one outcome whose value the compiler does not
 	// KNOW: the other stored arms carry a record's contents, this one carries the CALL TREE that produces
@@ -716,6 +730,17 @@ export union TopLevelConstant
 	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
 	// and fails to compile until it has been visited and decided.
 	factoryValue(calls ConstFactoryCallArray, root InitializerCallId, returnType MaxonType)
+	// ⭐ **IT EVALUATED TO A `CharacterSet` PRESET** (spec-port `lazy-static`) — the `containerValue` twin for
+	// the one compiler-owned record a global can hold. See `ConstFoldedValue.characterSet` for what it is and
+	// `ManagedGlobalRecord.characterSetRecord` for why the compiler materializes it rather than recording a
+	// call.
+	//
+	// ⚠ APPENDED AT THE END, for `managedValue`'s reason and now against SIX range arms rather than three —
+	// `managedValue to containerValue`, `managedValue to factoryValue` (×3), `arrayValue to factoryValue` and
+	// `value to poisoned` all EXCLUDE this case, so each site failed to compile until it had been visited and
+	// decided. Placing it beside `containerValue`, where it semantically belongs, would have let four of them
+	// swallow it silently — which is the whole reason this union appends.
+	characterSetValue(chars GenericInstanceId, members ConstArrayElementArray, categoryMask ParsedInt)
 end 'TopLevelConstant'
 
 // ⭐⭐ **DOES A TOP-LEVEL DECLARATION'S INITIALIZER RUN THE PROGRAM'S OWN CODE, AND WHOSE?** — ONE
@@ -744,21 +769,70 @@ export union TopLevelInitializerCall
 	calls(callees ByteArrayArray)
 end 'TopLevelInitializerCall'
 
-// ONE folded ELEMENT of a top-level array literal (P1.7 slice 2b) — what `__module_init` materializes and
-// pushes. Deliberately NOT `ConstInitializerValue` (which would make it recursive): a NESTED array literal
-// is not an element an array literal accepts, in a function body or here, so the type says so rather than
+// ONE folded ELEMENT of a top-level CONTAINER literal (P1.7 slice 2b) — what `__module_init` materializes
+// and adds. Deliberately NOT `ConstInitializerValue` (which would make it recursive): a NESTED container
+// literal is not an element any of them accepts, in a function body or here, so the type says so rather than
 // leaving a case for a walk to reject.
 export union ConstArrayElement
 	// An integer element: the folded number, materialized as an ordinary `literal` op. The whole scalar
 	// evaluator stands behind it, so `[BASE, BASE + 2]` is as much an element as `[1, 2]` is.
 	integer(payload ParsedInt)
 	// A String element: the literal's decoded bytes, materialized as the immortal `.rdata` record and then
-	// CLONED — the array's `element_destroy@40` walk drops every live slot, so each element must be a record
-	// the array may own (exactly what `Parser.moveElementIntoContainer` promotes a borrowed String literal to).
+	// CLONED — the container's `element_destroy@40` walk drops every live slot, so each element must be a
+	// record it may own (exactly what `Parser.moveElementIntoContainer` promotes a borrowed String literal to).
 	string(bytes ByteArray)
+	// ⭐ **A Character element** (spec-port `lazy-static`) — the same `.rdata`-record-then-CLONE the String
+	// arm takes, differing only in the TAG the value is minted at, which is what makes it a `Character` and
+	// not a one-byte String. It carries the same decoded bytes because a `Character` record IS a String
+	// record in shv2 (`emitCharacterLiteral` emits a `stringLiteral` op at the `character` tag).
+	//
+	// ⚠ **ONLY THE SET-LITERAL WALK PRODUCES ONE, AND `constArrayElementKindOf` SAYS SO.** A character
+	// LITERAL is not a constant at module scope (`Parser.evalConstCharLiteral` refuses it as E2004 — the
+	// value it denotes is a record), so `evalConstArrayElement` has no character arm and a top-level
+	// `['a', 'b']` is refused exactly as it was. What `CharSet from ['a', 'e']` supplies that a bare bracket
+	// list cannot is the INSTANCE, which is why the element is admitted there and nowhere else.
+	character(bytes ByteArray)
 end 'ConstArrayElement'
 
 export typealias ConstArrayElementArray = Array with ConstArrayElement
+
+// The element list every EMPTY container global carries — one shared array, never mutated, for the reason
+// every other `sharedEmpty*` in this compiler exists: a `var g = IntArray.create()` allocates nothing to say
+// it has no elements, and `ItemArray.create()` is the commonest managed global in the corpus.
+export let sharedEmptyConstArrayElements = ConstArrayElementArray.create()
+
+// ⭐ **DOES A FOLDED MEMBER FIT A SET'S DECLARED KEY TYPE?** The folding twin of `Parser.parseSetKeyArg`,
+// which holds a body's `insert` argument to the same `setKeyType`. Without it, `StrSet from [1, 2]` would
+// build a set whose slots hold integers and whose teardown walk `__str_decref`s them — a wrong answer at run
+// time on a program the compiler accepted.
+//
+// It is one MAP and one comparison rather than a per-key-type ladder, so the element a global is built from
+// and the type its container was declared at cannot be judged by two readings.
+export function constSetMemberMatchesKeyType(element ConstArrayElement, keyType MaxonType) returns bool
+	return maxonTypeTag(keyType) == constSetMemberKeyTag(element)
+end 'constSetMemberMatchesKeyType'
+
+// The key tag one folded member IS — `ConstArrayElement`'s classification for a SET, where
+// `constArrayElementKindOf` is its classification for an ARRAY. Two classifications because the two
+// containers ask different questions: an array INFERS its instance from this, a set CHECKS its stated one.
+function constSetMemberKeyTag(element ConstArrayElement) returns ValueTypeTag
+	return match element 'e'
+		integer gives ValueTypeTag.integer
+		string gives ValueTypeTag.string
+		character gives ValueTypeTag.character
+	end 'e'
+end 'constSetMemberKeyTag'
+
+// The eleven presets' member lists are `ByteArrayArray`s of decoded UTF-8 (`CharacterSetRuntime`), and a
+// global's member list is a `ConstArrayElementArray` — one conversion, so the table stays the single source
+// of what a preset contains and this walk adds no second transcription of it.
+export function constCharacterMembers(members ByteArrayArray) returns ConstArrayElementArray
+	var elements = ConstArrayElementArray.create()
+	for bytes in members 'eachMember'
+		elements.push(ConstArrayElement.character(bytes))
+	end 'eachMember'
+	return elements
+end 'constCharacterMembers'
 
 // WHICH element type a top-level array literal settled on — the ONE fact its `Array with T` instance, its
 // element size and its element destructor all follow from, decided from the FIRST element and enforced on
@@ -779,6 +853,12 @@ export function constArrayElementKindOf(element ConstArrayElement) returns Const
 	return match element 'e'
 		integer gives ConstArrayElementKind.integer
 		string gives ConstArrayElementKind.string
+		// ⚠ **A CHARACTER ELEMENT HAS NO ARRAY KIND, AND THAT IS THE INVARIANT RATHER THAN AN OMISSION.**
+		// This function's whole job is what an ARRAY LITERAL infers its instance from, and no array literal
+		// can hold one: `evalConstArrayElement` has no character arm, because a character literal is not a
+		// constant at module scope. A character element reaches the arena only through a SET literal, which
+		// STATES its instance (`ConstFoldedValue.containerCreate`'s giid) and never asks this.
+		character panic("constArrayElementKindOf: a Character element has no array-literal kind — it can only come from a set literal, whose instance is stated by its alias rather than inferred from its elements")
 	end 'e'
 end 'constArrayElementKindOf'
 
@@ -789,7 +869,10 @@ end 'constArrayElementKindOf'
 export function constArrayElementScalar(element ConstArrayElement) returns ParsedInt
 	return match element 'e'
 		integer(payload) gives payload
-		string panic("constArrayElementScalar: a String element has no constant image — its slot holds a heap address, which is why `arrayElementMayBeConstantBlob` refuses the instance before this is asked")
+		// A String and a Character element alike hold a heap address, which is why `arrayElementMayBeConstantBlob`
+		// refuses the instance before this is asked — and a Character element cannot reach a blob at all, its
+		// container being a `Set` rather than an `Array`.
+		string to character panic("constArrayElementScalar: a managed element has no constant image — its slot holds a heap address, which is why `arrayElementMayBeConstantBlob` refuses the instance before this is asked")
 	end 'e'
 end 'constArrayElementScalar'
 
@@ -824,11 +907,55 @@ export type ManagedGlobal
 	// take no `ProgramSignatures` at all, so there is no second place a drop callee could be derived from.
 	export let dropCallee as ByteArray
 	export let range as SourceRange
+	// ⭐⭐ **IS THIS SLOT FILLED ON FIRST ACCESS?** — the DECIDED BIT, `ProgramSignatures.declSlotIsLazy`'s
+	// answer, carried rather than re-derived. It routes three things in `ModuleInit` — which globals get a
+	// `__lazy_init#…` routine, which ones `__module_init` skips, and which ones `__maxon_global_cleanup`
+	// guards — and one more at every access site (`Parser.emitGlobalAddr`, through the label set the same
+	// predicate fills).
+	//
+	// ⛔⛔ **IT IS THE VERDICT, NOT THE PROVENANCE, AND THAT DISTINCTION IS THE §6 REVIEW'S** (finding 3). It
+	// carried `TopLevelDecl.scope` — WHERE the binding was declared — and `ModuleInit` routed on that alone
+	// while `declSlotIsLazy` decided the same question from THREE conditions (the scope, having storage, and
+	// the outcome being a stored record). The two agreed only because `managedGlobals` happens to admit
+	// exactly the record-outcome arms that predicate's range arm names, and nothing forced it: the day a
+	// file-scope binding becomes lazy, or a `static` member acquires a slot that is not a stored record,
+	// `declSlotIsLazy` fails to compile (its range arm covers the union) while three `match global.scope`
+	// answer silently — a slot nobody initializes, or a `call __lazy_init#X` with no routine behind it.
+	// One predicate, four readers.
+	export let filledOnFirstAccess as bool
 
-	export static function create(label ByteArray, initializer ManagedGlobalInitializer, valueType MaxonType, dropCallee ByteArray, range SourceRange) returns ManagedGlobal
-		return Self{label: label, initializer: initializer, valueType: valueType, dropCallee: dropCallee, range: range}
+	export static function create(label ByteArray, initializer ManagedGlobalInitializer, valueType MaxonType, dropCallee ByteArray, range SourceRange, filledOnFirstAccess bool) returns ManagedGlobal
+		return Self{label: label, initializer: initializer, valueType: valueType, dropCallee: dropCallee, range: range, filledOnFirstAccess: filledOnFirstAccess}
 	end 'create'
+
+	// ⭐ **THE SYNTHESIZED ROUTINE THAT FILLS THIS SLOT ON FIRST ACCESS** — `__lazy_init$<label>`, derived
+	// from the label so the routine and the slot cannot come to name different things. `__`-prefixed, so
+	// `isCompilerInternalCallee` treats it as the compiler's own and `TargetPrinter.isRuntimeFunction` keeps
+	// its body out of every golden fragment; what DOES reach a golden is the one `call` each access emits.
+	//
+	// The bootstrap names its equivalent `<Type>.<field>.__lazy_init` (MEASURED, off a cycle's stack trace).
+	// shv2 keys on the LABEL instead of the source name because the label is already the slot's IR identity
+	// and is already collision-resolved (`assignDataLabels`), so two file-private statics of the same name
+	// get two routines without a second disambiguator.
+	export function lazyInitCallee() returns ByteArray
+		return lazyStaticInitCallee(self.label)
+	end 'lazyInitCallee'
+
 end 'ManagedGlobal'
+
+// The `__lazy_init$<label>` spelling, written ONCE and read from both sides — `ManagedGlobal.lazyInitCallee`
+// (which builds the routine) and `ProgramSignatures.lazyStaticInitCalleeFor` (which makes an access call it).
+// ⛔ **THE JOIN IS `#`, AND IT IS NOT `$` — the §6 review's finding 7.** `Project.OverloadNameSeparator`
+// states the rule ("a symbol built by joining two names joins them with a character no name can hold") and
+// states that `$` is ALREADY SPENT on joining a lifted closure to its enclosing function. A third meaning
+// for it made `FnRefThunk.isLiftedClosureName` — a bare search for `$` — answer TRUE for this routine, which
+// is the right answer (it needs no env thunk) for entirely the wrong reason. `#` is the character that
+// already means "the compiler joined two names here".
+export function lazyStaticInitCallee(label ByteArray) returns ByteArray
+	var callee = b"__lazy_init#".clone()
+	callee.append(label)
+	return callee
+end 'lazyStaticInitCallee'
 
 export typealias ManagedGlobalArray = Array with ManagedGlobal
 
@@ -879,9 +1006,23 @@ export union ManagedGlobalRecord
 	// W41) has no literal record at all: it is BUILT, `create` then one `__managed_push` per element. `create`
 	// carries which callee and which stamps this instance fixes, resolved HERE (where the instance registry is)
 	// rather than re-derived by the synthesis — the same discipline `ManagedGlobal.dropCallee` follows. An
-	// array LITERAL has elements and every other container global has none, which is the same fact the
-	// container-factory arm has always stated: a container factory IS an array literal with no elements.
+	// array LITERAL has elements and an empty container factory has none, which is the same fact the
+	// container-factory arm has always stated: a container factory IS an array literal with no elements. A
+	// `CharSet from ['a', 'e']` is the third point on that line — an instance STATED by its alias, with
+	// elements — and it is what made the ADD callee ride `create` rather than being `__managed_push` written
+	// into the emitter (a `Set` inserts).
 	containerRecord(create ContainerCreateCall, elements ConstArrayElementArray)
+	// ⭐⭐ **A `CharacterSet` PRESET — `CharacterSet.whitespacesAndNewlines()`** (spec-port `lazy-static`). It
+	// is the ONE compiler-owned record a global can hold, and it is here rather than in the factory arena
+	// because it is not a CALL the author wrote: shv2 has no `stdlib/CharacterSet.maxon` to declare
+	// `whitespacesAndNewlines` as a callee, so the parser MATERIALIZES the eleven presets from data
+	// (`CharacterSetRuntime.characterSetPresets`) and this is the same materialization at module scope.
+	//
+	// It is the member set — `chars` + `charsType` + `members`, the very triple `containerRecord` above
+	// describes (that arm takes its type from the receiving slot; here the receiving slot is the BOX's, so
+	// the member set's own type has to ride) — plus the `categoryMask` that `__cs_make` seals it into a box
+	// with. Flat rather than holding a nested `ManagedGlobalRecord`, for this union's own stated reason (E4014).
+	characterSetRecord(chars ContainerCreateCall, charsType MaxonType, members ConstArrayElementArray, categoryMask ParsedInt)
 end 'ManagedGlobalRecord'
 
 // ONE argument a top-level factory call passes: its source-level `name:` LABEL (empty for a positional
@@ -981,15 +1122,36 @@ end 'GlobalRecordAndType'
 // handed both, while a declared `create()` builds its own fields from its own declaration and is handed none.
 // Who owns a given instance's `create` is `ProgramSignatures.instanceCreateIsDeclared`'s single answer, read
 // by the producer here and by the two liveness decisions, never re-derived from this callee's spelling.
+//
+// ⚠ **AND WHICH CALLEE ADDS AN ELEMENT, for the same reason the `create` callee rides here** (spec-port
+// `lazy-static`). `ModuleInit` used to spell `__managed_push` itself, which was true while an `Array` was
+// the only container that could arrive holding elements; a `CharSet from ['a', 'e']` INSERTS. Routing it
+// through the same per-container answer `containerCreateCall` already gives keeps one router deciding what
+// a container is, rather than a second `isSetInstance` test inside the synthesis.
 export type ContainerCreateCall
 	export let callee as ByteArray
 	export let stamps as ContainerCreateStampArray
 	export let sizing as ContainerSizing
+	export let elementAdd as ContainerElementAdd
 
-	export static function create(callee ByteArray, stamps ContainerCreateStampArray, sizing ContainerSizing) returns ContainerCreateCall
-		return Self{callee: callee, stamps: stamps, sizing: sizing}
+	export static function create(callee ByteArray, stamps ContainerCreateStampArray, sizing ContainerSizing, elementAdd ContainerElementAdd) returns ContainerCreateCall
+		return Self{callee: callee, stamps: stamps, sizing: sizing, elementAdd: elementAdd}
 	end 'create'
 end 'ContainerCreateCall'
+
+// ⭐ **HOW ONE ELEMENT JOINS A CONTAINER `__module_init` BUILT** — a runtime callee taking `(record, value)`,
+// or NOTHING for a container no top-level form can hand elements to.
+//
+// ⚠ **`unsupported` IS NOT "we have not got round to it": it is the honest answer for a container the
+// initializer grammar cannot give elements.** A `Map` global is only ever `MapAlias.create()` (there is no
+// top-level map literal) and a DECLARED generic's `create()` takes no arguments at all
+// (`Parser.requireDeclaredGenericGlobalCreate`), so both arrive with an EMPTY element list and never ask.
+// `ModuleInit` panics rather than defaulting, so the day a form does hand one elements, the missing callee is
+// a compile-time-loud gap and not a silently dropped element.
+export union ContainerElementAdd
+	push(callee ByteArray)
+	unsupported
+end 'ContainerElementAdd'
 
 // ONE argument a container's `create` is stamped with — an `element_size@24` stride, or the
 // `element_destroy@40` / `elemDrop@40` / `element_drop@24` destructor a container's teardown walk calls
@@ -1164,8 +1326,22 @@ export type TopLevelDecl
 	// slot, and every reader gates on `mutable` before looking (`dataLabelOf` panics rather than
 	// handing back an empty label).
 	export var dataLabel as ByteArray
+	// ⭐⭐ **WHICH BODY DECLARED THIS BINDING — file scope, or a `type` body's `static let`/`static var`.**
+	// shv2 reads the two through ONE reader (`Parser.readTopLevelBinding`, W65) because their STORAGE is one
+	// thing; this is the one place where WHEN they are initialized differs, so the fact is recorded where it
+	// is known rather than re-derived downstream from whether the name carries a `Type.` qualifier — which
+	// would be a lossy key used as an identity, and a file-scope `let` named with a dot is not a thing the
+	// grammar can produce but is exactly the kind of assumption this repo has been bitten by.
+	//
+	// ⛔ **IT IS NOT A STYLE DISTINCTION — IT IS MEASURED, AND CANONICAL STATES BOTH HALVES.**
+	// `specs/lazy-static.md`: a static field's initializer is *"evaluated the first time the static field is
+	// accessed"*. `specs/dead-top-level-var-elim.md:31`: a module-level var's initializer *"still runs even
+	// when the slot is dead"*. MEASURED on the runnable oracle with ONE program moved between the two
+	// positions (a never-read binding whose initializer bumps a counter): **`static var` prints 0, module-level
+	// `var` prints 1**. See `ModuleInit` for the two mechanisms that answer.
+	export var scope as TopLevelBindingScope
 
-	export static function create(name ByteArray, mutable bool, visibility Visibility, declFilePath FilePath, tokens TokenArray, initStart TokenIndex, initEnd TokenIndex, nameLine LineNumber, nameColumn ColumnNumber) returns TopLevelDecl
+	export static function create(name ByteArray, mutable bool, visibility Visibility, declFilePath FilePath, tokens TokenArray, initStart TokenIndex, initEnd TokenIndex, nameLine LineNumber, nameColumn ColumnNumber, scope TopLevelBindingScope) returns TopLevelDecl
 		return Self{
 			storageKey: topLevelStorageKey(name, visibility: visibility, declFilePath: declFilePath),
 			name: name,
@@ -1179,10 +1355,21 @@ export type TopLevelDecl
 			nameLine: nameLine,
 			nameColumn: nameColumn,
 			outcome: TopLevelConstant.pending,
-			dataLabel: b""
+			dataLabel: b"",
+			scope: scope
 		}
 	end 'create'
 end 'TopLevelDecl'
+
+// ⭐ **THE BODY A TOP-LEVEL BINDING WAS DECLARED IN** — see `TopLevelDecl.scope` for the measurement that
+// makes this a semantic fact rather than a provenance note.
+export enum TopLevelBindingScope
+	// `var x = …` / `let X = …` at file scope. Its initializer runs in `__module_init`, before `main`,
+	// unconditionally.
+	fileScope
+	// `static var x = …` / `static let X = …` inside a `type` body. Its initializer runs on FIRST ACCESS.
+	typeMember
+end 'TopLevelBindingScope'
 
 export typealias TopLevelDeclArray = Array with TopLevelDecl
 
@@ -1296,10 +1483,19 @@ export union ConstFoldedValue
 	// rather than a `managed` with a different payload for `TopLevelConstant.arrayValue`'s reason: the
 	// binding it settles has STORAGE, where a `managed` `let` has none.
 	arrayLiteral(elements ConstArrayElementArray, element ConstArrayElementKind)
-	// A CONTAINER FACTORY CALL (`ItemArray.create()`, `EntryMap.create()`) — the alias's instance, which is
-	// the whole value of an empty container. Its own answer for `arrayLiteral`'s reason: the binding it
-	// settles has STORAGE, and what it stores is a record no read can re-materialize.
-	containerCreate(giid GenericInstanceId)
+	// A CONTAINER whose INSTANCE IS STATED rather than inferred — `ItemArray.create()` and `EntryMap.create()`
+	// (empty), and `CharSet from ['a', 'e']` (with members). Its own answer for `arrayLiteral`'s reason: the
+	// binding it settles has STORAGE, and what it stores is a record no read can re-materialize — and it is
+	// separate from `arrayLiteral` because the two are TYPED from different facts: a literal's instance is
+	// INFERRED from its first element's kind (`constArrayValueType`), where this one is the giid the alias
+	// resolved to. That difference is exactly why the `from` form exists at all: a bare `['a', 'e']` is an
+	// array of characters, and only the alias can say the container is a `Set` over them.
+	containerCreate(giid GenericInstanceId, elements ConstArrayElementArray)
+	// ⭐⭐ **A `CharacterSet` PRESET — `CharacterSet.whitespacesAndNewlines()`** (spec-port `lazy-static`).
+	// It is `containerCreate` (the member set the preset seeds) plus the `categoryMask` `__cs_make` seals it
+	// with; see `ManagedGlobalRecord.characterSetRecord` for why the compiler MATERIALIZES it rather than
+	// recording a call, and why it is flat.
+	characterSet(chars GenericInstanceId, members ConstArrayElementArray, categoryMask ParsedInt)
 end 'ConstFoldedValue'
 
 // ONE argument of a top-level factory call, as the evaluator walked it: the source-level `name:` LABEL
@@ -5519,6 +5715,19 @@ typealias TupleElementTokenOwnerMap = Map with (ByteArray, ByteArray)
 // not a bool.
 typealias ManagedTopLevelNameSet = Set with ByteArray
 
+// The `.data` labels whose slot is filled ON FIRST ACCESS (spec-port `lazy-static`) — every `static`
+// member with a record slot. Read by `Parser.emitGlobalAddr` at every global access, which is why it is a
+// SET keyed by the label rather than a walk of the arena: the access door holds a label and nothing else.
+typealias LazyStaticSlotSet = Set with ByteArray
+
+// ⭐ **DOES AN ACCESS TO A GLOBAL SLOT HAVE TO RUN AN INITIALIZER FIRST?** A union rather than an
+// empty-bytes sentinel, because "this global is eager" is an ANSWER — it is what nearly every global is —
+// and not a missing callee.
+export union LazyStaticInit
+	none
+	callee(name ByteArray)
+end 'LazyStaticInit'
+
 // Function name ⇒ the pre-erasure `__ManagedMemory` SPELLING of its declared return type (A2j / A2m) — the
 // door `Parser.emitCall` asks before it marks a call's result. See `ProgramSignatures.declaredReturnSurfaces`
 // for why only a NON-PLAIN surface gets an entry.
@@ -6302,6 +6511,110 @@ let sharedEmptyMethodWitnessConstraints = WhereConstraintArray.create()
 export function maxonTypesDenoteSame(a MaxonType, b MaxonType) returns bool
 	return maxonTypeTag(a) == maxonTypeTag(b) and typeNameIdOf(a) == typeNameIdOf(b)
 end 'maxonTypesDenoteSame'
+
+// ⭐⭐ **WHAT A DECLARATION MAKES A TYPE NAME *MEAN*** — the thing a redeclaration of a COMPILER-OWNED name
+// has to be compared against, because W3's rule is that a name has ONE meaning and not that the compiler
+// must be the one to write it down (`Project.declarationContestsACompilerOwnedName`).
+//
+// ⚠ **THE DEFECT THE RESERVATION EXISTS TO PREVENT IS A *DISAGREEING* DECLARATION, AND ONLY THAT.**
+// `specs-shv2/character-set.md`'s `charset-alias-is-compiler-owned` records it: before the name was
+// reserved, `typealias CharSet = Set with String` silently OVERWROTE the compiler's meaning and the author
+// was then blamed at the first USE four lines down (*"requires a Character key — got a 'String' value"*).
+// A declaration that says exactly what the compiler already says overwrites nothing and can produce no such
+// report, so refusing it is a false reject — and it refused `stdlib/CharacterSet.maxon:19`'s own line,
+// which `specs/lazy-static.md` writes verbatim.
+export union DeclaredTypeMeaning
+	// A `type`, an `enum`/`union` or a FUNCTION typealias — each MINTS a nominal identity of its own, which
+	// by construction is not any other declaration's and not the compiler's. So every such declaration of an
+	// owned name contests it, and that is said HERE, once, by the comparison declining this arm — never by a
+	// per-name list that could go stale as names join `isCompilerOwnedTypeName`.
+	nominalIdentity
+	// A GENERIC-INSTANCE typealias — `Base with Args`, which mints no identity at all: it NAMES the instance
+	// its base and arguments intern to, so two of them agree exactly when those agree. The flat `args` array
+	// is the pre-order argument tree `GenericAliasEntry` carries, and base + args + shape is the same content
+	// `GenericInstanceRegistry.instanceKey` builds an instance's identity out of — compared here BEFORE that
+	// interner exists, because the declaration door runs in the sweep that builds it.
+	genericInstance(baseName ByteArray, args GenericArgNodeArray, argCount FieldIndex)
+end 'DeclaredTypeMeaning'
+
+// ⭐⭐ **THE MEANING THE COMPILER ALREADY HOLDS FOR AN OWNED NAME — ONE TABLE, FOR THE WHOLE SET.**
+//
+// `CharSet` is the only entry, and that is a consequence rather than a shortlist: it is the only owned name
+// the compiler declares as a generic-instance ALIAS — `registerCharacterSetType` upserts it into the very
+// `genericAliases` map a user `typealias` folds into, because the reference declares it exactly so
+// (`typealias CharSet = Set with Character`, `stdlib/CharacterSet.maxon:19`). Every other owned name denotes
+// a builtin TAG (`String`, `Character`, `ExitCode`, `Codepoint`), a compiler-synthesized LAYOUT
+// (`CharacterSet`, `StringIndex`) or a corpus enum/alias (`Ordering`, `HashValue`, the `__Managed*Error`s),
+// and none of those is a thing a declaration in a user file can BE. They therefore fall to
+// `nominalIdentity`, which the comparison below declines for every input — so the set is closed by the
+// comparison and not by this function having to enumerate it.
+export function compilerOwnedTypeMeaning(name ByteArray) returns DeclaredTypeMeaning
+	if name.equals(CharacterMemberSetAliasName) 'theCharacterMemberSet'
+		var args = GenericArgNodeArray.create()
+		args.push(GenericArgNode.leaf(MaxonType.character))
+		return DeclaredTypeMeaning.genericInstance(SetBuiltinBaseName, args: args, argCount: 1)
+	end 'theCharacterMemberSet'
+
+	return DeclaredTypeMeaning.nominalIdentity
+end 'compilerOwnedTypeMeaning'
+
+// Do two declarations make a name denote the SAME type?
+export function typeMeaningsAgree(owned DeclaredTypeMeaning, declared DeclaredTypeMeaning) returns bool
+	match owned 'owned'
+		// ⚠ **A MINTED IDENTITY AGREES WITH NOTHING, NOT EVEN A STRUCTURALLY IDENTICAL TWIN.** Two `type
+		// Point` declarations are two types — which is why a redeclaration is E3006 and not a no-op — so a
+		// nominal meaning on EITHER side is a disagreement, and this arm is what closes the owned-name set.
+		nominalIdentity then return false
+		genericInstance(baseName, args, argCount) then return declaredInstanceMeaningAgrees(declared, baseName: baseName, args: args, argCount: argCount)
+	end 'owned'
+end 'typeMeaningsAgree'
+
+// The second half of the pair, written out because Maxon matches ONE scrutinee at a time.
+function declaredInstanceMeaningAgrees(declared DeclaredTypeMeaning, baseName ByteArray, args GenericArgNodeArray, argCount FieldIndex) returns bool
+	match declared 'declared'
+		nominalIdentity then return false
+		genericInstance(otherBase, otherArgs, otherCount) then return baseName.equals(otherBase) and argCount == otherCount and genericArgNodesDenoteSame(args, other: otherArgs)
+	end 'declared'
+end 'declaredInstanceMeaningAgrees'
+
+// Node for node over the two pre-order argument trees. The COUNT is compared first because a nested instance
+// contributes nodes past the top-level arity, so equal `argCount`s do not imply equal trees.
+function genericArgNodesDenoteSame(args GenericArgNodeArray, other GenericArgNodeArray) returns bool
+	if args.count() != other.count() 'differentTrees'
+		return false
+	end 'differentTrees'
+
+	for i in 0 upto args.count() 'eachNode'
+		let node = try args.get(i) otherwise panic("genericArgNodesDenoteSame: args.get OOB at {i} below count {args.count()}")
+		let peer = try other.get(i) otherwise panic("genericArgNodesDenoteSame: other.get OOB at {i} below the count this loop already matched")
+		if not genericArgNodeDenotesSame(node, other: peer) 'differs'
+			return false
+		end 'differs'
+	end 'eachNode'
+
+	return true
+end 'genericArgNodesDenoteSame'
+
+function genericArgNodeDenotesSame(node GenericArgNode, other GenericArgNode) returns bool
+	match node 'node'
+		leaf(argType) then return declaredLeafDenotesSame(other, argType: argType)
+		instanceHeader(baseName, argCount, fixedSize) then return declaredHeaderDenotesSame(other, baseName: baseName, argCount: argCount, fixedSize: fixedSize)
+	end 'node'
+end 'genericArgNodeDenotesSame'
+
+function declaredLeafDenotesSame(other GenericArgNode, argType MaxonType) returns bool
+	match other 'other'
+		leaf(otherType) then return maxonTypesDenoteSame(argType, b: otherType)
+		instanceHeader then return false
+	end 'other'
+end 'declaredLeafDenotesSame'
+
+function declaredHeaderDenotesSame(other GenericArgNode, baseName ByteArray, argCount FieldIndex, fixedSize FixedElementCount) returns bool
+	match other 'other'
+		leaf then return false
+		instanceHeader(otherBase, otherCount, otherSize) then return baseName.equals(otherBase) and argCount == otherCount and fixedSize == otherSize
+	end 'other'
+end 'declaredHeaderDenotesSame'
 
 // ⭐ **AN INTERFACE'S POSITION IN DECLARATION ORDER — the whole-program, interner-FREE handle a
 // `witnessDispatch` names its requirement's interface by.** See `ProgramSignatures.interfaceNamesInDeclOrder`
@@ -7533,6 +7846,10 @@ export type ProgramSignatures
 	// because "how many slots does this program declare?" is the honest fact; the caller's question
 	// ("any at all?") is one comparison away and does not need its own field.
 	export var storedGlobalCount as StoredGlobalCount
+	// ⭐ **THE LAZY SLOTS, BY LABEL** — filled by `assignDataLabels` (which is the walk that MINTS the labels,
+	// so the key and the slot are created in one act) and read by the parser's access door. See
+	// `lazyStaticInitCalleeFor`.
+	export var lazyStaticSlots as LazyStaticSlotSet
 	// ⭐ **HAS EVERY FILE BEEN FOLDED IN YET?** False while `queryProgramSignatures` is still sweeping
 	// files into this index, true from the moment the last one lands. It is the index's own answer to
 	// "can an absence be trusted?" — during the sweep a name that is genuinely declared reads as
@@ -7728,7 +8045,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9451,7 +9768,9 @@ export type ProgramSignatures
 		// flips, and one concept has two layouts under two keys. **That is the listing rung's question to
 		// settle, not this one's** — recorded here because deleting a prediction that already came true
 		// once is how it comes true twice.
-		if declarationContestsACompilerOwnedName(layout.name, declaredByTheCorpus: declaredByTheCorpus) 'aUserContest'
+		// A struct layout MINTS an identity of its own, so it can agree with no compiler-owned meaning — see
+		// `DeclaredTypeMeaning.nominalIdentity`.
+		if declarationContestsACompilerOwnedName(layout.name, declaredByTheCorpus: declaredByTheCorpus, declares: DeclaredTypeMeaning.nominalIdentity) 'aUserContest'
 			return
 		end 'aUserContest'
 
@@ -10409,7 +10728,7 @@ export type ProgramSignatures
 				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
 				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value to poisoned then break 'state'
-				managedValue to factoryValue then break 'state'
+				managedValue to characterSetValue then break 'state'
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i)
 			end 'state'
@@ -10456,6 +10775,12 @@ export type ProgramSignatures
 	//
 	// It also counts them, into `storedGlobalCount` — this walk visits exactly the decls that have a slot,
 	// so the count is a by-product of the labelling rather than a second arena pass to keep in step.
+	//
+	// ⭐ **AND IT RECORDS WHICH OF THOSE SLOTS ARE LAZY** (spec-port `lazy-static`), for the same reason and
+	// in the same act: the key of that set IS the label being minted on this line, so there is no window in
+	// which a slot exists under a label the lazy set was keyed by differently. It runs inside
+	// `evaluateInitializers`, which completes before any file is parsed — which is what makes the answer
+	// available to the parser's access door at the moment it needs it.
 	function assignDataLabels()
 		var minted = DataLabelCountMap.create()
 		var stored = 0 as StoredGlobalCount
@@ -10466,6 +10791,9 @@ export type ProgramSignatures
 			end 'inlinedHasNoSlot'
 			decl.dataLabel = uniqueDataLabel(decl.name, minted: minted)
 			stored = stored + 1
+			if self.declSlotIsLazy(decl) 'filledOnFirstAccess'
+				self.lazyStaticSlots.insert(decl.dataLabel)
+			end 'filledOnFirstAccess'
 		end 'each'
 		self.storedGlobalCount = stored
 	end 'assignDataLabels'
@@ -10508,7 +10836,7 @@ export type ProgramSignatures
 			// `let N = db` is `Undefined constant 'db'`, in both declaration orders, exactly as the other
 			// record kinds already are — which is what keeps the arena free of any initialization ORDER to
 			// get wrong: no admitted initializer can name another global.
-			managedValue to factoryValue then return ConstEvalOutcome.notFound
+			managedValue to characterSetValue then return ConstEvalOutcome.notFound
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
 			pending then break 'state'
@@ -10573,15 +10901,16 @@ export type ProgramSignatures
 		end 'returns'
 	end 'declaredReturnValueType'
 
-	// Settle a decl from the value its initializer FOLDED to — the four non-call answers, each keeping the
-	// arm it has always had. One door rather than four call sites, so the evaluator's union and the arena's
+	// Settle a decl from the value its initializer FOLDED to — the five non-call answers, each keeping the
+	// arm it has always had. One door rather than five call sites, so the evaluator's union and the arena's
 	// outcome union are mapped in exactly one place.
 	function settleFoldedValue(decl TopLevelDecl, value ConstFoldedValue) returns ConstEvalOutcome
 		match value 'kind'
 			scalar(folded) then return self.settleScalarValue(decl, value: folded)
 			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
 			arrayLiteral(elements, element) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.arrayValue(elements, element: element))
-			containerCreate(giid) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid))
+			containerCreate(giid, elements) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid, elements: elements))
+			characterSet(chars, members, categoryMask) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.characterSetValue(chars, members: members, categoryMask: categoryMask))
 		end 'kind'
 	end 'settleFoldedValue'
 
@@ -10639,7 +10968,7 @@ export type ProgramSignatures
 			failed to poisoned then break 'state'
 			evaluating then decl.outcome = TopLevelConstant.poisoned
 			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
-			managedValue to factoryValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
+			managedValue to characterSetValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
 			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateDecl` marks it `evaluating` before the walk")
 		end 'state'
 	end 'poisonIfUndecided'
@@ -10786,7 +11115,16 @@ export type ProgramSignatures
 			arrayValue(_, element) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.constArrayValueType(element), mutable: decl.mutable)
 			// ⭐ A CONTAINER FACTORY reads as an array literal does — a POINTER slot holding the record
 			// `__module_init` built — and its type needs no inference at all: the alias named the instance.
-			containerValue(giid) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), mutable: decl.mutable)
+			containerValue(giid, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), mutable: decl.mutable)
+			// ⭐ A `CharacterSet` PRESET reads as any struct-typed global does — a POINTER slot holding the box
+			// `__module_init` built — at the compiler-owned layout's own type, which is what makes `ws.contains(c)`
+			// an ordinary `CharacterSet` method dispatch off an ordinary struct pointer.
+			// ⚠ **ADOPTED INTO THE READER'S INTERNER, exactly as the factory arm below is.** A `structRef` id is
+			// meaningless outside the table that minted it, and this one is minted in the INDEX's — so handing
+			// it to a file's parse unadopted panicked in `Parser.internedName` the first time a body wrote
+			// `ws.contains(c)`. The container arm above needs no adoption because a `GenericInstanceId` is
+			// whole-program by construction, which is exactly why the two arms differ here.
+			characterSetValue then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.adoptType(self.characterSetValueType(), into: into), mutable: decl.mutable)
 			// ⭐ A FACTORY-CALL GLOBAL reads the same way, at the callee's declared RETURN type — a struct
 			// reference for `Database.create(…)`, which is what makes `db.sourceFiles` an ordinary field
 			// load off an ordinary struct pointer.
@@ -10827,6 +11165,15 @@ export type ProgramSignatures
 	// Both are a pure LOOKUP here: the declaration sweep interns them whenever a file's tokens contain a `[`
 	// (plus a following string literal for the String one), which every array initializer does by definition
 	// — the same sweep-writes/parser-reads discipline `internBuiltinIntegerInstance` states.
+	// ⭐ **THE `MaxonType` A `CharacterSet` GLOBAL DENOTES** — the compiler-owned layout's own struct
+	// reference, interned in THIS index's table (`Parser.characterSetNameId` interns the same name in the
+	// artifact's, which is the same split every other cross-tier type name makes). One derivation, read by the
+	// slot walk, the init walk and the drop router alike, so the box `__cs_make` builds and the drop
+	// `__cs_decref` performs cannot be routed off two different types.
+	export function characterSetValueType() returns MaxonType
+		return MaxonType.structRef(self.typeNames.intern(CharacterSetTypeName))
+	end 'characterSetValueType'
+
 	export function constArrayValueType(element ConstArrayElementKind) returns MaxonType
 		return match element 'e'
 			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(self.arrayRecordBaseName()))
@@ -10871,7 +11218,7 @@ export type ProgramSignatures
 			return false
 		end 'inlinedHasNoSlot'
 
-		// ⛔ **A GLOBAL WHOSE INITIALIZER CALLS IS NEVER DROPPED, EVEN WHEN NOTHING READS IT** — the
+		// ⛔ **A FILE-SCOPE GLOBAL WHOSE INITIALIZER CALLS IS NEVER DROPPED, EVEN WHEN NOTHING READS IT** — the
 		// obligation `DeadGlobalElimination`'s header filed against the day an initializer may call, landing
 		// here (spec-port `map-struct-bytearray`). Dropping the arena entry drops the `__module_init` ops
 		// TOO, and for every other kind that is exactly right: they are compiler-synthesized allocation with
@@ -10880,7 +11227,15 @@ export type ProgramSignatures
 		// dead". Keeping the slot is the conservative half of that — a dead 8-byte word, never a lost effect
 		// — and it is deliberately NOT the oracle's `callee.EndsWith(".create")` naming heuristic, which
 		// makes renaming a method change whether its side effects run (see that header).
-		match self.declInitializerCall(decl) 'initializer'
+		//
+		// ⛔⛔ **AND IT IS FILE-SCOPE ONLY, BECAUSE FOR A `static` MEMBER THE OPPOSITE IS CANONICAL**
+		// (spec-port `lazy-static`). `specs/lazy-static.md` says a static field's initializer runs *"the first
+		// time the static field is accessed"* — so a static nothing accesses must run NOTHING, and keeping it
+		// alive to preserve a side effect would preserve the very side effect the language says must not
+		// happen. MEASURED on the oracle: the same never-read binding prints `1` at file scope and `0` as a
+		// static member. A lazy static's storage is therefore decided by liveness alone, which is exactly
+		// right — its initializer runs only from an access, so no access means no run to preserve.
+		match self.declScopeInitializerCall(decl) 'initializer'
 			none then break 'initializer'
 			calls then return true
 		end 'initializer'
@@ -10888,17 +11243,56 @@ export type ProgramSignatures
 		return live.contains(self.dataLabelOf(decl))
 	end 'contributesStorage'
 
+	// `declInitializerCall`, silenced for a LAZY slot — the one place the eager "keep it for its side
+	// effects" rule is asked. It is a separate function rather than a condition inside `declInitializerCall`
+	// because that answer has a SECOND reader (`StdlibFacts.deriveStdlibFacts`, which roots the callees) and
+	// that one must still see them: a lazy static's initializer callees are reached from `__lazy_init$…`,
+	// which is real code that has to be lowered.
+	function declScopeInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
+		if self.declSlotIsLazy(decl) 'runsOnFirstAccessOrNotAtAll'
+			return TopLevelInitializerCall.none
+		end 'runsOnFirstAccessOrNotAtAll'
+
+		return self.declInitializerCall(decl)
+	end 'declScopeInitializerCall'
+
+	// ⭐⭐ **IS THIS DECLARATION'S SLOT FILLED ON FIRST ACCESS?** — the ONE predicate behind the lazy-init
+	// map, the cleanup's null guard and the storage rule above, so the three cannot disagree about which
+	// slots can legally be null at run time.
+	//
+	// TWO conditions, and both are necessary. **The SCOPE**, which is canonical (see `TopLevelDecl.scope`).
+	// And **having a RECORD slot at all**: a scalar static's value is written into the `.data` image before
+	// anything runs — `specs/lazy-static.md` says constant initializers "continue to be evaluated at compile
+	// time" — so there is no initializer to defer and, decisively, no null a guard could test. An inlined
+	// managed `let` has no slot either. The record arms are named as the same band `managedGlobals` walks.
+	export function declSlotIsLazy(decl TopLevelDecl) returns bool
+		if decl.scope == TopLevelBindingScope.fileScope or not decl.hasStorage 'eagerOrSlotless'
+			return false
+		end 'eagerOrSlotless'
+
+		match decl.outcome 'state'
+			// Everything that is not a stored RECORD: unevaluated, a folded scalar, or a failure. None has a
+			// slot that can be null, so none can be lazy.
+			pending to poisoned then return false
+			managedValue to characterSetValue then return true
+		end 'state'
+	end 'declSlotIsLazy'
+
 	// Does this declaration's initializer RUN USER CODE, and whose? Asked of the OUTCOME rather than of a
 	// name so it cannot be answered by a spelling, and answered ONCE for both readers — see
 	// `TopLevelInitializerCall`, whose header carries why the two halves may not be derived separately.
 	//
 	// A range arm over the whole union, ending at the current last variant, so an outcome appended past
-	// `factoryValue` FAILS TO COMPILE here rather than being silently filed as "does not call".
+	// `characterSetValue` FAILS TO COMPILE here rather than being silently filed as "does not call".
 	function declInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		match decl.outcome 'state'
 			pending to arrayValue then return TopLevelInitializerCall.none
-			containerValue(giid) then return self.containerInitializerCall(giid)
+			containerValue(giid, _) then return self.containerInitializerCall(giid)
 			factoryValue(calls, _, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(calls))
+			// ⭐ A `CharacterSet` PRESET REACHES NO DECLARED CODE. Its member set is a builtin `Set` and its box
+			// is `__cs_make` — compiler-synthesized allocation throughout, with no source body to root and no
+			// user-visible effect, which is exactly the argument the builtin-container arm makes one line up.
+			characterSetValue then return TopLevelInitializerCall.none
 		end 'state'
 	end 'declInitializerCall'
 
@@ -10930,11 +11324,13 @@ export type ProgramSignatures
 	// The callee a FOLDED argument contributes, which is one only for a declared generic's empty container.
 	//
 	// A range arm over every non-container folded kind, ending at the current last variant, so an arm
-	// appended past `containerCreate` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
+	// appended past `characterSet` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
 	function appendFoldedArgumentCallee(callees ByteArrayArray, folded ConstFoldedValue)
 		match folded 'value'
 			scalar to arrayLiteral then return
-			containerCreate(giid) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+			containerCreate(giid, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
+			// Compiler-synthesized throughout — see `declInitializerCall`'s arm for the same value.
+			characterSet then return
 		end 'value'
 	end 'appendFoldedArgumentCallee'
 
@@ -11007,12 +11403,17 @@ export type ProgramSignatures
 			match decl.outcome 'state'
 				value(payload, tag) then entries.push(DataSectionEntry.create(String.from(self.dataLabelOf(decl)), valueType: globalStdType(tag, name: decl.name), value: payload))
 				failed to poisoned then continue
-				// ⭐ EVERY RECORD BINDING reserves a POINTER slot holding NULL — a managed literal (P1.7 slice
+				// ⭐ EVERY RECORD BINDING reserves a POINTER slot holding NULL, and a LAZY one keeps that null until
+				// its first access rather than only until `__module_init` — a managed literal (P1.7 slice
 				// 2a), an array literal (slice 2b) and a container factory alike, and now for a `let` too. The
 				// record it will point at cannot be baked into a constant image — a data→data pointer has no
 				// compile-time VA under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero
 				// here and `__module_init` writes the address before `main` runs.
+				// ⚠ The band is NOT contiguous — `characterSetValue` was appended past `factoryValue` (see that
+				// union) — so the materialized kinds are named as a range plus that one arm, both routed through
+				// the same `foldedValueOf`/`foldedValueType` pair.
 				managedValue to containerValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
+				characterSetValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
 				// ⭐ A FACTORY-CALL GLOBAL reserves the SAME null POINTER slot, for the same reason and one
 				// more: the record does not exist until the callee has RUN, which is strictly later than the
 				// image is written.
@@ -11078,6 +11479,28 @@ export type ProgramSignatures
 		return valueTagToStdType(tag)
 	end 'recordPointerSlotType'
 
+	// ⭐⭐ **DOES A READ OR WRITE OF `label` HAVE TO RUN AN INITIALIZER FIRST, AND WHICH?** — the query
+	// `Parser.emitGlobalAddr` asks at EVERY access to a global slot (spec-port `lazy-static`).
+	//
+	// ⭐ **IT IS ASKED OF THE ARENA, NOT OF THE LABEL'S SPELLING.** A `static` member's label is a bare name
+	// exactly like a file-scope var's (`assignDataLabels` strips the qualifier so goldens carry no type
+	// prefix), so nothing about the text can answer this — only the declaration can, through the
+	// `TopLevelDecl.scope` its reader recorded.
+	//
+	// ⚠ **A SCALAR STATIC IS NOT LAZY, AND THAT IS CANONICAL RATHER THAN AN OPTIMIZATION.**
+	// `specs/lazy-static.md` ends its Semantics list with *"Constant initializers (integer, float, bool
+	// literals) continue to be evaluated at compile time"* — their value IS the `.data` image, written before
+	// anything runs, so there is nothing to defer and no null a guard could test. The filter is therefore the
+	// same `managedTopLevelNames`/record split every other door here makes, expressed as: only a decl whose
+	// outcome is a stored RECORD gets a routine.
+	export function lazyStaticInitCalleeFor(label ByteArray) returns LazyStaticInit
+		if not self.lazyStaticSlots.contains(label) 'eagerOrNotAGlobal'
+			return LazyStaticInit.none
+		end 'eagerOrNotAGlobal'
+
+		return LazyStaticInit.callee(lazyStaticInitCallee(label))
+	end 'lazyStaticInitCalleeFor'
+
 	// ⭐ **EVERY LIVE MANAGED TOP-LEVEL GLOBAL IN THE PROGRAM, in ARENA (declaration) order** — the door
 	// `installManagedGlobalInit` asks through, and the ONLY enumeration of them.
 	//
@@ -11105,7 +11528,10 @@ export type ProgramSignatures
 				// after, and `let` refuses only the WRITE. All three route through `globalRecordOf`, which is
 				// also what a factory ARGUMENT of the same shape routes through: a container factory IS an
 				// array literal with no elements, and that is a fact about the record rather than a shortcut.
+				// ⚠ Not contiguous, for `declaredGlobals`' stated reason: `characterSetValue` is appended past
+				// `factoryValue` and takes the identical materialized-record route.
 				managedValue to containerValue then entries.push(self.recordGlobalOf(decl))
+				characterSetValue then entries.push(self.recordGlobalOf(decl))
 				// ⭐ A FACTORY-CALL GLOBAL's slot holds whatever the callee returns, so its construction is the
 				// CALL and its type is the callee's declared return type — settled when the outcome was.
 				factoryValue(calls, root, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(self.globalInitCalls(calls, declName: decl.name, elementFilePath: decl.declFilePath), root: root), valueType: returnType))
@@ -11119,7 +11545,7 @@ export type ProgramSignatures
 	// the TYPE its arm already built rather than re-deriving one: the drop callee is routed off that same
 	// type, so the record the init builds and the drop the cleanup emits cannot name two different types.
 	function managedGlobalEntry(decl TopLevelDecl, initializer ManagedGlobalInitializer, valueType MaxonType) returns ManagedGlobal
-		return ManagedGlobal.create(self.dataLabelOf(decl), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: declInitializerRange(decl))
+		return ManagedGlobal.create(self.dataLabelOf(decl), initializer: initializer, valueType: valueType, dropCallee: managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: valueType), range: declInitializerRange(decl), filledOnFirstAccess: self.declSlotIsLazy(decl))
 	end 'managedGlobalEntry'
 
 	// The entry for a global whose slot the compiler MATERIALIZES: resolve the folded value to its record and
@@ -11197,7 +11623,7 @@ export type ProgramSignatures
 	function foldedInitArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, folded ConstFoldedValue, elementFilePath FilePath) returns GlobalInitArgument
 		match folded 'kind'
 			scalar(value) then return GlobalInitArgument.create(arg.label, value: GlobalInitArgumentValue.scalar(value.payload), valueType: maxonTypeOfTag(value.tag, nameId: UnnamedTypeId), cleanup: GlobalInitArgumentCleanup.none)
-			managed to containerCreate then break 'kind'
+			managed to characterSet then break 'kind'
 		end 'kind'
 
 		let record = self.globalRecordOf(folded, elementFilePath: elementFilePath)
@@ -11283,7 +11709,9 @@ export type ProgramSignatures
 			scalar(folded) then panic("ProgramSignatures.foldedValueType: a folded scalar of tag '{typeTagName(folded.tag)}' names no record type — a scalar occupies its slot as a VALUE, and every caller splits the two before asking")
 			managed(_, kind) then return self.managedConstValueType(kind, elementFilePath: elementFilePath)
 			arrayLiteral(_, element) then return self.constArrayValueType(element)
-			containerCreate(giid) then return MaxonType.genericInstance(giid)
+			containerCreate(giid, _) then return MaxonType.genericInstance(giid)
+			// The BOX's type, not its member set's — the slot holds the `CharacterSet`, which owns the set.
+			characterSet then return self.characterSetValueType()
 		end 'folded'
 	end 'foldedValueType'
 
@@ -11303,21 +11731,26 @@ export type ProgramSignatures
 			// element kind — rather than resolved a second time from the kind. One derivation, so the record's
 			// stamps and the slot's type cannot come from two answers to one question.
 			arrayLiteral(elements, _) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: typeNameIdOf(valueType)), valueType: valueType)
-			containerCreate(giid) then return GlobalRecordAndType.create(self.containerRecordOf(ConstArrayElementArray.create(), giid: giid), valueType: valueType)
+			containerCreate(giid, elements) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: giid), valueType: valueType)
+			// The member set is described by the very same `containerCreateCall` an ordinary `Set` global gets —
+			// so a `CharSet from ['a']` global and the member set inside a `CharacterSet` preset global are built
+			// by one emitter from one description, and the box is the only thing this arm adds.
+			characterSet(chars, members, categoryMask) then return GlobalRecordAndType.create(ManagedGlobalRecord.characterSetRecord(self.containerCreateCall(chars), charsType: MaxonType.genericInstance(chars), members: members, categoryMask: categoryMask), valueType: valueType)
 		end 'folded'
 	end 'globalRecordOf'
 
-	// The folded value the three STORED-RECORD outcomes came from. It exists so ONE resolver serves a global's
+	// The folded value the four STORED-RECORD outcomes came from. It exists so ONE resolver serves a global's
 	// own slot and a factory ARGUMENT: the outcome union records what a declaration SETTLED to (and carries
 	// two arms an argument can never be), while `ConstFoldedValue` records what an initializer FOLDED to, and
-	// these three arms are the same three facts wearing the first union's name.
+	// these four arms are the same four facts wearing the first union's name.
 	function foldedValueOf(outcome TopLevelConstant, name ByteArray) returns ConstFoldedValue
 		match outcome 'o'
 			pending to poisoned then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to an outcome that stores no record — every caller filters on the stored-record arms first")
 			managedValue(bytes, kind) then return ConstFoldedValue.managed(bytes, kind: kind)
 			arrayValue(elements, element) then return ConstFoldedValue.arrayLiteral(elements, element: element)
-			containerValue(giid) then return ConstFoldedValue.containerCreate(giid)
+			containerValue(giid, elements) then return ConstFoldedValue.containerCreate(giid, elements: elements)
 			factoryValue then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to a factory CALL, which is not a folded value — its record is built by calling user code, not by materializing a constant")
+			characterSetValue(chars, members, categoryMask) then return ConstFoldedValue.characterSet(chars, members: members, categoryMask: categoryMask)
 		end 'o'
 	end 'foldedValueOf'
 
@@ -11411,7 +11844,7 @@ export type ProgramSignatures
 			// record with a `.data` slot, so a read is a LOAD and the caller's NEXT probe (`globalDeclFor`)
 			// is the one that answers. That makes `notFound` the right answer here rather than merely a
 			// defensive one — it is the same "no CONSTANT of that name is visible" a `var` has always given.
-			arrayValue to factoryValue then return TopLevelConstantLookup.notFound
+			arrayValue to characterSetValue then return TopLevelConstantLookup.notFound
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
@@ -11523,7 +11956,7 @@ export type ProgramSignatures
 			// ⭐ **A CONTAINER FACTORY MIXES ITS INSTANCE AND ITS LABEL** — the array-literal arm's two facts,
 			// with the instance stated outright instead of inferred from an element kind. There are no
 			// elements to leave out.
-			containerValue(giid) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: decl.dataLabel)
+			containerValue(giid, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeContainerValue), bytes: self.mangleGenericInstance(giid)), bytes: decl.dataLabel)
 			// ⭐ **A FACTORY-CALL GLOBAL MIXES ITS ROOT CALLEE AND ITS LABEL, AND NOT ITS ARGUMENTS** — the
 			// array-literal arm's rule, applied to the one initializer that calls. Every reader emits
 			// `globalAddr <label>` + `loadIndirect`, byte-identical whichever arguments the call passes, so
@@ -11540,6 +11973,10 @@ export type ProgramSignatures
 			// mixed: the build fails either way, and no reader's code depends on which diagnostic it
 			// failed with.
 			failed to poisoned then return mix(keyed, value: ConstShapeNoValue)
+			// ⭐ **A `CharacterSet` PRESET MIXES ITS MASK AND ITS LABEL** — the container arm's two facts, with
+			// the mask standing in for the instance: every preset has the SAME slot type, so the mask is what
+			// tells `whitespaces()` from `newlines()`. Its members are left out for the array literal's reason.
+			characterSetValue(_, _, categoryMask) then return mixBytes(mix(mix(keyed, value: ConstShapeCharacterSetValue), value: categoryMask), bytes: decl.dataLabel)
 			pending to evaluating then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` folds the hash only after every walk has finished")
 		end 'o'
 	end 'mixConstant'
@@ -15491,6 +15928,21 @@ export type ProgramSignatures
 		end 'returns'
 	end 'globalFactoryReturn'
 
+	// ⭐ **THE SAME CLASSIFICATION, REDUCED TO THE ONE BIT A CLAIM TEST NEEDS** (spec-port `lazy-static`) —
+	// asked by `Parser.atConstInitializerCall` of a BARE call, which is claimed only when the result can
+	// occupy a slot (see there for why that shape asks more than the qualified one does). It routes through
+	// `globalFactoryReturn` rather than re-deriving the answer, so the door that CLAIMS a call and the door
+	// that REFUSES one cannot come to disagree about what a `.data` slot can hold.
+	export function globalFactoryReturnsARecord(callee ByteArray) returns bool
+		match self.globalFactoryReturn(callee) 'returns'
+			record then return true
+			// ⚠ A RANGE, so an arm appended past `undeclared` is EXCLUDED and this site fails to compile until
+			// it has been visited — the discipline `TopLevelConstant`'s arms state, applied to the one place
+			// that reduces this union to a bit.
+			scalar to undeclared then return false
+		end 'returns'
+	end 'globalFactoryReturnsARecord'
+
 	// The classification of a factory's declared VALUE return type — split out so the `void` arm above stays
 	// one line and this one holds the whole managed/scalar question, which is `slotTypeIsManaged`'s.
 	function globalFactoryValueReturn(valueType MaxonType) returns GlobalFactoryReturn
@@ -15539,24 +15991,33 @@ export type ProgramSignatures
 	function containerCreateCall(id GenericInstanceId) returns ContainerCreateCall
 		var stamps = ContainerCreateStampArray.create()
 
+		// A DECLARED generic's `create()` takes no arguments (`Parser.requireDeclaredGenericGlobalCreate`), so a
+		// global of one is always EMPTY and there is no add callee to name — see `ContainerElementAdd`.
 		if self.instanceCreateIsDeclared(id) 'declaredGeneric'
-			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, sizing: ContainerSizing.grown)
+			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
 		end 'declaredGeneric'
 
 		if self.isSetInstance(id) 'set'
 			stamps.push(self.columnDestroyStamp(self.setKeyType(id)))
-			return ContainerCreateCall.create(SetCreateName, stamps: stamps, sizing: ContainerSizing.grown)
+			return ContainerCreateCall.create(SetCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.push(SetInsertName))
 		end 'set'
 
+		// A `Map` has no top-level literal — `MapAlias.create()` is the only form — so it never arrives with
+		// elements and names no add callee. `__map_upsert` takes a PAIR, which is not the `(record, value)`
+		// shape this description carries, so naming it here would be a claim the emitter could not honour.
 		if self.isMapInstance(id) 'map'
 			stamps.push(self.columnDestroyStamp(self.mapKeyType(id)))
 			stamps.push(self.columnDestroyStamp(self.mapValueType(id)))
-			return ContainerCreateCall.create(MapCreateName, stamps: stamps, sizing: ContainerSizing.grown)
+			return ContainerCreateCall.create(MapCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
 		end 'map'
 
+		// A `List` names none either, and for the `Map`'s reason rather than a shape one: `__list_append` IS the
+		// `(record, value)` pair this description carries, but no top-level form hands a list elements — the
+		// `List from […]` construction is a function body's (`atListFromConstruction`), and the initializer walk
+		// has no list arm — so naming a callee here would be a route nothing takes. See `ContainerElementAdd`.
 		if self.isListInstance(id) or self.isManagedListInstance(id) 'chain'
 			stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
-			return ContainerCreateCall.create(ListCreateName, stamps: stamps, sizing: ContainerSizing.grown)
+			return ContainerCreateCall.create(ListCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
 		end 'chain'
 
 		if not (self.isArrayInstance(id) or self.isVectorInstance(id)) 'notACreatableContainer'
@@ -15567,7 +16028,7 @@ export type ProgramSignatures
 		// from birth, so its record is then sized. That is the same pair of calls `emitVectorCreateOp` makes.
 		stamps.push(ContainerCreateStamp.inline(self.arrayElementSize(id)))
 		stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
-		return ContainerCreateCall.create(ManagedCreateName, stamps: stamps, sizing: ContainerSizing.fixed(self.genericInstanceFixedSize(id)) if self.isVectorInstance(id) else ContainerSizing.grown)
+		return ContainerCreateCall.create(ManagedCreateName, stamps: stamps, sizing: ContainerSizing.fixed(self.genericInstanceFixedSize(id)) if self.isVectorInstance(id) else ContainerSizing.grown, elementAdd: ContainerElementAdd.push(ManagedPushName))
 	end 'containerCreateCall'
 
 	// The element CLONE strategy for a managed-element `Array with T` (P1.7 slice 3b-vi-b) — the DUAL of

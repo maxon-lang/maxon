@@ -23,19 +23,50 @@
 export typealias FnRefThunkSet = Set with ByteArray
 
 // True iff `name` is a lifted closure's synthesized name — `<enclosing>$closure_<k>` (see
-// `Parser.parseClosureExpression`). The `$` byte is the tell: it is unwritable in a Maxon identifier and no
-// other synthesized name contains it, so a function name carrying it is a lifted closure and nothing else —
-// which is exactly what tells a closure (already `(userargs, __env)`-shaped) from a plain function (whose
-// value use needs a thunk). (Inline `'$'` is the Lexer's char-comparison idiom; a top-level char constant is
-// not a constant expression in the bootstrap.)
+// `Parser.parseClosureExpression`), which is what tells a closure (already `(userargs, __env)`-shaped) from
+// a plain function (whose value use needs a thunk).
+//
+// ⛔⛔ **IT SEARCHED FOR A BARE `$`, ON THE CLAIM THAT "no other synthesized name contains it" — AND THAT
+// CLAIM HAD ALREADY EXPIRED.** `ProgramSignatures.assignDataLabels` disambiguates a colliding `.data` label
+// as `__data_counter$1`, a second meaning for the byte; spec-port `lazy-static` then built
+// `__lazy_init#<label>`, whose name EMBEDS such a label — so a `$` can now sit inside a function name that
+// is not a closure. The bare search answered TRUE for it: the right answer (that routine needs no env thunk,
+// being callable only directly) reached for entirely the wrong reason.
+//
+// ⭐ **SO THE TEST IS THE MARKER, NOT THE BYTE.** `$closure_` is what `parseClosureExpression` mints, it
+// survives nesting (`f$closure_0$closure_1` still contains it), and no label disambiguator can produce it.
 export function isLiftedClosureName(name ByteArray) returns bool
-	for b in name 'each'
-		if b == '$' 'marker'
-			return true
-		end 'marker'
-	end 'each'
-	return false
+	return bytesContainSubsequence(name, needle: LiftedClosureMarker)
 end 'isLiftedClosureName'
+
+// The join + tag `Parser.parseClosureExpression` mints between an enclosing function and its lifted closure.
+let LiftedClosureMarker = b"$closure_"
+
+// Does `haystack` contain `needle` anywhere? `bytesStartWith`'s unanchored twin, written here because this
+// is its only caller and the shapes it is asked of are function names — a handful of bytes, once per
+// referenced callee.
+function bytesContainSubsequence(haystack ByteArray, needle ByteArray) returns bool
+	if needle.count() > haystack.count() 'cannotFit'
+		return false
+	end 'cannotFit'
+
+	for start in 0 upto haystack.count() - needle.count() + 1 'eachStart'
+		var matched = true
+		for i in 0 upto needle.count() 'eachByte'
+			let h = try haystack.get(start + i) otherwise panic("bytesContainSubsequence: haystack.get OOB at {start + i} below count {haystack.count()}")
+			let n = try needle.get(i) otherwise panic("bytesContainSubsequence: needle.get OOB at {i} below count {needle.count()}")
+			if h != n 'differs'
+				matched = false
+				break
+			end 'differs'
+		end 'eachByte'
+		if matched 'found'
+			return true
+		end 'found'
+	end 'eachStart'
+
+	return false
+end 'bytesContainSubsequence'
 
 // The name of the env-thunk for plain function `funcName`. ONE builder, shared by the reference lowering
 // (`LowerMaxonToStd.lowerFunctionRef`, which emits `funcAddr(__fnref_<name>)`) and the synthesis below, so

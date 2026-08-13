@@ -1843,18 +1843,20 @@ export function emitFunctionChunk(module TargetModule, func IrFunction, usesGt b
 
 	// ⭐ THE GT STACK GUARD (P1.5-B1a′). Emitted at the very START of the entry block — before `push rbp` — for a
 	// USER function of a GT module that reserves a frame, so a green thread whose stack would overflow grows +
-	// relocates it first. It is EXEMPT for COMPILER-SYNTHESIZED functions: the scheduler core must never trigger
-	// the grower, and their kernel calls are already shimmed onto the system stack (slice 1). ⚠ "Synthesized" is
-	// `isRuntimeFunction`'s answer and it is asked of the FUNCTION's provenance, never of its NAME — a `__`-name
-	// test handed this exemption to a user function declared in `stdlib/Builtins.maxon` and SEGFAULTED a green
-	// thread; see that predicate's header for the measurement. Emitted here at the
+	// relocates it first. It is EXEMPT for the compiler's own SCAFFOLDING: the scheduler core must never trigger
+	// the grower, and their kernel calls are already shimmed onto the system stack (slice 1). ⚠ The exemption is
+	// asked of the FUNCTION's provenance, never of its NAME — a `__`-name test handed it to a user function
+	// declared in `stdlib/Builtins.maxon` and SEGFAULTED a green thread; see `isRuntimeFunction`'s header for the
+	// measurement. ⛔ And the question is `skipsGreenThreadStackGuard`, NOT `isRuntimeFunction`: a synthesized
+	// function that runs USER CODE inside `main` (`__lazy_init#<label>`) satisfies the second and NEEDS the
+	// guard — see that predicate for why the two came apart. Emitted here at the
 	// byte level (not as a TargetOp), exactly like the syscall shim — so it is invisible to the Target-IR goldens
 	// and verified by the RUN + disassembly instead. `computeGuardFrameBytes` is the SAME frame the prologue
 	// reserves, so the guard projects rsp by exactly what the function consumes.
 	// Only a GT module's non-runtime functions can be guarded, so `computeGuardFrameBytes` (which allocates a
 	// callee-saved scan) is called ONLY for those — a non-GT module (the common case, and the whole scale corpus)
 	// pays nothing here.
-	let mightGuard = usesGt and not isRuntimeFunction(func)
+	let mightGuard = usesGt and not skipsGreenThreadStackGuard(func)
 	var guardFrameBytes = 0 as StackSize
 	if mightGuard 'guardFrame'
 		guardFrameBytes = computeGuardFrameBytes(module, func: func)

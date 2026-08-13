@@ -4890,7 +4890,9 @@ end 'createEnumRegistry'
 // probe `maxon-shv2 build stdlib/Interfaces.maxon` records the same declarations the loaded module does —
 // see `Parser.requireTypeNameNotCompilerOwned` for why `isStdlibSource` is the wrong bit here.
 export function upsertDeclaredEnum(registry EnumLayoutMap, layout EnumLayout, declaredByTheCorpus bool)
-	if declarationContestsACompilerOwnedName(layout.name, declaredByTheCorpus: declaredByTheCorpus) 'aUserContest'
+	// An `enum`/`union` layout MINTS an identity of its own, so it can agree with no compiler-owned meaning
+	// — see `DeclaredTypeMeaning.nominalIdentity`.
+	if declarationContestsACompilerOwnedName(layout.name, declaredByTheCorpus: declaredByTheCorpus, declares: DeclaredTypeMeaning.nominalIdentity) 'aUserContest'
 		return
 	end 'aUserContest'
 
@@ -4911,8 +4913,24 @@ end 'upsertDeclaredEnum'
 // The bit is the FILE's (`Queries.livesUnderStdlibDirectory`), never `isStdlibSource` — computed once per
 // file by each caller, so the readiness probe `maxon-shv2 build stdlib/<M>.maxon` records exactly what the
 // loaded module records. See `Parser.requireTypeNameNotCompilerOwned` for why the two bits differ.
-export function declarationContestsACompilerOwnedName(name ByteArray, declaredByTheCorpus bool) returns bool
-	return isCompilerOwnedTypeName(name) and not declaredByTheCorpus
+// ⭐⭐ **A CONTEST IS A *DISAGREEMENT*, NOT A REPEAT** (spec-port `lazy-static`). The rule used to end at
+// "and not declaredByTheCorpus", which refused a user declaration that says exactly what the compiler
+// already says — including `typealias CharSet = Set with Character`, which is byte-identical to
+// `stdlib/CharacterSet.maxon:19` and which `specs/lazy-static.md` writes verbatim. Such a declaration
+// OVERWRITES NOTHING, so it cannot produce the wrong-meaning defect the reservation exists to prevent (see
+// `DeclaredTypeMeaning`, which carries the measurement), and refusing it was a false reject.
+//
+// ⚠ **THE NARROWING IS EXPRESSED ONCE, FOR THE WHOLE OWNED SET, AS A COMPARISON OF MEANINGS** — never as a
+// per-name exception. `compilerOwnedTypeMeaning` answers `nominalIdentity` for every owned name but
+// `CharSet`, and `typeMeaningsAgree` declines that arm against every input, so the twelve names it does not
+// name stay refused BY THE COMPARISON. A name added to `isCompilerOwnedTypeName` therefore arrives fully
+// reserved with nothing here to remember.
+export function declarationContestsACompilerOwnedName(name ByteArray, declaredByTheCorpus bool, declares DeclaredTypeMeaning) returns bool
+	if not isCompilerOwnedTypeName(name) or declaredByTheCorpus 'notAnOwnedNameFromAUserFile'
+		return false
+	end 'notAnOwnedNameFromAUserFile'
+
+	return not typeMeaningsAgree(compilerOwnedTypeMeaning(name), declared: declares)
 end 'declarationContestsACompilerOwnedName'
 
 // --- Project: the compiler-wide shared state (Chunk C growth) ---

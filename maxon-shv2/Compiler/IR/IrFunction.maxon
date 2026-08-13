@@ -180,6 +180,24 @@ export type IrFunction
 	// Line and column of the function-name token; zero for synthesized functions.
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
+	// ⭐⭐ **DOES THIS SYNTHESIZED FUNCTION RUN THE PROGRAM'S OWN CODE, ON ITS CALLER'S STACK?**
+	// (spec-port `lazy-static`, §6 review finding 1.) FALSE for every parsed function — for which it is not
+	// asked, `isRuntimeFunction` having already answered — and false for the runtime's own scaffolding.
+	// TRUE for exactly one family so far: `__lazy_init#<label>`, which is compiler-synthesized but whose body
+	// is the user's factory call tree, reached from an ordinary access inside `main`.
+	//
+	// ⛔ **IT EXISTS BECAUSE PROVENANCE AND STACK BEHAVIOUR ARE DIFFERENT QUESTIONS AND ONE FIELD WAS
+	// ANSWERING BOTH.** `TargetPrinter.isRuntimeFunction` (empty `sourceFilePath` + the `mrt_`/`__` band)
+	// withholds the green-thread stack guard, on the stated premise that *"the scheduler core must never
+	// trigger the grower, and their kernel calls are already shimmed onto the system stack"*. That premise
+	// held for `__module_init` / `__maxon_global_cleanup` only because they run OUTSIDE `main`, where no
+	// green thread exists. `__lazy_init#X` runs INSIDE it, on whatever green thread first touches the static,
+	// with a real frame — which is precisely what the guard is for.
+	//
+	// ⚠ It is a FIELD and not a name test, for the reason `declaredAt`'s header gives one door up: the
+	// `__`-prefix test once handed this same exemption to a user function declared in `stdlib/Builtins.maxon`
+	// and SEGFAULTED a green thread. A synthesizing caller says this out loud; nothing infers it.
+	export var runsUserCodeOnItsCallersStack as bool
 
 	// --- Maxon-phase types (populated by parser, consumed by LowerMaxonToStd) ---
 	export var maxonReturnType as MaxonReturnType
@@ -468,10 +486,11 @@ export type IrFunction
 	// error, and the stack-guard one is the SIGSEGV the A1r review measured. Passing the position in means a
 	// caller cannot forget it; it can only decide it, and `SourcePosition.synthesized` is how a synthesizing
 	// caller says so out loud.
-	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none) returns IrFunction
+	export static function create(name ByteArray, maxonReturnType MaxonReturnType, paramCount ParamCount, maxonParamTypes MaxonTypeArray, valueTags ValueTypeTagArray, valueNameIds TypeNameIdArray, valueClosureEnv ValueIdArray, valueIsCapturingClosure BoolArray, valueWitnessIds ValueIdArray, returnLine LineNumber, declaredAt SourcePosition, throwsTypeName ThrowsClause = ThrowsClause.none, runsUserCodeOnItsCallersStack bool = false) returns IrFunction
 		return Self{
 			name: name,
 			visibility: Visibility.file,
+			runsUserCodeOnItsCallersStack: runsUserCodeOnItsCallersStack,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
@@ -520,6 +539,10 @@ export type IrFunction
 		return Self{
 			name: name,
 			visibility: Visibility.global,
+			// Every caller of this door is a RUNTIME installer or an entry stub — the scaffolding the guard
+			// exemption is actually about. The one synthesized family that runs user code is built at the
+			// MAXON tier (`ModuleInit.buildLazyStaticInit`) and says so through `create` above.
+			runsUserCodeOnItsCallersStack: false,
 			sourceFilePath: declaredAt.filePath,
 			paramCount: paramCount,
 			blockRefs: BlockRefArray.create(),
@@ -563,6 +586,9 @@ export type IrFunction
 		return Self{
 			name: src.name,
 			visibility: src.visibility,
+			// A copy is the same code with the same stack behaviour, so the claim TRAVELS rather than being
+			// re-decided here — exactly as `sourceFilePath` does one line down, and for the same reason.
+			runsUserCodeOnItsCallersStack: src.runsUserCodeOnItsCallersStack,
 			sourceFilePath: src.sourceFilePath,
 			paramCount: src.paramCount,
 			blockRefs: BlockRefArray.create(),

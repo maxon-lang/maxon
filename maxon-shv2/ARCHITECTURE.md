@@ -1398,7 +1398,8 @@ table to re-lay-out, and no ordering between three edits to get right.
 > this one cannot.
 >
 > ⚠ **IT RUNS BEFORE `installManagedGlobalInit`, and that is correctness, not tidiness.** `__module_init`
-> opens every managed global with a `globalAddr` of that global's own slot, so a scan run afterwards would
+> opens every eager managed global with a `globalAddr` of that global's own slot (and each `__lazy_init#…`
+> opens its own), so a scan run afterwards would
 > find every global keeping itself alive — always, silently. Both references meet the same shape and answer
 > it with a runtime `func.Name == "__module_init"` compare; here the fact is expressed by WHICH CODE HAS RUN.
 >
@@ -1418,9 +1419,17 @@ table to re-lay-out, and no ordering between three edits to get right.
 - **No side-effect heuristic.** The bootstrap decides removability by `callee.EndsWith(".create") || ".from"`
   (`DeadFunctionElimination.cs:181-183`), so `Counter.build()` keeps its `print` while the identical body
   renamed `Counter.create()` silently loses it. **Renaming a method must not change whether its side effects
-  run.** shv2 answers it structurally instead: **an initializer that CALLS keeps its slot, whatever names
-  it** — the whole filter short-circuits on `ProgramSignatures.declInitializerCall`, so a dead 8-byte word is
-  paid rather than a `print` lost, and the decision reads the OUTCOME rather than a spelling. TWO initializer
+  run.** shv2 answers it structurally instead: **an EAGER initializer that CALLS keeps its slot, whatever
+  names it** — the whole filter short-circuits on `ProgramSignatures.declScopeInitializerCall`, so a dead
+  8-byte word is paid rather than a `print` lost, and the decision reads the OUTCOME rather than a spelling.
+
+  ⛔ **THE KEEP-ALIVE IS EAGER-ONLY, AND FOR A LAZY `static` MEMBER THE OPPOSITE IS CANONICAL** (spec-port
+  `lazy-static`). `specs/lazy-static.md` says a static field's initializer runs *"the first time the static
+  field is accessed"*, so a static nothing accesses must run NOTHING — keeping it alive to preserve a side
+  effect would preserve the very effect the language forbids. `declScopeInitializerCall` silences the rule
+  for exactly those, which loses nothing: a lazy initializer runs only from an access, so no access means
+  there was never a run to preserve. MEASURED on the oracle, one never-read binding moved between the two
+  positions: `static var` prints 0, module-level `var` prints 1. TWO initializer
   forms call: a user static factory (`var db = Database.create(…)`, spec-port `map-struct-bytearray`) and a
   DECLARED generic's empty record (`var g = StrMap.create()`, W41), the second in the ARGUMENT position as
   well as its own. That one projection also feeds `globalInitCallees`, which ROOTS every one of those callees

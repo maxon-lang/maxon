@@ -3589,44 +3589,68 @@ let EmptyConstArrayLiteralMessage = "an empty array literal `[]` as a top-level 
 // `error.factory-returning-a-boxed-union`, which reach the same text through different `{typeName}`s.
 // Rewording, reflowing or re-punctuating one fails those cases on TEXT rather than on behaviour.
 
-// The anchor every refusal on this walk shares: the METHOD the author wrote. Stated once so five sentences
-// cannot come to disagree about which token a top-level factory's diagnostic points at.
-function factoryReturnRefusal(methodTok Token, message String) returns ConstEvalError
-	return ConstEvalError.defective(ParseError.unsupported(message, line: methodTok.line, column: methodTok.column))
+// ⭐⭐ **THE CALLEE A TOP-LEVEL INITIALIZER'S CALL NAMES, as the walk read it** — the registry KEY, the
+// SPELLING a diagnostic quotes, and the TOKEN a refusal points at, carried together because the three are
+// derived from the same one or two tokens and the sentences below quoted them separately eight times over.
+//
+// ⭐ **IT IS WHAT LETS THE TWO CALL SHAPES SHARE ONE WALK AND ONE SENTENCE TABLE** (spec-port
+// `lazy-static`): `Pair.create(…)` and a bare `buildPair()` differ in how the name is SPELLED and in
+// nothing else that follows — the visibility rule, the return rule, the argument walk and the arena entry
+// are the same for both, because a global's slot does not care which syntax named its filler.
+type ConstInitializerCallee
+	// The mangled `Type.method` (`qualifiedMethodName`) or the bare function name — the key the signature
+	// registry files the declaration under and the callee `__module_init`'s `call` op carries.
+	export let name as ByteArray
+	// How a diagnostic spells it: `Pair.create` or `buildPair`. Rendered ONCE, where the tokens are.
+	export let display as String
+	// Where a refusal points — the METHOD for a qualified call, the NAME itself for a bare one. Stated once
+	// so the sentences below cannot come to disagree about which token a top-level factory blames.
+	export let anchor as Token
+
+	export static function create(name ByteArray, display String, anchor Token) returns ConstInitializerCallee
+		return Self{name: name, display: display, anchor: anchor}
+	end 'create'
+end 'ConstInitializerCallee'
+
+function factoryReturnRefusal(callee ConstInitializerCallee, message String) returns ConstEvalError
+	return ConstEvalError.defective(ParseError.unsupported(message, line: callee.anchor.line, column: callee.anchor.column))
 end 'factoryReturnRefusal'
 
-// Unreachable in both positions through `atConstFactoryCall`, which admits the form only for a declared
-// callee — worded rather than assumed, because the two doors are asked of the same name.
-function factoryUndeclaredRefusal(typeTok Token, methodTok Token, nested bool) returns ConstEvalError
+// Unreachable in both positions through `atConstInitializerCall`, which admits either form only for a
+// declared callee — worded rather than assumed, because the two doors are asked of the same name.
+function factoryUndeclaredRefusal(callee ConstInitializerCallee, nested bool) returns ConstEvalError
 	if nested 'argumentPosition'
-		return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as an argument in a top-level initializer — no file declares it")
+		return factoryReturnRefusal(callee, message: "`{callee.display}` as an argument in a top-level initializer — no file declares it")
 	end 'argumentPosition'
 
-	return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — no file declares it")
+	return factoryReturnRefusal(callee, message: "`{callee.display}` as a top-level initializer — no file declares it")
 end 'factoryUndeclaredRefusal'
 
-function factoryScalarRefusal(typeTok Token, methodTok Token, typeName String, nested bool) returns ConstEvalError
+// ⚠ **REACHABLE ONLY FROM THE QUALIFIED SHAPE** — a bare call is claimed only when its callee returns a
+// record, for the reason `atConstInitializerCall` states. Kept as a sentence for `factoryUndeclaredRefusal`'s
+// reason: the decision is one match, and an arm that is unreachable today must still SAY what it decided.
+function factoryScalarRefusal(callee ConstInitializerCallee, typeName String, nested bool) returns ConstEvalError
 	if nested 'argumentPosition'
-		return nestedFactoryReturnRefusal(typeTok, methodTok: methodTok, returns: "'{typeName}', which is a scalar")
+		return nestedFactoryReturnRefusal(callee, returns: "'{typeName}', which is a scalar")
 	end 'argumentPosition'
 
-	return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', and a global holding a scalar has its value written into the `.data` image, which happens before any code can run. A factory-built global must return a record (a struct, a String or a container)")
+	return factoryReturnRefusal(callee, message: "`{callee.display}` as a top-level initializer — it returns '{typeName}', and a global holding a scalar has its value written into the `.data` image, which happens before any code can run. A factory-built global must return a record (a struct, a String or a container)")
 end 'factoryScalarRefusal'
 
-function factoryUnbridgedRefusal(typeTok Token, methodTok Token, typeName String, nested bool) returns ConstEvalError
+function factoryUnbridgedRefusal(callee ConstInitializerCallee, typeName String, nested bool) returns ConstEvalError
 	if nested 'argumentPosition'
-		return nestedFactoryReturnRefusal(typeTok, methodTok: methodTok, returns: "'{typeName}', which IS a record but keeps the bare type NAME as its type — a boxed union and a generic alias both do")
+		return nestedFactoryReturnRefusal(callee, returns: "'{typeName}', which IS a record but keeps the bare type NAME as its type — a boxed union and a generic alias both do")
 	end 'argumentPosition'
 
-	return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns '{typeName}', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead")
+	return factoryReturnRefusal(callee, message: "`{callee.display}` as a top-level initializer — it returns '{typeName}', which IS a record but is not one `__module_init` can access a `.data` slot through. A boxed union and a generic alias keep the bare type NAME as their type — a union's is what a `match` reads it by — and the synthesized initializer and cleanup carry that name straight onto the slot's load and store, where there is no width to give it. A struct, a tuple, a String, a Character and a builtin container all resolve to a concrete type and are legal here. Build it inside a function instead")
 end 'factoryUnbridgedRefusal'
 
-function factoryVoidRefusal(typeTok Token, methodTok Token, nested bool) returns ConstEvalError
+function factoryVoidRefusal(callee ConstInitializerCallee, nested bool) returns ConstEvalError
 	if nested 'argumentPosition'
-		return nestedFactoryReturnRefusal(typeTok, methodTok: methodTok, returns: "nothing")
+		return nestedFactoryReturnRefusal(callee, returns: "nothing")
 	end 'argumentPosition'
 
-	return factoryReturnRefusal(methodTok, message: "`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — it returns nothing, so there is no value for the binding to hold")
+	return factoryReturnRefusal(callee, message: "`{callee.display}` as a top-level initializer — it returns nothing, so there is no value for the binding to hold")
 end 'factoryVoidRefusal'
 
 // ⭐ **THE ARGUMENT POSITION'S ONE SENTENCE, with the callee's answer slotted in** — three of the four
@@ -3635,8 +3659,8 @@ end 'factoryVoidRefusal'
 // unless that factory CONSUMED it — drops it through the record's own drop callee
 // (`ProgramSignatures.recordArgumentCleanup`). All three steps need a value with a concrete record type, so
 // a scalar, a `void` and an unbridged record fail for one reason and differ only in WHAT was returned.
-function nestedFactoryReturnRefusal(typeTok Token, methodTok Token, returns String) returns ConstEvalError
-	return factoryReturnRefusal(methodTok, message: "a nested factory call `{String.from(typeTok.value)}.{String.from(methodTok.value)}(…)` in a top-level initializer — it returns {returns}, and `__module_init` passes a nested call's result to the enclosing factory as an owned RECORD, dropping it afterwards through that record's own drop callee unless the factory consumed it. A nested call must return a record with a concrete type — a struct, a tuple, a String, a Character or a builtin container. Build the value inside the enclosing factory instead")
+function nestedFactoryReturnRefusal(callee ConstInitializerCallee, returns String) returns ConstEvalError
+	return factoryReturnRefusal(callee, message: "a nested factory call `{callee.display}(…)` in a top-level initializer — it returns {returns}, and `__module_init` passes a nested call's result to the enclosing factory as an owned RECORD, dropping it afterwards through that record's own drop callee unless the factory consumed it. A nested call must return a record with a concrete type — a struct, a tuple, a String, a Character or a builtin container. Build the value inside the enclosing factory instead")
 end 'nestedFactoryReturnRefusal'
 
 // The result of resolving a `<sized>.min` / `<sized>.max` bound. A union, so the
@@ -16070,7 +16094,7 @@ export type Parser
 			// the same enumeration and is now the only one.
 			value then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
-			poisoned to factoryValue then break 'outcome'
+			poisoned to characterSetValue then break 'outcome'
 			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'
@@ -16119,7 +16143,11 @@ export type Parser
 		let initEnd = self.initializerEndIndex(initStart)
 		self.pos = initEnd
 
-		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column)
+		// ⭐ **THE SCOPE IS READ OFF THE QUALIFIER, HERE, WHERE IT IS A PARAMETER** — the caller states which
+		// body it is reading (`parseTypeMember` passes the enclosing type, the file-scope dispatcher passes
+		// nothing), so the fact is recorded at the one place that is TOLD it rather than inferred later from
+		// the shape of the name. See `TopLevelDecl.scope` for why the two positions differ at all.
+		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column, scope: TopLevelBindingScope.fileScope if qualifier.isEmpty() else TopLevelBindingScope.typeMember)
 	end 'readTopLevelBinding'
 
 	// ⭐ **THE STORAGE NAME A BINDING DECLARATION CLAIMS — bare at file scope, `Type.member` inside a `type`
@@ -16234,8 +16262,9 @@ export type Parser
 		if self.at(TokenKind.function) 'functionAlias'
 			// A function alias mints a NOMINAL identity (`resolveNamedAlias` re-tags a `named` reference to
 			// `function`), so it may not take a compiler-owned type name — unlike the ranged form below, which
-			// erases. See `requireTypeNameNotCompilerOwned`.
-			try self.requireTypeNameNotCompilerOwned(nameTok)
+			// erases, and unlike the generic-instance form below, which names an instance rather than minting
+			// one. See `requireTypeNameNotCompilerOwned`.
+			try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.nominalIdentity)
 			functionOut.push(try self.readFunctionTypeAlias(nameTok, recordSignature: recordFunctionSignature))
 			return TypeDeclKind.functionAlias
 		end 'functionAlias'
@@ -16244,10 +16273,19 @@ export type Parser
 		// identifier followed by `with`. It records its own registry (`GenericAliasEntry`), not the
 		// ranged one, and (in the REAL parse) checks the instantiation's arity and managed arguments.
 		if self.at(TokenKind.identifier) and self.kindAt(self.pos + 1) == TokenKind.with 'genericAlias'
-			// A generic-instance alias mints a NOMINAL identity (`resolveNamedAlias` re-tags a `named` reference
-			// to `genericInstance`, an owned heap box), the function alias's case exactly.
-			try self.requireTypeNameNotCompilerOwned(nameTok)
-			try self.readGenericInstanceAlias(nameTok, genericOut: genericOut, visibility: self.typeAliasVisibility(visibility))
+			// ⭐⭐ **THE ONE FORM WHOSE MEANING HAS TO BE *READ* BEFORE THE COMPILER-OWNED RULE CAN BE ASKED**
+			// (spec-port `lazy-static`). A generic-instance alias mints no identity — it NAMES the instance its
+			// base and arguments intern to (`resolveNamedAlias` re-tags a `named` reference to
+			// `genericInstance`) — so a redeclaration of an owned name AGREES exactly when that instance is the
+			// compiler's own, which is a fact about the RHS. Hence: read the alias, then judge it.
+			//
+			// ⚠ **AND THE ENTRY IS PUSHED ONLY AFTER THE VERDICT.** The guard used to stand ahead of the read,
+			// so a refused declaration reached no registry; pushing first would leave the SWEEP holding a
+			// contested alias whose diagnostic the real parse raises later, i.e. a registry describing a
+			// program the compiler rejected.
+			let entry = try self.readGenericInstanceAlias(nameTok, visibility: self.typeAliasVisibility(visibility))
+			try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.genericInstance(entry.baseName, args: entry.args, argCount: entry.argCount))
+			genericOut.push(entry)
 			return TypeDeclKind.genericAlias
 		end 'genericAlias'
 
@@ -16702,7 +16740,11 @@ export type Parser
 	// recorded a diagnostic instead of throwing, specifically to avoid "a 97th arm", and the recorded one was
 	// swallowed by `abortedParseArtifact`. The reason above stands entirely on its own — a diagnostic nobody
 	// reads is not free — and needs no help from a limit that is not there.
-	function readGenericInstanceAlias(aliasTok Token, genericOut GenericAliasEntryArray, visibility Visibility) throws ParseError
+	//
+	// ⚠ **IT RETURNS THE ENTRY RATHER THAN PUSHING IT** (spec-port `lazy-static`): the compiler-owned-name
+	// rule needs the alias's MEANING — its base and its arguments — and must be able to refuse the
+	// declaration after reading it, which a reader that had already filed it could not allow.
+	function readGenericInstanceAlias(aliasTok Token, visibility Visibility) returns GenericAliasEntry throws ParseError
 		let baseTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.with)
 		// ⭐ **ARGUMENT 0's PRE-ERASURE SPELLING (A2m)**, read with the cursor still on it — `parseGenericArgNodes`
@@ -16726,8 +16768,9 @@ export type Parser
 		let argsStart = self.pos
 		let argCount = try self.parseGenericArgNodes(args, inlineElement: self.baseStoresArgumentsInline(baseName), bareCommaList: true, slot: self.genericArgSlotOf(baseName))
 		let selfRef = self.selfNamingArgToken(aliasTok, argsStart: argsStart)
-		genericOut.push(GenericAliasEntry.create(aliasTok.value, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column))
 		self.checkGenericInstance(baseTok, argCount: argCount)
+
+		return GenericAliasEntry.create(aliasTok.value, baseName: baseName, argCount: argCount, args: args, elementIsBuffer: elementIsBuffer, baseIsBuffer: baseIsBuffer, nameLine: aliasTok.line, nameColumn: aliasTok.column, filePath: self.filePath, visibility: visibility, fixedSize: fixedSize, selfRefLine: selfRef.line, selfRefColumn: selfRef.column)
 	end 'readGenericInstanceAlias'
 
 	// ⭐ **THE TOKEN AT WHICH THIS DECLARATION NAMES ITSELF** — the second `A` of `typealias A = Array with A`.
@@ -17624,7 +17667,7 @@ export type Parser
 		// `readTypeHeader` stays a pure reader shared with the tolerant sweep, which is not a validator
 		// (see `recordScannedType`).
 		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
-		try self.requireTypeNameNotCompilerOwned(nameTok)
+		try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.nominalIdentity)
 		self.enterTypeScope(nameTok.value, isEnum: false)
 
 		var layout = StructLayout.create(nameTok.value, visibility: visibility, declFilePath: self.filePath)
@@ -18556,7 +18599,7 @@ export type Parser
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum)
 		let nameTok = try self.consume(TokenKind.identifier)
 		try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
-		try self.requireTypeNameNotCompilerOwned(nameTok)
+		try self.requireTypeNameNotCompilerOwned(nameTok, declares: DeclaredTypeMeaning.nominalIdentity)
 		let conformsTo = (try self.readOptionalImplementsClause()).names
 		self.enterTypeScope(nameTok.value, isEnum: true)
 
@@ -24417,14 +24460,21 @@ export type Parser
 	// the release must come after the new value is settled (it may be built from the old one) and before
 	// the store overwrites the only pointer to it.
 	//
-	// ⚠ **THE OLD-VALUE DECREF IS UNCONDITIONAL, WITH NO NULL TEST, AND THAT RESTS ON `__module_init`.**
-	// Both reference compilers guard it (`EmitDecrefValueIfNonnull`, `__mm_decref_maybenull_helper`) and
-	// then have to special-case the initializer function BY NAME to suppress it, because in their design a
-	// global's first store IS an ordinary store into a slot that is still zero. shv2's initializing store
-	// is not on this path at all — it is `ModuleInit`'s own emission, in a function that runs before
-	// `main` — so every store reaching HERE is a re-assignment of a slot `__module_init` already filled.
-	// One fact ("the slot is non-null throughout `main`") replaces a runtime branch on every write and a
-	// name match in the middle of the lowering.
+	// ⚠ **THE OLD-VALUE DECREF IS UNCONDITIONAL, WITH NO NULL TEST.** Both reference compilers guard it
+	// (`EmitDecrefValueIfNonnull`, `__mm_decref_maybenull_helper`) and then have to special-case the
+	// initializer function BY NAME to suppress it, because in their design a global's first store IS an
+	// ordinary store into a slot that is still zero. shv2's initializing store is not on this path at all —
+	// it is `ModuleInit`'s own emission — so every store reaching HERE finds a slot that is already filled.
+	//
+	// ⛔⛔ **AND WHAT MAKES THAT TRUE IS NO LONGER `__module_init`, WHICH IS WHY THIS PARAGRAPH WAS REWRITTEN**
+	// (spec-port `lazy-static`, §6 review finding 4). It used to read *"every store reaching HERE is a
+	// re-assignment of a slot `__module_init` already filled"*, and for a `static` member that is now FALSE:
+	// its slot is filled on FIRST ACCESS, and this store may BE the first access. The decref below is safe
+	// because **`emitGlobalAddr` forces the initializer first** — it is the single door every global read and
+	// write opens with, and it emits the `__lazy_init#<label>` call ahead of the address
+	// (`emitLazyStaticInitGuard`). ⚠ So that guard call is LOAD-BEARING FOR THIS DECREF, not merely for the
+	// value's freshness: remove it and a first-access assignment decrefs a null slot. A reader trusting the
+	// old sentence would have concluded exactly the opposite.
 	function emitCheckedGlobalStore(func IrFunction, block IrBlock, nameTok Token, label ByteArray, valueType MaxonType) throws ParseError
 		let valueStart = self.pos
 		let value = try self.parseExpression(func, block: block)
@@ -24728,8 +24778,15 @@ export type Parser
 	// would leave the rule with two homes again — and the next edit to either one is the same crash. **The
 	// BIT is this parser's** (`livesUnderStdlibDirectory`, for the reason two paragraphs up); **the RULE
 	// over it is `Project.declarationContestsACompilerOwnedName`'s, and only its.**
-	function requireTypeNameNotCompilerOwned(nameTok Token) throws ParseError
-		if not declarationContestsACompilerOwnedName(nameTok.value, declaredByTheCorpus: self.livesUnderStdlibDirectory) 'notAContest'
+	//
+	// ⭐⭐ **AND IT IS A CONTEST ONLY IF THE DECLARATION *DISAGREES*** (spec-port `lazy-static`). The caller
+	// states what its declaration makes the name MEAN, and the rule compares that against the meaning the
+	// compiler already holds — see `Project.declarationContestsACompilerOwnedName` and `DeclaredTypeMeaning`.
+	// Three of the four doors below mint a NOMINAL identity and so can never agree; the generic-instance
+	// alias can, and is the one that had been refusing `typealias CharSet = Set with Character` — the
+	// reference's own line.
+	function requireTypeNameNotCompilerOwned(nameTok Token, declares DeclaredTypeMeaning) throws ParseError
+		if not declarationContestsACompilerOwnedName(nameTok.value, declaredByTheCorpus: self.livesUnderStdlibDirectory, declares: declares) 'notAContest'
 			return
 		end 'notAContest'
 
@@ -47437,9 +47494,16 @@ export type Parser
 	// ⚠ **A PREDEFINED SET IS BUILT FRESH AT EVERY CALL, WHERE THE REFERENCE CACHES ONE** (`static let
 	// cachedWhitespaces`, `stdlib/CharacterSet.maxon:31-61`). The values are immutable and structurally
 	// equal, so nothing observable differs; what differs is COST — a `Set with Character` of at most seven
-	// members per call. shv2 has no module-level `static let` of a HEAP value to cache one in (a top-level
-	// managed `let` borrows a literal's own record and may not name another global), so caching is its own
-	// rung, and a wrong answer is not on the table either way.
+	// members per call.
+	//
+	// ⚠⚠ **THE REASON THIS PARAGRAPH USED TO GIVE EXPIRED AT spec-port `lazy-static`.** It said shv2 *"has
+	// no module-level `static let` of a HEAP value to cache one in (a top-level managed `let` borrows a
+	// literal's own record and may not name another global)"*. It has one now: `static var ws =
+	// CharacterSet.whitespacesAndNewlines()` compiles, gets its own `.data` slot, is built on first access
+	// and is dropped after `main` — which is `specs/lazy-static.md`'s own `charset-cache` case. So the
+	// cache is EXPRESSIBLE, and what keeps it undone is only that nobody has done it: it is a
+	// constant-factor optimization whose blast radius is every corpus trim's emitted code, which makes it
+	// its own rung and not a spec port's business. A wrong answer is not on the table either way.
 	function parseCharacterSetStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.dot)
 
@@ -58242,11 +58306,59 @@ export type Parser
 	// `integer` — the Maxon tier has no pointer type today, and an address is a machine word; the
 	// Std tier it lowers into is typeless anyway, and nothing dispatches on this value's tag (it is
 	// read only by the load/store that follows).
+	//
+	// ⭐⭐ **AND IT IS WHERE A LAZY STATIC'S INITIALIZER IS FORCED** (spec-port `lazy-static`).
+	// `specs/lazy-static.md` says a static field's initializer runs *"the first time the static field is
+	// accessed"*, and this function is, exactly, every access: `emitGlobalLoad` and `emitGlobalStore` are its
+	// only two callers and every read and every write of every global goes through one of them. Putting the
+	// guard here rather than at either of them — still less at the six call sites above them — is what makes
+	// "every access forces it" a property of the code instead of a claim about a list.
+	//
+	// ⛔⛔ **A WRITE FORCES IT TOO — AND THAT IS A SEMANTIC CHOICE, NOT A CONSEQUENCE** (§6 review). It has
+	// one mechanical half and one genuinely chosen half, and they should not be confused:
+	//
+	//   * **Mechanically required.** `State.set(s)` assigns a `static var` whose initializer may never have
+	//     run, and the assignment path RELEASES the old value before storing the new one
+	//     (`emitCheckedGlobalStore`, whose unconditional decref is safe BECAUSE of this guard — see its
+	//     header). Without forcing, a first-access assignment decrefs a null slot.
+	//   * **CHOSEN.** That the initializer's SIDE EFFECTS therefore run, for a static that is only ever
+	//     written and never read, is shv2 reading `specs/lazy-static.md`'s *"the first time the static field
+	//     is accessed"* as covering a write — canonical draws no read/write distinction, and a store IS an
+	//     access to the field. A compiler could instead skip the initializer and store into the null slot
+	//     without releasing; that would be a defensible reading too, and it is NOT the one shv2 takes.
+	//
+	// ⚠ **THE ORACLE WAS MEASURED AND CANNOT ARBITRATE IT.** On the write-only-static program the C# bootstrap
+	// does not compile at all: `error E9001: Unresolved global: Box.slot.__initialized`, out of
+	// `X86CodeEmitter.ResolveGlobals` — an internal error, i.e. a defect on its own write-only path. So this
+	// choice rests on the sentence, not on agreement with a reference. `specs-shv2/lazy-static-observable.md`
+	// pins it as a choice.
 	function emitGlobalAddr(label ByteArray, range SourceRange) returns ValueId
+		self.emitLazyStaticInitGuard(label, range: range)
 		let addr = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.globalAddr(addr, label: label), range: range)
 		return addr
 	end 'emitGlobalAddr'
+
+	// ⭐ **ONE `call __lazy_init$<label>` AHEAD OF THE ACCESS, OR NOTHING AT ALL.**
+	//
+	// ⭐⭐ **THE GUARD IS OUT OF LINE — THE BRANCH LIVES IN THE ROUTINE, NOT AT THE ACCESS — AND THAT IS A
+	// DEPARTURE FROM BOTH REFERENCES, TAKEN ON THE EVIDENCE OF THE SPEC'S OWN PROSE.** v1 and the bootstrap
+	// each emit the test INLINE at every load, and `specs/lazy-static.md`'s `two-loads-in-one-function` exists
+	// because that shape produced an **endless loop** the second time one function read one static: its
+	// already-initialized edge is a fall-through, so an init block laid between two guards branches back into
+	// the first. Out of line, that failure mode does not exist — there is one branch per STATIC instead of one
+	// per ACCESS, so it cannot be got wrong at the Nth site — and an access costs one op rather than a
+	// diamond, which is also why this moves goldens by a single `call`.
+	//
+	// It buys an unconditional call where the references have a predicted-not-taken branch. That is a
+	// constant-factor cost on a correctness-critical path, and it is the optimizer's to reclaim (inlining
+	// `__lazy_init$…` restores the reference shape with the guard still written once).
+	function emitLazyStaticInitGuard(label ByteArray, range SourceRange)
+		match self.signatures.lazyStaticInitCalleeFor(label) 'lazy'
+			none then break 'lazy'
+			callee(name) then _ = self.emitRuntimeCall(name, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		end 'lazy'
+	end 'emitLazyStaticInitGuard'
 
 	// --- The top-level constant evaluator (P1.0d.5a) ---
 	//
@@ -58303,9 +58415,9 @@ export type Parser
 		// already is. It is claimed on the same three-token lookahead the container factory below is, and for
 		// the same reason — the scalar walk reads `<identifier> .` as a RANGED-TYPE BOUND and has no other
 		// reading of it.
-		if self.atConstFactoryCall() 'factoryCallInitializer'
+		if self.atConstInitializerCall() 'factoryCallInitializer'
 			let call = try self.evalConstFactoryCall(stack)
-			try self.requireInitializerConsumed(decl)
+			try self.requireInitializerConsumed(decl, deferred: true)
 
 			return call
 		end 'factoryCallInitializer'
@@ -58314,7 +58426,7 @@ export type Parser
 		// ⭐ **ONE CONSUMED CHECK FOR EVERY FORM.** It used to be spelled once per arm below, four identical
 		// copies of the rule that an initializer is the WHOLE token range — and a fifth arm that forgot it
 		// would silently truncate `var xs = [1, 2] junk` to `[1, 2]`.
-		try self.requireInitializerConsumed(decl)
+		try self.requireInitializerConsumed(decl, deferred: false)
 
 		return ConstInitializerValue.direct(folded)
 	end 'evalConstInitializer'
@@ -58388,34 +58500,82 @@ export type Parser
 			return try self.evalConstContainerCreate()
 		end 'containerFactoryInitializer'
 
+		// ⭐⭐ **`CharSet from ['a', 'e']` IS THE FIFTH ANSWER** (spec-port `lazy-static`), claimed on the head
+		// the body and the declaration sweep already share a predicate for. It must be claimed HERE rather than
+		// left to the scalar walk, whose `evalConstNamed` reads a bare identifier as a reference to another
+		// top-level `let` and reported **E2004 `Undefined constant 'CharSet'`** — a message about a `let` the
+		// author never wrote.
+		if self.atSetFromConstruction() 'setLiteralInitializer'
+			return try self.evalConstSetFrom(stack)
+		end 'setLiteralInitializer'
+
+		// ⭐⭐ **`CharacterSet.whitespacesAndNewlines()` IS THE SIXTH** (spec-port `lazy-static`) — the one
+		// initializer whose value is neither folded nor CALLED. shv2 has no `stdlib/CharacterSet.maxon` to
+		// declare the eleven accessors, so `atConstInitializerCall` cannot claim them (no file declares
+		// `CharacterSet.whitespacesAndNewlines`) and the scalar walk reported **E2015 `… in a constant
+		// initializer`** — true of the grammar it was reading and not of the program. The presets are DATA, so
+		// this arm materializes one exactly as `parseCharacterSetStaticCall` does inside a function.
+		if self.atCharacterSetStaticCall() 'characterSetInitializer'
+			return try self.evalConstCharacterSetStatic()
+		end 'characterSetInitializer'
+
 		return ConstFoldedValue.scalar(try self.evalConstBinary(stack, minPrec: OrPrecedence))
 	end 'evalConstFoldedValue'
 
-	// ⭐⭐ **DOES THE CURSOR SIT ON A USER STATIC FACTORY CALL — `<TypeName>.<method>(`?** Four tokens of
-	// lookahead, and the decisive one is the LAST: what makes this form recognizable is that some file
-	// DECLARES a function under the mangled `Type.method` name, which is exactly the question the call
-	// site asks (`Parser.staticCallClaimsBase`) and exactly the key the signature index files a method
-	// under. Asking anything weaker — "does the head start with a capital?", "is the member `create`?" —
-	// would be a second, weaker reading of what a static call IS.
+	// ⭐⭐ **DOES THE CURSOR SIT ON A CALL A GLOBAL'S INITIALIZER DEFERS TO `__module_init` — either
+	// `<TypeName>.<method>(` or a bare `<function>(`?** One question in two spellings, and the decisive
+	// token is the LAST of the lookahead: what makes either form recognizable is that some file DECLARES a
+	// function under that name, which is exactly the question the call site asks
+	// (`Parser.staticCallClaimsBase`) and exactly the key the signature index files a declaration under.
+	// Asking anything weaker — "does the head start with a capital?", "is the member `create`?" — would be a
+	// second, weaker reading of what a call IS.
 	//
 	// ⚠ **THIS TEST IS ASKED *BEFORE* THE CONTAINER ARM (`evalConstInitializer`), AND THE TWO ARE DISJOINT
 	// ANYWAY.** A generic-instance alias lives in a different registry and declares no `Type.method`, so no
 	// spelling can satisfy both — which is what keeps the container's own surface sentence saying what a
 	// container has, whichever order the two are asked in.
-	function atConstFactoryCall() returns bool
-		if not (self.at(TokenKind.identifier) and self.peekKind() == TokenKind.dot) 'notADottedName'
+	//
+	// ⛔⛔ **THE BARE FORM ADDITIONALLY REQUIRES A RECORD RETURN, AND THAT ASYMMETRY IS DELIBERATE**
+	// (spec-port `lazy-static`). The two shapes differ in what ELSE already claims them:
+	//
+	//   * `<Type>.<method>(` has NO other reading in a constant initializer — the scalar walk reads
+	//     `<identifier> .` as a ranged-type bound (`i64.min`) and fails at the `(` — so claiming it whole and
+	//     then EXPLAINING the refusal (`requireFactoryReturnsARecord`) is strictly better than any message
+	//     the bound reader could give.
+	//   * a bare `<name>(` is already owned, precisely worded, by the fold's own call rejection
+	//     (`evalConstNamed` → E2045 *"Function calls are not allowed in global variable initializers"*),
+	//     which BOTH reference compilers emit and which `specs/top-level-let.md` and
+	//     `specs/static-variables.md` pin verbatim on `compute()` and `getDefault()`. Both of those return a
+	//     SCALAR, and a scalar global's value is written into the `.data` image before any code runs — so the
+	//     canonical sentence is exactly true of every bare call this test declines, and claiming those here
+	//     would only re-word a refusal two canonical specs already fix.
+	//
+	// ⇒ **The admitted set is the same in both shapes** — a declared callee returning a record — and only
+	// the REFUSAL differs, which is the same split `requireFactoryReturnsARecord`'s sentence table already
+	// makes between the slot position and the argument position.
+	function atConstInitializerCall() returns bool
+		if not self.at(TokenKind.identifier) 'notANameAtAll'
 			return false
-		end 'notADottedName'
-		if self.kindAt(self.pos + 2) != TokenKind.identifier or self.kindAt(self.pos + 3) != TokenKind.leftParen 'notACall'
+		end 'notANameAtAll'
+
+		if self.peekKind() == TokenKind.dot 'qualified'
+			if self.kindAt(self.pos + 2) != TokenKind.identifier or self.kindAt(self.pos + 3) != TokenKind.leftParen 'notACall'
+				return false
+			end 'notACall'
+
+			return self.signatures.declaresCallee(qualifiedMethodName(self.current().value, methodName: self.tokenAt(self.pos + 2).value))
+		end 'qualified'
+
+		if self.peekKind() != TokenKind.leftParen 'notACall'
 			return false
 		end 'notACall'
 
-		return self.signatures.declaresCallee(qualifiedMethodName(self.current().value, methodName: self.tokenAt(self.pos + 2).value))
-	end 'atConstFactoryCall'
+		return self.signatures.globalFactoryReturnsARecord(self.current().value)
+	end 'atConstInitializerCall'
 
 	// ⭐⭐ **`Database.create(EntryMap.create(), sourcePaths: StringArray.create())` — A GLOBAL BUILT BY THE
 	// PROGRAM'S OWN CODE** (spec-port `map-struct-bytearray`). The cursor sits on the type name;
-	// `atConstFactoryCall` has already established that some file declares this `Type.method`.
+	// `atConstInitializerCall` has already established that some file declares this callee.
 	//
 	// ⭐ **THIS IS THE ONE INITIALIZER FORM THAT RUNS USER CODE, AND EVERYTHING ELSE ABOUT IT FOLLOWS FROM
 	// THAT.** `evalConstNamed` refuses `f()` because a call's answer needs the program to be RUNNING — still
@@ -58443,33 +58603,19 @@ export type Parser
 	// minted, and nothing ever rewrites an entry.
 	//
 	// ⚠ **`nested` DECIDES WHICH RETURN RULE APPLIES, AND ONLY THAT.** Both positions demand a record and
-	// neither demands anything else — the visibility of the type, the visibility of the method and the
-	// E3062 name recording below are the same three checks wherever the call is written, which is why they
-	// are asked here once rather than by two callers.
+	// neither demands anything else — the visibility of the type, the visibility of the callee and the
+	// E3062 name recording are the same three checks wherever the call is written, which is why they are
+	// asked here once rather than by two callers.
 	function evalConstFactoryCallInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, nested bool) returns InitializerCallId throws ConstEvalError
-		let typeTok = try self.consumeConst(TokenKind.identifier)
-		// The type name is a USE of it, recorded for the same reason and at the same point the container
-		// factory's alias is: this walk is the only reader of a top-level initializer's tokens, so it is the
-		// only thing that can tell the E3062 check the name was written here.
-		self.signatures.recordConstInitializerTypeName(typeTok.value, declFilePath: self.filePath)
-		try self.consumeConstToken(TokenKind.dot)
-		let methodTok = try self.consumeConst(TokenKind.identifier)
-		let callee = qualifiedMethodName(typeTok.value, methodName: methodTok.value)
+		let callee = try self.consumeConstInitializerCallee()
 
-		// The TYPE half of the visibility rule, asked through the door every other type-named form asks
-		// (`parseDottedPrimary`'s hidden-base guard): a file that may not NAME `Database` may not build one
-		// at file scope either.
-		if not self.typeNameVisibleHere(typeTok.value) 'hiddenFactoryType'
-			throw ConstEvalError.defective(ParseError.undefinedVariable(String.from(typeTok.value), line: typeTok.line, column: typeTok.column))
-		end 'hiddenFactoryType'
-
-		// AND THE METHOD HALF, anchored at the method the author wrote. The rule itself is
+		// THE CALLEE'S OWN VISIBILITY, anchored at the name the author wrote. The rule itself is
 		// `requireGlobalInitCalleeIsVisible`'s — see there for why this position has to ask it at all.
-		try self.requireGlobalInitCalleeIsVisible(callee, anchor: methodTok) otherwise (err) 'hiddenFactoryMethod'
+		try self.requireGlobalInitCalleeIsVisible(callee.name, anchor: callee.anchor) otherwise (err) 'hiddenFactoryMethod'
 			throw ConstEvalError.defective(err)
 		end 'hiddenFactoryMethod'
 
-		try self.requireFactoryReturnsARecord(callee, typeTok: typeTok, methodTok: methodTok, nested: nested)
+		try self.requireFactoryReturnsARecord(callee, nested: nested)
 
 		try self.consumeConstToken(TokenKind.leftParen)
 		var args = ConstFactoryArgumentArray.create()
@@ -58485,10 +58631,39 @@ export type Parser
 		// The slot this call is about to occupy. Read BEFORE the push and AFTER the arguments, which is what
 		// makes it this call's own index: every nested call the walk above found has already appended itself.
 		let id = calls.count()
-		calls.push(ConstFactoryCall.create(callee, args: args))
+		calls.push(ConstFactoryCall.create(callee.name, args: args))
 
 		return id
 	end 'evalConstFactoryCallInto'
+
+	// ⭐⭐ **READ THE NAME A TOP-LEVEL CALL IS MADE THROUGH, IN EITHER SPELLING** — the one reader, so the
+	// registry key, the diagnostic spelling and the blame anchor are derived together and cannot drift.
+	// `atConstInitializerCall` has already established that some file declares whichever name is here.
+	//
+	// ⚠ **THE TWO SHAPES DIFFER IN EXACTLY ONE CHECK, AND IT IS THE ONE ONLY THE QUALIFIED FORM HAS A
+	// SUBJECT FOR**: a TYPE name, which must be visible here (the door every other type-named form asks,
+	// `parseDottedPrimary`'s hidden-base guard — a file that may not NAME `Database` may not build one at
+	// file scope either) and which is a USE of that name for the E3062 unused-typealias check. A bare call
+	// names no type, so it has neither; the CALLEE's own visibility is asked by the caller for both.
+	function consumeConstInitializerCallee() returns ConstInitializerCallee throws ConstEvalError
+		let headTok = try self.consumeConst(TokenKind.identifier)
+		if not self.at(TokenKind.dot) 'aFreeFunction'
+			return ConstInitializerCallee.create(headTok.value, display: String.from(headTok.value), anchor: headTok)
+		end 'aFreeFunction'
+
+		// The type name is a USE of it, recorded for the same reason and at the same point the container
+		// factory's alias is: this walk is the only reader of a top-level initializer's tokens, so it is the
+		// only thing that can tell the E3062 check the name was written here.
+		self.signatures.recordConstInitializerTypeName(headTok.value, declFilePath: self.filePath)
+		try self.consumeConstToken(TokenKind.dot)
+		let methodTok = try self.consumeConst(TokenKind.identifier)
+
+		if not self.typeNameVisibleHere(headTok.value) 'hiddenFactoryType'
+			throw ConstEvalError.defective(ParseError.undefinedVariable(String.from(headTok.value), line: headTok.line, column: headTok.column))
+		end 'hiddenFactoryType'
+
+		return ConstInitializerCallee.create(qualifiedMethodName(headTok.value, methodName: methodTok.value), display: "{String.from(headTok.value)}.{String.from(methodTok.value)}", anchor: methodTok)
+	end 'consumeConstInitializerCallee'
 
 	// ⭐⭐ **A TOP-LEVEL FACTORY MUST HAND BACK A RECORD, WHEREVER THE CALL WAS WRITTEN — ONE MATCH, TWO
 	// SENTENCE TABLES.** A `.data` slot holds either a baked VALUE or a POINTER filled before `main`, and only
@@ -58504,13 +58679,13 @@ export type Parser
 	// wording. It was two matches for one commit, and the failure that shape invited is not a sixth arm (that
 	// breaks both loudly) but someone admitting an existing arm in ONE position: nested→admitted is a panic
 	// three passes later, which is precisely what `unbridgedRecord` exists to prevent.
-	function requireFactoryReturnsARecord(callee ByteArray, typeTok Token, methodTok Token, nested bool) throws ConstEvalError
-		match self.signatures.globalFactoryReturn(callee) 'returns'
+	function requireFactoryReturnsARecord(callee ConstInitializerCallee, nested bool) throws ConstEvalError
+		match self.signatures.globalFactoryReturn(callee.name) 'returns'
 			record then return
-			undeclared then throw factoryUndeclaredRefusal(typeTok, methodTok: methodTok, nested: nested)
-			scalar(typeName) then throw factoryScalarRefusal(typeTok, methodTok: methodTok, typeName: typeName, nested: nested)
-			unbridgedRecord(typeName) then throw factoryUnbridgedRefusal(typeTok, methodTok: methodTok, typeName: typeName, nested: nested)
-			void then throw factoryVoidRefusal(typeTok, methodTok: methodTok, nested: nested)
+			undeclared then throw factoryUndeclaredRefusal(callee, nested: nested)
+			scalar(typeName) then throw factoryScalarRefusal(callee, typeName: typeName, nested: nested)
+			unbridgedRecord(typeName) then throw factoryUnbridgedRefusal(callee, typeName: typeName, nested: nested)
+			void then throw factoryVoidRefusal(callee, nested: nested)
 		end 'returns'
 	end 'requireFactoryReturnsARecord'
 
@@ -58530,7 +58705,7 @@ export type Parser
 	// never had a problem with; only the TYPE had to be flattened.
 	function evalConstFactoryArgument(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgument throws ConstEvalError
 		let label = self.consumeConstArgumentLabel()
-		if self.atConstFactoryCall() 'nestedCall'
+		if self.atConstInitializerCall() 'nestedCall'
 			return ConstFactoryArgument.create(label, value: ConstFactoryArgumentValue.call(try self.evalConstFactoryCallInto(calls, stack: stack, nested: true)))
 		end 'nestedCall'
 
@@ -58664,8 +58839,153 @@ export type Parser
 			throw ConstEvalError.defective(ParseError.unsupported("a top-level `{String.from(aliasTok.value)}.{String.from(CreateMethod)}()` — its elements are `{String.from(ManagedMemoryTypeName)}` buffers, and a global is re-loaded at every use, so an element read out of it would carry the `{String.from(self.signatures.arrayRecordDeclaredName())}` surface instead. Declare an array of buffers inside a function", line: aliasTok.line, column: aliasTok.column))
 		end 'elementsAreBuffers'
 
-		return ConstFoldedValue.containerCreate(giid)
+		return ConstFoldedValue.containerCreate(giid, elements: sharedEmptyConstArrayElements)
 	end 'evalConstContainerCreate'
+
+	// ⭐⭐ **`CharSet from ['a', 'e', 'i', 'o', 'u']` AS A TOP-LEVEL INITIALIZER** (spec-port `lazy-static`) —
+	// the SAME construction `parseSetFromConstruction` reads inside a function, folded to its instance and its
+	// members instead of emitted.
+	//
+	// ⭐ **THE HEAD IS WHAT THE BRACKETS CANNOT SAY, WHICH IS WHY ONLY THE `from` FORM IS ADMITTED HERE.** A
+	// bare `['a', 'e']` at file scope is refused and stays refused: a character literal is not a constant
+	// (`evalConstCharLiteral`), and even for an integer element list the brackets name an `Array`, never a
+	// `Set`. The alias states both the container and the key type, which is the whole of what this arm adds.
+	//
+	// ⚠ **THE HEAD IS CLAIMED BY `atSetFromConstruction`, THE VERY PREDICATE THE BODY AND THE DECLARATION
+	// SWEEP SHARE.** That predicate exists because the sweep must PRE-INTERN whatever instance a `Set from`
+	// mints, or the parser's own read becomes the first write to the shared registry mid-parse — see there.
+	// Asking a fourth, local question about the head would have re-opened exactly that hole for the one
+	// position that reaches the registry EARLIEST.
+	function evalConstSetFrom(stack TopLevelDeclIndexArray) returns ConstFoldedValue throws ConstEvalError
+		let aliasTok = try self.consumeConst(TokenKind.identifier)
+		// This walk is the only reader of a top-level initializer's tokens, so it is the only thing that can
+		// tell the E3062 check the alias was named here — `evalConstContainerCreate`'s hook, for its reason.
+		self.signatures.recordConstInitializerTypeName(aliasTok.value, declFilePath: self.filePath)
+		try self.consumeConstToken(TokenKind.from)
+
+		// A BARE `Set from […]` mints its instance from the elements, and a top-level element list cannot
+		// supply one: the members are folded, not emitted, so there is no value whose type could be read back.
+		// The alias form is the only one that STATES the instance, which is what this arm needs.
+		if not self.signatures.isGenericAlias(aliasTok.value) 'noInstanceStated'
+			throw ConstEvalError.defective(ParseError.unsupported("`{String.from(aliasTok.value)} from […]` as a top-level initializer — a global set is declared through a generic-instance alias, which is what states the key type its members are checked against (`typealias {String.from(CharacterMemberSetAliasName)} = {String.from(SetBuiltinBaseName)} with Character`). A bare `{String.from(SetBuiltinBaseName)} from […]` infers its instance from the elements, which a folded member list cannot supply", line: aliasTok.line, column: aliasTok.column))
+		end 'noInstanceStated'
+
+		let giid = self.signatures.genericAliasInstanceFrom(aliasTok.value, readerFilePath: self.filePath)
+
+		return ConstFoldedValue.containerCreate(giid, elements: try self.evalConstSetMembers(stack, giid: giid, aliasTok: aliasTok))
+	end 'evalConstSetFrom'
+
+	// The `[…]` half — one member per element, each held to the SET'S OWN KEY TYPE. The bracket walk is the
+	// array literal's (newlines are layout, a trailing token is the caller's `requireInitializerConsumed`);
+	// what differs is that the members are checked against a type the head STATED rather than against the
+	// first element's kind, which is why this cannot simply be `evalConstArrayLiteral`.
+	//
+	// ⚠ **AN EMPTY MEMBER LIST IS ADMITTED, unlike an empty ARRAY literal.** `[]` is refused there because
+	// nothing can say what its element type is; here the alias already did, and `CharSet from []` denotes the
+	// empty character set exactly as `CharSet.create()` does.
+	function evalConstSetMembers(stack TopLevelDeclIndexArray, giid GenericInstanceId, aliasTok Token) returns ConstArrayElementArray throws ConstEvalError
+		try self.consumeConst(TokenKind.leftBracket)
+		self.skipNewlines()
+		var members = ConstArrayElementArray.create()
+		while not self.at(TokenKind.rightBracket) 'eachMember'
+			members.push(try self.evalConstSetMember(stack, giid: giid, aliasTok: aliasTok))
+			self.skipNewlines()
+			if not self.at(TokenKind.rightBracket) 'moreMembers'
+				try self.consumeConst(TokenKind.comma)
+				self.skipNewlines()
+			end 'moreMembers'
+		end 'eachMember'
+		try self.consumeConst(TokenKind.rightBracket)
+
+		return members
+	end 'evalConstSetMembers'
+
+	// ⭐ **ONE MEMBER, ADMITTED BY THE SET'S KEY TYPE** — the folding twin of `parseSetKeyArg`, which holds a
+	// body's `insert` argument to the same type off the same `setKeyType`. Without it a `Set with String`
+	// declared from `[1, 2]` would build a set whose slots hold integers and whose teardown walk calls
+	// `__str_decref` on them.
+	//
+	// A CHARACTER key takes a character literal — the one position at module scope where one is admitted, and
+	// it is admitted because the value being built is a RECORD in a container rather than a folded constant
+	// (see `ConstArrayElement.character`). Every other key type folds through the array literal's own element
+	// reader, so a `Set with Integer` accepts exactly what an `Array with Integer` does.
+	function evalConstSetMember(stack TopLevelDeclIndexArray, giid GenericInstanceId, aliasTok Token) returns ConstArrayElement throws ConstEvalError
+		let keyType = self.signatures.setKeyType(giid)
+		let memberTok = self.current()
+		if maxonTypeTag(keyType) == ValueTypeTag.character 'characterKeyed'
+			if not self.at(TokenKind.charLiteral) 'notACharacterLiteral'
+				throw ConstEvalError.defective(ParseError.builtinOperandType("{String.from(aliasTok.value)} from", required: typeTagName(ValueTypeTag.character), got: tokenDisplayText(memberTok), line: memberTok.line, column: memberTok.column))
+			end 'notACharacterLiteral'
+			self.advance()
+			// DECODED here, so a malformed literal is named for what is wrong with IT rather than reported as a
+			// key-type mismatch — `evalConstCharLiteral`'s discipline, one arm over.
+			let bytes = try self.charLiteralBytes(memberTok) otherwise (err) 'malformed'
+				throw ConstEvalError.defective(err)
+			end 'malformed'
+
+			return ConstArrayElement.character(bytes)
+		end 'characterKeyed'
+
+		let element = try self.evalConstArrayElement(stack)
+		if not constSetMemberMatchesKeyType(element, keyType: keyType) 'wrongKeyType'
+			throw ConstEvalError.defective(ParseError.builtinOperandType("{String.from(aliasTok.value)} from", required: typeTagName(maxonTypeTag(keyType)), got: tokenDisplayText(memberTok), line: memberTok.line, column: memberTok.column))
+		end 'wrongKeyType'
+
+		return element
+	end 'evalConstSetMember'
+
+	// Is the cursor on `CharacterSet.<name>(` — the compiler-owned type's static-call shape? The head is the
+	// BUILTIN name, which no declaration can take (`isCompilerOwnedTypeName`), so the four tokens are
+	// unambiguous. `parseCharacterSetStaticCall` claims the same shape inside a function through
+	// `atCharacterSetTypeName`, whose other spelling is the `CharSet` alias — deliberately not admitted here,
+	// because `CharSet` names the MEMBER SET and its statics are the ordinary `Set` ones, which the container
+	// arm above already claims.
+	//
+	// ⚠ **THE MEMBER IS `tokenCanBeAName`, NOT `identifier`, and the twelfth static is why (D8: after a `.`, a
+	// keyword IS a name).** `from` lexes as `TokenKind.from`, so an `identifier` test declines
+	// `CharacterSet.from(…)` — which then fell to the scalar walk and was refused as *"a `create()`-style
+	// factory at the TOP of an initializer"*, a sentence about a grammar the author was not writing in. The
+	// body's reader takes all twelve through `consumeNameToken` for exactly this reason; this one asks the
+	// same predicate so the two doors claim the same shape.
+	function atCharacterSetStaticCall() returns bool
+		return self.at(TokenKind.identifier) and self.current().value.equals(CharacterSetBuiltinName) and self.peekKind() == TokenKind.dot and tokenCanBeAName(self.tokenAt(self.pos + 2)) and self.kindAt(self.pos + 3) == TokenKind.leftParen
+	end 'atCharacterSetStaticCall'
+
+	// ⭐⭐ **ONE OF THE ELEVEN PREDEFINED `CharacterSet`s, FOLDED TO ITS DATA** (spec-port `lazy-static`).
+	//
+	// ⭐ **THE TABLE IS THE ONE `parseCharacterSetStaticCall` WALKS** (`CharacterSetRuntime.characterSetPresets`),
+	// so the mask and the member list a global is born with are the same numbers a body's call is born with —
+	// which is what makes `static var ws = CharacterSet.whitespacesAndNewlines()` and a call to the accessor
+	// inside a function the same set rather than two transcriptions of one.
+	//
+	// ⚠ **`from` IS NOT ADMITTED HERE, AND THAT IS THE ARGUMENT RULE RATHER THAN AN OMISSION.**
+	// `CharacterSet.from(chars)` takes a `Set with Character` EXPRESSION, and the one this position could
+	// supply — `CharSet from […]` — is already a whole initializer of its own; nesting it would make the
+	// admitted argument set of a compiler-owned static a second, hand-written list beside
+	// `evalConstFoldedValue`. The refusal names the eleven, exactly as the body's dispatcher does for an
+	// unknown static.
+	function evalConstCharacterSetStatic() returns ConstFoldedValue throws ConstEvalError
+		let typeTok = try self.consumeConst(TokenKind.identifier)
+		try self.consumeConstToken(TokenKind.dot)
+		// Read rather than `consumeConst`ed: the member may be a KEYWORD (`from`), which the claim test above
+		// has already established is here — see there.
+		let methodTok = self.current()
+		self.advance()
+
+		// ⚠ **THE NAME IS JUDGED BEFORE THE ARGUMENT LIST IS TOUCHED.** `CharacterSet.from(chars)` HAS an
+		// argument, so requiring `()` first would report `Expected ')' but got …` — a complaint about the
+		// parenthesis rather than about the static, which is the misattribution this whole arm exists to end.
+		for preset in characterSetPresets() 'eachPreset'
+			if methodTok.value.equals(preset.method) 'match'
+				try self.consumeConstToken(TokenKind.leftParen)
+				try self.consumeConstToken(TokenKind.rightParen)
+
+				return ConstFoldedValue.characterSet(self.signatures.setInstanceForCharacter(), members: constCharacterMembers(preset.members), categoryMask: preset.categoryMask)
+			end 'match'
+		end 'eachPreset'
+
+		throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — a global `{String.from(CharacterSetBuiltinName)}` is one of the eleven predefined sets, whose members the compiler holds as data. `{String.from(FromMethod)}(chars)` builds one from an expression, which needs the program to be running; declare it inside a function", line: methodTok.line, column: methodTok.column))
+	end 'evalConstCharacterSetStatic'
 
 	// ONE element of a top-level array literal: a STRING literal, or anything the scalar evaluator folds to
 	// an integer. The managed/scalar split is `evalConstInitializer`'s, applied between two separators —
@@ -58740,12 +59060,33 @@ export type Parser
 	// quietly becomes whatever the prefix came to. It is the one failure mode the token-range model
 	// has that a tree model does not, and the bootstrap guards it in the same place and words
 	// (`ExpectConstInitializerFullyConsumed`, 2-Parser.cs:4979-4987).
-	function requireInitializerConsumed(decl TopLevelDecl) throws ConstEvalError
+	//
+	// ⭐⭐ **ONE RULE, TWO SENTENCES — and `deferred` reaches the WORDING and never the verdict**, exactly
+	// as `nested` does at `requireFactoryReturnsARecord`. The rule is that an initializer is its WHOLE token
+	// range, and it cannot differ by path; what the leftover MEANS does:
+	//
+	//   * a FOLDED initializer has already produced its value, so the leftover is the part that could not be
+	//     folded and the complaint is about CONSTANTNESS (`specs/byte-string-literal.md` pins
+	//     *"'.toByteArray()' cannot be evaluated at compile time"*).
+	//   * a DEFERRED one folds nothing — the whole of it is a call `__module_init` will make — so there is no
+	//     constant to complain about. Its grammar simply ENDED, and the leftover is a token standing where
+	//     the line should have. `specs/lazy-static.md` and `specs/top-level-let.md` both pin that sentence,
+	//     and the runnable oracle emits it from the same position (MEASURED: `static var b = Box.create() zzz`
+	//     is `E2010 Expected 'end of global initializer' but got 'zzz'` there).
+	function requireInitializerConsumed(decl TopLevelDecl, deferred bool) throws ConstEvalError
 		if self.pos >= decl.initEnd 'fullyConsumed'
 			return
 		end 'fullyConsumed'
 
 		let tok = self.current()
+		if deferred 'runsBeforeMain'
+			// The phrase is written out here exactly as its sibling `"end of default value"` is
+			// (`parseParameterDefaultHelper`): `Lexer.expectationDisplayText`'s header names these two and
+			// `'interpolation end'` as canonical's three hand-typed expectation PHRASES, each with one call
+			// site. A named constant would be a second spelling of a sentence nothing else says.
+			throw ConstEvalError.defective(ParseError.unexpectedToken("end of global initializer", got: tokenDisplayText(tok), line: tok.line, column: tok.column))
+		end 'runsBeforeMain'
+
 		throw ConstEvalError.defective(ParseError.nonConstantInitializer(String.from(decl.name), leftover: self.tokenTextFrom(self.pos, endIndex: decl.initEnd), line: tok.line, column: tok.column))
 	end 'requireInitializerConsumed'
 

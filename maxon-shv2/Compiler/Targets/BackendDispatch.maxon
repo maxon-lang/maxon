@@ -297,7 +297,7 @@ end 'augmentWithRuntime'
 //   mov rbp, rsp       … so a backtrace can name mrt_start and then stop
 //   sub rsp, 0x20      reserve shadow space (rsp is already 16-aligned by the push)
 //   call mrt_runtime_init   install the fault handler BEFORE any user code can fault
-//   [call __module_init]    fill every managed global's .data slot (P1.7 slice 2a)
+//   [call __module_init]    fill every EAGER managed global's .data slot (P1.7 slice 2a)
 //   call main          main returns its ExitCode in R8 (custom ABI)
 //   [global cleanup]   mov rcx, r8 ; call __maxon_global_cleanup  -> the same code back in R8
 //   mov ecx, r8d       hand R8's low 32 bits to ExitProcess's ECX arg (Win64 ABI)
@@ -361,7 +361,8 @@ function appendLeakGate(module TargetModule, block IrBlock, checkLeaks bool)
 	end 'leakGate'
 end 'appendLeakGate'
 
-// ⭐ **FILL EVERY MANAGED GLOBAL'S `.data` SLOT BEFORE `main`** (P1.7 slice 2a) — shared by both entry
+// ⭐ **FILL EVERY EAGER managed global's `.data` SLOT BEFORE `main`** (P1.7 slice 2a) — a `static`
+// member's is filled on first access instead (see `ModuleInit`) — shared by both entry
 // stubs, and the FIRST thing after the runtime init so a global is live for the whole of user code.
 // `__module_init` takes no argument and returns nothing; there is no live value to preserve across it
 // (`main` has not run), so it is a bare call. Emitted only for a program that has one (`initGlobals`).
@@ -400,7 +401,7 @@ end 'appendExitCodePassThroughCall'
 // reasons that all point the same way:
 //
 //   call mrt_runtime_init installs the SIGFPE handler (rt_sigaction) — appendX64LinuxRuntimeChunks
-//   [call __module_init]  fill every managed global's .data slot (P1.7 slice 2a)
+//   [call __module_init]  fill every EAGER managed global's .data slot (P1.7 slice 2a)
 //   call main            main returns its ExitCode in R8 (custom ABI)
 //   [global cleanup]     mov rcx, r8 ; call __maxon_global_cleanup  ->  the same code back in R8
 //   [leak gate]          mov rcx, r8 ; call __mm_leak_check  ->  adjusted code / 101 in R8

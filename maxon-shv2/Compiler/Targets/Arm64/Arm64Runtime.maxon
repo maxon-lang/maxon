@@ -133,7 +133,8 @@ export function buildArm64EntryStubChunk(leakCheck bool, initGlobals bool, os Os
 	var callFixups = CallFixupArray.create()
 	var iatRelocs = RelocationArray.create()
 
-	// Fill every managed global's `.data` slot BEFORE user code (P1.7 slice 2a). `__module_init` takes
+	// Fill every EAGER managed global's `.data` slot BEFORE user code (P1.7 slice 2a) — a `static` member's
+	// is filled on first access instead (see `ModuleInit`). `__module_init` takes
 	// no argument and returns nothing, so there is nothing to move around it.
 	if initGlobals 'moduleInit'
 		arm64EmitBranchLink(code, callFixups: callFixups, targetName: ModuleInitName)

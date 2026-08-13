@@ -590,8 +590,7 @@ declaration scan marked off, and whatever the expression did not reach was aband
 `var g = Box.create() zzz` compiled, ran, and ignored `zzz`. The same rule the interpolation body and
 the captured parameter default now follow.
 
-<!-- disabled-test: error.runtime-init-trailing-tokens -->
-<!-- MEASURED 2026-08-06 (BATCH32): shv2 refuses the program at the SAME position under a different code — `error E2045: <fragment>:12:22: Global initializer for 'g' is not a constant expression: 'zzz' cannot be evaluated at compile time`, where canonical expects `E2010 Expected 'end of global initializer' but got 'zzz'`. The defect this case guards — a trailing token silently ABANDONED — does not exist here: probed `let K = 3 zzz`, where shv2 and the bootstrap emit the identical E2045, and probed `var g = Box.create()` without the trailing token, which shv2 compiles and runs. shv2 routes a runtime-initialized global through the same constant-fold complaint rather than a trailing-token one, so this is WHICH diagnostic, not WHETHER. -->
+<!-- test: error.runtime-init-trailing-tokens -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
