@@ -572,7 +572,7 @@ function requireSiteOrdinalsAscend(sites RangeCheckSiteArray, order RangeSiteInd
 end 'requireSiteOrdinalsAscend'
 
 export function lowerMaxonToStd(maxonModule MaxonModule, project Project, funcNames FunctionNameIndex) returns StdModule
-	registerProgramLiteralBlobs(maxonModule, globalData: project.globalData)
+	registerProgramLiteralBlobs(maxonModule, globalData: project.globalData, unreachableStdlib: project.stdlibFacts.unreachable)
 	return MaxonToStdLowering.create(maxonModule, project: project, funcNames: funcNames).lower(project)
 end 'lowerMaxonToStd'
 
@@ -609,8 +609,34 @@ end 'lowerMaxonToStd'
 // a PREFIX FROM BYTE 0 with no label to anchor on, which is the pin's semantics rather than this walk's
 // fault. The cure for it is a label-anchored read (`Testing/SpecTestRunner.compareLinkedSection`), which is
 // a harness question and not this one.
-function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalDataTable)
+function registerProgramLiteralBlobs(maxonModule MaxonModule, globalData GlobalDataTable, unreachableStdlib FunctionNameSet)
 	for func in maxonModule.functions 'eachFunc'
+		// ⭐⭐ **THE THIRD PRE-ELIMINATION DOOR ONTO `nextStringId`, AND IT WAS OPEN (W69).** The two this
+		// walk's siblings shut — the body lowering below and `insertRangeChecks` — both skip a stdlib
+		// function no path from `main` reaches, and both say why in the same words: DFE prunes FUNCTIONS,
+		// never `.rdata`, so a blob registered for a body the back end never receives SURVIVES it, and one
+		// shared counter means a surviving blob renumbers every later `__str_blob_`/`__fconst_`/
+		// `__jumptable_` label in EVERY program. This walk runs EARLIER THAN EITHER and had no such test, so
+		// it registered the blob those two exist to prevent.
+		//
+		// ⚠ **MEASURED at `stdlib/Json.maxon`'s entry, which is the first listed module to reach it.** A
+		// STRING field default is not a `FieldDefault.literal` (that payload is a `ParsedInt`), so
+		// `export var stringValue as String = ""` mints the nullary helper `__fieldDefault#JsonNode#stringValue`
+		// whose whole body is `return ""` — an ordinary function, in the merged module, that nothing in a
+		// `return 7` program can reach. Its 8-byte blob was registered here at id 0 and referenced by
+		// nothing: `function main() returns ExitCode / return 7` grew a `.rdata` SECTION it had never had
+		// (5,567 ⇒ 6,115 bytes on disk, codeBytes unmoved at 1,592) and **13 committed goldens shifted by
+		// exactly one label**, `stdlib-whitelist.a-listed-modules-literals-are-byte-neutral` — the case
+		// written to catch precisely this — among them.
+		//
+		// ⇒ the gate is the SAME reachability fact stated the same way, never "is this whitelisted", so it
+		// outlives the filter. A REACHABLE stdlib function is not in the set and registers exactly as
+		// before, and no user function is ever in it — the ordering property this walk exists to establish
+		// is untouched for every literal a program can actually name.
+		if unreachableStdlib.contains(func.name) 'notInTheProgram'
+			continue
+		end 'notInTheProgram'
+
 		for blockRef in func.blockRefs 'eachBlock'
 			let block = try maxonModule.blocks.get(blockRef) otherwise panic("registerProgramLiteralBlobs: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'

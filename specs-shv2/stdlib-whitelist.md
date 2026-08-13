@@ -972,3 +972,124 @@ end 'main'
 ```maxoncstderr
 error E2001: <fragment>:3:12: unexpected token: 'to'
 ```
+
+## `stdlib/Json.maxon` — the entry W69 added, and the control that proves it is not inert
+
+**Listed 2026-08-12 (W69).** At 1,080 lines it is the largest pure-corpus module the list carries and
+the first that is a whole SUBSYSTEM rather than a handful of leaf functions: a recursive-descent parser
+(`JsonParser`), an arena of nodes (`JsonDoc` over `JsonNodeArray`), and 22 free emitter functions. Its
+last diagnostic blocker was `W66`'s field access through a struct-typed field (`Json.maxon:281`) and,
+past it, an `E2015` at `:400:21` that upstream's *a durable store CO-OWNS* cure cleared; it now probes
+`E3001` and nothing else.
+
+⚠ **A GREEN `E3001` IS EVIDENCE ONLY FOR THE DECLARATIONS THE COMPILER ACTUALLY ANALYZED**, and for a
+module whose name the compiler might SYNTHESIZE it is not evidence at all — that is the trap that made
+`Set`, `Vector` and `unicodeCategory` inert listings. Both were checked rather than assumed:
+
+- **The injection control FIRES.** `let bogus = NoSuchType.definitelyUndefined(1)` placed in
+  `findKeyInNode`'s body answers `E3001` **+ `E3004`**, the control the six `helpers/sort/*` files fail.
+- **There is no synthesized twin to out-vote the declaration.** `Json` is on neither
+  `TypeResolution.isCompilerOwnedTypeName` nor `builtinTypeNameTag`, it is not one of the seven
+  `*BuiltinBaseName` roots (`Set`, `Map`, `List`, `Vector` and the three `__Managed*`), and the whole
+  compiler mentions the name only in prose. So the listed declaration is the only one there is.
+
+⭐ **AND THE TWO CASES BELOW ARE THE DIFFERING-DECLARATIONS CONTROL IN SPEC FORM.** Neither can pass
+against an inert entry and neither can pass by merely NAMING the type: each drives the module's own
+logic end to end and checks a value only that logic can produce. Both are oracle-agreed — the bootstrap,
+which loads all of `stdlib/`, answers identically on the identical source.
+
+<!-- test: stdlib-whitelist.json-parse-and-read-from-the-whitelist -->
+`Json.parse` over a document holding all four scalar kinds and an array, then five accessors reading
+back out. What it exercises is the parse machinery: `JsonParser`'s whitespace skipping, its object and
+array recursion, its string and number scanners, `findKeyInNode`'s linear key walk, and `JsonDoc`'s
+arena indirection — `second` is read through `doc.get(id).numberValue`, so the node id the array
+returned has to name the right arena slot. The last read is NEGATIVE and is the one worth having:
+`getInt` for a key the document does not carry must reach the `otherwise` arm, so a `findKeyInNode`
+that answered with any id at all would fail here rather than pass quietly.
+```maxon
+function main() returns ExitCode
+	let doc = try Json.parse("\{\"count\": 7, \"name\": \"maxon\", \"ok\": true, \"tags\": [10, 20, 30]\}") otherwise 'parseErr'
+		panic("Json.parse rejected a valid document")
+	end 'parseErr'
+	let count = try doc.getInt(doc.root, key: "count") otherwise 'countErr'
+		panic("count missing")
+	end 'countErr'
+	let name = try doc.getString(doc.root, key: "name") otherwise 'nameErr'
+		panic("name missing")
+	end 'nameErr'
+	let ok = try doc.getBool(doc.root, key: "ok") otherwise 'okErr'
+		panic("ok missing")
+	end 'okErr'
+	let tags = try doc.getChild(doc.root, key: "tags") otherwise 'tagsErr'
+		panic("tags missing")
+	end 'tagsErr'
+	let n = try doc.arrayLength(tags) otherwise 'lenErr'
+		panic("tags is not an array")
+	end 'lenErr'
+	let secondId = try doc.arrayAt(tags, index: 1) otherwise 'atErr'
+		panic("tags[1] missing")
+	end 'atErr'
+	let second = trunc(doc.get(secondId).numberValue)
+	print("{name} count={count} tags={n} second={second} ok={ok}\n")
+	let absent = try doc.getInt(doc.root, key: "missing") otherwise 'absent'
+		print("absent key refused\n")
+		return (count + n + second) as ExitCode
+	end 'absent'
+	print("UNREACHED {absent}\n")
+	return 0
+end 'main'
+```
+```exitcode
+30
+```
+```stdout
+maxon count=7 tags=3 second=20 ok=true
+absent key refused
+```
+
+<!-- test: stdlib-whitelist.json-stringify-round-trips-through-the-whitelist -->
+The other half of the module, which the parse case cannot reach: the 22 free emitter functions, driven
+by building an arena BY HAND through `JsonNode`'s exported constructors and serializing it. The emitted
+text is checked literally, so it pins `writeJsonString`'s escaping of an embedded quote, `writeNumber`'s
+integral shortcut (`2.5` keeps its fraction, `1.0` prints as `1`), `writeBool` and `nullBytes` — and
+then the same text is fed back through `Json.parse`, so a serializer that emitted something almost-JSON
+would fail on the round trip rather than only on the string compare.
+```maxon
+function main() returns ExitCode
+	var doc = JsonDoc.create()
+	var keys = StringArray.create()
+	var children = JsonNodeIdArray.create()
+	keys.push("name")
+	children.push(doc.add(JsonNode.stringNode("a\"b")))
+	keys.push("size")
+	children.push(doc.add(JsonNode.numberNode(2.5)))
+	keys.push("done")
+	children.push(doc.add(JsonNode.boolNode(false)))
+	var items = JsonNodeIdArray.create()
+	items.push(doc.add(JsonNode.numberNode(1.0)))
+	items.push(doc.add(JsonNode.nullNode()))
+	keys.push("items")
+	children.push(doc.add(JsonNode.arrayNode(items)))
+	doc.root = doc.add(JsonNode.objectNode(keys, children: children))
+	let text = Json.stringify(doc)
+	print("{text}\n")
+	let round = try Json.parse(text) otherwise 'reparse'
+		panic("stringify emitted something parse rejects")
+	end 'reparse'
+	let size = try round.getInt(round.root, key: "size") otherwise 'sizeErr'
+		panic("size missing after round trip")
+	end 'sizeErr'
+	let name = try round.getString(round.root, key: "name") otherwise 'nameErr'
+		panic("name missing after round trip")
+	end 'nameErr'
+	print("{name} {size}\n")
+	return (size + 40) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+```stdout
+{"name":"a\"b","size":2.5,"done":false,"items":[1,null]}
+a"b 2
+```

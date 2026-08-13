@@ -1644,6 +1644,110 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     answers `E3001` **+ `E3004`**, which is the control the six `helpers/sort/*` files fail.
 	try listWhitelistedModule(stdlibDir, relative: "Range.maxon", into: listed)
 
+	// ⭐⭐ **W69 — `stdlib/Json.maxon`, THE LARGEST PURE-CORPUS MODULE ON THIS LIST (1,080 lines) AND THE
+	// FIRST THAT IS A SUBSYSTEM RATHER THAN A HANDFUL OF LEAVES.** `Json.parse` is a recursive-descent
+	// parser (`JsonParser`) filling a node ARENA (`JsonDoc` over a `JsonNodeArray`); `Json.stringify` and
+	// `stringifyPrettyNode` are 22 free emitter functions over a `ByteArray`. No intrinsic, no backend work
+	// and no `#if`, so the module is loadable exactly as written.
+	//
+	// ⚠ Its last two blockers cleared UPSTREAM rather than here, and neither was this entry's work: `W66`
+	// cured the field access through `doc`, a struct-typed FIELD (`:281`), and *a durable store CO-OWNS*
+	// cured the `E2015 :400:21` behind it. Re-probed before listing rather than inherited.
+	//
+	// ⭐⭐ **THE READINESS IS REAL IN BOTH OF THE WAYS THIS FILE HAS LEARNED TO DOUBT IT**, which is two
+	// separate doubts and not one: a conditional `extension`'s bodies are never ANALYZED (the six
+	// `helpers/sort/*` files), and a name the compiler SYNTHESIZES out-votes the declaration silently
+	// (`Set`, `Vector`, `unicodeCategory` — `W63`/`BATCH36`). Both were MEASURED:
+	//   • the probe: `maxon-shv2 build stdlib/Json.maxon` exits 1 with `E3001: No 'main' function found`
+	//     AND NOTHING ELSE;
+	//   • the INJECTION control FIRES — `let bogus = NoSuchType.definitelyUndefined(1)` in
+	//     `findKeyInNode`'s body answers `E3001` **+ `E3004 call to undefined function
+	//     'NoSuchType.definitelyUndefined'`**, run on a copy outside `stdlib/`;
+	//   • there is NO SYNTHESIZED TWIN: `Json` is on neither `TypeResolution.isCompilerOwnedTypeName` nor
+	//     `builtinTypeNameTag`, and it is none of the seven `*BuiltinBaseName` roots (`Set`, `Map`, `List`,
+	//     `Vector`, `__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`). shv2's own sources
+	//     mention the name in PROSE only.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • ⚠⚠ FREE FUNCTIONS (E3006) — **the dangerous clause, and this is the first entry with a large
+	//     surface for it: TWENTY-TWO**, several as generic as a name gets (`writeBool`, `writeNumber`,
+	//     `writeBytes`, `writeIndent`, `hexDigit`). Checked at BOTH surfaces the rule names, and at their
+	//     SOURCES rather than against any prose roster. Against `Parser.parseCallNamed`'s bare-name chain
+	//     AT THE CHAIN: the seventeen names standing there today are `calleeTakesPositionalArgsOnly`'s
+	//     eight (`trunc` `floor` `ceil` `round` `sqrt` `abs` `min` `max`), `runProcess`, `spawnReadLine`
+	//     and the seven `subp*` — and none of the 22 is among them. Against the free functions the 37
+	//     already-listed modules declare, read out of those files: 122 declarations, and the intersection
+	//     with these 22 is EMPTY.
+	//   • ⚠ It CONSUMES one, which is the sound direction and what the builtins are for: `JsonDoc.getInt`
+	//     (`:171`) and `writeNumber` (`:1027`) call `trunc` by bare name, exactly as `Math.pow` calls
+	//     `floor`. What a bare builtin reserves is a DECLARATION no call site can reach, and this module
+	//     declares no `trunc`.
+	//   • TYPE NAMES: `Json`, `JsonDoc`, `JsonNode`, `JsonKind`, `JsonParser`, `JsonByte`, `JsonError`,
+	//     `JsonAccessError` — eight, all nominal, so a user program spelling one wins and this module's
+	//     moves into the reserved space (A1s wave 2). No other stdlib file declares any of them, checked
+	//     AT THE SOURCE across all 50. TYPE-NAME-vs-BUILTIN, the one shape still SILENT, is the
+	//     no-synthesized-twin bullet above — the same question asked of the three rosters that answer it.
+	//   • ⚠ TYPEALIASES — twelve, and **FOUR ARE ALREADY DECLARED BY LISTED MODULES**: `Byte` and
+	//     `ByteArray` (`File`, `Console`, `String`, `Character`, `views`), `BytePos` (`String`) and
+	//     `StringArray` (`CommandLine`, `Build`, `String`). Every one at the IDENTICAL FORM —
+	//     `int(0 to u8.max)`, `Array with Byte`, `int(0 to u64.max)`, `Array with String` — so
+	//     `RangedAliasRegistry`'s whole-program fold has no range to contest. That registry's own header
+	//     already names this file in the seven that *"declare `Byte = int(0 to u8.max)` privately … and
+	//     agree"*. The other eight (`JsonNodeId`, `JsonNodeIdArray`, `JsonNodeArray`, `ChildCount`,
+	//     `ChildIndex`, `IndentDepth`, `JsonInt`, `JsonFloat`) are declared nowhere else under `stdlib/`.
+	//   • ⚠ `StringArray` is the first TOP-LEVEL `export`ed declaration of that name on the list — the
+	//     three above declare it inside a type body. A difference in SCOPE, not in FORM, and
+	//     `Project.isStdlibModuleDirectory`'s header already anticipates it BY NAME: a project's own
+	//     `export typealias StringArray` shadows `stdlib/Json.maxon`'s rather than colliding with it
+	//     (`typealias-collision/project-export-shadows-stdlib-export`).
+	//   • ONE TOP-LEVEL BINDING, `let firstPrintableByte = 0x20 as Byte` (`:803`) — the class `S2h` had to
+	//     build a reachability term for after `Log.maxon`'s mutable state cost a trivial program +87%.
+	//     `DeadGlobalElimination` drops it: the A/B below emits no `.data` slot for it and no
+	//     `__module_init` store, which is that term working rather than the prediction that an immutable
+	//     scalar is cheaper than a `var`.
+	//   • The "type-parameterized by a USER declaration" clause is the one this file insists is a BUILD and
+	//     not a reading, and it bites hardest here because `Byte`/`ByteArray` are the very names it is
+	//     about. Checked as a build: a program declaring `typealias Byte = int(0 to 1000)` and calling
+	//     nothing in this module compiles and runs clean.
+	//   • E3112 fires only when a user program actually contests a spelling, so there is nothing to clear
+	//     ahead of time. The surface it exposes is `JsonNode`'s six fields (`kind`, `boolValue`,
+	//     `numberValue`, `stringValue`, `keys`, `children`) and `JsonDoc`'s two (`nodes`, `root`), the
+	//     method names, and the parameter names those methods take as labels (`key`, `index`, `children`,
+	//     `depth`, `out`, `doc`, `id`, `ids`, `keys`).
+	//   • It has NO imports and calls into no other stdlib module by name.
+	//
+	// ⛔⛔ **THE THIRD QUESTION `S2g` ESTABLISHED — what does the entry cost a program that does NOT use
+	// it? — CAME BACK RED, AND THAT IS THE WHOLE STORY OF THIS RUNG.** MEASURED first, before anything was
+	// cured: with only the line below added, `function main() returns ExitCode / return 7` kept its 1,592
+	// code bytes but grew a `.rdata` SECTION IT HAD NEVER HAD (three PE sections to four, 5,567 ⇒ 6,115
+	// bytes on disk) and **13 committed goldens shifted by exactly one label** — including
+	// `stdlib-whitelist.a-listed-modules-literals-are-byte-neutral`, the case written to catch precisely
+	// this. The payload was eight zero bytes at id 0, referenced by nothing.
+	//
+	// ⭐ **IT WAS NOT THIS MODULE'S FAULT, AND THE BISECT IS WHY THE ENTRY STANDS RATHER THAN BEING
+	// WITHDRAWN.** `stdlib/` is read as DATA, so the carrier was found without a rebuild: temporarily
+	// spelling `:77`'s `export var stringValue as String = ""` as `= "ZQ"` turned the mystery payload into
+	// `ZQ\0\0\0\0\0\0`. A STRING field default is not a `FieldDefault.literal` (that payload is a
+	// `ParsedInt`), so it mints the nullary helper `__fieldDefault#JsonNode#stringValue` — and
+	// `LowerMaxonToStd.registerProgramLiteralBlobs` walked that helper with **no unreachable-stdlib gate**,
+	// where the two passes on either side of it have carried one for exactly this reason since A1s. It is
+	// the THIRD pre-elimination door onto `GlobalDataTable.nextStringId`, and `InsertRangeChecks`'s header
+	// claimed the class was shut at two. Gating it is `W69`'s one compiler change; with it, the A/B above
+	// is **1,592 code bytes both ways and the two executables byte-for-byte identical at 5,567 bytes**.
+	//
+	// ⚠ **AND THE GATE IS WORTH MORE THAN THIS ENTRY: IT REMOVED ORPHANS THAT WERE ALREADY THERE.** Five
+	// committed goldens in this spec alone move DOWNWARDS (`__str_rec_10` ⇒ `__str_rec_4`), which is dead
+	// `.rdata` leaving the image of every program that reaches stdlib at all — a cost the tree has been
+	// paying since the first listed module with an unreachable literal-bearing body.
+	//
+	// ⭐ **THE CAPABILITY IS REAL RATHER THAN MERELY LOADABLE, and for a module this size that is the
+	// point.** `specs-shv2/stdlib-whitelist.md`'s two `json-*` cases are the differing-declarations control
+	// in spec form: one parses a document and reads five values back out through the arena (its last read
+	// NEGATIVE, so a `findKeyInNode` answering with any id would fail rather than pass), the other builds
+	// an arena by hand and serializes it, checking the emitted text literally and then re-parsing it. Both
+	// are oracle-agreed on the identical source, and neither can pass against an inert entry.
+	try listWhitelistedModule(stdlibDir, relative: "Json.maxon", into: listed)
+
 	//     ⛔⛔ **`stdlib/Set.maxon` IS NOT LISTED, AND THE REASON IS A MEASUREMENT RATHER THAN A BLOCKER
 	//     (W63, BATCH36).** Its last DIAGNOSTIC blocker died with `W61` — it probes `E3001` and nothing
 	//     else, and the injection control fires (`NoSuchType.definitelyUndefined` in `Set.count()`'s body
