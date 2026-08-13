@@ -21245,6 +21245,32 @@ export type Parser
 		// a clean E3006. Two files whose declarations happen to AGREE fall through to that clean E3006 now,
 		// which is the better diagnostic and was always the one the program deserved.
 		let ownerName = paramDefaultOwnerName(owner)
+
+		// ⭐⭐ **THE FIFTH REFUSAL: A `static` MEMBER AND AN INSTANCE MEMBER WEAR THIS NAME, AND THE DEFAULTS
+		// REGISTRY HAS ONE KEY FOR THE TWO OF THEM (W74 review).** A pair is separated by the KEY each member
+		// is registered under — `memberRegistrationKey` hands the static `<name>#__static` and leaves the
+		// instance the source spelling — while the declaration sweep files parameter defaults under the name
+		// the SOURCE wrote, for both. The two halves therefore come apart, and nothing downstream can repair
+		// it: MEASURED, `T.m()` against a `static m(a Num = 7)` beside an instance `m(b Num)` asks the defaults
+		// registry for `T.m#__static`, misses, fills nothing, and is refused
+		// `E3036: 'T.m#__static' expects 1 argument(s) but 0 were provided` — a symbol no source wrote, about a
+		// call the author got right.
+		//
+		// ⚠ **IT IS ASKED OF THE WHOLE-PROGRAM CONTEST, WHICH IS WHY IT CANNOT BE LEFT TO THE COUNT COMPARISON
+		// BELOW.** `funcDeclarationCounts` is tallied per REGISTRATION KEY (`ProgramSignatures.record`) and the
+		// defaulting count per SOURCE NAME (`recordParamDefaults`), and a pair remaps exactly one of those two
+		// keys — for exactly one of the two declaration ORDERS, because the remap happens when the second
+		// member arrives. MEASURED: `static m(a Num)` written ahead of `m(b Num = 4)` was refused while the
+		// identical program with the two members SWAPPED compiled and answered 7. `isStaticInstanceContest` is
+		// settled before any file is parsed, so this answers both orders the same way.
+		//
+		// ⚠ It is a refusal and not a repair deliberately: filing a pair's defaults under
+		// `memberRegistrationKey` means minting the helper NAME from that key too, and the mint happens in the
+		// token SCAN — a pass before the contest is known. That is a rung, not a review; see the report.
+		if self.signatures.isStaticInstanceContest(ownerName) 'aStaticAndAnInstanceShareThisName'
+			throw ParseError.unsupported("a default value on parameter '{String.from(paramName)}' of '{String.from(ownerName)}' — a `static` member and an instance member of this type both wear that name, so the two are registered under DIFFERENT keys while the whole-program declaration sweep publishes parameter defaults under the one name the source wrote. A call that omits an argument cannot be told which of the two members' default to supply, and a call to the `static` half cannot find one at all. Give the two members distinct names, or drop the default", line: eqTok.line, column: eqTok.column)
+		end 'aStaticAndAnInstanceShareThisName'
+
 		if self.signatures.paramDefaultsCollide(ownerName) 'declarationsDisagree'
 			throw ParseError.unsupported("a default value on parameter '{String.from(paramName)}' of '{String.from(ownerName)}' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default", line: eqTok.line, column: eqTok.column)
 		end 'declarationsDisagree'

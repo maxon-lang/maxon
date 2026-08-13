@@ -3095,6 +3095,31 @@ function defaultProducerMark(producer ParamDefaultProducer) returns ContentHash
 	end 'produces'
 end 'defaultProducerMark'
 
+// ⭐⭐ **DO TWO DECLARATIONS OF ONE NAME SLOT A CALL'S ARGUMENTS THE SAME WAY? — the half of "may the sweep
+// answer for this name from its ONE entry?" that BOTH sweep records ask, spelled once.**
+//
+// `OpaqueParamInfo.matches` and `ParamDefaultInfo.matches` decide that question over two different facts, and
+// each of them has to compare the SAME list first: the CALL-ALIGNED parameter names (receiver prepended),
+// which are what a labelled argument is slotted by and therefore what makes "the same call" mean the same
+// positions in both declarations. It is one rule, and it decided the admission of one overload set from two
+// loops — so a future edit to either (treating a repeated `_` as unnameable, say, or folding a rename that
+// no call can observe) would have moved one verdict and not the other, and the set would have been admitted
+// by the defaults gate while the opaque gate declined it. Neither copy would fail to compile.
+function callAlignedParamNamesAgree(mine ByteArrayArray, other ByteArrayArray) returns bool
+	if mine.count() != other.count() 'differentArity'
+		return false
+	end 'differentArity'
+
+	for i in 0 upto mine.count() 'eachName'
+		let name = try mine.get(i) otherwise panic("callAlignedParamNamesAgree: paramNames.get OOB at {i} despite i < count")
+		if not name.equals(try other.get(i) otherwise panic("callAlignedParamNamesAgree: the other declaration's paramNames.get OOB at {i} despite the counts being equal")) 'renamedSlot'
+			return false
+		end 'renamedSlot'
+	end 'eachName'
+
+	return true
+end 'callAlignedParamNamesAgree'
+
 // ⭐ **A FUNCTION'S PER-PARAMETER DEFAULTS** — the call-aligned `paramNames` (so a call site can slot a
 // LABELLED argument to its position before any `FuncSignature` exists, exactly as `ParamConsumeInfo` does)
 // and, per position, what PRODUCES that parameter's default (`ParamDefaultProducer`). The sweep computes it
@@ -3151,16 +3176,9 @@ export type ParamDefaultInfo
 	// member's helper is EMITTED under is a different question, answered at the declaration from the
 	// registration name (`Parser.parseDefaultHelper`).
 	export function matches(other ParamDefaultInfo) returns bool
-		if self.paramNames.count() != other.paramNames.count() or self.producers.count() != other.producers.count() 'differentShape'
+		if self.producers.count() != other.producers.count() or not callAlignedParamNamesAgree(self.paramNames, other: other.paramNames) 'differentShape'
 			return false
 		end 'differentShape'
-
-		for i in 0 upto self.paramNames.count() 'eachName'
-			let mine = try self.paramNames.get(i) otherwise panic("ParamDefaultInfo.matches: paramNames.get OOB at {i} despite i < count")
-			if not mine.equals(try other.paramNames.get(i) otherwise panic("ParamDefaultInfo.matches: other.paramNames.get OOB at {i} despite the counts being equal")) 'renamedSlot'
-				return false
-			end 'renamedSlot'
-		end 'eachName'
 
 		for i in 0 upto self.producers.count() 'eachSlot'
 			if not paramDefaultProducersAgree(self.producerFor(i), other: other.producerFor(i)) 'differentProducer'
@@ -3286,7 +3304,7 @@ export type OpaqueParamInfo
 	// Equality is by VALUE and not by arrival, deliberately: a declaration re-folded from the same source
 	// compares equal and stays answerable, so this cannot be defeated by how many times a file is swept.
 	export function matches(other OpaqueParamInfo) returns bool
-		if self.typeParamCount != other.typeParamCount or self.positions.count() != other.positions.count() or self.paramNames.count() != other.paramNames.count() 'differentShape'
+		if self.typeParamCount != other.typeParamCount or self.positions.count() != other.positions.count() or not callAlignedParamNamesAgree(self.paramNames, other: other.paramNames) 'differentShape'
 			return false
 		end 'differentShape'
 
@@ -3295,13 +3313,6 @@ export type OpaqueParamInfo
 				return false
 			end 'movedSlot'
 		end 'eachPosition'
-
-		for i in 0 upto self.paramNames.count() 'eachName'
-			let mine = try self.paramNames.get(i) otherwise panic("OpaqueParamInfo.matches: paramNames.get OOB at {i} despite i < count")
-			if not mine.equals(try other.paramNames.get(i) otherwise panic("OpaqueParamInfo.matches: other.paramNames.get OOB at {i} despite the counts being equal")) 'renamedSlot'
-				return false
-			end 'renamedSlot'
-		end 'eachName'
 
 		return true
 	end 'matches'
