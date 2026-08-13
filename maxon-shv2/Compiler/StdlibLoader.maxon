@@ -1721,8 +1721,16 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// cured: with only the line below added, `function main() returns ExitCode / return 7` kept its 1,592
 	// code bytes but grew a `.rdata` SECTION IT HAD NEVER HAD (three PE sections to four, 5,567 ⇒ 6,115
 	// bytes on disk) and **13 committed goldens shifted by exactly one label** — including
-	// `stdlib-whitelist.a-listed-modules-literals-are-byte-neutral`, the case written to catch precisely
-	// this. The payload was eight zero bytes at id 0, referenced by nothing.
+	// `stdlib-whitelist.a-listed-modules-literals-are-byte-neutral`. The payload was eight zero bytes at id
+	// 0, referenced by nothing.
+	//
+	// ⛔ **THAT CASE DID NOT GO RED, AND THIS ENTRY IMPLIED IT HAD (W69 review).** It reads a displaced
+	// payload off its golden FRAGMENT, and a fragment mismatch is REFERENCE, NOT A GATE. MEASURED on a
+	// compiler rebuilt with the gate neutralised: **PASS**, exit 0, with the orphan at `.rdata` byte 0 of
+	// every program in the suite. What found this was the 1,228-fragment DRIFT COUNT below — a number a
+	// human reads. The review added `a-listed-modules-literals-cannot-reach-the-rdata-image`, which pins the
+	// linked `.rdata` from byte 0 with a ```RequiredRdata block and is the first thing in the battery that
+	// turns red if the gate is removed.
 	//
 	// ⭐ **IT WAS NOT THIS MODULE'S FAULT, AND THE BISECT IS WHY THE ENTRY STANDS RATHER THAN BEING
 	// WITHDRAWN.** `stdlib/` is read as DATA, so the carrier was found without a rebuild: temporarily

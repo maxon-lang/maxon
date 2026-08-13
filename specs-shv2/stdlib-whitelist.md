@@ -270,9 +270,18 @@ end 'main'
 <!-- targets: x64-windows -->
 The sibling of `no-clock-is-byte-neutral`, for the half that case cannot see. That program's fragment
 names no `.rdata` label at all, so it stays green while every synthetic label in the corpus renumbers.
-This one holds a float constant and a dense-`match` jump table, so its fragment names `__fconst_0` and
-`__jumptable_0` — the first ids of two of the three prefixes minted from the one shared counter. A
-listed module that registers ANY `.rdata` for code no path from `main` reaches moves both.
+This one holds a float constant and a dense-`match` jump table, so its fragment NAMES labels off the one
+shared counter — `__fconst_1`, `__jumptable_2` and `__str_blob_0`, the last being the range-check panic
+message that took id 0. A listed module that registers ANY `.rdata` for code no path from `main` reaches
+moves all three.
+
+⛔⛔ **BUT IT DETECTS THAT THROUGH ITS GOLDEN, SO IT CANNOT FAIL — IT IS A READING, NOT A GATE (W69
+review).** A fragment mismatch prints a `note:`, counts as no failure and leaves the exit code at 0 (user
+ruling 2026-08-02). MEASURED: with `registerProgramLiteralBlobs`' unreachable-stdlib gate neutralised and
+the compiler rebuilt — an orphan blob at `.rdata` byte 0 of every program in the suite — this case
+reported **PASS**. Keep it: the drift it prints names the moved labels, which no other case does. But the
+enforcement lives in `a-listed-modules-literals-cannot-reach-the-rdata-image` below, which pins the linked
+image and goes red.
 ```maxon
 typealias Weight = float(0.0 to 100.0)
 
@@ -305,6 +314,47 @@ end 'main'
 ```
 ```exitcode
 14
+```
+
+<!-- test: stdlib-whitelist.a-listed-modules-literals-cannot-reach-the-rdata-image -->
+⛔⛔ **THE BYTE-NEUTRALITY CLAIM'S ONLY GATE. ITS TWO SIBLINGS ABOVE CANNOT FAIL, AND ONE OF THEM WAS
+CREDITED WITH CATCHING THIS RUNG'S DEFECT (W69 review).** `a-listed-modules-literals-are-byte-neutral`
+detects a displaced `.rdata` payload through its golden FRAGMENT — and a fragment mismatch is REFERENCE, NOT
+A GATE (user ruling 2026-08-02): it prints a `note:`, counts as no failure and leaves the exit code at 0.
+MEASURED by neutralising `LowerMaxonToStd.registerProgramLiteralBlobs`' unreachable-stdlib gate and
+rebuilding, which puts an orphan blob from `stdlib/Json.maxon` at `.rdata` byte 0 of every program in the
+suite: that case reported **PASS**. It is a real reading and a useful one, but nothing in the battery turns
+it red, so the invariant this whole file rests on had no enforcement at all.
+
+⭐ **A ```RequiredRdata BLOCK IS THAT ENFORCEMENT, AND THE FIT IS EXACT.** The block is compared as a run
+FROM BYTE 0, read back out of the LINKED IMAGE rather than out of the compiler's opinion of it — so it
+answers precisely "did anything get in front of this program's read-only data?". This program's whole
+`.rdata` is its two float constants, 16 bytes, every one of them pinned; a listed module that registers ANY
+`.rdata` for code no path from `main` reaches lands ahead of them, because `registerProgramLiteralBlobs`
+runs before the target tier mints a float. Re-measured with the gate neutralised:
+`.rdata mismatch at byte 6: expected 0x29, got 0x00` — eight zero bytes of orphan where `12.5` belongs.
+
+⚠ **IT MUST HOLD NO STRING LITERAL OF ITS OWN, and that is not a stylistic choice.** The user's `main` is
+walked before stdlib's functions, so a program literal in `main` keeps byte 0 whatever an orphan does and
+the pin goes green on the broken compiler — MEASURED, on a first draft of this case that pinned its own
+`"MAXONPIN"` blob and passed with the gate neutralised. The payload a displacement is visible against has to
+be one the COMPILER composes.
+```maxon
+function main() returns ExitCode
+	let scale = 12.5
+	let floor = 1.5
+	if scale > floor 'gt'
+		return 8
+	end 'gt'
+	return 1
+end 'main'
+```
+```exitcode
+8
+```
+```RequiredRdata
+f64 12.5
+f64 1.5
 ```
 
 <!-- test: stdlib-whitelist.target-refusal-blames-the-crossing-call -->
@@ -993,13 +1043,18 @@ module whose name the compiler might SYNTHESIZE it is not evidence at all — th
   `*BuiltinBaseName` roots (`Set`, `Map`, `List`, `Vector` and the three `__Managed*`), and the whole
   compiler mentions the name only in prose. So the listed declaration is the only one there is.
 
-⛔ **AND THE ENTRY WAS NOT BYTE-NEUTRAL WHEN FIRST ADDED — `a-listed-modules-literals-are-byte-neutral`
-CAUGHT IT, WHICH IS WHAT THAT CASE IS FOR.** The fault was not this module's: a STRING field default
-mints a nullary helper, and `LowerMaxonToStd.registerProgramLiteralBlobs` walked it with no
+⛔ **AND THE ENTRY WAS NOT BYTE-NEUTRAL WHEN FIRST ADDED.** The fault was not this module's: a STRING
+field default mints a nullary helper, and `LowerMaxonToStd.registerProgramLiteralBlobs` walked it with no
 unreachable-stdlib gate — a THIRD pre-elimination door onto `GlobalDataTable.nextStringId` where
 `InsertRangeChecks`'s header claims the class is shut at two. The measurement and the cure are recorded
-once, at the entry in `StdlibLoader.maxon`; what belongs here is only that the case fired and was not
-re-minted to make it stop.
+once, at the entry in `StdlibLoader.maxon`; what belongs here is only that it was found and not papered
+over by a re-mint.
+
+⚠ **WHAT FOUND IT WAS THE DRIFT COUNT, NOT A FAILING CASE, AND THIS SECTION SAID OTHERWISE FOR ONE
+COMMIT.** `a-listed-modules-literals-are-byte-neutral` shifted by a label and reported **PASS** — measured
+directly at the W69 review, on a rebuilt compiler with the gate neutralised. A golden is REFERENCE, not a
+gate. The case that turns this invariant red is
+`a-listed-modules-literals-cannot-reach-the-rdata-image`, added by that review.
 
 ⭐ **AND THE TWO CASES BELOW ARE THE DIFFERING-DECLARATIONS CONTROL IN SPEC FORM.** Neither can pass
 against an inert entry and neither can pass by merely NAMING the type: each drives the module's own
