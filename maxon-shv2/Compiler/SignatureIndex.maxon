@@ -3387,6 +3387,31 @@ end 'ThrowsClauseEntry'
 export typealias ThrowsClauseEntryArray = Array with ThrowsClauseEntry
 export typealias FuncThrowsMap = Map with (ByteArray, ThrowsClause)
 
+// ⭐ **THE NAMES WHOSE THROWING DECLARATIONS NAME TWO DIFFERENT ERROR TYPES (W77).** `funcThrows` is keyed by
+// the name the SOURCE wrote and is last-wins, so a name declared twice leaves ONE clause and every call to it
+// — including the one that resolves to the OTHER member — would decode its error as that clause's type.
+// `ProgramSignatures.throwsClauseAttribution` reads this set as one of the three answers it distinguishes.
+//
+// ⚠ **THE COMPARISON IS BETWEEN TWO SPELLED NAMES, AND THAT IS EXACT HERE RATHER THAN AN APPROXIMATION.** The
+// sweep is a TOKEN scan that runs before any file is parsed, so no type exists yet to compare — but a type
+// NAME denotes at most one declaration whole-program (two `enum Boom`s in two directories are `E3006:
+// duplicate definition of 'Boom'`, MEASURED), and the whole throws mechanism downstream is name-keyed on the
+// same terms: `Parser.tryErrorEnumType` interns the clause's name and `ProgramSignatures.enumOf` looks the
+// layout up by it. A finer comparison here would be finer than what it is compared FOR.
+typealias DisagreeingThrowsNameSet = Set with ByteArray
+
+// ⭐ **WHY THE SWEEP'S ONE `throws` ENTRY FOR A NAME CANNOT BE APPLIED TO EVERY DECLARATION WEARING IT** —
+// `ProgramSignatures.throwsClauseAttribution`'s answer, and a union rather than a bool because the three
+// failures are three different defects: one is about what the declarations SAY, and two are about the KEY
+// they were filed under. Its one reader writes a different sentence for each, which a bool would have made
+// impossible without spelling the classification a second time at the refusal.
+export union ThrowsClauseAttribution
+	appliesToEveryDeclaration
+	declarationsDisagree
+	sharedByTwoRegistrationKeys
+	filedUnderAnotherKey
+end 'ThrowsClauseAttribution'
+
 // The answer to "does this callee consume any parameter?" — a union so "no recorded entry" is an ANSWER
 // (a borrow-only callee), never confused with an empty-but-present one.
 export union CalleeConsume
@@ -4158,6 +4183,14 @@ export function iterableFactoryFromClause(clause ThrowsClause) returns IterableF
 
 	return IterableFactory.throwsIterationError
 end 'iterableFactoryFromClause'
+
+// The error type a clause the throws REGISTRY holds names. `ProgramSignatures.recordThrows` files only a
+// throwing clause and returns before writing anything else, so `none` on either side of its comparison is
+// not a program's property but two readings of one union — `iterableFactoryFromClause`'s panic above, at the
+// registry's own door. Written once because the comparison has two operands and one contract.
+function recordedThrowsTypeName(clause ThrowsClause) returns String
+	return try throwsClauseName(clause) otherwise panic("recordedThrowsTypeName: a clause the throws registry holds answered `throwing` to `throwsClauseIsThrowing` and `none` to `throwsClauseName` — one union, two readings")
+end 'recordedThrowsTypeName'
 
 // The `element_size@24` of a MANAGED-element array (P1.7 slice 3) — a managed element (String / struct /
 // union / instance / nested Array) is a HEAP BOX addressed by a POINTER, so a slot holds the 8-byte pointer,
@@ -7760,6 +7793,13 @@ export type ProgramSignatures
 	// makes recording only the throwing ones correct (the same "absence is the answer" `funcParamConsumes`
 	// rests on).
 	var funcThrows as FuncThrowsMap
+	// The names whose throwing declarations do not all name ONE error type — see `DisagreeingThrowsNameSet`.
+	// Empty for every program that declares each function once, and for every overload set whose members agree.
+	var disagreeingThrows as DisagreeingThrowsNameSet
+	// How many declarations of a name THREW, against `funcDeclarationCounts`' how many there were — the pair
+	// `throwsClauseAttribution` compares, and the only way the sweep can see a member that publishes no clause
+	// at all. `funcDefaultingDeclarationCounts`' twin, one registry over and for exactly its reason.
+	var funcThrowingDeclarationCounts as FunctionDeclarationCountMap
 	// ⭐ Function name -> its per-parameter DEFAULTS (BATCH2 slice 4). `defaultsOf(callee)` is the door
 	// `Parser.emitCall` asks before deciding an under-supplied call is an arity error. Filled by
 	// `recordParamDefaults` from each file's scanned signatures; last-wins on a duplicate name (E3006
@@ -8149,7 +8189,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9694,12 +9734,104 @@ export type ProgramSignatures
 			return
 		end 'nonThrowing'
 
+		// ⚠ **THE OVERWRITE IS COMPARED, BECAUSE THE KEY IS NOT UNIQUE** — `recordParamDefaults`' rule at the
+		// registry next door, and it is the same rule for the same reason. Two declarations may wear one name
+		// legitimately, as an OVERLOAD SET, and the map keeps one of them; whether that matters is exactly
+		// whether the two name the same error type, because that type is what every `try` at the shared name
+		// decodes its flag as. The count beside it catches the third shape, a sibling that throws NOTHING and
+		// so never reaches this recorder at all (`FunctionDeclarationCountMap`).
+		//
+		// ⚠ **THE VERDICT IS NOT MIXED INTO THE HASH**, for `recordParamDefaults`' reason: it is DERIVED from
+		// the clauses this routine mixes one per declaration, so a program that gains or loses a throwing
+		// sibling moves the hash through the write that made it.
+		if let incumbent = try self.funcThrows.get(name) 'anotherThrowingDeclarationOfThisName'
+			self.noteRepeatedDeclaration(self.funcThrowingDeclarationCounts, name: name)
+			if not recordedThrowsTypeName(incumbent).equals(recordedThrowsTypeName(clause)) 'twoErrorTypes'
+				self.disagreeingThrows.insert(name)
+			end 'twoErrorTypes'
+		end 'anotherThrowingDeclarationOfThisName'
+
 		self.funcThrows.upsert(name, value: clause)
 		// The THROWS TYPE NAME rides too — a callee that changes which error it throws changes what type a
 		// caller's `(e)` binding recovers — and it rides through the SHARED `mixThrowsClause`, so a function's
 		// clause and an interface requirement's clause enter the hash the one way.
 		self.hash = mixThrowsClause(mixBytes(mix(self.hash, value: DeclShapeThrows), bytes: name), clause: clause)
 	end 'recordThrows'
+
+	// ⭐⭐ **CAN THE SWEEP'S ONE `throws` ENTRY FOR THIS NAME BE APPLIED TO EVERY DECLARATION WEARING IT? — the
+	// question `Parser.requireOverloadableName` refuses on (W77).** It answers WHY and not merely whether,
+	// because the three ways the answer can be no are three different defects and each earns its own sentence
+	// at the refusal — `OverloadRedeclaration`'s shape, one registry over, and for its reason.
+	//
+	// Two of the three are about this name's own declarations, and the sweep sees each from a different side
+	// (`paramDefaultsCollide`'s pair of halves, one registry over, and its reason):
+	//
+	//   • **Two throwing declarations name different error types** — recorded by `recordThrows`, which compares
+	//     them (`DisagreeingThrowsNameSet`).
+	//   • **A sibling throws NOTHING** — invisible to the throws registry, because only a throwing declaration
+	//     ever reaches it. That is what the two counts are for: every declaration is counted by `record`, only
+	//     the throwing ones by `recordThrows`, and a difference IS the non-throwing sibling. Without it the set
+	//     is admitted and the sibling's calls are compiled as throwing calls, reading an error flag no member
+	//     ever writes.
+	//
+	// The third is not about the declarations at all but about the KEY they are filed under, and it is why this
+	// function reads two contest registries before it reads its own two halves: those halves are tallied under
+	// the name the SWEEP wrote, and two contests move the ENTRY off that name without moving the tally with it.
+	// Where they part there is no verdict to read, so the honest answer is the blanket one.
+	//
+	// A name NO declaration throws from has one answer — "does not throw" — and nothing to disagree about, so
+	// the absent entry is the fast path and the common one.
+	export function throwsClauseAttribution(name ByteArray) returns ThrowsClauseAttribution
+		if not self.funcThrows.contains(name) 'noDeclarationOfThisNameThrows'
+			return ThrowsClauseAttribution.appliesToEveryDeclaration
+		end 'noDeclarationOfThisNameThrows'
+
+		// ⭐⭐ **A `static`/INSTANCE PAIR IS TWO REGISTRATION KEYS AND ITS CLAUSE IS FILED UNDER NEITHER.** The
+		// members are told apart at the call by SYNTAX and registered under `m` and `m#__static`, while
+		// `recordThrows` files a clause under the one source name both wrote — so `T.m#__static` misses the entry
+		// outright and `T.m` may find the STATIC's. Agreement cannot rescue that, which is exactly what the two
+		// halves below cannot express: they compare `funcDeclarationCounts` (keyed by `memberRegistrationKey`)
+		// against a throwing count keyed by the source name, so for a pair they are counting two populations —
+		// `W75`'s mismatch at a second registry. Asked here rather than at the refusal because the KEYING is this
+		// index's fact, and asked through the same `isStaticInstanceContest` that chose the keys.
+		if self.isStaticInstanceContest(name) 'aStaticAndAnInstanceShareThisSourceName'
+			return ThrowsClauseAttribution.sharedByTwoRegistrationKeys
+		end 'aStaticAndAnInstanceShareThisSourceName'
+
+		// ⛔⛔ **A FREE FUNCTION CONTESTED ACROSS DIRECTORIES IS REGISTERED UNDER A KEY THE TALLIES WERE NEVER
+		// KEPT UNDER (N1c), SO THERE IS NO VERDICT TO READ.** `refileContestedFreeFunction` COPIES the entries
+		// from `want` to `alpha.want`; the set and the two counts below stay on `want`. This key therefore
+		// answers "yes, something here throws" and "no, nothing disagrees" — the second from maps nothing ever
+		// asked about this key. Both spellings are tested because a SUBDIRECTORY declaration is registered under
+		// the qualified name while a ROOT one keeps the bare name (`freeFunctionRegistrationName`), and the
+		// refusal has to reach the same programs either way.
+		//
+		// ⛔ **MEASURED, and the failure is ORDER-DEPENDENT**: two `want` overloads in `alpha/` throwing `Boom`
+		// and `Splat`, with a `want` in `beta/` making the bare name contested. Written Num-then-bool the program
+		// compiles and answers 7; the same two declarations written bool-then-Num report
+		// `E3034: unknown enum case: 'worseA'` — the `(e)` binding typed off whichever clause was recorded last.
+		//
+		// ⚠ **THE CURE IS TO TALLY PER REGISTRATION KEY, AND IT IS NOT A TEST HERE.** The INCUMBENT refile fires
+		// when a SECOND directory declares the name, by which time the first directory's own scan arrays are
+		// gone — so the counts cannot be recomputed at the place the entries are copied, and moving them wholesale
+		// is wrong in both directions (the bare key ACCUMULATES every directory's declarations: see the A5l note
+		// at `foldFile`). Until that is cured this is the boundary, and it costs exactly what the blanket refusal
+		// this rung replaced already cost. A name declared ONCE per directory never reaches this function at all:
+		// its only caller is asked only where a name is already contested.
+		if self.isContestedFreeFunction(name) or self.isContestedRegistrationName(name) 'theTalliesStayedOnTheBareName'
+			return ThrowsClauseAttribution.filedUnderAnotherKey
+		end 'theTalliesStayedOnTheBareName'
+
+		if self.disagreeingThrows.contains(name) 'twoErrorTypes'
+			return ThrowsClauseAttribution.declarationsDisagree
+		end 'twoErrorTypes'
+
+		if self.declarationCountIn(self.funcDeclarationCounts, name: name) != self.declarationCountIn(self.funcThrowingDeclarationCounts, name: name) 'aSiblingThrowsNothing'
+			return ThrowsClauseAttribution.declarationsDisagree
+		end 'aSiblingThrowsNothing'
+
+		return ThrowsClauseAttribution.appliesToEveryDeclaration
+	end 'throwsClauseAttribution'
 
 	// ⭐ **THE CALLEE'S `throws` CLAUSE, or `none`** — the door a call site asks: does this callee throw,
 	// and what error type does it throw? `none` (no recorded entry) is every non-throwing function and the

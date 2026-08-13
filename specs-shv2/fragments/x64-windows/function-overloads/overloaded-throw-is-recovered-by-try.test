@@ -1,0 +1,197 @@
+// Test: overloaded-throw-is-recovered-by-try
+typealias Num = int(-1000 to 1000)
+
+enum Boom implements Error
+	fromNumber
+	fromFlag
+end 'Boom'
+
+function check(value Num) returns Num throws Boom
+	if value < 0 'low'
+		throw Boom.fromNumber
+	end 'low'
+	return 1
+end 'check'
+
+function check(value bool) returns Num throws Boom
+	if value 'yes'
+		throw Boom.fromFlag
+	end 'yes'
+	return 2
+end 'check'
+
+function main() returns ExitCode
+	var result = 0
+	try check(-1) otherwise (e) 'fromTheNumberMember'
+		match e 'which'
+			fromNumber then result = result + 10
+			fromFlag then result = result + 100
+		end 'which'
+	end 'fromTheNumberMember'
+	try check(true) otherwise (e) 'fromTheFlagMember'
+		match e 'which'
+			fromNumber then result = result + 1000
+			fromFlag then result = result + 3
+		end 'which'
+	end 'fromTheFlagMember'
+	let last = try check(false) otherwise 0
+	return (result + last) as ExitCode
+end 'main'
+---
+ExitCode: 15
+---
+func @check {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, -1000
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, low
+    x64.jmp ifcont
+  low:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 1
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @check#bool {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, yes
+    x64.jmp ifcont
+  yes:
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 2
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rbx, 0
+    x64.movRegImm rcx, -1
+    x64.callDirect check
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#3
+    x64.jmp matchnext#6
+  matcharm#3:
+    x64.leaRegRegImm32 rax, rbx, 10
+    x64.jmp matchcont#7
+  matchnext#6:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#4
+    x64.jmp matchdead#5
+  matcharm#4:
+    x64.leaRegRegImm32 rax, rbx, 100
+    x64.jmp matchcont#7
+  matchcont#7:
+    x64.movRegReg rbx, rax
+    x64.jmp trycont#8
+  matchdead#5:
+  tryok#1:
+    x64.jmp trycont#8
+  trycont#8:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect check#bool
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#10
+    x64.jmp tryok#9
+  tryerr#10:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#11
+    x64.jmp matchnext#14
+  matcharm#11:
+    x64.leaRegRegImm32 rax, rbx, 1000
+    x64.jmp matchcont#15
+  matchnext#14:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#12
+    x64.jmp matchdead#13
+  matcharm#12:
+    x64.leaRegRegImm32 rax, rbx, 3
+    x64.jmp matchcont#15
+  matchcont#15:
+    x64.movRegReg rbx, rax
+    x64.jmp trycont#16
+  matchdead#13:
+  tryok#9:
+    x64.jmp trycont#16
+  trycont#16:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect check#bool
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#18
+    x64.jmp tryok#17
+  tryerr#18:
+    x64.movRegImm32 rax, 0
+    x64.jmp trycont#19
+  tryok#17:
+    x64.movRegReg rax, r8
+    x64.jmp trycont#19
+  trycont#19:
+    x64.leaRegRegReg r8, rbx, rax
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

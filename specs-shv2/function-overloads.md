@@ -76,6 +76,37 @@ What they may differ in is the only thing the parse does not have to commit to �
 **expression**, which is a function body the resolved member names. A set whose members
 disagree about the shape is refused at the declaration, with the position of the `=`.
 
+#### An overload set may `throws`, when every member throws the same error
+
+A `throws` clause is published by the whole-program declaration sweep under the name the source
+wrote, and a `try` is desugared while the call is **parsed** — a whole pass before the overload is
+resolved. So the clause the `try` reads has to be every member's, and when the members agree it is:
+one error type, recovered whichever member the call turns out to name.
+
+```text
+static function want(actual Num, expected Num) returns Num throws Boom
+static function want(actual bool, expected bool) returns Num throws Boom
+
+try Chk.want(1, expected: 1)      // recovers Boom
+try Chk.want(true, expected: true) // recovers Boom
+```
+
+Members that **disagree** are refused at the second declaration. There are two ways to disagree and
+both are unrepairable at a call site: naming two different error types (the `(e)` binding would be
+typed from whichever declaration the by-name sweep recorded last), and one member throwing where
+another does not (the call would be compiled with or without an error flag, and `try` on a call that
+cannot throw is itself an error).
+
+A `static` member beside an instance member of one name is **not** an overload set — the two are told
+apart at the call by syntax, and each is registered under a key of its own — but the sweep still files
+their `throws` clauses under the one name they share, so the entry belongs to neither key. Such a pair
+is refused whenever either member throws, however the two agree.
+
+A **free function** whose bare name is also declared in another directory is registered under its
+directory-qualified name (`alpha.want`), and the sweep moves its throws clause onto that key while the
+tally that would say whether the overloads agree stays on the bare name. With nothing left to compare,
+a throwing overload set of such a name is refused too — again however the members agree.
+
 #### The oracle's non-injective overload name is deliberately not ported
 
 The canonical suite's `error.overload-pair-compiling-to-one-name` pins a **refusal**: the
@@ -1053,4 +1084,429 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:20:9: the overloads of 'f' do not agree on the TYPE of parameter 1, which this call omitted and the compiler supplied from that parameter's default ('int' and 'float'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and the overload is resolved a whole pass later — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload
+```
+
+<!-- test: overloads-agree-on-the-error-they-throw -->
+Both members `throws Boom`, so the one clause the whole-program declaration sweep files under the shared
+source name is every member's answer and the `try` recovers `Boom` whichever member the call resolves to.
+The two members return DIFFERENT values, so a call that reached the wrong one would be a wrong number
+rather than a crash: `5 + 9`.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+type Chk
+
+	export static function want(actual Num, expected Num) returns Num throws Boom
+		if actual != expected 'differ'
+			throw Boom.bad
+		end 'differ'
+		return 5
+	end 'want'
+
+	export static function want(actual bool, expected bool) returns Num throws Boom
+		if actual != expected 'differ'
+			throw Boom.bad
+		end 'differ'
+		return 9
+	end 'want'
+
+end 'Chk'
+
+function main() returns ExitCode
+	let a = try Chk.want(1, expected: 1) otherwise 0
+	let b = try Chk.want(true, expected: true) otherwise 0
+	return (a + b) as ExitCode
+end 'main'
+```
+```exitcode
+14
+```
+
+<!-- test: overloads-three-way-agree-on-the-error-they-throw -->
+The shape both `stdlib/Testing.maxon`'s `Expect.equal` and `stdlib/Subprocess.maxon`'s `run` are written
+in: THREE declarations of one name, every one of them throwing the one error type the module declares.
+Each member answers a different value, so the sum names which members ran: `1 + 2 + 4`.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum TestFailure
+	mismatch
+end 'TestFailure'
+
+type Expect
+
+	export static function equal(actual Num, expected Num) returns Num throws TestFailure
+		if actual != expected 'differ'
+			throw TestFailure.mismatch
+		end 'differ'
+		return 1
+	end 'equal'
+
+	export static function equal(actual String, expected String) returns Num throws TestFailure
+		if actual.count() != expected.count() 'differ'
+			throw TestFailure.mismatch
+		end 'differ'
+		return 2
+	end 'equal'
+
+	export static function equal(actual bool, expected bool) returns Num throws TestFailure
+		if actual != expected 'differ'
+			throw TestFailure.mismatch
+		end 'differ'
+		return 4
+	end 'equal'
+
+end 'Expect'
+
+function main() returns ExitCode
+	let a = try Expect.equal(1, expected: 1) otherwise 0
+	let b = try Expect.equal("xy", expected: "ab") otherwise 0
+	let c = try Expect.equal(true, expected: true) otherwise 0
+	return (a + b + c) as ExitCode
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: overloaded-throw-is-recovered-by-try -->
+The accept path is not only that the set COMPILES — the thrown error has to reach the handler, and the
+`(e)` binding has to be typed from the clause the members share. Each member throws a different CASE of
+that one type and the handler discriminates on it, so a recovery attributed to the wrong member is a
+wrong number: `10` from the Num member's throw, `3` from the bool member's, and `2` from the bool
+member's non-throwing return.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom implements Error
+	fromNumber
+	fromFlag
+end 'Boom'
+
+function check(value Num) returns Num throws Boom
+	if value < 0 'low'
+		throw Boom.fromNumber
+	end 'low'
+	return 1
+end 'check'
+
+function check(value bool) returns Num throws Boom
+	if value 'yes'
+		throw Boom.fromFlag
+	end 'yes'
+	return 2
+end 'check'
+
+function main() returns ExitCode
+	var result = 0
+	try check(-1) otherwise (e) 'fromTheNumberMember'
+		match e 'which'
+			fromNumber then result = result + 10
+			fromFlag then result = result + 100
+		end 'which'
+	end 'fromTheNumberMember'
+	try check(true) otherwise (e) 'fromTheFlagMember'
+		match e 'which'
+			fromNumber then result = result + 1000
+			fromFlag then result = result + 3
+		end 'which'
+	end 'fromTheFlagMember'
+	let last = try check(false) otherwise 0
+	return (result + last) as ExitCode
+end 'main'
+```
+```exitcode
+15
+```
+
+<!-- test: error.overloads-disagree-on-the-error-they-throw -->
+Two error types under one name. The `(e)` binding a `try` mints is typed while the call is PARSED, from
+the one entry the by-name sweep holds — whichever declaration wrote it last — so one of the two calls
+would decode the other member's error. The oracle accepts this program (it answers 14): its throws facts
+are per-declaration, and shv2's sweep is keyed by the name the source wrote, so this is a conservative
+refusal of a program the language permits rather than a rule of the language.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+enum Splat
+	worse
+end 'Splat'
+
+function want(actual Num) returns Num throws Boom
+	if actual < 0 'neg'
+		throw Boom.bad
+	end 'neg'
+	return 5
+end 'want'
+
+function want(actual bool) returns Num throws Splat
+	if actual 'yes'
+		throw Splat.worse
+	end 'yes'
+	return 9
+end 'want'
+
+function main() returns ExitCode
+	let a = try want(1) otherwise 0
+	let b = try want(false) otherwise 0
+	return (a + b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:19:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+```
+
+<!-- test: error.overloads-disagree-on-whether-they-throw-at-all -->
+The second way to disagree, and the sweep sees it from the other side: only a THROWING declaration is
+recorded, so nothing in the throws registry can report the member that publishes nothing. It is the
+declaration COUNT that does — every declaration is counted once, and the throwing ones are counted again
+in a tally of their own, so a difference between the two IS the silent sibling. Without it this set is
+admitted and `want(true)` is compiled as a throwing call, whose error flag the bool member never writes.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+function want(actual Num) returns Num throws Boom
+	if actual < 0 'neg'
+		throw Boom.bad
+	end 'neg'
+	return 5
+end 'want'
+
+function want(actual bool) returns Num
+	if actual 'yes'
+		return 9
+	end 'yes'
+	return 2
+end 'want'
+
+function main() returns ExitCode
+	let a = try want(1) otherwise 0
+	let b = want(true)
+	return (a + b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+```
+
+<!-- test: error.overloads-disagree-on-whether-they-throw-at-all-non-throwing-member-first -->
+The same two declarations in the other order. The refusal is settled from the whole-program sweep, which
+has folded every file before any of them is parsed, so which member the author wrote first cannot change
+the verdict — only the position the diagnostic is reported at.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+function want(actual bool) returns Num
+	if actual 'yes'
+		return 9
+	end 'yes'
+	return 2
+end 'want'
+
+function want(actual Num) returns Num throws Boom
+	if actual < 0 'neg'
+		throw Boom.bad
+	end 'neg'
+	return 5
+end 'want'
+
+function main() returns ExitCode
+	let a = try want(1) otherwise 0
+	let b = want(true)
+	return (a + b) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
+```
+
+<!-- test: error.a-static-and-instance-pair-where-the-static-throws -->
+A `static m` and an instance `m` are NOT an overload set — they are two registration keys, told apart at
+the call by syntax — but the sweep files a `throws` clause under the one name the source wrote, so the
+clause belongs to neither key. The static's call asks for `T.m#__static` and misses, and the instance's
+call asks for `T.m` and finds the STATIC's clause: both readings are wrong, and neither is repairable
+once the `try` has been desugared. Refused however the two agree, which is the difference between a pair
+and an overload set.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+type T
+	export var v as Num
+
+	export static function make(v Num) returns T
+		return Self{v: v}
+	end 'make'
+
+	export function m(b Num) returns Num
+		return self.v + b
+	end 'm'
+
+	export static function m(a Num) returns Num throws Boom
+		if a < 0 'neg'
+			throw Boom.bad
+		end 'neg'
+		return a
+	end 'm'
+end 'T'
+
+function main() returns ExitCode
+	let t = T.make(1)
+	let s = try T.m(4) otherwise 0
+	return (s + t.m(2)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:18: Unsupported: a `static` member and an instance member of 'T.m' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names
+```
+
+<!-- test: error.a-static-and-instance-pair-where-the-static-throws-declared-first -->
+The same two members with the STATIC written first. `isStaticInstanceContest` is settled by the sweep
+before any file is parsed, so both orders reach the same refusal — the pairing that caught the
+declaration-order defect in the defaults twin, written here for the same reason.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+type T
+	export var v as Num
+
+	export static function make(v Num) returns T
+		return Self{v: v}
+	end 'make'
+
+	export static function m(a Num) returns Num throws Boom
+		if a < 0 'neg'
+			throw Boom.bad
+		end 'neg'
+		return a
+	end 'm'
+
+	export function m(b Num) returns Num
+		return self.v + b
+	end 'm'
+end 'T'
+
+function main() returns ExitCode
+	let t = T.make(1)
+	let s = try T.m(4) otherwise 0
+	return (s + t.m(2)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:25: Unsupported: a `static` member and an instance member of 'T.m' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names
+```
+
+<!-- test: error.a-static-and-instance-pair-where-the-instance-throws -->
+The other half of the pair carrying the clause. The instance's call finds it and is right by accident;
+the static's call asks for `T.m#__static`, misses, and is compiled as a call that cannot throw — so the
+`try` the author wrote over the STATIC would be refused as a `try` on a non-throwing callee. Refused at
+the declaration instead, where the reason can be stated.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+type T
+	export var v as Num
+
+	export static function make(v Num) returns T
+		return Self{v: v}
+	end 'make'
+
+	export function m(b Num) returns Num throws Boom
+		if b < 0 'neg'
+			throw Boom.bad
+		end 'neg'
+		return self.v + b
+	end 'm'
+
+	export static function m(a Num) returns Num
+		return a
+	end 'm'
+end 'T'
+
+function main() returns ExitCode
+	let t = T.make(1)
+	let i = try t.m(2) otherwise 0
+	return (T.m(4) + i) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:15:18: Unsupported: a `static` member and an instance member of 'T.m' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names
+```
+
+<!-- test: error.a-throwing-overload-set-whose-bare-name-another-directory-declares -->
+The members here AGREE — both `throws Boom` — and an overload set of the same two declarations at the
+root compiles and answers 14. What refuses this one is not the declarations but the KEY they land on: a
+free function contested across directories is registered as `alpha.want`, and the declaration sweep
+COPIES its throws clause onto that key while leaving the disagreement verdict and the two declaration
+counts on the bare `want` — where `beta/`'s declaration is tallied too. The verdict this refusal would
+have to read was therefore never computed for this key. ⚠ It is a REAL refusal and not a formality: with
+the throws types made to disagree, the same program compiles one way round and reports
+`E3034: unknown enum case` the other, because the `(e)` binding is typed off whichever clause the by-name
+sweep recorded last. Curing it means tallying per registration key, which is `W75`'s "one fact under two
+keys" at a third registry.
+```maxon
+// --- file: alpha/x.maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+export function want(actual Num) returns Num throws Boom
+	if actual < 0 'neg'
+		throw Boom.bad
+	end 'neg'
+	return 5
+end 'want'
+
+export function want(actual bool) returns Num throws Boom
+	if actual 'yes'
+		throw Boom.bad
+	end 'yes'
+	return 9
+end 'want'
+
+// --- file: beta/y.maxon
+typealias Small = int(-1000 to 1000)
+
+export function want(actual Small) returns Small
+	return actual + 1
+end 'want'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let a = try alpha.want(1) otherwise 0
+	let b = try alpha.want(false) otherwise 0
+	return (a + b + beta.want(3)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: alpha/specs/fragments/function-overloads/error.a-throwing-overload-set-whose-bare-name-another-directory-declares.test:16:17: Unsupported: overloading 'alpha.want' — one of its declarations `throws`, and this name is ALSO declared as a free function in another directory, so the declaration sweep moved its throws clause onto the directory-qualified key and left behind the tally that would say whether the overloads agree about it. With nothing to compare, a `try` at a call to this name cannot be told which overload's error type it recovers. Give the overloads distinct names, or stop contesting the bare name across directories
 ```

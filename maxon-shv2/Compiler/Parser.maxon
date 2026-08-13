@@ -14069,10 +14069,15 @@ export type Parser
 	//     answer.
 	//
 	// Both are absence-is-the-answer registries — the sweep records ONLY a consuming function and ONLY a
-	// throwing one — so "the name has an entry" catches a divergence whichever member contributed it, which
-	// is what makes this test sound without per-member facts the sweep does not publish. It refuses more than
-	// it must (a set whose members consume IDENTICALLY is refused too), and that is the conservative
-	// direction: a refusal is a diagnostic, and the alternative is a silent wrong answer.
+	// throwing one — so "the name has an entry" catches a divergence whichever member contributed it.
+	//
+	// ⚠ **THAT LAST STEP IS WHERE THE TWO NOW PART, AND THE THROWS HALF NO LONGER TAKES IT (W77).** "The name
+	// has an entry" catches a divergence, but it also catches an AGREEMENT, and an agreeing set has nothing
+	// for a call to be told apart by: one error type, recovered whichever member wins. So the throws refusal
+	// asks the SWEEP whether the entry can be applied to every declaration wearing the name
+	// (`ProgramSignatures.throwsClauseAttribution`) rather than whether it exists. The CONSUME half still refuses
+	// on existence, and that is the conservative direction for a fact whose divergence mode is a leak or a
+	// double free rather than a diagnostic — closing it needs per-member consume bits, below.
 	//
 	// ⚠ **THE CONSUME HALF ALSO ASKS WHETHER ANY MEMBER CAN TRANSFER ANYTHING, and that is not caution — it
 	// is what keeps the rule about ownership rather than about field stores.** The sweep sets a consume bit
@@ -14091,10 +14096,19 @@ export type Parser
 	// ⭐⭐ **AND IT IS ASKED OF A `static`/INSTANCE PAIR TOO, WHICH IS NOT AN OVERLOAD SET AT ALL** — the two
 	// take two registration names and are told apart at the call by SYNTAX
 	// (`ProgramSignatures.isStaticInstanceContest`). What they still SHARE is the source name every table
-	// named above is keyed by, so every sentence below is true of them word for word, and the pair is refused
-	// on exactly these terms rather than on a rule of its own. Its members are checked one at a time — each
-	// declaration arrives here with its OWN transfer bit and nothing else in hand, which is precisely the
-	// disjunction the overload path spells with `overloadMembersTransferOwnership`.
+	// named above is keyed by, so three of the four sentences below are true of them word for word, and the
+	// pair is refused on exactly those terms rather than on a rule of its own. Its members are checked one at
+	// a time — each declaration arrives here with its OWN transfer bit and nothing else in hand, which is
+	// precisely the disjunction the overload path spells with `overloadMembersTransferOwnership`.
+	//
+	// ⚠⚠ **THE FOURTH — `throws` — IS THE ONE THE PAIR NEEDS SAID DIFFERENTLY (W77).** An overload set's
+	// members SHARE a registration key, so an agreeing clause is every member's answer; a pair's members share
+	// NO key, so the clause the sweep filed under their common source name is neither member's —
+	// `T.m#__static` misses it outright and `T.m` finds a clause that may be the static's. Agreement cannot
+	// rescue that, so the pair keeps the blanket refusal the overload set has just been let out of, under a
+	// sentence that says what is actually wrong. Which claimant this is comes back from
+	// `ProgramSignatures.throwsClauseAttribution` rather than from a flag threaded through here: the KEYING is
+	// that index's fact, and it already holds the contest registry the base was chosen from.
 	//
 	// ⚠ It takes the transfer answer as ONE bool rather than the member set, because the two callers know it
 	// from different places: the overload path ORs the newcomer's bit over the incumbent members', while a
@@ -14104,9 +14118,30 @@ export type Parser
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations MOVES a parameter into durable storage and one of them takes a managed parameter, and the whole-program declaration sweep publishes a function's consume facts under the name the source wrote, so a call to this name cannot be told which overload's ownership transfer to apply (it would leak in one direction and free twice in the other). Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'consumingOverload'
 
-		if throwsClauseIsThrowing(self.signatures.throwsOf(base)) 'throwingOverload'
-			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations `throws`, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told which overload's error type it recovers. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
-		end 'throwingOverload'
+		// ⭐⭐ **THE `throws` REFUSAL IS THREE SENTENCES, BECAUSE THE THREE WAYS A NAME'S CLAUSE BECOMES
+		// UNREADABLE ARE THREE DIFFERENT DEFECTS (W77).** Everything above is one sentence that happens to be
+		// true of every claimant; this is the one place they genuinely part, so it is written as a `match` over
+		// the reason rather than as a single blanket test.
+		//
+		// ⭐⭐ **AND THE BLANKET TEST WAS ONE CONCLUSION TOO STRONG, WHICH IS THE RUNG.** The sentence it rested
+		// on is TRUE — the clause is published under the name the source wrote, and a `try` is desugared when the
+		// call is PARSED, a whole pass before `SemanticCheck.resolveOverloadedCalls` picks a member. What it
+		// missed is that when every member of an overload SET states the same clause there is nothing per-member
+		// left to be told apart: the `try` recovers that one error type whichever member wins, and no re-point
+		// after resolution is needed — unlike the defaults twin, whose default EXPRESSION does belong to one
+		// member (W74). MEASURED against the oracle, which accepts what shv2 refused: two `Chk.want` statics both
+		// `throws Boom`, returning 5 and 9, each called under `try … otherwise 0`, answer **14**.
+		//
+		// ⚠ **THE ORACLE ACCEPTS THE DISAGREEING SETS TOO** (measured: `throws Boom` beside `throws Splat`
+		// answers 14, and a throwing member beside a non-throwing one likewise), so `declarationsDisagree` is a
+		// CONSERVATIVE refusal rather than a rule of the language. Lifting it needs per-member facts in the
+		// sweep — the boundary this function's header states for all four of these refusals — not a better test.
+		match self.signatures.throwsClauseAttribution(base) 'throwsAttribution'
+			appliesToEveryDeclaration then break 'throwsAttribution'
+			declarationsDisagree then throw ParseError.unsupported("overloading '{String.from(base)}' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+			sharedByTwoRegistrationKeys then throw ParseError.unsupported("a `static` member and an instance member of '{String.from(base)}' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names", line: nameTok.line, column: nameTok.column)
+			filedUnderAnotherKey then throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations `throws`, and this name is ALSO declared as a free function in another directory, so the declaration sweep moved its throws clause onto the directory-qualified key and left behind the tally that would say whether the overloads agree about it. With nothing to compare, a `try` at a call to this name cannot be told which overload's error type it recovers. Give the overloads distinct names, or stop contesting the bare name across directories", line: nameTok.line, column: nameTok.column)
+		end 'throwsAttribution'
 
 		// ⚠ **ASKED OF THE WHOLE SURFACE AND NOT ONLY THE OUTRIGHT SPELLING (A2m).** A tuple slot and an array
 		// element name the buffer through the same one-entry-per-bare-name sweep and are chosen at the same

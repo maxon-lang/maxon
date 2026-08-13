@@ -1,0 +1,34 @@
+// Test: error.a-static-and-instance-pair-where-the-instance-throws
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+type T
+	export var v as Num
+
+	export static function make(v Num) returns T
+		return Self{v: v}
+	end 'make'
+
+	export function m(b Num) returns Num throws Boom
+		if b < 0 'neg'
+			throw Boom.bad
+		end 'neg'
+		return self.v + b
+	end 'm'
+
+	export static function m(a Num) returns Num
+		return a
+	end 'm'
+end 'T'
+
+function main() returns ExitCode
+	let t = T.make(1)
+	let i = try t.m(2) otherwise 0
+	return (T.m(4) + i) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:18: Unsupported: a `static` member and an instance member of 'T.m' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names
