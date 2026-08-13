@@ -2596,12 +2596,19 @@ export type ParamConsumeInfo
 	end 'typeParamFeedOf'
 end 'ParamConsumeInfo'
 
+// ⭐⭐ **`takesReceiver` RIDES ON EVERY BY-NAME SWEEP ENTRY, AND IT IS THE ONLY THING THAT TELLS THE TWO
+// MEMBERS OF A `static`/INSTANCE PAIR APART (W75).** The scan pushes one entry per DECLARATION keyed by the
+// name the source wrote, and a pair's two members wear one source name — so without this bit the fold sees
+// two entries it cannot attribute, keeps the last, and files one member's answer under the other's key.
+// It is the same bit `FuncReturnTypeEntry` carries for the same reason, and `sweepRegistrationKey` is the
+// one reader of both.
 export type ParamConsumeEntry
 	export let name as ByteArray
 	export let info as ParamConsumeInfo
+	export let takesReceiver as bool
 
-	export static function create(name ByteArray, info ParamConsumeInfo) returns ParamConsumeEntry
-		return Self{name: name, info: info}
+	export static function create(name ByteArray, info ParamConsumeInfo, takesReceiver bool) returns ParamConsumeEntry
+		return Self{name: name, info: info, takesReceiver: takesReceiver}
 	end 'create'
 end 'ParamConsumeEntry'
 
@@ -2865,12 +2872,14 @@ function anyBitSet(column BoolArray) returns bool
 	return false
 end 'anyBitSet'
 
+// `takesReceiver` rides for `ParamConsumeEntry`'s reason (W75) — see there.
 export type ParamReassignEntry
 	export let name as ByteArray
 	export let info as ParamReassignInfo
+	export let takesReceiver as bool
 
-	export static function create(name ByteArray, info ParamReassignInfo) returns ParamReassignEntry
-		return Self{name: name, info: info}
+	export static function create(name ByteArray, info ParamReassignInfo, takesReceiver bool) returns ParamReassignEntry
+		return Self{name: name, info: info, takesReceiver: takesReceiver}
 	end 'create'
 end 'ParamReassignEntry'
 
@@ -3215,12 +3224,14 @@ function paramDefaultHelperNameOf(producer ParamDefaultProducer) returns ByteArr
 	end 'produces'
 end 'paramDefaultHelperNameOf'
 
+// `takesReceiver` rides for `ParamConsumeEntry`'s reason (W75) — see there.
 export type ParamDefaultEntry
 	export let name as ByteArray
 	export let info as ParamDefaultInfo
+	export let takesReceiver as bool
 
-	export static function create(name ByteArray, info ParamDefaultInfo) returns ParamDefaultEntry
-		return Self{name: name, info: info}
+	export static function create(name ByteArray, info ParamDefaultInfo, takesReceiver bool) returns ParamDefaultEntry
+		return Self{name: name, info: info, takesReceiver: takesReceiver}
 	end 'create'
 end 'ParamDefaultEntry'
 
@@ -3381,12 +3392,14 @@ end 'CalleeParamDefaults'
 // call-site dual of its return type, from the SAME token walk. `recordScannedSignature` fills one per
 // THROWING function so a call site can decide whether it needs `try` (E3055/E3057) and what type an
 // `(e)` binding recovers. Travels by NAME and carries no ids, exactly like `ParamConsumeEntry`.
+// `takesReceiver` rides for `ParamConsumeEntry`'s reason (W75) — see there.
 export type ThrowsClauseEntry
 	export let name as ByteArray
 	export let clause as ThrowsClause
+	export let takesReceiver as bool
 
-	export static function create(name ByteArray, clause ThrowsClause) returns ThrowsClauseEntry
-		return Self{name: name, clause: clause}
+	export static function create(name ByteArray, clause ThrowsClause, takesReceiver bool) returns ThrowsClauseEntry
+		return Self{name: name, clause: clause, takesReceiver: takesReceiver}
 	end 'create'
 end 'ThrowsClauseEntry'
 
@@ -3396,7 +3409,8 @@ export typealias FuncThrowsMap = Map with (ByteArray, ThrowsClause)
 // ⭐ **THE NAMES WHOSE THROWING DECLARATIONS NAME TWO DIFFERENT ERROR TYPES (W77).** `funcThrows` is keyed by
 // the name the SOURCE wrote and is last-wins, so a name declared twice leaves ONE clause and every call to it
 // — including the one that resolves to the OTHER member — would decode its error as that clause's type.
-// `ProgramSignatures.throwsClauseAttribution` reads this set as one of the three answers it distinguishes.
+// `ProgramSignatures.throwsClauseCollide` reads this set as one half of its comparison, exactly as
+// `paramDefaultsCollide` reads `DisagreeingParamDefaultNameSet` one registry over.
 //
 // ⚠ **THE COMPARISON IS BETWEEN TWO SPELLED NAMES, AND THAT IS EXACT HERE RATHER THAN AN APPROXIMATION.** The
 // sweep is a TOKEN scan that runs before any file is parsed, so no type exists yet to compare — but a type
@@ -3405,17 +3419,6 @@ export typealias FuncThrowsMap = Map with (ByteArray, ThrowsClause)
 // same terms: `Parser.tryErrorEnumType` interns the clause's name and `ProgramSignatures.enumOf` looks the
 // layout up by it. A finer comparison here would be finer than what it is compared FOR.
 typealias DisagreeingThrowsNameSet = Set with ByteArray
-
-// ⭐ **WHY THE SWEEP'S ONE `throws` ENTRY FOR A NAME CANNOT BE APPLIED TO EVERY DECLARATION WEARING IT** —
-// `ProgramSignatures.throwsClauseAttribution`'s answer, and a union rather than a bool because the two
-// failures are two different defects: one is about what the declarations SAY, the other about the KEY they
-// were filed under. Its one reader writes a different sentence for each, which a bool would have made
-// impossible without spelling the classification a second time at the refusal.
-export union ThrowsClauseAttribution
-	appliesToEveryDeclaration
-	declarationsDisagree
-	sharedByTwoRegistrationKeys
-end 'ThrowsClauseAttribution'
 
 // The answer to "does this callee consume any parameter?" — a union so "no recorded entry" is an ANSWER
 // (a borrow-only callee), never confused with an empty-but-present one.
@@ -7130,54 +7133,16 @@ end 'FreeFunctionContest'
 // costs one map miss and no allocation on every call the compiler validates. NEVER mutated.
 let sharedEmptyContestedSpellings = ByteArrayArray.create()
 
-// ⭐⭐ **WHICH OF THE EIGHT SWEEP FACTS A RE-KEY MAY CARRY, AND THE CALLER DOES NOT CHOOSE FOR
-// CONVENIENCE (A5l).** The split is by WHICH PASS WROTE THE FACT, because that is what decides whether the
-// source key can be known to hold ONE declaration's:
+// ⭐⭐ **THE EIGHT SWEEP FACTS TRAVEL TOGETHER ON A RE-KEY, AND THEY DID NOT UNTIL W75.** The two contests
+// that move a declaration — a free function declared in more than one DIRECTORY, and a `static` member whose
+// name an instance member of its type also wears — used to disagree about which facts a move may carry: the
+// pair's copy took only the four `record` writes, because the four BY-NAME scans folded AHEAD of the
+// declaration loop and both members' entries were already piled onto the one source name, UNATTRIBUTABLE.
 //
-//   • **`record` writes four of the eight** — the return type, the declaration site, the return SURFACE and
-//     the return type's declaring file — one declaration at a time, under the key that declaration chose.
-//   • **The four BY-NAME SCANS fold AHEAD of the declaration loop** — `funcParamConsumes`,
-//     `funcParamReassigns`, `funcParamDefaults`, `funcThrows` (`foldFile`, above the `record` loop).
-//
-// `everyFact` is sound where the source key provably holds one declaration's facts and nothing else's: the
-// contest-minting refile fires at the instant a SECOND directory declares the name, so every entry at the
-// bare key was written by the incumbent directory's own fold.
-//
-// `perDeclarationFactsOnly` is the answer for a re-key that cannot establish that premise —
-// `ProgramSignatures.noteStaticInstanceDeclaration`. A `static`/instance pair's two members are folded under
-// ONE source name, and the by-name scans run BEFORE either reaches `record`, so a positive entry there is
-// UNATTRIBUTABLE rather than merely possibly another file's: copying it would file one member's answer under
-// the other's key. They stay put, and a pair declaring any of the four is REFUSED by
-// `Parser.requireOverloadableName` on exactly the terms an ordinary overload set is, so a program that
-// compiles never reads the shared entry. ⚠ **`funcParamReassigns` is the one whose shared entry would not
-// merely mis-answer a question but change an ABI** — see its refusal there.
-//
-// ⚠ **`returnSurface` RODE ON THE WRONG SIDE OF THAT LINE, AND THE COST WAS TWO DIFFERENT INDEXES FOR ONE
-// PROGRAM.** It was listed with the by-name scans, which it is not — `record` is its only writer besides this
-// copy — so a pair naming `__ManagedMemory` was filed under the static key when the static declared SECOND
-// and dropped when it declared FIRST, i.e. the index depended on declaration order. Only
-// `requireOverloadableName`'s buffer refusal made that unobservable, which is an argument about a refusal
-// and not a reason for the asymmetry.
-//
-// ⚠ **IT WAS SIX BOOLEANS AND A PER-FILE ARRAY WALK UNTIL W78.** The third caller — a contested free
-// function's own end-of-fold refile — needed a bit per conditional fact, derived by re-reading the file's
-// scan arrays, because the bare key accumulated ACROSS files and only those arrays could say which positive
-// entry was this file's. It has no third caller now: every declaration of a contested name is filed under
-// its registration key to begin with (`sweepRegistrationKey`), so there is nothing left on the bare key to
-// be selective about.
-enum SweptDeclarationFacts
-	everyFact
-	perDeclarationFactsOnly
-end 'SweptDeclarationFacts'
-
-// Does this set carry the four facts the BY-NAME scans publish? — asked once, by the one routine that copies
-// them, so the two arms' meaning is stated in the enum above and tested in exactly one place.
-function sweptFactsIncludeTheByNameScans(facts SweptDeclarationFacts) returns bool
-	return match facts 'facts'
-		everyFact gives true
-		perDeclarationFactsOnly gives false
-	end 'facts'
-end 'sweptFactsIncludeTheByNameScans'
+// The by-name folds now run after that loop and key by the member each entry belongs to
+// (`ParamConsumeEntry.takesReceiver`), so the source key holds one declaration's facts at every moment a
+// re-key reads it — which is what retired the selector, the six booleans behind it, and the per-file walk of
+// the scan arrays that derived them.
 
 // The ordinal the SECOND file to spell one sweep tuple key takes — see
 // `ProgramSignatures.sweepScopedTupleName`, where the FIRST minter deliberately keeps the UNSUFFIXED key.
@@ -7723,7 +7688,7 @@ export type ProgramSignatures
 	// Empty for every program that declares each function once, and for every overload set whose members agree.
 	var disagreeingThrows as DisagreeingThrowsNameSet
 	// How many declarations of a name THREW, against `funcDeclarationCounts`' how many there were — the pair
-	// `throwsClauseAttribution` compares, and the only way the sweep can see a member that publishes no clause
+	// `throwsClauseCollide` compares, and the only way the sweep can see a member that publishes no clause
 	// at all. `funcDefaultingDeclarationCounts`' twin, one registry over and for exactly its reason.
 	var funcThrowingDeclarationCounts as FunctionDeclarationCountMap
 	// ⭐ Function name -> its per-parameter DEFAULTS (BATCH2 slice 4). `defaultsOf(callee)` is the door
@@ -7852,13 +7817,13 @@ export type ProgramSignatures
 	// `tryResolveStaticInstanceCollision` re-keys the static to `~static`, the bootstrap's
 	// `ResolveStaticInstanceCollision` to the same spelling.
 	//
-	// ⚠ **THE THREE SWEEP FACTS THAT CANNOT BE SPLIT ARE REFUSED INSTEAD, NOT GUESSED** — a `throws` clause, a
-	// consume set over a MANAGED parameter and a parameter default are folded by the BY-NAME scans that run
-	// ahead of the declaration loop (`foldFile`), which have no second key to offer, so a pair declaring one of
-	// them is refused by `Parser.requireOverloadableName` on exactly the terms an ordinary overload set is. That
-	// is why this set carries no per-member copy of them. (A `__ManagedMemory` RETURN SURFACE is not one of
-	// them and was once listed here as a fourth: `record` writes it per declaration, so it splits with the rest
-	// — see `SweptDeclarationFacts`. It is refused as well, for its own A2j/A2m reason.)
+	// ✅ **THREE SWEEP FACTS USED TO BE UNSPLITTABLE AND WERE REFUSED INSTEAD (W75 CLOSED THAT).** A `throws`
+	// clause, a consume set over a MANAGED parameter and a parameter default are published by the BY-NAME scans,
+	// which folded AHEAD of the declaration loop — before this contest could exist — and so had no second key
+	// to offer. They fold after it now and carry the receiver-presence of the declaration that stated them
+	// (`ParamConsumeEntry.takesReceiver`), so each member of a pair states its own and none of the three earns a
+	// refusal any more. (A `__ManagedMemory` RETURN SURFACE was never one of them: `record` writes it per
+	// declaration, so it always split with the rest.)
 	//
 	// It is EMPTY for every program in the tree — the shape did not compile before this rung — so
 	// `Set.contains` returns at its `capacity == 0` test for every declaration and every static call.
@@ -8526,7 +8491,7 @@ export type ProgramSignatures
 				// has nothing left to move. This file still claims its OWN key below.
 				alreadyContested then break 'contest'
 				// Every entry at the bare key was written by the INCUMBENT directory's own fold, which is
-				// `SweptDeclarationFacts.everyFact`'s premise — nothing else has declared the name yet.
+				// premise `rekeyDeclarationSweepEntries` rests on — nothing else has declared the name yet.
 				newlyContested(incumbentRegistrationName) then self.refileContestedFreeFunction(bareName, registrationName: incumbentRegistrationName)
 			end 'contest'
 
@@ -8560,40 +8525,6 @@ export type ProgramSignatures
 		for functionAlias in functionAliases 'eachFunctionAlias'
 			self.recordFunctionTypeAlias(functionAlias)
 		end 'eachFunctionAlias'
-
-		// Consume facts travel by NAME and carry no ids, so they fold before the interner reconciliation
-		// below — nothing about them needs remapping (like `enumTypes`).
-		//
-		// ⭐⭐ **EVERY BY-NAME FOLD BELOW KEYS THROUGH `sweepRegistrationKey`, AND THAT IS W78's WHOLE CURE.**
-		// The contest pass above has already decided whether this file's free functions keep their bare name,
-		// so a declaration's facts land on the key the parser will ask with rather than on the name the source
-		// wrote — which is what makes each recorder's own "another declaration of this key" test, and the tally
-		// riding on it, describe the declarations that key actually holds. Before it, a second directory's
-		// declaration accumulated onto the bare key and the verdicts computed there were about a population no
-		// call site ever resolves against.
-		for entry in paramConsumes 'eachConsume'
-			self.recordParamConsume(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory), info: entry.info)
-		end 'eachConsume'
-
-		// By-reference columns travel by NAME and carry no ids either, so they fold here beside the consume
-		// facts. This loop is also where the program-wide gate is raised (`recordParamReassign`), and every
-		// file passes through it before any body is parsed — which is what makes the gate complete at the
-		// first read.
-		for entry in paramReassigns 'eachByRef'
-			self.recordParamReassign(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory), info: entry.info)
-		end 'eachByRef'
-
-		// Default facts carry names and helper names and no ids either, so they fold here beside the consume
-		// facts, ahead of the interner reconciliation.
-		for entry in paramDefaults 'eachParamDefault'
-			self.recordParamDefaults(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory), info: entry.info)
-		end 'eachParamDefault'
-
-		// Throws clauses travel by NAME and carry no ids either (the throws type is a bare enum name),
-		// so they fold here alongside the consume facts, before the interner reconciliation.
-		for entry in throwsEntries 'eachThrows'
-			self.recordThrows(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory), clause: entry.clause)
-		end 'eachThrows'
 
 		// Interface declaration SITES (R8) carry no ids at all — a file path and a token index — so they fold
 		// here with the consume facts and the throws clauses, ahead of the interner reconciliation and ahead of
@@ -8693,34 +8624,66 @@ export type ProgramSignatures
 			end 'eachRemapped'
 		end 'idsMoved'
 
-		// ⭐⭐ **THIS FILE'S OWN CONTESTED FREE FUNCTIONS: THE ONE THING THE LOOPS ABOVE COULD NOT KEY FOR
-		// THEMSELVES — THE NAME OF A SYNTHESIZED DEFAULT HELPER (N1c review, re-scoped by W78).**
+		// ⭐⭐ **THE FOUR BY-NAME FOLDS, AND THEY RUN *AFTER* THE DECLARATION LOOP ABOVE (W75).** Each keys
+		// through `sweepRegistrationKey`, so a declaration's consume facts, by-reference columns, parameter
+		// defaults and `throws` clause land on the same key its return type and declaration site did — which
+		// is the key the parser asks with, and the key its tallies are counted under.
 		//
-		// Everything else this loop used to do is gone: every recorder above now files under
-		// `sweepRegistrationKey`'s answer, so there are no entries left sitting on the bare key to move and no
-		// A5l question about whose they are. A helper is different because its NAME was minted by the token
-		// SCAN, from the bare name, a pass before any contest was known — two directories each declaring a
-		// defaulting `pick` both minted `__paramDefault#pick#0`, MEASURED as
-		// `E3006: duplicate definition of function '__paramDefault#pick#0'` against a program the rule accepts.
+		// ⚠ **THE POSITION IS THE `static`/INSTANCE PAIR'S, and it is why these four moved.** A pair is
+		// DISCOVERED by `noteStaticInstanceDeclaration`, inside `record`: the second member to fold is the
+		// first moment anything in the program can see both. Folded ahead of that loop, as they were, these
+		// four arrived before the contest existed and had no key to be told apart by — both members' facts
+		// piled onto the one source name and the map kept whichever folded last. MEASURED before W75:
+		// `T.m()` against a `static m(a Num = 7)` beside an instance `m(b Num)` asked the defaults registry
+		// for `T.m#__static`, found nothing to fill, and was refused
+		// `E3036: 'T.m#__static' expects 1 argument(s) but 0 were provided` — a symbol no source wrote,
+		// blamed on a call the author got right.
+		//
+		// They carry no interner ids (names, numbers, a bare enum name), so nothing about them needs
+		// remapping and the position costs them nothing else.
+		for entry in paramConsumes 'eachConsume'
+			self.recordParamConsume(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
+		end 'eachConsume'
+
+		// This loop is also where the program-wide by-reference gate is raised (`recordParamReassign`), and
+		// every file passes through it before any body is parsed — which is what makes the gate complete at
+		// the first read.
+		for entry in paramReassigns 'eachByRef'
+			self.recordParamReassign(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
+		end 'eachByRef'
+
+		for entry in paramDefaults 'eachParamDefault'
+			self.recordParamDefaults(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
+		end 'eachParamDefault'
+
+		for entry in throwsEntries 'eachThrows'
+			self.recordThrows(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), clause: entry.clause)
+		end 'eachThrows'
+
+		// ⭐⭐ **THIS FILE'S OWN RE-KEYED DECLARATIONS: THE ONE THING THE LOOPS ABOVE COULD NOT KEY FOR
+		// THEMSELVES — THE NAME OF A SYNTHESIZED DEFAULT HELPER.**
+		//
+		// Everything else is already keyed: every recorder above files under `sweepRegistrationKey`'s answer.
+		// A helper is different because its NAME was minted by the token SCAN, from the name the source wrote,
+		// a pass before any contest was known — two directories each declaring a defaulting `pick` both minted
+		// `__paramDefault#pick#0`, MEASURED as
+		// `E3006: duplicate definition of function '__paramDefault#pick#0'` against a program the rule accepts,
+		// and a `static`/instance pair's two members mint one `__paramDefault#T.m#0` between them.
 		//
 		// ⚠ **IT HAS TO BE HERE, AFTER THE `record` LOOP**, because the rename moves the helper's OWN swept
-		// signature with it and that signature is written by that loop. The defaults entry it reads is already
-		// under the registration key, which is what makes it this file's declaration's by construction.
+		// signature with it and that signature is written by that loop.
 		//
-		// ⚠ **THE `idsUnchanged` BRANCH USED TO `return`, AND THIS IS WHY IT NO LONGER DOES.** An early return
-		// there would have skipped this for exactly the files whose interner ids happened not to move — a
-		// condition with nothing whatever to do with namespaces, so the bug would have been a function of
-		// which type names a file mentions.
-		//
-		// A program with no contested name does not enter the loop body at all: `isContestedFreeFunction` is
-		// a miss on an empty map for every name.
-		for bareName in freeFunctionNames 'eachFreeFunctionOfThisFile'
-			if not self.isContestedFreeFunction(bareName) 'keepsItsBareName'
+		// It walks `paramDefaults` rather than the file's free-function names because BOTH contests re-key a
+		// helper and only this array knows which declarations have one; a program that declares no default
+		// does not enter the loop at all.
+		for entry in paramDefaults 'eachDeclarationThatDefaultsSomething'
+			let key = self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver)
+			if key.equals(entry.name) 'theHelperKeepsTheNameTheScanMintedForIt'
 				continue
-			end 'keepsItsBareName'
+			end 'theHelperKeepsTheNameTheScanMintedForIt'
 
-			self.renameContestedParamDefaultHelpers(bareName, registrationName: freeFunctionRegistrationName(bareName, moduleDirectory: moduleDirectory))
-		end 'eachFreeFunctionOfThisFile'
+			self.renameParamDefaultHelpers(entry.info, bareName: entry.name, registrationName: key)
+		end 'eachDeclarationThatDefaultsSomething'
 	end 'foldFile'
 
 	// Add one declaration to the index AND fold it into the hash. The one write, so the table and the
@@ -8748,7 +8711,8 @@ export type ProgramSignatures
 	// to land on one key.
 	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo)
 		let contested = self.isContestedFreeFunction(name)
-		let key = self.sweepRegistrationKey(self.noteStaticInstanceDeclaration(name, takesReceiver: takesReceiver), moduleDirectory: moduleDirectory)
+		self.noteStaticInstanceDeclaration(name, takesReceiver: takesReceiver)
+		let key = self.sweepRegistrationKey(name, moduleDirectory: moduleDirectory, takesReceiver: takesReceiver)
 		// ⭐⭐ **THE ARRIVAL TEST IS ASKED OF TWO DIFFERENT MAPS, AND THE SPLIT IS THE RESIDUE'S (W78).** For
 		// every ordinary key `returnTypes` IS the arrival counter: each declaration reaches here exactly once
 		// and writes it, so an entry already present is another declaration's. A CONTESTED free function's
@@ -8781,10 +8745,19 @@ export type ProgramSignatures
 		// their reason: they are facts about ONE declaration, and a second writer is a second chance for them
 		// to come to describe two.
 		//
-		// ⚠ A CONTESTED FREE FUNCTION'S ENTRIES ARE NOT MOVED OFF THE BARE KEY WITH THE REST
-		// (`refileContestedFreeFunction`), AND THAT IS EXACT RATHER THAN AN OMISSION: a bare type-parameter
-		// parameter can only be declared inside a generic type's body, and a free function is by definition
-		// outside every one — so this map never holds an entry a namespace contest could be about.
+		// ⚠ IT IS KEYED BY `key` LIKE EVERY OTHER WRITE HERE, so a re-key carries it by construction and there is
+		// nothing for the contest registries to strand — which was already true of the free-function contest for
+		// a reason of its own: a bare type-parameter parameter can only be declared inside a generic type's
+		// body, and a free function is by definition outside every one, so this map never holds an entry a
+		// NAMESPACE contest could be about.
+		//
+		// ⚠ **PROBED (W78), AND ITS READER'S DECLINING ARM IS UNREACHABLE FROM ANY PROGRAM THAT COMPILES.** To
+		// populate this set two declarations of one key must disagree about their opaque parameters, and the
+		// three ways an opaque parameter can be USED each close that door first: STORING one makes the set a
+		// consuming overload (`Parser.requireOverloadableName`'s first refusal), FORWARDING one to a storing
+		// sibling reaches the same refusal, and RETURNING one is refused for want of a layout descriptor.
+		// Leaving `item` unused is E3012. So the set is filed correctly and `opaqueParamsOf` declines correctly,
+		// but nothing today gets far enough to observe either.
 		if secondDeclaration and not self.storedOpaqueParams(key).matches(opaqueParams) 'twoDeclarationsDisagree'
 			self.contestedOpaqueParams.insert(key)
 		end 'twoDeclarationsDisagree'
@@ -8811,11 +8784,12 @@ export type ProgramSignatures
 	// exactly one of them is a refile:
 	//
 	//   • **The STATIC is the NEWCOMER** ⇒ nothing to move. It is handed its own key and `record` writes all
-	//     four of the facts it owns under that key on the next line — the same four, under the same conditions,
-	//     that `perDeclarationFactsOnly` would have copied.
+	//     four of the facts it owns under that key on the next line, and its BY-NAME facts fold afterwards
+	//     under the key this contest has just given them.
 	//   • **The STATIC is the INCUMBENT** ⇒ its facts are sitting on the bare key, written by a fold that could
 	//     not yet know, and this instance's own writes are about to overwrite them. They move first. What may
-	//     and may not travel is `SweptDeclarationFacts`' subject.
+	//     travels is `rekeyDeclarationSweepEntries`' subject — everything, because the by-name folds have not
+	//     run for this file yet and every entry at the source name was written by the incumbent.
 	//
 	// ⚠ **THE ASYMMETRY IS ALSO WHAT KEEPS `record`'s `secondDeclaration` HONEST.** That flag reads "does this
 	// key already hold a declaration?" off `returnTypes`, and a copy into the static key would have made it
@@ -8833,22 +8807,29 @@ export type ProgramSignatures
 	// ⚠ **NO HASH MIXING HERE**, for `refileContestedFreeFunction`'s reason: every fact the copy moves was
 	// already mixed under the bare name by the write that made it, and the key change itself rides `record`'s
 	// own `mixDeclaration` (see there).
-	function noteStaticInstanceDeclaration(name ByteArray, takesReceiver bool) returns ByteArray
-		let incumbent = try self.funcDeclSites.get(name) otherwise return name
+	function noteStaticInstanceDeclaration(name ByteArray, takesReceiver bool)
+		let incumbent = try self.funcDeclSites.get(name) otherwise return
 		if incumbent.takesReceiver == takesReceiver 'oneKindOfMemberOnly'
-			return name
+			return
 		end 'oneKindOfMemberOnly'
 
-		// Inserted BEFORE either key is derived, because `memberRegistrationKey` reads exactly this set — so
-		// this routine composes the contest and the mint through the ONE reader that does, rather than spelling
-		// the composition a second time here.
+		// Inserted before the key is derived, because `memberRegistrationKey` reads exactly this set — so this
+		// routine composes the contest and the mint through the ONE reader that does, rather than spelling the
+		// composition a second time here. `record` re-asks through `sweepRegistrationKey` on the next line and
+		// gets the newcomer's own key from it, which is why nothing is returned.
 		self.staticInstanceContests.insert(name)
 		if not takesReceiver 'theStaticIsTheNewcomerAndOwnsItsOwnKeyOutright'
-			return self.memberRegistrationKey(name, takesReceiver: false)
+			return
 		end 'theStaticIsTheNewcomerAndOwnsItsOwnKeyOutright'
 
-		self.copyDeclarationSweepEntries(name, to: self.memberRegistrationKey(name, takesReceiver: false), moving: SweptDeclarationFacts.perDeclarationFactsOnly)
-		return name
+		self.rekeyDeclarationSweepEntries(name, to: self.memberRegistrationKey(name, takesReceiver: false))
+		// ⚠ **AND THE SOURCE KEY IS EMPTIED OUTRIGHT, WHICH THE FREE-FUNCTION CALLER DELIBERATELY DOES NOT
+		// DO.** There the bare name keeps a residue so a bare call to a contested name reaches E3095; here the
+		// source name is not a leftover but the INSTANCE member's own key, and `record` is about to write every
+		// one of these four under it on the next line. Left in place, the static's return type would still be
+		// standing there for the instant between — which `record`'s own arrival test reads as "another
+		// declaration of this key", counting the instance as the second `T.m` and refusing its default.
+		self.clearRecordOwnedSweepEntries(name)
 	end 'noteStaticInstanceDeclaration'
 
 	// ⭐⭐⭐ **THE KEY A MEMBER OF `sourceName` WITH THIS RECEIVER-PRESENCE IS FILED UNDER — AND THEREFORE THE
@@ -8870,7 +8851,7 @@ export type ProgramSignatures
 	//
 	// It costs one `Set.contains` on a set that is EMPTY for every program in this tree (the shape did not
 	// compile before this rung), and that returns at its `capacity == 0` test before hashing — so the two asks
-	// a declaration makes (this and the `pairContest` refusal gate) are free rather than merely cheap.
+	// asks a declaration makes are free rather than merely cheap.
 	export function memberRegistrationKey(sourceName ByteArray, takesReceiver bool) returns ByteArray
 		if takesReceiver or not self.isStaticInstanceContest(sourceName) 'theSourceNamesOwnKey'
 			return sourceName
@@ -8904,12 +8885,14 @@ export type ProgramSignatures
 	//
 	// It costs one `Map.contains` on a map that is EMPTY for every program that declares no name in two
 	// directories, which returns at its `capacity == 0` test before hashing.
-	function sweepRegistrationKey(memberKey ByteArray, moduleDirectory String) returns ByteArray
-		if not self.isContestedFreeFunction(memberKey) 'oneDirectoryDeclaresThisName'
-			return memberKey
-		end 'oneDirectoryDeclaresThisName'
+	function sweepRegistrationKey(sourceName ByteArray, moduleDirectory String, takesReceiver bool) returns ByteArray
+		if self.isContestedFreeFunction(sourceName) 'moreThanOneDirectoryDeclaresThisName'
+			// Minted ONCE: the join allocates, and this is asked per declaration and per by-name entry.
+			let qualified = freeFunctionRegistrationName(sourceName, moduleDirectory: moduleDirectory)
+			return qualified if self.contestedKeyIsTakeable(qualified) else sourceName
+		end 'moreThanOneDirectoryDeclaresThisName'
 
-		return freeFunctionRegistrationName(memberKey, moduleDirectory: moduleDirectory)
+		return self.memberRegistrationKey(sourceName, takesReceiver: takesReceiver)
 	end 'sweepRegistrationKey'
 
 	// ⭐ **DO A `static` MEMBER AND AN INSTANCE MEMBER OF ONE TYPE SHARE THIS SOURCE NAME?** The bare flag, for
@@ -9688,32 +9671,24 @@ export type ProgramSignatures
 		return self.funcParamDefaults.contains(callee)
 	end 'declaresParamDefaults'
 
-	// ⭐⭐ **DO THIS NAME'S DECLARATIONS DISAGREE ABOUT THEIR DEFAULT SHAPE? — the door
-	// `Parser.captureParamDefault` refuses at (W74).** Two ways they can, and the sweep sees each from a
-	// different side:
-	//
-	//   • **Two published shapes differ** — recorded by `recordParamDefaults`, which compares them.
-	//   • **A sibling published NOTHING** — invisible to the defaults registry, because a declaration with no
-	//     default never reaches it. That is what the two counts are for: every declaration is counted by
-	//     `record`, only the defaulting ones by `recordParamDefaults`, and a difference IS the missing
-	//     sibling. See `FunctionDeclarationCountMap` for the measured wrong answer it stops.
+	// ⭐ **DO THIS NAME'S DECLARATIONS DISAGREE ABOUT THEIR DEFAULT SHAPE? — the door
+	// `Parser.captureParamDefault` refuses at (W74).** The whole question is
+	// `declarationsDisagreeAbout`'s, asked of the defaults registry; `throwsClauseCollide` asks the identical
+	// question of the throws registry one door over, and the reason it is not written twice is stated there.
 	//
 	// A name with no defaults entry has nothing to disagree about. That is the answer for a declaration whose
 	// defaults the tolerant sweep ABANDONED (a parameter type it could not read), and it is the right one: the
 	// real parse is about to report that declaration with a position of its own.
 	export function paramDefaultsCollide(name ByteArray) returns bool
-		if not self.funcParamDefaults.contains(name) 'thisNameDeclaresNoDefault'
-			return false
-		end 'thisNameDeclaresNoDefault'
-
-		return self.declarationsDisagreeAbout(self.disagreeingParamDefaults, publishedBy: self.funcDefaultingDeclarationCounts, name: name)
+		return self.declarationsDisagreeAbout(self.funcParamDefaults.contains(name), disagreeing: self.disagreeingParamDefaults, publishedBy: self.funcDefaultingDeclarationCounts, name: name)
 	end 'paramDefaultsCollide'
 
 	// ⭐⭐ **DO THIS NAME'S DECLARATIONS DISAGREE ABOUT A FACT ONLY SOME OF THEM PUBLISH? — the ONE comparison
-	// `paramDefaultsCollide` and `throwsClauseAttribution` both rest on, written once (W77 review).** The two
-	// registries are different (a default shape, a `throws` clause) and so are the two verdicts they feed (a
-	// bool, a four-arm union), but the TEST is the same test, because both registries are absence-is-the-answer:
-	// only a declaration that HAS the fact ever reaches the recorder.
+	// `paramDefaultsCollide` and `throwsClauseCollide` both rest on, written once (W77 review).** The two
+	// registries are different (a default shape, a `throws` clause) but the TEST is the same test, because both
+	// are absence-is-the-answer: only a declaration that HAS the fact ever reaches the recorder, which is also
+	// why the presence probe is the caller's to pass in — the two maps hold different value types and there is
+	// no one `contains` that could ask both.
 	//
 	// ⚠ **THAT IS WHY IT IS TWO HALVES AND NOT ONE, and why they must stay together.** `disagreeing` catches two
 	// PUBLISHED values that differ — the recorder compares its own overwrite and files the name. The counts catch
@@ -9724,7 +9699,11 @@ export type ProgramSignatures
 	// ⛔ **IT IS WRITTEN ONCE BECAUSE A THIRD WAY TO DISAGREE WOULD OTHERWISE HAVE TO BE ADDED TWICE**, and the
 	// copy that missed it would not fail to compile — it would answer "these declarations agree" about a name
 	// whose declarations do not, which at both doors is a silently mis-compiled call rather than a diagnostic.
-	function declarationsDisagreeAbout(disagreeing DivergentDeclarationNameSet, publishedBy FunctionDeclarationCountMap, name ByteArray) returns bool
+	function declarationsDisagreeAbout(somebodyPublishesIt bool, disagreeing DivergentDeclarationNameSet, publishedBy FunctionDeclarationCountMap, name ByteArray) returns bool
+		if not somebodyPublishesIt 'noDeclarationOfThisNameStatesTheFactAtAll'
+			return false
+		end 'noDeclarationOfThisNameStatesTheFactAtAll'
+
 		if disagreeing.contains(name) 'twoPublishedValuesDiffer'
 			return true
 		end 'twoPublishedValuesDiffer'
@@ -9805,53 +9784,21 @@ export type ProgramSignatures
 		self.hash = mixThrowsClause(mixBytes(mix(self.hash, value: DeclShapeThrows), bytes: name), clause: clause)
 	end 'recordThrows'
 
-	// ⭐⭐ **CAN THE SWEEP'S ONE `throws` ENTRY FOR THIS NAME BE APPLIED TO EVERY DECLARATION WEARING IT? — the
-	// question `Parser.requireOverloadableName` refuses on (W77).** It answers WHY and not merely whether,
-	// because the three ways the answer can be no are three different defects and each earns its own sentence
-	// at the refusal — `OverloadRedeclaration`'s shape, one registry over, and for its reason.
+	// ⭐⭐ **DO THIS NAME'S DECLARATIONS DISAGREE ABOUT WHAT THEY THROW? — the question
+	// `Parser.requireOverloadableName` refuses on (W77).** `paramDefaultsCollide`'s twin one registry over,
+	// and the same two lines, because it is the same question over a different published fact: they name two
+	// error types, or a sibling throws nothing at all.
 	//
-	// ONE of the three is about this name's own declarations — they name two error types, or a sibling throws
-	// nothing at all — and it is not decided here: it is `declarationsDisagreeAbout`'s, the shared comparison
-	// `paramDefaultsCollide` asks of the defaults registry one door over. Both halves of it matter and both are
-	// stated there; the reason it is not written twice is that a THIRD way to disagree, added to one copy only,
-	// would leave the other silently calling a divergent set unanimous.
-	//
-	// The other is not about the declarations at all but about the KEY they are filed under, and it is why this
-	// function reads a contest registry BEFORE that comparison: a `static`/instance pair's clause is filed
-	// under the ONE name the source wrote while the members are registered under two, so there is no verdict
-	// to read and the honest answer is the blanket one.
-	//
-	// ✅ **THE SECOND SUCH ARM IS GONE (W78).** A free function contested across directories used to be the
-	// same defect — `refileContestedFreeFunction` copied the entries from `want` to `alpha.want` and left the
-	// set and both counts on `want` — and the answer was the same blanket refusal. The sweep now files a
-	// declaration's facts and its tallies under ONE key (`sweepRegistrationKey`), so `alpha.want` has a verdict
-	// of its own and an agreeing contested overload set compiles, which the oracle has always done.
-	//
-	// A name NO declaration throws from has one answer — "does not throw" — and nothing to disagree about, so
-	// the absent entry is the fast path and the common one.
-	export function throwsClauseAttribution(name ByteArray) returns ThrowsClauseAttribution
-		if not self.funcThrows.contains(name) 'noDeclarationOfThisNameThrows'
-			return ThrowsClauseAttribution.appliesToEveryDeclaration
-		end 'noDeclarationOfThisNameThrows'
-
-		// ⭐⭐ **A `static`/INSTANCE PAIR IS TWO REGISTRATION KEYS AND ITS CLAUSE IS FILED UNDER NEITHER.** The
-		// members are told apart at the call by SYNTAX and registered under `m` and `m#__static`, while
-		// `recordThrows` files a clause under the one source name both wrote — so `T.m#__static` misses the entry
-		// outright and `T.m` may find the STATIC's. Agreement cannot rescue that, which is exactly what the two
-		// halves below cannot express: they compare `funcDeclarationCounts` (keyed by `memberRegistrationKey`)
-		// against a throwing count keyed by the source name, so for a pair they are counting two populations —
-		// `W75`'s mismatch at a second registry. Asked here rather than at the refusal because the KEYING is this
-		// index's fact, and asked through the same `isStaticInstanceContest` that chose the keys.
-		if self.isStaticInstanceContest(name) 'aStaticAndAnInstanceShareThisSourceName'
-			return ThrowsClauseAttribution.sharedByTwoRegistrationKeys
-		end 'aStaticAndAnInstanceShareThisSourceName'
-
-		if self.declarationsDisagreeAbout(self.disagreeingThrows, publishedBy: self.funcThrowingDeclarationCounts, name: name) 'twoErrorTypesOrASiblingThatThrowsNothing'
-			return ThrowsClauseAttribution.declarationsDisagree
-		end 'twoErrorTypesOrASiblingThatThrowsNothing'
-
-		return ThrowsClauseAttribution.appliesToEveryDeclaration
-	end 'throwsClauseAttribution'
+	// ✅ **IT ANSWERED *WHY* AND NOT MERELY *WHETHER* UNTIL W78, AND IT NO LONGER HAS TO.** Two of the three
+	// answers it distinguished were not about the declarations at all but about the KEY they were filed
+	// under — a `static`/instance pair's clause filed under the one name the source wrote, and a
+	// directory-contested free function's tallies left on the bare name — and each earned its own sentence at
+	// the refusal because there was genuinely nothing to compare. The sweep now files a declaration's clause
+	// and its tallies under the key the parser asks with, so both keys have a verdict of their own and the
+	// union collapses to the bool it always was underneath.
+	export function throwsClauseCollide(name ByteArray) returns bool
+		return self.declarationsDisagreeAbout(self.funcThrows.contains(name), disagreeing: self.disagreeingThrows, publishedBy: self.funcThrowingDeclarationCounts, name: name)
+	end 'throwsClauseCollide'
 
 	// ⭐ **THE CALLEE'S `throws` CLAUSE, or `none`** — the door a call site asks: does this callee throw,
 	// and what error type does it throw? `none` (no recorded entry) is every non-throwing function and the
@@ -10715,7 +10662,7 @@ export type ProgramSignatures
 	// declaration that never stated it (A5l): MEASURED, `beta.pick()` compiled by borrowing `alpha.pick`'s
 	// parameter default, and `try beta.pick()` was accepted by borrowing its `throws` clause. So the two
 	// unconditional facts and the two the return type implies stay as the residue, and the four the by-name
-	// scans publish are struck — `SweptDeclarationFacts`' split, read in the other direction.
+	// scans publish are struck — `clearByNameSweepEntries`' split, read in the other direction.
 	//
 	// ⭐⭐ **A ROOT DECLARATION NEEDS NO REFILE AT ALL, AND THAT IS W78's DELETION OF THE SHADOW.** The root is
 	// the unqualified namespace, so `freeFunctionRegistrationName` hands it back the BARE name — which is now
@@ -10743,11 +10690,27 @@ export type ProgramSignatures
 			return
 		end 'anotherDeclarationHoldsThisKey'
 
-		self.copyDeclarationSweepEntries(bareName, to: registrationName, moving: SweptDeclarationFacts.everyFact)
-		self.moveDeclarationTallies(bareName, to: registrationName)
-		self.clearByNameSweepEntries(bareName)
-		self.renameContestedParamDefaultHelpers(bareName, registrationName: registrationName)
+		self.rekeyDeclarationSweepEntries(bareName, to: registrationName)
 	end 'refileContestedFreeFunction'
+
+	// ⭐⭐ **MOVE ONE ALREADY-FOLDED DECLARATION FROM THE KEY IT WAS FILED UNDER TO THE KEY A CONTEST HAS
+	// JUST GIVEN IT — THE ONE RE-KEY, ASKED BY BOTH CONTESTS.** A declaration folded before its contest was
+	// visible is filed under the name the source wrote, and everything about it has to travel together: the
+	// eight facts a call site reads, the three tallies and two verdicts that judge them, and the names of the
+	// helper functions its parameter defaults compile to. Both callers reach it at an instant when the source
+	// key holds this declaration's facts and nothing else's — the free-function contest fires at the SECOND
+	// directory, and the pair contest at the second member.
+	//
+	// ⚠ **THE FOUR BY-NAME FACTS ARE STRUCK FROM THE SOURCE KEY, and that is not tidiness.** A conditional
+	// fact left behind is answered for a declaration that never stated it (A5l): MEASURED, `beta.pick()`
+	// compiled by borrowing `alpha.pick`'s parameter default, and `try beta.pick()` was accepted by borrowing
+	// its `throws` clause. What the two callers do with the four `record` writes differs, and each says why.
+	function rekeyDeclarationSweepEntries(from ByteArray, to ByteArray)
+		self.copyDeclarationSweepEntries(from, to: to)
+		self.moveDeclarationTallies(from, to: to)
+		self.clearByNameSweepEntries(from)
+		self.renameContestedParamDefaultHelpers(from, registrationName: to)
+	end 'rekeyDeclarationSweepEntries'
 
 	// ⭐⭐ **CLAIM THE DIRECTORY-QUALIFIED KEY THIS FILE'S DECLARATIONS OF A CONTESTED NAME WILL BE FILED
 	// UNDER — AND RECORD WHETHER IT WAS ALREADY SOMEBODY ELSE'S (N1c review).**
@@ -10800,7 +10763,7 @@ export type ProgramSignatures
 	// ⭐ **THE THREE TALLIES AND THE TWO DISAGREEMENT VERDICTS MOVE WITH THE ENTRIES THEY DESCRIBE (W78) —
 	// and that they did NOT is the whole of the defect this rung closes.** The incumbent's declarations are
 	// the only ones counted under the bare key at this instant, so the counts are exactly theirs; leaving
-	// them behind made `paramDefaultsCollide` and `throwsClauseAttribution` read, at the registration name,
+	// them behind made `paramDefaultsCollide` and `throwsClauseCollide` read, at the registration name,
 	// maps nothing had ever written for it — and an absent tally reads as "one declaration, agreeing".
 	//
 	// The DECLARATION count is materialized rather than moved-if-present, because from here on this key is
@@ -10871,11 +10834,12 @@ export type ProgramSignatures
 	// ⛔⛔ **A PRESENT FACT IS NOT NECESSARILY *THIS* DECLARATION'S, AND THAT IS WHAT `moving` DECIDES
 	// (A5l).** This routine's own header used to rest on "an absent fact is not copied" alone — true only
 	// while the source key holds ONE declaration's facts, which is exactly what the `static`/instance caller
-	// cannot establish for the four BY-NAME facts. See `SweptDeclarationFacts`.
+	// cannot establish for the four BY-NAME facts — which is why they now fold AFTER the declaration loop, under
+	// the key each belongs to, leaving this copy with one declaration's facts at both callers.
 	//
 	// The DEFAULT-HELPER rename is NOT part of this: it renames the helper a declaration's own real parse
 	// synthesizes, which is a property of the destination NAME rather than of the facts.
-	function copyDeclarationSweepEntries(from ByteArray, to ByteArray, moving SweptDeclarationFacts)
+	function copyDeclarationSweepEntries(from ByteArray, to ByteArray)
 		// The return type is unconditional at every recorder (`record` writes one per declaration), so the
 		// source key holds this declaration's own by construction and `moving` has nothing to say about it.
 		if let returnType = try self.returnTypes.get(from) 'hasReturnType'
@@ -10892,10 +10856,6 @@ export type ProgramSignatures
 		if let declFilePath = try self.funcReturnDeclFiles.get(from) 'returnsANameStillToBeResolved'
 			self.funcReturnDeclFiles.upsert(to, value: declFilePath)
 		end 'returnsANameStillToBeResolved'
-		if not sweptFactsIncludeTheByNameScans(moving) 'theSourceKeyHoldsBothMembersByNameFacts'
-			return
-		end 'theSourceKeyHoldsBothMembersByNameFacts'
-
 		if let consumes = try self.funcParamConsumes.get(from) 'consumesAParameter'
 			self.funcParamConsumes.upsert(to, value: consumes)
 		end 'consumesAParameter'
@@ -10922,6 +10882,16 @@ export type ProgramSignatures
 		_ = self.funcParamDefaults.remove(name)
 		_ = self.funcThrows.remove(name)
 	end 'clearByNameSweepEntries'
+
+	// The other four — the ones `record` writes for every declaration. Split from the by-name four rather
+	// than folded into one eight-way clear because exactly one caller wants both, and the split is the same
+	// one `copyDeclarationSweepEntries`' header draws: which PASS wrote the fact.
+	function clearRecordOwnedSweepEntries(name ByteArray)
+		_ = self.returnTypes.remove(name)
+		_ = self.funcDeclSites.remove(name)
+		_ = self.declaredReturnSurfaces.remove(name)
+		_ = self.funcReturnDeclFiles.remove(name)
+	end 'clearRecordOwnedSweepEntries'
 
 	// ⭐⭐ **A CONTESTED FUNCTION'S SYNTHESIZED DEFAULT HELPERS ARE RENAMED WITH IT (N1c review), AND THAT IS
 	// CORRECTNESS RATHER THAN TIDINESS.** `Project.paramDefaultHelperName`'s own header rests the mechanism's

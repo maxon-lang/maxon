@@ -11767,7 +11767,7 @@ export type Parser
 		// `ThrowsClauseEntry` — its cursor already sits at the block label with nothing to consume.
 		if self.at(TokenKind.throws) 'throwing'
 			let throwsClause = try self.parseOptionalThrowsClause() otherwise return
-			throwsEntries.push(ThrowsClauseEntry.create(funcName, clause: throwsClause))
+			throwsEntries.push(ThrowsClauseEntry.create(funcName, clause: throwsClause, takesReceiver: takesReceiver))
 		end 'throwing'
 
 		// ⭐ Record which SOURCE parameters are bare inner aliases (P1.6-C), so the parser's per-instance
@@ -11828,7 +11828,7 @@ export type Parser
 		// much a forwarder as a free function is, and three of `specs/pass-by-reference.md`'s transitive cases
 		// are exactly that program — whereas the consume half deliberately declines to read one. Hence two
 		// lists into one walk rather than a second walk of the same tokens.
-		self.scanBodyParamFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, paramsStart: paramsStart, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, detectFieldStores: not takesReceiver)
+		self.scanBodyParamFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, paramsStart: paramsStart, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
 	end 'recordScannedSignature'
 
 	// ⭐ **THE CALL-ALIGNED PARAMETER NAMES PBR-2's SCAN IS INDEXED BY.** For everything the consume scan
@@ -11956,7 +11956,7 @@ export type Parser
 		end 'params'
 		self.pos = resume
 
-		paramDefaults.push(ParamDefaultEntry.create(funcName, info: ParamDefaultInfo.create(names, producers: producers)))
+		paramDefaults.push(ParamDefaultEntry.create(funcName, info: ParamDefaultInfo.create(names, producers: producers), takesReceiver: takesReceiver))
 	end 'recordScannedParamDefaults'
 
 	// Does the parameter list at `parenPos` declare a default on ANY parameter? A peek-only, allocation-free
@@ -12031,7 +12031,7 @@ export type Parser
 		return self.paramTypeParamPositionAt(positions, index: index) < self.enclosingTypeParams.count()
 	end 'paramIsTypeParamTyped'
 
-	function scanBodyParamFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, detectFieldStores bool)
+	function scanBodyParamFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, detectFieldStores bool, takesReceiver bool)
 		// ⚠ **TWO NAME LISTS, AND THEY ARE NOT THE SAME LIST.** The CONSUME half reads `paramNames`, which the
 		// caller leaves EMPTY for a non-generic instance method (a direct `Self{f: p}` store there is left to the
 		// callee-side borrowed-value refusal — see the call site). The BY-REFERENCE half reads `byRefParamNames`,
@@ -12186,14 +12186,14 @@ export type Parser
 		end 'walk'
 
 		if any 'consumes'
-			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds)))
+			paramConsumes.push(ParamConsumeEntry.create(funcName, info: ParamConsumeInfo.create(paramNames, bits: consumed, feeds: feeds), takesReceiver: takesReceiver))
 		end 'consumes'
 
 		// A body that neither reassigns nor forwards a parameter states nothing, exactly as a non-consuming one
 		// does — which is every function in every program written before PBR-2, so the whole-program map stays
 		// empty and `programTakesAParamByRef` answers false after one `count()`.
 		if statesByRef 'takesOrForwardsAByRefParam'
-			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(byRefParamNames, direct: reassignedDirect, forwarded: reassignedForwarded, forwardCalls: forwardCalls, bareName: funcBareName, callability: self.declarationCallability())))
+			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(byRefParamNames, direct: reassignedDirect, forwarded: reassignedForwarded, forwardCalls: forwardCalls, bareName: funcBareName, callability: self.declarationCallability()), takesReceiver: takesReceiver))
 		end 'takesOrForwardsAByRefParam'
 	end 'scanBodyParamFacts'
 
@@ -13614,7 +13614,7 @@ export type Parser
 		for i in feedStart upto paramConsumes.count() 'find'
 			let filed = try paramConsumes.get(i) otherwise panic("mergeGainedFeedsInto: paramConsumes.get({i}) OOB")
 			if filed.name.equals(scan.funcName) 'match'
-				try paramConsumes.set(i, value: ParamConsumeEntry.create(scan.funcName, info: self.feedsMergedOnto(filed.info, scan: scan, nodeBase: nodeBase, isFeed: isFeed))) otherwise panic("mergeGainedFeedsInto: paramConsumes.set({i}) OOB")
+				try paramConsumes.set(i, value: ParamConsumeEntry.create(scan.funcName, info: self.feedsMergedOnto(filed.info, scan: scan, nodeBase: nodeBase, isFeed: isFeed), takesReceiver: filed.takesReceiver)) otherwise panic("mergeGainedFeedsInto: paramConsumes.set({i}) OOB")
 				return
 			end 'match'
 		end 'find'
@@ -13623,7 +13623,7 @@ export type Parser
 		// An EMPTY facts record says exactly that and is not a placeholder: `isConsumed` / `typeParamFeedOf` read
 		// every index past their own column as `false` / `none`, which is the content of "the sweep recorded
 		// nothing here".
-		paramConsumes.push(ParamConsumeEntry.create(scan.funcName, info: self.feedsMergedOnto(ParamConsumeInfo.create(scan.paramNames, bits: BoolArray.create(), feeds: TypeParamFeedArray.create()), scan: scan, nodeBase: nodeBase, isFeed: isFeed)))
+		paramConsumes.push(ParamConsumeEntry.create(scan.funcName, info: self.feedsMergedOnto(ParamConsumeInfo.create(scan.paramNames, bits: BoolArray.create(), feeds: TypeParamFeedArray.create()), scan: scan, nodeBase: nodeBase, isFeed: isFeed), takesReceiver: scan.takesReceiver))
 	end 'mergeGainedFeedsInto'
 
 	// `prior` with this method's solved feed nodes turned ON: a node the fixpoint marked becomes a CALLEE-STORAGE
@@ -14017,21 +14017,17 @@ export type Parser
 		//
 		// ⚠ **THE NAME COMES FROM `memberRegistrationKey` AND IS NOT COMPOSED HERE.** The sweep files this
 		// declaration's facts under that key and the static call door asks for the same one; three spellings of
-		// "contest ⇒ the static name" would be three chances to disagree about a symbol. The `pairContest` flag
-		// beside it is a different question — whether the REFUSALS below apply — so it is asked separately.
-		let pairContest = self.signatures.isStaticInstanceContest(base)
+		// "contest ⇒ the static name" would be three chances to disagree about a symbol.
 		let registrationBase = self.signatures.memberRegistrationKey(base, takesReceiver: takesReceiver)
 		let contested = self.signatures.isContestedExtensionMethod(base)
 		if not contested and not self.declaredFuncNames.contains(registrationBase) 'firstOfThisName'
-			// A pair member is the FIRST of its own base, so the four refusals an overload set earns are asked
-			// here for it — of the SOURCE name, which is the key the whole-program sweep filed them under and
-			// the one thing the two members still share. The transfer bit is derived INSIDE the gate and not
-			// above it: it walks the parameter list asking `typeIsManaged` per parameter, and this fast path is
-			// every function declaration in a program that neither overloads nor pairs anything.
-			if pairContest 'aStaticAndAnInstanceShareThisSourceName'
-				try self.requireOverloadableName(base, nameTok: nameTok, transfersOwnership: self.declaresTransferableParam(paramTypes, takesReceiver: takesReceiver))
-			end 'aStaticAndAnInstanceShareThisSourceName'
-
+			// ✅ **A PAIR MEMBER USED TO BE PUT THROUGH THE OVERLOAD REFUSALS HERE, AND W75 RETIRED THAT.** The
+			// four facts those refusals are about — a consume set, a by-reference column, a parameter default
+			// and a `throws` clause — were filed by the sweep under the ONE name the two members share, so
+			// neither key could read its own. They are now filed per registration key
+			// (`ProgramSignatures.sweepRegistrationKey`), which leaves a pair with nothing shared to be
+			// ambiguous about: a pair member is the FIRST of its own base and takes it outright, exactly as any
+			// other first declaration of a name does.
 			self.claimFuncName(registrationBase)
 			return registrationBase
 		end 'firstOfThisName'
@@ -14075,7 +14071,7 @@ export type Parser
 	// has an entry" catches a divergence, but it also catches an AGREEMENT, and an agreeing set has nothing
 	// for a call to be told apart by: one error type, recovered whichever member wins. So the throws refusal
 	// asks the SWEEP whether the entry can be applied to every declaration wearing the name
-	// (`ProgramSignatures.throwsClauseAttribution`) rather than whether it exists. The CONSUME half still refuses
+	// (`ProgramSignatures.throwsClauseCollide`) rather than whether it exists. The CONSUME half still refuses
 	// on existence, and that is the conservative direction for a fact whose divergence mode is a leak or a
 	// double free rather than a diagnostic — closing it needs per-member consume bits, below.
 	//
@@ -14093,22 +14089,15 @@ export type Parser
 	// key its tables by something finer than the bare name, and that is a whole-program-query change with a
 	// parse-memo hash behind it. Until then this is the boundary, stated where a reader meets it.
 	//
-	// ⭐⭐ **AND IT IS ASKED OF A `static`/INSTANCE PAIR TOO, WHICH IS NOT AN OVERLOAD SET AT ALL** — the two
-	// take two registration names and are told apart at the call by SYNTAX
-	// (`ProgramSignatures.isStaticInstanceContest`). What they still SHARE is the source name every table
-	// named above is keyed by, so three of the four sentences below are true of them word for word, and the
-	// pair is refused on exactly those terms rather than on a rule of its own. Its members are checked one at
-	// a time — each declaration arrives here with its OWN transfer bit and nothing else in hand, which is
-	// precisely the disjunction the overload path spells with `overloadMembersTransferOwnership`.
-	//
-	// ⚠⚠ **THE FOURTH — `throws` — IS THE ONE THE PAIR NEEDS SAID DIFFERENTLY (W77).** An overload set's
-	// members SHARE a registration key, so an agreeing clause is every member's answer; a pair's members share
-	// NO key, so the clause the sweep filed under their common source name is neither member's —
-	// `T.m#__static` misses it outright and `T.m` finds a clause that may be the static's. Agreement cannot
-	// rescue that, so the pair keeps the blanket refusal the overload set has just been let out of, under a
-	// sentence that says what is actually wrong. Which claimant this is comes back from
-	// `ProgramSignatures.throwsClauseAttribution` rather than from a flag threaded through here: the KEYING is
-	// that index's fact, and it already holds the contest registry the base was chosen from.
+	// ✅ **IT WAS ASKED OF A `static`/INSTANCE PAIR TOO, AND W75 RETIRED THAT.** Such a pair is not an
+	// overload set at all: the two take two registration names and are told apart at the call by SYNTAX
+	// (`ProgramSignatures.isStaticInstanceContest`). What they used to SHARE is the source name every table
+	// named above was keyed by — so the four sentences below were true of them word for word, and the pair was
+	// refused on exactly those terms rather than on a rule of its own. The sweep files each member's consume
+	// set, by-reference columns, defaults and `throws` clause under that member's OWN key now
+	// (`ProgramSignatures.sweepRegistrationKey`), which leaves a pair with nothing shared to be ambiguous
+	// about; a pair member reaches this function only as the first declaration of its own base, which is to
+	// say not at all.
 	//
 	// ⚠ It takes the transfer answer as ONE bool rather than the member set, because the two callers know it
 	// from different places: the overload path ORs the newcomer's bit over the incumbent members', while a
@@ -14118,10 +14107,13 @@ export type Parser
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations MOVES a parameter into durable storage and one of them takes a managed parameter, and the whole-program declaration sweep publishes a function's consume facts under the name the source wrote, so a call to this name cannot be told which overload's ownership transfer to apply (it would leak in one direction and free twice in the other). Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'consumingOverload'
 
-		// ⭐⭐ **THE `throws` REFUSAL IS THREE SENTENCES, BECAUSE THE THREE WAYS A NAME'S CLAUSE BECOMES
-		// UNREADABLE ARE THREE DIFFERENT DEFECTS (W77).** Everything above is one sentence that happens to be
-		// true of every claimant; this is the one place they genuinely part, so it is written as a `match` over
-		// the reason rather than as a single blanket test.
+		// ⭐⭐ **THE `throws` REFUSAL IS ONE SENTENCE AGAIN, AND THAT IS W78's DOING.** It was three: an
+		// overload set whose declarations genuinely disagree, plus two claimants whose clause was filed under a
+		// key that was NEITHER member's — a `static`/instance pair, and a free function contested across
+		// directories — each of which had to say "there is nothing here to compare" in its own sentence. The
+		// sweep now files a declaration's clause AND the tallies that judge it under the key the parser asks
+		// with (`ProgramSignatures.sweepRegistrationKey`), so both of those keys have a verdict of their own
+		// and only the genuine disagreement is left.
 		//
 		// ⭐⭐ **AND THE BLANKET TEST WAS ONE CONCLUSION TOO STRONG, WHICH IS THE RUNG.** The sentence it rested
 		// on is TRUE — the clause is published under the name the source wrote, and a `try` is desugared when the
@@ -14133,14 +14125,14 @@ export type Parser
 		// `throws Boom`, returning 5 and 9, each called under `try … otherwise 0`, answer **14**.
 		//
 		// ⚠ **THE ORACLE ACCEPTS THE DISAGREEING SETS TOO** (measured: `throws Boom` beside `throws Splat`
-		// answers 14, and a throwing member beside a non-throwing one likewise), so `declarationsDisagree` is a
-		// CONSERVATIVE refusal rather than a rule of the language. Lifting it needs per-member facts in the
-		// sweep — the boundary this function's header states for all four of these refusals — not a better test.
-		match self.signatures.throwsClauseAttribution(base) 'throwsAttribution'
-			appliesToEveryDeclaration then break 'throwsAttribution'
-			declarationsDisagree then throw ParseError.unsupported("overloading '{String.from(base)}' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names", line: nameTok.line, column: nameTok.column)
-			sharedByTwoRegistrationKeys then throw ParseError.unsupported("a `static` member and an instance member of '{String.from(base)}' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names", line: nameTok.line, column: nameTok.column)
-		end 'throwsAttribution'
+		// answers 14, and a throwing member beside a non-throwing one likewise), so this is a CONSERVATIVE
+		// refusal rather than a rule of the language. Lifting it needs per-MEMBER facts in the sweep — the
+		// boundary this function's header states for all four of these refusals — not a better test. Per-KEY
+		// facts, which is what W78 supplied, are a different thing: they separate two DECLARATIONS wearing one
+		// source name, not two members of one overload set, which share a registration key by design.
+		if self.signatures.throwsClauseCollide(base) 'declarationsDisagree'
+			throw ParseError.unsupported("overloading '{String.from(base)}' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names", line: nameTok.line, column: nameTok.column)
+		end 'declarationsDisagree'
 
 		// ⚠ **ASKED OF THE WHOLE SURFACE AND NOT ONLY THE OUTRIGHT SPELLING (A2m).** A tuple slot and an array
 		// element name the buffer through the same one-entry-per-bare-name sweep and are chosen at the same
@@ -20039,7 +20031,14 @@ export type Parser
 		// The height BEFORE the list is read, so `claimDefaultHelpersForRegistrationName` below can tell this
 		// declaration's own captures from every earlier one's — see there, and `DefaultHelperOwner`.
 		let firstPendingDefault = self.pendingDefaultHelpers.count()
-		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sourceName), paramTypeHint: ClosureParamTypeHint.none)
+		// ⭐⭐ **THE OWNER IS THE KEY THE SWEEP FILED THIS DECLARATION'S DEFAULTS UNDER, NOT THE NAME THE
+		// SOURCE WROTE (W75).** They differ for exactly one shape — a `static` member whose name an instance
+		// member of its type also wears — and there the two members are two keys, `m` and `m#__static`, with a
+		// set of defaults each. Asked under the source name, the static's own drain would read the INSTANCE's
+		// shape out of the by-name registry. `memberRegistrationKey` is the one composition of that contest,
+		// so this is a lookup rather than a second derivation.
+		let sweptOwnerName = self.signatures.memberRegistrationKey(sourceName, takesReceiver: takesReceiver)
+		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sweptOwnerName), paramTypeHint: ClosureParamTypeHint.none)
 		try self.consume(TokenKind.rightParen)
 
 		// ⭐ **A STRUCT PARAMETER OR RETURN TYPE IS RE-TAGGED `structRef` HERE**, in the real parse where
@@ -20068,7 +20067,7 @@ export type Parser
 		let name = try self.overloadRegistrationNameFor(sourceName, paramTypes: paramTypes, paramNames: paramNames, takesReceiver: takesReceiver, nameTok: nameTok)
 		// ⭐ **AN OVERLOAD MEMBER'S DEFAULTS FOLLOW ITS REGISTRATION NAME (W74)** — the sweep published one
 		// helper name for the whole set, and each member has to emit a helper of its own.
-		self.claimDefaultHelpersForRegistrationName(firstPendingDefault, sourceName: sourceName, registrationName: name)
+		self.claimDefaultHelpersForRegistrationName(firstPendingDefault, sourceName: sweptOwnerName, registrationName: name)
 
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
@@ -21262,7 +21261,7 @@ export type Parser
 			declaredFunction then break 'owner'
 		end 'owner'
 
-		// ⭐⭐ **THE FOURTH REFUSAL: THIS NAME'S DECLARATIONS DO NOT DESCRIBE ONE DEFAULT SHAPE, SO NO CALL CAN
+		// ⭐⭐ **THE THIRD REFUSAL: THIS NAME'S DECLARATIONS DO NOT DESCRIBE ONE DEFAULT SHAPE, SO NO CALL CAN
 		// BE FILLED FOR ALL OF THEM.** The whole-program sweep publishes defaults under the name the SOURCE
 		// wrote, and a short call is filled while it is PARSED — a whole pass before `resolveOverloadedCalls`
 		// picks a member. An OVERLOAD SET whose members publish the IDENTICAL shape is filled the same way
@@ -21280,30 +21279,14 @@ export type Parser
 		// which is the better diagnostic and was always the one the program deserved.
 		let ownerName = paramDefaultOwnerName(owner)
 
-		// ⭐⭐ **THE FIFTH REFUSAL: A `static` MEMBER AND AN INSTANCE MEMBER WEAR THIS NAME, AND THE DEFAULTS
-		// REGISTRY HAS ONE KEY FOR THE TWO OF THEM (W74 review).** A pair is separated by the KEY each member
-		// is registered under — `memberRegistrationKey` hands the static `<name>#__static` and leaves the
-		// instance the source spelling — while the declaration sweep files parameter defaults under the name
-		// the SOURCE wrote, for both. The two halves therefore come apart, and nothing downstream can repair
-		// it: MEASURED, `T.m()` against a `static m(a Num = 7)` beside an instance `m(b Num)` asks the defaults
-		// registry for `T.m#__static`, misses, fills nothing, and is refused
-		// `E3036: 'T.m#__static' expects 1 argument(s) but 0 were provided` — a symbol no source wrote, about a
-		// call the author got right.
-		//
-		// ⚠ **IT IS ASKED OF THE WHOLE-PROGRAM CONTEST, WHICH IS WHY IT CANNOT BE LEFT TO THE COUNT COMPARISON
-		// BELOW.** `funcDeclarationCounts` is tallied per REGISTRATION KEY (`ProgramSignatures.record`) and the
-		// defaulting count per SOURCE NAME (`recordParamDefaults`), and a pair remaps exactly one of those two
-		// keys — for exactly one of the two declaration ORDERS, because the remap happens when the second
-		// member arrives. MEASURED: `static m(a Num)` written ahead of `m(b Num = 4)` was refused while the
-		// identical program with the two members SWAPPED compiled and answered 7. `isStaticInstanceContest` is
-		// settled before any file is parsed, so this answers both orders the same way.
-		//
-		// ⚠ It is a refusal and not a repair deliberately: filing a pair's defaults under
-		// `memberRegistrationKey` means minting the helper NAME from that key too, and the mint happens in the
-		// token SCAN — a pass before the contest is known. That is a rung, not a review; see the report.
-		if self.signatures.isStaticInstanceContest(ownerName) 'aStaticAndAnInstanceShareThisName'
-			throw ParseError.unsupported("a default value on parameter '{String.from(paramName)}' of '{String.from(ownerName)}' — a `static` member and an instance member of this type both wear that name, so the two are registered under DIFFERENT keys while the whole-program declaration sweep publishes parameter defaults under the one name the source wrote. A call that omits an argument cannot be told which of the two members' default to supply, and a call to the `static` half cannot find one at all. Give the two members distinct names, or drop the default", line: eqTok.line, column: eqTok.column)
-		end 'aStaticAndAnInstanceShareThisName'
+		// ✅ **THE FIFTH REFUSAL IS GONE (W75), AND WHAT RETIRED IT IS A KEY RATHER THAN A BETTER TEST.** A
+		// `static` member and an instance member of one type are two registration keys — `m` and `m#__static`
+		// — and the sweep used to file BOTH members' defaults under the one name the source wrote, so `T.m()`
+		// asked the defaults registry for the static key, missed, filled nothing, and was refused
+		// `E3036: 'T.m#__static' expects 1 argument(s) but 0 were provided`: a symbol no source wrote, blamed
+		// on a call the author got right. The by-name folds now key by the member each entry belongs to
+		// (`ProgramSignatures.sweepRegistrationKey`), so each half of a pair has a shape of its own and there
+		// is nothing left for a call to be unable to tell apart. `ownerName` above IS that key.
 
 		if self.signatures.paramDefaultsCollide(ownerName) 'declarationsDisagree'
 			throw ParseError.unsupported("a default value on parameter '{String.from(paramName)}' of '{String.from(ownerName)}' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default", line: eqTok.line, column: eqTok.column)

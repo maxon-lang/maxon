@@ -11,7 +11,7 @@ category: core
 
 A parameter default is compiled as a synthesized nullary function, and a call site that omits the
 argument emits a call to it. Everything therefore hangs off ONE thing: a name the call site can look the
-declaration up by. Two declaration forms cannot supply one, and two more supply one that does not answer
+declaration up by. Two declaration forms cannot supply one, and one more supplies one that does not answer
 for the declaration that wrote it — each is refused where the `=` is written, rather than mis-served.
 
 - A CLOSURE literal is called indirectly, through a function value; the call site has no callee name.
@@ -24,11 +24,14 @@ for the declaration that wrote it — each is refused where the `=` is written, 
   to be filled from. The same refusal catches a name DECLARED TWICE by accident, whose duplicate-definition
   diagnostic (E3006) is only reported once every file has parsed — after the losing declaration's own
   helper is built.
-- A `static` MEMBER AND AN INSTANCE MEMBER of one type wearing one name. That pair is not an overload set:
-  the two are told apart by the KEY each is registered under (`m` and `m#__static`), while the sweep files
-  parameter defaults under the one name the source wrote. So a `Type.m()` call asks the defaults registry
-  for the static key, misses, and fills nothing — the default is inert and the call is refused for an arity
-  it never had.
+✅ **A `static` MEMBER BESIDE AN INSTANCE MEMBER OF ONE NAME WAS A FOURTH, AND IS NOT ANY MORE (W75).** That
+pair is not an overload set: the two are told apart by the KEY each is registered under (`m` and
+`m#__static`), and the sweep used to file parameter defaults under the one name the source wrote — so a
+`Type.m()` call asked the defaults registry for the static key, missed, and filled nothing, leaving the
+default inert and the call refused for an arity it never had. The sweep's by-name folds now key by the
+MEMBER each entry belongs to, and the synthesized helper is renamed with it, so each half of a pair carries
+its own defaults. `same-name-methods.md` carries the pair's own rules; the cases below pin both halves and
+both declaration orders.
 
 ⚠ **AN OVERLOAD SET WHOSE MEMBERS AGREE ON THAT SHAPE IS NOT REFUSED, AND USED TO BE (W74).** Members that
 declare the same parameters and default the same positions are filled identically whichever one a call
@@ -128,12 +131,15 @@ end 'main'
 error E2015: <fragment>:4:22: Unsupported: a default value on parameter 'a' of 'f' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
 ```
 
-<!-- test: error-default-on-the-static-half-of-a-same-name-pair -->
-A `static m` and an instance `m` are two members told apart by their registration KEY, and the defaults
-registry has ONE key for the two of them. Before this refusal the static's default was simply inert:
-`T.m()` asked the registry for `T.m#__static`, found nothing to fill, and the program was refused
-`E3036: 'T.m#__static' expects 1 argument(s) but 0 were provided` — a symbol no source wrote, blamed on a
-call the author got right.
+<!-- test: a-default-on-the-static-half-of-a-same-name-pair -->
+✅ **REFUSED UNTIL W75 (`error-default-on-the-static-half-of-a-same-name-pair`), AND THE REFUSAL'S OWN
+SENTENCE NAMED THE CURE.** A `static m` and an instance `m` are two members told apart by their registration
+KEY, and the defaults registry had ONE key for the two of them: `T.m()` asked it for `T.m#__static`, found
+nothing to fill, and the program was refused `E3036: 'T.m#__static' expects 1 argument(s) but 0 were
+provided` — a symbol no source wrote, blamed on a call the author got right. The by-name folds now key by the
+member each entry belongs to, and the synthesized helper is renamed with it, so the static's default is the
+static's. `T.m()` fills 7 and `t.m(2)` answers 3. ⚠ The oracle refuses this program on `E3007` — its rule
+about what a pair IS, not about the default.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -158,17 +164,17 @@ function main() returns ExitCode
 	return (T.m() + t.m(2)) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:33: Unsupported: a default value on parameter 'a' of 'T.m' — a `static` member and an instance member of this type both wear that name, so the two are registered under DIFFERENT keys while the whole-program declaration sweep publishes parameter defaults under the one name the source wrote. A call that omits an argument cannot be told which of the two members' default to supply, and a call to the `static` half cannot find one at all. Give the two members distinct names, or drop the default
+```exitcode
+10
 ```
 
-<!-- test: error-default-on-the-instance-half-of-a-same-name-pair -->
-⭐ **THE SAME TWO MEMBERS AS THE CASE ABOVE, DECLARED IN THE OTHER ORDER, AND THE POINT IS THAT THE ANSWER
-IS THE SAME.** It was not: the pair's two counts are tallied under different keys — declarations per
-REGISTRATION key, defaulting declarations per SOURCE name — and the pair remaps exactly one of those, when
-the second member arrives. So this order was refused by the count comparison while the other compiled and
-answered 7. The refusal is now asked of `isStaticInstanceContest`, which is settled before any file is
-parsed and cannot depend on which member was written first.
+<!-- test: a-default-on-the-instance-half-of-a-same-name-pair -->
+✅ **THE SAME TWO MEMBERS DECLARED IN THE OTHER ORDER, AND THE POINT IS THAT THE ANSWER IS THE SAME.** It
+was not, twice over: before W74 the pair's two counts were tallied under different keys and this order was
+refused by the count comparison while the other compiled; before W75 both orders were refused outright. The
+sweep now files each member's defaults — and the tallies that judge them — under that member's own
+registration key, which is settled by the second member to fold whichever one that is. `T.m(2)` answers 2
+and `t.m()` fills 4 onto a `v` of 1. ⚠ The oracle refuses on `E3007`, its own rule about pairs.
 ```maxon
 typealias Num = int(i64.min to i64.max)
 
@@ -193,8 +199,8 @@ function main() returns ExitCode
 	return (T.m(2) + t.m()) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:26: Unsupported: a default value on parameter 'b' of 'T.m' — a `static` member and an instance member of this type both wear that name, so the two are registered under DIFFERENT keys while the whole-program declaration sweep publishes parameter defaults under the one name the source wrote. A call that omits an argument cannot be told which of the two members' default to supply, and a call to the `static` half cannot find one at all. Give the two members distinct names, or drop the default
+```exitcode
+7
 ```
 
 <!-- test: error-default-on-an-overloaded-name-a-second-directory-contests -->

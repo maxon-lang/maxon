@@ -98,9 +98,10 @@ another does not (the call would be compiled with or without an error flag, and 
 cannot throw is itself an error).
 
 A `static` member beside an instance member of one name is **not** an overload set — the two are told
-apart at the call by syntax, and each is registered under a key of its own — but the sweep still files
-their `throws` clauses under the one name they share, so the entry belongs to neither key. Such a pair
-is refused whenever either member throws, however the two agree.
+apart at the call by syntax, and each is registered under a key of its own — and the sweep files each
+member's `throws` clause under that member's key, so a `try` at either call recovers that member's own
+error type. (Such a pair was refused whenever either member threw, for as long as the sweep published one
+clause under the one name they share.)
 
 A **free function** whose bare name is also declared in another directory is registered under its
 directory-qualified name (`alpha.want`), and the sweep files that declaration's facts — and the tallies
@@ -111,7 +112,7 @@ under the bare name, where a second directory's declarations are counted too.)
 
 ##### ⚠ Every refusal above is **narrower than the language**, and none of them is canon
 
-The three paragraphs above describe what **shv2** can compile, not what the language permits. shv2
+The paragraphs above describe what **shv2** can compile, not what the language permits. shv2
 decides the ABI of a `try` while the call is **parsed**, from a whole-program entry keyed by the name the
 source wrote; the oracle carries its throws facts **per declaration** and so has nothing to be unable to
 tell apart. Every one of these programs is a conservative refusal awaiting per-member facts in the sweep,
@@ -122,14 +123,13 @@ cases below refuse:
 |---|---|
 | two members naming two error types (`Boom` beside `Splat`) | accepts, answers **14** |
 | a throwing member beside a non-throwing one | accepts, answers **14** |
-| a `static`/instance pair whose parameter types tell them apart, one of them throwing | accepts, answers **7** |
 
-The `static`/instance pair is the one place the two compilers disagree about more than throws: the oracle
-treats such a pair as **one overload set**, so when the two members' parameter types cannot tell them apart
-it reports `E3007: Ambiguous overload for 'T.m'` at the call rather than accepting — which is why the
-measured acceptance above is of the variant whose parameters differ. shv2 separates the pair by
-registration key instead (`same-name-methods.md`), and refuses only once a `throws` clause has to be
-attributed to one of those two keys.
+The `static`/instance pair is the one place the two compilers disagree about the SHAPE and not merely about
+what shv2 can attribute: the oracle treats such a pair as **one overload set**, so when the two members'
+parameter types cannot tell them apart it reports `E3007: Ambiguous overload for 'T.m'` at the call, where
+shv2 separates them by registration key (`same-name-methods.md`) and compiles. The pair cases below are
+therefore programs **shv2 accepts and the oracle refuses** — the opposite direction from the table above,
+and a difference of rule rather than of precision.
 
 #### The oracle's non-injective overload name is deliberately not ported
 
@@ -1414,17 +1414,19 @@ end 'main'
 error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
 ```
 
-<!-- test: error.a-static-and-instance-pair-where-the-static-throws -->
-A `static m` and an instance `m` are NOT an overload set — they are two registration keys, told apart at
-the call by syntax — but the sweep files a `throws` clause under the one name the source wrote, so the
-clause belongs to neither key. The static's call asks for `T.m#__static` and misses, and the instance's
-call asks for `T.m` and finds the STATIC's clause: both readings are wrong, and neither is repairable
-once the `try` has been desugared. Refused however the two agree, which is the difference between a pair
-and an overload set. ⚠ **Narrower than the language**: give the two members parameter types that tell them
-apart and the oracle compiles the same pair and answers **7** (MEASURED). On THIS program — where both
-members take `Num` — the oracle refuses too, but for a different reason and at a different place
-(`E3007: Ambiguous overload for 'T.m'` at the call), because it reads a pair as one overload set where
-shv2 reads two registration keys.
+<!-- test: a-static-and-instance-pair-where-the-static-throws -->
+✅ **REFUSED UNTIL W75, AND WHAT REFUSED IT WAS THE KEY.** A `static` member and an instance member of one
+type are two registration keys — `T.m` and `T.m#__static`, told apart at the call by SYNTAX — and the
+declaration sweep used to publish a function's `throws` clause under the ONE name the source wrote, so the
+clause belonged to neither key. The by-name sweep folds now key by the MEMBER each entry belongs to, so the
+static's clause is filed under the static's key and the instance's under the instance's, and a `try` at
+either call recovers that member's own error type. Answers **7**.
+
+⚠ **THE ORACLE REFUSES THIS PROGRAM, ON A DIFFERENT RULE** (MEASURED: `E3007: Ambiguous overload for 'T.m'`).
+It treats a `static`/instance pair as ONE overload set and cannot tell these two members apart by their
+parameter types; shv2 separates them by registration key (`same-name-methods.md`). That divergence is about
+what a PAIR IS, and it is unchanged — this case is only about whether the clause can be attributed once the
+pair exists.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1457,14 +1459,16 @@ function main() returns ExitCode
 	return (s + t.m(2)) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:18: Unsupported: a `static` member and an instance member of 'T.m' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names
+```exitcode
+7
 ```
 
-<!-- test: error.a-static-and-instance-pair-where-the-static-throws-declared-first -->
-The same two members with the STATIC written first. `isStaticInstanceContest` is settled by the sweep
-before any file is parsed, so both orders reach the same refusal — the pairing that caught the
-declaration-order defect in the defaults twin, written here for the same reason.
+<!-- test: a-static-and-instance-pair-where-the-static-throws-declared-first -->
+✅ **THE SAME PAIR WITH THE STATIC WRITTEN FIRST, and the point is that the answer is the same.** The
+contest is detected at the SECOND member to fold, so one order re-keys the incumbent's already-filed clause
+and the other files the newcomer's under its own key from the start — two different paths through the sweep
+to one answer, and only running both says whether they agree. Answers **7**, as above. The oracle refuses
+this one too, on `E3007`.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1497,15 +1501,15 @@ function main() returns ExitCode
 	return (s + t.m(2)) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:25: Unsupported: a `static` member and an instance member of 'T.m' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names
+```exitcode
+7
 ```
 
-<!-- test: error.a-static-and-instance-pair-where-the-instance-throws -->
-The other half of the pair carrying the clause. The instance's call finds it and is right by accident;
-the static's call asks for `T.m#__static`, misses, and is compiled as a call that cannot throw — so the
-`try` the author wrote over the STATIC would be refused as a `try` on a non-throwing callee. Refused at
-the declaration instead, where the reason can be stated.
+<!-- test: a-static-and-instance-pair-where-the-instance-throws -->
+✅ **THE OTHER HALF OF THE PAIR CARRYING THE CLAUSE.** Before W75 the instance's call found the clause and
+was right by accident, while the static's asked for `T.m#__static`, missed, and was compiled as a call that
+cannot throw — so a `try` over the STATIC would have been refused as a `try` on a non-throwing callee. Each
+member now carries its own. Answers **7**; the oracle refuses on `E3007`.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1538,8 +1542,8 @@ function main() returns ExitCode
 	return (T.m(4) + i) as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:15:18: Unsupported: a `static` member and an instance member of 'T.m' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names
+```exitcode
+7
 ```
 
 <!-- test: a-throwing-overload-set-whose-bare-name-another-directory-declares -->
