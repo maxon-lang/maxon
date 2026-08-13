@@ -968,6 +968,77 @@ error E3036: app/specs/fragments/namespace-qualified-resolution/error.contested-
 ```
 
 
+<!-- test: error.a-root-contestant-does-not-inherit-a-subdirectorys-default -->
+⛔⛔ **THE CASE ABOVE WITH THE SECOND CONTESTANT AT THE *ROOT*, AND THAT IS A DIFFERENT KEY — NOTHING RAN
+IT UNTIL NOW (found at W78's review).** Above, `beta/` has a qualified key of its own and never looks at
+the bare name, so leaving a stale fact there is harmless. A ROOT declaration has no qualified spelling:
+the bare `pick` IS its registration key. So the incumbent's default, filed under that same bare name by a
+fold that could not yet know, sits exactly where the root declaration is about to read from — and the root
+states no default, so nothing of its own overwrites it.
+
+⛔ **What keeps them apart is `ProgramSignatures.clearByNameSweepEntries`, and it had no gate.** MEASURED
+by deleting its one call: this program **compiles and answers 13** — `pick(2)` silently filled `b` from
+`alpha/`'s default, on a declaration that declares none — while `function-overloads`,
+`param-default-refusals`, `static-instance-name-duplicates`, `same-name-methods` and this whole spec stayed
+100% green. The order matters and only one of the two shows it: with the root file folded FIRST the
+incumbent is the root's own declaration and there is nothing stale to inherit.
+```maxon
+// --- file: alpha/a.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num, b Num = 5) returns Num
+	return a + b
+end 'pick'
+
+// --- file: rootpick.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small, b Small) returns Small
+	return a + b
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (pick(2) + alpha.pick(1)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3036: app/<fragment>:18:10: 'pick' expects 2 argument(s) but 1 were provided
+```
+
+
+<!-- test: error.a-root-contestant-does-not-inherit-a-subdirectorys-throws -->
+⛔ **THE SAME HOLE ON THE `throws` REGISTRY.** `error.contested-free-function-throws-is-not-inherited`
+below is this program with the second contestant in `beta/` instead of at the root — and that one passes
+whether or not the by-name clear runs, for the reason above. MEASURED with the clear deleted: this program
+**compiles and answers 5**, a `try` accepted over a root `pick` that declares no `throws`, where the
+correct answer is the E3055 below. Its twin fold order (root file first) refuses either way.
+```maxon
+// --- file: alpha/a.maxon
+enum Boom
+	bad
+end 'Boom'
+
+export function pick() returns int throws Boom
+	throw Boom.bad
+end 'pick'
+
+// --- file: rootpick.maxon
+export function pick() returns int
+	return 5
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let v = try pick() otherwise 0
+	return v as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3055: app/<fragment>:18:10: try requires a throwing function: 'pick' does not throw'
+```
+
+
 <!-- test: contested-free-function-own-default-still-applies -->
 The positive half of the case above, and the reason the cure is a SOURCE test rather than a clear of
 the bare key: alpha's own default must still reach alpha's own qualified key. Only one of the two

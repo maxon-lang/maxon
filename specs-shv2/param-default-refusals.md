@@ -312,6 +312,49 @@ end 'main'
 error E2015: beta/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-the-contestant-declares-first.test:16:35: Unsupported: a default value on parameter 'b' of 'beta.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
 ```
 
+<!-- test: error-default-on-a-contested-name-whose-declarations-disagree-about-parameter-names -->
+⛔⛔ **THE OTHER HALF OF W78's TALLY MOVE, AND NOTHING RAN IT UNTIL THIS CASE (found at review).** The
+three cases above all disagree by a MISSING default — one member publishes a shape and the other publishes
+nothing — which the sweep sees as two COUNTS that differ. This one disagrees the other way: both members
+publish a default, so the counts match and the only thing that can refuse it is the disagreement VERDICT
+`recordParamDefaults` files when two published shapes differ. `alpha/`'s members name their parameters
+`(a, b)` and `(x, y)`, so a short call cannot be told which pair of labels it is filling.
+
+⛔ **THE VERDICT HAS TO TRAVEL WITH THE ENTRIES, AND THAT MOVE HAD NO GATE.** `alpha/` folds first, so its
+verdict is filed under the bare `pick` and only `ProgramSignatures.moveDeclarationTallies` carries it onto
+`alpha.pick`. MEASURED by deleting that one line: this program **compiles and answers 65** while the
+identical program with the two directories folded in the other order still refuses, and the uncontested
+twin (`beta/` removed) still refuses — a silent, order-dependent accept that every committed case was
+green over. ⚠ **Still narrower than the language**: the oracle carries defaults per declaration and
+answers **67**.
+```maxon
+// --- file: alpha/a.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num, b Num = 5) returns Num
+	return a + b
+end 'pick'
+
+export function pick(x bool, y Num = 5) returns Num
+	return y if x else 0
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small) returns Small
+	return a + 50
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick(2) + alpha.pick(true) + beta.pick(3)) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: alpha/<fragment>:5:35: Unsupported: a default value on parameter 'b' of 'alpha.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+```
+
 <!-- test: two-files-agreeing-on-their-defaults-report-ONE-duplicate -->
 Two files declaring one `f` with the SAME default shape are no longer refused at the `=` (W74) — they fall
 through to the duplicate-definition diagnostic the program always deserved. ⚠ **AND THEY MUST EARN EXACTLY

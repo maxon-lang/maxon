@@ -8751,13 +8751,19 @@ export type ProgramSignatures
 		// body, and a free function is by definition outside every one, so this map never holds an entry a
 		// NAMESPACE contest could be about.
 		//
-		// ⚠ **PROBED (W78), AND ITS READER'S DECLINING ARM IS UNREACHABLE FROM ANY PROGRAM THAT COMPILES.** To
-		// populate this set two declarations of one key must disagree about their opaque parameters, and the
-		// three ways an opaque parameter can be USED each close that door first: STORING one makes the set a
+		// ⛔⛔ **W78 CLAIMED THIS SET'S READER COULD NOT BE REACHED BY ANY PROGRAM THAT COMPILES. IT IS
+		// REACHED BY `stdlib/Array.maxon` ON EVERY COMPILE (found at review).** The argument was that the
+		// three ways an opaque parameter can be USED each close the door first — STORING one makes the set a
 		// consuming overload (`Parser.requireOverloadableName`'s first refusal), FORWARDING one to a storing
-		// sibling reaches the same refusal, and RETURNING one is refused for want of a layout descriptor.
-		// Leaving `item` unused is E3012. So the set is filed correctly and `opaqueParamsOf` declines correctly,
-		// but nothing today gets far enough to observe either.
+		// sibling reaches the same refusal, RETURNING one is refused for want of a layout descriptor — and
+		// that leaving it unused is E3012. Two things are wrong with it. A fourth use was missed: `_ = item`
+		// DISCARDS the parameter, silencing E3012 while storing, forwarding and returning nothing. And the
+		// premise was never tested against the stdlib, where `Array`'s conditional extension declares
+		// `contains(element Element)` beside `contains(sequence ElementArray)` and puts `Array.contains` in
+		// this set for every program in the tree.
+		//
+		// ⇒ **WHAT IT COSTS IS A MISSING RANGE CHECK, MEASURED — see `opaqueParamsOf`**, which is where the
+		// decline is taken and where the cure is stated. It is a standing gap, not this rung's.
 		if secondDeclaration and not self.storedOpaqueParams(key).matches(opaqueParams) 'twoDeclarationsDisagree'
 			self.contestedOpaqueParams.insert(key)
 		end 'twoDeclarationsDisagree'
@@ -8915,11 +8921,31 @@ export type ProgramSignatures
 	// receiver. A callee with no entry reads back the shared "declares none", which every predicate on the
 	// record answers negatively for, so the caller needs no second presence test.
 	//
-	// ⚠ **A CONTESTED NAME ANSWERS "NONE", AND THAT IS A REFUSAL RATHER THAN A GAP.** The sweep keys by bare
-	// name, so an overload set whose members disagree about their opaque parameters has no answer this index
-	// can give — and giving one anyway builds a range guard for the member the call did not resolve to
-	// (`OpaqueParamInfo.matches` carries the measured wrong answer). Declining costs a missed check on
-	// exactly those sets and nothing anywhere else.
+	// ⛔⛔ **A CONTESTED NAME ANSWERS "NONE", AND THAT IS A MEASURED HOLE, NOT A REFUSAL (found at W78's
+	// review).** The sweep keys by bare name, so an overload set whose members disagree about their opaque
+	// parameters has no answer this index can give — and giving one anyway builds a range guard for the member
+	// the call did not resolve to (`OpaqueParamInfo.matches` carries that measured wrong answer). But the
+	// caller reads the decline as *"this callee guards nothing"* and emits NO guard, which is this family's
+	// one failure mode that is silent rather than loud.
+	//
+	// ⛔ **MEASURED (W78 review): a second declaration of an unrelated overload DELETES a range check on the
+	// first.** A `Holder uses Element` declaring `add(item Element)` — whose body pushes `item` into an
+	// `Array with Element` field — instantiated `Holder with Small` where `Small = int(0 to 10)` and handed a
+	// runtime 100: with `add` declared once the program panics
+	// `Range check failed: value outside typealias 'Small'`; add a `add(flag bool)` beside it and the same
+	// program RUNS, storing 100 in a slot whose declared range is 0 to 10. Removing this arm alone does not
+	// cure it — the guard then comes from whichever declaration the sweep recorded last, which is the wrong
+	// guard rather than a missing one.
+	//
+	// ⚠ **IT IS LIVE IN THIS TREE, on `Array.contains`** (`stdlib/Array.maxon`), whose conditional extension
+	// declares `contains(element Element)` beside `contains(sequence ElementArray)` — slot 0 opaque in one and
+	// concrete in the other. So this arm is taken on every compile, and it is NOT the unreachable check W78's
+	// `record` header first claimed it was.
+	//
+	// ⇒ **THE CURE IS PER-MEMBER OPAQUE COLUMNS, OR RECORDING THE GUARD AFTER OVERLOAD RESOLUTION — a rung,
+	// and not a refusal.** A blanket refusal at `Parser.requireOverloadableName`, on the terms the `throws`
+	// and consume refusals use, was written and MEASURED to reject `stdlib/Array.maxon:568` — the stdlib
+	// itself relies on the set this index cannot answer for.
 	export function opaqueParamsOf(callee ByteArray) returns OpaqueParamInfo
 		if self.contestedOpaqueParams.contains(callee) 'twoDeclarationsDisagree'
 			return sharedNoOpaqueParams
@@ -10687,6 +10713,16 @@ export type ProgramSignatures
 
 		self.claimContestedRegistrationName(bareName, registrationName: registrationName)
 		if not self.contestedKeyIsTakeable(registrationName) 'anotherDeclarationHoldsThisKey'
+			// ⚠ **THE INCUMBENT IS STRANDED ON THE BARE KEY, SO ITS TALLY IS MATERIALIZED HERE TOO (found at
+			// review).** Declining the qualified key leaves these declarations counted under the bare name —
+			// and from this line on the name is contested, which is to say counted from the tally map rather
+			// than from `returnTypes` (`keyAlreadyHoldsADeclaration`). Without this write the map says nothing
+			// about a key that already holds declarations, and a LATER contestant filing under the same bare
+			// key — a ROOT one, whose registration name IS that key — would read "absent" as zero and count
+			// itself the first. Every program that reaches this arm is refused by `commitFuncSignatures` for
+			// the collision that sent it here, so nothing observes the difference today; the invariant is
+			// stated in code rather than rested on that argument.
+			self.materializeDeclarationCount(bareName, contested: true)
 			return
 		end 'anotherDeclarationHoldsThisKey'
 
