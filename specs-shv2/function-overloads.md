@@ -107,6 +107,29 @@ directory-qualified name (`alpha.want`), and the sweep moves its throws clause o
 tally that would say whether the overloads agree stays on the bare name. With nothing left to compare,
 a throwing overload set of such a name is refused too — again however the members agree.
 
+##### ⚠ Every refusal above is **narrower than the language**, and none of them is canon
+
+The three paragraphs above describe what **shv2** can compile, not what the language permits. shv2
+decides the ABI of a `try` while the call is **parsed**, from a whole-program entry keyed by the name the
+source wrote; the oracle carries its throws facts **per declaration** and so has nothing to be unable to
+tell apart. Every one of these programs is a conservative refusal awaiting per-member facts in the sweep,
+and a later reader must not read them as rules. MEASURED against the bootstrap, on the very programs the
+cases below refuse:
+
+| shv2 refuses | the oracle |
+|---|---|
+| two members naming two error types (`Boom` beside `Splat`) | accepts, answers **14** |
+| a throwing member beside a non-throwing one | accepts, answers **14** |
+| a `static`/instance pair whose parameter types tell them apart, one of them throwing | accepts, answers **7** |
+| a throwing overload set whose bare name a second directory declares | accepts, answers **18** |
+
+The `static`/instance pair is the one place the two compilers disagree about more than throws: the oracle
+treats such a pair as **one overload set**, so when the two members' parameter types cannot tell them apart
+it reports `E3007: Ambiguous overload for 'T.m'` at the call rather than accepting — which is why the
+measured acceptance above is of the variant whose parameters differ. shv2 separates the pair by
+registration key instead (`same-name-methods.md`), and refuses only once a `throws` clause has to be
+attributed to one of those two keys.
+
 #### The oracle's non-injective overload name is deliberately not ported
 
 The canonical suite's `error.overload-pair-compiling-to-one-name` pins a **refusal**: the
@@ -1223,6 +1246,56 @@ end 'main'
 15
 ```
 
+<!-- test: overloaded-throw-is-recovered-by-try-members-reversed -->
+The identical program with the two members written in the other order, and it earns a case of its own
+because the clause the `try` reads is filed LAST-WINS under one key: the case above would pass just as
+well if the recovery were attributed to whichever member the sweep happened to record last, and only the
+reversal can tell the two apart. Same three numbers, same total — `10` from the Num member's throw, `3`
+from the bool member's, `2` from the bool member's non-throwing return.
+```maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom implements Error
+	fromNumber
+	fromFlag
+end 'Boom'
+
+function check(value bool) returns Num throws Boom
+	if value 'yes'
+		throw Boom.fromFlag
+	end 'yes'
+	return 2
+end 'check'
+
+function check(value Num) returns Num throws Boom
+	if value < 0 'low'
+		throw Boom.fromNumber
+	end 'low'
+	return 1
+end 'check'
+
+function main() returns ExitCode
+	var result = 0
+	try check(-1) otherwise (e) 'fromTheNumberMember'
+		match e 'which'
+			fromNumber then result = result + 10
+			fromFlag then result = result + 100
+		end 'which'
+	end 'fromTheNumberMember'
+	try check(true) otherwise (e) 'fromTheFlagMember'
+		match e 'which'
+			fromNumber then result = result + 1000
+			fromFlag then result = result + 3
+		end 'which'
+	end 'fromTheFlagMember'
+	let last = try check(false) otherwise 0
+	return (result + last) as ExitCode
+end 'main'
+```
+```exitcode
+15
+```
+
 <!-- test: error.overloads-disagree-on-the-error-they-throw -->
 Two error types under one name. The `(e)` binding a `try` mints is typed while the call is PARSED, from
 the one entry the by-name sweep holds — whichever declaration wrote it last — so one of the two calls
@@ -1270,6 +1343,9 @@ recorded, so nothing in the throws registry can report the member that publishes
 declaration COUNT that does — every declaration is counted once, and the throwing ones are counted again
 in a tally of their own, so a difference between the two IS the silent sibling. Without it this set is
 admitted and `want(true)` is compiled as a throwing call, whose error flag the bool member never writes.
+⚠ **A CONSERVATIVE REFUSAL, not a rule of the language**: the oracle compiles this exact program and
+answers **14** (MEASURED), because its throws facts are per-declaration. Lifting it needs per-member facts
+in shv2's sweep, not a better test here.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1304,7 +1380,8 @@ error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarati
 <!-- test: error.overloads-disagree-on-whether-they-throw-at-all-non-throwing-member-first -->
 The same two declarations in the other order. The refusal is settled from the whole-program sweep, which
 has folded every file before any of them is parsed, so which member the author wrote first cannot change
-the verdict — only the position the diagnostic is reported at.
+the verdict — only the position the diagnostic is reported at. Conservative in the same way its twin
+above is, and for the same reason.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1342,7 +1419,11 @@ the call by syntax — but the sweep files a `throws` clause under the one name 
 clause belongs to neither key. The static's call asks for `T.m#__static` and misses, and the instance's
 call asks for `T.m` and finds the STATIC's clause: both readings are wrong, and neither is repairable
 once the `try` has been desugared. Refused however the two agree, which is the difference between a pair
-and an overload set.
+and an overload set. ⚠ **Narrower than the language**: give the two members parameter types that tell them
+apart and the oracle compiles the same pair and answers **7** (MEASURED). On THIS program — where both
+members take `Num` — the oracle refuses too, but for a different reason and at a different place
+(`E3007: Ambiguous overload for 'T.m'` at the call), because it reads a pair as one overload set where
+shv2 reads two registration keys.
 ```maxon
 typealias Num = int(-1000 to 1000)
 
@@ -1470,7 +1551,9 @@ have to read was therefore never computed for this key. ⚠ It is a REAL refusal
 the throws types made to disagree, the same program compiles one way round and reports
 `E3034: unknown enum case` the other, because the `(e)` binding is typed off whichever clause the by-name
 sweep recorded last. Curing it means tallying per registration key, which is `W75`'s "one fact under two
-keys" at a third registry.
+keys" at a third registry. ⚠ **Still narrower than the language**: the oracle compiles this exact program
+and answers **18** (MEASURED). Both fold orders reach the same refusal, and so does the shape where the
+contesting declaration sits at the ROOT rather than in a second subdirectory.
 ```maxon
 // --- file: alpha/x.maxon
 typealias Num = int(-1000 to 1000)

@@ -3363,6 +3363,12 @@ typealias DisagreeingParamDefaultNameSet = Set with ByteArray
 typealias FunctionDeclarationCount = int(1 to u32.max)
 typealias FunctionDeclarationCountMap = Map with (ByteArray, FunctionDeclarationCount)
 
+// The shape EVERY "which names publish two different values of one swept fact?" set wears —
+// `DisagreeingParamDefaultNameSet` above and `DisagreeingThrowsNameSet` below are both this, and it is the
+// parameter type of the ONE routine that reads either (`ProgramSignatures.declarationsDisagreeAbout`). Named
+// for the question rather than for a registry, because the routine is asked it about more than one.
+typealias DivergentDeclarationNameSet = Set with ByteArray
+
 // The answer to "does this callee declare any parameter default?" — a union so "no recorded entry" is an
 // ANSWER (every parameter is mandatory), never confused with an empty-but-present one. `CalleeConsume`'s
 // twin, one declaration fact over.
@@ -4178,19 +4184,21 @@ export function iterableFactoryFromClause(clause ThrowsClause) returns IterableF
 	end 'infallible'
 
 	if not throwsClauseIsIterationError(clause) 'someOtherError'
-		return IterableFactory.throwsSomethingElse(try throwsClauseName(clause) otherwise panic("iterableFactoryFromClause: a clause answered `throwing` to `throwsClauseIsThrowing` and `none` to `throwsClauseName` — one union, two readings"))
+		return IterableFactory.throwsSomethingElse(throwingClauseTypeName(clause))
 	end 'someOtherError'
 
 	return IterableFactory.throwsIterationError
 end 'iterableFactoryFromClause'
 
-// The error type a clause the throws REGISTRY holds names. `ProgramSignatures.recordThrows` files only a
-// throwing clause and returns before writing anything else, so `none` on either side of its comparison is
-// not a program's property but two readings of one union — `iterableFactoryFromClause`'s panic above, at the
-// registry's own door. Written once because the comparison has two operands and one contract.
-function recordedThrowsTypeName(clause ThrowsClause) returns String
-	return try throwsClauseName(clause) otherwise panic("recordedThrowsTypeName: a clause the throws registry holds answered `throwing` to `throwsClauseIsThrowing` and `none` to `throwsClauseName` — one union, two readings")
-end 'recordedThrowsTypeName'
+// ⭐ **THE ERROR TYPE A CLAUSE ALREADY ESTABLISHED AS THROWING NAMES — the ONE spelling of that assertion in
+// this file.** `none` here is never a program's property: every caller has already separated the two arms,
+// either through `throwsClauseIsThrowing` (`iterableFactoryFromClause` above) or by reading the clause back
+// out of a registry only a throwing declaration reaches (`ProgramSignatures.recordThrows` files nothing else
+// and returns before writing). So the failure it names is two readings of ONE union disagreeing, and there is
+// exactly one thing to say about that — which is why the panic is written here rather than at each door.
+function throwingClauseTypeName(clause ThrowsClause) returns String
+	return try throwsClauseName(clause) otherwise panic("throwingClauseTypeName: a clause answered `throwing` to `throwsClauseIsThrowing` and `none` to `throwsClauseName` — one union, two readings")
+end 'throwingClauseTypeName'
 
 // The `element_size@24` of a MANAGED-element array (P1.7 slice 3) — a managed element (String / struct /
 // union / instance / nested Array) is a HEAP BOX addressed by a POINTER, so a slot holds the 8-byte pointer,
@@ -9706,12 +9714,31 @@ export type ProgramSignatures
 			return false
 		end 'thisNameDeclaresNoDefault'
 
-		if self.disagreeingParamDefaults.contains(name) 'twoShapes'
-			return true
-		end 'twoShapes'
-
-		return self.declarationCountIn(self.funcDeclarationCounts, name: name) != self.declarationCountIn(self.funcDefaultingDeclarationCounts, name: name)
+		return self.declarationsDisagreeAbout(self.disagreeingParamDefaults, publishedBy: self.funcDefaultingDeclarationCounts, name: name)
 	end 'paramDefaultsCollide'
+
+	// ⭐⭐ **DO THIS NAME'S DECLARATIONS DISAGREE ABOUT A FACT ONLY SOME OF THEM PUBLISH? — the ONE comparison
+	// `paramDefaultsCollide` and `throwsClauseAttribution` both rest on, written once (W77 review).** The two
+	// registries are different (a default shape, a `throws` clause) and so are the two verdicts they feed (a
+	// bool, a four-arm union), but the TEST is the same test, because both registries are absence-is-the-answer:
+	// only a declaration that HAS the fact ever reaches the recorder.
+	//
+	// ⚠ **THAT IS WHY IT IS TWO HALVES AND NOT ONE, and why they must stay together.** `disagreeing` catches two
+	// PUBLISHED values that differ — the recorder compares its own overwrite and files the name. The counts catch
+	// the half the recorder structurally cannot see: a sibling that published NOTHING never reached it, so every
+	// test written over the registry alone reads that program as unanimous. `record` counts EVERY declaration and
+	// each recorder counts its own, so a difference IS the silent sibling.
+	//
+	// ⛔ **IT IS WRITTEN ONCE BECAUSE A THIRD WAY TO DISAGREE WOULD OTHERWISE HAVE TO BE ADDED TWICE**, and the
+	// copy that missed it would not fail to compile — it would answer "these declarations agree" about a name
+	// whose declarations do not, which at both doors is a silently mis-compiled call rather than a diagnostic.
+	function declarationsDisagreeAbout(disagreeing DivergentDeclarationNameSet, publishedBy FunctionDeclarationCountMap, name ByteArray) returns bool
+		if disagreeing.contains(name) 'twoPublishedValuesDiffer'
+			return true
+		end 'twoPublishedValuesDiffer'
+
+		return self.declarationCountIn(self.funcDeclarationCounts, name: name) != self.declarationCountIn(publishedBy, name: name)
+	end 'declarationsDisagreeAbout'
 
 	// Count one more declaration of `name` in `counts`, seeding at the one already folded — see
 	// `FunctionDeclarationCountMap` for why the map holds only names with more than one, and why `1` is the
@@ -9746,7 +9773,7 @@ export type ProgramSignatures
 		// sibling moves the hash through the write that made it.
 		if let incumbent = try self.funcThrows.get(name) 'anotherThrowingDeclarationOfThisName'
 			self.noteRepeatedDeclaration(self.funcThrowingDeclarationCounts, name: name)
-			if not recordedThrowsTypeName(incumbent).equals(recordedThrowsTypeName(clause)) 'twoErrorTypes'
+			if not throwingClauseTypeName(incumbent).equals(throwingClauseTypeName(clause)) 'twoErrorTypes'
 				self.disagreeingThrows.insert(name)
 			end 'twoErrorTypes'
 		end 'anotherThrowingDeclarationOfThisName'
@@ -9763,21 +9790,16 @@ export type ProgramSignatures
 	// because the three ways the answer can be no are three different defects and each earns its own sentence
 	// at the refusal — `OverloadRedeclaration`'s shape, one registry over, and for its reason.
 	//
-	// Two of the three are about this name's own declarations, and the sweep sees each from a different side
-	// (`paramDefaultsCollide`'s pair of halves, one registry over, and its reason):
+	// ONE of the three is about this name's own declarations — they name two error types, or a sibling throws
+	// nothing at all — and it is not decided here: it is `declarationsDisagreeAbout`'s, the shared comparison
+	// `paramDefaultsCollide` asks of the defaults registry one door over. Both halves of it matter and both are
+	// stated there; the reason it is not written twice is that a THIRD way to disagree, added to one copy only,
+	// would leave the other silently calling a divergent set unanimous.
 	//
-	//   • **Two throwing declarations name different error types** — recorded by `recordThrows`, which compares
-	//     them (`DisagreeingThrowsNameSet`).
-	//   • **A sibling throws NOTHING** — invisible to the throws registry, because only a throwing declaration
-	//     ever reaches it. That is what the two counts are for: every declaration is counted by `record`, only
-	//     the throwing ones by `recordThrows`, and a difference IS the non-throwing sibling. Without it the set
-	//     is admitted and the sibling's calls are compiled as throwing calls, reading an error flag no member
-	//     ever writes.
-	//
-	// The third is not about the declarations at all but about the KEY they are filed under, and it is why this
-	// function reads two contest registries before it reads its own two halves: those halves are tallied under
-	// the name the SWEEP wrote, and two contests move the ENTRY off that name without moving the tally with it.
-	// Where they part there is no verdict to read, so the honest answer is the blanket one.
+	// The other two are not about the declarations at all but about the KEY they are filed under, and they are
+	// why this function reads two contest registries BEFORE that comparison: it is tallied under the name the
+	// SWEEP wrote, and two contests move the ENTRY off that name without moving the tally with it. Where they
+	// part there is no verdict to read, so the honest answer is the blanket one.
 	//
 	// A name NO declaration throws from has one answer — "does not throw" — and nothing to disagree about, so
 	// the absent entry is the fast path and the common one.
@@ -9822,13 +9844,9 @@ export type ProgramSignatures
 			return ThrowsClauseAttribution.filedUnderAnotherKey
 		end 'theTalliesStayedOnTheBareName'
 
-		if self.disagreeingThrows.contains(name) 'twoErrorTypes'
+		if self.declarationsDisagreeAbout(self.disagreeingThrows, publishedBy: self.funcThrowingDeclarationCounts, name: name) 'twoErrorTypesOrASiblingThatThrowsNothing'
 			return ThrowsClauseAttribution.declarationsDisagree
-		end 'twoErrorTypes'
-
-		if self.declarationCountIn(self.funcDeclarationCounts, name: name) != self.declarationCountIn(self.funcThrowingDeclarationCounts, name: name) 'aSiblingThrowsNothing'
-			return ThrowsClauseAttribution.declarationsDisagree
-		end 'aSiblingThrowsNothing'
+		end 'twoErrorTypesOrASiblingThatThrowsNothing'
 
 		return ThrowsClauseAttribution.appliesToEveryDeclaration
 	end 'throwsClauseAttribution'
