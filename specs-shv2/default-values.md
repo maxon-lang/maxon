@@ -353,3 +353,48 @@ end 'main'
 ```exitcode
 5
 ```
+
+### Error: A default value must consume everything up to the `,` or `)` that ends it
+
+The capture walks to the delimiter that ends the default, and the expression parsed out of that region
+has to reach it. Anything left over is text the author wrote and the compiler was about to ignore —
+`b Integer = 7 zzz` silently defaulted to 7, exactly as `"{7 zzz}"` silently printed 7.
+
+<!-- test: default-values.error.param-default-trailing-tokens -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function f(a Integer, b Integer = 7 zzz) returns Integer
+	return a + b
+end 'f'
+
+function main() returns ExitCode
+	return f(1)
+end 'main'
+```
+```maxoncstderr
+error E2010: specs/fragments/default-values/default-values.error.param-default-trailing-tokens.test:4:37: Expected 'end of default value' but got 'zzz'
+```
+
+### Error: An exponent without a decimal point is not a float default either
+
+`1e100` is the integer `1` followed by the identifier `e100` — a float literal must contain a decimal
+point. Dropped, it made `b Real = 1e100` default to `1`: a hundred orders of magnitude, silently.
+Write `1.0e100`.
+
+<!-- test: default-values.error.param-default-exponent-without-point -->
+```maxon
+typealias Real = float(f64.min to f64.max)
+
+function f(a Real, b Real = 1e100) returns Real
+	return a + b
+end 'f'
+
+function main() returns ExitCode
+	print("{f(1.0)}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: specs/fragments/default-values/default-values.error.param-default-exponent-without-point.test:4:30: Expected 'end of default value' but got 'e100'
+```

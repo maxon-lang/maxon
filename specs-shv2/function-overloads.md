@@ -49,6 +49,49 @@ create("bar")   // calls second overload
 
 If the compiler cannot determine which overload to call based on argument types alone, it requires named arguments. Calling an ambiguous overload without named arguments is a compile error.
 
+#### Each overload carries its own parameter defaults
+
+Every member of an overload set may give a parameter a default value, and a call that omits
+the argument gets **the default belonging to the member the call resolves to** — not the one
+belonging to whichever declaration the compiler read last.
+
+```text
+function pad(value Integer, with String = "0") returns String
+  return with
+end 'pad'
+
+function pad(value bool, with String = "-") returns String
+  return with
+end 'pad'
+
+pad(1)      // "0" — the Integer member's default
+pad(true)   // "-" — the bool member's default
+```
+
+The members have to agree on the **shape** of their defaults, because the argument list is
+built while the call is parsed and the overload is picked a whole pass later: the same
+call-aligned parameter names, and at every position the same answer to "does this parameter
+default, and is it produced by a synthesized helper or by the caller's own location?".
+What they may differ in is the only thing the parse does not have to commit to — the default
+**expression**, which is a function body the resolved member names. A set whose members
+disagree about the shape is refused at the declaration, with the position of the `=`.
+
+#### The oracle's non-injective overload name is deliberately not ported
+
+The canonical suite's `error.overload-pair-compiling-to-one-name` pins a **refusal**: the
+bootstrap builds an overload's disambiguating name by joining `{parameter}_{type}` parts with
+`_`, and `_` is legal inside both a parameter name and a type name, so the join is not
+injective — `f(x_i64_y P, w R)` and `f(x i64_y_P, w R)` compile to one name and the bootstrap
+reports `E3006`.
+
+shv2 **compiles that program and prints the correct `3 34`**, both overloads live, each
+answering for its own argument types. Its overload identity does not go through that join at
+all: a member's registration name is claimed against the file's own set of already-claimed
+names and counted past on a contest, so uniqueness is established by construction rather than
+by an injectivity argument (`Parser.overloadRegistrationNameFor`). Porting the canonical case
+would therefore demand a regression — a refusal of a program this compiler handles — so it is
+not ported, and this paragraph is the record of that decision rather than a silent gap.
+
 ## Tests
 
 <!-- test: basic-type-disambiguation -->
@@ -854,4 +897,126 @@ end 'main'
 ```
 ```exitcode
 109
+```
+
+<!-- test: overloads-each-carry-their-own-default -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function pad(value Integer, with String = "0") returns Integer
+	return value + with.count()
+end 'pad'
+
+function pad(value bool, with String = "---") returns Integer
+	if value 'yes'
+		return with.count()
+	end 'yes'
+	return 0
+end 'pad'
+
+function main() returns ExitCode
+	return (pad(1) + pad(true)) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: overloads-three-way-each-carry-their-own-default -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function tag(value Integer, mark String = "a") returns Integer
+	return value + mark.count()
+end 'tag'
+
+function tag(value String, mark String = "bb") returns Integer
+	return value.count() + mark.count()
+end 'tag'
+
+function tag(value bool, mark String = "ccc") returns Integer
+	if value 'yes'
+		return mark.count()
+	end 'yes'
+	return 0
+end 'tag'
+
+function main() returns ExitCode
+	return (tag(1) + tag("xy") + tag(true)) as ExitCode
+end 'main'
+```
+```exitcode
+9
+```
+
+<!-- test: overload-default-supplied-explicitly-on-one-member -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function width(value Integer, unit String = "mm") returns Integer
+	return value + unit.count()
+end 'width'
+
+function width(value bool, unit String = "inches") returns Integer
+	if value 'yes'
+		return unit.count()
+	end 'yes'
+	return 0
+end 'width'
+
+function main() returns ExitCode
+	return (width(3, unit: "centimetre") + width(true)) as ExitCode
+end 'main'
+```
+```exitcode
+19
+```
+
+<!-- test: overloads-with-caller-location-defaults -->
+```maxon
+// --- file: main.maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Expect
+
+	export static function equal(actual Integer, expected Integer, message String = "num", file String = __file__, line SourceLineNumber = __line__) returns Integer
+		print("{file}:{line} {message}\n")
+		if actual == expected 'same'
+			return message.count()
+		end 'same'
+		return 0
+	end 'equal'
+
+	export static function equal(actual String, expected String, message String = "text", file String = __file__, line SourceLineNumber = __line__) returns Integer
+		print("{file}:{line} {message}\n")
+		if actual.count() == expected.count() 'same'
+			return message.count()
+		end 'same'
+		return 0
+	end 'equal'
+
+	export static function equal(actual bool, expected bool, message String = "flag", file String = __file__, line SourceLineNumber = __line__) returns Integer
+		print("{file}:{line} {message}\n")
+		if actual == expected 'same'
+			return message.count()
+		end 'same'
+		return 0
+	end 'equal'
+
+end 'Expect'
+
+function main() returns ExitCode
+	let a = Expect.equal(1, expected: 1)
+	let b = Expect.equal("xy", expected: "xy")
+	let c = Expect.equal(true, expected: true)
+	return (a + b + c) as ExitCode
+end 'main'
+```
+```exitcode
+11
+```
+```stdout
+main.maxon:33 num
+main.maxon:34 text
+main.maxon:35 flag
 ```
