@@ -656,11 +656,14 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesIncref = true
 		usage.usesHeap = true
 	end 'strretain'
-	// The `General_Category` lookup (P1.8 Slice D). It declares NOTHING else — see `usesUcdCategory` —
-	// which makes it the second family, beside `__clock_*`, whose body calls nothing this scan cannot see.
-	if callee.equals(UcdCategoryName) 'ucdcategory'
+	// The `General_Category` family (P1.8 Slice D; the two raw table loads added at W64). It declares
+	// NOTHING else — see `usesUcdCategory` — which makes it the second family, beside `__clock_*`, whose
+	// bodies call nothing this scan cannot see. A PREFIX, exactly as `__clock_*` and `__gt_*` are: all
+	// three entry points read the same two tables and carry the same nothing else, so "does this program
+	// touch the UCD tables?" is one question with one answer.
+	if isUcdRuntimeCallee(callee) 'ucdtables'
 		usage.usesUcdCategory = true
-	end 'ucdcategory'
+	end 'ucdtables'
 	// ⚠ **THE ORDER IS A RULE ABOUT FAMILIES, NOT ABOUT TODAY'S ARMS, WHICH IS WHY IT SURVIVES THE ARM THAT
 	// FORCED IT.** The `CharacterSet` family closes into the two below it — `__cs_contains` decodes a
 	// codepoint — so it must record FIRST: a bit turned on after its own family's closure has run installs an

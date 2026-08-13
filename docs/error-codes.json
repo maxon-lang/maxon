@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "67b7898a2857af53",
+  "sourceHash": "805e4a1d30e1fac2",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -533,6 +533,15 @@
       "doc": "A 'Vector with ...' does not state a usable element COUNT before its element type:\n'Vector with Int' (no count at all), 'Vector with 0 Int' (a vector of no elements), or a\ncount too large for the compiler to fold into a buffer allocation.\nA Vector's SIZE IS PART OF ITS TYPE ('Vector with 3 Int' and 'Vector with 4 Int' are\ndifferent types), which is why the count is required rather than defaulted: there is no\nsize a sizeless spelling could mean, and a default would silently give two declarations\none type. It is NOT E2056 GenericArityMismatch, which counts TYPE arguments -- the count\nis a value, is consumed before the type-argument list is read, and a 'Vector with 3'\nmissing its element type IS the E2056 that code names.\nv1 reports the same two faults through its generic parser-error codes; shv2 registers its\nown so the one rule has one message wherever the spelling is met.",
       "emittedBy": {"shv2": "vectorSizeMalformed"},
       "notEmittedBy": ["csharp", "selfhosted"]
+    },
+    {
+      "code": 2070,
+      "tag": "E2070",
+      "name": "ParserUcdTableLabelUnknown",
+      "stage": "parser",
+      "doc": "A '__Builtins.ucd*' load names a compiler-owned Unicode table its intrinsic does not read.\nEach intrinsic reads exactly ONE table, because the label and the STRIDE are one fact:\n'ucdByteAt' reads '__ucd_bmp', one byte per BMP codepoint, and 'ucdI64At' reads\n'__ucd_supp', an array of 8-byte packed range entries. Reading either with the other's\nstride cannot produce an answer -- only a wrong one -- so the pairing is refused rather\nthan assumed, and the message names the table the intrinsic DOES read.\n⚠ IT IS A SECURITY GUARD AND NOT A TYPO CHECK, which is why it is a refusal at the label\ntoken rather than a link failure later. Both reference compilers turned the label into a\nFILE NAME under the stdlib directory, so an unchecked one was a PATH TRAVERSAL: MEASURED,\nthe bootstrap answered '__Builtins.ucdByteAt(\"__ucd_../../../evil\", 0)' by reaching for\n'stdlib/helpers/string/ucd_../../../evil.bin' and reporting the miss as E9001 with a C#\nstack trace. v1 guards only the '__ucd_' PREFIX (LowerMaxonToStd.maxon:8464-8486), which\ndoes not close it: '__ucd_../../x' carries the prefix and still escapes. A ROSTER of the\ntables the compiler actually owns is what closes it, and it is the same roster in both\ncompilers.\nNOT E2010: a label that is not a string LITERAL at all is refused at the token by the\nordinary 'expected a string literal' rule, because that is a shape the parser can state\nwithout knowing which intrinsic it is reading for.",
+      "emittedBy": {"csharp": "ParserUcdTableLabelUnknown", "shv2": "ucdTableLabelUnknown"},
+      "notEmittedBy": ["selfhosted"]
     },
     {
       "code": 3001,

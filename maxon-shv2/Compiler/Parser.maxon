@@ -1300,6 +1300,26 @@ export union ParseError implements Error
 	// because they are one mistake — a statement that computes nothing — and NOT a raiser, because a place
 	// chain compared against itself and a literal in RHS position have no shape in common to share.
 	discardOfALiteral(line LineNumber, column ColumnNumber)
+	// ⭐⭐ **A `__Builtins.ucd*` LOAD WHOSE LABEL NAMES NO TABLE ITS INTRINSIC READS.** Renders as
+	// **E2070**, positioned at the label LITERAL. `table` is the one that intrinsic does read, so the
+	// message names the fix rather than only the fault. APPENDED AT THE END OF THE UNION.
+	//
+	// ⚠ **A SECURITY GUARD, NOT A TYPO CHECK.** Both reference compilers turn the label into a FILE NAME
+	// under the stdlib directory, so an unrostered one was a PATH TRAVERSAL — MEASURED against the
+	// bootstrap, which answered `ucdByteAt("__ucd_../../../evil", 0)` by reaching for
+	// `stdlib/helpers/string/ucd_../../../evil.bin` and reporting the miss as an E9001 carrying a C# stack
+	// trace. v1 checks the `__ucd_` PREFIX only, which that label carries. See `parseUcdTableLoad`.
+	ucdTableLabelUnknown(intrinsic String, table String, label String, line LineNumber, column ColumnNumber)
+	// ⭐ **A `name:` LABEL THAT NAMES NO PARAMETER OF AN INTRINSIC THAT HAS SOME.** Renders as **E3037**
+	// through `argUnknownLabelMessage` — the SAME code and the same words a user-declared call's unknown
+	// label gets, and the same producer its witness-dispatch twin uses, because it is one mistake met at a
+	// third kind of call site. APPENDED AT THE END OF THE UNION.
+	//
+	// It is a SEPARATE arm from `witnessUnknownArgLabel` only because that arm's noun is a witness
+	// dispatch; sharing the message rather than the variant is what keeps the three sites' wording one
+	// fact. Raised by `parseUcdTableLoad`, the one intrinsic family with parameter names — a builtin
+	// WITHOUT a declaration answers E2067 instead, and that difference is the whole rule.
+	builtinUnknownArgLabel(intrinsic String, label String, line LineNumber, column ColumnNumber)
 end 'ParseError'
 
 // ⭐⭐ **ONE PARSER-DETECTED NAME DIAGNOSTIC WHOSE REPORT IS HELD BACK UNTIL EVERY FILE IS PARSED.**
@@ -4174,6 +4194,41 @@ let BuiltinsWriteStderrName = b"__Builtins.writeStderr"
 let BuiltinsBitsToFloatName = b"__Builtins.bitsToFloat"
 
 let BuiltinsFloatToBitsName = b"__Builtins.floatToBits"
+
+// ⭐⭐ **`__Builtins.ucdByteAt("__ucd_bmp", offset: cp)` / `ucdI64At("__ucd_supp", index: i)` — THE TWO RAW
+// READS OF THE CHECKED-IN UNICODE TABLES (W64).** `stdlib/helpers/string/unicodeCategory.maxon:53-75` is
+// written against exactly this pair — both reference compilers give it to that file — and it is the only
+// corpus caller. Their lowering is `UnicodeCategoryRuntime`'s `__ucd_bmp_at`/`__ucd_supp_at`, the same two
+// table reads `__ucd_cat` is built from.
+//
+// ⭐⭐ **THEY ARE THE FIRST `__Builtins` INTRINSICS WITH A REAL DECLARATION, AND THAT IS THE POINT OF THE
+// RUNG.** ⚖ USER RULING 2026-08-12, on a measured contradiction: `STDLIB-BRINGUP.md` §F filed the corpus's
+// unlabelled second argument as *"either intrinsic calls are exempt from the named-argument rule, or the
+// corpus is edited"* — but a `name:` label names a PARAMETER OF A DECLARATION, and this pair had no
+// parameter names in the bootstrap at all (a hand-written parse hook, `2-Parser.cs:12178-12201`), so
+// there was no name to write. MEASURED: `offset: cp` answered `E2004 Undefined variable 'offset'`. The
+// answer was neither exemption nor a re-spelling of the call — it was to GIVE THEM A DECLARATION. Each
+// now has two parameters, `label` and `offset`/`index`, in BOTH compilers, and the universal label rule
+// binds with nothing added to it.
+//
+// ⇒ **They are emphatically NOT in `calleeTakesPositionalArgsOnly`** — that roster is the MATH intrinsics,
+// the builtins that are permanently compiler-owned because each IS a machine instruction and will never
+// acquire a declaration to take labels from. These two acquired one.
+//
+// ⚠ **shv2 REQUIRES the label; the bootstrap merely ACCEPTS it.** Both compile the corpus spelling; only
+// shv2 refuses the unlabelled one (E2053, its universal rule). The asymmetry is the safe direction — a
+// compiler refusing MORE than the oracle cannot break the differential gate — and it is the same
+// asymmetry the bootstrap's own `MissingArgLabel` header already records for every other call door.
+let BuiltinsUcdByteAtName = b"__Builtins.ucdByteAt"
+let BuiltinsUcdI64AtName = b"__Builtins.ucdI64At"
+
+// The DECLARED name of each intrinsic's second parameter — the authority a `name:` label is checked
+// against, and the only spelling of it. `offset` counts BYTES into the directly-indexed BMP table;
+// `index` counts 8-byte ENTRIES into the sorted supplementary table, and the two words say which.
+// Both reference compilers use these same two names (v1 registers them as real signatures,
+// `LowerMaxonToStd.maxon:1110-1111`; the bootstrap's rows carry them since W64).
+let UcdByteAtIndexParamName = b"offset"
+let UcdI64AtIndexParamName = b"index"
 
 // `floatToBits(x)` takes exactly one FLOAT and `bitsToFloat(b)` exactly one INTEGER. Stated here beside
 // the intrinsics for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
@@ -57817,6 +57872,22 @@ export type Parser
 		try self.consumeNameToken(NamePosition.declaration)
 		try self.consume(TokenKind.leftParen)
 
+		// ⭐ **THE TWO UCD TABLE LOADS ARE PARSED, NOT EMITTED FROM PARSED ARGUMENTS** — their first
+		// argument is a compile-time LABEL that selects a linked blob, so it must be read off its token
+		// rather than resolved as a value. Taken here, before `parseCallArgs`, because that is the only
+		// point at which the label's token is still the cursor. See `parseUcdTableLoad`; the label RULE it
+		// enforces on the second argument is `consumeArgLabel`'s, not a second copy.
+		//
+		// A receiver cannot have been prepended: `__Builtins` is a compiler TYPE, so both these callees
+		// arrive through `parseQualifiedCall` with `ReceiverArg.none`.
+		if callee.equals(BuiltinsUcdByteAtName) 'ucdByteAt'
+			return try self.parseUcdTableLoad(func, callee: callee, tableStem: UcdBmpStem, runtimeName: UcdBmpAtName, indexParamName: UcdByteAtIndexParamName, anchor: anchor)
+		end 'ucdByteAt'
+
+		if callee.equals(BuiltinsUcdI64AtName) 'ucdI64At'
+			return try self.parseUcdTableLoad(func, callee: callee, tableStem: UcdSuppStem, runtimeName: UcdSuppAtName, indexParamName: UcdI64AtIndexParamName, anchor: anchor)
+		end 'ucdI64At'
+
 		var args = ValueIdArray.create()
 		var argLabels = ByteArrayArray.create()
 		var argRanges = SourceRangeArray.create()
@@ -58398,6 +58469,64 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(runtimeName, args: callArgs, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitBuiltinsStreamWrite'
+
+	// ⭐⭐ **`__Builtins.ucdByteAt("__ucd_bmp", offset: cp)` — A RAW READ OF A CHECKED-IN UNICODE TABLE
+	// (W64).** Serves both intrinsics, differing only in the table, the leaf and the parameter NAME, which
+	// is what makes the two impossible to enforce differently: the sibling door is where this repo's
+	// recorded scar lives (a rule applied to the one name that forced the question and left standing one
+	// name over).
+	//
+	// ⭐⭐ **IT PARSES ITS OWN ARGUMENTS, AND ONLY THE LABEL IS THE REASON.** The label selects a blob the
+	// compiler LINKS, so it has to be known while the call is parsed; taken off its token, a computed
+	// label is structurally impossible rather than merely refused, and no dead `stringLiteral` op or
+	// `.rdata` String record is minted for text that never becomes a value. v1 takes the other route —
+	// an ordinary argument, recovered afterwards through `stringLiteralProvenance`
+	// (`LowerMaxonToStd.maxon:1087-1096`) — which is the same refusal one pass later plus that record;
+	// the bootstrap takes this one (`2-Parser.cs`'s `ParseUcdTableLoadArgs`).
+	//
+	// ⭐ **EVERY RULE IT APPLIES IS ASKED THROUGH THE DOOR THAT OWNS IT, NOT RESTATED HERE.**
+	// `consumeArgLabel` decides E2052 for the label argument and E2053 for the index argument — the one
+	// place either is decided — and this function adds only the question a declared callee's own
+	// signature would have answered downstream (does the label name THIS parameter?) plus the roster
+	// check, which is the security guard `UnicodeCategoryRuntime`'s header measures.
+	//
+	// ⚠ The result is a bare i64: `tagIsIntegral` and not `tagIsInteger`, for the reason the `readStdin`
+	// arm records — a ranged alias carries the `named` tag until TypeResolution collapses it, and an index
+	// is exactly the sort of value a corpus spells with one (`stdlib/helpers/string/unicodeCategory.maxon`
+	// hands over a `Codepoint`).
+	function parseUcdTableLoad(func IrFunction, callee ByteArray, tableStem String, runtimeName ByteArray, indexParamName ByteArray, anchor Token) returns ValueId throws ParseError
+		// The table label is the FIRST argument and is therefore positional — the language's rule for the
+		// first argument of every call, inherited rather than restated. Asked BEFORE the literal is
+		// consumed so a labelled one earns E2052 instead of "expected a string literal".
+		_ = try self.consumeArgLabel(0 as ParamCount, rule: ArgLabelRule.ordinary)
+
+		let labelTok = try self.consume(TokenKind.stringLiteral)
+		let label = try self.decodedStringLiteralBytes(labelTok)
+		let table = ucdLabel(tableStem)
+		if not label.equals(table.toByteArray()) 'notThisIntrinsicsTable'
+			throw ParseError.ucdTableLabelUnknown(String.from(callee), table: table, label: String.from(label), line: labelTok.line, column: labelTok.column)
+		end 'notThisIntrinsicsTable'
+
+		// A call that stops after the label is a missing second argument, and `consume` says so at the `)`
+		// it found. That is also the bootstrap's answer (its `Expect(TokenType.Comma)`), so the two agree
+		// on the one call shape neither has a builtin-arity diagnostic for.
+		try self.consume(TokenKind.comma)
+
+		let indexTok = self.current()
+		let argLabel = try self.consumeArgLabel(1 as ParamCount, rule: ArgLabelRule.ordinary)
+		if not argLabel.equals(indexParamName) 'notTheDeclaredParameter'
+			throw ParseError.builtinUnknownArgLabel(String.from(callee), label: String.from(argLabel), line: indexTok.line, column: indexTok.column)
+		end 'notTheDeclaredParameter'
+
+		let index = try self.parseValueExpression(func)
+		if not tagIsIntegral(self.tagOf(index)) 'notAnIndex'
+			throw ParseError.builtinOperandType(String.from(callee), required: typeTagName(ValueTypeTag.integer), got: typeTagName(self.tagOf(index)), line: indexTok.line, column: indexTok.column)
+		end 'notAnIndex'
+
+		try self.consume(TokenKind.rightParen)
+
+		return self.emitRuntimeCall(runtimeName, args: singletonArgs(index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+	end 'parseUcdTableLoad'
 
 	// ⭐⭐⭐ **`__Builtins.writeStdout(s.addressableBytes())` BECOMES `__write_stdout(s)` — ONE OP REWRITTEN, ONE
 	// FIELD CHANGED (W35, re-aimed at W49 wave 7).** The view exists to satisfy a TYPE, not a USE:

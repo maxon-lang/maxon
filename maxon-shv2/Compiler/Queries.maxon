@@ -1769,6 +1769,14 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// which is the one place both are decided.
 		selfAssignmentHasNoEffect(place, line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "self-assignment has no effect: '{place} = {place}'", line: line, column: column, filePath: path)
 		discardOfALiteral(line, column) then reportPositioned(project, code: ErrorCode.semanticSelfAssignment, message: "expected a function call", line: line, column: column, filePath: path)
+		// The `__Builtins.ucd*` table roster (W64) — a SECURITY guard, since the label is a file name in both
+		// reference compilers. The message names the table the intrinsic DOES read, because the pairing is
+		// the fact the author got wrong. See `Parser.parseUcdTableLoad`.
+		ucdTableLabelUnknown(intrinsic, table, label, line, column) then reportPositioned(project, code: ErrorCode.ucdTableLabelUnknown, message: "'{intrinsic}' reads the compiler-owned table '{table}'; the label '{label}' names no table it can read", line: line, column: column, filePath: path)
+		// An intrinsic WITH parameter names, given a label naming none of them — E3037 and
+		// `argUnknownLabelMessage`, the same code and words the direct-call and witness-dispatch doors give
+		// the identical mistake.
+		builtinUnknownArgLabel(intrinsic, label, line, column) then reportPositioned(project, code: ErrorCode.callUnknownArgLabel, message: argUnknownLabelMessage(intrinsic, label: label), line: line, column: column, filePath: path)
 		// The P1.9 DECLARATION-SITE typealias arms. Every message is byte-for-byte the reference
 		// oracle's (2-Parser.cs:4794, :4831, :4838, :9840, :5782) — `ranged-typealias.md` and
 		// `export-keyword.md` compare this stderr exactly, in both suites.

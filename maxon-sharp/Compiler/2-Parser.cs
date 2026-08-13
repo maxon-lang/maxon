@@ -12175,31 +12175,84 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
         return op.Result;
       }),
     // === UCD (Unicode Character Database) intrinsics ===
-    ["ucdByteAt"] = new(
-      "Loads a byte from a .ucd section blob.\n\n`__Builtins.ucdByteAt(\"label\", offset) returns int`",
-      p => {
-        var labelToken = p.Expect(TokenType.StringLiteral);
-        var label = labelToken.Value;
-        p.Expect(TokenType.Comma);
-        var offset = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonUcdByteLoadOp(label, offset);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["ucdI64At"] = new(
-      "Loads a 64-bit int from a .ucd section blob.\n\n`__Builtins.ucdI64At(\"label\", index) returns int`",
-      p => {
-        var labelToken = p.Expect(TokenType.StringLiteral);
-        var label = labelToken.Value;
-        p.Expect(TokenType.Comma);
-        var index = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var op = new MaxonUcdI64LoadOp(label, index);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
+    ["ucdByteAt"] = UcdTableLoadIntrinsic("ucdByteAt", UcdBmpLabel, indexParamName: "offset",
+      what: "Loads one General_Category byte out of the BMP table, indexed DIRECTLY by codepoint.",
+      buildLoad: (label, index) => new MaxonUcdByteLoadOp(label, index)),
+    ["ucdI64At"] = UcdTableLoadIntrinsic("ucdI64At", UcdSuppLabel, indexParamName: "index",
+      what: "Loads one packed supplementary-range entry out of the sorted table, striding by 8 bytes.",
+      buildLoad: (label, index) => new MaxonUcdI64LoadOp(label, index)),
   };
+
+  /// ⭐ **THE TABLES THE COMPILER OWNS, AND THE ONLY LABELS A `__Builtins.ucd*` LOAD MAY NAME.**
+  /// Both are checked in under `stdlib/helpers/string/` and linked into the program's `.ucd`
+  /// section by `MaxonToStandardConversion.EnsureUcddataLoaded`, which builds the FILE NAME out of
+  /// the label — so an unrostered label was a PATH TRAVERSAL, not a typo. MEASURED before the
+  /// roster existed: `ucdByteAt("__ucd_../../../evil", 0)` reached for
+  /// `stdlib/helpers/string/ucd_../../../evil.bin` and reported the miss as an E9001 carrying a C#
+  /// stack trace. v1 guards the `__ucd_` PREFIX only (`LowerMaxonToStd.maxon:8464-8486`), which
+  /// does not close that — the crafted label above carries the prefix. A roster does.
+  private const string UcdBmpLabel = "__ucd_bmp";
+  private const string UcdSuppLabel = "__ucd_supp";
+
+  /// ⭐⭐ **ONE ROW = ONE DECLARATION.** The label, the second parameter's NAME and the help text's
+  /// signature line all come off this one call, so what a `name:` label is checked against cannot
+  /// drift from what the documentation advertises — they were two independent strings before, and
+  /// the handler ignored the one the doc printed.
+  ///
+  /// ⚠ **THE TABLE AND THE STRIDE ARE ONE FACT**, which is why each intrinsic takes its label as a
+  /// constant here rather than as a free parameter: `ucdByteAt` reads one byte per BMP codepoint
+  /// and `ucdI64At` reads 8-byte packed entries, so reading either table with the other's stride
+  /// cannot produce an answer — only a wrong one.
+  private static BuiltinInfo UcdTableLoadIntrinsic(string bareName, string tableLabel,
+      string indexParamName, string what, Func<string, MaxonValue, MaxonOp> buildLoad) =>
+    new($"{what}\n\n`__Builtins.{bareName}(\"{tableLabel}\", {indexParamName}: <int>) returns int`",
+      p => {
+        var index = p.ParseUcdTableLoadArgs(bareName, tableLabel: tableLabel, indexParamName: indexParamName);
+        var op = buildLoad(tableLabel, index);
+        p._currentBlock!.AddOp(op);
+        return op.Results[0];
+      });
+
+  /// ⭐ **`("<table>", <name>: <expr>)` — the argument list both UCD loads take.** The caller has
+  /// consumed `(`; this leaves the cursor past `)` and returns the index value.
+  ///
+  /// ⭐⭐ **THE LABEL IS A TOKEN AND NEVER A VALUE, AND THAT IS THE GUARD.** It selects a blob the
+  /// compiler links into the program, so it has to be known while the call is parsed; taking it
+  /// off the token makes a computed label structurally impossible rather than merely rejected.
+  /// (v1 parses it as an ordinary argument and recovers the literal afterwards through
+  /// `stringLiteralProvenance` — the same refusal, one pass later, plus a dead string record.)
+  ///
+  /// ⭐ **THE SECOND ARGUMENT IS LABELLED, BECAUSE THIS INTRINSIC HAS A DECLARATION.** A `name:`
+  /// label names a PARAMETER, which is exactly why the bare builtins are exempt from the rule —
+  /// they have none. These two have `label` and `offset`/`index`, so the ordinary rule binds and
+  /// the ordinary sentences answer: `MissingArgLabel` for an absent label, `UnknownArgLabel` for
+  /// one the declaration does not carry, `FirstArgCannotBeNamed` for a label on the table itself.
+  private MaxonValue ParseUcdTableLoadArgs(string bareName, string tableLabel, string indexParamName) {
+    if (AtArgLabel()) throw FirstArgCannotBeNamed(Current());
+
+    var labelToken = Expect(TokenType.StringLiteral);
+    if (labelToken.Value != tableLabel) {
+      throw new CompileError(ErrorCode.ParserUcdTableLabelUnknown,
+        $"'__Builtins.{bareName}' reads the compiler-owned table '{tableLabel}'; "
+        + $"the label '{labelToken.Value}' names no table it can read",
+        labelToken.Line, labelToken.Column);
+    }
+
+    // A call that stops after the label is a missing second argument, and `Expect` says so at the
+    // `)` it found. There is no builtin-arity diagnostic in this compiler to reach for instead
+    // (shv2 answers E3036 for its own builtins), and inventing one here would be a second rule
+    // riding in on a label fix.
+    Expect(TokenType.Comma);
+    var labelTok = Current();
+    if (!AtArgLabel()) throw MissingArgLabel(labelTok);
+    Advance(); // consume the label name
+    Advance(); // consume ':'
+    if (labelTok.Value != indexParamName) throw UnknownArgLabel(labelTok);
+
+    var index = ResolveExprValue(ParseExpression());
+    Expect(TokenType.RightParen);
+    return index;
+  }
 
   private static readonly Dictionary<string, (IrType Type, MaxonValueKind Kind)> PrimitiveTypes = new() {
     ["int"] = (IrType.I64, MaxonValueKind.Integer),
@@ -13779,7 +13832,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     for (int position = 0; ; position++) {
       int slot = position;
 
-      if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
+      if (AtArgLabel()) {
         var nameToken = Advance();
         Advance(); // consume ':'
         slot = ifaceMethod.ParamNames.IndexOf(nameToken.Value);
@@ -24190,11 +24243,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     // Track where each arg was evaluated for cross-block pinning.
     var argLocations = new (IrBlock<MaxonOp>? block, int opIndex)[args.Length];
 
-    if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
-      var firstLabelToken = Current();
-      throw new CompileError(ErrorCode.ParserFirstArgCannotBeNamed,
-        "first arg cannot be named",
-        firstLabelToken.Line, firstLabelToken.Column);
+    if (AtArgLabel()) {
+      throw FirstArgCannotBeNamed(Current());
     } else {
       if (firstPositionalIndex >= callee.ParamTypes.Count) {
         throw new CompileError(ErrorCode.SemanticWrongArgCount,
@@ -24210,7 +24260,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     var nextPositionalIndex = firstPositionalIndex + 1;
     while (Check(TokenType.Comma) && Advance() != null) {
-      if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
+      if (AtArgLabel()) {
         ParseNamedArg(callee, args, typeParams, argMutabilities, argVarNames);
         for (int i = 0; i < args.Length; i++)
           if (args[i] != null && argLocations[i].block == null)
@@ -24291,19 +24341,41 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
   /// ⭐ THE ONE SENTENCE for an argument after the first that carries no `name:` label, and the one
   /// code. `specs/parameter-labels.md` rules the first argument positional and every later one named;
-  /// FOUR doors now enforce it — a direct call, an enum payload, a dispatched (interface or
-  /// type-parameter) call, and the inlined `String` byte methods — and it was written out at two of
-  /// them the day there were two. A rule spelled once cannot drift between the doors that answer it.
+  /// FIVE doors now enforce it — a direct call, an enum payload, a dispatched (interface or
+  /// type-parameter) call, the inlined `String` byte methods, and the two UCD intrinsics, which
+  /// joined at W64 by ACQUIRING A DECLARATION (they are the only `__Builtins` members with parameter
+  /// names) — and it was written out at two of them the day there were two. A rule spelled once
+  /// cannot drift between the doors that answer it.
   ///
   /// ⚠ The code is E3005 rather than the registry's purpose-built `ParserCallArgMissingLabel`
   /// (E2053, which only shv2 claims) because six `maxoncstderr` blocks across BOTH suites pin E3005
   /// for this rule today. Aligning the two compilers on one number is a diagnostic-parity rung, and
   /// `specs-shv2/enum-full.md`'s disabled-test note already names it as one; a second code raised at
   /// the two new doors alone would be this project's signature defect, not a step towards parity.
-  private static CompileError MissingArgLabel(Token callToken) =>
+  ///
+  /// `anchor` is where the diagnostic points, and the doors do not agree on it: the four call doors
+  /// point at the CALL (they have already parsed past the offending argument by the time they know),
+  /// while the UCD intrinsics point at the ARGUMENT ITSELF, which is what shv2 does at every door
+  /// and is the more useful of the two. The parameter is therefore named for the ROLE it plays here
+  /// rather than for the token any one caller happens to hold.
+  private static CompileError MissingArgLabel(Token anchor) =>
     new CompileError(ErrorCode.SemanticTypeMismatch,
       "Second and subsequent arguments must be named. Use 'name: value' syntax",
-      callToken.Line, callToken.Column);
+      anchor.Line, anchor.Column);
+
+  /// Is the cursor on an argument's `name:` label? Two tokens — a name-like token followed by a
+  /// colon — and the SAME question at all six doors that ask it (a direct call, a dispatched
+  /// requirement, an enum payload, and the two UCD intrinsics, whose second argument is labelled
+  /// because they have a declaration to name). It was written out six times; a predicate spelled
+  /// once cannot come to mean different things at different doors.
+  private bool AtArgLabel() => CheckIdentifierLike() && PeekNext().Type == TokenType.Colon;
+
+  /// A label on the FIRST argument, which is positional at every call site in the language. The
+  /// third copy of this `throw` is what made it a function: the two that existed (a direct call and
+  /// an enum payload) were byte-identical, and the UCD intrinsics ask the same question again.
+  private static CompileError FirstArgCannotBeNamed(Token labelToken) =>
+    new CompileError(ErrorCode.ParserFirstArgCannotBeNamed,
+      "first arg cannot be named", labelToken.Line, labelToken.Column);
 
   /// A `name:` label that matches no parameter of the callee — the same answer whether the callee is
   /// a function, an enum case or a dispatched requirement, so it is written here rather than at each.
@@ -24341,11 +24413,8 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     Expect(TokenType.LeftParen);
 
     // First argument — must be positional
-    if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
-      var firstLabelToken = Current();
-      throw new CompileError(ErrorCode.ParserFirstArgCannotBeNamed,
-        "first arg cannot be named",
-        firstLabelToken.Line, firstLabelToken.Column);
+    if (AtArgLabel()) {
+      throw FirstArgCannotBeNamed(Current());
     } else {
       var argExpr = ParseExpression();
       var argVal = ResolveExprValue(argExpr);
@@ -24355,7 +24424,7 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
 
     // Remaining arguments — must be named
     while (Check(TokenType.Comma) && Advance() != null) {
-      if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
+      if (AtArgLabel()) {
         ParseEnumNamedArg(enumCase, args);
       } else {
         throw MissingArgLabel(callToken);

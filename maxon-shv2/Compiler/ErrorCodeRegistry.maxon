@@ -268,6 +268,25 @@ export enum ErrorCode
 	// v1 reports the same two faults through its generic parser-error codes; shv2 registers its
 	// own so the one rule has one message wherever the spelling is met.
 	vectorSizeMalformed = "E2069"
+	// A '__Builtins.ucd*' load names a compiler-owned Unicode table its intrinsic does not read.
+	// Each intrinsic reads exactly ONE table, because the label and the STRIDE are one fact:
+	// 'ucdByteAt' reads '__ucd_bmp', one byte per BMP codepoint, and 'ucdI64At' reads
+	// '__ucd_supp', an array of 8-byte packed range entries. Reading either with the other's
+	// stride cannot produce an answer -- only a wrong one -- so the pairing is refused rather
+	// than assumed, and the message names the table the intrinsic DOES read.
+	// ⚠ IT IS A SECURITY GUARD AND NOT A TYPO CHECK, which is why it is a refusal at the label
+	// token rather than a link failure later. Both reference compilers turned the label into a
+	// FILE NAME under the stdlib directory, so an unchecked one was a PATH TRAVERSAL: MEASURED,
+	// the bootstrap answered '__Builtins.ucdByteAt("__ucd_../../../evil", 0)' by reaching for
+	// 'stdlib/helpers/string/ucd_../../../evil.bin' and reporting the miss as E9001 with a C#
+	// stack trace. v1 guards only the '__ucd_' PREFIX (LowerMaxonToStd.maxon:8464-8486), which
+	// does not close it: '__ucd_../../x' carries the prefix and still escapes. A ROSTER of the
+	// tables the compiler actually owns is what closes it, and it is the same roster in both
+	// compilers.
+	// NOT E2010: a label that is not a string LITERAL at all is refused at the token by the
+	// ordinary 'expected a string literal' rule, because that is a shape the parser can state
+	// without knowing which intrinsic it is reading for.
+	ucdTableLabelUnknown = "E2070"
 
 	// The program declares no 'main' function.
 	noMainFunction = "E3001"
