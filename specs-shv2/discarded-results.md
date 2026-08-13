@@ -82,7 +82,7 @@ The variable name `_` is a special discard identifier. It does not create a bind
 ## Tests
 
 <!-- disabled-test: pure-function-discarded -->
-<!-- purity analysis (E3064) - shv2 has no purity classification -->
+<!-- MEASURED 2026-08-13: compiles clean. NOT a missing mechanism — the effect classification exists (`SemanticCheck.buildEffectFreeSummary`, landed with the tuple-assign port) and reads a body of exactly this shape as effect-free, which is what `tuple-assign/tuple-assign-discard-all` pins. What is missing is the BARE-CALL DOOR: `parseStatement`'s `callStmt` arm files no `PendingDiscardedResult`, so nothing asks. Wiring it makes every bare call statement in the suite a candidate — a blast-radius decision, not a gap. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -101,7 +101,7 @@ error E3064: specs/fragments/discarded-results/pure-function-discarded.test:10:2
 ```
 
 <!-- disabled-test: pure-function-let-discard -->
-<!-- purity analysis (E3064) + the `_ =` discard binding -->
+<!-- MEASURED 2026-08-13: compiles clean. Same standing as `pure-function-discarded` one door over — the classification is there; the `_ =` DOOR (`parseAssignment`'s `DiscardBindingName` arm) files no site. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -138,7 +138,7 @@ end 'main'
 ```
 
 <!-- disabled-test: impure-function-discarded -->
-<!-- top-level `var` globals + purity analysis (E3065) -->
+<!-- MEASURED 2026-08-13: compiles clean. Needs E3065, which shv2 emits NOWHERE and which `docs/error-codes.txt` gives no `shv2` line. It is also a different question from the one this tree can answer: the summary classifies `provably effect-free` vs `not proven`, and E3065 needs the third verdict `has an effect, so the discard must be explicit`. Both that split and the bare-call door above. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -159,8 +159,7 @@ end 'main'
 error E3065: specs/fragments/discarded-results/impure-function-discarded.test:13:2: result of 'incrementAndGet' is not used (use '_ = expr' to discard)
 ```
 
-<!-- disabled-test: impure-function-let-discard -->
-<!-- top-level `var` globals + the `_ =` discard binding -->
+<!-- test: impure-function-let-discard -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -224,8 +223,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: impure-print-discarded -->
-<!-- P1.2 String + the `print` builtin -->
+<!-- test: impure-print-discarded -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -268,7 +266,7 @@ end 'main'
 ```
 
 <!-- disabled-test: underscore-not-prefix-suppression -->
-<!-- E3012 unused-variable check -->
+<!-- MEASURED 2026-08-13: compiles clean, and NOTHING to do with purity — the case is an unused body `let` wanting E3012. A body `let` is deliberately not an unused-binding candidate in shv2 (`UnusedBindingKind.mutableLocal` carries the reason and names the rung that owns it); only `var`s, parameters and `for` bindings are enrolled. -->
 ```maxon
 
 function main() returns ExitCode
@@ -292,8 +290,7 @@ end 'main'
 error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:2: expected a function call
 ```
 
-<!-- disabled-test: tuple-partial-discard -->
-<!-- tuple types and destructuring -->
+<!-- test: tuple-partial-discard -->
 ```maxon
 
 typealias Small = int(0 to 100)
@@ -311,8 +308,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: tuple-all-discard-pure -->
-<!-- tuple types and destructuring -->
+<!-- test: tuple-all-discard-pure -->
 ```maxon
 
 typealias Small = int(0 to 100)
@@ -331,7 +327,7 @@ error E3064: specs/fragments/discarded-results/tuple-all-discard-pure.test:10:2:
 ```
 
 <!-- disabled-test: transitive-impure -->
-<!-- purity analysis (E3065) -->
+<!-- MEASURED 2026-08-13: compiles clean. E3065, exactly as `impure-function-discarded` — and the TRANSITIVE half it is named for already works: the effect summary closes over the call graph and reads `computeAndPrint` as effectful through `printValue`, proven two hops deep by probe. Only the code and the door are missing. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -355,7 +351,7 @@ error E3065: specs/fragments/discarded-results/transitive-impure.test:15:2: resu
 ```
 
 <!-- disabled-test: try-pure-let-discard -->
-<!-- P1.4 errors (`throws`/`try`/`otherwise`) + P1.2 String -->
+<!-- MEASURED 2026-08-13: compiles clean, and it would NOT fire even with the `_ =` door wired — shv2's summary counts a `throws` clause as an effect (`opShowsAnEffect`: failing is an effect the return type cannot express), so `parseNum` is not effect-free here where the canonical spec calls it pure. That disagreement is the blocker, ahead of the door. -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -380,8 +376,7 @@ end 'main'
 error E3064: specs/fragments/discarded-results/try-pure-let-discard.test:17:2: result of pure function 'parseNum' must be used
 ```
 
-<!-- disabled-test: try-impure-let-discard -->
-<!-- P1.4 errors + top-level `var` globals -->
+<!-- test: try-impure-let-discard -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -431,8 +426,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: param-mutating-method-is-impure -->
-<!-- purity analysis (E3064/E3065) — shv2 has NO purity classification, so this case cannot pin the one it is named for: it accepts EVERY `_ =` discard unconditionally (a provably pure `_ = isTwo(2)` compiles clean), and docs/error-codes.txt claims E3064/E3065 for csharp+selfhosted only, with no shv2 line. The old marker named two blockers, `P1.7 Array + purity analysis`; the Array half landed and this half did not, so the exit code now tracks only "the removal happened". Its nine siblings above are disabled for exactly this -->
+<!-- test: param-mutating-method-is-impure -->
 A function that mutates a parameter through a mutating method (`arr.remove(i)`)
 is IMPURE — even though it neither writes a global nor calls a known impure
 builtin directly. Its `bool` result is therefore `_=`-discardable (E3065-style),

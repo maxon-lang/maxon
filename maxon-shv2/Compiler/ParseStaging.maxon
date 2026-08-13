@@ -49,6 +49,9 @@ let sharedEmptyInferredInstantiationSites = GenericInstantiationSiteArray.create
 let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
 let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 let sharedEmptyTransformArities = PendingTransformArityArray.create()
+// A statement that uses NONE of a call's result is rarer than either — one spelling opens the door
+// (`(_, _) = f()`) and almost no file writes it — so the empty column is shared for the reason above it.
+let sharedEmptyDiscardedResults = PendingDiscardedResultArray.create()
 
 // Overloading a name is rare, so the overwhelming file contributes NO overload set. It is shared for
 // `typeNameDecls`' stronger reason too: only the real parse can fill it, and the tolerant declaration
@@ -217,6 +220,10 @@ export type FileParseArtifact
 	// `project.pendingTransformArities` by `commitPendingTransformArities`; drained beside the doors above,
 	// after RESOLUTION (see PendingTransformArity).
 	export var pendingTransformArities as PendingTransformArityArray
+	// ⭐ Sites that used none of a call's result, folded into `project.pendingDiscardedResults` by
+	// `commitPendingDiscardedResults`; drained beside the two lists above, after the effect summary is
+	// built (see PendingDiscardedResult).
+	export var pendingDiscardedResults as PendingDiscardedResultArray
 	// This file's range-check contributions (P1.9), one per function that has a cast into a
 	// ranged alias or a ranged `return`. Folded into `project.rangeChecks` by `commitRangeChecks`.
 	export var rangeChecks as FunctionRangeCheckEntryArray
@@ -325,6 +332,7 @@ export type FileParseArtifact
 			pendingFnMergeChecks: PendingFnMergeCheckArray.create(),
 			pendingFunctionTypeDoors: sharedEmptyFunctionTypeDoors,
 			pendingTransformArities: sharedEmptyTransformArities,
+			pendingDiscardedResults: sharedEmptyDiscardedResults,
 			rangeChecks: FunctionRangeCheckEntryArray.create(),
 			typeAliases: RangedTypeAliasArray.create(),
 			functionTypeAliases: FunctionTypeAliasArray.create(),
@@ -551,6 +559,15 @@ export type FileParseArtifact
 		end 'firstTransform'
 		self.pendingTransformArities.push(transform)
 	end 'recordTransformArity'
+
+	// Record a statement that used none of a call's result (see PendingDiscardedResult). Copy-on-write off
+	// the shared empty on the first push, for the reason `recordTransformArity` is.
+	export function recordDiscardedResult(site PendingDiscardedResult)
+		if self.pendingDiscardedResults.count() == 0 'firstSite'
+			self.pendingDiscardedResults = PendingDiscardedResultArray.create()
+		end 'firstSite'
+		self.pendingDiscardedResults.push(site)
+	end 'recordDiscardedResult'
 end 'FileParseArtifact'
 
 // Fold `artifact` into the whole-program build in source-path order:
@@ -607,6 +624,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	commitPendingFnMergeChecks(project, artifact: artifact)
 	commitPendingFunctionTypeDoors(project, artifact: artifact)
 	commitPendingTransformArities(project, artifact: artifact)
+	commitPendingDiscardedResults(project, artifact: artifact)
 	commitRangeChecks(project, artifact: artifact)
 	// BEFORE the five per-kind commits below, because it is the one that can REFUSE a declaration: a
 	// name reported here is one whose meaning the registries beneath cannot agree on, and reporting it
@@ -1338,3 +1356,11 @@ function commitPendingTransformArities(project Project, artifact FileParseArtifa
 		project.pendingTransformArities.push(transform)
 	end 'each'
 end 'commitPendingTransformArities'
+
+// Append this file's recorded discarded-result sites to the whole-program list — the twin of the two
+// commits above, and dedup-free for their reason: each entry is a distinct SITE with its own position.
+function commitPendingDiscardedResults(project Project, artifact FileParseArtifact)
+	for site in artifact.pendingDiscardedResults 'each'
+		project.pendingDiscardedResults.push(site)
+	end 'each'
+end 'commitPendingDiscardedResults'

@@ -1,0 +1,55 @@
+// Test: impure-print-discarded
+
+typealias Integer = int(i64.min to i64.max)
+
+function computeAndPrint(x Integer) returns Integer
+	print("computing")
+	return x * 2
+end 'computeAndPrint'
+
+function main() returns ExitCode
+	_ = computeAndPrint(5)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @computeAndPrint {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect print
+    x64.imulRegRegImm32 r8, rbx, 2
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect computeAndPrint
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

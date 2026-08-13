@@ -462,6 +462,12 @@ export union ParseError implements Error
 	// assign to — what they must change is the ARGUMENT — so the sentence states the two types and
 	// nothing else. Renders as E3005; see `SlotMismatchVoice.payloadArgument`.
 	typeMismatchExpectedGot(expected String, got String, line LineNumber, column ColumnNumber)
+	// ⭐ A statement-level TUPLE ASSIGNMENT whose target count does not match the tuple's element count
+	// (`(x) = makePair(…)`). Renders as E3005, positioned on the `(` — where the author decided how many
+	// targets to write. Both the code and the wording are `specs/tuple-assign.md`'s, pinned by
+	// `tuple-assign-error-count-mismatch`, and BOTH differ from the E2015 the two DECLARING patterns raise
+	// for the same shape of mistake — see `requireTupleLayout` for why the two are not merged.
+	tupleAssignArityMismatch(elements ElementCount, targets ElementCount, line LineNumber, column ColumnNumber)
 	// A `return <expr>` whose value's type class differs from the function's declared return
 	// type (`return flag` from a function declared `returns Integer`). Renders as E3005 with
 	// the bootstrap's exact text — `Cannot return 'bool' from function declared to return
@@ -2407,6 +2413,68 @@ union TupleAliasOwner
 	unpublished
 end 'TupleAliasOwner'
 
+// ⭐ **WHAT ONE POSITION OF A TUPLE-ASSIGNMENT TARGET LIST DOES WITH ITS ELEMENT** (`specs/tuple-assign.md`).
+// Three answers and only three: rebind a binding already in scope, declare a fresh one, or throw the element
+// away. `tupleAssignTargetAt` is the single reader that decides which, off the tokens.
+union TupleAssignTarget
+	// A bare name — `(x, y) = f()`. The binding must already exist and be writable (E2013).
+	rebinds
+	// `let y` / `var y` — this element DECLARES the name, with the author's mutability.
+	declares(mutable bool)
+	// `_` — the element is produced and never assigned. It costs nothing to drop: an element read is a
+	// BORROW of the hidden temp's box, so a discarded position simply emits no read at all.
+	discards
+end 'TupleAssignTarget'
+
+// Does this target throw its element away? Asked ahead of the field read, because a discard is the one target
+// that wants no read at all. A FREE function beside the union rather than a `Parser` member: it reads the
+// union and never the parser, and a classifier wearing an instance signature invites a reader to look for
+// parser state it does not touch.
+function tupleAssignTargetDiscards(target TupleAssignTarget) returns bool
+	return match target 'kind'
+		rebinds to declares gives false
+		discards gives true
+	end 'kind'
+end 'tupleAssignTargetDiscards'
+
+// Does this target WRITE a binding that already exists? The question the three "does this statement write a
+// name" readers ask — a declaring target introduces a name no enclosing loop can be carrying and no caller
+// can have passed by reference, and a discard writes nothing.
+function tupleAssignTargetRebinds(target TupleAssignTarget) returns bool
+	return match target 'kind'
+		rebinds gives true
+		declares to discards gives false
+	end 'kind'
+end 'tupleAssignTargetRebinds'
+
+// Does this target DECLARE the name it holds? The question the reserved-name refusal asks, and the one a
+// rebinding target must not be asked — its name was checked at its own declaration.
+function tupleAssignTargetDeclares(target TupleAssignTarget) returns bool
+	return match target 'kind'
+		rebinds gives false
+		declares gives true
+		discards gives false
+	end 'kind'
+end 'tupleAssignTargetDeclares'
+
+// Which DIRECT call, if any, produced a value — the answer `directCallDefining` gives. A union rather than
+// "the callee bytes, empty for none", because an empty `ByteArray` is a perfectly good callee key as far as
+// every reader downstream is concerned, and the two answers differ in KIND. (`tupleAssignEqualsAt` answers
+// the same shape of question with a sentinel index instead, and its header says why the two differ.)
+union DiscardedCallee
+	notACall
+	named(callee ByteArray)
+end 'DiscardedCallee'
+
+// Did a call produce the value at all? The `try` rewrite's half of `directCallDefining` — it needs the fact,
+// not the name.
+function discardedCalleeIsACall(producer DiscardedCallee) returns bool
+	return match producer 'p'
+		notACall gives false
+		named gives true
+	end 'p'
+end 'discardedCalleeIsACall'
+
 // What `materializeIterableIterationSource` made of a `for … in` source (W3). BOTH halves or neither: the
 // cursor the loop walks and the value its header starts from are decided by the same `createIterator`
 // declaration, and a caller holding one without the other would have to re-derive whether the factory could
@@ -3525,6 +3593,13 @@ let BindingPatternNeedsClause = "`let (x, y) = …` needs a right-hand side that
 let ForPatternSubject = "a destructuring `for` pattern"
 let ForPatternSourceNoun = "element"
 let ForPatternNeedsClause = "`for (k, v) in …` needs a source whose element is a tuple"
+// The third construct spelling the pattern — a statement-level tuple ASSIGNMENT. It has no binding and no
+// initializer either: what it has is a right-hand side, and targets rather than names. Only the non-tuple
+// sentence is assembled from these; its arity mismatch is E3005 and worded by the spec (see
+// `requireTupleLayout`).
+let AssignPatternSubject = "a tuple assignment"
+let AssignPatternSourceNoun = "right-hand side"
+let AssignPatternNeedsClause = "`(x, y) = …` needs a right-hand side that is a tuple"
 
 // ⭐ **THE `(key, value)` PAIR BOX'S VALUE SLOT, AS A FIELD INDEX** — the `_1` of the synthesized tuple
 // `__map_entries` fills, read by `emitMapEntriesArray` off the interned layout to get its displacement.
@@ -11996,7 +12071,11 @@ export type Parser
 			// be — wasteful, never wrong, because a cell is a legal way to hold any value and both ends read
 			// this one column. The FIELD-store shape (`p.x = 5` where a parameter is named `x`) is excluded
 			// exactly, by `rebindsANameAt`; see there for the golden it moved.
-			if self.rebindsANameAt(q) 'rebindsAName'
+			// ⭐ **AND THE TUPLE-ASSIGNMENT SPELLING OF THE SAME WRITE** (`(p, _) = f()`), which carries no `=`
+			// of its own and so is invisible to the shape above. Without it a by-reference parameter could be
+			// rebound by `p = f()` and not by `(p, _) = f()` — one operation, two answers decided by spelling.
+			// See `tupleAssignRebindsANameAt` for why the enclosing `(` is free here.
+			if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'rebindsAName'
 				let target = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
 				if target < byRefParamNames.count() 'ofOwnParameter'
 					try reassignedDirect.set(target, value: true) otherwise panic("scanBodyParamFacts: reassignedDirect.set OOB at {target} despite target < byRefParamNames.count()")
@@ -20584,10 +20663,15 @@ export type Parser
 	// the local rule "is not separable from two refusals shv2 lacks — `let _ = expr` is E2001 and
 	// `_ = <pure call>` is E3064 — until all three land together, a borrowed element that may be neither
 	// bound, nor discarded, nor used has no legal spelling at all." That premise is the ORACLE's and does
-	// not transfer: **shv2 has no purity analysis**, so `_ = <any call>` is already the discard spelling
-	// here (`parseAssignment`'s `DiscardBindingName` arm) and such a value HAS a legal spelling before this
-	// rule is written. MEASURED, not reasoned: `_ = f()` on a non-mutating call compiles and runs. E2001 and
-	// E3064 are not blockers, and neither is anything else the note names.
+	// not transfer: **shv2's `_ =` DOOR CONSULTS NO PURITY VERDICT**, so `_ = <any call>` is already the
+	// discard spelling here (`parseAssignment`'s `DiscardBindingName` arm) and such a value HAS a legal
+	// spelling before this rule is written. MEASURED, not reasoned: `_ = f()` on a non-mutating call compiles
+	// and runs. E2001 and E3064 are not blockers, and neither is anything else the note names.
+	//
+	// ⚠ **THE REASON WAS "shv2 has no purity analysis" AND THAT IS NO LONGER TRUE** —
+	// `SemanticCheck.buildEffectFreeSummary` landed with the tuple-assign port. The CONCLUSION is unchanged
+	// because it never rested on the analysis being absent, only on this door not asking it, and this door
+	// still does not.
 	//
 	// ⚠ **WHAT IS REAL IS A COST THE NOTE NEVER MENTIONED — the unused-`let` half costs 82 cases of this
 	// suite, in EXPRESSIVENESS rather than tidiness.** See `UnusedBindingKind.mutableLocal`, which carries
@@ -22903,7 +22987,13 @@ export type Parser
 			// statement starter after the preceding expression completed. Renders as E3058.
 			let otherwiseTok = self.current()
 			throw ParseError.otherwiseWithoutTry(otherwiseTok.line, column: otherwiseTok.column)
-		end 'strayOtherwise' else if self.assignsAt(self.pos) 'assign'
+		end 'strayOtherwise' else if self.tupleAssignEqualsAt(self.pos) != self.pos 'tupleAssign'
+			// `(x, let y) = f()` — a statement-level TUPLE ASSIGNMENT (`specs/tuple-assign.md`): one
+			// right-hand side, evaluated once, distributed positionally over targets that rebind, declare or
+			// discard. It is the only statement in the grammar that opens with `(`, and the predicate — not
+			// this arm — is where that claim is stated and defended. See `tupleAssignEqualsAt`.
+			try self.parseTupleAssignment(func, block: block)
+		end 'tupleAssign' else if self.assignsAt(self.pos) 'assign'
 			// An identifier followed by `=` is a reassignment. The two-token lookahead
 			// keeps a bare identifier from being mis-parsed as an incomplete assignment.
 			// Through `assignsAt`, which is also what decides a loop's carried vars — see there.
@@ -23547,22 +23637,255 @@ export type Parser
 
 		for i in 0 upto nameToks.count() 'eachName'
 			let nameTok = try nameToks.get(i) otherwise panic("parseDestructuringBinding: nameToks.get OOB at {i} below count {nameToks.count()}")
-			let element = self.emitFieldLoad(value, layout: layout, index: i, range: SourceRange.between(keywordTok, last: nameTok))
-
-			// ⭐⭐ **E3078 IS ASKED PER ELEMENT, AND `sourceReadsAField` IS UNCONDITIONALLY TRUE HERE** — an
-			// element IS a field of the source, whatever the initializer's own span was, so `var (p, q) = t`
-			// from an immutable `t` is exactly the `var p = t.0` the desugaring means and gets that program's
-			// answer and that program's sentence, blaming the name the author wrote. A managed element would
-			// otherwise be promoted (retained) into a writable name and `p.x = 9` would show through `t` —
-			// MEASURED, and refused by both reference compilers in the longhand spelling.
-			try self.requireMutableBindingSource(nameTok, value: element, sourceName: sourceName, sourceReadsAField: true, mutable: mutable)
-
-			// No source name for the DECLARATION: a field load is a fresh borrowed value held by no binding,
-			// so there is nothing for the move poison to find.
-			try self.declareInitializedBinding(func, nameTok: nameTok, value: element, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
-			self.noteBodyVarDeclared(nameTok, mutable: mutable)
+			try self.declareDestructuredElement(func, nameTok: nameTok, element: self.emitFieldLoad(value, layout: layout, index: i, range: SourceRange.between(keywordTok, last: nameTok)), sourceName: sourceName, mutable: mutable)
 		end 'eachName'
 	end 'parseDestructuringBinding'
+
+	// ⭐ **ONE DESTRUCTURED ELEMENT, BOUND TO THE NAME THAT NAMES IT** — shared by the DECLARING pattern
+	// (`let (x, y) = t`, once per name) and by a tuple ASSIGNMENT's `let`/`var` target (`(x, let y) = f()`),
+	// which are the same three obligations in the same order. Written twice, an element of one form would
+	// come to be enrolled for a rule the other's is not.
+	function declareDestructuredElement(func IrFunction, nameTok Token, element ValueId, sourceName ByteArray, mutable bool) throws ParseError
+		// ⭐⭐ **E3078 IS ASKED PER ELEMENT, AND `sourceReadsAField` IS UNCONDITIONALLY TRUE HERE** — an
+		// element IS a field of the source, whatever the initializer's own span was, so `var (p, q) = t`
+		// from an immutable `t` is exactly the `var p = t.0` the desugaring means and gets that program's
+		// answer and that program's sentence, blaming the name the author wrote. A managed element would
+		// otherwise be promoted (retained) into a writable name and `p.x = 9` would show through `t` —
+		// MEASURED, and refused by both reference compilers in the longhand spelling.
+		try self.requireMutableBindingSource(nameTok, value: element, sourceName: sourceName, sourceReadsAField: true, mutable: mutable)
+
+		// No source name for the DECLARATION: a field load is a fresh borrowed value held by no binding,
+		// so there is nothing for the move poison to find.
+		try self.declareInitializedBinding(func, nameTok: nameTok, value: element, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
+		self.noteBodyVarDeclared(nameTok, mutable: mutable)
+	end 'declareDestructuredElement'
+
+	// ⭐⭐ **`(x, let y) = makePair(10, b: 32)` — STATEMENT-LEVEL TUPLE ASSIGNMENT (`specs/tuple-assign.md`),
+	// lowered as ONE evaluation of the right-hand side plus one field read per target.** It is the
+	// DECLARING destructure with the per-position question widened: each target either REBINDS a binding
+	// already in scope, DECLARES a fresh one, or DISCARDS its element. Everything else it does —  the hidden
+	// owner of the box, the borrowed field reads, the per-element declaration — is `parseDestructuringBinding`'s,
+	// shared rather than restated.
+	//
+	// ⭐ **THE RIGHT-HAND SIDE IS EVALUATED EXACTLY ONCE, AND THE HIDDEN BINDING IS WHAT MAKES THAT TRUE
+	// RATHER THAN MERELY INTENDED.** Every target reads a FIELD of the one value the expression produced, so
+	// `(a, b) = step(a)` inside a loop calls `step` once per trip whatever the arity —  and `a` on the
+	// right-hand side is read before any target is written, because the whole expression is parsed and
+	// emitted ahead of the distribution loop below.
+	//
+	// ⭐ **AND THE HIDDEN BINDING IS AN OWNERSHIP OBLIGATION, exactly as it is for the declaring form.** The
+	// right-hand side is a tuple BOX somebody has to drop; the targets cannot, because a `_N` field read is a
+	// BORROW (`emitFieldLoad` never marks the loaded value owned-heap) and N of them would drop one managed
+	// element N times. So the box is bound to a name the source cannot spell, which drops it at scope exit —
+	// and that is also why a `_` DISCARD owes nothing at all: it reads no field, and the element it declined
+	// to read was never its to release.
+	//
+	// ⚠ **THE TEMP IS DECLARED IMMUTABLE, where the declaring form hands it the author's keyword.** There is
+	// no author keyword here — the mutability is per TARGET — and the temp's own is inert either way (nothing
+	// rebinds it; the box is never written through). Immutable is the honest spelling of "nothing rebinds
+	// this", and it is the same value `let (x, y) = …` passes.
+	//
+	// ⭐⭐ **"THE BOX HAS AN OWNER" IS NOT THE WHOLE OWNERSHIP QUESTION HERE, AND THIS IS THE ONE PLACE IT IS
+	// NOT — CAN A TARGET OUTLIVE THAT OWNER?** The declaring form never has to ask: its names are declared in
+	// the same scope as its temp, so they die together. An ASSIGNMENT can name a binding declared in an
+	// ENCLOSING scope, and the temp dies at the END of the block the statement sits in — so a target holding a
+	// borrow of the temp's box would be read after the box was released. MEASURED, on the shape that would
+	// expose it (a loop rebinding an outer `var s` from a `(String, String)` per trip, then 40 further
+	// allocations to REUSE any freed slab before `s` is printed): **the right string, exit 0, no 101** — and
+	// identical to the bootstrap on the un-churned form.
+	//
+	// It is right because a REBINDING target does not hold a borrow at all: `completeLocalRebind` →
+	// `reassignBindingValue` gives the binding a value it owns (a borrowed managed element is promoted — a
+	// String COPIES, an aggregate increfs), which is the same promotion `s = <a field read>` performs. The
+	// borrow is consumed inside the statement; nothing of the temp's survives it. A DECLARING target's name is
+	// scoped with the temp, exactly as in the declaring form.
+	function parseTupleAssignment(func IrFunction, block IrBlock) throws ParseError
+		let openTok = self.current()
+		let openIndex = self.pos
+		let equalsIndex = self.tupleAssignEqualsAt(openIndex)
+		let targetIndices = self.tupleAssignTargetIndices(openIndex, equalsIndex: equalsIndex)
+
+		// Past `( … ) =` in one step. The predicate has already read every token of the head and the walk
+		// above has already split it into targets, so consuming them one at a time here would be that same
+		// grammar walked a third time — and the third copy is the one that gets taught a new target shape
+		// last.
+		self.pos = (equalsIndex + 1) as TokenIndex
+
+		// ONE pass over the targets before the right-hand side exists, answering both questions that have to be
+		// settled before it is parsed: the reserved-name refusal (so `(x, let __y) = f()` is refused as the bad
+		// declaration it is, rather than after a call was emitted) and whether EVERY target discards (E3064's
+		// door, below). A rebinding target names a binding that was checked at its own declaration.
+		var everyTargetDiscards = true
+		for k in 0 upto targetIndices.count() 'eachTargetBeforeTheRhs'
+			let nameIndex = try targetIndices.get(k) otherwise panic("parseTupleAssignment: targetIndices.get OOB at {k} below count {targetIndices.count()}")
+			let target = self.tupleAssignTargetAt(nameIndex)
+			if tupleAssignTargetDiscards(target) 'discarded'
+				continue
+			end 'discarded'
+
+			everyTargetDiscards = false
+			if tupleAssignTargetDeclares(target) 'declaringTarget'
+				let nameTok = self.tokenAt(nameIndex)
+				try self.requireUnreservedName(nameTok, declaredName: nameTok.value)
+			end 'declaringTarget'
+		end 'eachTargetBeforeTheRhs'
+
+		let rhsStart = self.pos
+		// ⭐ **A MODULE-WIDE `OpIndex`, NOT A PER-BLOCK COUNT — the genuine analogue of
+		// `rewriteLastCallToTryCall`'s `targetOpFloor`.** The producer probe compares against the block the
+		// expression ENDED on, which a `try` or a ternary may have forked; two different blocks' op COUNTS
+		// compare to nothing at all, and the fresh block's small count silently skipped the enrolment. Op
+		// indices are global to the module, so this floor means the same thing on whatever block the
+		// expression left the cursor.
+		let opFloor = self.artifact.module.ops.count()
+		let value = try self.parseExpression(func, block: block)
+
+		// ⚠ **PROBED IMMEDIATELY, RECORDED LATER.** The producer is "the last op this statement emitted", and
+		// the temp's declaration below can emit one of its own (a borrowed-managed promotion) — which would
+		// put a `__mm_retain` where the call is expected. So the callee is read here and the pending site is
+		// filed only once the statement is known to be well formed, below: a program the arity check is about
+		// to refuse must not leave an E3064 site behind in the artifact.
+		var discardedCallee = DiscardedCallee.notACall
+		if everyTargetDiscards 'nothingTookAnElement'
+			discardedCallee = try self.directCallProducing(value, opFloor: opFloor)
+		end 'nothingTookAnElement'
+
+		let layout = try self.requireTupleLayout(value, keywordTok: openTok, patternSubject: AssignPatternSubject, sourceNoun: AssignPatternSourceNoun, needsClause: AssignPatternNeedsClause)
+
+		// E3005, positioned on the `(` — where the author decided how many targets to write. It is NOT the
+		// E2015 the two DECLARING patterns raise for the same shape of mistake (`requireTupleLayout` says
+		// why): this sentence and this code are `specs/tuple-assign.md`'s, byte for byte.
+		if layout.fieldCount() != targetIndices.count() 'arityMismatch'
+			throw ParseError.tupleAssignArityMismatch(layout.fieldCount(), targets: targetIndices.count(), line: openTok.line, column: openTok.column)
+		end 'arityMismatch'
+
+		match discardedCallee 'usedNothing'
+			named(callee) then self.artifact.recordDiscardedResult(PendingDiscardedResult.create(callee, line: openTok.line, column: openTok.column, filePath: self.filePath))
+			notACall then break 'usedNothing'
+		end 'usedNothing'
+
+		// WHICH local the right-hand side reached into, read once for the whole statement — the temp's move
+		// source, and the root every DECLARING target reaches a field of (see `declareDestructuredElement`).
+		let sourceName = self.rhsRootLocalName(rhsStart)
+
+		let tempTok = Token.create(TokenKind.identifier, line: openTok.line, column: openTok.column, value: "{DestructureTempPrefix}{openTok.line}_{openTok.column}".toByteArray())
+		try self.declareInitializedBinding(func, nameTok: tempTok, value: value, sourceName: sourceName, sourceReadsAField: self.rhsSpanReadsAField(rhsStart), mutable: false)
+
+		for i in 0 upto targetIndices.count() 'eachTarget'
+			let nameIndex = try targetIndices.get(i) otherwise panic("parseTupleAssignment: targetIndices.get OOB at {i} below count {targetIndices.count()}")
+			let target = self.tupleAssignTargetAt(nameIndex)
+			let nameTok = self.tokenAt(nameIndex)
+
+			// Asked BEFORE the read, which is the whole of what a discard costs: no field load, no store, no
+			// binding — see the ownership paragraph in this function's header.
+			if tupleAssignTargetDiscards(target) 'discarded'
+				continue
+			end 'discarded'
+
+			let element = self.emitFieldLoad(value, layout: layout, index: i, range: SourceRange.between(openTok, last: nameTok))
+			match target 'kind'
+				declares(mutable) then try self.declareDestructuredElement(func, nameTok: nameTok, element: element, sourceName: sourceName, mutable: mutable)
+				rebinds then try self.rebindTupleAssignTarget(func, nameTok: nameTok, nameIndex: nameIndex, element: element)
+				discards then panic("parseTupleAssignment: `tupleAssignTargetDiscards` already continued past every discard, so this arm names a case that cannot reach it")
+			end 'kind'
+		end 'eachTarget'
+	end 'parseTupleAssignment'
+
+	// ⭐⭐ **WHICH CALL PRODUCED THE RIGHT-HAND SIDE — the half of E3064's door the PARSER can answer.**
+	// `(_, _) = makePair(10, b: 32)` uses nothing the call produced, so the statement is a call written for an
+	// effect; whether the callee HAS one is a whole-program question, judged by
+	// `SemanticCheck.checkDiscardedResults` from the site the caller files (see `PendingDiscardedResult`).
+	//
+	// ⚠ **A RIGHT-HAND SIDE THAT IS NOT A DIRECT CALL ANSWERS `notACall`, and that is the rule rather than a
+	// limitation.** `(_, _) = (1, 2)` builds a tuple and drops it: wasteful, but there is no callee whose
+	// result went unused and so nothing E3064 can be about. The producer is identified the way the `try`
+	// rewrite identifies its target — the last op this statement emitted, required to DEFINE the value the
+	// expression handed back — so a `+`, a group, or a bare name all decline it.
+	//
+	// ⚠ **A `tryCall` IS NOT MATCHED** (`directCallDefining` lists it with the non-call ops), so
+	// `(_, _) = try f() otherwise (1, 2)` records nothing. Deliberate and in the safe direction: a throwing
+	// callee is never effect-free by this analysis anyway (`opShowsAnEffect` treats a throw as an effect), so
+	// the site it would file could never fire. Stated because "the last op is the call" reads like it covers
+	// both spellings.
+	//
+	// ⚠ It reads `self.currentBlock` FRESH rather than the block it was handed: an expression may have forked
+	// (a `try`, a ternary), and the op that produced the value is on the block the expression ENDED on. What
+	// makes that safe is the floor being a module-wide `OpIndex` — see the caller.
+	function directCallProducing(value ValueId, opFloor OpIndex) returns DiscardedCallee throws ParseError
+		let refCount = self.currentBlock.opRefs.count()
+		if refCount == 0 'theBlockHoldsNoOp'
+			return DiscardedCallee.notACall
+		end 'theBlockHoldsNoOp'
+
+		let opIdx = try self.currentBlock.opRefs.get(refCount - 1) otherwise panic("directCallProducing: opRefs.get OOB on a block whose count was just read as non-zero")
+		if opIdx < opFloor 'olderThanThisStatement'
+			return DiscardedCallee.notACall
+		end 'olderThanThisStatement'
+
+		return try self.directCallDefining(opIdx, value: value)
+	end 'directCallProducing'
+
+	// The identifier token of each target of a confirmed list, in source order. Every identifier in the span
+	// IS a target's name and nothing else is one — a qualifier is a KEYWORD and a separator is a comma — so
+	// this is the walk in full, and the k-th identifier is the k-th tuple element's target.
+	function tupleAssignTargetIndices(openIndex TokenIndex, equalsIndex TokenIndex) returns TokenIndexArray
+		var indices = TokenIndexArray.create()
+		var i = (openIndex + 1) as TokenIndex
+		while i < equalsIndex 'eachToken'
+			if self.kindAt(i) == TokenKind.identifier 'targetName'
+				indices.push(i)
+			end 'targetName'
+
+			i = (i + 1) as TokenIndex
+		end 'eachToken'
+		return indices
+	end 'tupleAssignTargetIndices'
+
+	// ⭐ **A BARE TARGET IS THE ASSIGNMENT `x = <that element>`, and it goes through the same door.** Everything
+	// a rebind owes — the E3012 mention, the mutability refusal (E2013), E3070's rebind note, the type and
+	// aggregate-identity checks, the cell store and the payload write-back — is `parseAssignment`'s and is
+	// asked here through the same two routines, in the same order.
+	//
+	// ⚠ **`rhsWasBareLocal` IS FALSE, and that is a fact rather than a simplification.** The value is a FIELD
+	// LOAD — a fresh borrowed pointer that is the value of no binding — so there is no source binding for the
+	// move poison to find, exactly as `declareDestructuredElement` passes no source name for the same reason.
+	//
+	// ⚠ **AND `integerizedOperand` IS NOT ASKED, where `parseAssignment` asks it.** That coercion turns a
+	// CHARACTER LITERAL right-hand side into its codepoint for an integral target (`b = '0'`), and it is keyed
+	// on the RHS's TOKEN SPAN. A tuple element has no span of its own — it is a field of an already-built box,
+	// and a tuple element is never a bare character literal at this point — so there is nothing here for it to
+	// convert. Stated because its absence otherwise reads as an omission.
+	//
+	// ⚠ **A NAME REPEATED ACROSS TARGETS (`(x, x) = f()`) IS NOT DIAGNOSED: both stores run, the last wins.**
+	// Consistent rather than overlooked — `x = a` then `x = b` on two lines is legal Maxon and means the same
+	// thing — and neither reference compiler refuses the tuple spelling either.
+	//
+	// ⛔ **A TARGET THAT DOES NOT NAME A LOCAL IS REFUSED, NOT QUIETLY REDIRECTED.** A self field
+	// (`count = 1` inside a method) and a module-scope `var` are each written through a DIFFERENT store —
+	// `emitCheckedSelfFieldStore` and `emitCheckedGlobalStore` — and each of those parses its own right-hand
+	// side, which a tuple assignment has already evaluated. Routing such a name to the local rebind instead
+	// would silently rebind the field's ALIAS and never write the receiver's storage: a wrong answer, not a
+	// missing feature. E2015 is exactly "a shape this compiler does not lower HERE yet"; the name that
+	// resolves to nothing at all keeps the E2004/E2013 answer a plain `x = …` gives it.
+	function rebindTupleAssignTarget(func IrFunction, nameTok Token, nameIndex TokenIndex, element ValueId) throws ParseError
+		if not self.scope.contains(nameTok.value) 'notALocal'
+			match self.signatures.globalDeclFor(nameTok.value, readerFilePath: self.filePath, into: self.artifact.typeNames) 'global'
+				found then throw ParseError.unsupported("a tuple-assignment target naming the module-scope binding '{String.from(nameTok.value)}' (a module binding is written through a different store, which parses its own right-hand side; assign the element to a local and store that)", line: nameTok.line, column: nameTok.column)
+				notFound then try self.rejectNonGlobalAssignment(nameTok)
+			end 'global'
+		end 'notALocal'
+
+		var binding = self.scope.getInfo(nameTok.value)
+		self.markBindingReferenced(binding)
+
+		if binding.isSelfField 'selfField'
+			throw ParseError.unsupported("a tuple-assignment target naming the field '{String.from(nameTok.value)}' of the enclosing type (a field is written through the receiver by a different store, which parses its own right-hand side; assign the element to a local and store that)", line: nameTok.line, column: nameTok.column)
+		end 'selfField'
+
+		try self.requireMutableBinding(binding, nameTok: nameTok)
+		self.noteLocalRebind(func, nameIndex: nameIndex, anchor: nameTok)
+		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: element, rhsWasBareLocal: false)
+	end 'rebindTupleAssignTarget'
 
 	// The tuple layout `value` must have for a destructuring pattern over `nameToks` to mean anything: a tuple
 	// (never a declared struct — its fields have names the author would have to write) whose element count is
@@ -23575,16 +23898,27 @@ export type Parser
 	// RIGHT-HAND SIDE"* about a header that has no binding, no initializer and no right-hand side. The nouns
 	// are the two triples above; the `let` triple keeps both sentences byte-identical to their committed pins.
 	function requireDestructurableTuple(value ValueId, nameToks TokenArray, keywordTok Token, patternSubject String, sourceNoun String, needsClause String) returns StructLayout throws ParseError
-		if not tagIsStructRef(self.tagOf(value)) or not isTupleTypeName(self.valueTypeName(value)) 'notATuple'
-			throw ParseError.unsupported("{patternSubject} of a '{typeTagName(self.tagOf(value))}' {sourceNoun} (only a TUPLE can be destructured — {needsClause})", line: keywordTok.line, column: keywordTok.column)
-		end 'notATuple'
-
-		let layout = self.tupleLayoutOfValue(value)
+		let layout = try self.requireTupleLayout(value, keywordTok: keywordTok, patternSubject: patternSubject, sourceNoun: sourceNoun, needsClause: needsClause)
 		if layout.fieldCount() != nameToks.count() 'arityMismatch'
 			throw ParseError.unsupported("{patternSubject} of {nameToks.count()} names against a tuple of {layout.fieldCount()} elements (every element must be named)", line: keywordTok.line, column: keywordTok.column)
 		end 'arityMismatch'
 		return layout
 	end 'requireDestructurableTuple'
+
+	// ⭐ **THE "IT MUST BE A TUPLE" HALF, ON ITS OWN, because a THIRD construct spells the pattern and does
+	// NOT share the arity sentence.** A statement-level tuple ASSIGNMENT (`(x, y) = f()`) asks exactly this
+	// question of its right-hand side, and then asks a different arity question: the canonical
+	// `specs/tuple-assign.md` pins its count mismatch as **E3005** with its own wording, where the two
+	// DECLARING patterns above pin E2015 with theirs (`specs-shv2/tuples.md`). Two committed sentences under
+	// two committed codes, so the split is where they actually differ and nowhere else — the non-tuple
+	// refusal stays one sentence assembled from the caller's nouns.
+	function requireTupleLayout(value ValueId, keywordTok Token, patternSubject String, sourceNoun String, needsClause String) returns StructLayout throws ParseError
+		if not tagIsStructRef(self.tagOf(value)) or not isTupleTypeName(self.valueTypeName(value)) 'notATuple'
+			throw ParseError.unsupported("{patternSubject} of a '{typeTagName(self.tagOf(value))}' {sourceNoun} (only a TUPLE can be destructured — {needsClause})", line: keywordTok.line, column: keywordTok.column)
+		end 'notATuple'
+
+		return self.tupleLayoutOfValue(value)
+	end 'requireTupleLayout'
 
 	// ⭐ **IS `value` A TUPLE THIS RUNG MAY COPY?** — a tuple `structRef` none of whose elements owns heap.
 	// THE one gate on the value-semantics copy, so its askers cannot come to disagree about which tuples have
@@ -23889,9 +24223,7 @@ export type Parser
 		// gets away with it because it RETAINS on `get` and so simply KILLS the borrow at a reassignment
 		// (`BorrowCheckPass.cs:129-132`); shv2 takes no reference there, so killing the borrow would be
 		// unsound and the only two answers left are retain-on-get or refuse. This rung IS the refusal.
-		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
-			self.noteBorrowSubjectRebind(func, subjectName: self.borrowSubjectNameAt(nameIndex), anchor: nameTok)
-		end 'mayConflictWithABorrow'
+		self.noteLocalRebind(func, nameIndex: nameIndex, anchor: nameTok)
 
 		let rhsStart = self.pos
 		let parsedValue = try self.parseExpression(func, block: block)
@@ -23905,6 +24237,35 @@ export type Parser
 		// needs nothing: the literal already IS one. See `integerizedOperand`.
 		let declaredTag = maxonTypeTag(binding.varType)
 		let value = try self.integerizedOperand(parsedValue, expected: declaredTag, start: rhsStart, pastEnd: self.pos)
+
+		try self.completeLocalRebind(func, binding: binding, nameTok: nameTok, value: value, rhsWasBareLocal: rhsWasBareLocal)
+	end 'parseAssignment'
+
+	// ⭐⭐ **E3070's LOCAL REBIND DOOR — the guard and the subject derivation, in one place because TWO
+	// statements open it.** `x = <expr>` and a tuple assignment's BARE target (`(x, y) = f()`) rebind the
+	// same storage under the same name token, so they owe the same note; the two sibling doors
+	// (`storeToGlobal`, `emitCheckedSelfFieldStore`) keep their own because their SUBJECT is derived
+	// differently, and that difference is exactly what each of their headers is about.
+	function noteLocalRebind(func IrFunction, nameIndex TokenIndex, anchor Token)
+		if self.functionHoldsABorrow(func) 'mayConflictWithABorrow'
+			self.noteBorrowSubjectRebind(func, subjectName: self.borrowSubjectNameAt(nameIndex), anchor: anchor)
+		end 'mayConflictWithABorrow'
+	end 'noteLocalRebind'
+
+	// ⭐⭐ **A LOCAL REBIND, FROM THE TYPE CHECK TO THE STORE — everything `x = <expr>` still owes once its
+	// value exists.** SHARED with a tuple assignment's bare target, which arrives here holding an element of
+	// an already-evaluated tuple rather than a freshly parsed expression. A second copy of this list is not
+	// a duplication risk in the abstract: it is the concrete way a rebind comes to skip the aggregate-retype
+	// refusal, or to store past a cell, or to leave a mutated payload unwritten.
+	//
+	// ⚠ **THE CHECKS THAT RUN *BEFORE* THE RIGHT-HAND SIDE ARE DELIBERATELY NOT IN HERE** —
+	// `requireMutableBinding` and `noteLocalRebind` are asked by each caller at ITS OWN point. For
+	// `parseAssignment` that point is before the RHS is parsed, and moving it after would reorder two true
+	// complaints about one statement (`let x = 0` / `x = nosuch()` reports E2013 today, the RHS's error
+	// afterwards). A tuple assignment cannot ask them there — its RHS is evaluated once, ahead of every
+	// target — so it asks them per target, in target order, which is the order its own pins read in.
+	function completeLocalRebind(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
+		let declaredTag = maxonTypeTag(binding.varType)
 		let valueTag = self.tagOf(value)
 
 		// ⭐ The binding KEEPS ITS DECLARED TYPE ACROSS A REBIND, so `x = 3` into a `var x = 0.0` rebinds
@@ -23954,9 +24315,9 @@ export type Parser
 		// AFTER the rebind, deliberately: the box takes its reference to the value the BINDING ended up
 		// holding, which for a borrowed RHS is the owned copy `reassignBindingValue` promoted it to.
 		if binding.isPayloadBinding 'writeBackIntoTheBox'
-			try self.writeBackPayload(binding, nameTok: nameTok)
+			try self.writeBackPayload(func, binding: binding, nameTok: nameTok)
 		end 'writeBackIntoTheBox'
-	end 'parseAssignment'
+	end 'completeLocalRebind'
 
 	// ⭐⭐ **WRITE A MUTATED PAYLOAD BINDING BACK INTO THE SCRUTINEE'S BOX** — the exact inverse of
 	// `emitUnionPayloadLoad`, and the whole of `specs/mutable-enums.md`. It stores through
@@ -23981,7 +24342,11 @@ export type Parser
 	// a reassignment cannot change the answer — a scalar binding's declared type refuses a heap RHS), so
 	// membership IS the fact, already single-homed in `bindingIsOwned`. A second column would be free to
 	// disagree with the set that actually emits the drop.
-	function writeBackPayload(binding VarInfo, nameTok Token) throws ParseError
+	function writeBackPayload(func IrFunction, binding VarInfo, nameTok Token) throws ParseError
+		// E3064's seed, as at `emitFieldWrite`: this stores into the SCRUTINEE's box, an aggregate that already
+		// existed and that the caller may still be holding. The second of the two assignment emitters.
+		func.assignsIntoAnExistingAggregate = true
+
 		let range = SourceRange.ofToken(nameTok)
 		let value = binding.boundValue
 		let managed = self.bindingIsOwned(binding)
@@ -26585,7 +26950,7 @@ export type Parser
 	// CALL, not a bare op, so the author's spelling of the reinterpretation is not in the set either.)
 	function opReinterpretsResultOf(idx OpIndex, producer OpIndex) returns bool throws ParseError
 		return match try self.artifact.module.ops.get(idx) otherwise panic("opReinterpretsResultOf: opRef {idx} not in module.ops") 'reinterpretation'
-			unaryOp(_, operand, op) gives unaryOpProducesACallResult(op) and try self.opDefines(producer, value: operand)
+			unaryOp(_, operand, op) gives unaryOpProducesACallResult(op) and discardedCalleeIsACall(try self.directCallDefining(producer, value: operand))
 			call to binOp gives false
 			compare to panicAbortValue gives false
 			// The error-flag encode is emitted by the ROUTER, never by a call's result production, so it can never be
@@ -26605,15 +26970,18 @@ export type Parser
 		end 'o'
 	end 'unaryOpProducesACallResult'
 
-	// Does the op at `idx` DEFINE `value` as the result of a direct call — the producer half of the test above.
-	function opDefines(idx OpIndex, value ValueId) returns bool throws ParseError
-		return match try self.artifact.module.ops.get(idx) otherwise panic("opDefines: opRef {idx} not in module.ops") 'producer'
-			call(result, _, _, _, _, _, _, _) gives result == value
-			literal to panicAbortValue gives false
+	// ⭐ **WHICH DIRECT CALL DEFINED `value`, if the op at `idx` is one.** ONE enumeration of the op union
+	// serves both askers — the `try` rewrite, which only wants to know THAT a call defines its operand
+	// (`discardedCalleeIsACall`), and the discarded-result probe, which wants the callee by NAME — so a newly
+	// appended op is classified here once and cannot be classified two ways.
+	function directCallDefining(idx OpIndex, value ValueId) returns DiscardedCallee throws ParseError
+		return match try self.artifact.module.ops.get(idx) otherwise panic("directCallDefining: opRef {idx} not in module.ops") 'producer'
+			call(result, callee, _, _, _, _, _, _) gives DiscardedCallee.named(callee) if result == value else DiscardedCallee.notACall
+			literal to panicAbortValue gives DiscardedCallee.notACall
 			// The error-flag encode defines a value, but never a CALL's result — this test is about a direct call's.
-			errorFlagEncode gives false
+			errorFlagEncode gives DiscardedCallee.notACall
 		end 'producer'
-	end 'opDefines'
+	end 'directCallDefining'
 
 	function rewriteLastCallToTryCall(func IrFunction, flag ValueId, tryTok Token, targetOpFloor OpIndex) returns TryTarget throws ParseError
 		let refCount = self.currentBlock.opRefs.count()
@@ -30884,7 +31252,10 @@ export type Parser
 	//
 	// The `_` binding needs no arm on THAT side: `if let _ = try f()` has SAID what happens to the result,
 	// which is all this rule asks. Whether a PURE callee may be discarded that way is E3064's question, and
-	// shv2 has no purity classification to answer it with (see specs-shv2/discarded-results.md).
+	// THIS DOOR does not ask it. ⚠ The reason used to read "shv2 has no purity classification to answer it
+	// with", which stopped being true when `SemanticCheck.buildEffectFreeSummary` landed with the tuple-assign
+	// port: the classification exists, and exactly one door consults it (the all-discard tuple assignment).
+	// Wiring this one is a scope decision, not a missing mechanism (see specs-shv2/discarded-results.md).
 	//
 	// ⭐⭐ **AND THE DUAL, WHICH IS THE SAME QUESTION FROM THE OTHER SIDE: `if let x = try voidF()` BINDS A
 	// VALUE THE CALL DOES NOT PRODUCE (E3059).** A binding is a VALUE POSITION, so this is precisely the
@@ -34288,6 +34659,36 @@ export type Parser
 			if self.assignsAt(i) 'assignment'
 				self.collectCarriedPositions(positions, name: self.tokenAt(i).value)
 			end 'assignment'
+
+			// ⭐⭐ **A TUPLE ASSIGNMENT'S BARE TARGETS ARE WRITES THIS SCAN CANNOT SEE AS `identifier =`.**
+			// `(a, b) = step(a)` writes both names and neither is followed by an `=` — `a` is followed by a
+			// comma and `b` by a `)`. Left out, a loop carrying either would mint no header phi and the name
+			// would reset to its entry value every trip: silent, and exactly the miscompile this function's
+			// header calls out as the one direction it may not err in.
+			//
+			// ⚠ **BOTH HALVES GO THROUGH THE SHARED READERS — the SPAN through `tupleAssignEqualsAt` and WHICH
+			// TOKENS IN IT ARE TARGETS through `tupleAssignTargetIndices`.** This used to re-derive the second
+			// half inline ("every identifier in the span"), under a comment claiming it did not, which is the
+			// copy that gets taught a new target shape last: teach the grammar a target that is not a bare
+			// identifier and the parse learns it while this scan does not, dropping a header phi with no
+			// diagnostic anywhere. Both reviewers found it independently.
+			//
+			// Only REBINDING targets are collected — a `let`/`var` target declares a name the loop header
+			// cannot be carrying, and `_` writes nothing. A DECLARING destructure (`let (x, y) = t`) never
+			// reaches here at all: `tupleAssignEqualsAt` refuses a `(` that follows the keyword, at the
+			// grammar rather than here.
+			// ⚠ The `!= i` guard is not a readability nicety: `tupleAssignTargetIndices` ALLOCATES its answer,
+			// and this loop visits every token of every construct extent in the program. Called unguarded it
+			// would mint an empty array per token — see this header's own note on the Θ(bindings × constructs)
+			// probe that was removed from here for exactly that kind of cost.
+			let equalsIndex = self.tupleAssignEqualsAt(i)
+			if equalsIndex != i 'aTupleAssignmentOpensHere'
+				for nameIndex in self.tupleAssignTargetIndices(i, equalsIndex: equalsIndex) 'eachTarget'
+					if tupleAssignTargetRebinds(self.tupleAssignTargetAt(nameIndex)) 'rebindingTarget'
+						self.collectCarriedPositions(positions, name: self.tokenAt(nameIndex).value)
+					end 'rebindingTarget'
+				end 'eachTarget'
+			end 'aTupleAssignmentOpensHere'
 
 			i = i + 1
 		end 'scan'
@@ -55033,7 +55434,7 @@ export type Parser
 		// (`name = n`) must MOVE the new value in and only THEN drop the value it displaces (a borrowed String
 		// is promoted, a borrowed struct is co-owned), not a raw store that leaks the old value and dangles
 		// behind a borrow. ⚠ The acquire-before-release order is load-bearing — `emitFieldWrite` says why.
-		try self.emitFieldWrite(receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
+		try self.emitFieldWrite(func, box: receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
 	end 'emitCheckedSelfFieldStore'
 
 	// `self.x` / `self.m(…)` — the receiver named explicitly. `self` is its own KEYWORD token, so it
@@ -55242,7 +55643,7 @@ export type Parser
 		// f64. Same door as the struct literal and the bare self-field spelling.
 		let value = try self.requireFieldType(step.layout, index: index, fieldType: self.storedFieldType(step.box, layout: step.layout, index: index), value: parsed, anchor: step.lastFieldTok)
 
-		try self.emitFieldWrite(step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
+		try self.emitFieldWrite(func, box: step.box, layout: step.layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: step.lastFieldTok, range: SourceRange.between(step.baseTok, last: step.lastFieldTok))
 	end 'parseFieldAssignment'
 
 	// ⭐ **WRITE A FIELD, DROPPING THE OLD MANAGED VALUE AND MOVING THE NEW ONE IN** (P1.4a wave 2) — the
@@ -55287,7 +55688,15 @@ export type Parser
 		return self.slotTypeThroughReceiver(box, declared: self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames))
 	end 'storedFieldType'
 
-	function emitFieldWrite(box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
+	function emitFieldWrite(func IrFunction, box ValueId, layout StructLayout, index FieldIndex, value ValueId, argBareLocal bool, anchor Token, range SourceRange) throws ParseError
+		// ⭐⭐ **E3064's SEED, SET AT THE ONE EMITTER BOTH FIELD-ASSIGNMENT DOORS FUNNEL INTO.** `self.n = 5`,
+		// `n = 5` and `p.x = 5` all arrive here, and every one of them writes an aggregate that already existed —
+		// which is an effect the function's RETURN type cannot express. Set HERE and not at the two doors, for
+		// the reason the loop-phi predicate is one predicate: a third assignment spelling would otherwise have to
+		// remember. ⚠ Deliberately NOT on `emitFieldStore`, which also fills a FRESH box — see
+		// `IrFunction.assignsIntoAnExistingAggregate` for what setting it there would cost.
+		func.assignsIntoAnExistingAggregate = true
+
 		// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not be stored in a struct FIELD** — a struct box is
 		// heap memory that outlives the frame, so the field would hold a closure whose env is gone. Positioned
 		// at the field name (`anchor`).
@@ -62910,6 +63319,125 @@ export type Parser
 		return self.kindAt(index) == TokenKind.identifier and self.kindAt(index + 1) == TokenKind.equals
 	end 'assignsAt'
 
+	// ⭐⭐ **`( <target> , … ) =` — THE ONE READER OF A TUPLE ASSIGNMENT'S TARGET-LIST SHAPE**
+	// (`specs/tuple-assign.md`). Returns the index of the `=` that closes the list, or `index` itself when
+	// the tokens at `index` are not one — the same "the answer IS the start index when there is nothing
+	// here" convention `fieldChainEndAfter` uses, and unambiguous because a real answer is always at least
+	// three tokens further on.
+	//
+	// The shape is exactly: `(` TARGET (`,` TARGET)* `)` `=`, where a TARGET is an optional `let`/`var`
+	// qualifier followed by one identifier. Nothing else — no expression, no call, no index — which is what
+	// makes the admission decidable from tokens alone, before a single op is emitted.
+	//
+	// ⭐ **THERE IS NO AMBIGUITY TO RESOLVE HERE, AND THAT IS A MEASURED FACT RATHER THAN A HOPE.** shv2
+	// admits NO statement that opens with `(` — a parenthesised-expression statement, `(a + b).m()`
+	// included, dies in `parseStatement`'s `strayStatementToken` arm as `E2001: unexpected token: '('`. So
+	// this predicate can only ever turn an E2001 into a program; every `(`-opening statement it declines
+	// keeps the exact sentence it has today. Should a parenthesised-expression statement ever become legal,
+	// THIS is the predicate that decides between them, and it is one predicate rather than a rule
+	// re-derived at each door — see the second caller.
+	//
+	// ⚠ **A ONE-NAME LIST IS ADMITTED ON PURPOSE, where `parseDestructuringNames` refuses one outright.**
+	// `(x) = makePair(…)` must reach the ARITY diagnostic the spec pins
+	// (`tuple-assign/tuple-assign-error-count-mismatch`, E3005 naming both counts), which a syntactic
+	// refusal would pre-empt with a sentence about names rather than about the tuple.
+	//
+	// ⚠ **IT IS BOUNDED BY THE TOKEN ARRAY, NOT BY AN ARITY LIMIT.** `tokenAt` hands back a synthetic EOF
+	// past the end, whose kind is neither an identifier nor a comma, so a malformed source falls out of the
+	// walk at the first token that does not fit rather than running off. v1 caps its probe at 256 tokens
+	// (`Parser.maxon:10510`); shv2 needs no cap because the EOF is the cap.
+	//
+	// ⚠ **THE "NOTHING HERE" ANSWER IS THE START INDEX, WHERE `DiscardedCallee` IN THIS SAME COMMIT MINTS A
+	// UNION RATHER THAN LET AN EMPTY `ByteArray` MEAN NONE — and the two rulings are not in tension.** An
+	// empty `ByteArray` is a perfectly good callee KEY, so there "none" and a real answer are indistinguishable
+	// to every reader downstream. Here they are not: a real answer is the index of an `=` at least three
+	// tokens past the `(`, so `== index` is a value the successful case can never take. Copy the union when
+	// the "none" value is one the domain admits; copy this when it is not.
+	//
+	// ⛔⛔ **A `(` DIRECTLY AFTER `let`/`var` OPENS THE DECLARING DESTRUCTURE AND IS REFUSED HERE, AT THE ONE
+	// READER.** `let (x, y) = t` and `(x, y) = f()` are the SAME token run from the `(` onwards — this walk
+	// cannot tell them apart looking forward, and `tupleAssignTargetAt` cannot either, because it reads the
+	// token before each NAME and in the declaring form the keyword sits before the PAREN, so every name there
+	// classified as a REBIND. The loop-phi scan then carried both names of a `let (x, y) = t`: the
+	// documented-safe direction (a surplus carried binding costs a phi, never an answer), but a phi that
+	// header calls codegen-visible, minted for names the loop cannot be carrying at all.
+	//
+	// It is refused HERE rather than at the scan because it is a fact about the GRAMMAR — that `(` belongs to
+	// another construct — and a guard at one call site is the rule the next caller forgets. `parseStatement`
+	// is unaffected: it reaches this at a statement's first token, where the predecessor is a newline, and a
+	// `let`/`var` there was consumed by its own arm two branches earlier.
+	function tupleAssignEqualsAt(index TokenIndex) returns TokenIndex
+		if self.kindAt(index) != TokenKind.leftParen 'notATargetList'
+			return index
+		end 'notATargetList'
+
+		if index > 0 and (self.kindAt(index - 1) == TokenKind.let or self.kindAt(index - 1) == TokenKind.var) 'opensADeclaringDestructure'
+			return index
+		end 'opensADeclaringDestructure'
+
+		var i = (index + 1) as TokenIndex
+		while i < self.tokens.count() 'eachTarget'
+			if self.kindAt(i) == TokenKind.let or self.kindAt(i) == TokenKind.var 'declaresANewBinding'
+				i = (i + 1) as TokenIndex
+			end 'declaresANewBinding'
+
+			if self.kindAt(i) != TokenKind.identifier 'notATarget'
+				return index
+			end 'notATarget'
+			i = (i + 1) as TokenIndex
+
+			if self.kindAt(i) == TokenKind.rightParen 'endOfList'
+				return (i + 1) as TokenIndex if self.kindAt(i + 1) == TokenKind.equals else index
+			end 'endOfList'
+
+			if self.kindAt(i) != TokenKind.comma 'notASeparator'
+				return index
+			end 'notASeparator'
+			i = (i + 1) as TokenIndex
+		end 'eachTarget'
+
+		// Ran off the end of the token array without ever meeting a `)` — a truncated source, which is no
+		// target list. The bound is the array's own length rather than an arity cap for the reason the
+		// header gives: past the end every read is a synthetic EOF, so the walk above would decline it on
+		// the very next token anyway, and this is the belt to that suspenders.
+		return index
+	end 'tupleAssignEqualsAt'
+
+	// ⭐ **WHAT ONE ELEMENT OF A CONFIRMED TARGET LIST IS**, read off the identifier at `nameIndex` and the
+	// token before it. THE one classifier, so the loop-phi token scan and the parse cannot come to disagree
+	// about which elements are WRITES to a binding already in scope — a disagreement in that direction is
+	// not a missed diagnostic but a loop that recomputes from its entry value every trip
+	// (`assignedBindingsIn`'s "under-approximating would drop a real phi").
+	//
+	// Precondition: `nameIndex` is an identifier inside a list `tupleAssignEqualsAt` has already accepted AS A
+	// TUPLE ASSIGNMENT, so the token before it is the qualifier or a separator and nothing else. That
+	// predicate now refuses the DECLARING form outright, which is what makes the precondition true rather than
+	// merely intended — before it did, every name of a `let (x, y) = t` classified as a REBIND here, because
+	// the keyword sits before the PAREN and never before a name.
+	//
+	// ⚠ **THE QUALIFIER IS TESTED BEFORE THE DISCARD NAME, so `(let _, y) = f()` DECLARES a binding called
+	// `_` and pays a field read where `(_, y)` does neither.** That is the opposite order from `parseAssignment`
+	// and the `for` pattern, and it is deliberate: it makes this form agree with `let (a, _) = t`, where the
+	// declaring pattern also declares `_` (`parseDestructuringNames` runs every name through
+	// `declareInitializedBinding`). One spelling of "declare a name I will not read", answering the same way
+	// in both destructuring forms, beats agreeing with the doors that have no declarator to test.
+	function tupleAssignTargetAt(nameIndex TokenIndex) returns TupleAssignTarget
+		let qualifier = self.kindAt(nameIndex - 1)
+		if qualifier == TokenKind.let 'declaresALet'
+			return TupleAssignTarget.declares(false)
+		end 'declaresALet'
+
+		if qualifier == TokenKind.var 'declaresAVar'
+			return TupleAssignTarget.declares(true)
+		end 'declaresAVar'
+
+		if self.tokenAt(nameIndex).value.equals(DiscardBindingName) 'discards'
+			return TupleAssignTarget.discards
+		end 'discards'
+
+		return TupleAssignTarget.rebinds
+	end 'tupleAssignTargetAt'
+
 	// ⭐⭐ **`assignsAt` PLUS THE ONE QUALIFIER A *REBIND* NEEDS AND A LOOP PHI DOES NOT (PBR-2): a name
 	// preceded by `.` is a FIELD, not a binding.** `hh.op = op` writes a field OF `hh` and rebinds nothing
 	// called `op` — but the token `op` is followed by `=`, so the bare textual test answers yes.
@@ -62932,6 +63460,37 @@ export type Parser
 
 		return index == 0 or self.kindAt(index - 1) != TokenKind.dot
 	end 'rebindsANameAt'
+
+	// ⭐⭐ **THE SAME QUESTION `rebindsANameAt` ANSWERS, ASKED OF THE ONE WRITE FORM WHOSE TARGET CARRIES NO
+	// `=`.** `(x, _) = pair(x)` writes `x`; the token after `x` is a comma, so the `identifier =` shape cannot
+	// see it. THREE readers decide "does this statement write this name" and the loop-phi scan was the only
+	// one taught when tuple assignment landed — leaving the other two answering by SPELLING: `x = f()` on a
+	// by-reference parameter compiled and `(x, _) = f()` was E2013, one operation with two answers.
+	//
+	// ⭐ **THE ENCLOSING `(` COSTS NOTHING TO FIND, because both callers already track it.** They walk forward
+	// keeping `openBrackets` (`trackBracketAt`, called before the name test in both), so the innermost opener
+	// is an O(1) read — the same one `bareCallArgumentAt` takes. No backward scan, and no second grammar: this
+	// only LOCATES a candidate `(`, and `tupleAssignEqualsAt` decides whether it opens a target list. A `(`
+	// that opens a call, a group, a `{` on the stack, or a DECLARING destructure is declined there.
+	//
+	// ⚠ **ZERO BLAST RADIUS ON EXISTING PROGRAMS, and that is checkable rather than hoped:** it can only fire
+	// for a name that is BOTH a by-reference parameter (or a closure-captured local) AND a tuple-assignment
+	// target, and no program in this tree could contain a tuple assignment at all before this port — every one
+	// of them was `E2001: unexpected token: '('`.
+	function tupleAssignRebindsANameAt(index TokenIndex, openBrackets TokenIndexArray) returns bool
+		if self.kindAt(index) != TokenKind.identifier or openBrackets.count() == 0 'notANameInsideAnOpenBracket'
+			return false
+		end 'notANameInsideAnOpenBracket'
+
+		// A bare target is always followed by the `,` or `)` of its list. One token, and it keeps an ordinary
+		// argument list from paying the forward walk below on every name it holds.
+		if self.kindAt(index + 1) != TokenKind.comma and self.kindAt(index + 1) != TokenKind.rightParen 'notInAList'
+			return false
+		end 'notInAList'
+
+		let opener = try openBrackets.get(openBrackets.count() - 1) otherwise panic("tupleAssignRebindsANameAt: openBrackets is empty though its count was just read as non-zero")
+		return index < self.tupleAssignEqualsAt(opener) and tupleAssignTargetRebinds(self.tupleAssignTargetAt(index))
+	end 'tupleAssignRebindsANameAt'
 
 	// ⭐ **THE BRACKET BOOKKEEPING BOTH PEEK-ONLY BODY WALKS KEEP** — `scanBodyParamFacts` (the sweep's, over a
 	// whole declaration) and `collectCellLocalNames` (the parse's, over one body, ONCE — never over one
@@ -63065,7 +63624,10 @@ export type Parser
 					mentionedInsideAClosure.insert(name)
 				end 'capturedByThatClosure'
 
-				if self.rebindsANameAt(q) 'reassigned'
+				// The tuple-assignment spelling of the same write, for `scanBodyParamFacts`' reason one door
+				// over: a captured local written ONLY by `(x, _) = f()` would otherwise not be `assigned`, so
+				// the closure below would capture it by value and never see the write.
+				if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'reassigned'
 					assigned.insert(name)
 				end 'reassigned'
 
@@ -63237,6 +63799,15 @@ export type Parser
 	// assignment arms — because the shape it refuses spans all of them (`assignsAt`, `fieldAssignsAt` and
 	// `selfFieldAssignsAt` each own one spelling of it) and a fourth write form would otherwise have to
 	// remember to ask. A statement that opens with something the chain walk refuses costs one predicate.
+	//
+	// ⛔ **AND THE FOURTH WRITE FORM ARRIVED AND DOES *NOT* REACH IT — TUPLE ASSIGNMENT.** `fieldChainEndAfter`
+	// walks a chain from a NAME, so it stops dead at the `(` and this rule never looks at the statement:
+	// `(x, y) = (x, y)` compiles where `x = x` is E3067. Left as it is rather than widened, and the reason is
+	// that the premise above does not actually cover it — a target LIST is not a chain, so serving it needs a
+	// SECOND rule here (compare N targets against N right-hand elements), not the reuse the header promises.
+	// It is a missing diagnostic on a statement nobody writes, and inventing a positional self-assignment rule
+	// no reference compiler has, on a form neither of them refuses either, is a bigger claim than this port
+	// should make. The paragraph above is kept honest by saying so here.
 	function rejectDegenerateAssignment(index TokenIndex) throws ParseError
 		let lhsEnd = self.fieldChainEndAfter(index, minHops: AnyFieldHops)
 		if lhsEnd == index or self.kindAt(lhsEnd) != TokenKind.equals 'notAnAssignmentStatement'

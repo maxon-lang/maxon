@@ -79,6 +79,11 @@ export function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// and for their reason: a function value's parameter list is whole-program, and a lifted closure's does
 	// not reach the registry until merge.
 	checkTransformArities(project)
+	// E3064: the sites the parser recorded that used none of a call's result (`PendingDiscardedResult`),
+	// judged against the whole-program effect summary built here. Beside the two drains above and after
+	// `resolveOverloadedCalls`, whose rewrite is what makes a call op's `callee` the name the summary is
+	// keyed by.
+	checkDiscardedResults(project, module: module, funcNames: funcNames)
 	// E3070: a collection mutated while an element borrowed out of it is still live. The facts are the
 	// PARSER's (a binding exists nowhere else in shv2), and this is the first point that holds the
 	// whole-program `mutationSummary` its call-argument half asks — which is why it runs here rather than in
@@ -2862,6 +2867,237 @@ function checkTransformParamType(project Project, transform PendingTransformArit
 
 	reportPositioned(project, code: ErrorCode.typeMismatch, message: "`{method}` calls its transform with the container's own element, which is '{displayNameOfAggregate(transform.elementTag, aggregate: transform.elementIdentity)}' — but this transform declares its parameter as '{displayNameOfAggregate(paramTag, aggregate: paramIdentity)}'; a transform is `function(Element) returns Element`, so its parameter IS the element", line: transform.line, column: transform.column, filePath: transform.filePath)
 end 'checkTransformParamType'
+
+// ⭐⭐ **E3064 — A CALL WHOSE RESULT NOBODY TOOK, WHEN THE CALLEE HAD NO OTHER REASON TO RUN.** Drains the
+// sites the parser recorded (`PendingDiscardedResult`) against the effect summary built below. The message
+// and the code are `specs/tuple-assign.md`'s, and the anchor is the site's own — the statement's `(`, which
+// is where the author wrote the discards.
+//
+// ⚠ **THE SUMMARY IS ASKED ONLY WHEN A SITE EXISTS**, and that is not an optimization: it is a whole-program
+// walk over every function's every op, and almost no program writes an all-discard tuple assignment. A
+// compile that records no site pays nothing at all.
+function checkDiscardedResults(project Project, module MaxonModule, funcNames FunctionNameIndex)
+	if project.pendingDiscardedResults.count() == 0 'nothingDiscardedAWholeResult'
+		return
+	end 'nothingDiscardedAWholeResult'
+
+	let effectFree = buildEffectFreeSummary(module, funcNames: funcNames)
+	for site in project.pendingDiscardedResults 'eachSite'
+		let calleeIndex = try funcNames.byName.get(site.callee) otherwise continue
+		if not (try effectFree.get(calleeIndex) otherwise panic("checkDiscardedResults: effectFree.get({calleeIndex}) OOB below count {effectFree.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")) 'theCallDidSomething'
+			continue
+		end 'theCallDidSomething'
+
+		reportPositioned(project, code: ErrorCode.semanticDiscardedPureResult, message: "result of pure function '{String.from(site.callee)}' must be used", line: site.line, column: site.column, filePath: site.filePath)
+	end 'eachSite'
+end 'checkDiscardedResults'
+
+// ⭐⭐ **WHICH FUNCTIONS ARE PROVABLY FREE OF OBSERVABLE EFFECT** — a dense `bool` per function over
+// `funcNames.functions`, in the index space `funcNames.byName` resolves into, exactly as
+// `ParamMutationSummary` publishes its masks.
+//
+// ⛔⛔ **"NOT PROVABLY EFFECT-FREE" IS THE ANSWER FOR EVERYTHING THIS PASS CANNOT SEE, AND THAT DIRECTION IS
+// THE WHOLE SAFETY ARGUMENT.** Its one consumer REFUSES a program when the answer is "effect-free", so an
+// over-generous classification does not miss a diagnostic — it rejects a legal program. Every unknown
+// therefore reads as an effect: a callee no `IrFunction` declares, an indirect or witness dispatch whose
+// target is chosen at run time, a spawn, an await, a throw, a panic, a touch of module storage. The cost is
+// missed diagnostics, which is the direction that cannot break anything.
+//
+// ⛔⛔ **A FIELD ASSIGNMENT IS ON THAT LIST THROUGH A COLUMN OF THIS RULE'S OWN, AND THE FIRST VERSION GOT IT
+// WRONG BY BORROWING E3070's.** The seed below reads `IrFunction.assignsIntoAnExistingAggregate`, set at the
+// two assignment emitters (`Parser.emitFieldWrite`, `Parser.writeBackPayload`). It used to read the two
+// PARAMETER masks alone — both of which their own doors deliberately narrow to ARRAY-instance fields, because
+// only an array write can free an array element — so `self.n = self.n + 1` on an int field set neither, a
+// method doing exactly that was classified effect-free, and a legal program was REFUSED. A fact recorded for
+// one consumer, reused as the floor for another, where the first one's deliberate narrowing is the second
+// one's hole; the two doors could not know a second consumer had come to lean on them being wide.
+//
+// ⚠⚠ **AND THE ORACLE COULD NOT ARBITRATE IT, BECAUSE IT DISAGREES WITH ITSELF.** MEASURED, three programs,
+// each `(_, _) = <the call>`, against the bootstrap:
+//
+//   | the write                                  | bootstrap         | shv2 before | shv2 now |
+//   | bare `n = n + 1` inside a method           | COMPILES (impure) | E3064       | COMPILES |
+//   | `self.n = self.n + 1` inside a method      | E3064 (pure)      | E3064       | COMPILES |
+//   | `c.n = 7` through a `c Counter` PARAMETER  | E3064 (pure)      | E3064       | COMPILES |
+//
+// One write, two spellings, two verdicts from the reference — so rows 2 and 3 are NOT evidence that refusing
+// is correct, they are evidence the bootstrap has a hole of its own, and a check that measured only those two
+// read as total agreement. **shv2 deliberately accepts all three.** That is the semantically right answer (a
+// method that mutates its receiver has an effect) and the safe direction for a REFUSING diagnostic: shv2 now
+// accepts everything the oracle accepts on this axis, plus the two shapes the oracle wrongly refuses. The
+// bootstrap's hole is not chased here.
+//
+// ⭐ **THE ONE CARVE-OUT IS THE HEAP RUNTIME (`isRuntimeCallee`, the `__mm_` family), and without it the
+// analysis would be vacuous rather than conservative.** Every struct in shv2 IS a heap box, so `return (a,
+// b)` emits an `__mm_alloc` — count that as an effect and NO function that builds a value is ever
+// effect-free, including the `makePair` the spec's own case is about. Allocation, retain and release are
+// bookkeeping the SOURCE never asked for: the compiler emits them, they are unobservable to the program, and
+// `isRuntimeCallee` is the predicate that already draws exactly that line for exactly that reason (see its
+// header — it is deliberately narrower than `isCompilerInternalCallee`, so a `__write_stdout` or a
+// `__destruct_*` is NOT waved through here and `print` stays what it is).
+//
+// ⭐ **AND THE CLOSURE IS THE SHARED ENGINE, NOT A ROUND-BASED RE-SCAN.** Effects propagate to CALLERS, which
+// is reverse reachability over the call graph — `reverseReachabilityMark` — seeded with the functions whose
+// own bodies show one. The same relation, the same CSR and the same complexity argument as the parameter
+// mutation and closure escape summaries; see that routine's header for why a re-scan loop is a different
+// complexity and not a different spelling.
+function buildEffectFreeSummary(module MaxonModule, funcNames FunctionNameIndex) returns BoolArray
+	var seeds = BoolArray.create()
+	var edges = EffectCallEdges.create()
+	for i in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(i) otherwise panic("buildEffectFreeSummary: functions.get OOB at {i}")
+		seeds.push(functionShowsAnEffect(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges))
+	end 'eachFunc'
+
+	var effectFree = BoolArray.create()
+	let effectful = reverseReachabilityMark(buildCsr(edges.calleeIndices, to: edges.callerIndices, nodeCount: funcNames.functions.count()), seeds: seeds)
+	for i in 0 upto effectful.count() 'invert'
+		effectFree.push(not (try effectful.get(i) otherwise panic("buildEffectFreeSummary: effectful.get({i}) OOB below count {effectful.count()}")))
+	end 'invert'
+	return effectFree
+end 'buildEffectFreeSummary'
+
+// The plain caller-calls-callee relation, stored so that a CSR over it lists, for each CALLEE, the functions
+// that CALL it — the reversed adjacency `reverseReachabilityMark` walks to push a mark from a callee up to
+// everyone who calls it.
+//
+// ⛔⛔ **IT IS NOT `CallParamEdges`, AND THE DIFFERENCE IS NOT THE TWO COLUMNS IT LACKS.** That record's
+// `byCallee` builds a CSR whose neighbours are EDGE ROW NUMBERS — the indirection that lets its consumer read
+// the two parameter positions off the other columns of the same row — so walking it as though a neighbour
+// were a function index marks whatever function happens to share a number with a row. This summary was
+// written that way first, and it read GREEN on its own acceptance case for the only reason a wrong answer
+// ever reads green: nothing propagated at all, because the single callee in that program was not a seed.
+// These neighbours ARE the callers.
+type EffectCallEdges
+	export var calleeIndices as CsrColumn
+	export var callerIndices as CsrColumn
+
+	export static function create() returns EffectCallEdges
+		return Self{calleeIndices: CsrColumn.create(), callerIndices: CsrColumn.create()}
+	end 'create'
+
+	// Pushed together and only here, so the two columns stay the same length by construction. The CSR is built
+	// by the one caller straight off the two columns — `buildCsr(calleeIndices, to: callerIndices)` — rather
+	// than through a method of this type: a one-line delegation would add a name without adding a fact, and
+	// the column ORDER is the fact worth reading at the call site.
+	export function record(calleeIndex FuncIndex, callerIndex FuncIndex)
+		self.calleeIndices.push(calleeIndex)
+		self.callerIndices.push(callerIndex)
+	end 'record'
+end 'EffectCallEdges'
+
+// The SEED: does this function's OWN body show an effect, before the call graph is closed? The same walk
+// records the caller-callee edges, so the graph and the seeds come out of ONE pass over the ops.
+//
+// ⚠ **THE THREE GUARDS BELOW RETURN WITHOUT RECORDING THIS FUNCTION'S EDGES, AND THAT IS SOUND** — an edge
+// (callee, this) exists only to carry a CALLEE's mark up into this function, and this function is already
+// marked. Its own mark reaches its callers through the edges THEY record. The op loop returns early for the
+// same reason.
+function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges EffectCallEdges) returns bool
+	// A function with NO body is a declaration this module cannot read — a restored intrinsic, an extern.
+	// Nothing about it is provable.
+	if func.blockRefs.count() == 0 'noBodyToProveAnythingAbout'
+		return true
+	end 'noBodyToProveAnythingAbout'
+
+	// A function that returns nothing exists for its effects, whether or not this walk can find one.
+	if functionReturnsNothing(func) 'voidExistsForItsEffects'
+		return true
+	end 'voidExistsForItsEffects'
+
+	// ⭐⭐ **IT ASSIGNS INTO AN AGGREGATE THAT ALREADY EXISTED — THIS RULE'S OWN COLUMN, and reading E3070's
+	// instead was a measured false rejection.** See `IrFunction.assignsIntoAnExistingAggregate`: the two
+	// parameter masks below are narrowed to ARRAY-instance fields by their own doors, so `self.n = self.n + 1`
+	// on an int field set neither and a method doing exactly that was classified effect-free.
+	if func.assignsIntoAnExistingAggregate 'writesAnAggregateItWasHanded'
+		return true
+	end 'writesAnAggregateItWasHanded'
+
+	// It writes what it was handed — the parser's own two masks, the seeds `ParamMutationSummary` closes over.
+	// Read UNCLOSED here on purpose: the transitive half arrives through the very same call edges this walk
+	// records, so closing it twice would be one fact propagated by two fixpoints. They are kept BESIDE the
+	// column above rather than replaced by it: each catches writes the other does not (a `String`/`Set`
+	// receiver write is in E3019's mask and is no field assignment at all).
+	if func.writtenParamMask != NoParamPositions or func.storageWrittenParamMask != NoParamPositions 'writesItsArguments'
+		return true
+	end 'writesItsArguments'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionShowsAnEffect: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			if opShowsAnEffect(try module.ops.get(opIdx) otherwise panic("functionShowsAnEffect: opIdx {opIdx} not in module.ops"), funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges) 'effectful'
+				return true
+			end 'effectful'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'functionShowsAnEffect'
+
+// Does this function promise a value at all? A `void` return is the language's way of saying the call is
+// worth making for something other than what it hands back.
+function functionReturnsNothing(func IrFunction) returns bool
+	return match func.maxonReturnType 'rt'
+		void gives true
+		value gives false
+	end 'rt'
+end 'functionReturnsNothing'
+
+// The per-op arm. It answers "does THIS op show an effect", and for a direct call it also records the edge
+// the closure will carry the callee's answer back along. The non-call bands range to `break`, so a newly
+// appended op fails to compile here rather than silently reading as effect-free — the band-append invariant,
+// and here it is load-bearing in the refusing direction (see `buildEffectFreeSummary`'s safety argument).
+function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges EffectCallEdges) returns bool
+	return match op 'op'
+		call(_, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		literal to branch gives false
+		// ⭐ **MODULE STORAGE, READ *OR* WRITTEN.** `globalAddr` is the one door to a global (`emitGlobalAddr`),
+		// so this covers both directions — and both are effects for this rule's purpose: a write is the
+		// spec's "modifies global state", and a READ of a `var` global makes the result depend on when the
+		// call happened, which is exactly what "the result is all this call is for" denies.
+		globalAddr gives true
+		// ⛔ **A STORE THROUGH A POINTER IS NOT DECIDED HERE, AND THIS ARM ONCE CLAIMED IT WAS.** It read "a
+		// store into a heap box the function itself built is not observable outside it", deferring the rest to
+		// the `globalAddr` arm — and neither half held: `self.n = 5` and `p.n = 5` both lower to a
+		// `storeIndirect` through a box the function was HANDED, which `globalAddr` never sees. Telling "a box
+		// this frame allocated" from "a box it was handed" needs provenance this op does not carry, so the OP
+		// cannot answer it.
+		//
+		// It stays `false` because the question is answered EARLIER, on the function rather than on the op:
+		// the assignment emitters set `assignsIntoAnExistingAggregate` and the seed above reads it, which is
+		// exactly the provenance this op lacks — a store the parser knows to be a field ASSIGNMENT rather than
+		// the filling of a fresh box. A `storeIndirect` reaching here has already been counted if it was one.
+		loadIndirect to stringLiteral gives false
+		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		// Failing is an effect the RETURN type cannot express, so a function that can throw has a reason to be
+		// called besides its value (`Parser`'s `_ = try …` note makes the same point from the other side).
+		throwError to propagateError gives true
+		panicAbort gives true
+		// Taking a function's ADDRESS calls nothing.
+		functionRef gives false
+		// The target is chosen at run time or out of a witness table, so there is no callee to close over.
+		indirectCall gives true
+		// A spawn runs concurrently and an await orders this frame against another — neither is a value this
+		// call merely computed.
+		asyncCall to tryAwait gives true
+		sizeofType to switch gives false
+		witnessDispatch to witnessTryDispatch gives true
+		panicAbortValue gives true
+		errorFlagEncode gives false
+	end 'op'
+end 'opShowsAnEffect'
+
+// One call, judged by its callee. A `__mm_*` heap entry point says nothing (see `buildEffectFreeSummary`);
+// any other callee this module does not declare is an effect; a declared one contributes an EDGE and lets
+// the closure decide.
+function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges EffectCallEdges) returns bool
+	if isRuntimeCallee(callee) 'heapBookkeeping'
+		return false
+	end 'heapBookkeeping'
+
+	let calleeIndex = try funcIndexByName.get(callee) otherwise return true
+	edges.record(calleeIndex, callerIndex: callerIndex)
+	return false
+end 'calleeShowsAnEffect'
 
 // Where the door was, as the diagnostic says it — ONE arm per `FunctionTypeDoor`, and a new door cannot be
 // declared without being given its sentence here. The shapes the arms fall into, rather than a list of them:

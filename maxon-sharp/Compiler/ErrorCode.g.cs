@@ -456,6 +456,9 @@ public enum ErrorCode {
   /// a pure-function call's result was discarded. Pure callees must
   /// have their result used -- neither bare `foo()` nor `_ = foo()` is
   /// permitted. Fires from `checkDiscardedResults`.
+  /// shv2 raises it at ONE door so far -- a tuple assignment whose every target is `_`
+  /// (`(_, _) = makePair(10, b: 32)`, `specs/tuple-assign.md`), which uses none of the
+  /// result. Its bare-call and `_ =` doors stay shelved in `specs-shv2/discarded-results.md`.
   /// </summary>
   SemanticDiscardedPureResult = 3064,
   /// <summary>

@@ -422,6 +422,35 @@ export type IrFunction
 	// the `Array` retirement chain strikes moves onto it.
 	export var storageWrittenParamMask as ParamPositionMask
 
+	// ⭐⭐ **DOES THIS BODY ASSIGN INTO AN AGGREGATE THAT ALREADY EXISTED? — the effect summary's OWN seed, and
+	// a THIRD question over the same territory as the two masks above, which is exactly why it is its own
+	// column and not a reading of theirs.**
+	//
+	// | question | column |
+	// |---|---|
+	// | "does passing an immutable binding HERE make it an error?" | `writtenParamMask` (E3019) |
+	// | "does this body write the storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
+	// | "does this body write a field of a box it did not just build?" | **this** (E3064) |
+	//
+	// ⛔⛔ **IT EXISTS BECAUSE READING E3070's COLUMN INSTEAD WAS A MEASURED FALSE REJECTION.** The effect
+	// summary first seeded off the two masks above; both are deliberately narrowed to ARRAY-instance fields
+	// (see the four-row divergence table), so `self.n = self.n + 1` on an INT field set neither, a method
+	// doing exactly that was classified effect-free, and `(_, _) = c.bump()` — a legal program the bootstrap
+	// compiles — was refused E3064. That is a fact recorded for one consumer reused as the floor for another,
+	// where the first one's deliberate narrowing is the second one's hole.
+	//
+	// ⛔ **AND WIDENING E3070's COLUMN WOULD HAVE BEEN THE WRONG CURE**: its narrowing is its SCOPE (an array
+	// element is the only borrow it tracks), and a `String`/`Set` row added to it refuses `b.wipe()` while
+	// `b.items` is borrowed — a legal program, one pass over. Three questions, three columns.
+	//
+	// ⚠ **IT IS SET AT `Parser.emitFieldWrite` AND `Parser.writeBackPayload`, the two ASSIGNMENT emitters, and
+	// deliberately NOT at `emitFieldStore`** — the raw store, which is also how a FRESH box is filled
+	// (`Self{…}`, a tuple literal). Setting it there would mark every function that builds a value, including
+	// the `makePair` the acceptance case turns on, and the summary would be vacuous rather than conservative.
+	// It over-approximates in the safe direction instead: a write into a box this frame allocated (`var p =
+	// Point.create(1)` then `p.x = 5`) sets it too, costing a missed diagnostic and never a refusal.
+	export var assignsIntoAnExistingAggregate as bool
+
 	// ⭐⭐ **THE PARAMETERS THIS FUNCTION TAKES BY REFERENCE (PBR-2) — an ABI fact, and the ONE of the three
 	// masks on this record that is not a diagnostic's seed.**
 	//
@@ -518,6 +547,7 @@ export type IrFunction
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
 			storageWrittenParamMask: 0,
+			assignsIntoAnExistingAggregate: false,
 			borrowFacts: sharedEmptyBorrowFacts
 		}
 	end 'create'
@@ -570,6 +600,7 @@ export type IrFunction
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
 			storageWrittenParamMask: 0,
+			assignsIntoAnExistingAggregate: false,
 			borrowFacts: sharedEmptyBorrowFacts
 		}
 	end 'createFromStd'
@@ -616,6 +647,7 @@ export type IrFunction
 			writtenParamMask: src.writtenParamMask,
 			reassignedParamMask: src.reassignedParamMask,
 			storageWrittenParamMask: src.storageWrittenParamMask,
+			assignsIntoAnExistingAggregate: src.assignsIntoAnExistingAggregate,
 			borrowFacts: src.borrowFacts
 		}
 	end 'shallowCopy'

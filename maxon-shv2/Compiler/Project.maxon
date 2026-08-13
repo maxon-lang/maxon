@@ -5642,6 +5642,32 @@ end 'PendingTransformArity'
 
 export typealias PendingTransformArityArray = Array with PendingTransformArity
 
+// ⭐⭐ **A SITE THAT USES NONE OF A CALL'S RESULT, AWAITING THE WHOLE-PROGRAM VERDICT ON WHETHER THE CALLEE
+// HAD ANY OTHER REASON TO RUN (E3064, `specs/tuple-assign.md`).** Recorded rather than checked in place for
+// `PendingFunctionTypeDoor`'s reason and a sharper one of its own: whether a callee is PURE is a property of
+// the whole call graph — its body, its callees, and their callees — and shv2's parser is a pure function of
+// ONE FILE, so the callee's body may not even have been read yet when the site is found.
+//
+// ⚠ **THE ONLY DOOR THAT RECORDS ONE TODAY IS THE ALL-DISCARD TUPLE ASSIGNMENT** — `(_, _) = makePair(…)`,
+// which names every target `_` and so uses nothing the call produced. The canonical language raises E3064 at
+// two more doors (a bare `foo()` statement and `_ = foo()`), and shv2 raises it at NEITHER: both stand
+// shelved with their reason in `specs-shv2/discarded-results.md`, and wiring them is a change of blast
+// radius rather than a change of mechanism — this record and the summary that judges it serve all three.
+export type PendingDiscardedResult
+	// The callee whose result nobody took, as the CALL OP spells it — the key the effect summary is indexed
+	// by, so it is the resolved name and not the source token.
+	export var callee as ByteArray
+	export var line as LineNumber
+	export var column as ColumnNumber
+	export var filePath as FilePath
+
+	export static function create(callee ByteArray, line LineNumber, column ColumnNumber, filePath FilePath) returns PendingDiscardedResult
+		return Self{callee: callee, line: line, column: column, filePath: filePath}
+	end 'create'
+end 'PendingDiscardedResult'
+
+export typealias PendingDiscardedResultArray = Array with PendingDiscardedResult
+
 // The outcome of slotting a call's arguments to its callee's parameter positions.
 // `ordered` carries the arg SSA values in DECLARATION order (label reordering applied);
 // every other arm is a call error the caller renders as a positioned diagnostic. This
@@ -5860,6 +5886,9 @@ export type Project
 	// PendingTransformArity). Filled and drained exactly as `pendingFunctionTypeDoors` above, and after
 	// resolution for the same reason: a lifted closure's signature is not in the registry until merge.
 	export var pendingTransformArities as PendingTransformArityArray
+	// ⭐ Recorded sites that used none of a call's result, awaiting the whole-program effect summary (see
+	// PendingDiscardedResult). Filled and drained exactly as the two lists above.
+	export var pendingDiscardedResults as PendingDiscardedResultArray
 	// ⭐ THE TWO DEFERRED NAME DIAGNOSTIC LISTS (P1.9) — E3062 candidates and hidden `as` targets,
 	// appended per file by `mergeArtifact` and drained, in this order, by
 	// `TypeResolution.reportDeferredNameDiagnostics`. `DeferredNameDiagnostic` carries the argument for
@@ -6028,6 +6057,7 @@ export type Project
 			collidedTypeNames: CollidedTypeNameSet.create(),
 			pendingFunctionTypeDoors: PendingFunctionTypeDoorArray.create(),
 			pendingTransformArities: PendingTransformArityArray.create(),
+			pendingDiscardedResults: PendingDiscardedResultArray.create(),
 			// Aimed at the TARGET this project was created for, never the host — see `exitCodeHigh`.
 			typeAliases: RangedAliasRegistry.create(target.os),
 			typeNameDecls: TypeNameRegistry.create(),
