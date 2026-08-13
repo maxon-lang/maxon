@@ -4120,9 +4120,16 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 //
 // ⇒ **SO THE RESIDUE IS ALL SIX MEMBERS, FOR ONE CAUSE AND NOT SIX** (`ARR4`'s framing: a roster is the
 // residue of what could not retire). `count` `get` `set` `createIterator` are blocked by the `self` wall
-// above. `create` and `init` are blocked by it AND by a second, independent fact: `create()`'s
-// `return Self{}` means *"N zero-initialized elements"* and the body has no way to name N, so even a
-// matching `self` would give a `Vec3.create()` a 0-slot vector.
+// above. The two STATICS take `Self` in RETURN position instead, so the wall reaches them from the other
+// side, and they are not blocked alike — a distinction worth keeping, because it is what a later rung
+// would size the work from (corrected in review, W86; this paragraph had charged both with `create`'s):
+//   • **`create()` carries a SECOND, independent fact.** `return Self{}` means *"N zero-initialized
+//     elements"* and the body has no way to name N — there is no size type parameter to name it with —
+//     so even a matching `Self` would give a `Vec3.create()` a 0-slot vector.
+//   • **`init(managed)` carries no such fact.** It ADOPTS a buffer that already states N in its own
+//     `length@8`, so its body never needs to name the count; what it needs is for the fused-wrapper
+//     identity arm to RETYPE its countless `Self{managed: managed}` to the receiver's sized instance,
+//     which is the `firstFieldIsItsOwnBuffer` mechanism listed below and not this bullet's fact.
 //
 // ⭐ **TWO CANDIDATE CURES, NAMED SO THE NEXT RUNG DOES NOT RE-DERIVE THEM, NEITHER BUILT HERE.**
 //   1. **Size-polymorphic `Self`** — let a sized instance satisfy the declaration's countless `Self` at a
@@ -4152,9 +4159,16 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 // ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ManagedRecordBytes` fused record, the
 // `__managed_*` helpers, `__managed_decref`.** A fixed-size buffer and a growable one differ in what may be DONE to
 // them, not in how the bytes sit, so a second record would have been the same six slots under a second
-// name: `genericInstanceBoxSize` and `genericInstanceBoxDropCallee` answer a Vector with the `Array` row,
-// and `Vector.create()` is one `__managed_mem_create(N, elementSize)` — the entry that PUBLISHES `N`
-// zero-initialized elements, which is precisely the spec's *"zero-initialized, N elements"*.
+// name: `genericInstanceBoxSize` and `genericInstanceBoxDropCallee` answer a Vector with the `Array` row.
+//
+// ⛔⛔ **HOW `Vector.create()` IS EMITTED IS `Parser.emitVectorCreateOp`'s TO STATE, AND THIS HEADER STATED
+// IT TOO — WRONGLY (found in review, W86).** It said *"one `__managed_mem_create(N, elementSize)` — the
+// entry that PUBLISHES `N` zero-initialized elements"*, which is the shape that emitter's own ⚠ paragraph
+// records TRYING and MEASURING as **E3057 throwing function requires try: 'create'** on every case in
+// `/specs/vector.md`, because that entry THROWS. What is emitted is `__managed_create` then
+// `__managed_resize(N)`, which throws nothing. Two headers, one fact, opposite answers — and the copy a
+// reader lands on first was the one naming the route already known not to work. The emitter is the one
+// place that says it now.
 //
 // ⭐⭐ **WHAT IS `Vector`'s ALONE IS THE SIZE, AND IT LIVES IN THE INSTANCE'S IDENTITY** —
 // `GenericInstanceRegistry.fixedSizes`, part of the intern KEY, so `Vector with 3 Int` and
@@ -8317,9 +8331,18 @@ export type ProgramSignatures
 	// (`GenericInstanceRegistry.fixedSizes`, see `VectorBuiltinBaseName`), so `Vector with 3 Int` is not the
 	// record a `__ManagedMemory with Int` folds onto and never can be — one instance would have to be two —
 	// and its literal already has its own door (`Parser.parseVectorFromConstruction`, a RETYPE of the array
-	// literal rather than an identity). Skipping it also keeps `isArrayBaseName` answering FALSE for that
-	// name in a program declaring an array conformer of its own, without which a `Vector with N T` would be
-	// an `Array` instance as well and `Parser.dispatchMethodOnReceiver` asks the array arm FIRST.
+	// literal rather than an identity).
+	//
+	// ⛔⛔ **AND THE SKIP IS NOT ONLY ABOUT THE FOLD TARGET — IT IS WHAT KEEPS A VECTOR OFF THE `Array`
+	// SURFACE, IN EVERY PROGRAM RATHER THAN ONLY IN A CONTESTED ONE (sharpened in review, W86).** Taking
+	// `corpusArrayRecordName` makes `isArrayBaseName(b"Vector")` answer TRUE at THAT predicate's first test
+	// (the bare name equality, not the `hasNonCorpusArrayConformer` widening under it), so every
+	// `Vector with N T` is an `Array` instance as well — and `Parser.dispatchMethodOnReceiver` asks the array
+	// arm FIRST. A vector receiver would then reach `dispatchArrayMethod`, whose roster SERVES `push`,
+	// `resize` and `clear`: a fixed-size container grown through its own type's back door, which is a WRONG
+	// ANSWER and not a refusal. It is unreachable today only because the tree-wide `E2015` above stops the
+	// compile before any dispatch runs — so the loud failure is what stands between here and the silent one,
+	// and a rung that fixed only the loud half would uncover the quiet one.
 	//
 	// ⇒ **It lands on the day the module is listed and not before**: with `Vector.maxon` unlisted the skip
 	// cannot fire, so it would be a fix no case in the suite could turn red — the shape this tree refuses to
