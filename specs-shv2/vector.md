@@ -611,14 +611,7 @@ end 'main'
 A `Vector with 3 Int` and a `Vector with 4 Int` are two types, wherever they are reached from: a
 declared alias, a field of a generic type, or a synthesized instance nothing has named.
 
-<!-- disabled-test: capacity-is-part-of-instance-identity -->
-<!-- MISSING MECHANISM: `Vector with <N> <type parameter>` inside a generic body. shv2 refuses this
-     cleanly and positionally (E2015 — no statically known element stride to size inline storage
-     with), because dictionary-passing shares ONE body across instantiations while a fixed-size
-     vector field needs its stride at LAYOUT time. Supplied by board row `S2u`; re-enable there.
-     The sibling cases `error.wrong-size-vector-argument` and `same-size-aliases-are-one-type`
-     from this same canonical section DO pass, so the size-is-part-of-identity rule itself holds
-     wherever the element type is concrete. -->
+<!-- test: capacity-is-part-of-instance-identity -->
 The size is part of the type, so a generic type's capacity-4 field must keep that capacity
 rather than adopting a declared `Vector with 3` alias that happens to share its element type.
 ```maxon
@@ -651,14 +644,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: distinct-capacities-are-distinct-instances -->
-<!-- MISSING MECHANISM: `Vector with <N> <type parameter>` inside a generic body. shv2 refuses this
-     cleanly and positionally (E2015 — no statically known element stride to size inline storage
-     with), because dictionary-passing shares ONE body across instantiations while a fixed-size
-     vector field needs its stride at LAYOUT time. Supplied by board row `S2u`; re-enable there.
-     The sibling cases `error.wrong-size-vector-argument` and `same-size-aliases-are-one-type`
-     from this same canonical section DO pass, so the size-is-part-of-identity rule itself holds
-     wherever the element type is concrete. -->
+<!-- test: distinct-capacities-are-distinct-instances -->
 Two generic types whose fields differ only in capacity must not collapse onto one instance,
 even when nothing in the project declares a name for either.
 ```maxon
@@ -774,4 +760,146 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:7:4: Unsupported: `Vector` member 'push' — shv2 provides count/get/set; that list IS the surface, so nothing else is served here
+```
+
+## A Published Slot Must Be A Value At Every Instantiation
+
+⚠ NOT FROM `/specs/vector.md` — shv2's own, and it is the other half of the mechanism `S2u` built. A
+`Vector with <N> <type parameter>` is created ONCE, in a body every instantiation shares, and `create()`
+publishes all N slots by zeroing them. A zeroed slot is an element for a trivial instantiation and a NULL
+for a managed one, and the shared body cannot branch on which. MEASURED before the gate existed, on the
+program below with a `for … in` read added: `count()` answered 4 while every `get` reported an empty slot
+(exit 0, no diagnostic), and the loop read **SEGFAULTED**. It is the concrete managed element's refusal
+(`error.a-concrete-managed-element-is-refused`, just below) asked of the thing that is knowable inside a
+shared body — the instantiation set — rather than of an element type there is none of.
+
+<!-- test: error.a-managed-instantiation-of-a-vector-field-is-refused -->
+A type parameter can be instantiated at a managed type, so a fixed-size vector over one is refused at
+the `create()` that would publish its slots — not at the instantiation, and not at run time.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	var h = StrHolder.create()
+	return h.size()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer, bool or float elements only, or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+```
+
+<!-- test: error.one-managed-instantiation-refuses-the-shared-body -->
+The body is compiled ONCE and serves every instantiation, so the rule is EXISTENTIAL: one managed
+instantiation refuses it, and a trivial instantiation standing beside it does not buy it back.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias IntHolder = Holder with Int
+typealias StrHolder = Holder with String
+
+function main() returns ExitCode
+	var a = IntHolder.create()
+	var b = StrHolder.create()
+	return a.size() + b.size()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer, bool or float elements only, or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+```
+
+<!-- test: a-vector-in-an-extension-body-over-an-associated-type -->
+NOT FROM `/specs/vector.md` — the construct reached from its third position, which sources its layout
+descriptor differently from the other two: an `extension` body has no `uses` clause of its own and is
+scanned in its target's scope, so the descriptor a `Slot.create()` reads there is reserved through the
+interface's parameter rather than a struct's. The refusal above is a REFUSAL, and a refusal that fires
+everywhere proves only that nothing works — this is the capability half, at the position the two cases
+above do not stand in.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+interface Sized uses Element
+	typealias Slot = Vector with 4 Element
+	function tally() returns Int
+end 'Sized'
+
+extension Sized
+	export function tallyTwice() returns Int
+		var v = Slot.create()
+		return v.count() + tally()
+	end 'tallyTwice'
+end 'Sized'
+
+type Bag uses Element implements Sized with Element
+	typealias Slot = Vector with 4 Element
+	var n as Int
+
+	export static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+
+	export function tally() returns Int
+		return n
+	end 'tally'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	return b.tallyTwice()
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: error.a-concrete-managed-element-is-refused -->
+NOT FROM `/specs/vector.md` — the CONCRETE half of the same invariant, which until this case nothing ran
+at all. `Parser.requireVectorElementType`'s two arms are one rule about one hazard, and `S2u` was about to
+land two cases on the shared-body arm and leave this one where it found it: the door that refuses a
+written `Vector with 2 String` could have been deleted and the whole suite would have stayed green. ⚠ It is a KNOWN DIVERGENCE and not agreement — the bootstrap compiles and
+runs this program (`W82` measured `got=beta count=3` on the byte-identical shape), because it reads the
+corpus `stdlib/Vector.maxon`, which is generic over its element, where shv2's synthesized vector is
+scalar-only. The row that owns that divergence is the `Vector` retirement chain, not this case; what this
+case pins is that shv2's position is a stated refusal rather than an accident.
+```maxon
+typealias Vec2 = Vector with 2 String
+
+function main() returns ExitCode
+	var v = Vec2.create()
+	return v.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:10: Unsupported: `Vector` holds its elements INLINE and publishes every slot at `create`, so it has no element destructor to stamp and a 'String' element would leak its storage and be read back as a null slot — a vector's element is an integer, a bool or a float
 ```

@@ -13320,7 +13320,12 @@ export type Parser
 
 	// Is the identifier at `aliasPos` a member-level opaque-`T` array alias being CONSTRUCTED — the
 	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` qualifies (`Container.X`) to a
-	// whole-program generic alias naming an OPAQUE `Array` instance. The opacity is read straight off
+	// whole-program generic alias naming an OPAQUE instance of a container whose `create` builds the fused
+	// managed record — `Array with <type parameter>`, and since S2u the fixed-size `Vector with <N> <type
+	// parameter>`, whose create IS that same one plus the `__managed_resize` that publishes its slots. WHICH
+	// containers those are is `instanceCreateBuildsTheManagedRecord`'s to say, for the reason that function
+	// carries: asked separately here and at the emit, the two are free to disagree, and the disagreement is
+	// a compiler panic. The opacity is read straight off
 	// `self.signatures` — the SAME index and the SAME `containerElementIsOpaque` predicate `emitArrayCreateOp`
 	// branches the descriptor-reading create on — so the reserved slot and the emitted read decide off ONE fact
 	// and cannot diverge, whatever their token distance. The sweep has folded every inner alias before the real
@@ -13342,7 +13347,7 @@ export type Parser
 			return false
 		end 'notAlias'
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
-		return self.signatures.isArrayInstance(giid) and self.signatures.containerElementIsOpaque(giid)
+		return self.signatures.instanceCreateBuildsTheManagedRecord(giid) and self.signatures.containerElementIsOpaque(giid)
 	end 'opaqueArrayConstructionAt'
 
 	// ⭐ **THE `Self{…}` SPELLING OF THE CONSTRUCTION ABOVE (W57)** — a separate shape test because `Self` is a
@@ -52432,9 +52437,24 @@ export type Parser
 	// `element_destroy@40` stays 0, so a managed element would leak at teardown and every `set` would
 	// overwrite a live pointer. A `Character` is refused for that same reason and not a separate one.
 	//
-	// ⚠ **AN OPAQUE `T` IS REFUSED AHEAD OF THE OTHERS, exactly as `requireListElementType` refuses one** — a
-	// vector inside a generic body has no statically known stride at all, so the element size `create()`
-	// stamps would be a guess rather than the element's.
+	// ⭐⭐ **AN OPAQUE `T` IS ADMITTED, AND WHAT IT IS JUDGED BY IS THE INSTANTIATION SET (S2u).** This arm
+	// used to refuse outright — *"a vector inside a generic body has no statically known element stride to
+	// size its storage with"* — and **that premise was false**: a vector's storage is the same fused managed
+	// record an array's is, held behind ONE 8-byte field slot, and an opaque `T`'s stride is the uniform
+	// machine word every type parameter occupies under dictionary-passing (`LAYOUT_TYPE_PARAM_SLOT_BYTES`,
+	// which `emitOpaqueArrayCreateOp` has stamped for `Array with <type parameter>` since P1.7 slice 3b-i).
+	// The SIZE is not the problem either — `Vector with 4 Element` states its 4 in the source, and the
+	// substitution carries it into `Vector with 4 Int` through the intern key (`substituteInstanceArgsThrough`
+	// carries `fixedSize` explicitly, for exactly this).
+	//
+	// ⛔ **WHAT IS GENUINELY UNSOUND IS ONE INSTANTIATION AT A TIME, AND IT IS THE `create()` THAT PUBLISHES
+	// SLOTS — NOT THE STRIDE.** `emitVectorCreateOp` grows the record to N by ZEROING it, so all N slots are
+	// readable by the type's own contract; a trivial element's zero IS a value, and a managed element's is a
+	// NULL. A type parameter can be instantiated at a managed type, so the question the concrete arm below
+	// answers off `containerElementIsManaged` is answered here off the INSTANTIATION SET
+	// (`requireEveryInstantiationPublishesAValue`) — the same boundary, asked of the thing that is knowable
+	// at this position. The two are one invariant with two doors, exactly as this function and
+	// `requireArrayResizeHasZeroElement` already are.
 	//
 	// ⚠⚠ **THE MANAGED TEST IS `containerElementIsManaged`, AND THE TAG WHITELIST BELOW CANNOT STAND IN FOR
 	// IT — THAT WAS A MEASURED SEGFAULT, NOT A THEORETICAL GAP (review finding 1).** `tagIsIntegral` answers
@@ -52451,7 +52471,8 @@ export type Parser
 	// door), and the whitelist below stays as the POSITIVE rule for everything that is not managed.
 	function requireVectorElementType(giid GenericInstanceId, tok Token) throws ParseError
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
-			throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)} with <N> <type parameter>` — a vector inside a generic body has no statically known element stride to size its storage with; declare it at a concrete element type", line: tok.line, column: tok.column)
+			try self.requireEveryInstantiationPublishesAValue(giid, tok: tok)
+			return
 		end 'opaqueElement'
 
 		if self.signatures.containerElementIsManaged(giid) 'managedElement'
@@ -52465,6 +52486,35 @@ export type Parser
 
 		throw ParseError.unsupported(self.vectorElementRefusal(giid), line: tok.line, column: tok.column)
 	end 'requireVectorElementType'
+
+	// ⭐⭐ **EVERY INSTANTIATION OF THE ENCLOSING GENERIC TYPE MUST MAKE THIS VECTOR'S PUBLISHED SLOTS VALUES
+	// (E2015, S2u).** A `Vector with <N> <type parameter>` is created ONCE, in a body shared by every
+	// instantiation, and `create()` publishes all N slots by zeroing them — so the slots are elements for a
+	// trivial instantiation and null pointers for a managed one. The shared body cannot branch on that, so
+	// admitting the construct means every instantiation must be trivial, and one managed instantiation
+	// refuses the body.
+	//
+	// ⛔ **MEASURED, BOTH SYMPTOMS, before this gate existed** — `type Holder uses Element` with
+	// `typealias Slot = Vector with 4 Element`, at `typealias StrHolder = Holder with String`: `slot.count()`
+	// answered **4** while `try slot.get(0)` took `emitLoadElemAndOkReturn`'s empty-slot branch and THREW
+	// (four elements it does not have, exit 0, no diagnostic), and a `for e in slot` returning `e`
+	// **SEGFAULTED (139)** — `__managed_get_unchecked` drops that empty-slot arm, on the guarantee this
+	// refusal supplies. They are `requireVectorElementType`'s own header's two symptoms for the CONCRETE
+	// managed element, re-measured one axis over.
+	//
+	// ⭐ **IT IS `requireOpaqueArrayCopyable`'s SHAPE AND FOR ITS REASON**: the refusal is contingent on the
+	// instance registry, so the construct that forces it is the INSTANTIATION rather than the body's own
+	// line — and when the body is `stdlib/`'s, that line is one no user wrote.
+	// `blameLibraryRefusalOnInstantiation` re-anchors it there; in a user body it already lands on a line its
+	// author wrote and is left alone.
+	function requireEveryInstantiationPublishesAValue(giid GenericInstanceId, tok Token) throws ParseError
+		match self.signatures.genericTypeFieldManagedElementInstantiation(typeNameIdOf(self.signatures.containerElementType(giid))) 'managedInstantiation'
+			noInstance then return
+			instance(offender) then self.blameLibraryRefusalOnInstantiation(offender)
+		end 'managedInstantiation'
+
+		throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)} with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `{String.from(CreateMethod)}` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `{String.from(CountMethod)}()` would answer N while every `{String.from(GetMethod)}` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer, bool or float elements only, or hold the elements in an `{String.from(self.signatures.arrayRecordDeclaredName())} with <type parameter>`, which publishes nothing and grows by `{String.from(ArrayPushMethod)}`", line: tok.line, column: tok.column)
+	end 'requireEveryInstantiationPublishesAValue'
 
 	// The ONE wording of "a vector cannot hold that", shared by the two gates that reach it — the managed
 	// door and the tag whitelist — so a reader meets one sentence about one rule however the element was

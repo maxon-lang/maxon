@@ -1635,6 +1635,19 @@ enum TypeArgInstantiationKind
 	// Not deep-cloneable through the single-`copyFunc` element mechanism (`not typeSupportsDeepClone(as
 	// element)`): a managed-element array or a non-Array generic instance — the opaque-copy front-end reject.
 	uncopyableElement
+	// A HEAP AGGREGATE (`typeIsManaged`): a String, a struct, a boxed union, a nested container — anything
+	// whose slot is a POINTER rather than the value. The front-end reject for the one container that
+	// PUBLISHES its slots at birth (`Vector with N <type parameter>`, S2u): `create()` zeroes every slot, and
+	// a zeroed pointer is an ABSENCE, not a value.
+	//
+	// ⛔ **IT IS NOT `consumeMoved`, AND THE TWO ARE ONE WORD APART IN ENGLISH AND A WHOLE CLASS APART IN
+	// FACT.** That one is the CONSUME boundary (`typeArgIsOwned` — does the box take the caller's value
+	// away), and it answers FALSE for an all-scalar struct, which is BORROWED at the call site. A `Vector`
+	// slot standing for one is still a null pointer with a live `destroyFunc@40` behind it, so the boundary
+	// this kind needs is the one `containerElementIsManaged` — the CONCRETE vector's own element gate —
+	// already reads. The two gates then agree on what "managed" means, which is what a shared body's refusal
+	// and a concrete instance's refusal must do.
+	managedElement
 end 'TypeArgInstantiationKind'
 
 // Which instance of the declaring base classified its argument as the asked-for kind, or that none did.
@@ -1653,14 +1666,15 @@ end 'TypeArgKindMatch'
 //
 // The two emission kinds answer *"must this shared body carry a drop?"*, where a phantom buys a
 // descriptor-gated drop for a shape that never occurs — a no-op at run time — and ignoring one would omit a
-// drop that is owed. They therefore keep reading every row. The copy kind answers *"must this program be
-// REFUSED?"*, where a phantom is not a conservative margin but a wrong answer about a program that contains
-// no such array; it reads only rows the source named.
+// drop that is owed. They therefore keep reading every row. The two REFUSING kinds answer *"must this
+// program be REFUSED?"*, where a phantom is not a conservative margin but a wrong answer about a program
+// that contains no such instantiation; they read only rows the source named.
 function kindIgnoresSpeculativeInstances(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
 		consumeMoved then return false
 		coOwnedTrivial then return false
 		uncopyableElement then return true
+		managedElement then return true
 	end 'kind'
 end 'kindIgnoresSpeculativeInstances'
 
@@ -15619,6 +15633,21 @@ export type ProgramSignatures
 		return self.isVectorBaseName(self.genericInstanceBaseName(id))
 	end 'isVectorInstance'
 
+	// ⭐⭐ **WHICH CONTAINERS' `create` BUILDS THE FUSED MANAGED RECORD — the ONE family test the
+	// descriptor-need SEED and the descriptor-reading EMIT both read (S2u).** `Parser.emitVectorCreateOp` IS
+	// `emitArrayCreateOp` plus the `__managed_resize` that publishes the N slots, so a `Vector` reaches the
+	// opaque, descriptor-reading create by exactly the route an `Array` does. Asked separately, the seed
+	// (`Parser.opaqueArrayConstructionAt`) and the emit would be free to disagree about which containers take
+	// that route — and that disagreement is a compiler PANIC rather than a wrong answer: **MEASURED**, the
+	// opaque refusal relaxed with this family still spelled `isArrayInstance`, `Holder.create()` writing
+	// `Slot.create()` reached *"appendOpaqueArrayCreate: opaque `Array.create()` in 'Holder.create' but the
+	// function carries no layout descriptor parameter"*. It is `opaqueArrayConstructionAt`'s own stated
+	// discipline, one axis over: that door already reads the SAME `containerElementIsOpaque` the emit branches
+	// on, and this is the other half of the same pairing.
+	export function instanceCreateBuildsTheManagedRecord(id GenericInstanceId) returns bool
+		return self.isArrayInstance(id) or self.isVectorInstance(id)
+	end 'instanceCreateBuildsTheManagedRecord'
+
 	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Vector with N T`?** — `isArrayInstanceAt`'s twin, and it exists
 	// for that function's MEASURED reason and not for symmetry: a `TypeNameId` and a `GenericInstanceId` share
 	// one numeric space, so `isVectorInstance` handed a plain `named` id can answer TRUE about an instance the
@@ -19765,6 +19794,7 @@ export type ProgramSignatures
 			consumeMoved then return self.typeArgIsOwned(t)
 			coOwnedTrivial then return self.typeArgIsCoOwnedTrivial(t)
 			uncopyableElement then return not self.typeSupportsDeepClone(t, asElement: true, visited: ClonerSet.create())
+			managedElement then return self.typeArgIsManagedElement(t)
 		end 'kind'
 	end 'typeArgHasKind'
 
@@ -19882,6 +19912,27 @@ export type ProgramSignatures
 		return not self.typeArgIsOwned(t)
 	end 'typeArgIsCoOwnedTrivial'
 
+	// ⭐⭐ **IS `t` A HEAP AGGREGATE — the boundary a PUBLISHED SLOT is judged by (S2u).** A container that
+	// zeroes its slots at birth (`Vector.create()`'s `__managed_resize`) publishes a VALUE for a trivial
+	// argument and an ABSENCE for a managed one, so this asks the one question `containerElementIsManaged`
+	// asks of a concrete element — `typeIsManaged` — of an instantiation's argument instead. Nothing is
+	// composed out of the two neighbouring kinds: `consumeMoved or coOwnedTrivial` would spell the same
+	// boundary a second time and be free to drift from `containerElementIsManaged`, which is the door the
+	// CONCRETE half of the same refusal reads.
+	//
+	// ⚠ **A SUPERSEDED SPELLING VOTES NOTHING, exactly as it does for the other REFUSING kind**
+	// (`typeSupportsDeepClone`'s `genericAlias` arm, which carries the measurement): these classifiers are
+	// driven by a whole-program walk over the registry's PRE-SETTLE memory, and a contested alias name no
+	// reader can reach is not an instantiation of anything. Voting off one would refuse a program whose
+	// single-file spelling compiles — A3k's measured wrong answer, and the direction a refusal may not err in.
+	export function typeArgIsManagedElement(t MaxonType) returns bool
+		if self.typeArgSpellingIsSuperseded(t) 'theContestReplacedThisOne'
+			return false
+		end 'theContestReplacedThisOne'
+
+		return self.typeIsManaged(t, from: self.typeNames)
+	end 'typeArgIsManagedElement'
+
 	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT OPAQUE ARRAY ELEMENT
 	// UNCOPYABLE (P1.7 slice 3b-vi-b-β)?** The FRONT-END gate for an opaque `slice`/`clone`/`append`: the shared
 	// body copies each element through the descriptor's single `copyFunc@32`, which can hold a cloner only for a
@@ -19903,6 +19954,31 @@ export type ProgramSignatures
 	export function genericTypeFieldUncopyableInstantiation(param TypeParamId) returns TypeArgKindMatch
 		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.uncopyableElement)
 	end 'genericTypeFieldUncopyableInstantiation'
+
+	// ⭐⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PUBLISHED SLOT A NULL
+	// POINTER (S2u)?** The front-end gate for `Vector with <N> <type parameter>` inside a generic body.
+	// A vector's `create()` PUBLISHES all N slots by zeroing them (`Parser.emitVectorCreateOp`'s
+	// `__managed_resize`), and every one of the N is then a readable element by the type's own contract —
+	// which is true of a trivial argument, whose zero IS a value, and false of a MANAGED one, whose zero is a
+	// null pointer. The shared body compiles ONCE and serves every instantiation, so it is admissible only if
+	// EVERY instantiation is trivial; one managed instantiation is refused with a positioned E2015 at the
+	// `create()`, blamed back at the instantiation the user wrote.
+	//
+	// ⛔ **AND THE HAZARD IT SHUTS OUT IS MEASURED, ON BOTH ITS HALVES.** With the gate absent,
+	// `type Holder uses Element` + `typealias Slot = Vector with 4 Element` at `Holder with String`:
+	// `count()` answers **4** while `try slot.get(0)` takes `emitLoadElemAndOkReturn`'s empty-slot branch and
+	// THROWS — four elements it does not have, exit 0, no diagnostic — and a `for e in slot` reading `e`
+	// SEGFAULTED (139), because `__managed_get_unchecked` dropped that empty-slot arm on the guarantee this
+	// refusal is what supplies. It is the CONCRETE managed refusal's exact twin one axis over
+	// (`Parser.requireVectorElementType`'s managed arm, whose own header records the same two symptoms for
+	// `Vector with 2 IntArray`), and the two must not be relaxed apart.
+	//
+	// HOW the instances are found is `instanceWithTypeArgKind`'s business and is described there once; what
+	// this gate adds is the KIND. It hands back the INSTANCE for `genericTypeFieldUncopyableInstantiation`'s
+	// stated reason: the instantiation is what the user WROTE, so it is what the refusal is blamed at.
+	export function genericTypeFieldManagedElementInstantiation(param TypeParamId) returns TypeArgKindMatch
+		return self.instanceWithTypeArgKind(param, kind: TypeArgInstantiationKind.managedElement)
+	end 'genericTypeFieldManagedElementInstantiation'
 
 	// ⭐⭐ **WHERE THE PROGRAM WROTE THIS INSTANTIATION — the source anchor a library-body refusal is blamed
 	// at (BLAME).** `genericAliasSites` is the whole-program list of every WRITTEN `Base with Args` carrying a
