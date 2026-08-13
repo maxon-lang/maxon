@@ -2568,32 +2568,25 @@ end 'MethodReceiver'
 // updated at, and the two doors would then be free to disagree about a refusal whose sabotage note records
 // that the wrong answer is SILENT.
 //
-// ⚠ **THE TWO DOORS SHARE THE SENTENCE AND NO LONGER SHARE THE PREDICATE, and the two halves of the sentence
-// are why that is tolerable.** It says both "this type has no constructible value" AND "the box has to be
-// loaded out of the receiver first". `structBaseOfReceiver` refuses on the FIRST half and states it only where
-// it is true (`ProgramSignatures.structTypeIsConstructible`). `requireStructBase` refuses on the SECOND — it
-// still refuses EVERY struct-typed self-field alias, constructible or not, because its box is the alias's
-// `boundValue`, which is 0, which is the RECEIVER, and it has nothing materialized to address. So `inner.a`
-// in a perfectly constructible `Outer` is told something whose first half is not true of it. That is a
-// diagnostic wording the read/write door owes a better version of once it materializes the box; it is not a
-// licence to give the two doors different TEXT, because a second spelling would go red at whichever door it
-// was not updated at and let them drift on the refusal itself, whose sabotage note records that the wrong
-// answer is SILENT.
+// ⭐⭐ **THE TWO DOORS NOW SHARE THE PREDICATE AS WELL AS THE SENTENCE (W66), AND THE PREDICATE IS
+// CONSTRUCTIBILITY** — `requireConstructibleSelfFieldBase`, which both ask. They spent one rung apart:
+// `structBaseOfReceiver` narrowed to types with no constructible value while `requireStructBase` went on
+// refusing EVERY struct-typed self-field alias, because its box was the alias's `boundValue`, which is 0,
+// which is the RECEIVER, and it had nothing materialized to address. So `inner.a` in a perfectly
+// constructible `Outer` was told something whose first half was not true of it, one function away from an
+// `inner.get()` that compiled and answered 41. Both doors materialize now (`baseBoxOf`), so both refuse on
+// the same half and the sentence is true wherever it is thrown.
 //
 // ⛔⛔ **ITS CLOSING CLAUSE WAS DELETED (PBR-1 review), BECAUSE IT HAD BECOME FALSE AT BOTH DOORS.** The
 // sentence used to end *"which arrives with the rung that gives a field a struct type — no struct-typed field
-// can be constructed yet"*, and both halves of that are now refuted by a program in this tree: `type Outer`'s
-// `var inner as Inner` IS constructed, by `Outer.make()`, and the bare `inner.get()` spelling **compiles and
-// runs** through the METHOD door (measured: exit 41) one function away from where `inner.x` still reports
-// this. So the promised rung is not what is missing — the method door already materializes the box
-// (`methodReceiverBinding`) and already narrows its refusal to types with no constructible value; what
-// `requireStructBase` lacks is that one materialization, not a language feature.
+// can be constructed yet"*, and both halves of that were refuted by a program in this tree: `type Outer`'s
+// `var inner as Inner` IS constructed, by `Outer.make()`. What was missing was one materialization, not a
+// language feature — which is exactly what W66 added, and what the shared predicate above now records.
 //
-// ⚠ **WHAT SURVIVES IS THE HALF THAT IS TRUE AT BOTH DOORS, AND THE TEXT IS STILL SHARED FOR THE REASON
-// BELOW.** "Its box has to be loaded out of the receiver before it can be addressed" is the base door's
-// actual reason and is a true statement of what reaching the field requires at the method door too; the
-// method door merely refuses one step further on. A second SPELLING is still refused here — the paragraph
-// below is unchanged on that — so the fix is a shorter shared sentence, never two.
+// ⚠ **WHAT SURVIVES IS THE HALF THAT IS TRUE AT BOTH DOORS.** "Its box has to be loaded out of the receiver
+// before it can be addressed" is a true statement of what reaching the field requires at either door; what
+// makes it a REFUSAL rather than a description is the type on a cycle, where no value could ever be put there
+// for the load to find. A second SPELLING is still refused here — the paragraph below is unchanged on that.
 //
 // It returns the STRING and each caller throws `ParseError.unsupported(…)` INLINE — never
 // `throw self.helperReturningAParseError(…)`, which leaks two allocations under the C#-emitted refcount
@@ -43962,11 +43955,11 @@ export type Parser
 		// direction that costs something is the other one.
 		self.markMutabilityExercised(binding)
 
-		// ⚠ The OWNER mask is read off the binding as it ARRIVED, before `methodReceiverBinding` materializes
+		// ⚠ The OWNER mask is read off the binding as it ARRIVED, before `baseBindingOf` materializes
 		// a self-field alias into an ordinary value binding — materializing is exactly what erases the fact
 		// that the record belongs to `self`. See `receiverOwnerMask`.
 		let owner = try self.receiverOwnerMask(func, binding: binding, baseTok: baseTok)
-		// Read BEFORE the materialization too: `methodReceiverBinding` hands back an ordinary value binding,
+		// Read BEFORE the materialization too: `baseBindingOf` hands back an ordinary value binding,
 		// which is exactly the fact the struct fallthrough still has to refuse on.
 		let selfFieldName = baseTok.value if binding.isSelfField else EmptySourceText
 
@@ -44010,10 +44003,11 @@ export type Parser
 			end 'inlineManagedServesTheRecord'
 		end 'aCalledManagedFieldMember'
 
-		let held = try self.methodReceiverBinding(binding, baseTok: baseTok)
+		let box = try self.baseBoxOf(binding, baseTok: baseTok)
+		let held = try self.baseBindingOf(binding, baseTok: baseTok, box: box)
 
 		self.advance()
-		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(self.bindingValue(held, range: SourceRange.ofToken(baseTok)), tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: subjectName, owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
+		return try self.dispatchMethodOnReceiver(func, recv: MethodReceiver.create(box, tag: maxonTypeTag(held.varType), nameId: typeNameIdOf(held.varType), anchor: baseTok, immutableName: self.immutableReceiverNameOf(held, baseTok: baseTok), subjectName: subjectName, owner: owner, selfFieldName: selfFieldName), resultUsed: resultUsed)
 	end 'dispatchMethodOnBinding'
 
 	// Is this self-field alias the INLINE `managed` of a fused byte-record wrapper — the one field whose
@@ -44294,11 +44288,11 @@ export type Parser
 		// — `specs-shv2/self-field-struct-typed.md` pins the refusal and its own sabotage note says the method
 		// case does not merely go red without it, it goes GREEN WITH THE WRONG CODE. It sits at the FALLTHROUGH
 		// and not in front of the switch because every builtin arm above serves such an alias correctly and by
-		// design (`items.push(v)`, `name.append("!")` — `methodReceiverBinding`'s header measures both).
+		// design (`items.push(v)`, `name.append("!")` — `baseBoxOf`'s header measures both).
 		//
 		// ⭐⭐ **THE PREDICATE IS CONSTRUCTIBILITY, AND THAT IS WHAT THE ORIGINAL REFUSAL WAS ARGUING FOR ALL
 		// ALONG.** Its case was never "a struct-typed field is unlowerable" — the box IS loaded correctly, by
-		// `methodReceiverBinding`, before this receiver is built — but the `mintPhi` trap: `type Node`'s
+		// `baseBoxOf`, before this receiver is built — but the `mintPhi` trap: `type Node`'s
 		// `var next as Node` needs a `Node` to put there and there is no `null` and no base case, so NO PROGRAM
 		// COULD OBSERVE the load being right. That argument holds for a type on a cycle in the struct-field
 		// graph and for nothing else. `type Outer`'s `var inner as Inner` is built by
@@ -44307,26 +44301,39 @@ export type Parser
 		// through this same fallthrough — the two spellings of one access must not disagree.
 		// `ProgramSignatures.structTypeIsConstructible` is the one home of that question, cycles and all.
 		//
-		// ⚠ **`requireStructBase` DOES NOT ASK THE NARROWED QUESTION, and the asymmetry is load-bearing**, not
-		// an omission: its box is `binding.boundValue`, which is 0 for a self-field alias — and 0 is the
-		// RECEIVER. Admitting there without materializing the field first is exactly the measured silent
-		// `return self.a` its own header records. This door is safe precisely because it holds a VALUE its
-		// producer already loaded.
+		// ⭐ **`requireStructBase` NOW ASKS THE SAME NARROWED QUESTION (W66)**, through the same function. It
+		// used to refuse EVERY such alias, constructible or not, because its box was `binding.boundValue` — 0,
+		// the RECEIVER, the measured silent `return self.a` its own header records — and it now materializes
+		// the field through `baseBoxOf` exactly as this door's producer does. One predicate, one sentence.
 		//
-		// ⚠ The name resolution is NESTED INSIDE the alias arm, not hoisted above it. `structLayoutOfType`
-		// below resolves the same name for itself, but this door is on the path of EVERY method dispatch in
-		// the program while a self-field alias base is rare — so lifting the resolution out to share it would
-		// pay it on every call to save one dense-column index on almost none. It stays where only the alias
-		// path reaches it, exactly as the enum arm above gates on its TAG before touching the interner.
+		// ⚠ The gate is NESTED INSIDE the alias arm, not hoisted above it. `structLayoutOfType` below resolves
+		// the same name for itself, but this door is on the path of EVERY method dispatch in the program while
+		// a self-field alias base is rare — so lifting the resolution out to share it would pay it on every
+		// call to save one dense-column index on almost none. It stays where only the alias path reaches it,
+		// exactly as the enum arm above gates on its TAG before touching the interner.
 		if not recv.selfFieldName.isEmpty() 'selfFieldAlias'
-			let baseName = self.baseStructNameOfType(recv.tag, nameId: recv.nameId, baseTok: recv.anchor)
-			if not self.signatures.structTypeIsConstructible(baseName) 'inconstructible'
-				throw ParseError.unsupported(structTypedSelfFieldBaseMessage(recv.selfFieldName), line: recv.anchor.line, column: recv.anchor.column)
-			end 'inconstructible'
+			try self.requireConstructibleSelfFieldBase(recv.tag, nameId: recv.nameId, fieldName: recv.selfFieldName, anchor: recv.anchor)
 		end 'selfFieldAlias'
 
 		return StructBase.create(try self.structLayoutOfType(recv.tag, nameId: recv.nameId, baseTok: recv.anchor), box: recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName)
 	end 'structBaseOfReceiver'
+
+	// ⭐⭐ **MAY A SELF-FIELD ALIAS OF THIS AGGREGATE TYPE BE A BASE AT ALL? — ONE PREDICATE FOR THE TWO
+	// DOORS THAT CAN HOLD ONE**, the METHOD receiver (`structBaseOfReceiver`) and the field-chain BASE
+	// (`requireStructBase`). Both materialize the box before they get here; what is left to decide is whether
+	// a value of the field's type could exist at all, and that is `ProgramSignatures.structTypeIsConstructible`'s
+	// one home — a walk over the struct-field cycle, not a name comparison.
+	//
+	// ⚠ **THE PREDICATE AND THE SENTENCE TRAVEL TOGETHER, AND THAT IS THE POINT.**
+	// `specs-shv2/self-field-struct-typed.md` pins three cases against the identical text at two doors; while
+	// the two doors asked the same question in two places, one of them could be narrowed and the other left
+	// behind — which is exactly what happened, and W66 is the rung that paid for it. Asking through here is
+	// what makes a future narrowing arrive at both doors or at neither.
+	function requireConstructibleSelfFieldBase(tag ValueTypeTag, nameId TypeNameId, fieldName ByteArray, anchor Token) throws ParseError
+		if not self.signatures.structTypeIsConstructible(self.baseStructNameOfType(tag, nameId: nameId, baseTok: anchor)) 'inconstructible'
+			throw ParseError.unsupported(structTypedSelfFieldBaseMessage(fieldName), line: anchor.line, column: anchor.column)
+		end 'inconstructible'
+	end 'requireConstructibleSelfFieldBase'
 
 	// ⭐ **DISPATCH A METHOD ON AN ENUM/UNION RECEIVER (D1).** The cursor sits on the member NAME. The
 	// callee is mangled from the receiver's declared ENUM NAME and the member name — the very key
@@ -44359,11 +44366,11 @@ export type Parser
 		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
 	end 'dispatchEnumMethod'
 
-	// ⭐⭐ **THE BINDING A METHOD DISPATCH ACTS ON — and a SELF-FIELD ALIAS is the one that has to be
-	// MATERIALIZED first.** Every other binding already holds its value; a self-field alias holds NONE.
+	// ⭐⭐ **THE BOX A BASE BINDING DENOTES — and a SELF-FIELD ALIAS is the one that has to be MATERIALIZED
+	// first.** Every other binding already holds its value; a self-field alias holds NONE.
 	// `VarInfo.createSelfField` leaves `boundValue` 0 because a read of the alias is a `loadIndirect`
-	// through the receiver — **and ValueId 0 IS the receiver** — so a dispatch that took `boundValue` on
-	// its own addressed the enclosing struct's BOX as if it were the field.
+	// through the receiver — **and ValueId 0 IS the receiver** — so a door that took `boundValue` on its own
+	// addressed the enclosing struct's BOX as if it were the field.
 	//
 	// ⚠ **BOTH HALVES OF THAT WERE MEASURED WRONG, and one of them silently.** With `var items as IntArray`
 	// inside `type Bag`:
@@ -44372,27 +44379,49 @@ export type Parser
 	//     diagnostic anywhere, and the runnable oracle answers 1.
 	//   • `items.push(v)` was **E3019** — a false rejection of an ordinary struct-with-a-container method,
 	//     because the alias is neither `mutable` nor `isParameter`, so `immutableReceiverNameOf` blamed it.
-	//     The oracle accepts it.
-	//
-	// The second half is fixed by asking the right question: a self field's writability is the FIELD's own
-	// `var`/`let` (`layout.fieldIsMutable`, the SAME column `emitCheckedSelfFieldStore` asks of `n = 1`),
-	// not the receiver binding's — the receiver is a parameter and is therefore never `mutable`. So a `var`
-	// field is written freely and a `let` field is refused, blaming the field's name, which is byte-for-byte
-	// the oracle's diagnostic.
+	//     The oracle accepts it. That half is `baseBindingOf`'s, below; this one is the load.
 	//
 	// `builtinConformanceReceiverValue` used to be this rule's third copy, for the conformer arm alone
-	// (`count.hash()` hashing the receiver's box pointer). It is gone: one materialization, four arms.
-	function methodReceiverBinding(binding VarInfo, baseTok Token) returns VarInfo throws ParseError
+	// (`count.hash()` hashing the receiver's box pointer). It is gone: one load, every door.
+	//
+	// ⭐⭐ **THE FIELD-CHAIN BASE IS THE DOOR THAT USED TO REFUSE INSTEAD OF ASKING (W66).**
+	// `requireStructBase` had no materialization at all, so it refused EVERY struct-typed self-field alias —
+	// `inner.x` and `inner.x = 7` were E2015 one function away from an `inner.get()` that compiled and ran
+	// (measured: exit 41), and the `self.inner.x = 7` spelling of that same write answered 7. Three spellings
+	// of one access, two of them served and one refused, is the asymmetry this being a shared function ends.
+	function baseBoxOf(binding VarInfo, baseTok Token) returns ValueId throws ParseError
+		if binding.isSelfField 'materializeTheField'
+			return try self.parseSelfFieldRead(baseTok, binding: binding)
+		end 'materializeTheField'
+
+		return self.bindingValue(binding, range: SourceRange.ofToken(baseTok))
+	end 'baseBoxOf'
+
+	// ⭐⭐ **THE BINDING A BASE'S WRITABILITY IS ASKED OF — the alias MATERIALIZED, anything else itself.**
+	// A self field's writability is the FIELD's own `var`/`let` (`selfFieldIsWritable`), not the alias
+	// binding's: the alias is built `mutable: false` because a REBIND of it is never legal, and the receiver
+	// it hangs off is a parameter and so is never `mutable` either. Both of the doors that ask — E3019's
+	// receiver door (`immutableReceiverNameOf`) and E2013's instance door (`requireWritableInstance`), which
+	// that second function's header calls *"one write of one record under two spellings"* — read
+	// `mutable`/`isParameter` off a binding, so the materialized one is what carries them the answer.
+	//
+	// ⚠ **IT TAKES THE BOX RATHER THAN LOADING ONE, AND THAT IS WHY IT IS SPLIT FROM `baseBoxOf`.** The
+	// field-chain door asks the two questions at two different moments — `requireStructBase` resolves the box
+	// as part of proving the base is a struct at all, and the WRITE check happens later, after the chain has
+	// been walked and the field resolved (`parseFieldAssignment`'s rank order). Re-deriving the binding from
+	// the box it already holds emits nothing; loading again would emit a second `loadIndirect` nobody reads.
+	function baseBindingOf(binding VarInfo, baseTok Token, box ValueId) returns VarInfo throws ParseError
 		if not binding.isSelfField 'holdsItsOwnValue'
 			return binding
 		end 'holdsItsOwnValue'
 
-		return try self.selfFieldValueBinding(binding, baseTok: baseTok, value: try self.parseSelfFieldRead(baseTok, binding: binding))
-	end 'methodReceiverBinding'
+		return try self.selfFieldValueBinding(binding, baseTok: baseTok, value: box)
+	end 'baseBindingOf'
 
 	// ⭐ **THE MATERIALIZED FORM OF A SELF-FIELD ALIAS, GIVEN THE VALUE THAT STANDS FOR IT.** Two doors reach
 	// it and they differ ONLY in where that value comes from: the ordinary one loads the field
-	// (`methodReceiverBinding`), and the fused-wrapper record door hands over the RECEIVER
+	// (`baseBoxOf`), the field-chain base re-derives it from the box that door already loaded
+	// (`baseBindingOf`), and the fused-wrapper record door hands over the RECEIVER
 	// (`dispatchMethodOnBinding`'s `inlineManagedServesTheRecord`, which mints nothing).
 	//
 	// ⚠ It is a function rather than two constructions because everything ELSE about the binding — the blame
@@ -44405,7 +44434,7 @@ export type Parser
 
 	// ⭐ **MAY A SELF-FIELD ALIAS BE WRITTEN THROUGH? — THE FIELD'S OWN `var`/`let`, NEVER THE BINDING'S.**
 	// `createSelfField` binds every alias `mutable: false` and says why (a rebind of the alias is never legal),
-	// so asking the BINDING calls a `var` field immutable — the false E3019 `methodReceiverBinding`'s header
+	// so asking the BINDING calls a `var` field immutable — the false E3019 `baseBoxOf`'s header
 	// measures. `layout.fieldIsMutable` is the SAME column `emitCheckedSelfFieldStore` asks of `n = 1`.
 	//
 	// ⚠ **BOTH ASKERS COME THROUGH HERE, AND THAT IS WHY IT IS A FUNCTION.** A method RECEIVER (`items.push(v)`)
@@ -44416,7 +44445,7 @@ export type Parser
 	//
 	// ⭐⭐ **AND AN ITERATED FIELD IS NOT WRITABLE, WHATEVER THE FIELD DECLARES.** This is one of the five
 	// readers of the iteration lock, and it needs its own arm rather than sharing
-	// `immutableReceiverNameOf`'s, because `methodReceiverBinding` MINTS A FRESH `VarInfo` for the alias:
+	// `immutableReceiverNameOf`'s, because `baseBindingOf` MINTS A FRESH `VarInfo` for the alias:
 	// the lock is keyed on object identity (so a shadowing declaration is correctly not locked), and that
 	// fresh object is not the one the lock holds. Asking HERE — where the alias's own binding is still in
 	// hand — covers both of this function's askers at once, which is the reason it is a function.
@@ -53055,12 +53084,15 @@ export type Parser
 			let baseName = self.baseBindingName(baseTok)
 			if self.scope.contains(baseName) 'localBase'
 				let baseBinding = self.scope.getInfo(baseName)
-				// ⚠ E3070 exemption with an EXPIRY: this base resolves a FIELD CHAIN, whose trailing call is
-				// refused today (a nested struct method `o.inner.m()` is E2015 at `parseFieldChainCall`), so no
-				// method dispatch can reach the empty subject from here. The rung that lands that call must pass
-				// `borrowSubjectNameAt` of the chain's base instead, or it inherits this exemption in silence.
-				let base = try self.requireStructBase(baseBinding, baseTok: baseTok, subjectName: EmptySourceText)
-				return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: baseBinding)
+				let base = try self.requireStructBase(baseBinding, baseTok: baseTok)
+
+				// ⚠ **THE BINDING THREADED ON IS THE MATERIALIZED ONE, NOT THE ONE THE SCOPE HANDED BACK (W66).**
+				// It is what `parseFieldAssignment`'s instance rank asks (`requireWritableInstance`), and for a
+				// self-field alias the scope's binding answers that question `false` whatever the field declares
+				// — `mutable: false` by construction and not a parameter. `baseBindingOf` re-derives it from the
+				// box this door already loaded, so nothing is emitted twice and the WRITE door and the METHOD
+				// door read one column (`selfFieldIsWritable`) about one field.
+				return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: try self.baseBindingOf(baseBinding, baseTok: baseTok, box: base.box))
 			end 'localBase'
 
 			// A CAPTURED enclosing struct is the base (P1.5-A2b-2): `level.rawValue` inside a closure that captures
@@ -53129,7 +53161,9 @@ export type Parser
 	// `dispatchOnManagedReceiver` uses, and the two must not come to describe one global differently.
 	function resolveGlobalFieldChain(baseTok Token, label ByteArray, valueType MaxonType, mutable bool) returns FieldChainStep throws ParseError
 		let binding = VarInfo.createValueBinding(baseTok.value, varType: valueType, mutable: mutable, boundValue: self.emitGlobalLoad(label, valueType: valueType, range: SourceRange.ofToken(baseTok)))
-		let base = try self.requireStructBase(binding, baseTok: baseTok, subjectName: EmptySourceText)
+		let base = try self.requireStructBase(binding, baseTok: baseTok)
+		// No `baseBindingOf` here, and it would be a no-op if there were: `createValueBinding` cannot mint a
+		// self-field alias, so a global base always holds its own value.
 		return try self.resolveFieldChainFrom(base.box, layout: base.layout, baseTok: baseTok, baseBinding: binding)
 	end 'resolveGlobalFieldChain'
 
@@ -54060,8 +54094,8 @@ export type Parser
 	// the receiver rather than aliasing an owned value, so it is never moved-from (`poisonMoveSource`
 	// gates on `rhsWasBareLocalReference`, which excludes self-fields). `parseVariableReference` routes
 	// self-fields away before it reaches this guard; the exclusion here is what keeps the guard safe on
-	// the struct-typed self-field base that DOES reach `requireStructBase` (and is refused there for the
-	// unrelated reason that its box has to be loaded out of the receiver first).
+	// the struct-typed self-field base that DOES reach `requireStructBase` (which since W66 materializes it
+	// rather than refusing it, so the guard runs on the alias for real and not merely on its way to an error).
 	function requireBindingLive(binding VarInfo, nameTok Token) throws ParseError
 		// ⭐ **THE NON-LEXICAL HALF OF E3070 IS WRITTEN HERE, and this is why it is written HERE.** This is the
 		// one chokepoint every USE of a local binding funnels through — the bare read, a field read or write
@@ -54123,11 +54157,13 @@ export type Parser
 	// a name the sweep had already recorded), so it panics; the first very much can — `let n = 5`
 	// then `n.x` — and reports. `baseTok` is only the token those diagnostics point at.
 	//
-	// ⭐⭐ **IT IS THE ONE READER OF A BASE BINDING'S `boundValue`, AND THAT IS WHY IT RETURNS THE
-	// BOX AND NOT JUST THE LAYOUT.** A SELF-FIELD ALIAS HAS NO SSA VALUE: `createSelfField` leaves
+	// ⭐⭐ **IT IS THE ONE READER OF A BASE BINDING'S BOX, AND THAT IS WHY IT RETURNS THE BOX AND NOT
+	// JUST THE LAYOUT.** A SELF-FIELD ALIAS HAS NO SSA VALUE: `createSelfField` leaves
 	// `boundValue` 0 because a read of the alias is a `loadIndirect` through the receiver, not a
 	// reference to a value — **and ValueId 0 IS THE RECEIVER**. So a caller that proved the layout
-	// here and then reached for `binding.boundValue` on its own silently addressed `__self`.
+	// here and then reached for `binding.boundValue` on its own silently addressed `__self`. What this
+	// door hands back is `baseBoxOf`'s answer, which is that `loadIndirect` for an alias and the
+	// binding's own value for everything else.
 	//
 	// That is not a hazard this comment is imagining; it was MEASURED, on the three sites that did
 	// exactly that. In a self-referential `type Node` (`var next as Node`, which
@@ -54142,7 +54178,7 @@ export type Parser
 	// fact for the bare-name path and its comment states it exactly; the fact was written down
 	// once and needed in four places. Handing the box back from here is what makes the other three
 	// unable to get it wrong.
-	function requireStructBase(binding VarInfo, baseTok Token, subjectName ByteArray) returns StructBase throws ParseError
+	function requireStructBase(binding VarInfo, baseTok Token) returns StructBase throws ParseError
 		// The base binding must be LIVE before anything about it is resolved — a moved-from base is dead,
 		// so `p.x`, `p.x = …` and `p.m()` on it are use-after-move (E3102), reported here at the base
 		// token before the field/method is even looked up. This is the shared guard's second enforcing
@@ -54163,29 +54199,39 @@ export type Parser
 			throw ParseError.unsupported("a field access on '{String.from(baseTok.value)}', which is declared '{typeTagName(baseTag)}' and not a struct type (only a struct has fields)", line: baseTok.line, column: baseTok.column)
 		end 'notAStruct'
 
-		// ⚠ **A STRUCT-TYPED FIELD USED AS A BASE IS REFUSED, NOT LOADED** — `next.a` inside `type
-		// Node`'s own method. Tested AFTER the `structRef` gate above, so a SCALAR field's alias
-		// (`count.x`, where `count` is an `Integer`) still reports what is actually wrong with it
-		// rather than being blamed on a struct it is not.
+		// ⚠ **A STRUCT-TYPED FIELD USED AS A BASE IS MATERIALIZED, AND REFUSED ONLY WHEN NO VALUE OF ITS
+		// TYPE COULD EXIST (W66)** — `inner.x` inside `type Outer`'s own method loads the field's box out
+		// of the receiver and addresses THAT; `next.a` inside `type Node` is still E2015, because
+		// `var next as Node` closes a cycle and no program can put a `Node` there to observe the load
+		// being right. That is the `mintPhi` trap, and it is the whole of what the original refusal was
+		// arguing for — see `requireConstructibleSelfFieldBase`, which the METHOD door asks too.
 		//
-		// Reading it correctly means materializing the field first — `loadIndirect` the box out of
-		// the receiver, then address THAT — which is one line, and is deliberately NOT taken here.
-		//
-		// ⚠ **THIS DOOR REFUSES EVERY SUCH ALIAS, INCLUDING ONES WHOSE TYPE IS PERFECTLY
-		// CONSTRUCTIBLE, AND THE METHOD-CALL DOOR NO LONGER DOES.** The asymmetry is exactly the box:
-		// the value this function hands back is `binding.boundValue`, which a self-field alias leaves
-		// 0 — and 0 is the RECEIVER, the measured silent `return self.a` this function's own header
-		// records. `structBaseOfReceiver` is safe to narrow because `methodReceiverBinding` has
-		// already materialized the field into a real value by the time it looks; nothing has
-		// materialized one HERE. Narrowing this door means loading the box first and then answering
-		// the WRITE path's mutability off the FIELD rather than off the alias binding (which is
-		// `mutable: false` by construction, and reports E2013 against an `export var` field) — the
-		// receiver-ownership work `parseMethodCall` already owes, not a predicate change.
+		// ⚠ **THE ARM STAYS BELOW THE `structRef` GATE, and moving it above is the tidy-looking edit that
+		// is wrong.** A SCALAR field's alias (`count.x`, where `count` is an `Integer`) is not a struct
+		// base either, but it is not a struct-typed field and must not be told it is;
+		// `self-field-struct-typed.md`'s `error.scalar-field-base-is-not-a-struct` goes red on exactly
+		// that reordering while the cycle cases stay green.
 		if binding.isSelfField 'structTypedField'
-			throw ParseError.unsupported(structTypedSelfFieldBaseMessage(baseTok.value), line: baseTok.line, column: baseTok.column)
+			try self.requireConstructibleSelfFieldBase(baseTag, nameId: baseTypeNameId, fieldName: baseTok.value, anchor: baseTok)
 		end 'structTypedField'
 
-		return StructBase.create(try self.structLayoutOfType(baseTag, nameId: baseTypeNameId, baseTok: baseTok), box: self.bindingValue(binding, range: SourceRange.ofToken(baseTok)), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: subjectName)
+		// The layout is proved BEFORE the box is loaded, so a base this door is going to refuse emits no op
+		// — `emitCheckedGlobalStore`'s discipline, and `structLayoutOfType` can still throw for a generic
+		// instance whose base carries no layout of its own.
+		let layout = try self.structLayoutOfType(baseTag, nameId: baseTypeNameId, baseTok: baseTok)
+
+		// ⚠ **`immutableName` IS ASKED OF THE MATERIALIZED BINDING, NEVER OF THE ALIAS.** Every self-field
+		// alias is built `mutable: false` (a rebind of the alias is never legal) and is not a parameter, so
+		// asking the alias reports "immutable" against an `export var` field — the false E3019 `baseBoxOf`'s
+		// header measures. `baseBindingOf` carries the FIELD's own `var`/`let` in that column.
+		let box = try self.baseBoxOf(binding, baseTok: baseTok)
+
+		// ⚠ E3070's subject is EMPTY here and that is not an exemption — a field CHAIN's borrow subject is
+		// derived by its own caller from the base's token index (`parseFieldChainCall`'s
+		// `borrowSubjectNameAt`, `parseFieldAssignment`'s), because only the token index can tell a
+		// `self`-rooted chain's FIELD subject from the receiver. Neither caller of this function reads the
+		// `subjectName` a `StructBase` carries; both take only the box and the layout.
+		return StructBase.create(layout, box: box, immutableName: self.immutableReceiverNameOf(try self.baseBindingOf(binding, baseTok: baseTok, box: box), baseTok: baseTok), subjectName: EmptySourceText)
 	end 'requireStructBase'
 
 	// The `StructLayout` a struct-typed (tag, nameId) pair names — the guarded layout half of
@@ -54996,7 +55042,7 @@ export type Parser
 
 		if self.scope.isSelfField(tok.value) 'selfField'
 			// A self field's writability is the FIELD's own `var`/`let`, exactly as it is for a self-field
-			// method receiver (`methodReceiverBinding`) — the receiver is a parameter and is never `mutable`.
+			// method receiver (`baseBindingOf`) — the receiver is a parameter and is never `mutable`.
 			let binding = self.scope.getInfo(tok.value)
 			let writable = try self.selfFieldIsWritable(binding, nameTok: tok)
 			self.publishBareBindingName(tok, immutable: not writable)
@@ -55179,8 +55225,8 @@ export type Parser
 		// spellings of a field read emit the identical `loadIndirect` off it. This is the THIRD reader of
 		// `boundValue` that took 0 for a real id — `dispatchMethodOnBinding` and
 		// `builtinConformanceReceiverValue` were the other two, and the census says it is the last: every
-		// other reader either guards on `isSelfField` first (`receiverOwnerMask`), is reached only where the
-		// alias was already refused (`requireStructBase`'s struct-typed-FIELD arm), or cannot see an alias at
+		// other reader either guards on `isSelfField` first (`receiverOwnerMask`, and `baseBoxOf` for the
+		// field-chain base W66 opened), or cannot see an alias at
 		// all (`parseVariableReference`'s local arm runs under `not isSelfField`; `consumedArgName` and the
 		// move/alias searches scan `ownedBindings`, which a `trivial`-ownership alias never joins).
 		//

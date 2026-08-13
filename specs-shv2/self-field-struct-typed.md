@@ -1,10 +1,10 @@
 ---
 feature: self-field-struct-typed
 status: stable
-keywords: field, self, struct, receiver, E2015, ownership, unsupported
+keywords: field, self, struct, receiver, E2015, ownership, unsupported, constructible
 category: type-system
 ---
-# A Struct-Typed Field Used As A Base Is REFUSED, Not Silently Addressed As The Receiver
+# A Struct-Typed Field Used As A Base Is MATERIALIZED — And Refused Only When Its Type Is On A Cycle
 
 ## Documentation
 
@@ -34,42 +34,61 @@ mints a `structRef` *directly* for the enclosing type's own name — so `var nex
 | `next.a = 99` | — | E2013 *"cannot assign to immutable variable: 'next'"*, which is false of an `export var` |
 
 The fix is not a fourth guard. `requireStructBase` returns the **box together with the layout**
-(`StructBase`), so it is the one reader of a base binding's `boundValue` and a caller cannot hold a
-layout it proved beside a box it assumed.
+(`StructBase`), so it is the one reader of a base binding's box and a caller cannot hold a layout it
+proved beside a box it assumed.
 
-⚠ **Why REFUSE rather than load it correctly.** Materializing the field first — `loadIndirect` the
-box out of the receiver, then address that — is one line. It was deliberately not taken here: for
-`type Node` no value of the field's type could exist at all. `Self{next: …}` needs a `Node` to put
-there, and there is no `null` and no base case, so no program could observe the load being right.
-That is the `mintPhi` trap exactly — a mechanism handed a consumer and no reason to be right — and
-it is the same trap this rung's own self-field scaffold waited out for two rungs.
+⭐⭐ **THE BOX IS LOADED, AND THE REFUSAL IS ONLY ABOUT WHETHER A VALUE OF THE FIELD'S TYPE COULD
+EXIST (W66).** Materializing the field — `loadIndirect` the box out of the receiver, then address
+that — is what `Parser.baseBoxOf` does for every door that can hold such an alias. What survives as
+a refusal is the `mintPhi` trap and nothing else: for `type Node`, `Self{next: …}` needs a `Node` to
+put there, and there is no `null` and no base case, so **no program could observe the load being
+right**. That argument holds for a type on a cycle in the struct-field graph and for nothing else,
+and `ProgramSignatures.structTypeIsConstructible` is its one home — a real walk over that graph, not
+a comparison against the enclosing type's name.
 
-⛔⛔ **THAT ARGUMENT HOLDS FOR A TYPE ON A CYCLE AND FOR NOTHING ELSE, AND THE THREE CASES BELOW ARE
-ALL SUCH A TYPE — SO THIS FILE PINS LESS THAN ITS TITLE CLAIMS.** The refusal reads as *"a
-struct-typed field may not be a base"* and the language's answer is now narrower than that. The
-METHOD door already narrowed to constructibility (`ProgramSignatures.structTypeIsConstructible`) and
-already materializes the box (`Parser.methodReceiverBinding`): in a perfectly ordinary
-`type Outer { export var inner as Inner }`, the bare `inner.get()` **compiles and runs** — measured
-**exit 41**. The READ/WRITE door (`Parser.requireStructBase`) has not narrowed, because its box is
-the alias's `boundValue`, which is 0, which is the RECEIVER — so `inner.x` and `inner.x = 7` are
-still E2015 beside a sibling call that works, and the `self.inner.x = 7` spelling of that same write
-compiles and answers **7** (measured against the bootstrap, which answers 7 too).
+⛔ **THE FOUR REFUSAL CASES BELOW ARE ALL `type Node`, WHICH IS WHY THEY ARE UNCHANGED BY THAT
+NARROWING.** Every one of them declares `var next as Node` inside `type Node`, so
+`structTypeIsConstructible` answers false and the message is exactly the one it always was. A change
+to any of their `maxoncstderr` blocks means the narrowing has gone too wide, not that they needed
+updating.
 
-⇒ **What is missing is that one materialization at that one door, not a language feature**, and the
-message no longer promises otherwise: its old closing clause (*"which arrives with the rung that
-gives a field a struct type — no struct-typed field can be constructed yet"*) was deleted by PBR-1's
-review as false at both doors. Closing the gap opens a bare struct-field READ and WRITE and needs its
-own acceptance cases — including the E3070 seeds a write through a third base kind inherits — which
-is why PBR-1 measured it and reported it rather than building it.
+⚠ **THE TWO DOORS SPENT ONE RUNG APART, AND THAT ASYMMETRY IS WHAT W66 CLOSED.** The METHOD door
+narrowed first (`Parser.structBaseOfReceiver`) while the READ/WRITE door
+(`Parser.requireStructBase`) went on refusing every struct-typed self-field alias, because its box
+was the alias's `boundValue` — 0, the RECEIVER. So in a perfectly ordinary
+`type Outer { export var inner as Inner }` the bare `inner.get()` compiled and ran (measured **exit
+41**) one function away from an `inner.x` that was E2015, and the `self.inner.x = 7` spelling of the
+refused write compiled and answered **7**. Three spellings of one access, two served and one
+refused. Both doors now ask one function (`Parser.requireConstructibleSelfFieldBase`), so a future
+narrowing arrives at both or at neither.
 
-⚠ **That rung also inherits a live ownership hole this one does not close**, recorded here because
-this is where it was found: `function link(other Node) → next = other` compiles today, to
-`storeBaseDispReg.word64 [rcx + 8], rdx` — a struct pointer stored into heap storage with **no
-incref**. So `parseMethodCall`'s claim that *"this rung has scalar and float fields only, so there
-is nowhere to store it"* is false as written; the receiver-borrow conclusion survives only because
-`parseSelfPrimary` refuses a bare `self` as a value, which is a different mechanism than the one the
-comment names. The cases below refuse every path that could *observe* a struct-typed field; the
-store itself needs the ownership analysis and is not this rung's to invent.
+⚠ **THE WRITE'S PERMISSION COMES OFF THE FIELD, NEVER OFF THE ALIAS BINDING.** `createSelfField`
+binds every alias `mutable: false` (a *rebind* of the alias is never legal) and the receiver it
+hangs off is a parameter, so `requireWritableInstance` asked of the alias reports E2013 against an
+`export var` field — the third row of the table above, arriving by a different route. The
+materialized binding carries `selfFieldIsWritable` in that column, which is the same
+`layout.fieldIsMutable` the bare `n = 1` spelling asks. `constructible-field-write` is the pin for a
+`var` field and `error.let-field-base-is-immutable` for a `let` one; the two must not come to
+disagree.
+
+⛔ **THE OWNERSHIP HOLE THIS FILE USED TO RECORD IS GONE, AND IT WAS RE-MEASURED RATHER THAN
+ASSUMED.** The note read: *"`function link(other Node) → next = other` compiles today, to
+`storeBaseDispReg.word64 [rcx + 8], rdx` — a struct pointer stored into heap storage with no
+incref"*. Neither half holds any more. **That program no longer compiles at all** — `type Node`
+itself is refused, **E4014 *"type 'Node' contains a reference cycle (via Node → next: Node)"***,
+byte-identical on both compilers (measured W66) — so `next = other` is unreachable, and the cases
+below reach their E2015 only because a parser diagnostic outranks a later-stage one. And the store
+it warned about now refcounts: `emitCheckedSelfFieldStore` routes through the same `emitFieldWrite`
+`p.right = …` uses, whose golden for the constructible twin (`heap-field-assignment.md`'s
+`basic-self-field-assign`) carries `__mm_incref` on the incoming value and `__mm_decref` on the one
+it displaces, in that order.
+
+⚠ **W66 therefore widened nothing here, and its own write path was measured for it anyway.** A write
+*through* a struct-typed base (`inner.value = 7`, `mid.leaf = fresh`) lands on
+`parseFieldAssignment`'s `emitFieldWrite` — the same door — and a three-deep replace
+(`Top → Mid → Leaf`) ran leak-free, exit 0. What survives of the old note is only the correction it
+made to `parseMethodCall`'s claim that *"this rung has scalar and float fields only, so there is
+nowhere to store it"*, which is still false as written.
 
 ## Tests
 
@@ -177,4 +196,134 @@ end 'main'
 ```
 ```maxoncstderr
 error E2015: <fragment>:9:10: Unsupported: a field access on 'count', which is declared 'int' and not a struct type (only a struct has fields)
+```
+
+<!-- test: constructible-field-read -->
+**The capability the narrowing opens, READ side (W66).** `inner.value` inside `Outer`'s own method,
+where `Inner` is an ordinary type a program can build — so the box is loaded out of the receiver and
+addressed, rather than refused. The sibling spelling `inner.get()` went through the METHOD door and
+already worked; both are here so the two cannot come to disagree about one access.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	export function get() returns Integer
+		return value
+	end 'get'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	export function readIt() returns Integer
+		return inner.value
+	end 'readIt'
+
+	export function callIt() returns Integer
+		return inner.get()
+	end 'callIt'
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(Inner.create(20))
+	return o.readIt() + o.callIt()
+end 'main'
+```
+```exitcode
+40
+```
+
+<!-- test: constructible-field-write -->
+**The WRITE side, which is where the permission column matters.** A self-field alias is built
+`mutable: false` and is not a parameter, so asking the BINDING refuses this program with E2013
+*"cannot assign to immutable variable: 'inner'"* — false of an `export var` field. The materialized
+binding answers off `layout.fieldIsMutable` instead, which is the same column the bare `value = 7`
+spelling asks one indirection in. Sabotage it by threading the scope's binding into
+`resolveFieldChainFrom` instead of `baseBindingOf`'s and this case goes red while
+`error.let-field-base-is-immutable` below stays green — the two together are what pin the column.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	export function writeIt(v Integer)
+		inner.value = v
+	end 'writeIt'
+
+	export function readIt() returns Integer
+		return inner.value
+	end 'readIt'
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	var o = Outer.create(Inner.create(3))
+	o.writeIt(7)
+	return o.readIt()
+end 'main'
+```
+```exitcode
+7
+```
+
+<!-- test: error.let-field-base-is-immutable -->
+The other half of the column: the SAME write, through a base field declared `let`. It is refused,
+and the E2013 names the BASE — byte-for-byte the runnable oracle's diagnostic on this program
+(measured). Without this case a permission that always answered "writable" would look correct.
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export let inner as Inner
+
+	export function writeIt(v Integer)
+		inner.value = v
+	end 'writeIt'
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.create(Inner.create(3))
+	o.writeIt(7)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2013: <fragment>:17:3: cannot assign to immutable variable: 'inner'
 ```
