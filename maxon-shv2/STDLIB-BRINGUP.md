@@ -442,3 +442,122 @@ bytes.)*
 | **Runtime slice** | `TcpClient` → `HttpClient` → `httpHelpers` | Workstream R; needs socket intrinsics |
 | **Ruling** | `Subprocess` | throwing overload |
 | **Ordinary compiler gaps** | `Json` (`W66`) · `List` · `CharacterSet` · `PrimitiveExtensions` · `Testing` | the tractable five |
+
+---
+
+## Full probe table — 11 actionable, 2026-08-13
+
+**MEASURED on `08c0d6e83b`** (`main`, clean), **both binaries rebuilt immediately before the sweep** —
+`build csharp` then `build shv2` — one `maxon-shv2 build stdlib/<m>.maxon` per unlisted module, logs in
+`temp/stdlib-probe/*.log`. **Re-measured from scratch, not edited from the table above**, which is this
+file's standing rule and is what caught both moves below.
+
+`whitelistedStdlibModules` now makes **38 `listWhitelistedModule` calls** — count the calls, never a
+prose number. **50 − 38 = 12 unlisted; `Internals.maxon` is excluded permanently ⇒ 11 actionable.**
+`Json.maxon` is the one that left the list (`W69`).
+
+| module | first diagnostic | class |
+|---|---|---|
+| `Set.maxon` | `E3001` only | ⚠ **READY BUT INERT** — unchanged; `Set` is synthesized |
+| `Vector.maxon` | `E3001` only | ⚠ **READY BUT INERT** — unchanged; `Vector` is synthesized |
+| `helpers/string/unicodeCategory.maxon` | `E3001` only | ⚠ **READY BUT INERT?** — unchanged; its only stdlib consumer is `CharacterSet.maxon`, itself unlisted |
+| **`Testing.maxon`** | **`E3001` only** | ⭐ **MOVED** from `E2051 :34:13` `__TestReport` reserved — **three doors, three consecutive rungs**: `W72` the `__` declaration door, `W74` the per-member parameter default, `W77` the agreeing-`throws` overload set at `:182:25`. **The only module in this table whose probe improved into readiness**, and `Testing` is synthesized NOWHERE in the compiler (`grep "\"Testing\""` over `Compiler/` and `Runtime/` is empty), so unlike the three rows above it is not inert *by that mechanism*. ⇒ **the one candidate listing available today** — still owes `StdlibLoader`'s collision checklist AND the differing-declarations control before anyone calls it a line of work |
+| `List.maxon` | `E3086 :21:10` field `chain` not initialized, no default | unchanged |
+| `CharacterSet.maxon` | `E2004 :31:33` Undefined constant `CharacterSet` | unchanged |
+| `PrimitiveExtensions.maxon` | `E2010 :2:11` Expected identifier but got `int` | unchanged — `extension int` does not parse |
+| **`Subprocess.maxon`** | **`E2053 :387:72`** the second and later arguments must be named | ⭐ **MOVED** from `E2015 :357:25` (overloading `run`, one declaration `throws`) — **the ruling-grade blocker is GONE**, cleared by `W77` exactly as that row predicted. The new site is a 15-argument positional `__Builtins.subprocessSpawn(…)`: a CALL-SYNTAX divergence (§F), and a first error is a LOWER BOUND — whether `subprocessSpawn` exists as an shv2 intrinsic at all is behind it and unmeasured |
+| `TcpClient.maxon` | `E3004 :23:18` no `__ManagedSocket.tcpConnect` intrinsic | unchanged |
+| `HttpClient.maxon` | `E2015 :176:18` member access `send` on an `unknown` value | unchanged — behind `TcpClient` |
+| `helpers/http/httpHelpers.maxon` | `E3011 :4:9` Unknown type `HttpMethod` | unchanged — behind `HttpClient` |
+
+### ⚠ THE TABLE WENT STALE IN A DAY, AND NOT BECAUSE THE MOVES WERE UNPREDICTABLE — NOBODY REFRESHED IT
+
+Every one of the three changes was **named in advance by the rung that made it**, which is the
+uncomfortable part. `W69`'s row is *"list `stdlib/Json.maxon`"*. `W77`'s row says outright *"it is the
+CURRENT first blocker of TWO modules at once — `Testing.maxon:182:25` and `Subprocess.maxon:357:25`.
+Neither may be LISTED by this rung; **re-probe both and report their next blockers verbatim**"* — and
+`Testing`'s two earlier doors were the stated payoff of `W72` (*"the real blocker behind
+stdlib/Testing.maxon"*) and `W74` (*"Testing.maxon's blocker"*) before it. **Four consecutive rungs
+worked this table's rows and none of them wrote back into it.**
+
+⇒ this file is a **DATED MEASUREMENT that no rung updates as a side effect**, so the rule is not "trust
+the newest table" but **re-probe before planning against any row**, every time. *(`Testing` alone took
+`W72` → `W74` → `W77` to reach `E3001`: a first error is a lower bound, and clearing one door only
+reveals the next.)*
+
+⭐ **And the moves went the direction the classes predict, which is the useful part:** the rows that
+moved were the *ruling* and the *ordinary gaps* — the classes an ordinary compiler rung clears, and
+`Testing`'s three doors were each cleared by a rung whose subject was a language rule, not a module.
+**Nothing moved in the retirement chains or the runtime slice**, and nothing will until someone works
+them directly: no amount of adjacent rung traffic retires a synthesized `Set` or mints a socket
+intrinsic. ⇒ **the four ordinary gaps will keep falling out of unrelated rungs; the four chains and the
+runtime slice will not.**
+
+### The honest remaining shape — 2026-08-13
+
+| kind | modules | note |
+|---|---|---|
+| **Reconciliation chains** (retirements, not listings) | `Set` (`W8`) · `Map` (`W52`) · `Vector` | unchanged, and **`Map` is already LISTED and inert**, so the chain count exceeds the unlisted count. `HashTableRuntime` is shared by `Map` and `Set` ⇒ those two cannot run in parallel |
+| **Runtime slice** | `TcpClient` → `HttpClient` → `httpHelpers` | unchanged; Workstream R, socket intrinsics |
+| **Ordinary compiler gaps** | `List` · `CharacterSet` · `PrimitiveExtensions` · `Subprocess` | **`Subprocess` moved INTO this class**; `Json` left it (listed at `W69`) |
+| **Candidate listing** | `Testing` | probes clean and is not synthesized — the only row that is plausibly a whitelist line rather than a rung |
+
+⚠ **11 is not 11 units of work, and it is wrong in both directions.** It OVERSTATES — three of the
+eleven are inert-if-listed and need chains, and a fourth chain (`Map`) is not in the eleven at all
+because it already shipped listed. It UNDERSTATES — every non-`E3001` row is a first error, i.e. a lower
+bound on that module's ladder.
+
+---
+
+## ⛔ THE CLASSES WERE WRONG — RE-MEASURED 2026-08-13 (second sweep, same day, `08c0d6e83b`)
+
+**Both binaries rebuilt again**, all 11 actionable modules re-probed (logs in `temp/probe-0813b/`).
+**Every FIRST DIAGNOSTIC above reproduced verbatim — not one row moved.** What moved is the
+**classification**, and it moved for three of the four modules the table above calls *"ordinary compiler
+gaps … the classes an ordinary compiler rung clears"*.
+
+⇒ **that sentence was the useful-looking part of the table and it was the wrong part.** The row above
+predicts *"the four ordinary gaps will keep falling out of unrelated rungs"*. **Three of the four cannot**,
+for exactly the reason the same table gives for the chains: no amount of adjacent rung traffic retires a
+synthesized name or mints an intrinsic.
+
+| module | table above says | MEASURED | the evidence |
+|---|---|---|---|
+| `List.maxon` | ordinary gap (`E3086`) | ⛔ **SYNTHESIZED TWIN — a chain, like `Set`/`Vector`** | `SignatureIndex.maxon:4002` `export let ListBuiltinBaseName = b"List"`. Clearing `E3086` would buy a **listed and inert** entry, which is `W8`'s hazard exactly |
+| `Subprocess.maxon` | ordinary gap (`E2053`) | ⛔ **RUNTIME SLICE — no intrinsic exists** | shv2's whole `__Builtins.*` set is 14 names (`bitsToFloat` `commandLineArg` `commandLineCount` `currentTimeMs` `currentTimeNanos` `currentUnixTimeSeconds` `executablePath` `floatToBits` `readStdin` `sleep` `ucdByteAt` `ucdI64At` `writeStderr` `writeStdout`). **`subprocessSpawn` is not among them, nor `subprocessGetPid`, nor `subprocessWaitCollect`.** Naming the 15 arguments per `W64`'s ruling MOVES the error to `E3004`; it does not clear it |
+| `CharacterSet.maxon` | ordinary gap (`E2004`) | ⛔ **CONVERGENCE — a compiler-owned name, like `String`/`Character`** | `SignatureIndex.maxon:4509` `CharacterSetBuiltinName = b"CharacterSet"` and `:5279` `CharacterMemberSetAliasName = b"CharSet"`, both in `TypeResolution.isCompilerOwnedTypeName:986`. The module declares **both** names (`:19` `typealias CharSet`, `:22` `type CharacterSet`) |
+| `PrimitiveExtensions.maxon` | ordinary gap (`E2010`) | ✅ **CORRECT — the only one** | `extension int implements …` does not parse. A parser feature, `L-parser-decl`, and nothing else is behind that door that has been measured |
+
+### ⭐ `stdlib/Testing.maxon` — READINESS CONFIRMED AGAINST BOTH CONTROLS, AND ONE OF THEM HAD TO MOVE
+
+The table above calls it *"the one candidate listing available today"* and correctly says it still owed
+the two controls. **Both were run. Both pass:**
+
+- **NO SYNTHESIZED TWIN.** `grep 'b"Testing"' / 'b"Expect"' / 'b"TestFailure"' / 'b"__TestReport"'` over
+  `maxon-shv2/Compiler/` is **empty**, and none of the seven `*BuiltinBaseName` roots is any of them.
+- **THE INJECTION CONTROL FIRES** — `let bogus = NoSuchType.definitelyUndefined(1)` in
+  `__TestReport.threw`'s body answers `E3001` **+ `E3004 … 'NoSuchType.definitelyUndefined'`** at
+  `stdlib/Testing.maxon:53:15`. Its bodies are analyzed; this is not the `helpers/sort/*` blindness.
+
+⚠⚠ **BUT THE CONTROL AS THIS FILE PRESCRIBES IT — *"copy the module outside `stdlib/`"* — CANNOT BE RUN
+ON THIS MODULE, AND ANSWERS THE WRONG QUESTION IF YOU TRY.** The copy dies at
+`E2051: identifier '__TestReport' is reserved` **before reaching any body**, because `W72`'s door admits a
+`__` declaration only under `stdlib/`. A reader following the recipe verbatim gets a refusal that has
+nothing to do with the injection and everything to do with the copy's PATH. ⇒ **for a module declaring a
+`__` name, inject IN PLACE and restore** (`cp` a backup first; `git status stdlib/` after). The recipe in
+"Reproducing this table" is correct for every other module and wrong for this one.
+
+### The honest remaining shape — 2026-08-13, second sweep
+
+| kind | modules | can an unrelated rung clear it? |
+|---|---|---|
+| **Candidate listing** | `Testing` | — it is ready NOW, and it is a rung of its own (`W81`) |
+| **Ordinary compiler gap** | `PrimitiveExtensions` | ✅ yes — `extension int` is a parser feature |
+| **Synthesized-twin chains** | `Set` · `Vector` · `List` · (`Map`, already listed and inert) | ⛔ no |
+| **Inert-if-listed** | `unicodeCategory` | ⛔ no — its one export is synthesized as `__ucd_cat` |
+| **Convergence** (compiler-owned name) | `CharacterSet` | ⛔ no |
+| **Runtime slices** (intrinsics that do not exist) | `Subprocess` · `TcpClient` → `HttpClient` → `httpHelpers` | ⛔ no |
+
+⇒ **the remaining bring-up is ONE listing, ONE parser feature, and NINE modules behind four workstreams
+that only direct work moves.** The optimistic reading — *"four ordinary gaps will keep falling out"* —
+survives for exactly one module.
