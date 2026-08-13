@@ -8272,17 +8272,20 @@ end 'CaughtErrorBinder'
 //
 // The two TERMINAL forms collapse to one shape because everything past the fork is common to them: the
 // optional binding, its declaration, its drop, and its diverging tail. Only the last token differs, and that
-// is `parseDivergingTerminalForm`, which a match arm's `default` shares.
+// is `parseDivergingTerminalForm`, which every position admitting `divergentHandlerOpensAt`'s keyword pair
+// shares — that function's header names them, so this does not carry a second copy of the list.
 union TryBlockHandlerShape
 	blockHandler
 	divergent
 end 'TryBlockHandlerShape'
 
 // ⛔⛔ **DOES THIS TOKEN OPEN A DIVERGING TERMINAL FORM?** — `panic("…")` and `throws E.case`, the pair, in
-// ONE place. THREE readers, and the third is why this exists rather than an `at()` chain at each: a
+// ONE place. FOUR readers, and the third is why this exists rather than an `at()` chain at each: a
 // block-form `try`'s divergent `otherwise` admits the pair at both positions its optional binding can leave
-// the cursor in (`requireTryBlockOtherwise`), and a match arm's `default` admits exactly the same pair
-// (`parseMatchCommon`). All three then parse it through the one `parseDivergingTerminalForm`.
+// the cursor in (`requireTryBlockOtherwise`), a match arm's `default` admits exactly the same pair
+// (`parseMatchCommon`), and a match EXPRESSION arm admits it where its `gives` would go (`parseArmBody` —
+// `specs/match-expr-arm-divergent.md`). All four then parse it through the one
+// `parseDivergingTerminalForm`.
 //
 // ⚠ **THE MATCH-`default` READER IS THE ONE THIS WAS MISSING**, and the review found it: the keywords were
 // spelled in three places, of which only two were coupled, so a third diverging form added to `default`
@@ -9249,7 +9252,9 @@ end 'valueMergeMismatchError'
 // How control left one arm's body, plus the exit snapshot the merge (or the next arm's
 // fallthrough phi) needs. `fellThrough` and `reachesMerge` are mutually exclusive with each
 // other and with a terminated exit: an arm either flows to the next arm's body (`and
-// fallthrough`), reaches the merge, or returns/breaks — exactly one.
+// fallthrough`), reaches the merge, or TERMINATES — exactly one. Terminating covers every way a
+// block can end: `return`/`break`/`continue` in a statement arm, and `panic(…)`/`throws E.case`
+// in a DIVERGING expression arm, which is the one shape that terminates while carrying no give.
 type MatchArmBody
 	export var fellThrough as bool
 	export var reachesMerge as bool
@@ -28688,11 +28693,14 @@ export type Parser
 		return CaughtErrorBinder.create(eNameTok.value, hasBinding: true, anchor: eNameTok)
 	end 'parseOptionalCaughtErrorBinder'
 
-	// ⭐⭐ **`panic("…")` / `throws E.case` — THE TWO DIVERGING TERMINAL FORMS, PARSED ONCE.** Two constructs
-	// spell this pair and mean the same by it: a match arm's `default`, and a block-form `try`'s divergent
-	// `otherwise`. Both admit it through `divergentHandlerOpensAt`, both seat it in a block their caller
-	// chose, and both rely on it TERMINATING that block. The fork was written twice before the review; the
-	// two LEAF routines were always shared, which is what made the copy easy to miss.
+	// ⭐⭐ **`panic("…")` / `throws E.case` — THE TWO DIVERGING TERMINAL FORMS, PARSED ONCE.** Three positions
+	// spell this pair and mean the same by it: a match arm's `default`, a match EXPRESSION arm's BODY —
+	// where its `gives` would go, the keyword replacing it (`red panic("…")` —
+	// `specs/match-expr-arm-divergent.md`, which is why this is a shared door and not a second fork) — and a
+	// block-form `try`'s divergent `otherwise`. All admit it through
+	// `divergentHandlerOpensAt`, all seat it in a block their caller chose, and all rely on it TERMINATING
+	// that block. The fork was written twice before the review; the two LEAF routines were always shared,
+	// which is what made the copy easy to miss.
 	//
 	// ⚠ **THE SINGLE-CALL `try f() otherwise throw E.x` IS DELIBERATELY NOT ONE OF THEM.** It spells `throw`,
 	// not `throws`, and it lives in `parseUnboundOtherwiseForm` beside `ignore`, `return`/`break`/`continue`
@@ -35127,7 +35135,11 @@ export type Parser
 		let outcome = try self.parseMatchCommon(func, block: self.currentBlock, isExpression: true)
 		match outcome.result 'r'
 			value(id) then return id
-			none then panic("parseMatchExpression: an expression match produced no value — every `gives` arm must reach the merge")
+			// ⚠ **THE GUARANTEE IS `finalizeMatchMerge`'s REFUSAL, NOT "every arm gives".** An arm may now
+			// diverge (`match-expr-arm-divergent`), so `reachingArms` can legitimately be short — and when it
+			// is EMPTY, that routine throws E2015 rather than returning a valueless outcome, which is what
+			// makes this arm unreachable. Any non-empty reaching set yields a result phi.
+			none then panic("parseMatchExpression: an expression match produced no value — an empty reaching set is refused E2015 by `finalizeMatchMerge`, so a `none` here means a reaching arm carried no give")
 		end 'r'
 	end 'parseMatchExpression'
 
@@ -35392,6 +35404,30 @@ export type Parser
 				// phis, which both belong to the block the edges actually branch to.
 				defaultBody = self.emitErrorUnionDefaultCleanup(func, union: errorUnion, entry: defaultBody, flag: scrut, anchor: defTok)
 
+				// ⛔⛔ **THE FLOORS ARE TAKEN ONCE, ABOVE THE FORK, BECAUSE BOTH DEFAULT SHAPES OWE THE SAME
+				// EXIT — and the DIVERGING one did not pay it (measured: a compiler panic).** `default throws
+				// E.p(Box.make().name)` takes a member borrow off a temporary, so `dispatchMethodOnBase` calls
+				// `giveTemporaryScopeLifetime`, which moves the box from `pendingTempDrops` into
+				// `ownedBindings`; `emitHandoffExitDrops` then RESTORES `ownedBindings`, so the record survives
+				// the arm with nothing draining it. With no floor to drain to, the mark and the owned-binding
+				// stack fell out of lockstep and `reconcileMovesAtMerge` panicked *"a reaching edge's mark holds
+				// 0 entries but 1 owned bindings are in scope"* — on a program the bootstrap compiles and runs
+				// (measured: `gives=5`, `throws=9`, exit 0).
+				//
+				// ⚠ **A3h FIXED THE PLAIN DEFAULT AND LEFT THIS ONE**, which is why the floors moved UP here
+				// rather than a second pair being taken inside the diverging branch: one arm, one exit
+				// obligation, taken in one place. Of the three positions sharing `parseDivergingTerminalForm`,
+				// the other two already bracketed it — a block-form `try`'s divergent `otherwise` through
+				// `dropArmScopedOwned`, a diverging EXPRESSION arm through `finishArmExit` — so this was the
+				// odd one out rather than a new rule.
+				let defaultTempFloor = self.pendingTempDrops.count()
+				// ⚠ The catch-all arm had NO owned floor at all until A3h, so a scope-lifetime record it
+				// enrolled — today a `giveTemporaryScopeLifetime` temporary, and a managed payload binding
+				// the day a `default` can bind one — accumulated into the enclosing scope and was decref'd
+				// in the continuation, on every OTHER arm's path too. It settles exactly as a pattern arm
+				// does now, through the one door.
+				let defaultOwnedFloor = self.ownedBindings.count()
+
 				// ⭐ **`default throws E.case` / `default panic("…")`** (P1.4b) — a DIVERGING catch-all that
 				// covers every unmatched case (so the match is exhaustive). It is the ONLY legal enum
 				// default; a scalar match may use it too. A PLAIN `default` (then/gives) stays E2046 on an
@@ -35399,6 +35435,11 @@ export type Parser
 				// scalar match. A diverging default terminates its body and so reaches no merge.
 				if divergentHandlerOpensAt(self.kindAt(self.pos)) 'divergingDefault'
 					try self.parseDivergingTerminalForm(func, block: defaultBody)
+					// The exit is `currentBlock`, not `defaultBody`: the diverging form's own expression may
+					// have moved control (a `try` inside a thrown value's arguments), exactly as
+					// `parseDivergentOtherwise` reads it. It carries no give — the discard says so, where a
+					// `MatchGiveValue` variable would only be read back as the `none` it went in as.
+					_ = try self.finishArmExit(MatchGiveValue.none, tempFloor: defaultTempFloor, ownedFloor: defaultOwnedFloor, exitBlock: self.currentBlock, anchor: defTok)
 				end 'divergingDefault' else 'plainDefault'
 					if isErrorUnionMatch 'errorUnionPlainDefault'
 						throw ParseError.errorUnionMatchDefaultMustThrow(defTok.line, column: defTok.column)
@@ -35407,13 +35448,6 @@ export type Parser
 						let layout = requireEnumLayout(enumMatch)
 						throw ParseError.matchDefaultEnumMustThrow(layout.kindWord(), typeName: String.from(layout.name), line: defTok.line, column: defTok.column)
 					end 'enumPlainDefault'
-					let defaultTempFloor = self.pendingTempDrops.count()
-					// ⚠ The catch-all arm had NO owned floor at all until A3h, so a scope-lifetime record it
-					// enrolled — today a `giveTemporaryScopeLifetime` temporary, and a managed payload binding
-					// the day a `default` can bind one — accumulated into the enclosing scope and was decref'd
-					// in the continuation, on every OTHER arm's path too. It settles exactly as a pattern arm
-					// does now, through the one door.
-					let defaultOwnedFloor = self.ownedBindings.count()
 					var defaultArmBody = try self.parseArmBody(func, bodyBlock: defaultBody, isExpression: isExpression, carried: carried)
 					defaultArmBody.give = try self.finishArmExit(defaultArmBody.give, tempFloor: defaultTempFloor, ownedFloor: defaultOwnedFloor, exitBlock: defaultArmBody.exitBlock, anchor: matchTok)
 					// `default` is the last arm, so a fall-through has no next arm to reach — it simply
@@ -35831,14 +35865,48 @@ export type Parser
 		return owner.mutable
 	end 'scrutineeBindingIsMutable'
 
-	// Parse ONE arm's body. A `gives` arm is a single expression (its value feeds the merge phi); a
-	// `then` arm is a single statement, and `and fallthrough` may follow it. Reports E2049 for a
+	// Parse ONE arm's body, in one of THREE shapes. An EXPRESSION arm is either a `gives` — a single
+	// expression, whose value feeds the merge phi — or a DIVERGING terminal form (`panic("…")` /
+	// `throws E.case`), which yields no value and reaches no merge; which one is decided by
+	// `divergentHandlerOpensAt`, the roster the whole file shares, at the `'divergingArm'` block below.
+	// A `then` arm is a single statement, and `and fallthrough` may follow it. Reports E2049 for a
 	// block-opening statement body, E2025 for `return … and fallthrough`, and E2001 for a stray
-	// `and` after a `gives` arm.
+	// `and` after either shape of expression arm.
 	function parseArmBody(func IrFunction, bodyBlock IrBlock, isExpression bool, carried VarInfoArray) returns MatchArmBody throws ParseError
 		self.currentBlock = bodyBlock
 
 		if isExpression 'givesArm'
+			// ⭐⭐ **`<pattern> panic("…")` / `<pattern> throws E.case` — A DIVERGING ARM OF A MATCH EXPRESSION**
+			// (`specs/match-expr-arm-divergent.md`), admitted through `divergentHandlerOpensAt` and read by
+			// `parseDivergingTerminalForm`, exactly as the `default` arm one line of grammar away already is.
+			// The keyword REPLACES `gives`: the arm yields no value, so it feeds no merge phi and the result
+			// type is inferred from the `gives` arms alone. Its pattern still marks its coverage bit — that is
+			// stamped by `collectEnumPatternIntervals` from the PATTERN, before this routine is entered — so a
+			// diverging arm counts toward exhaustiveness just as the spec says, with nothing to add here.
+			//
+			// ⚠ **EXPRESSION FORM ONLY, WHICH IS THE SPEC'S OWN LINE.** A match STATEMENT arm already spells
+			// both through its ordinary single-statement body (`red then panic("…")`, `red then throw E.case`),
+			// so admitting the bare form there would be a second grammar for a thing the language already has.
+			// A statement arm reaching a `panic` here therefore still gets `Expected 'then'`.
+			if divergentHandlerOpensAt(self.kindAt(self.pos)) 'divergingArm'
+				try self.parseDivergingTerminalForm(func, block: self.currentBlock)
+				let divergedBlock = self.currentBlock
+				try self.rejectStrayAndOnExpressionArm()
+
+				// ⛔ **THE TERMINATOR IS CHECKED HERE, WHERE THE FAILURE CAN STILL BE NAMED.** Both routes
+				// guarantee one — `parsePanicStatement` ends in `emitDeadReturn`, `emitThrowError` sets one —
+				// and everything below depends on it: `reachesMerge` is stated `false` on the strength of it,
+				// and `exitVals` is EMPTY because a block control never leaves has no values to carry out.
+				// Left to be discovered downstream, a break here surfaces as `giveValueOf`'s generic "an
+				// expression-match arm carries no `gives` value" twenty frames away, or as a short read inside
+				// the merge's carried-var phi loop — neither of which names this arm or this form.
+				if not divergedBlock.isTerminated() 'divergentArmLeftControlLive'
+					panic("parseArmBody: a `panic`/`throws` arm of a match expression left its block UNTERMINATED — `parseDivergingTerminalForm` terminates on both of its routes, and the merge below relies on it: an arm that reached the result phi carrying no `gives` value would leave the phi an operand short")
+				end 'divergentArmLeftControlLive'
+
+				return MatchArmBody.create(false, reachesMerge: false, exitBlock: divergedBlock, exitVals: ValueIdArray.create(), give: MatchGiveValue.none, blame: EmptySourceText)
+			end 'divergingArm'
+
 			try self.consume(TokenKind.gives)
 			let valueTok = self.current()
 			let valueStart = self.pos
@@ -35853,12 +35921,7 @@ export type Parser
 			try self.rejectEscapingClosure(value, message: "cannot use a closure that captures as a `gives` arm of a match expression: {CapturingClosureMergeSuffix}", tok: valueTok)
 
 			let exitBlock = self.currentBlock
-			// `and fallthrough` is meaningless where every arm must yield a value. The climber
-			// already stopped at the `and` (see parseBinary), so it sits here as a stray token.
-			if self.at(TokenKind.and) 'strayAnd'
-				let andTok = self.current()
-				throw ParseError.strayToken(tokenDisplayText(andTok), line: andTok.line, column: andTok.column)
-			end 'strayAnd'
+			try self.rejectStrayAndOnExpressionArm()
 			return MatchArmBody.create(false, reachesMerge: not exitBlock.isTerminated(), exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.value(value), blame: self.expressionImmutableBlame(valueTok, valueStart: valueStart, value: value))
 		end 'givesArm'
 
@@ -35896,6 +35959,22 @@ export type Parser
 		let reachesMerge = not exitBlock.isTerminated() and not fellThrough
 		return MatchArmBody.create(fellThrough, reachesMerge: reachesMerge, exitBlock: exitBlock, exitVals: self.snapshotBindings(carried), give: MatchGiveValue.none, blame: EmptySourceText)
 	end 'parseArmBody'
+
+	// ⭐ **`and fallthrough` IS MEANINGLESS ON EITHER SHAPE OF MATCH-EXPRESSION ARM, so the refusal is one
+	// thing.** A `gives` arm yields a value and a DIVERGING arm leaves the function; neither has a successor
+	// to fall into, and an `and` after either is a leftover rather than an operator — the Pratt climber has
+	// already stopped at it (see `parseBinary`), so it sits at the cursor and would otherwise be read by the
+	// arm loop as the next arm's PATTERN, blaming a token two lines further on. Shared because the two arm
+	// shapes are positioned to see the identical token and must not come to disagree about whether it is
+	// legal: the divergent shape had no refusal at all when it was added, which is exactly that drift.
+	function rejectStrayAndOnExpressionArm() throws ParseError
+		if not self.at(TokenKind.and) 'noStrayAnd'
+			return
+		end 'noStrayAnd'
+
+		let andTok = self.current()
+		throw ParseError.strayToken(tokenDisplayText(andTok), line: andTok.line, column: andTok.column)
+	end 'rejectStrayAndOnExpressionArm'
 
 	// The block-opening statement keywords — an arm body may not start with one (E2049). `try`'s
 	// block form is also one, but `try` is a later rung and cannot appear here yet.
@@ -35945,8 +36024,27 @@ export type Parser
 
 		if reachingArms.count() == 0 'allTerminate'
 			merge.terminator = Terminator.dead
+			// ⛔⛔ **A MATCH EXPRESSION EVERY ARM OF WHICH DIVERGES — REFUSED E2015, AND IT USED TO BE A COMPILER
+			// PANIC.** Two doors reach it: a `default panic(…)`/`default throws` as the only arm (reachable since
+			// P1.4b — measured before `match-expr-arm-divergent` landed), and every PATTERN arm diverging
+			// (`match-expr-arm-divergent`, which added the second). Nothing feeds the result phi, so there is no
+			// value to hand the enclosing expression, and shv2 has no `never`-typed expression result to stand in
+			// for one — `parseExpression` returns a `ValueId` the whole Pratt climber then reads and types.
+			//
+			// ⭐ **E2015 IS THE HONEST CODE, and the registry's own words are the test**: "the source uses a
+			// language construct this compiler does not implement YET". That is exactly this. The bootstrap
+			// COMPILES these programs and lets the unreachable continuation stand (measured), so the refusal is a
+			// BOUNDED GAP, not a language rule — which is why it is not `strayToken`/E2001 and not a semantic
+			// E3xxx, both of which would file a pending feature as a permanent illegality (the mistake
+			// `expectedDeclaration` and `selfOutsideInstanceMethod` each record having made in the other
+			// direction). Pinned by `specs-shv2/match-expr-all-arms-diverge.md`, whose prose carries the
+			// divergence so the case documents the gap rather than freezing it as intended behaviour.
+			//
+			// ⚠ **A TERNARY CANNOT REACH THIS**, so the message names the match form without asking `construct`
+			// for a noun: `a if c else b` has two arms that are both EXPRESSIONS, and there is no divergent
+			// spelling for either — every ternary arm produces a value or fails to parse.
 			if isExpression 'exprNoValue'
-				panic("finalizeMatchMerge: a match expression reached no value-producing arm — every `gives` arm must reach the merge (diverging arms are a later rung)")
+				throw ParseError.unsupported("a match EXPRESSION whose every arm diverges — each arm ends in `panic(…)` or `throws`, so no arm reaches the merge and there is no value to give the binding or expression around it. Write it as a match STATEMENT (`then panic(…)` arms need no value), or give at least one arm a `gives`", line: matchTok.line, column: matchTok.column)
 			end 'exprNoValue'
 			return MatchOutcome.create(merge, result: MatchGiveValue.none)
 		end 'allTerminate'
@@ -36291,13 +36389,20 @@ export type Parser
 		return valueMergeMismatchError(construct == MergeConstruct.ternary, expectedDisplay: self.valueDisplayTypeName(self.giveValueOf(firstArm.give)), gotDisplay: self.valueDisplayTypeName(self.giveValueOf(displayArm.give)), line: matchTok.line, column: matchTok.column)
 	end 'valueMergeGiveMismatch'
 
-	// The `gives` value an expression arm carries. Only ever asked of an expression-match arm, so a
-	// `none` is a parser invariant break, not a program error. Takes the `MatchGiveValue` itself so both
-	// `MatchArmExit` and the arm loop's `MatchArmBody` reach it through the one extractor.
+	// The `gives` value an expression arm carries. Only ever asked of an expression-match arm that REACHES
+	// THE MERGE, so a `none` is a parser invariant break, not a program error. Takes the `MatchGiveValue`
+	// itself so both `MatchArmExit` and the arm loop's `MatchArmBody` reach it through the one extractor.
+	//
+	// ⚠ **A VALUELESS ARM IS NOT ITSELF THE BREAK — REACHING THE MERGE WITH ONE IS.** Two arm shapes carry
+	// no give: a STATEMENT arm (which never meets this routine, because a statement match runs no give
+	// rule), and a DIVERGING expression arm (`panic`/`throws`), which is legal and simply terminates —
+	// `parseArmBody` checks its terminator on the spot and keeps it out of `reachingArms`. So the message
+	// names the collection this value came out of rather than the arm's spelling: whichever produced it,
+	// the defect is that a non-giving arm was admitted to the merge.
 	function giveValueOf(give MatchGiveValue) returns ValueId
 		match give 'g'
 			value(id) then return id
-			none then panic("giveValueOf: an expression-match arm carries no `gives` value")
+			none then panic("giveValueOf: an arm in a match expression's REACHING set carries no `gives` value — a statement arm never reaches this rule and a diverging `panic`/`throws` arm is kept out of `reachingArms` by its terminator check, so an arm reached the merge that should not have")
 		end 'g'
 	end 'giveValueOf'
 
