@@ -1,0 +1,67 @@
+// Test: expr-second-term
+enum E
+	a
+	b
+	c
+	d
+end 'E'
+
+function pick(v E) returns ExitCode
+	return match v 'm'
+		a or b or c gives 7
+		d gives 9
+	end 'm'
+end 'pick'
+
+function main() returns ExitCode
+	return pick(E.b)
+end 'main'
+---
+ExitCode: 7
+---
+func @pick {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.jumpTable rcx, default=matchdead [[0..2]=matcharm#1, [3]=matcharm#2] @__jumptable_1
+  matchdead:
+  matcharm#1:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  matcharm#2:
+    x64.movRegImm32 r8, 9
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.callDirect pick
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

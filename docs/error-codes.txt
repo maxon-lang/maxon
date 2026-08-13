@@ -1976,6 +1976,50 @@ E3128 SemanticSharedConformanceReadsDictionary
 	doc The cure for a program this refuses is a per-INSTANCE witness table, which `maxon-selfhosted` emits
 	doc (`Passes/BuildWitnessTables.emitPerInstanceWitnessTables`) and shv2 does not yet.
 
+E3129 SemanticMatchArmPayloadBindingConflict
+	shv2 matchArmPayloadBindingConflict
+	doc A match arm's payload bindings are not a one-to-one map between names and payload slots, or an
+	doc `or`-arm binds a slot some case the arm covers does not hold as that type.
+	doc An arm's payload bindings are loaded ONCE, unconditionally, at the head of the arm BODY, and every
+	doc alternative of an `or`-arm branches to that one body. Two consequences, and this code carries both:
+	doc the bindings must be a BIJECTION (one name per slot, one slot per name), because the load is a list
+	doc walk and the scope install is keyed by NAME and overwrites; and every case the arm covers must
+	doc present each bound slot as that binding's own type, because the load runs on all their paths.
+	doc A union's cases share one payload offset (`EnumLayout.payloadSlotOffset`), so `stay or walk(dir)`
+	doc is well defined: `stay` declares no slot 0, and a narrow case's unused slots are ZERO-FILLED at
+	doc construction (`Parser.emitEnumBox`'s `zeroFill` loop, whose header states the fill is MANDATORY --
+	doc the union cloner preserves it by blitting the whole box). So the binding reads 0 on the `stay`
+	doc path. That is the shape `specs/match-enum-or-pattern.md` pins, and this check admits it -- but only
+	doc where 0 is PROVABLY a value of the binding's own type, which is `Parser.zeroInhabitsPayloadType`,
+	doc a question about the SLOT and deliberately not `payloadClassIsManaged` (a question about whether
+	doc the DECLARATION view owes a heap drop, which fails open on a function pointer and on a type
+	doc parameter).
+	doc The shapes it refuses were MEASURED as wrong answers before it existed, all on programs the
+	doc bootstrap and v1 compile and run:
+	doc - a bound slot another covered case declares with a DIFFERENT type (`speak(msg String) or
+	doc   walk(dir Integer)`, binding `dir`) read the String record POINTER as an integer and printed it
+	doc   -- no crash, no diagnostic, silently wrong.
+	doc - a binding whose type does not admit 0, on a slot a covered case leaves empty: a String
+	doc   (`stay or speak(msg String)`) dereferenced null, 0xC0000005; a FUNCTION-typed payload
+	doc   (`idle or run(op)`, `specs-shv2/first-class-functions.md`'s own `Action` union) called through
+	doc   address 0, 0xC0000005; a ranged alias excluding zero (`int(1 to 10)`) bound 0, outside its own
+	doc   declared domain.
+	doc - the SAME SLOT bound by two alternatives (`shout(msg) or speak(msg)`), which emits two loads and
+	doc   two acquisitions against one slot: on a sole-owned scrutinee the first MOVED the String out and
+	doc   nulled the slot, the second read the slot it had just emptied, and the arm body held null --
+	doc   0xC0000005 again. Bind the slot on one alternative and name the other cases bare
+	doc   (`shout or speak(msg)`), which is legal and MEASURED correct on every alternative.
+	doc - the SAME NAME bound at two DIFFERENT slots (`walk(dir) or run(_, dir)`), which passes every slot
+	doc   test and is then decided by `Scope.install`, keyed by name and last-wins: the arm read slot 1 on
+	doc   the `walk` path, printing 0 where 7 was stored. The same hole existed one construct over for a
+	doc   single case's own list (`walk(x, x)`), so ONE check over the arm's finished binding list serves
+	doc   both doors.
+	doc NEITHER REFERENCE COMPILER REFUSES ANY OF THEM, and both produce the same garbage, so nothing that
+	doc worked is taken away. It is the `and fallthrough` rule one construct over
+	doc (`Parser.rejectFallthroughIntoBindingArm`), which refuses a related hazard for a related reason: an
+	doc arm body reached from a case that does not hold what its bindings destructure.
+	doc The cure is to give the disagreeing case its own arm, or to rename the colliding binding.
+
 E6003 BinaryOutputNotWritten
 	shv2 binaryOutputNotWritten
 	doc The backend reported no failure, yet nothing exists at the output path after the write. The

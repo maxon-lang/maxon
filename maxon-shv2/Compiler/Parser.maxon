@@ -1043,6 +1043,14 @@ export union ParseError implements Error
 	// A payload pattern supplying the wrong number of bindings for a union member's case. Renders as
 	// **E3035**, positioned at the CASE name (past the qualifier), naming the case as `Enum.case`.
 	errorUnionWrongBindingCount(qualifiedCase String, expected ElementCount, got ElementCount, line LineNumber, column ColumnNumber)
+	// **E3129** — a match arm whose payload binding cannot be honoured. `reason` carries the whole
+	// explanation and that shape's cure, because the four shapes refused share only their SUBJECT (this
+	// arm's bindings) and not their argument: two are about the arm's own binding list being a bijection
+	// (one name per slot, one slot per name) and two are about what a covered case holds in a bound slot.
+	// A single lead-in general enough to cover all four would say nothing, so `Queries` renders the name
+	// and defers. Positioned at the binding the author must rename, move or drop. See
+	// `requireArmBindingsAreDistinct` and `requireOrArmPayloadSlotsAgree`.
+	matchArmPayloadBindingConflict(bindingName String, reason String, line LineNumber, column ColumnNumber)
 	// **E3084** — a block-form `try`'s `otherwise (e) 'h' … end` handler that never `match`es on its binding.
 	// Positioned at the handler's block LABEL, which is both references' anchor. The handler is reached by
 	// EVERY routed edge, so one that never discriminates has silently swallowed every error the body can
@@ -9304,9 +9312,6 @@ end 'PayloadBinding'
 
 typealias PayloadBindingArray = Array with PayloadBinding
 
-// A pattern arm's parse result: the boolean CONDITION (`subject == tag`, or the OR/range fold) and
-// the payload BINDINGS the arm body declares. A scalar match, and every enum pattern that is not a
-// single case (an or-chain, a range), carries no bindings.
 // ⭐ **THE STRATEGY THRESHOLD — below this many disjoint intervals a `match` dispatches by a linear
 // compare chain, at or above it by a balanced binary search.** Three intervals is at most three
 // compare-and-branch pairs, cheaper than the compare-per-level a search spends before it reaches a
@@ -34409,11 +34414,17 @@ export type Parser
 	//     otherwise 0) > 0 'loop'` puts an operator there. `then` and `gives` are the only two
 	//     separators a payload-carrying arm can take AND the only two no real `if`/`while`/`match`/`for`
 	//     header can be followed by. `to`/`upto` belong to scalar RANGE patterns, which carry no
-	//     payload. `or` is the one genuine gap: `end(m) or omega then …` reads as a closer — shv2
-	//     already refuses a payload binding on an `or`-pattern outright (`rejectOrPatternBinding`), so the
-	//     program stays refused, and the rung that lifts THAT restriction is the one that must add `or`
-	//     here. `keyword-named-case-members.md` pins the payload arms AND the parenthesized-condition
-	//     shapes that forbid the wider set.
+	//     payload. ⚠ **`or` REMAINS THE ONE GENUINE GAP, and it is now a gap rather than a moot point**:
+	//     `end(m) or omega then …` reads as a closer, and since payload bindings on an or-arm became
+	//     legal (`requireOrArmPayloadSlotsAgree`) nothing else refuses that program. Widening the set to
+	//     admit it is what the stdlib line above forbids, so a KEYWORD-named case binding a payload as
+	//     the first alternative of an `or`-chain is still not spellable — the narrow shape a later rung
+	//     owes, and one no spec reaches today. ⚠ **AND IT FAILS AS A MISCOUNT, NOT AS A DIAGNOSTIC**: the
+	//     scan misreads the arm before any binding check runs, so it surfaces as the two faults this list
+	//     already records — a bogus `E2026 … not exhaustive` when the arm loop ends early, or the
+	//     `assertScanAligned` compiler PANIC when a block is opened that nothing closes.
+	//     `keyword-named-case-members.md` pins the payload arms AND the parenthesized-condition shapes
+	//     that forbid the wider set.
 	//   • **A LABEL — the `:` LOOKAHEAD.** `weigh(i, for: 3)`. See the arm below.
 	//   • **A MEMBER NAME — the LOOKBEHIND.** `Kw.end`, `Kw.while`, `obj.end()`. A `.` is followed by a
 	//     member name and by nothing else in this grammar (Maxon has no `..` range and a float literal
@@ -35503,7 +35514,7 @@ export type Parser
 					end 'ftTargetBindsUnion'
 				end 'errorUnionPattern' else if isEnumMatch 'enumPattern'
 					let armLayout = requireEnumLayout(enumMatch)
-					payloadBindings = try self.collectEnumPatternIntervals(armLayout, covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
+					payloadBindings = try self.collectEnumPatternIntervals(armLayout, covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals, intervalMark: intervalMark)
 					// An `and fallthrough` edge reaches this arm's BODY from a different case, and this arm's
 					// bindings sit at the head of that body — so they would destructure a case the value does
 					// not hold. Checked here, where the pattern's bindings are first in hand and before any
@@ -37229,30 +37240,242 @@ export type Parser
 	end 'valueIsBoxedUnion'
 
 	// One arm's enum pattern, reduced to DISPATCH INTERVALS over the case tags (P1.1b + match-dispatch).
-	// Alternatives (`red or blue`) each contribute their interval(s); a payload BINDING is legal only on
-	// a SINGLE case (`walk(dir)`), never on an or-alternative. Returns the payload bindings the arm body
-	// declares (empty for a bare case, an or-chain, or a range). Replaces the old compare-emitting
+	// Alternatives (`red or blue`) each contribute their interval(s), and EVERY alternative may carry a
+	// payload binding — the arm's bindings are the concatenation, whichever alternative wrote them
+	// (`stay or walk(dir) gives dir`, `specs/match-enum-or-pattern.md`). Replaces the old compare-emitting
 	// `emitEnumPatternCondition`: an enum/union tag is an i64, so an enum arm ALWAYS feeds the interval
 	// plan, and the per-case `== tag` compare is emitted later — once — by the dispatch itself.
-	function collectEnumPatternIntervals(layout EnumLayout, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray) returns PayloadBindingArray throws ParseError
-		let first = try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into)
-		if not self.at(TokenKind.or) 'single'
-			return first
-		end 'single'
-
-		try self.rejectOrPatternBinding(first)
+	//
+	// ⚠ **THE BINDINGS ARE ONE LIST FOR THE WHOLE ARM BECAUSE THEY LOAD AT ONE PLACE** — the head of the
+	// single body block every alternative branches to (`parseMatchCommon` → `declarePayloadBindings`) —
+	// so they are read on EVERY covered case's path, not just the one whose alternative declared them.
+	// That is what makes the spec's shape well defined and what makes four other shapes garbage;
+	// `requireArmBindingsAreDistinct` and `requireOrArmPayloadSlotsAgree` are where the difference is decided.
+	//
+	// `intervalMark` is the arm's own slice of the interval plan — `into` accumulates across ALL arms, so it
+	// is what says which intervals, i.e. which cases, belong to THIS arm. It is PASSED IN rather than
+	// recomputed here: the caller already holds the identical value for its own edge-arg stamp, and two
+	// derivations agreeing only because nothing pushes between them is not an invariant. If they diverged,
+	// E3129 would check cases the arm does not cover (or miss ones it does) while phi args landed on the
+	// wrong edges.
+	function collectEnumPatternIntervals(layout EnumLayout, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray, intervalMark ElementCount) returns PayloadBindingArray throws ParseError
+		var bindings = PayloadBindingArray.create()
+		try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings)
 		while self.at(TokenKind.or) 'orChain'
 			try self.consume(TokenKind.or)
-			let rhs = try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into)
-			try self.rejectOrPatternBinding(rhs)
+			try self.collectEnumPatternAtomIntervals(layout, covered: covered, bodyBlockId: bodyBlockId, into: into, bindings: bindings)
 		end 'orChain'
-		return PayloadBindingArray.create()
+
+		// Both halves of E3129, in the order their answers depend on: whether the arm's bindings are a
+		// bijection is a fact about the arm ALONE, and settling it first means the agreement walk below never
+		// has to reason about which of two bindings of one slot it is talking about.
+		try self.requireArmBindingsAreDistinct(bindings)
+		try self.requireOrArmPayloadSlotsAgree(layout, bindings: bindings, into: into, intervalMark: intervalMark)
+		return bindings
 	end 'collectEnumPatternIntervals'
 
+	// ⛔⛔ **AN ARM'S PAYLOAD BINDINGS MUST BE A BIJECTION — ONE NAME PER SLOT, ONE SLOT PER NAME.** The two
+	// halves are one rule because they are one mechanism read from its two ends: `declarePayloadBindings`
+	// walks this list emitting a LOAD, a scope DECLARATION and an ACQUISITION per entry. The list is indexed
+	// by SLOT and the scope is keyed by NAME (`Scope.install` overwrites), so a repeat on EITHER axis makes
+	// the arm body see something no alternative asked for — and each axis was MEASURED wrong:
+	//
+	//   • **TWO BINDINGS, ONE SLOT** (`shout(msg) or speak(msg)`) — two loads and two acquisitions against
+	//     one slot. On a sole-owned scrutinee the acquisition is `moveOutManagedPayload`: the first entry
+	//     takes the String and NULLS slot 0, the second reads the slot it just emptied and takes ownership
+	//     of null, and the second declaration is the one in scope. **0xC0000005, no output**, against a
+	//     CONTROL (same union, same sole-owned scrutinee, same payload, one case per arm) that exits 0.
+	//   • **ONE NAME, TWO SLOTS** (`walk(dir) or run(_, dir)`) — passes every SLOT test (the slots differ,
+	//     and the discard makes `run(_, dir)` spellable), so only the name axis can catch it. The second
+	//     `install` silently wins: MEASURED `walk=0` where 7 was stored, and its managed twin
+	//     (`shout(_, msg) or speak(msg, _)`) yielded the wrong FIELD with refcounts balanced — a wrong
+	//     answer with no crash and no leak, the worst shape here.
+	//
+	// ⚠ **NEITHER IS ONLY A CRASH, WHICH IS WHY BOTH ARE REFUSED FOR EVERY PAYLOAD TYPE.** The scalar
+	// spelling `walk(a) or run(b) gives a + b` does not fault — it quietly answers `10` for `walk(5)`,
+	// because both names read the one slot — and a rule that admitted what merely misleads while refusing
+	// what faults would be two rules for one mistake.
+	//
+	// ⭐ **IT IS CHECKED OVER THE ARM'S FINISHED LIST, WHICH IS WHY ONE CHECK SERVES TWO DOORS.** The name
+	// axis is not an or-arm property at all: a SINGLE case's own list had the identical hole
+	// (`walk(x, x)` — `parseCasePayloadBindings` never compared its names either), and an arm's list is the
+	// only place both are visible. So the error-union arm asks through here too, and neither door needs its
+	// own copy. Discards are skipped on both axes: `_` emits no load and installs no name, so it can
+	// contest nothing.
+	function requireArmBindingsAreDistinct(bindings PayloadBindingArray) throws ParseError
+		for i in 0 upto bindings.count() 'eachBinding'
+			let binding = try bindings.get(i) otherwise panic("requireArmBindingsAreDistinct: bindings.get OOB at {i} on a range walked to the array's own count")
+			if binding.isDiscard 'readsNothing'
+				continue
+			end 'readsNothing'
+
+			// Positioned at the SECOND binding throughout — the token the author must rename or delete.
+			for j in 0 upto i 'eachEarlier'
+				let earlier = try bindings.get(j) otherwise panic("requireArmBindingsAreDistinct: bindings.get OOB at {j}, below the outer index")
+				if earlier.isDiscard 'installsNothing'
+					continue
+				end 'installsNothing'
+
+				if earlier.slot == binding.slot 'oneSlotBoundTwice'
+					throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "payload slot {binding.slot} is already bound by '{String.from(earlier.nameTok.value)}' in this arm. An arm's alternatives share one slot region and one arm body, so binding a slot twice loads the same value twice — and for a managed payload out of a scrutinee this frame owns, moves it out of the box twice and leaves the arm holding null. Bind the slot on ONE alternative and write this one's case name bare: a bare name on a payload-carrying case is legal, and the single binding already serves every alternative", line: binding.nameTok.line, column: binding.nameTok.column)
+				end 'oneSlotBoundTwice'
+
+				if earlier.nameTok.value.equals(binding.nameTok.value) 'oneNameBoundTwice'
+					throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "this arm already binds the name '{String.from(earlier.nameTok.value)}', at payload slot {earlier.slot} rather than slot {binding.slot}. The arm body has ONE binding of that name — the later one silently wins — so on the path of the case that fills slot {earlier.slot} the body would read slot {binding.slot} instead. Give the two payloads different names", line: binding.nameTok.line, column: binding.nameTok.column)
+				end 'oneNameBoundTwice'
+			end 'eachEarlier'
+		end 'eachBinding'
+	end 'requireArmBindingsAreDistinct'
+
+	// ⭐⭐ **EVERY CASE AN ARM COVERS MUST HOLD WHAT THE ARM'S BINDINGS READ (E3129).** The bindings are
+	// loaded once, unconditionally, at the head of the arm BODY, and every alternative of an `or`-chain
+	// branches to that one body — so the load runs on the path of every covered case, and each of them has
+	// to present the bound slot as the binding's own type.
+	//
+	// ⭐ **THE SPEC'S SHAPE IS ADMITTED BY A CONSTRUCTION GUARANTEE, NOT BY LUCK — AND THE LOAD-BEARING HALF
+	// IS THE ZERO-FILL, NOT THE ALLOCATOR.** `stay or walk(dir) gives dir` reads 0 on the `stay` path because
+	// `emitEnumBox` sizes every box for the WIDEST case (`boxSizeBytes` over `maxPayloadArity`) and then
+	// EXPLICITLY STORES 0 into the slots a narrow case does not fill (its `zeroFill` loop, whose own header
+	// states the fill is MANDATORY); the union cloner preserves it by blitting the whole box. The slab's
+	// zeroing says the same thing today, but it is the WEAKER guarantee — it carries an explicit "a future
+	// free-list must re-zero" caveat (ARCHITECTURE.md → "Allocator: the zeroing contract"), which the store
+	// does not — so this rule cites the store. That is why `specs/match-enum-or-pattern.md` can pin `stay=0`,
+	// and `emitEnumBox` now carries the back-reference saying a diagnostic depends on it.
+	//
+	// ⚠ **WHETHER THAT 0 IS A VALUE AT ALL IS A SEPARATE QUESTION**, asked of the binding's own type by
+	// `zeroInhabitsPayloadType` — see it for the two measured faults that come of asking a drop-ownership
+	// predicate instead.
+	//
+	// ⚠⚠ **THE SHAPES REFUSED HERE WERE MEASURED AS WRONG ANSWERS, on programs BOTH reference compilers
+	// compile and run** — the refusal this replaced (*"a binding shared across the alternatives of an
+	// or-arm arrives at a later rung"*) was hiding them rather than deferring a feature:
+	//   • a bound slot another covered case declares with a DIFFERENT type — `speak(msg String) or
+	//     walk(dir) gives dir` — printed `speak=7078117`, the String record's POINTER read as an integer.
+	//     No crash and no diagnostic, which is the worst of the three.
+	//   • a binding whose type does not admit 0, on a slot a covered case leaves empty — `stay or speak(msg)
+	//     gives msg.count()` dereferenced the zero-filled slot (**0xC0000005**), and so did a FUNCTION-typed
+	//     payload called through address 0. The zero that makes an `int` binding well defined is a null
+	//     pointer for those, so one construction fact decides the two oppositely — see
+	//     `zeroInhabitsPayloadType`, which is the half that says which.
+	// Neither is fixable by emitting better code: the arm body is compiled ONCE and its binding has ONE
+	// type, so no per-alternative edge (block args included) can make one name mean a String on one
+	// incoming edge and an integer on another — and no value exists to give a `String` binding on a case
+	// that carries no String. So the honest answer is a refusal, as it is for the related hazard one
+	// construct over (`rejectFallthroughIntoBindingArm`).
+	//
+	// Vacuous for a single-case arm — `walk(dir)` covers only `walk`, which declares the slot it binds — so
+	// the rule is stated once for every enum arm rather than behind an "is this an or-chain" test.
+	function requireOrArmPayloadSlotsAgree(layout EnumLayout, bindings PayloadBindingArray, into DispatchIntervalArray, intervalMark ElementCount) throws ParseError
+		if bindings.count() == 0 'bindsNothing'
+			return
+		end 'bindsNothing'
+
+		for ci in 0 upto layout.caseCount() 'eachCase'
+			if not self.armCoversCase(layout, index: ci, into: into, intervalMark: intervalMark) 'anotherArmsCase'
+				continue
+			end 'anotherArmsCase'
+			let payloads = layout.payloadsAt(ci)
+
+			for binding in bindings 'eachBinding'
+				// A `_` reads nothing, so no case has to hold anything for it.
+				if binding.isDiscard 'discarded'
+					continue
+				end 'discarded'
+				try self.requireCaseHoldsBoundSlot(layout, caseIndex: ci, payloads: payloads, binding: binding)
+			end 'eachBinding'
+		end 'eachCase'
+	end 'requireOrArmPayloadSlotsAgree'
+
+	// Does case `index` route to THIS arm — i.e. does its tag fall in one of the intervals the arm just
+	// contributed? Read off the interval plan rather than collected a second time as the atoms are parsed,
+	// because the plan IS the arm's coverage (a range alternative expands into it exactly as a bare case
+	// does), and a parallel case list would be that fact recorded twice. Tags are unique per case, so tag
+	// membership and case membership are the same question.
+	function armCoversCase(layout EnumLayout, index CaseIndex, into DispatchIntervalArray, intervalMark ElementCount) returns bool
+		let tag = layout.tagOfIndex(index)
+		for k in intervalMark upto into.count() 'eachInterval'
+			let interval = try into.get(k) otherwise panic("armCoversCase: intervals.get OOB at {k} on a range walked to the array's own count")
+			if tag >= interval.lo and tag <= interval.hi 'covered'
+				return true
+			end 'covered'
+		end 'eachInterval'
+		return false
+	end 'armCoversCase'
+
+	// One (covered case, binding) pair — the whole of E3129's rule, and both of its arms turn on the same
+	// question: what does THIS case put in the slot the binding reads?
+	function requireCaseHoldsBoundSlot(layout EnumLayout, caseIndex CaseIndex, payloads PayloadFieldArray, binding PayloadBinding) throws ParseError
+		let bound = self.signatures.payloadTypeOf(binding.field, layout: layout, into: self.artifact.typeNames)
+
+		if binding.slot >= payloads.count() 'caseLeavesTheSlotEmpty'
+			// Nothing is ever stored there on this case's path — `emitEnumBox` ZERO-FILLS a narrow case's
+			// unused slots — so the binding reads 0. Legal exactly where 0 is a value of the binding's own
+			// type, which is a question about the SLOT and not about who owes a drop.
+			if self.zeroInhabitsPayloadType(bound) 'zeroIsAValueOfThisType'
+				return
+			end 'zeroIsAValueOfThisType'
+
+			throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` carries no payload in slot {binding.slot}, so on that case's path the binding reads the zero the box was filled with — and zero is not a value of the type '{String.from(binding.field.name)}' is declared at. Give '{String.from(layout.caseNameAt(caseIndex))}' an arm of its own", line: binding.nameTok.line, column: binding.nameTok.column)
+		end 'caseLeavesTheSlotEmpty'
+
+		// Both types come from `payloadTypeOf` into THIS file's interner, which is the precondition
+		// `maxonTypesDenoteSame` states for its `named` arm — two ids from different interners would be
+		// incomparable.
+		let here = try payloads.get(binding.slot) otherwise panic("requireCaseHoldsBoundSlot: payloads.get OOB at slot {binding.slot} after the count guard")
+		if maxonTypesDenoteSame(self.signatures.payloadTypeOf(here, layout: layout, into: self.artifact.typeNames), b: bound) 'sameTypeInTheSlot'
+			return
+		end 'sameTypeInTheSlot'
+
+		throw ParseError.matchArmPayloadBindingConflict(String.from(binding.nameTok.value), reason: "case '{String.from(layout.caseNameAt(caseIndex))}' of `{layout.kindWord()} {String.from(layout.name)}` declares its own payload '{String.from(here.name)}' in slot {binding.slot}, of a different type from the '{String.from(binding.field.name)}' being bound — so on that case's path the binding would read one type's bytes as another's. Give '{String.from(layout.caseNameAt(caseIndex))}' an arm of its own", line: binding.nameTok.line, column: binding.nameTok.column)
+	end 'requireCaseHoldsBoundSlot'
+
+	// ⭐⭐ **IS 0 PROVABLY A VALUE OF THIS PAYLOAD TYPE? — a question about the SLOT, and deliberately NOT
+	// `payloadClassIsManaged`.** That predicate is documented as the single reader of *"does this class own a
+	// heap drop?"*, a DECLARATION-view question, and asking it this one instead FAILS OPEN on every type that
+	// owes no drop yet has no zero: a `function`-typed payload classifies `scalar` (a code pointer is an
+	// inline i64), so `idle or run(op) gives op(3)` called through address 0 — **MEASURED 0xC0000005**, on
+	// `specs-shv2/first-class-functions.md`'s own `Action` union; a `typeParam` answers false for the reason
+	// its own header gives (*"the DECLARATION view's answer rather than the slot's"*) while a managed
+	// instantiation makes 0 a null reference; and a ranged alias excluding zero (`int(1 to 10)`) bound 0,
+	// **MEASURED `off=0`**, outside its own declared domain. It is the same one-predicate-two-facts shape
+	// `moveOutManagedPayload` records six segfaults for.
+	//
+	// ⚠ **IT FAILS CLOSED: it admits only what it can PROVE, and every unlisted type is refused.** A new
+	// `ValueTypeTag` therefore lands as a false reject — a diagnostic — rather than as the null dereference
+	// the open default was. That is also why it is written as an explicit admit-list and not as an exhaustive
+	// `match`: the default here must be a REFUSAL, and a `match` arm added by a future tag would have to
+	// choose an answer where "not yet reasoned about" is the honest one.
+	//
+	// A RANGED ALIAS answers from its own bounds through `literalInRange` — the one door that knows a range's
+	// upper bound may be an unsigned pattern (`int(0 to u64.max)` stores `high` as -1), so a naive
+	// `high >= 0` would refuse it. A FLOAT alias is skipped first: its bounds are IEEE-754 patterns and this
+	// asks an integer question, the identical domain guard `requireOtherwiseLiteralInRange` makes (and
+	// `requirePayloadLowerable` refuses a float payload binding upstream regardless).
+	//
+	// A `named` type that is NOT a ranged alias is refused, which is the arm that covers an ENUM payload:
+	// an enum's tags are its values and need not include 0 at all (`red = 1`), so zero would bind a
+	// non-existent case. A struct, a union, a tuple and a generic instance are refused by the same arm, each
+	// because 0 there is a null pointer.
+	function zeroInhabitsPayloadType(slotType MaxonType) returns bool
+		if maxonTypeTag(slotType) == ValueTypeTag.named 'aNamedType'
+			return match self.declaredAliasOfNameId(typeNameIdOf(slotType)) 'a'
+				declared(alias) gives not aliasIsFloat(alias) and literalInRange(0 as ParsedInt, low: alias.low, high: alias.high, isFloat: false)
+				undeclared gives false
+			end 'a'
+		end 'aNamedType'
+
+		// The three primitive domains that contain zero: `int` spans it, `bool` reads it as `false`, and
+		// `ExitCode`'s range starts at 0 (`Project.exitCodeAliasHigh` moves only the upper bound).
+		let tag = maxonTypeTag(slotType)
+		return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.exitCode
+	end 'zeroInhabitsPayloadType'
+
 	// One alternative: a single case (`red`, or `walk(dir)` binding its payload) or a case-name range
-	// (`low to high`, `low upto high`). Only the single-case form may carry payload bindings. Appends the
-	// covered case tag(s) as point/range intervals into `into` and returns the payload bindings.
-	function collectEnumPatternAtomIntervals(layout EnumLayout, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray) returns PayloadBindingArray throws ParseError
+	// (`low to high`, `low upto high`). Only the single-case form may carry payload bindings — a range
+	// names no one case whose payload fields a binding list could resolve against. Appends the covered case
+	// tag(s) as point/range intervals into `into`, and any bindings onto the ARM's list (see the caller:
+	// the alternatives share one list because they share one body block).
+	function collectEnumPatternAtomIntervals(layout EnumLayout, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray, bindings PayloadBindingArray) throws ParseError
 		let patternTok = self.current()
 		let loStart = self.pos
 		let lowIndex = try self.resolveEnumArmCase(layout)
@@ -37271,18 +37494,19 @@ export type Parser
 			try self.requireRangeIsMultiValued(lowIndex, hi: highIndex, isUpto: isUpto, hasAdjacentValues: true, loStart: loStart)
 
 			try self.collectEnumRangeIntervals(layout, lowIndex: lowIndex, highIndex: highIndex, isUpto: isUpto, covered: covered, patternTok: patternTok, bodyBlockId: bodyBlockId, into: into)
-			return PayloadBindingArray.create()
+			return
 		end 'rangeArm'
 
-		var bindings = PayloadBindingArray.create()
 		if self.at(TokenKind.leftParen) 'payloadBind'
-			bindings = try self.parseCasePayloadBindings(layout, caseIndex: lowIndex, caseTok: patternTok)
+			let atomBindings = try self.parseCasePayloadBindings(layout, caseIndex: lowIndex, caseTok: patternTok)
+			for binding in atomBindings 'appendEach'
+				bindings.push(binding)
+			end 'appendEach'
 		end 'payloadBind'
 
 		try self.markEnumCovered(covered, index: lowIndex, layout: layout, patternTok: patternTok)
 		let tag = layout.tagOfIndex(lowIndex)
 		into.push(DispatchInterval.create(tag, hi: tag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
-		return bindings
 	end 'collectEnumPatternAtomIntervals'
 
 	// ⭐⭐ **ONE ARM OF A MATCH ON A SYNTHESIZED ERROR UNION.** The union path's twin of
@@ -37335,6 +37559,12 @@ export type Parser
 			try self.requireErrorUnionBindingCount(member, caseIndex: memberCaseIndex, caseTok: caseTok)
 			bindings = try self.parseCasePayloadBindings(member.layout, caseIndex: memberCaseIndex, caseTok: caseTok)
 		end 'payloadBind'
+
+		// The NAME half of E3129 (`requireArmBindingsAreDistinct`). An error-union arm names exactly one
+		// `(member, case)` pair and so has no or-chain and no slot to contest twice — but its list is minted
+		// by the same `parseCasePayloadBindings`, which never compared its own names, so `bad(x, x)` reached
+		// `Scope.install` here exactly as it did on the enum path. One rule, asked at both doors.
+		try self.requireArmBindingsAreDistinct(bindings)
 
 		try self.markEnumCovered(covered, index: index, layout: info.layout, patternTok: caseTok)
 		let tag = info.layout.tagOfIndex(index)
@@ -37498,21 +37728,17 @@ export type Parser
 		return after
 	end 'emitErrorUnionMemberRelease'
 
-	// A payload binding is meaningful only where exactly one case matched — refuse it on an
-	// or-alternative (`stay or walk(dir)`), whose alternatives may be different cases of different
-	// arity. Positioned at the binding name.
-	function rejectOrPatternBinding(atomBindings PayloadBindingArray) throws ParseError
-		if atomBindings.count() == 0 'noBinding'
-			return
-		end 'noBinding'
-		let binding = try atomBindings.get(0) otherwise panic("rejectOrPatternBinding: bindings.count() > 0 but get(0) failed")
-		throw ParseError.unsupported("a payload binding '{String.from(binding.nameTok.value)}' on an `or`-pattern (a binding shared across the alternatives of an or-arm arrives at a later rung)", line: binding.nameTok.line, column: binding.nameTok.column)
-	end 'rejectOrPatternBinding'
-
-	// ⭐ **A FALLTHROUGH TARGET MAY NOT BIND A PAYLOAD** — the `rejectOrPatternBinding` rule one construct
-	// over, and for the identical reason: a payload binding is meaningful only where EXACTLY ONE case
-	// matched, and an `and fallthrough` edge is precisely an arrival from a DIFFERENT case. On that edge
-	// the bindings would destructure a case the value does not hold.
+	// ⭐ **A FALLTHROUGH TARGET MAY NOT BIND A PAYLOAD** — an arrival from a case the arm never named, so the
+	// bindings at its head would destructure a case the value does not hold.
+	//
+	// ⚠⚠ **IT IS NO LONGER "a binding is meaningful only where EXACTLY ONE case matched" — E3129 MADE THAT
+	// FALSE**, and the replacement premise is what keeps this refusal unconditional. An `or`-arm now binds
+	// across several cases precisely because `requireOrArmPayloadSlotsAgree` can CHECK them: they are the
+	// arm's own alternatives, enumerated in its pattern. A fallthrough SOURCE is not in that set — the arm
+	// fallen into never named it — so the agreement was never asked, and the same check cannot simply be
+	// pointed at the predecessor either: it carries a hazard the or-arm shape does not, namely that the
+	// predecessor's arm may already have MOVED its payload out and NULLED the slot, which is a fact about
+	// EMITTED CODE on one incoming edge rather than about the layout both cases share.
 	//
 	// ⚠ What that costs depends only on which slot happens to be read, which is why it had to become a
 	// refusal rather than a note. All three MEASURED, before this check existed: a **SIGSEGV** (an owned
@@ -45429,6 +45655,12 @@ export type Parser
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(i), value: stored, storageType: payloadStorageOf(class), range: range)
 		end 'storeEach'
 
+		// ⚠ **A DIAGNOSTIC NOW RESTS ON THIS LOOP.** E3129 admits `stay or walk(dir) gives dir` — a binding
+		// read on the path of a case that declares no such slot — because this fill pins a deterministic 0
+		// there, and `Parser.zeroInhabitsPayloadType` decides whether that 0 is a value of the binding's
+		// type. It is THIS store the guarantee rests on, not the slab's zeroing (which carries a
+		// "a future free-list must re-zero" caveat this does not); the union cloner preserves it by blitting
+		// the whole box (`MmRuntime.synthesizeUnionCloner`). Removing the fill silently un-defines that spec.
 		for j in payloads.count() upto layout.maxPayloadArity() 'zeroFill'
 			let zero = self.emitLiteral(0 as ParsedInt, valueType: MaxonType.integer, range: range)
 			self.emitIndirectStore(box, offset: layout.payloadSlotOffset(j), value: zero, storageType: MaxonType.integer, range: range)
