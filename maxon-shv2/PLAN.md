@@ -553,6 +553,7 @@ take its blocker instead)*
 | **W63** | **LIST `stdlib/Set.maxon` — the same walk.** `W61` is its only reported error today. ⚠ **`Set` IS A SYNTHESIZED COMPILER BUILTIN** (P1.7b), so this entry carries `W8`'s hazard — the SILENT one — and the convergence, not the diagnostic, is what decides whether it lists this rung. If it turns out to need the synthesized `Set` retired, that is ruling-grade and this row stops there with the measurement written down. | **L-stdlib** | ✅ DONE | `slice/BATCH36-conformance-means-not-declares` | 2026-08-12T22:26Z |
 | **W64** | **THE `E2053` RULING, DELIVERED — NAME THE ARGUMENTS AT THE TWO INTRINSIC CALL SITES.** `STDLIB-BRINGUP.md` §F filed *"either intrinsic calls are exempt from the named-argument rule, or the corpus is edited at these two sites"* as one decision covering both. ⚖ **USER RULING 2026-08-12: EDIT THE CORPUS.** The named-argument rule stays universal — an exemption keyed to the `__`-reserved namespace would be a second rule about argument syntax, which is this project's signature bug in the one place a reader looks up how a call is written. Sites: `stdlib/helpers/string/unicodeCategory.maxon:55` (`__Builtins.ucdByteAt`) and `stdlib/TcpClient.maxon:23` (`__ManagedSocket.tcpConnect`). ⚠ **THE EDIT IS THE WHOLE ROW; THE LISTING IS NOT PROMISED** — both modules are re-probed after it and whatever lies past `E2053` is reported, not predicted. `TcpClient` in particular fronts a socket runtime nothing has measured. | **L-stdlib** | ✅ DONE | `slice/BATCH36-conformance-means-not-declares` | 2026-08-12T22:26Z |
 | **W65** | 🔴 **A `static let` / `static var` MEMBER IN A TYPE BODY IS A PARSE ERROR IN shv2 AND COMPILES IN THE ORACLE.** MEASURED 2026-08-12, 14 lines, no stdlib: `type Box` with `static let limit = 41` ⇒ **`E2010: Expected 'function' but got 'let'`** at the `static` keyword's continuation; the bootstrap **compiles and prints 41**. `static var` gives the same refusal with `got 'var'`. The type-body declaration walk admits `static` only as the prefix of a `function`. ⚠ **NOT A "MISSING FEATURE" ROW — A DIVERGENCE ROW**: `specs/static-variables.md` and `specs/constants.md` are both already ported into `specs-shv2/`, so this form is inside the ported corpus's subject area and no case exercises it. It is `stdlib/CharacterSet.maxon`'s first door (**11 sites**, `:31` onward, each a `static let` cache of a built-in set) and one of `stdlib/Testing.maxon`'s later ones (~30 sites). ⚠ The listing of neither module is promised by this row — the door is, and both are re-probed behind it. | **L-parser-decl** | ✅ DONE | `slice/BATCH36-conformance-means-not-declares` | 2026-08-12T22:26Z |
+| **W66** | 🔴 **A LEGAL PROGRAM IS REFUSED: A *CONSTRUCTIBLE* STRUCT-TYPED SELF-FIELD MAY BE METHOD-CALLED BUT NOT READ OR WRITTEN — ONE FACT, TWO DOORS, AND THE CURE IS ALREADY BUILT AT THE OTHER ONE.** MEASURED 2026-08-12 on `cb307d7f69`, 20 lines, no stdlib: `type Outer` holding `export var doc as Inner`, and `doc.root = v` / `return doc.root` inside `Outer`'s own method, is **`E2015` at the base token** — while the **bootstrap compiles the identical file and runs it (exit 7)**. The sibling spelling `inner.get()` **compiles and runs** one function away, and `self.doc.root = v` compiles too, so the language's answer is already narrower than the refusal's text. ⭐ **THE ASYMMETRY IS THE BOX, AND IT IS WRITTEN DOWN AT BOTH DOORS.** `Parser.requireStructBase:54011` refuses EVERY `binding.isSelfField` base because the value it hands back is `binding.boundValue`, which a self-field alias leaves **0**, and **ValueId 0 IS the receiver** — the measured silent `return self.a` that `specs-shv2/self-field-struct-typed.md` pins. The METHOD door has already narrowed: `structBaseOfReceiver` admits on `SignatureIndex.structTypeIsConstructible` (a real graph walk over the struct-typed-field cycle, not a name comparison) and `Parser.methodReceiverBinding:44218` **materializes** the alias through `parseSelfFieldRead` → `selfFieldValueBinding`, which also takes the WRITE path's mutability off the **FIELD** (`selfFieldIsWritable`) rather than off the alias binding (`mutable: false` by construction ⇒ the false `E2013`/`E3019` against an `export var`). ⇒ **the read/write door lacks that one materialization, not a language feature** — `requireStructBase`'s own header, `structTypedSelfFieldBaseMessage`'s header and `self-field-struct-typed.md:47-63` all three say so in those words, and the last adds that closing it *"needs its own acceptance cases — including the E3070 seeds a write through a third base kind inherits"*. ✅ **THE FOUR PINNED CASES STAY GREEN BY CONSTRUCTION, WHICH IS WHY THE NARROWING IS SAFE:** every one is `type Node { var next as Node }`, a CYCLE, and `structTypeIsConstructible` answers **false** on exactly those — the spec file already says it *"pins less than its title claims"*. ⛔ Do NOT move the `isSelfField` arm above the `structRef` gate: `error.scalar-field-base-is-not-a-struct` goes red and the other three stay green. **STDLIB VALUE: this is `stdlib/Json.maxon`'s FIRST blocker** (`Json.maxon:281`, `doc.root = rootId`), one of the 13 unlisted modules — see the census below. | **L-parser-postfix** | ⬜ FREE | — | — |
 
 > ### ⭐⭐ EVERY R4 ROW PAIRS A REACHABLE BUILTIN WITH AN UNREACHABLE WRAPPER — READ THIS BEFORE CLAIMING ONE
 >
@@ -4039,6 +4040,45 @@ it, correctly, because three measured facts invalidate a naive whitelist:
   `checkCalls` **skips an unreached WHITELISTED body** but not an unreached ordinary call, so a dead `sleep(1)` is
   refused on wasm today while a dead `Clock.nowMs()` compiles. **The day `sleep` moves into a whitelisted module
   that program silently starts compiling again** — that flip must be a decision, not a side effect.
+
+
+### 📏 THE STDLIB CENSUS — all 13 unlisted modules, each probed, 2026-08-12
+
+**Measured on `cb307d7f69`, one `maxon-shv2 build stdlib/<m>.maxon` per module, `temp/stdlibprobe/*.log`.**
+37 of the 50 real modules under `stdlib/` are listed. This is the other 13, with the FIRST error each
+stops at. ⚠ **A first error is a LOWER BOUND on a module's ladder, never its depth** — shv2 reports one
+error per file here, so every row below is "at least this", and the readiness rows are the only ones
+whose depth is known.
+
+| module | first error | class |
+|---|---|---|
+| `Set.maxon` | `E3001` only | ⚠ **READY BUT INERT** — `Set` is SYNTHESIZED (26 refs). `W63` listed-built-withdrew and measured it |
+| `Vector.maxon` | `E3001` only | ⚠ **READY BUT INERT** — `Vector` is SYNTHESIZED (45 refs) |
+| `helpers/string/unicodeCategory.maxon` | `E3001` only | ⚠ **READY BUT INERT?** — its ONE export `unicodeGeneralCategory` is synthesized as `__ucd_cat` (`Runtime/UnicodeCategoryRuntime.maxon:133`). Its only stdlib consumer is `CharacterSet.maxon`, itself unlisted |
+| `Json.maxon` | `E2015 :281:3` field access through a struct-typed FIELD | **⇒ `W66`** — a legal program refused, oracle disagrees |
+| `List.maxon` | `E3086 :21:10` field `chain` not initialized, no default | field default / recursive field |
+| `CharacterSet.maxon` | `E2004 :31:33` Undefined constant `CharacterSet` | `CharacterSet` is a builtin type name (it is in `E2015`'s own member-carrying list) |
+| `PrimitiveExtensions.maxon` | `E2010 :2:11` Expected identifier but got `int` | `extension int implements …` — extending a PRIMITIVE does not parse |
+| `Subprocess.maxon` | `E2015 :357:25` overloading `Subprocess.run`, one declaration `throws` | ⚖ ruling-grade — the refusal is a stated design position |
+| `Internals.maxon` | `E2051 :26:10` `__mm_incref` is reserved | the `__`-prefix door; ⚠ and the names COLLIDE with the compiler's own runtime |
+| `Testing.maxon` | `E2051 :34:13` `__TestReport` is reserved | same door, no collision |
+| `TcpClient.maxon` | `E3004 :23:18` no `__ManagedSocket.tcpConnect` intrinsic | Workstream R — a runtime slice |
+| `HttpClient.maxon` | `E2015 :176:18` member access on `unknown` | behind `TcpClient` |
+| `helpers/http/httpHelpers.maxon` | `E3011 :4:9` Unknown type `HttpMethod` | behind `HttpClient` |
+
+⭐⭐ **THE HEADLINE IS THE THREE `E3001` ROWS, AND IT IS NOT GOOD NEWS.** The readiness probe the loader's
+own collision rule prescribes (`E3001` and nothing else) passes on all three, and **all three would be
+INERT** — the compiler synthesizes the name, so the listed declaration is never analyzed at all. That is
+`project-batch36-a-whitelist-entry-can-be-inert`'s measurement, and `stdlib/Map.maxon` already shipped
+this way (`W43` listed it, `W52` says the actual job was never begun). ⇒ **the listed count of 37
+overstates the working cone**, and the check that separates the two is neither the probe nor the
+injection control but the **differing-declarations control**: change what the module ANSWERS and see
+whether the program's answer or its emitted bytes move.
+
+⇒ **The honest remaining shape: THREE reconciliation chains** (`Set`/`W8`, `Map`/`W52`, `Vector`) which
+are retirements like `ARR0…ARR4`, not listings; **one runtime slice** (`TcpClient` → `HttpClient` →
+`httpHelpers`); **one ruling** (`Subprocess`); and **five ordinary compiler gaps** (`Json`/`W66`,
+`List`, `CharacterSet`, `PrimitiveExtensions`, the `E2051` pair).
 
 ### ⭐⭐ THE WHITELIST IS TEMPORARY SCAFFOLDING, NOT A FEATURE (USER RULING, 2026-07-25) — and the loader is now REAL
 **Three user directives, all landed** (`stdlib-diagnostic-attribution`, x64 **1586/0**, wasm **1394/0**, fragments
