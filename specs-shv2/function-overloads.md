@@ -103,9 +103,11 @@ their `throws` clauses under the one name they share, so the entry belongs to ne
 is refused whenever either member throws, however the two agree.
 
 A **free function** whose bare name is also declared in another directory is registered under its
-directory-qualified name (`alpha.want`), and the sweep moves its throws clause onto that key while the
-tally that would say whether the overloads agree stays on the bare name. With nothing left to compare,
-a throwing overload set of such a name is refused too — again however the members agree.
+directory-qualified name (`alpha.want`), and the sweep files that declaration's facts — and the tallies
+that say whether its declarations agree — under the same key. So such an overload set is judged on its
+declarations exactly as a root-level one is: agreeing members compile, disagreeing ones are refused. (It
+was refused whatever the members said until the tallies were keyed that way, because the verdict was kept
+under the bare name, where a second directory's declarations are counted too.)
 
 ##### ⚠ Every refusal above is **narrower than the language**, and none of them is canon
 
@@ -121,7 +123,6 @@ cases below refuse:
 | two members naming two error types (`Boom` beside `Splat`) | accepts, answers **14** |
 | a throwing member beside a non-throwing one | accepts, answers **14** |
 | a `static`/instance pair whose parameter types tell them apart, one of them throwing | accepts, answers **7** |
-| a throwing overload set whose bare name a second directory declares | accepts, answers **18** |
 
 The `static`/instance pair is the one place the two compilers disagree about more than throws: the oracle
 treats such a pair as **one overload set**, so when the two members' parameter types cannot tell them apart
@@ -1541,19 +1542,15 @@ end 'main'
 error E2015: <fragment>:15:18: Unsupported: a `static` member and an instance member of 'T.m' share this name — two registration keys and not an overload set — and one of them `throws`. The whole-program declaration sweep publishes a function's throws clause under the ONE name the source wrote, so that clause belongs to neither key: a `try` at a call to either member cannot be told whether that member throws or which error type it recovers. Give the two members distinct names
 ```
 
-<!-- test: error.a-throwing-overload-set-whose-bare-name-another-directory-declares -->
-The members here AGREE — both `throws Boom` — and an overload set of the same two declarations at the
-root compiles and answers 14. What refuses this one is not the declarations but the KEY they land on: a
-free function contested across directories is registered as `alpha.want`, and the declaration sweep
-COPIES its throws clause onto that key while leaving the disagreement verdict and the two declaration
-counts on the bare `want` — where `beta/`'s declaration is tallied too. The verdict this refusal would
-have to read was therefore never computed for this key. ⚠ It is a REAL refusal and not a formality: with
-the throws types made to disagree, the same program compiles one way round and reports
-`E3034: unknown enum case` the other, because the `(e)` binding is typed off whichever clause the by-name
-sweep recorded last. Curing it means tallying per registration key, which is `W75`'s "one fact under two
-keys" at a third registry. ⚠ **Still narrower than the language**: the oracle compiles this exact program
-and answers **18** (MEASURED). Both fold orders reach the same refusal, and so does the shape where the
-contesting declaration sits at the ROOT rather than in a second subdirectory.
+<!-- test: a-throwing-overload-set-whose-bare-name-another-directory-declares -->
+✅ **THIS WAS A REFUSAL UNTIL W78, AND WHAT REFUSED IT WAS THE KEY, NOT THE DECLARATIONS.** The members
+AGREE — both `throws Boom` — and the same two declarations at the root have always compiled. What refused
+this one is that a free function contested across directories is registered as `alpha.want` while the
+declaration sweep filed its clause, its disagreement verdict and both of its tallies under the bare `want`
+— where `beta/`'s declaration is tallied too. There was no verdict at `alpha.want` to read, so the honest
+answer was a blanket refusal. The sweep now files a declaration's facts AND its tallies under the one key
+the parser asks with (`ProgramSignatures.sweepRegistrationKey`), so this set is judged on its declarations
+like any other and answers **18** — which is what the oracle has always answered (MEASURED).
 ```maxon
 // --- file: alpha/x.maxon
 typealias Num = int(-1000 to 1000)
@@ -1590,8 +1587,59 @@ function main() returns ExitCode
 	return (a + b + beta.want(3)) as ExitCode
 end 'main'
 ```
+```exitcode
+18
+```
+
+<!-- test: error.a-contested-overload-set-whose-members-name-two-error-types -->
+⛔ **THE DISCRIMINATING HALF OF THE CASE ABOVE, AND WITHOUT IT "the contested set compiles" WOULD BE
+INDISTINGUISHABLE FROM "the contested set is never judged".** The same shape, with `alpha/`'s two members
+made to name DIFFERENT error types: the verdict now has to be computed at `alpha.want` and has to say no.
+Before W78 the verdict lived on the bare `want` and this key had none, so the refusal here proves the
+per-key tally actually FIRES rather than merely being absent. ⚠ **Still narrower than the language**: the
+oracle carries its throws facts per declaration and compiles this too.
+```maxon
+// --- file: alpha/x.maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+enum Splat
+	worse
+end 'Splat'
+
+export function want(actual Num) returns Num throws Boom
+	if actual < 0 'neg'
+		throw Boom.bad
+	end 'neg'
+	return 5
+end 'want'
+
+export function want(actual bool) returns Num throws Splat
+	if actual 'yes'
+		throw Splat.worse
+	end 'yes'
+	return 9
+end 'want'
+
+// --- file: beta/y.maxon
+typealias Small = int(-1000 to 1000)
+
+export function want(actual Small) returns Small
+	return actual + 1
+end 'want'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let a = try alpha.want(1) otherwise 0
+	let b = try alpha.want(false) otherwise 0
+	return (a + b + beta.want(3)) as ExitCode
+end 'main'
+```
 ```maxoncstderr
-error E2015: alpha/specs/fragments/function-overloads/error.a-throwing-overload-set-whose-bare-name-another-directory-declares.test:16:17: Unsupported: overloading 'alpha.want' — one of its declarations `throws`, and this name is ALSO declared as a free function in another directory, so the declaration sweep moved its throws clause onto the directory-qualified key and left behind the tally that would say whether the overloads agree about it. With nothing to compare, a `try` at a call to this name cannot be told which overload's error type it recovers. Give the overloads distinct names, or stop contesting the bare name across directories
+error E2015: alpha/specs/fragments/function-overloads/error.a-contested-overload-set-whose-members-name-two-error-types.test:20:17: Unsupported: overloading 'alpha.want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names
 ```
 
 <!-- test: contested-directory-overload-set-agreeing-on-defaults -->

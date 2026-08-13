@@ -1,0 +1,42 @@
+// Test: error.a-contested-overload-set-whose-members-name-two-error-types
+// --- file: alpha/x.maxon
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+enum Splat
+	worse
+end 'Splat'
+
+export function want(actual Num) returns Num throws Boom
+	if actual < 0 'neg'
+		throw Boom.bad
+	end 'neg'
+	return 5
+end 'want'
+
+export function want(actual bool) returns Num throws Splat
+	if actual 'yes'
+		throw Splat.worse
+	end 'yes'
+	return 9
+end 'want'
+
+// --- file: beta/y.maxon
+typealias Small = int(-1000 to 1000)
+
+export function want(actual Small) returns Small
+	return actual + 1
+end 'want'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	let a = try alpha.want(1) otherwise 0
+	let b = try alpha.want(false) otherwise 0
+	return (a + b + beta.want(3)) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: alpha/<fragment>:20:17: Unsupported: overloading 'alpha.want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names

@@ -234,7 +234,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: alpha/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-a-second-directory-contests.test:9:32: Unsupported: a default value on parameter 'b' of 'alpha.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+error E2015: alpha/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-a-second-directory-contests.test:9:35: Unsupported: a default value on parameter 'b' of 'alpha.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
 ```
 
 <!-- test: error-default-on-an-overloaded-name-a-second-directory-contests-defaulted-first -->
@@ -268,7 +268,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: alpha/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-a-second-directory-contests-defaulted-first.test:5:32: Unsupported: a default value on parameter 'b' of 'alpha.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+error E2015: alpha/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-a-second-directory-contests-defaulted-first.test:5:35: Unsupported: a default value on parameter 'b' of 'alpha.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
 ```
 
 <!-- test: error-default-on-an-overloaded-name-the-contestant-declares-first -->
@@ -303,7 +303,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: beta/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-the-contestant-declares-first.test:15:32: Unsupported: a default value on parameter 'b' of 'beta.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+error E2015: beta/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-the-contestant-declares-first.test:16:35: Unsupported: a default value on parameter 'b' of 'beta.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
 ```
 
 <!-- test: two-files-agreeing-on-their-defaults-report-ONE-duplicate -->
