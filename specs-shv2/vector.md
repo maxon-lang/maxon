@@ -747,3 +747,31 @@ end 'main'
 ```exitcode
 24
 ```
+
+## The Member Surface Is A Roster
+
+⚠ NOT FROM `/specs/vector.md` — shv2's own, and it pins a refusal that had never been pinned at all
+(W86). The vector dispatch is the last of eight member surfaces to reach the shared roster gate
+(`Parser.vectorSurfaceMemberNames` + `requireSurfaceMember`), and until this case the sentence a reader
+gets for a member a vector does not have was a hand-written literal nothing ran. It had already drifted:
+it named `push`/`pop`/`append`/`resize`/`clear` as the absent members and never mentioned `insert` or
+`remove`. Retiring a member to `stdlib/Vector.maxon` is a deletion from that roster and this case is what
+would move with it.
+
+<!-- test: error.a-member-off-the-roster-is-refused-with-the-roster -->
+A fixed-size container has no `push`: its size is part of its type, so an operation that changed the
+length would change the value's type. What the reader is told is what the surface DOES serve, rendered
+from the one list the dispatch itself gates on.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.push(4)
+	return v.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:4: Unsupported: `Vector` member 'push' — shv2 provides count/get/set; that list IS the surface, so nothing else is served here
+```

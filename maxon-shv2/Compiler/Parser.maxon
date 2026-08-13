@@ -6102,6 +6102,39 @@ function mapSurfaceMemberNames() returns ByteArrayArray
 	return names
 end 'mapSurfaceMemberNames'
 
+// ⭐⭐ **WHICH MEMBERS THE `Vector` SURFACE HAS — THE EIGHTH ROSTER, AND THE LAST DISPATCH STILL CARRYING A
+// HAND-WRITTEN ONE (W86).** `dispatchVectorMethod` gated on three `equals` arms and ended in a typed-out
+// sentence, which is the shape A2q removed from five surfaces and which `cursor`/`map` never had. It carries
+// the identical obligations as the seven above: the entries are the very constants the arms match on, the
+// ORDER is the message's order because the message is joined from this list, the gate is asked ahead of every
+// arm, and the fall-through is a PANIC naming it.
+//
+// ⚠ **THE TYPED-OUT SENTENCE HAD ALREADY DRIFTED, WHICH IS THE USUAL FINDING WHEN ONE OF THESE IS
+// REPLACED.** It ended *"It has no `push`/`pop`/`append`/`resize`/`clear`: its size is part of its type"* —
+// a list of what is ABSENT, which is the clause `surfaceRosterProvider`'s header records being deleted from
+// every other surface because no gate can check it. `insert` and `remove` are absent too and it never named
+// them. The positive half is what the shared sentence states, and it states it off this list.
+//
+// ⛔ **`create` IS NOT HERE AND MUST NOT BE.** A vector is BORN through `gateAndEmitContainerCreate`, not
+// through a member call, so a `create` on this roster would have no arm to reach — the `Array` roster's own
+// header records the identical trap, and the drift panic below is what now catches it.
+//
+// ⛔⛔ **AND NO LINE HERE CAN BE STRUCK TODAY, WHICH IS `W86`'s MEASURED RESULT RATHER THAN AN OMISSION.**
+// Striking a name is how a `String`/`Array` member retires to the corpus (`memberBelongsToTheCorpus`), and
+// with `stdlib/Vector.maxon` listed each strike is **E3005 argument type mismatch for 'self': expected
+// 'Vector_Int', got 'Vec3'** on every case that touches the member. `Self` inside `type Vector uses Element`
+// is a vector with NO count — a size is the second coordinate of an INSTANCE
+// (`SignatureIndex.VectorBuiltinBaseName`) and a declaration's own `Self` states none — so a corpus `Vector`
+// method's `self` parameter cannot match a receiver, every value of which has one. See that header for the
+// full map and for the two candidate cures.
+function vectorSurfaceMemberNames() returns ByteArrayArray
+	var names = ByteArrayArray.create()
+	names.push(CountMethod)
+	names.push(GetMethod)
+	names.push(ArraySetMethod)
+	return names
+end 'vectorSurfaceMemberNames'
+
 // ⚠⚠ **A ROSTER IS BUILT ONCE PER FILE THAT ASKS FOR IT, NOT ONCE PER CALL SITE, AND THE DIFFERENCE IS
 // MEASURED.** Both lists are CONSTANTS — the two functions above only push, and nothing mutates what they
 // return — so `dispatchArrayMethod` can hold a reference instead of rebuilding one. Rebuilt per dispatch
@@ -6125,7 +6158,7 @@ end 'mapSurfaceMemberNames'
 // that disables the memo silently, with no compile error and no wrong answer to find it by.
 let sharedEmptySurfaceRoster = ByteArrayArray.create()
 
-// ⭐ **WHICH BUILTIN SURFACE A ROSTER ANSWERS FOR.** Six surfaces carry members shv2 dispatches by name, and
+// ⭐ **WHICH BUILTIN SURFACE A ROSTER ANSWERS FOR.** Eight surfaces carry members shv2 dispatches by name, and
 // each has exactly one roster — so the surface is the memo's key, the builder's selector and the refusal's
 // subject at once. It replaced a `isManagedMemory bool` that could only tell two of the five apart.
 //
@@ -6133,7 +6166,7 @@ let sharedEmptySurfaceRoster = ByteArrayArray.create()
 // enum because `String.from(bytes)` was read by a different function, off a different token, against a
 // different list from `s.byteLength()` — a member of the TYPE beside members of a VALUE. Retiring both of
 // those statics to their own corpus declarations left nothing for that entry to key, so what remains is one
-// kind of question asked six ways rather than two kinds asked seven.
+// kind of question asked one way per surface rather than two kinds asked across seven.
 enum MemberSurface
 	// `__ManagedMemory` — the buffer under an `Array`'s record, reached through `.managed` or minted as one.
 	buffer
@@ -6144,6 +6177,11 @@ enum MemberSurface
 	stringIndex
 	// `Map with (Key, Value)` — the two-column hash table's own surface.
 	map
+	// `Vector with N Element` — the FIXED-SIZE array's own surface, and a surface of its own rather than
+	// more of the `Array`'s even though the two share a record: what may be DONE to a vector is a strict
+	// subset (no `push`/`pop`/`append`/`resize`/`clear`), and its `count()` is a constant read off the TYPE
+	// where an `Array`'s is a load off the record.
+	vector
 	// `__ManagedMemoryCursor with Element` — a navigable position INSIDE a buffer, and a surface of its own
 	// rather than more of the buffer's: what may be done to a position (`current`/`advance`/`seek`) and what
 	// may be done to the storage it points into (`get`/`setLength`/`grow`) are disjoint sets on two receivers.
@@ -6296,9 +6334,9 @@ function surfaceRosterProvider(surface MemberSurface) returns String
 		return "P1.7"
 	end 'arraySurface'
 
-	// The other five are shv2's own synthesized surfaces and say so with one arm rather than five identical
+	// The other six are shv2's own synthesized surfaces and say so with one arm rather than six identical
 	// ones — a fall-through is still impossible, which is the property the split arms existed for.
-	if surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.map or surface == MemberSurface.cursor 'shv2sOwnSurface'
+	if surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.map or surface == MemberSurface.cursor or surface == MemberSurface.vector 'shv2sOwnSurface'
 		return "shv2"
 	end 'shv2sOwnSurface'
 
@@ -10959,7 +10997,7 @@ export type Parser
 	// allocation-neutral against the shared empty — until a name is actually declared twice.
 	var declaredFuncNames as DeclaredFuncNameSet
 	var overloadMembers as OverloadMemberMap
-	// ⭐ The seven MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty
+	// ⭐ The eight MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty
 	// anchor — see `sharedEmptySurfaceRoster` for the measurement that put them here, and `MemberSurface`
 	// for which dispatch reads which.
 	var arraySurfaceRoster as ByteArrayArray
@@ -10969,6 +11007,7 @@ export type Parser
 	var stringIndexSurfaceRoster as ByteArrayArray
 	var mapSurfaceRoster as ByteArrayArray
 	var cursorSurfaceRoster as ByteArrayArray
+	var vectorSurfaceRoster as ByteArrayArray
 	// ⭐ **THE `Array` DECLARATION NAMES, memoized off the SAME anchor and for the same measurement (ARR2)** —
 	// `ProgramSignatures.arrayDeclarationNames` mints an array, and its two askers sit on the descriptor
 	// pre-scan's per-member-name miss path, which is exactly where `sharedEmptySurfaceRoster`'s note says an
@@ -11185,6 +11224,7 @@ export type Parser
 			stringIndexSurfaceRoster: sharedEmptySurfaceRoster,
 			mapSurfaceRoster: sharedEmptySurfaceRoster,
 			cursorSurfaceRoster: sharedEmptySurfaceRoster,
+			vectorSurfaceRoster: sharedEmptySurfaceRoster,
 			arrayDeclarationRoster: sharedEmptySurfaceRoster,
 			corpusServedArrayMembers: sharedEmptyCorpusMemberVerdicts
 		}
@@ -52468,10 +52508,13 @@ export type Parser
 	// would answer the same number by a route that could disagree with the type, and a fixed size that can
 	// disagree with its own type is not a fixed size.
 	//
-	// ⚠ The roster is refused in full rather than per-member: a fixed-size container deliberately has no
-	// `push`/`pop`/`append`/`resize`/`clear`, and that absence is the whole content of "fixed size".
+	// ⭐ **THE ROSTER GATE IS ASKED FIRST**, as it is on every other surface that carries one: it is the
+	// question every other refusal about the call presupposes. It came last of the eight, and with it the
+	// typed-out fall-through sentence goes — what this surface serves is stated once, in
+	// `vectorSurfaceMemberNames`, and read by the gate, by the refusal and by the drift panic at once.
 	function dispatchVectorMethod(func IrFunction, vec ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
+		let roster = try self.requireSurfaceMember(MemberSurface.vector, typeName: VectorBuiltinBaseName, methodTok: methodTok)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(vec)
 		let mutates = vectorMethodMutatesReceiver(methodTok.value)
@@ -52494,7 +52537,15 @@ export type Parser
 			return try self.parseArraySet(func, arr: vec, giid: giid, callee: ManagedSetName, methodTok: methodTok, secondArgLabelled: true, range: range)
 		end 'set'
 
-		throw ParseError.unsupported("`{String.from(VectorBuiltinBaseName)}` method '{String.from(methodTok.value)}' — a vector provides `{String.from(CountMethod)}`/`{String.from(GetMethod)}`/`{String.from(ArraySetMethod)}` and `for … in`. It has no `push`/`pop`/`append`/`resize`/`clear`: its size is part of its type, and an operation that changed the length would change the value's type", line: methodTok.line, column: methodTok.column)
+		// ⚠⚠ **NO RECEIVER CAN REACH HERE, AND THIS IS THE CHECK THAT SAYS SO** — the `Array` and buffer
+		// dispatchers' own closing argument, verbatim: the gate at the top admitted only the names
+		// `vectorSurfaceMemberNames` lists, and each of those matches an arm on its own spelling, so arriving
+		// here means the roster gained a member and the dispatch did not — the failure mode a roster INTRODUCES,
+		// and the one the typed-out sentence it replaces could not have. **VERIFIED RED**: pushing
+		// `ContainsMethod` onto that roster and writing `v.contains(1)` reaches this panic, naming the member,
+		// the roster it came from and both remedies.
+		let drift = rosterDriftMessage("dispatchVectorMethod", member: methodTok.value, roster: roster, rosterFuncs: "`vectorSurfaceMemberNames`")
+		panic("{drift}")
 	end 'dispatchVectorMethod'
 
 	// Is the cursor on a `Vector from` construction — the bare `Vector` identifier immediately followed by
@@ -53526,10 +53577,10 @@ export type Parser
 	// on the value being dispatched.
 	//
 	// A roster is built on this file's FIRST call into its surface and held after — see
-	// `sharedEmptySurfaceRoster` for why the memo is per Parser and why it is lazy. The seven arms differ
+	// `sharedEmptySurfaceRoster` for why the memo is per Parser and why it is lazy. The eight arms differ
 	// only in which field they fill, which is the whole of what Maxon cannot abstract here: there is no way
-	// to hand a function the field to lazily populate, so the alternative to seven arms in one home is
-	// seven homes.
+	// to hand a function the field to lazily populate, so the alternative to eight arms in one home is
+	// eight homes.
 	function surfaceMemberNames(surface MemberSurface) returns ByteArrayArray
 		if surface == MemberSurface.buffer 'bufferSurface'
 			if self.bufferSurfaceRoster is sharedEmptySurfaceRoster 'firstBufferCallInThisFile'
@@ -53586,6 +53637,14 @@ export type Parser
 
 			return self.cursorSurfaceRoster
 		end 'cursorSurface'
+
+		if surface == MemberSurface.vector 'vectorSurface'
+			if self.vectorSurfaceRoster is sharedEmptySurfaceRoster 'firstVectorCallInThisFile'
+				self.vectorSurfaceRoster = vectorSurfaceMemberNames()
+			end 'firstVectorCallInThisFile'
+
+			return self.vectorSurfaceRoster
+		end 'vectorSurface'
 
 		panic("surfaceMemberNames: no roster for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then answer for by falling through")
 	end 'surfaceMemberNames'

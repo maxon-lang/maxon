@@ -4087,14 +4087,67 @@ export let ManagedMemoryCursorBuiltinBaseName = b"__ManagedMemoryCursor"
 export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **THE FIFTH COMPILER-OWNED CONTAINER: `Vector with <N> <Element>`, A FIXED-SIZE ARRAY.**
-// `stdlib/Vector.maxon` declares one, and shv2 cannot read that file for the reason `ListRuntime.maxon`'s
-// header measured a second time and this rung measured a third: its sole field is
-// `__ManagedMemory with Element`, and (a) shv2's `__ManagedMemory` is an ARITY-ZERO alias for
-// `Array with Byte` (`ManagedMemoryTypeName`), so that annotation is **E2055 "Type '__ManagedMemory' has no
-// associated types"**; (b) its `create()`'s `return Self{}` is **E3086** (no field initializer, no default);
-// and (c) a generic type holding a compiler-owned container over its OWN type parameter erases the
-// element's managed-ness and access-violates at teardown. So `Vector` is synthesized here like the other
-// four.
+// `stdlib/Vector.maxon` declares one, and shv2 synthesizes its own instead.
+//
+// ⛔⛔ **THE THREE-CLAUSE ARGUMENT THAT USED TO STAND HERE IS RETIRED — ALL THREE CLAUSES WERE RE-MEASURED
+// BY `W86` (2026-08-13) AND NOT ONE OF THEM IS THE REASON.** It said the file could not be READ, because
+// (a) `var managed as __ManagedMemory with Element` is `E2055` against shv2's arity-ZERO
+// `__ManagedMemory`; (b) `create()`'s `return Self{}` is `E3086`; and (c) a generic type holding a
+// compiler-owned container over its own type parameter erases the element's managed-ness and
+// access-violates at teardown. MEASURED on this tree:
+//   • **(a) and (b) DO NOT FIRE.** `maxon-shv2 build stdlib/Vector.maxon` exits 1 with
+//     **`E3001: No 'main' function found` and nothing else**, and the injection control FIRES
+//     (`let bogus = NoSuchType.definitelyUndefined(1)` in `count()`'s body, on a copy outside `stdlib/`,
+//     answers `E3001` **+ `E3004`**), so its bodies really are analyzed. (a) died when `Array.maxon` was
+//     listed and `__ManagedMemory` became a one-parameter fold (ARR5b); (b) died with the `S2f`/`S2i`
+//     empty-container family. **The file the note said shv2 CANNOT READ type-checks clean.**
+//   • **(c) IS UNREACHABLE, so it is a prediction and not a measurement.** Two refusals stand in front of
+//     it — `Parser.requireVectorElementType`'s opaque arm (board row `S2u`) and its managed arm — and with
+//     the module listed neither is what the compile dies of. Its REASON is sound and its refusal is kept:
+//     an inline buffer that publishes every slot at `create()` while `element_destroy@40` stays 0 really
+//     would leak a `String` element. It is simply not why `Vector` is synthesized.
+//
+// ⛔⛔⛔ **THE REAL REASON IS ONE FACT, AND IT IS ABOUT THE SIZE RATHER THAN ABOUT THE ELEMENT: A CORPUS
+// `Vector` METHOD'S `self` CAN NEVER MATCH ITS RECEIVER.** `Self` inside `type Vector uses Element` is the
+// declaration's own instance over its own parameters (`ownRecordSelfInstance`) — a vector with **NO
+// count** — while every value a program holds states one, because the count is part of the intern KEY
+// (`fixedSizes`, below). MEASURED with `stdlib/Vector.maxon` listed and a member struck from
+// `Parser.vectorSurfaceMemberNames`, on `--filter=vector` (47 cases, base 47/0):
+// **8 passed, 39 failed, every one of them `E3005 argument type mismatch for 'self': expected 'Vector_Int',
+// got 'Vec3'`.** The same wall stands in front of the traversal: letting `for … in` take the corpus
+// `createIterator()` — which needs no roster strike at all, only the declaration being visible — is
+// `expected 'Vector_Int', got 'Vec4'`.
+//
+// ⇒ **SO THE RESIDUE IS ALL SIX MEMBERS, FOR ONE CAUSE AND NOT SIX** (`ARR4`'s framing: a roster is the
+// residue of what could not retire). `count` `get` `set` `createIterator` are blocked by the `self` wall
+// above. `create` and `init` are blocked by it AND by a second, independent fact: `create()`'s
+// `return Self{}` means *"N zero-initialized elements"* and the body has no way to name N, so even a
+// matching `self` would give a `Vec3.create()` a 0-slot vector.
+//
+// ⭐ **TWO CANDIDATE CURES, NAMED SO THE NEXT RUNG DOES NOT RE-DERIVE THEM, NEITHER BUILT HERE.**
+//   1. **Size-polymorphic `Self`** — let a sized instance satisfy the declaration's countless `Self` at a
+//      parameter position. One body per element serves every size; `count()` would stop folding to a
+//      constant and become a `length@8` load; `error.wrong-size-vector-argument` must go on failing, so the
+//      rule has to be confined to a declaration's own `Self` and not become size erasure at large.
+//   2. **Monomorphize the corpus body over (element, SIZE)**, which is v1's answer: `/specs/vector.md`'s
+//      `RequiredIR` shows `x64.call Vector.create` taking a `__layout_Vector_N3_Int` descriptor, i.e. the
+//      count travels in the LAYOUT DESCRIPTOR. shv2's descriptors carry a stride and no count, which is the
+//      same gap board row `S2u` names, and it costs one copy of every member per size.
+//
+// ⚠ **AND LISTING THE MODULE COSTS THREE MECHANISMS BEFORE ANY OF THAT — all built by `W86`, all measured,
+// all withdrawn with the entry.** `ProgramSignatures.noteArrayLiteralConformer` (a second stdlib
+// `BuiltinArrayLiteral` conformer STEALS `corpusArrayRecordName` and every program in the tree fails to
+// compile — see that header); `firstFieldIsItsOwnBuffer` + `Parser.emitFusedWrapperLiteral` (the identity
+// arm must RETYPE, or `init`'s `Self{managed: managed}` is `E3005`); and `requireVectorElementType` (an
+// instance stating NO count publishes no slots, so the element rule is vacuous — without it `create()`'s
+// `Self{}` is `E2015`). A future listing rung owes all three.
+//
+// ⚠ **THE `listWhitelistedModule` LINE IS NOT THE DELIVERABLE AND WAS WITHDRAWN, `W63`'s `Set` RULE
+// APPLIED.** With the entry live and nothing retired the differing-declarations control comes back INERT:
+// `stdlib/Vector.maxon`'s `count()` rewritten to `return managed.length() + 100` leaves a
+// `Vec3.create()`+`set`+`get`+`count()` program answering **8**, byte-for-byte identical at **11,795
+// bytes**; an UNDEFINED CALL in that same body compiles clean and still answers 8. The entry is byte-neutral
+// (`return 7` identical at 5,567 bytes) and buys nothing.
 //
 // ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ManagedRecordBytes` fused record, the
 // `__managed_*` helpers, `__managed_decref`.** A fixed-size buffer and a growable one differ in what may be DONE to
@@ -4577,7 +4630,10 @@ export let ManagedMemoryTypeName = b"__ManagedMemory"
 // ARE one `GenericInstanceId`; what it registered was the ARITY-ZERO alias alone, so the base spelling —
 // which `stdlib/Map.maxon`, `Array.maxon`, `Vector.maxon`, `Character.maxon` and `String.maxon` all write —
 // was `E2055 "Type '__ManagedMemory' has no associated types"`, the refusal `VectorBuiltinBaseName`'s header
-// records as reason (a) for synthesizing `Vector` rather than reading its declaration.
+// used to record as reason (a) for synthesizing `Vector` rather than reading its declaration. **W43 IS WHAT
+// KILLED THAT REASON, and the note it justified outlived it by seven weeks** — re-measured 2026-08-13, the
+// annotation compiles and `stdlib/Vector.maxon` probes `E3001` and nothing else; the surviving reason is a
+// different fact entirely and is stated at that header.
 //
 // ⭐ **CANONICALIZING AT THE READ IS WHAT KEEPS IT ONE INSTANCE.** Every downstream door — the arity check,
 // the intern key, `genericInstanceBoxSize`, the drop callee, the element accessors — asks about a base NAME,
@@ -8244,11 +8300,36 @@ export type ProgramSignatures
 	// that role — a `ByteArray` handed back by `String.toByteArray()` is the corpus's record, and folding
 	// `__ManagedMemory` in a user file onto `Bag` would give one record two ids at every crossing.
 	//
-	// ⚠ **LAST STDLIB DECLARATION WINS, AND THE CORPUS HAS EXACTLY ONE.** `stdlib/Vector.maxon` also carries
-	// the marker and is deliberately NOT listed (`VectorBuiltinBaseName`'s header records why shv2
-	// synthesizes `Vector` instead), so the walk meets one. v1 handles the same ambiguity by PROBING THE NAME
-	// `"Array"` first (`maxon-selfhosted/Compiler/Parser.maxon:16043-16050`) under a comment claiming the
-	// compiler knows nothing about `Array` — the probe is the knowledge, and it is not ported.
+	// ⛔⛔ **"LAST STDLIB DECLARATION WINS, AND THE CORPUS HAS EXACTLY ONE" WAS A DATED MEASUREMENT, AND `W86`
+	// IS THE DATE IT EXPIRED.** `stdlib/Vector.maxon` carries the marker too, and the note that stood here
+	// said it was "deliberately NOT listed" — an argument that evaporates the moment a rung lists it.
+	// MEASURED, on the first build of that entry: `Vector` is walked after `Array`, so it took
+	// `corpusArrayRecordName`, `isArrayBaseName(b"Array")` went FALSE, and `stdlib/Array.maxon:114`'s own
+	// `Self{managed: managed}` — the record's identity — was refused
+	// **`E2015 … shv2 mints that record only for the two names it owns the record FOR`**. Every program in
+	// the tree, including `function main() returns ExitCode / return 7`, failed to compile. A single-valued
+	// fact derived from a marker two declarations carry is decided by walk order, and the note admitted as
+	// much while resting on the count staying at one.
+	//
+	// ⭐ **THE TIEBREAK IS NAMED HERE AND DELIBERATELY NOT BUILT, BECAUSE NOTHING IN THIS TREE CAN RUN IT.**
+	// It is a skip at the top of this function for a name shv2 already owns as its own SIZED container base
+	// (`isVectorBaseName`): a `Vector`'s size is the second coordinate of its instance identity
+	// (`GenericInstanceRegistry.fixedSizes`, see `VectorBuiltinBaseName`), so `Vector with 3 Int` is not the
+	// record a `__ManagedMemory with Int` folds onto and never can be — one instance would have to be two —
+	// and its literal already has its own door (`Parser.parseVectorFromConstruction`, a RETYPE of the array
+	// literal rather than an identity). Skipping it also keeps `isArrayBaseName` answering FALSE for that
+	// name in a program declaring an array conformer of its own, without which a `Vector with N T` would be
+	// an `Array` instance as well and `Parser.dispatchMethodOnReceiver` asks the array arm FIRST.
+	//
+	// ⇒ **It lands on the day the module is listed and not before**: with `Vector.maxon` unlisted the skip
+	// cannot fire, so it would be a fix no case in the suite could turn red — the shape this tree refuses to
+	// carry. `W86` built it, measured it (the tree-wide E2015 above becomes a clean compile of every program),
+	// and withdrew it with the entry.
+	//
+	// ⚠ v1 breaks the same tie by PROBING THE NAME `"Array"` first
+	// (`maxon-selfhosted/Compiler/Parser.maxon:16034-16049`) under a comment claiming the compiler knows
+	// nothing about `Array` — the probe is the knowledge. Not to be ported: the fact shv2 reads instead is
+	// one it genuinely holds, and it names the declaration that is DISQUALIFIED rather than the one that wins.
 	export function noteArrayLiteralConformer(name ByteArray, isStdlibSource bool)
 		if not self.declaresTheArrayLiteralMarker(name) 'firstDeclarationOfThisName'
 			self.arrayLiteralConformers.push(name)
