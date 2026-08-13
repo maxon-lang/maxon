@@ -1,0 +1,239 @@
+// Test: try-block.routed-union-result-is-released
+typealias Num = int(0 to 1000)
+
+union Shape
+    circle(r Num)
+    square(s Num)
+end 'Shape'
+
+union ShapeError
+    tooBig(limit Num)
+end 'ShapeError'
+
+function makeShape(r Num) returns Shape throws ShapeError
+    if r > 500 'tooBig'
+        throw ShapeError.tooBig(500)
+    end 'tooBig'
+
+    return Shape.circle(r)
+end 'makeShape'
+
+function classify(r Num) returns Num
+    var out = 0
+
+    // The success path must FALL OUT of the try block rather than return from inside it.
+    // An early return runs the function-exit cleanup, which released the routed temp anyway;
+    // only falling through reaches the try block's own inner scope-end, which is the one that
+    // dropped it.
+    try 'blk'
+        let s = makeShape(r)
+        match s 'm'
+            circle(v) then out = v
+            square(v) then out = 0
+        end 'm'
+    end 'blk' otherwise (e) 'h'
+        match e 'k'
+            tooBig(limit) then out = limit - 499
+        end 'k'
+    end 'h'
+
+    return out
+end 'classify'
+
+function main() returns ExitCode
+    var total = 0
+    total = total + classify(3)
+    total = total + classify(4)
+    total = total + classify(900)
+    return total
+end 'main'
+---
+ExitCode: 8
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @makeShape {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rbx, 1000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.cmpRegImm32 rbx, 500
+    x64.jcc greater, tooBig
+    x64.jmp ifcont
+  tooBig:
+    x64.movRegImm32 rbx, 500
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg rax, r8
+    x64.movRegImm32 rcx, 0
+    x64.storeBaseDispReg.word64 [rax + 0], rcx
+    x64.storeBaseDispReg.word64 [rax + 8], rbx
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, rax
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#14
+    x64.jmp __rc_chk#15
+  __rc_chk#15:
+    x64.cmpRegImm32 rcx, 1000
+    x64.jcc greater, __rc_panic#14
+    x64.jmp __rc_ok#13
+  __rc_panic#14:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#13:
+    x64.callDirect makeShape
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryblkthrow
+    x64.jmp tryblkok
+  tryblkthrow:
+    x64.jmp tryblkerr
+  tryblkerr:
+    x64.loadRegBaseDisp.word64 rax, [r10 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#9
+    x64.jmp matchdead#10
+  matcharm#9:
+    x64.loadRegBaseDisp.word64 rax, [r10 + 8]
+    x64.leaRegRegImm32 rbx, rax, -499
+    x64.jmp matchcont#11
+  matchcont#11:
+    x64.movRegReg rcx, r10
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.jmp tryblkcont
+  matchdead#10:
+  tryblkok:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#4
+    x64.jmp matchnext
+  matcharm#4:
+    x64.loadRegBaseDisp.word64 rbx, [r8 + 8]
+    x64.jmp matchcont#8
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#5
+    x64.jmp matchdead#6
+  matcharm#5:
+    x64.loadRegBaseDisp.word64 rax, [r8 + 8]
+    x64.movRegImm32 rbx, 0
+    x64.jmp matchcont#8
+  matchcont#8:
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.jmp tryblkcont
+  tryblkcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#17
+    x64.jmp __rc_chk#18
+  __rc_chk#18:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic#17
+    x64.jmp __rc_ok#16
+  __rc_panic#17:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#16:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead#6:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 3
+    x64.callDirect classify
+    x64.leaRegRegImm32 rbx, r8, 0
+    x64.movRegImm32 rcx, 4
+    x64.callDirect classify
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 rcx, 900
+    x64.callDirect classify
+    x64.leaRegRegReg r8, rbx, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

@@ -635,6 +635,9 @@ function registerIfProgramLiteral(op MaxonOp, globalData GlobalDataTable)
 		tryCall to sizeofType then break 'op'
 		constArrayLiteral(_, _, _, bytes) then _ = registerByteArrayLiteralBlob(globalData, bytes: bytes)
 		switch to panicAbortValue then break 'op'
+		// The error-flag encode carries no program LITERAL — the only constant it needs is the bias, which the
+		// lowering mints for itself rather than reading out of the op.
+		errorFlagEncode then break 'op'
 	end 'op'
 end 'registerIfProgramLiteral'
 
@@ -1165,6 +1168,9 @@ type MaxonToStdLowering
 			witnessTryDispatch then self.lowerWitnessTryDispatch(hlOp, dstBlock: dstBlock)
 			// A panic whose message was ASSEMBLED at run time (A3n) — the pointer passes through verbatim.
 			panicAbortValue(messagePtr) then self.stdModule.appendOp(dstBlock, op: StdOp.osPanicValue(messagePtr))
+			// The error flag a routed bare `throw` carries to its block handler — `throwError`'s encode,
+			// as a value rather than as a terminator's side effect.
+			errorFlagEncode(result, errorValue, errorIsBoxed) then self.lowerErrorFlagEncode(result, errValue: errorValue, errIsBoxed: errorIsBoxed, dstBlock: dstBlock)
 		end 'lower'
 	end 'lowerOp'
 
@@ -1199,6 +1205,7 @@ type MaxonToStdLowering
 			constArrayLiteral then panic("lowerMaxonToStd: a `constArrayLiteral` op appeared as a block terminator (parser bug — a constant array literal is a value-producing body op, never a terminator)")
 			witnessDispatch to witnessTryDispatch then panic("lowerMaxonToStd: a `witnessDispatch` op appeared as a block terminator (parser bug — a witness dispatch is a value-producing body op, never a terminator)")
 			panicAbortValue then panic("lowerMaxonToStd: a `panicAbortValue` op appeared as a block terminator (parser bug — like `panicAbort` it is a body op followed by a dead return terminator)")
+			errorFlagEncode then panic("lowerMaxonToStd: an `errorFlagEncode` op appeared as a block terminator (parser bug — it DEFINES the flag a routed throw's edge carries, so it is a value-producing body op emitted ahead of that edge's branch)")
 		end 'lower'
 	end 'lowerTerminator'
 
@@ -3534,13 +3541,50 @@ type MaxonToStdLowering
 			self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(boxedDefault, errorFlagId: errValue))
 			return
 		end 'boxed'
-		let bias = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.const(bias, value: ErrorFlagOrdinalBias, valueType: StdType.i64))
 		let flag = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(flag, lhs: errValue, rhs: bias, opcode: StdBinOpcode.add, operandType: StdType.i64))
+		self.encodeScalarErrorFlag(flag, errValue: errValue, dstBlock: dstBlock)
 		let defaultVal = self.emitZeroConstOfReturnType(dstBlock)
 		self.stdModule.setTerminator(dstBlock, op: StdOp.errorReturn(defaultVal, errorFlagId: flag))
 	end 'lowerThrowError'
+
+	// ⭐⭐ **THE SCALAR ERROR-FLAG ENCODE — `ordinal + ErrorFlagOrdinalBias` — AND IT IS THE ONLY PLACE IT IS
+	// SPELLED.** Two ops reach it and they are the same fact under two grammars: `throwError`, which publishes
+	// the flag to the CALLER through the error register, and `errorFlagEncode`, which hands it to a block-form
+	// `try`'s shared handler as a VALUE (a bare `throw` inside the body branches rather than returns). A second
+	// spelling of this add — in the parser, say, where the matching DECODE already lives — would be the ABI
+	// written at two tiers, free to drift the day the bias moves; both readers of `ErrorFlagOrdinalBias`
+	// (`Parser.declareCaughtError`'s decode and this) then still name the one constant, which is the property
+	// PLAN.md's own note about this bias asks for.
+	//
+	// ⚠ **THE DESTINATION IS THE CALLER'S**, so each spelling of the encode defines the id ITS OWN consumer
+	// names: the terminator form a fresh value it invents, the value form the `result` the parser declared and
+	// the routed edge already carries in its `argIds`. This pass does not renumber (`lowerLiteral`'s header),
+	// so a value form that could not write `result` directly would owe it a rename op.
+	function encodeScalarErrorFlag(flag ValueId, errValue ValueId, dstBlock IrBlock)
+		let bias = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(bias, value: ErrorFlagOrdinalBias, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(flag, lhs: errValue, rhs: bias, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	end 'encodeScalarErrorFlag'
+
+	// `MaxonOp.errorFlagEncode` — the flag a ROUTED bare `throw` carries on its edge to the block handler.
+	// Same two encodings `lowerThrowError` picks between, off the same `errIsBoxed` bit the parser stamped:
+	// a BOXED union's pointer IS its flag, a SCALAR enum's is `ordinal + bias` through the shared routine.
+	//
+	// ⚠ **`result` MUST BE DEFINED BY AN OP, AND ONLY THE BOXED ARM PAYS FOR THAT.** This pass does not
+	// renumber (`lowerLiteral`'s header), so the Maxon `result` id the routed edge already names in its
+	// `argIds` has to be the destination of a real Std instruction. The SCALAR arm simply IS that instruction
+	// — the shared encode writes `result` directly. A BOXED error computes nothing at all (the pointer is the
+	// flag), so it has no instruction to be, and the Std tier has no move op: `add 0` is its rename.
+	function lowerErrorFlagEncode(result ValueId, errValue ValueId, errIsBoxed bool, dstBlock IrBlock)
+		if not errIsBoxed 'scalarEncodeDefinesItDirectly'
+			self.encodeScalarErrorFlag(result, errValue: errValue, dstBlock: dstBlock)
+			return
+		end 'scalarEncodeDefinesItDirectly'
+
+		let zero = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(zero, value: 0, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.binOp(result, lhs: errValue, rhs: zero, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	end 'lowerErrorFlagEncode'
 
 	// An uncaught `try f()` — re-publish the caught flag VERBATIM. `errorFlag` is ALREADY the `ordinal + 1`
 	// encoding (it came straight out of a `tryCall`), so there is NO re-encoding — the whole reason

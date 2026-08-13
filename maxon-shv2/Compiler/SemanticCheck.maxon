@@ -1156,6 +1156,8 @@ function opEscapesValue(op MaxonOp, subject EscapeScanSubject, func IrFunction, 
 		// A panic's message pointer is bytes handed to a diverging runtime — nothing outlives the frame,
 		// because there is no frame afterwards.
 		panicAbortValue then break 'op'
+		// The error-flag encode persists nothing: its result is consumed by the routed edge's phi, in this frame.
+		errorFlagEncode then break 'op'
 	end 'op'
 	return false
 end 'opEscapesValue'
@@ -1225,6 +1227,8 @@ function terminatorEscapesValue(term MaxonOp, subject EscapeScanSubject, func Ir
 		witnessDispatch to witnessTryDispatch then break 'term'
 		// A panic is a body op followed by a dead return, never a terminator.
 		panicAbortValue then break 'term'
+		// The error-flag encode is a BODY op — the routed edge's `branch` is what terminates its block.
+		errorFlagEncode then break 'term'
 	end 'term'
 	return false
 end 'terminatorEscapesValue'
@@ -1529,6 +1533,8 @@ function collectCallParamEdgesAt(project Project, op MaxonOp, func IrFunction, c
 		witnessDispatch to witnessTryDispatch then break 'op'
 		// A panic calls no user function, so it carries no mutation edge.
 		panicAbortValue then break 'op'
+		// The error-flag encode calls no user function, so it carries no mutation edge.
+		errorFlagEncode then break 'op'
 	end 'op'
 end 'collectCallParamEdgesAt'
 
@@ -1694,6 +1700,8 @@ function functionHasAwait(func IrFunction, module MaxonModule) returns bool
 				switch then break 'op'
 				witnessDispatch to witnessTryDispatch then break 'op'
 				panicAbortValue then break 'op'
+				// The error-flag encode neither spawns nor awaits — it is arithmetic.
+				errorFlagEncode then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -1733,6 +1741,8 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 				switch then break 'op'
 				witnessDispatch to witnessTryDispatch then break 'op'
 				panicAbortValue then break 'op'
+				// The error-flag encode is not an await site: it reads an enum value, never a promise handle.
+				errorFlagEncode then break 'op'
 			end 'op'
 		end 'eachOp'
 	end 'eachBlock'
@@ -1858,6 +1868,8 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		witnessDispatch to witnessTryDispatch then break 'op'
 		// A rendered panic reads a byte pointer, never a promise handle.
 		panicAbortValue then break 'op'
+		// The error-flag encode reads an enum tag or a box pointer, never a promise handle.
+		errorFlagEncode then break 'op'
 	end 'op'
 	return OpAwaitRole.unrelated
 end 'classifyOpForPromise'
@@ -1893,6 +1905,8 @@ function collectAwaitSuccessors(module MaxonModule, block IrBlock, into BlockIdA
 		witnessDispatch to witnessTryDispatch then break 'term'
 		// A panic is a body op followed by a dead return, never a terminator.
 		panicAbortValue then break 'term'
+		// The error-flag encode is a BODY op, so it is never the terminator whose successors this walks.
+		errorFlagEncode then break 'term'
 	end 'term'
 end 'collectAwaitSuccessors'
 
@@ -2016,6 +2030,8 @@ function checkCalls(project Project, module MaxonModule, signatures ProgramSigna
 					witnessTryDispatch(_, _, args, _, methodIndex, interfaceDeclIndex, _) then checkWitnessArgTypes(project, func: func, signatures: signatures, witnessSlots: witnessSlots, opIndex: opIdx, args: args, methodIndex: methodIndex, interfaceDeclIndex: interfaceDeclIndex)
 					// A panic has no callee name to validate.
 					panicAbortValue then break 'op'
+					// The error-flag encode has no callee name to validate and no arguments to type.
+					errorFlagEncode then break 'op'
 				end 'op'
 			end 'eachOp'
 		end 'eachBlock'
@@ -3602,6 +3618,8 @@ function closureEscapeReason(op MaxonOp) returns String
 		witnessDispatch to witnessTryDispatch then return "cannot pass a closure that captures to an interface method dispatched through a witness: the concrete method is chosen at run time, so the compiler cannot tell whether it stores the closure, and its environment cannot be threaded to it. {CapturingClosureEscapeSuffix}"
 		// A panic persists nothing (`opEscapesValue` says so), so it falls through to the panic below.
 		panicAbortValue then break 'op'
+		// The error-flag encode persists nothing (`opEscapesValue` says so), so it falls through to the panic below.
+		errorFlagEncode then break 'op'
 	end 'op'
 
 	// Reached only if `opEscapesValue` reported an escape at an op this mapping believes cannot persist a
@@ -4432,6 +4450,8 @@ function checkReturnsAgainstInterface(project Project, module MaxonModule, func 
 			call then break 'op'
 			literal then break 'op'
 			retVoid to panicAbortValue then break 'op'
+			// The error-flag encode hands nothing back through the return registers — its result is a routed edge's.
+			errorFlagEncode then break 'op'
 		end 'op'
 	end 'eachOp'
 end 'checkReturnsAgainstInterface'

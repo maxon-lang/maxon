@@ -3852,21 +3852,13 @@ let BooleanPackedBits = 1 as PackedBitWidth
 // answer because there is nothing to gain from narrowing a type no value inhabits, and it is what the
 // walk below would otherwise have to invent a first bound out of.
 function payloadFreeEnumTagSlot(layout EnumLayout) returns StorageSlot
-	if layout.caseCount() == 0 'noValuesToHold'
-		return StorageSlot.machineWord()
-	end 'noValuesToHold'
-
-	// ONE walk for both bounds: they are the two ends of a single value set, and `valueRangeStorageSlot`'s
-	// precondition (`low <= high`) is structural only because they are derived together.
-	var low = layout.tagOfIndex(0)
-	var high = low
-	for i in 1 upto layout.caseCount() 'eachCase'
-		let tag = layout.tagOfIndex(i)
-		low = tag if tag < low else low
-		high = tag if tag > high else high
-	end 'eachCase'
-
-	return valueRangeStorageSlot(low, high: high)
+	// ONE walk for both bounds — `Project.enumTagSpan`'s, shared with the synthesized error union that
+	// measures a member the same way. `valueRangeStorageSlot`'s precondition (`low <= high`) is structural
+	// because the two ends are derived together there.
+	match enumTagSpan(layout) 'span'
+		noCases then return StorageSlot.machineWord()
+		spanning(low, high) then return valueRangeStorageSlot(low, high: high)
+	end 'span'
 end 'payloadFreeEnumTagSlot'
 
 // ⭐⭐ **THE TWO NAMES shv2 GIVES A BYTE — the ROSTER, in one place (R4.7 review).** `Byte` is the

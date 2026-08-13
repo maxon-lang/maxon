@@ -987,6 +987,41 @@ export union ParseError implements Error
 	// positioned at the closing `end`. `missing` is the comma-joined names of the uncovered cases, in
 	// declaration order — the enum twin of `matchNotExhaustive`.
 	enumMatchNotExhaustive(kindWord String, typeName String, missing String, line LineNumber, column ColumnNumber)
+	// --- The SYNTHESIZED ERROR UNION's five diagnostics (a block-form `try` whose body routes two or more
+	// distinct error enums). Every one of them names the MEMBER the author wrote rather than the synthesized
+	// layout, which is why each is its own arm and not a `typeName` handed to its enum-match sibling above.
+	//
+	// The union's `match` does not cover every `(member, case)` pair and has no `default throws`/`panic`.
+	// Renders as **E2026**, positioned at the closing `end`, with `missing` the qualified `Enum.case` names in
+	// member-then-declaration order. Both references emit this code with this sentence.
+	errorUnionMatchNotExhaustive(missing String, line LineNumber, column ColumnNumber)
+	// A PLAIN `default then …` in a union's match. Renders as **E2046** at the `default`, the same code its
+	// enum sibling uses: a catch-all would silently swallow an error variant added to any member later, so
+	// only `default throws` / `default panic` opt out.
+	errorUnionMatchDefaultMustThrow(line LineNumber, column ColumnNumber)
+	// A BARE case name declared by two or more members of the union. Renders as **E3085** at the case name;
+	// the fix is the qualified spelling, which the message states.
+	errorUnionAmbiguousBareCase(caseName String, line LineNumber, column ColumnNumber)
+	// A BARE case name no member of the union declares. Renders as **E3034** at the case name — the same code
+	// `enumUnknownCase` renders, with the sentence the union can spell (there is no ONE enum to name).
+	//
+	// ⚠ **E3034 HAS THREE RENDERINGS IN AN ERROR-UNION MATCH AND ONLY TWO OF THEM ARE ARMS HERE.** The third
+	// is a QUALIFIER that names a real member which has no such case (`ErrA.nope`): that one goes through the
+	// GENERIC `enumUnknownCase` arm, carrying the member's own kind word and a hand-built `"Member.case"`
+	// name, because at that point there IS one enum to name and its own sentence is the right one.
+	errorUnionUnknownCase(caseName String, line LineNumber, column ColumnNumber)
+	// A QUALIFIER naming a type that is not a member of this union at all — `ErrC.x` where the body routed
+	// only `ErrA` and `ErrB`. Renders as **E3034** at the qualifier, distinct from the case-name arm above
+	// because the author's mistake is a different one (v1 splits the two sentences the same way).
+	errorUnionUnknownMember(memberName String, line LineNumber, column ColumnNumber)
+	// A payload pattern supplying the wrong number of bindings for a union member's case. Renders as
+	// **E3035**, positioned at the CASE name (past the qualifier), naming the case as `Enum.case`.
+	errorUnionWrongBindingCount(qualifiedCase String, expected ElementCount, got ElementCount, line LineNumber, column ColumnNumber)
+	// **E3084** — a block-form `try`'s `otherwise (e) 'h' … end` handler that never `match`es on its binding.
+	// Positioned at the handler's block LABEL, which is both references' anchor. The handler is reached by
+	// EVERY routed edge, so one that never discriminates has silently swallowed every error the body can
+	// raise; the single-call `otherwise` forms catch one call's error and owe no such proof.
+	tryBlockBindingNotMatched(bindingName String, line LineNumber, column ColumnNumber)
 	// Two arms cover the same enum case — a bare name repeated, or a case covered by both a range and
 	// a later arm. Renders as **E2027**, positioned at the second (overlapping) arm.
 	matchOverlappingCase(caseName String, line LineNumber, column ColumnNumber)
@@ -1394,6 +1429,8 @@ function asyncCalleeIfMatch(op MaxonOp, promise ValueId) returns AsyncCalleeLook
 		switch gives AsyncCalleeLookup.none
 		witnessDispatch to witnessTryDispatch gives AsyncCalleeLookup.none
 		panicAbortValue gives AsyncCalleeLookup.none
+		// The error-flag encode mints no promise — it is not a call of any kind.
+		errorFlagEncode gives AsyncCalleeLookup.none
 	end 'op'
 end 'asyncCalleeIfMatch'
 
@@ -7637,14 +7674,28 @@ type TryBlockContext
 	// The owned-binding height at the `try`, so a routed throw releases exactly what the BODY declared and
 	// still owns at that point — the body's `end` is jumped over, so its fall-through drops never run.
 	export let ownedFloor as BindingMark
-	// The error type routed so far, `none` until the first routed call. It types the `(e)` binding
-	// (`tryErrorEnumType`) — read from the SAME `throwsOf` clause the routing decision is made on, so what
-	// the handler binds and what the router accepted cannot disagree.
+	// The error type routed so far, `none` until the first routed edge — `members[0]`'s clause, kept as its
+	// own field because it is what the SINGLE-member handler binds (`tryErrorEnumType`) and what
+	// `requireRoutableTryBlockBody` reads to answer "did anything route at all?". Read from the SAME
+	// `throwsOf`/`thrownTypeClause` answer the routing decision is made on, so what the handler binds and what
+	// the router accepted cannot disagree.
 	export var throwsClause as ThrowsClause
-	// A SECOND, different error type reaching the same handler. Recorded rather than thrown because the
-	// router cannot throw (see `routeBareThrowingCallToTryBlock`); `parseTryBlockStatement` refuses it at the
-	// body's end, before the handler is parsed and before any of it is lowered.
-	export var conflictingType as String
+	// ⭐⭐ **EVERY DISTINCT ERROR TYPE THIS BLOCK ROUTES, IN FIRST-ROUTED ORDER — the members of the
+	// synthesized error union.** Two or more of them is a real Maxon program (`/specs/try-block.md` is mostly
+	// made of them), and the member's POSITION here is its discriminant in both references. shv2 carries no
+	// discriminant: `fusedTagOffset` on each member maps that member's own case tags into a private slice of
+	// one dense integer line, so the pair (which member, which case) is a SINGLE number — see
+	// `recordRoutedErrorType` for the assignment and why it is injective.
+	export var members as TryBlockErrorMemberArray
+	// ⭐ **THE ROUTED EDGES, KEPT SO THE FUSED ORDINAL CAN BE ATTACHED TO THEM AFTER THE BODY IS PARSED.**
+	// Whether the block IS a union is not known until its last statement, and a single-member block must emit
+	// exactly what it emitted before this existed — so an edge records what it would need and nothing is
+	// spent until `synthesizeErrorUnion` decides there is a union to dispatch.
+	export var routedEdges as RoutedErrorEdgeArray
+	// ⚠ **A MEMBER THE FUSED LINE CANNOT HOLD** — its name, for the refusal `requireRoutableTryBlockBody`
+	// raises once a SECOND member proves the block really needs to fuse. Recorded rather than thrown for
+	// `conflictingMoveEdge`'s reason: the routing path cannot throw.
+	export var unfusableMember as String
 	// ⭐⭐ **THE OWNERSHIP STATE THE HANDLER IS ENTERED WITH — the move flags of the bindings declared
 	// OUTSIDE this block, as the FIRST routed call left them.** The handler is a sibling path of the body,
 	// not its continuation, so it must not inherit whatever the body went on to move after the throw edge
@@ -7656,16 +7707,323 @@ type TryBlockContext
 	// A LATER routed call whose outer-ownership state DISAGREES with `edgeMoveMark` — the body moved an
 	// outer binding BETWEEN two routed calls, so the shared handler is reached with that binding live on one
 	// edge and already given away on another. One handler cannot be right for both, so
-	// `requireRoutableTryBlockBody` refuses it; recorded here rather than thrown for `conflictingType`'s
-	// reason (the router cannot throw).
+	// `requireRoutableTryBlockBody` refuses it; recorded here rather than thrown because the router cannot
+	// throw (see `routeBareThrowingCallToTryBlock`).
 	export var conflictingMoveEdge as bool
 
 	export static function create(func IrFunction, tryTok Token, label ByteArray, errBlockId BlockId, flagPhi ValueId, phiVars LoopPhiVarArray, ownedFloor BindingMark) returns TryBlockContext
-		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, conflictingType: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()), conflictingMoveEdge: false}
+		return Self{func: func, tryTok: tryTok, label: label, errBlockId: errBlockId, flagPhi: flagPhi, phiVars: phiVars, ownedFloor: ownedFloor, throwsClause: ThrowsClause.none, members: TryBlockErrorMemberArray.create(), routedEdges: RoutedErrorEdgeArray.create(), unfusableMember: "", edgeMoveMark: MoveMark.create(BoolArray.create(), values: ValueIdArray.create()), conflictingMoveEdge: false}
 	end 'create'
 end 'TryBlockContext'
 
 typealias TryBlockContextArray = Array with TryBlockContext
+
+// ⭐⭐ **ONE MEMBER OF A BLOCK-FORM `try`'s SYNTHESIZED ERROR UNION — an error enum the body routes, plus
+// the OFFSET that maps its own case tags onto the block's one dense dispatch line.**
+//
+// ⭐ **`fusedTagOffset` IS WHY shv2 NEEDS NO DISCRIMINANT, and it is the whole departure from both
+// references.** v1 carries a `__tryBlockDiscr` slot beside the flag and the bootstrap a
+// `TypeDiscriminantVarName`, and each handler arm then tests a PAIR — `discr == m and flag == ord + 1`, two
+// compares and a fused `and`, or two chained blocks for a boxed member. shv2's `match` already owns a
+// tag-interval DISPATCH (a balanced binary search over one i64), so a pair would be the one thing that
+// engine cannot consume. Adding the offset instead makes `(member, case)` a SINGLE integer, and the whole
+// handler is then an ordinary enum match over a synthesized layout — no second compare, no second phi, and
+// no second copy of the arm/merge/phi machinery.
+type TryBlockErrorMember
+	// The error enum/union's name — the identity `recordRoutedErrorType` dedupes on.
+	export let name as ByteArray
+	export let clause as ThrowsClause
+	// Is this member's flag a heap BOX POINTER rather than an `ordinal + bias`? It decides where the member's
+	// own tag comes from at a routed edge (a LOAD out of the box vs the flag itself), which is a per-MEMBER
+	// fact and not a per-case one: every throw of a boxed union delivers a pointer, payload-free cases
+	// included. Both references say the same (`ErrorUnionCaseRef.memberIsBoxed`).
+	export let isBoxed as bool
+	// The member's declared layout — its case names, tags and payload slots. Held rather than re-looked-up so
+	// the fused layout, the arm resolution and the payload binding all read one object.
+	export let layout as EnumLayout
+	// ⭐ **ADDED TO THIS MEMBER'S OWN CASE TAG TO GIVE THE FUSED TAG**, and `fusedTop` is the highest fused
+	// tag it can produce — the position the NEXT member starts one past. Carrying the top on the member,
+	// rather than a cursor on the block, is what keeps a block that routes ONE error type from computing
+	// anything it will never use. See `recordRoutedErrorType` for the placement and its injectivity argument.
+	export let fusedTagOffset as ParsedInt
+	export let fusedTop as ParsedInt
+	// ⚠ **CAN THIS MEMBER BE PLACED ON THE FUSED LINE AT ALL?** False when its own tag span, or its position
+	// above the members before it, does not fit an i64 — reachable, because a FLOAT-backed error enum's tags
+	// are IEEE-754 bit patterns and one spanning a negative and a positive double is ~1.8e19 wide. It is
+	// RECORDED rather than thrown because the routing path cannot throw, and it is only ever an error when a
+	// SECOND member arrives: a lone member is never fused, so an unfusable one is a perfectly good block.
+	export let fusable as bool
+
+	export static function create(name ByteArray, clause ThrowsClause, isBoxed bool, layout EnumLayout, placement FusedPlacement) returns TryBlockErrorMember
+		return Self{name: name, clause: clause, isBoxed: isBoxed, layout: layout, fusedTagOffset: placement.offset, fusedTop: placement.top, fusable: placement.fusable}
+	end 'create'
+end 'TryBlockErrorMember'
+
+typealias TryBlockErrorMemberArray = Array with TryBlockErrorMember
+
+// ⭐⭐ **WHERE ONE MEMBER SITS ON THE FUSED DISPATCH LINE — or that it does not fit.** The three numbers
+// travel together because they are one decision: `offset` is what a routed edge and the synthesized layout
+// both add to the member's own tag, `top` is the highest fused tag it can produce (where the next member
+// starts one past), and `fusable` says whether the arithmetic that produced them was performable at all.
+type FusedPlacement
+	export let fusable as bool
+	export let offset as ParsedInt
+	export let top as ParsedInt
+
+	export static function create(offset ParsedInt, top ParsedInt) returns FusedPlacement
+		return Self{fusable: true, offset: offset, top: top}
+	end 'create'
+
+	// A member the line cannot hold. Its numbers are `0` and are never read: `requireRoutableTryBlockBody`
+	// refuses the block the moment a second member joins it, and a block with one member fuses nothing.
+	export static function tooWide() returns FusedPlacement
+		return Self{fusable: false, offset: 0, top: 0}
+	end 'tooWide'
+end 'FusedPlacement'
+
+// ⚠⚠ **THE FUSED LINE'S CEILING AND FLOOR, HELD SHORT OF `i64`'s OWN BY A MARGIN — so every placement
+// question is a COMPARISON and never a trial addition.** `ParsedInt` is `int(i64.min to i64.max)`, so an
+// overflowing `+` is a COMPILER PANIC, not a wrapped number; the placement arithmetic adds at most a `+ 1`
+// past a checked bound, and the margin is what lets that `+ 1` be performed without a second question.
+let FusedTagCeiling = I64MaxBound - 4
+let FusedTagFloor = I64MinBound + 4
+
+// ⭐ **PLACE A MEMBER WHOSE FUSED RANGE MUST START AT `floor`** — every member but the first scalar one.
+// The offset that achieves it is `floor - <the member's lowest tag>`, and both that subtraction and the
+// resulting top are checked before either is performed.
+function fusedPlacementAt(floor ParsedInt, span EnumTagSpan) returns FusedPlacement
+	return match span 'span'
+		// A declaration with no cases can throw nothing, so it occupies no position: the next member starts
+		// exactly where this one would have, and the layout contributes no fused case for it to collide with.
+		noCases gives FusedPlacement.create(0, top: floor - 1)
+		spanning(low, high) gives fusedPlacementOfSpan(floor, low: low, high: high)
+	end 'span'
+end 'fusedPlacementAt'
+
+// The `spanning` arm's arithmetic, split out so the guards read as one sequence rather than nesting inside
+// a match arm. Each `return` below is a placement the i64 line cannot express.
+function fusedPlacementOfSpan(floor ParsedInt, low ParsedInt, high ParsedInt) returns FusedPlacement
+	// The member's own WIDTH first — `high - low` is itself an i64 subtraction, and a float-backed enum
+	// spanning a negative and a positive double is wider than the whole line.
+	if low < 0 and high > FusedTagCeiling + low 'widerThanTheLine'
+		return FusedPlacement.tooWide()
+	end 'widerThanTheLine'
+
+	let width = high - low
+	// The member has to fit ABOVE `floor` as well as be narrow enough on its own.
+	if floor > FusedTagCeiling - width 'noRoomAboveTheFloor'
+		return FusedPlacement.tooWide()
+	end 'noRoomAboveTheFloor'
+
+	// And the offset itself is `floor - low`, which climbs as `low` falls.
+	if low < 0 and floor > FusedTagCeiling + low 'offsetOverflows'
+		return FusedPlacement.tooWide()
+	end 'offsetOverflows'
+	if low > 0 and floor < FusedTagFloor + low 'offsetUnderflows'
+		return FusedPlacement.tooWide()
+	end 'offsetUnderflows'
+
+	return FusedPlacement.create(floor - low, top: floor + width)
+end 'fusedPlacementOfSpan'
+
+// ⭐ **PLACE THE FIRST SCALAR MEMBER, WHOSE OFFSET IS PINNED TO `ErrorFlagOrdinalBias`** — the one member
+// whose position is chosen rather than derived, because pinning it there makes its fused ordinal the FLAG
+// ITSELF and so costs a one-member block nothing. Only its top has to be checked.
+function fusedPlacementAtTheBias(span EnumTagSpan) returns FusedPlacement
+	return match span 'span'
+		noCases gives FusedPlacement.create(ErrorFlagOrdinalBias, top: ErrorFlagOrdinalBias - 1)
+		spanning(_, high) gives FusedPlacement.tooWide() if high > FusedTagCeiling - ErrorFlagOrdinalBias else FusedPlacement.create(ErrorFlagOrdinalBias, top: high + ErrorFlagOrdinalBias)
+	end 'span'
+end 'fusedPlacementAtTheBias'
+
+// ⭐⭐ **ONE ROUTED THROW EDGE, RECORDED SO ITS FUSED ORDINAL CAN BE ATTACHED ONCE THE MEMBER LIST IS
+// COMPLETE.** A block-form `try` does not know whether it is a union until its body's last statement, and a
+// single-member block must emit byte-for-byte what it emitted before the union existed — so nothing is
+// spent at the edge that a one-member block would not have spent, and `synthesizeErrorUnion` pays the rest.
+//
+// ⭐ **THE THREE SHAPES, AND WHY THE FIRST ONE COSTS NOTHING.** A routed edge's fused ordinal is
+// `<this member's own tag> + fusedTagOffset`:
+//   • the FIRST member, when it is SCALAR — its offset is exactly `ErrorFlagOrdinalBias`, so the fused
+//     ordinal IS the flag the edge already carries. `fusedValue` is that flag and NO op exists. This is the
+//     shape every block that turns out to have one member takes, which is what keeps them unchanged.
+//   • any LATER member, when it is SCALAR — `flag + (offset - bias)`, emitted AT ROUTING TIME into the
+//     block the edge leaves from, which has no terminator yet at that moment. A second member only ever
+//     appears in a block that IS a union, so the op is never dead.
+//   • any BOXED member — the tag is a LOAD out of the box, which must not run on the success path (the flag
+//     is `0` there and the load would fault). So the edge is forced through a landing PAD and the load is
+//     emitted into it at `synthesizeErrorUnion` time — a pad ends in an unconditional branch, which is what
+//     lets an op be appended to it after the fact (`IrModule.appendOp` refuses a block ending in a
+//     conditional branch, and refusing is right: an op past it would run on one edge only).
+type RoutedErrorEdge
+	// The EDGE's own argument list — the very array the `BranchEdge` holds, so pushing the fused ordinal onto
+	// it IS attaching it to the edge. Positional against `errBlock.blockArgs`, where the fused phi is likewise
+	// appended last.
+	export let args as ValueIdArray
+	// The error flag this edge carries: an `ordinal + bias` for a scalar member, the box POINTER for a boxed
+	// one. It is `args[0]`, held again by name because the deferred load reads it.
+	export let flag as ValueId
+	// Where a DEFERRED computation is emitted — the landing pad, for a boxed member. Unread for the two
+	// scalar shapes, whose value is already in `fusedValue`.
+	export let block as IrBlock
+	export let member as TryBlockErrorMember
+	// The already-computed fused ordinal, for both SCALAR shapes. Unread when `member.isBoxed`.
+	export let fusedValue as ValueId
+	export let anchor as Token
+
+	export static function create(args ValueIdArray, flag ValueId, block IrBlock, member TryBlockErrorMember, fusedValue ValueId, anchor Token) returns RoutedErrorEdge
+		return Self{args: args, flag: flag, block: block, member: member, fusedValue: fusedValue, anchor: anchor}
+	end 'create'
+
+	// ⭐ **ATTACH THE FUSED ORDINAL TO THIS EDGE — a method rather than a `edge.args.push(…)` at the caller,
+	// and the difference is the borrow rule.** `args` IS the array the `BranchEdge` holds, so the push is the
+	// attachment; reaching through the edge to mutate it from outside makes the edge a mutated borrow of the
+	// context that owns it (E3019). Owning the mutation here says what is really happening: an edge gains an
+	// argument.
+	export function attachFusedOrdinal(fused ValueId)
+		self.args.push(fused)
+	end 'attachFusedOrdinal'
+end 'RoutedErrorEdge'
+
+typealias RoutedErrorEdgeArray = Array with RoutedErrorEdge
+
+// ⭐⭐ **WHAT A HANDLER'S `match e` NEEDS WHEN `e` IS A SYNTHESIZED ERROR UNION — and it is deliberately NOT
+// A TYPE.** The bootstrap mints an `IrErrorUnionType` and writes it into its type registry under a joined
+// NAME (`__ErrorUnion2-ErrA-ErrB`), which makes that name a table KEY and the join's injectivity a
+// correctness property — `/specs/try-block.md`'s `union-member-names-join-injectively` exists because `_`
+// spelled `{A_B, C}` and `{A, B_C}` identically and one union silently REPLACED the other. shv2 carries the
+// union in the HANDLER's own scope instead, on `errorUnionBindings`, keyed by the `(e)` binding name and
+// popped when the handler closes: two nested handlers hold two records and neither can see the other's, so
+// there is no shared name space for a join to collide in. v1 reaches the same place (member NAMES on the
+// context, `e` declared as a plain integer) for its own reasons.
+//
+// ⛔⛔ **AND THE KEY IS THE BINDING'S IDENTITY, NOT ITS NAME — THIS HEADER ONCE CLAIMED THE NAME WAS
+// ENOUGH AND THAT WAS A MEASURED WRONG ANSWER.** It argued shv2 beats the bootstrap's joined name because
+// "there is no shared name space for a join to collide in", which is true of one handler against another
+// and FALSE of a handler against its own body: shv2 permits shadowing, so `let e = Inner.splat` inside the
+// handler re-binds the name, and `match e` took the union path and dispatched on the ERROR's fused ordinal.
+// MEASURED, with case names chosen to collide: shv2 **exited 11** where the bootstrap exits **22**, and no
+// diagnostic anywhere. (With non-colliding names it failed loud instead — `E3034: no case 'one' in the
+// error union` — which is how the silent form was found.) `errorUnionForScrutinee` now accepts only when
+// the name still resolves to the VALUE the handler bound, so a shadow simply is not the union. A lossy key
+// used as an identity, which is a shape this tree has paid for before.
+//
+// ⭐ **THE LAYOUT IS A DISPATCH TABLE, NOT A VALUE LAYOUT.** Its cases are the `(member, case)` pairs in
+// member-then-declaration order and its tags are the fused ordinals; it carries NO payload slots, because a
+// payload is read against the MEMBER's own layout (which is also what names the enum in a payload
+// diagnostic). Nothing registers it, so nothing outside the handler can resolve it — which is exactly the
+// property that makes the missing name safe.
+type ErrorUnionInfo
+	export let layout as EnumLayout
+	// Per FUSED case, the member it came from — parallel to `layout`'s own columns. It answers the two
+	// questions a bare enum layout cannot: which enum to name in `ErrA.bang` (exhaustiveness, E3085's
+	// ambiguity scan) and which member's rules an arm plays by.
+	export let caseMembers as TryBlockErrorMemberArray
+	// The dispatch subject: the fused ordinal every routed edge computed, merged through the error block's
+	// last phi. `match e` reads THIS where an ordinary enum match reads `emitEnumTagOf(scrut)`.
+	export let fusedOrdinal as ValueId
+
+	export static function create(layout EnumLayout, caseMembers TryBlockErrorMemberArray, fusedOrdinal ValueId) returns ErrorUnionInfo
+		return Self{layout: layout, caseMembers: caseMembers, fusedOrdinal: fusedOrdinal}
+	end 'create'
+end 'ErrorUnionInfo'
+
+// ⭐ **ONE RESOLVED ARM OF AN ERROR-UNION MATCH** — which member it named, and the payload bindings its
+// pattern declared. Returned as a pair because `parseMatchCommon` needs BOTH and neither is derivable from
+// the other: the member decides whose layout the payload plays by and whether the arm owes the box a
+// release, and the bindings are what the arm body declares at its head.
+type ErrorUnionArm
+	export let member as TryBlockErrorMember
+	export let bindings as PayloadBindingArray
+
+	export static function create(member TryBlockErrorMember, bindings PayloadBindingArray) returns ErrorUnionArm
+		return Self{member: member, bindings: bindings}
+	end 'create'
+end 'ErrorUnionArm'
+
+// Is this match's scrutinee a synthesized error union, and if so which — `DeclaredEnum`'s shape, for
+// `DeclaredEnum`'s reason: the absent state is structurally distinct from an empty one.
+union ErrorUnionMatch
+	notAUnion
+	synthesized(info ErrorUnionInfo)
+end 'ErrorUnionMatch'
+
+// The `ErrorUnionMatch` twin of `enumMatchIsDeclared`.
+function errorUnionIsSynthesized(m ErrorUnionMatch) returns bool
+	return match m 'm'
+		notAUnion gives false
+		synthesized gives true
+	end 'm'
+end 'errorUnionIsSynthesized'
+
+// The `ErrorUnionMatch` twin of `requireEnumLayout` — panics where the caller has already established there
+// is a union, so no site has to invent a meaning for the absent case.
+function requireErrorUnionInfo(m ErrorUnionMatch) returns ErrorUnionInfo
+	match m 'm'
+		notAUnion then panic("requireErrorUnionInfo: asked for the error union of a match whose scrutinee is not one — every caller tests `errorUnionIsSynthesized` first")
+		synthesized(info) then return info
+	end 'm'
+end 'requireErrorUnionInfo'
+
+// A handler-scoped `(e)` binding that names a synthesized error union — pushed when the handler declares it
+// and popped when the handler closes, so `match e` can find the union by the NAME the source wrote and a
+// nested handler's binding cannot be mistaken for an enclosing one. v1's `errorUnionBindings` in shape and
+// in reason; the bootstrap keys the same lookup on its variable table's `Kind == ErrorUnion`.
+type ErrorUnionBinding
+	export let name as ByteArray
+	// ⭐ **THE VALUE THE HANDLER BOUND THAT NAME TO — the IDENTITY, where the name alone is only a lookup
+	// key.** A `match` reaches the union only when the name still resolves to this value; a SHADOW binds a
+	// different one and is therefore not the union. See `ErrorUnionInfo`'s header for the wrong answer the
+	// name-only key produced.
+	export let flag as ValueId
+	export let info as ErrorUnionInfo
+
+	export static function create(name ByteArray, flag ValueId, info ErrorUnionInfo) returns ErrorUnionBinding
+		return Self{name: name, flag: flag, info: info}
+	end 'create'
+end 'ErrorUnionBinding'
+
+typealias ErrorUnionBindingArray = Array with ErrorUnionBinding
+
+// The synthesized layout's NAME. It is a diagnostic string and nothing else — no registry holds it, so it
+// cannot be a key and cannot collide (and `requireUnreservedName` bars the `__` space from user
+// declarations anyway). It reaches a message only through E3081's all-discard sentence, which every other
+// error-union diagnostic bypasses by naming the MEMBER enum the author actually wrote.
+let SynthesizedErrorUnionName = b"__ErrorUnion"
+
+// ⭐ **WHICH FORM OF CATCH IS BEING PARSED — the one thing `parseOtherwiseBlock` cannot see for itself, and
+// the two facts that hang off it.** The single-call forms (`try f() otherwise (e) 'h' … end` and
+// `if try f() … else (e) 'h' … end`) catch ONE call's error: the binding is that callee's declared enum, and
+// the handler may do whatever it likes with it. A BLOCK form's handler is shared by every routed edge, so it
+// MUST discriminate — that is E3084, and it is the reference's rule too — and when the body routed two or
+// more error types the binding is the synthesized union rather than any declared enum. Both facts travel as
+// one value so a call site cannot state half of the form.
+union CaughtErrorForm
+	singleCall
+	blockForm(errorUnion ErrorUnionMatch)
+end 'CaughtErrorForm'
+
+// The synthesized error union this catch binds — `notAUnion` for a single-call form, which catches one
+// callee's declared enum and can never be a union, and for a block form whose body routed one error type.
+function caughtErrorUnionMatch(form CaughtErrorForm) returns ErrorUnionMatch
+	return match form 'f'
+		singleCall gives ErrorUnionMatch.notAUnion
+		blockForm(errorUnion) gives errorUnion
+	end 'f'
+end 'caughtErrorUnionMatch'
+
+// The binding name this handler must be seen to `match` on (E3084), or EMPTY when it owes no such proof: a
+// single-call handler, or a block-form one that declares no binding at all — though `requireTryBlockOtherwise`
+// has already refused the latter, so the test here is the rule stated rather than a case that arrives.
+function tryBlockBindingToMatch(form CaughtErrorForm, bindingName ByteArray, hasBinding bool) returns ByteArray
+	if not hasBinding 'nothingToMatchOn'
+		return EmptySourceText
+	end 'nothingToMatchOn'
+
+	return match form 'f'
+		singleCall gives EmptySourceText
+		blockForm gives bindingName
+	end 'f'
+end 'tryBlockBindingToMatch'
 
 // The name of the internal binding a `for … in` over an OWNED array TEMPORARY moves that temporary
 // into (`parseForStatement`). It is never installed in a `Scope`, so no source line can name it; the
@@ -8924,6 +9282,31 @@ export type Parser
 	// old value, set true, emit, restore. It is never left set across a statement. Same per-function reset
 	// and per-closure save/restore as `tryBlocks` above (see that field's lifetime rule).
 	var tryBlockRoutingSuppressed as bool
+	// ⭐ **THE `(e)` BINDINGS CURRENTLY IN SCOPE THAT NAME A SYNTHESIZED ERROR UNION, innermost last.** A
+	// handler pushes one when it declares such a binding and pops it at its own `end`, so `match e` resolves
+	// the union by the name the source wrote — and by the VALUE that name is still bound to, which is what
+	// makes a SHADOW not the union (`errorUnionForScrutinee`).
+	//
+	// ⚠⚠ **IT IS SAVED AND RESET PER CLOSURE, AND THE CLAIM THAT IT NEED NOT BE WAS FALSE AS WRITTEN.** It
+	// read *"a handler cannot span either boundary"*; a CLOSURE DECLARED INSIDE A HANDLER does span it — its
+	// body parses with this list non-empty, so a `match e` in there would take the union path and name a
+	// fused phi belonging to a DIFFERENT `IrFunction`. This is the neighbourhood `fa548fac5`'s own review
+	// found `tryBlocks` reset without being restored in, so both halves are spelled here.
+	var errorUnionBindings as ErrorUnionBindingArray
+	// ⭐ **THE BLOCK-FORM `(e)` BINDING THIS HANDLER MUST BE SEEN TO `match` ON, AND WHETHER IT HAS BEEN
+	// (E3084).** A block-form handler is reached by every routed edge, so a handler that never discriminates
+	// has silently swallowed every error the body could raise — both references refuse it and both anchor the
+	// refusal on the handler's own label. The name is EMPTY while no such handler is open, which is also the
+	// single-call forms' state: they catch ONE call's error and are free to ignore it.
+	//
+	// ⚠ It is the NAME and nothing else — see `noteTryBlockBindingMatched` for why this rule and the union
+	// DISPATCH key on different things, which is the one place in this construct they deliberately disagree.
+	//
+	// ⚠ Saved and restored by `parseOtherwiseBlock` around its own body, so a nested `try` block inside a
+	// handler asks its own question and gives the enclosing one back unchanged — and reset per closure with
+	// `errorUnionBindings`, for the reason stated there.
+	var tryBindingName as ByteArray
+	var tryBindingMatched as bool
 	// The enclosing match STATEMENTS, innermost last — the other half of the break-target stack (see
 	// `MatchContext` for why `break` needs its own rather than sharing `loops`). `continue` never reads
 	// it. Reset per function AND per closure exactly as `loops` is: without the closure reset, a `break`
@@ -10081,6 +10464,9 @@ export type Parser
 			loops: LoopContextArray.create(),
 			tryBlocks: TryBlockContextArray.create(),
 			tryBlockRoutingSuppressed: false,
+			errorUnionBindings: ErrorUnionBindingArray.create(),
+			tryBindingName: EmptySourceText,
+			tryBindingMatched: false,
 			matches: MatchContextArray.create(),
 			iterationLockedBindings: sharedEmptyIterationLocks,
 			lastBlockBodyEnd: 0,
@@ -25196,47 +25582,29 @@ export type Parser
 	// P1.4b — scalar error handling: throw / try / otherwise / panic
 	// ============================================================================
 
-	// `throw E.case` or `throw <e>` — leave the function via the ERROR edge. The thrown expression
-	// evaluates to a `named(E)` enum value carrying the case's tag (a literal for `throw E.case`, the
-	// caught `(e)` binding for `throw e`); `throwError` carries it and lowering re-encodes it `+1`. Owned
-	// locals are dropped before the error terminator (trivial for scalar Wave 1).
+	// `throw E.case` or `throw <e>` — leave the enclosing ERROR SCOPE, which is the FUNCTION unless a
+	// block-form `try` body encloses this statement, in which case it is that block's shared handler (see
+	// `emitThrowError`, which owns the fork, and `routeBareThrowToTryBlock`). The thrown expression evaluates
+	// to a `named(E)` enum value carrying the case's tag (a literal for `throw E.case`, the caught `(e)`
+	// binding for `throw e`); the flag encode is the same at both destinations. Owned locals are dropped
+	// before control leaves — the whole frame's on the function edge, the block's own on the routed one.
 	function parseThrowStatement(func IrFunction, block IrBlock) throws ParseError
 		self.currentBlock = block
 		let throwTok = try self.consume(TokenKind.throw)
 		try self.emitThrowError(func, anchor: throwTok)
 	end 'parseThrowStatement'
 
-	// ⛔⛔ **A BARE `throw` INSIDE A BLOCK-FORM `try` BODY IS REFUSED, AND THE ALTERNATIVE WAS A SILENT WRONG
-	// ANSWER.** Both references ROUTE such a throw to the enclosing block's handler — it is the whole point of
-	// `routeBareThrowToTryBlock` (`2-Parser.cs:23904`) and `routeBareThrowToActiveTryBlock`
-	// (`maxon-selfhosted/Parser.maxon:13362`), and the bootstrap's comment records that NOT routing it used to
-	// let the error escape the block, which it calls a correctness bug. MEASURED here before this guard, on a
-	// body holding one routed call and one `throw AErr.beta`: the bootstrap answers **6** (the handler's `beta`
-	// arm) and shv2 answered **3** — the throw neither reached the handler nor left the function.
-	//
-	// ⭐ **IT IS REFUSED RATHER THAN ROUTED BECAUSE ROUTING IT WOULD BE A SECOND COPY OF THE THROW ENCODE.**
-	// A routed throw must become the error FLAG the handler's phi merges — `ordinal + ErrorFlagOrdinalBias`
-	// for a scalar enum, the box pointer for a boxed union — and in shv2 that encode is written exactly once,
-	// at the Std tier, by `LowerMaxonToStd.lowerThrowError` off the `throwError` TERMINATOR this routine
-	// emits. Producing the same flag as a VALUE here would be that encode spelled a second time in the
-	// parser, free to disagree with the one every catch site decodes against. Routing arrives with a
-	// value-producing form of the encode; until then this is loud.
-	//
-	// The stack is popped before the HANDLER parses, so `otherwise (e) 'h' … throw … end 'h'` is untouched —
-	// it re-throws to the enclosing function exactly as the reference does (measured: both exit 8).
-	function rejectThrowInsideTryBlockBody(anchor Token) throws ParseError
-		if self.tryBlocks.count() == 0 'notInATryBlockBody'
-			return
-		end 'notInATryBlockBody'
-
-		throw ParseError.unsupported("a bare `throw` inside a block-form `try 'label' … end` body — the references route it to the block's shared handler, and shv2's error-flag ENCODE exists only as the Std-tier lowering of the `throwError` terminator, so there is no value form of it for a routed edge to carry. Move the `throw` into a function the body calls, or out of the block", line: anchor.line, column: anchor.column)
-	end 'rejectThrowInsideTryBlockBody'
-
-	// Parse the thrown enum expression and emit the `throwError` terminator into `currentBlock`. Shared by
-	// the `throw <e>` statement and the match `default throws <E.case>` arm (which differ only in the
-	// keyword their caller consumed — `throw` vs `throws`).
+	// Parse the thrown enum expression and send the error on its way — the `throwError` terminator out of the
+	// function, or a branch to the enclosing block-form `try`'s shared handler. Shared by the `throw <e>`
+	// statement and the match `default throws <E.case>` arm (which differ only in the keyword their caller
+	// consumed — `throw` vs `throws`), so both spellings route identically inside a `try` block.
 	function emitThrowError(func IrFunction, anchor Token) throws ParseError
-		try self.rejectThrowInsideTryBlockBody(anchor)
+		// ⭐ **WHERE THIS THROW GOES IS DECIDED FIRST, BECAUSE IT DECIDES WHAT THE THROW OWES.** A ROUTED throw
+		// does not leave the function — it branches to the enclosing block-form `try`'s shared handler — so it
+		// is measured against no enclosing `throws` clause (there may not be one: `main` may hold a `try` block
+		// whose body throws) and it releases only what the BLOCK owns, not the whole frame. Read off exactly
+		// the stack the old refusal read, so the set of programs that route is the set that used to be refused.
+		let routed = self.tryBlocks.count() > 0
 		let errValue = try self.parseExpression(func, block: self.currentBlock)
 		let errorType = self.typeOf(errValue)
 
@@ -25245,7 +25613,8 @@ export type Parser
 		// enclosing function's DECLARED CLAUSE (`tryErrorEnumType` → the same predicate over the clause name).
 		// Two derivations of ONE fact, and until this check nothing made them agree — the same shape, and the
 		// same door, the propagate form has guarded with E3059 since P1.4b.
-		try self.requireThrownTypeFitsEnclosing(func, errorType: errorType, anchor: anchor)
+		//
+		try self.requireThrownTypeFitsEnclosing(func, errorType: errorType, routed: routed, anchor: anchor)
 
 		let errorIsBoxed = self.throwsTypeIsBoxedUnion(errorType)
 
@@ -25295,10 +25664,81 @@ export type Parser
 		// the thrown box leaves the local drop sets, the throw expression's leftover temporaries and every
 		// other owned binding drop, and the owned list is restored for a sibling exit edge that still owns
 		// it. A SCALAR error owns no heap, so its move-out is inert — the Wave-1 behaviour, unchanged.
+		if routed 'toTheBlockHandler'
+			self.routeBareThrowToTryBlock(errValue, errorType: errorType, errorIsBoxed: errorIsBoxed, anchor: anchor)
+			return
+		end 'toTheBlockHandler'
+
 		self.emitHandoffExitDrops(errValue, anchor: anchor)
 
 		self.artifact.emitTerminator(self.currentBlock, op: MaxonOp.throwError(errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
 	end 'emitThrowError'
+
+	// ⭐⭐ **ROUTE A BARE `throw` TO THE ENCLOSING BLOCK-FORM `try`'s SHARED HANDLER — the THROW twin of
+	// `routeBareThrowingCallToTryBlock`, and the whole of what that construct's body means by "a throw".**
+	// Both references route it and both record that NOT routing it is a correctness bug (`routeBareThrowToTryBlock`
+	// at `2-Parser.cs:25146`, `routeBareThrowToActiveTryBlock` at `maxon-selfhosted/Parser.maxon:13342`), and
+	// shv2 MEASURED the same wrong answer before it was refused: a body holding one routed call and one
+	// `throw AErr.beta` answered 3 where the bootstrap answered 6 — the throw neither reached the handler nor
+	// left the function.
+	//
+	// ⭐ **THE ONE THING THAT HAD TO BE BUILT FOR IT IS A VALUE FORM OF THE ERROR-FLAG ENCODE**, which is now
+	// `MaxonOp.errorFlagEncode` — lowered by the SAME `encodeScalarErrorFlag` the `throwError` terminator is,
+	// so the flag a routed throw hands the handler is bit-identical to the one a returned throw hands a caller.
+	// The refusal this replaces was right that spelling the encode a second time in the parser was the wrong
+	// answer; it was the op, not the parser, that was missing.
+	//
+	// ⭐ **THREE THINGS ARE SHARED VERBATIM WITH THE CALL ROUTER, and each is a guard that construct paid for**:
+	// the error edge's args are the flag FIRST and every carried binding's value RIGHT HERE (positional against
+	// the phis, `edgeArgsFor(preLoop: false)`); the edge goes through `tryBlockThrowEdgeTarget`, so this site's
+	// own live temporaries and the body's owned bindings are released in a landing pad rather than leaked over
+	// the body's `end`; and `recordRoutedEdge` settles the handler's error TYPE and the ownership state the
+	// handler is entered with. Nothing here is a second opinion about any of them.
+	//
+	// ⚠ **BUT THE BOX IN FLIGHT LEAVES THE DROP SETS FIRST, WHICH IS THE CALL ROUTER'S OWN HAZARD WEARING THE
+	// THROW'S CLOTHES.** A `throw U.case(x)` builds an owned box and hands it to the handler, which adopts it
+	// (`enrollCaughtBox`); left in `pendingTempDrops`/`ownedBindings` the landing pad would release it on the
+	// very edge that transfers it — a double free. `emitHandoffExitDrops` performs exactly this move-out for
+	// the function-exit form, and its save/restore of `ownedBindings` is kept for its reason: a SIBLING edge
+	// (another arm, the path that did not throw) still owns whatever this one gave away.
+	function routeBareThrowToTryBlock(errValue ValueId, errorType MaxonType, errorIsBoxed bool, anchor Token)
+		var ctx = try self.tryBlocks.get(self.tryBlocks.count() - 1) otherwise panic("routeBareThrowToTryBlock: tryBlocks.get failed on a stack the caller has already tested is non-empty")
+		let member = self.recordRoutedEdge(ctx, clause: self.thrownTypeClause(errorType))
+
+		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.errorFlagEncode(flag, errorValue: errValue, errorIsBoxed: errorIsBoxed), range: SourceRange.ofToken(anchor))
+		let fused = self.routedEdgeFusedValue(ctx, member: member, flag: flag)
+
+		let errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
+		let savedOwnedBindings = self.ownedBindings
+		if self.valueIsOwnedHeap(errValue) 'boxInFlight'
+			self.removeFromOwnedBindings(errValue)
+			self.removeFromPendingTemps(errValue)
+		end 'boxInFlight'
+
+		let errTargetId = self.tryBlockThrowEdgeTarget(ctx, errArgs: errArgs, flag: flag, member: member, fusedValue: fused, anchor: anchor)
+		self.ownedBindings = savedOwnedBindings
+
+		self.emitBranch(self.currentBlock, targetId: errTargetId)
+	end 'routeBareThrowToTryBlock'
+
+	// ⭐ **THE `ThrowsClause` A THROWN VALUE'S TYPE NAMES — the THROW door's projection, where a CALL's is
+	// `signatures.throwsOf(callee)`.** Both routed edges (a bare throwing call, a bare `throw`) hand
+	// `recordRoutedEdge` one of these, so the block's error type is settled from ONE kind of answer whichever
+	// door produced it. Its two readers — this and `requireThrownTypeFitsEnclosing` — are why it is a function
+	// rather than two spellings of `nameOf(typeNameIdOf(...))`.
+	//
+	// It PANICS on a non-`named` type rather than answering `none`: every caller has already run
+	// `requireThrownTypeFitsEnclosing`'s first test, which is the one place "that is not an error type at all"
+	// is reported, and a `none` here would be that refusal silently re-decided as "this block routed nothing".
+	function thrownTypeClause(errorType MaxonType) returns ThrowsClause
+		if maxonTypeTag(errorType) != ValueTypeTag.named 'notAnErrorType'
+			panic("thrownTypeClause: a thrown value's type is not `named` — `requireThrownTypeFitsEnclosing` reports that as E3062 before either caller reaches here")
+		end 'notAnErrorType'
+
+		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(errorType)) otherwise panic("thrownTypeClause: a `named` MaxonType's TypeNameId did not resolve in the artifact's interner — every such id was minted by `intern` against this same interner")
+		return ThrowsClause.throwing(String.from(name))
+	end 'thrownTypeClause'
 
 	// ⭐ **MOVE A THROWN BOXED-UNION FIELD OUT OF ITS OWNED-LOCAL CONTAINER.** The field READ borrowed the
 	// box (its container owns it); throwing it transfers ownership to the caller. The transfer is a MOVE:
@@ -25796,6 +26236,9 @@ export type Parser
 			unaryOp(_, operand, op) gives unaryOpProducesACallResult(op) and try self.opDefines(producer, value: operand)
 			call to binOp gives false
 			compare to panicAbortValue gives false
+			// The error-flag encode is emitted by the ROUTER, never by a call's result production, so it can never be
+			// the reinterpretation sitting on top of one.
+			errorFlagEncode gives false
 		end 'reinterpretation'
 	end 'opReinterpretsResultOf'
 
@@ -25815,6 +26258,8 @@ export type Parser
 		return match try self.artifact.module.ops.get(idx) otherwise panic("opDefines: opRef {idx} not in module.ops") 'producer'
 			call(result, _, _, _, _, _, _, _) gives result == value
 			literal to panicAbortValue gives false
+			// The error-flag encode defines a value, but never a CALL's result — this test is about a direct call's.
+			errorFlagEncode gives false
 		end 'producer'
 	end 'opDefines'
 
@@ -25880,6 +26325,8 @@ export type Parser
 			// A panic is not a call and cannot throw — it ends the process — so it rejects `try` exactly as
 			// every other non-call op does.
 			panicAbortValue gives try self.rejectTryTarget(tryTok)
+			// A `try` cannot be applied to the error-flag encode: the parser emits it, no source expression is it.
+			errorFlagEncode gives try self.rejectTryTarget(tryTok)
 		end 'rewrite'
 	end 'rewriteLastCallToTryCall'
 
@@ -26447,11 +26894,11 @@ export type Parser
 
 		// Block forms own their caught box end-to-end (`parseOtherwiseBlock` enrols, binds and drops it).
 		if self.at(TokenKind.leftParen) 'bindingForm'
-			return try self.parseOtherwiseBinding(func, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)))
+			return try self.parseOtherwiseBinding(func, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: CaughtErrorForm.singleCall)
 		end 'bindingForm'
 
 		if self.at(TokenKind.charLiteral) 'blockForm'
-			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)))
+			return try self.parseOtherwiseBlock(func, bindingName: EmptySourceText, hasBinding: false, flag: flag, errorType: self.tryErrorEnumType(self.tryTargetThrows(target)), form: CaughtErrorForm.singleCall)
 		end 'blockForm'
 
 		// ⭐ **THE NON-BLOCK FORMS DISCARD THE CAUGHT ERROR, SO ITS BOX MUST DROP HERE.** `otherwise ignore`,
@@ -26625,15 +27072,18 @@ export type Parser
 		throw ParseError.otherwiseOutsideRangedReturn(value, aliasName: String.from(alias.name), low: alias.low, high: alias.high, line: tryTok.line, column: tryTok.column)
 	end 'requireOtherwiseLiteralInRange'
 
-	// `otherwise (e) 'label' … end 'label'` — bind the caught error `e = flag - 1` (typed as `errorType` so
-	// `match e` recognizes it), then parse the labelled handler block. In a match arm this block form is E2049.
+	// `otherwise (e) 'label' … end 'label'` — bind the caught error, then parse the labelled handler block.
+	// In a match arm this block form is E2049. What `e` BINDS is `declareCaughtError`'s three-way answer, not
+	// this routine's: a scalar enum's decoded ordinal, a boxed union's pointer, or — for a block whose body
+	// routed two or more error types — the raw flag under a synthesized error union.
 	//
-	// ⭐ **IT TAKES THE ERROR TYPE, NOT THE `TryTarget` IT USED TO DERIVE ONE FROM**, because a block-form
-	// `try 'l' … end 'l' otherwise (e) 'h' … end 'h'` has NO single target to derive it from: its handler is
-	// shared by every routed call in the body, and the type it binds is the one those calls agreed on
-	// (`TryBlockContext.throwsClause`). The single-call form still asks `tryTargetThrows` — one line up, at
-	// its own caller — so this routine keeps ONE input and the two constructs reach it two ways.
-	function parseOtherwiseBinding(func IrFunction, flag ValueId, errorType MaxonType) returns TryHandler throws ParseError
+	// ⭐ **IT TAKES THE ERROR TYPE AND THE FORM, NOT THE `TryTarget` IT USED TO DERIVE THEM FROM**, because a
+	// block-form `try 'l' … end 'l' otherwise (e) 'h' … end 'h'` has NO single target: its handler is shared
+	// by every routed edge in the body. For a ONE-member block the type is what those edges agreed on
+	// (`TryBlockContext.throwsClause`); for a multi-member one there is no single enum at all, and `form`
+	// carries the synthesized union that replaces it. The single-call form still asks `tryTargetThrows` — one
+	// line up, at its own caller — so this routine keeps one shape and the two constructs reach it two ways.
+	function parseOtherwiseBinding(func IrFunction, flag ValueId, errorType MaxonType, form CaughtErrorForm) returns TryHandler throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let eNameTok = try self.consume(TokenKind.identifier)
 		// ⛔ **A CAUGHT ERROR IS A DECLARATION, SO IT ASKS THE DECLARATION DOOR** — for the reason
@@ -26643,7 +27093,7 @@ export type Parser
 		// refuses the keyword first — which is exactly why the hole was invisible to the receiver rule.
 		try self.requireUnreservedName(eNameTok, declaredName: eNameTok.value)
 		try self.consume(TokenKind.rightParen)
-		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, errorType: errorType)
+		return try self.parseOtherwiseBlock(func, bindingName: eNameTok.value, hasBinding: true, flag: flag, errorType: errorType, form: form)
 	end 'parseOtherwiseBinding'
 
 	// ⭐ **ENROL A CAUGHT BOXED ERROR AS OWNED.** The flag IS the box pointer (the throw ENCODE wrote it
@@ -26665,10 +27115,15 @@ export type Parser
 		self.ownedBindings.push(binding)
 	end 'enrollCaughtBox'
 
-	// ⭐⭐ **RECOVER THE CAUGHT ERROR INTO `currentBlock` — THE ONE DECODE, SHARED BY THE TWO CONSTRUCTS THAT
-	// CATCH.** `try f() otherwise (e) 'err' … end` and `if try f() 'ok' … end 'ok' else (e) 'err' … end` are
-	// one operation reached by two grammars: the same flag, caught the same way, and the error-flag ABI has
-	// exactly two shapes to undo (`throwsTypeIsBoxedUnion`, the fact the throw ENCODE turned on):
+	// ⭐⭐ **RECOVER THE CAUGHT ERROR INTO `currentBlock` — THE ONE DECODE, SHARED BY EVERY CONSTRUCT THAT
+	// CATCHES.** `try f() otherwise (e) 'err' … end`, `if try f() 'ok' … end 'ok' else (e) 'err' … end` and a
+	// block-form `try`'s handler are one operation reached by three grammars: the same flag, caught the same
+	// way. THREE shapes to undo — the third is `form`'s, and it is not a decode at all:
+	//   • a SYNTHESIZED ERROR UNION (a block whose body routed two or more error types) — the flag is an
+	//     `ordinal + bias` on some incoming edges and a box POINTER on others, so there is no ONE decode and
+	//     no ONE type; `e` takes the flag untyped and the arms discriminate (`declareErrorUnionBinding`).
+	// The other two are the error-flag ABI's own pair (`throwsTypeIsBoxedUnion`, the fact the throw ENCODE
+	// turned on):
 	//   • a BOXED union — the flag IS the box pointer, written verbatim by the throw, so the binding takes it
 	//     with NO arithmetic and only its type columns move (`enrollCaughtBox`).
 	//   • a SCALAR enum — `e = flag - ErrorFlagOrdinalBias`, the exact inverse of the Std-tier throw ENCODE
@@ -26681,7 +27136,13 @@ export type Parser
 	//
 	// The caller has already opened the scope frame the binding lands in, and owns the matching
 	// `ownedFloor` / `popScope` / `dropArmScopedOwned` — this routine only declares.
-	function declareCaughtError(flag ValueId, errorType MaxonType, bindingName ByteArray, hasBinding bool, anchor Token) throws ParseError
+	function declareCaughtError(flag ValueId, errorType MaxonType, bindingName ByteArray, hasBinding bool, form CaughtErrorForm, anchor Token) throws ParseError
+		let caughtUnion = caughtErrorUnionMatch(form)
+		if errorUnionIsSynthesized(caughtUnion) 'aSynthesizedUnion'
+			try self.declareErrorUnionBinding(flag, info: requireErrorUnionInfo(caughtUnion), bindingName: bindingName, hasBinding: hasBinding, anchor: anchor)
+			return
+		end 'aSynthesizedUnion'
+
 		if self.throwsTypeIsBoxedUnion(errorType) 'boxedError'
 			var eBinding = VarInfo.createValueBinding(EmptySourceText, varType: errorType, mutable: false, boundValue: flag)
 			if hasBinding 'nameBoxedE'
@@ -26701,11 +27162,95 @@ export type Parser
 		_ = try self.scope.declareValueBinding(bindingName, varType: errorType, mutable: false, value: eValue) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: anchor.line, column: anchor.column)
 	end 'declareCaughtError'
 
+	// ⭐⭐ **DECLARE A SYNTHESIZED-ERROR-UNION `(e)` BINDING — the THIRD shape of caught error, and the only one
+	// that owns nothing.** `e` is bound to the FLAG itself and typed `integer`, exactly as v1 binds it: the
+	// flag is an `ordinal + bias` on some incoming edges and a heap box POINTER on others, so there is no one
+	// type it could carry and no one drop it could owe. Claiming either would be a measured fault in one
+	// direction or the other — marking it owned would decref an ordinal on a scalar member's edge, and giving
+	// it a member's `named` type would tell `emitDecref` to run that member's `__destruct_` over a number.
+	//
+	// ⭐ **SO THE BOX IS RELEASED PER ARM INSTEAD**, where the member IS known — `parseMatchCommon`'s
+	// per-arm `enrollCaughtBox`, plus `emitErrorUnionDefaultCleanup` for a `default` that names none. The
+	// bootstrap reaches the same split (`__union_arm_` bindings and `EmitUnionDefaultCleanupBlock`); v1 avoids
+	// the default case only because its box lives in a separate slot the handler's scope drops.
+	//
+	// The registration is what lets `match e` find the union by the name the author wrote; `parseOtherwiseBlock`
+	// pops it at the handler's `end`, so a nested handler's binding cannot be mistaken for this one.
+	function declareErrorUnionBinding(flag ValueId, info ErrorUnionInfo, bindingName ByteArray, hasBinding bool, anchor Token) throws ParseError
+		if not hasBinding 'nothingToBind'
+			return
+		end 'nothingToBind'
+
+		_ = try self.scope.declareValueBinding(bindingName, varType: MaxonType.integer, mutable: false, value: flag) otherwise throw ParseError.localShadowsSelfField(String.from(bindingName), typeName: String.from(self.enclosingType), line: anchor.line, column: anchor.column)
+		self.errorUnionBindings.push(ErrorUnionBinding.create(bindingName, flag: flag, info: info))
+	end 'declareErrorUnionBinding'
+
+	// ⛔⛔ **THE SYNTHESIZED ERROR UNION A MATCH SCRUTINEE NAMES — AND THE TEST IS THE BINDING'S IDENTITY,
+	// NOT ITS NAME.** The name is how the record is FOUND; what makes it the union is that the name still
+	// resolves, in the scope the `match` stands in, to the very VALUE the handler bound. shv2 permits
+	// shadowing, so a name-only test handed `let e = Inner.splat` the error's dispatch and produced a silent
+	// wrong answer — see `ErrorUnionInfo`'s header for the measurement. `lookupValue` IS the shadowing rule
+	// (innermost declaration wins), so asking it is asking the one authority rather than re-deciding scope
+	// here.
+	//
+	// Walked innermost-first anyway, so a nested handler's `(f)` wins over an enclosing `(e)` of the same
+	// name — v1's `lastErrorUnionBindingIndex`, and its reason.
+	function errorUnionForScrutinee(name ByteArray) returns ErrorUnionMatch
+		if name.isEmpty() 'notABareName'
+			return ErrorUnionMatch.notAUnion
+		end 'notABareName'
+
+		// An unbound name is not this handler's binding either — it is a name-resolution failure the
+		// expression parse is about to report with a position of its own.
+		let bound = try self.scope.lookupValue(name) otherwise return ErrorUnionMatch.notAUnion
+
+		var i = self.errorUnionBindings.count()
+		while i > 0 'innermostFirst'
+			i = i - 1
+			let binding = try self.errorUnionBindings.get(i) otherwise panic("errorUnionForScrutinee: errorUnionBindings.get OOB at {i} on a list walked downwards from its own count")
+			if binding.name.equals(name) and binding.flag == bound 'found'
+				return ErrorUnionMatch.synthesized(binding.info)
+			end 'found'
+		end 'innermostFirst'
+		return ErrorUnionMatch.notAUnion
+	end 'errorUnionForScrutinee'
+
+	// Record that the enclosing block-form handler's binding HAS now been matched on (E3084's other half).
+	// An empty `tryBindingName` — every context but an open block-form handler — can match nothing.
+	//
+	// ⚠⚠ **IT IS KEYED ON THE NAME, WHERE `errorUnionForScrutinee` IS KEYED ON THE BINDING'S IDENTITY — and
+	// the asymmetry is deliberate, because the two ask different questions.** The DISPATCH asks *"which value
+	// is being discriminated?"*, which a shadow answers differently and must; this rule asks *"did the author
+	// write a `match` on this name in this handler?"*, which is syntactic, and both references implement it
+	// syntactically (`_tryBlockMatchedBinding` / v1's flag). Tightening it to the identity was MEASURED to
+	// refuse a handler whose only `match e` names a shadow — a program the C# oracle compiles and runs — so
+	// the strict reading is not the language's. `try-block-shadowed-binding.md` pins both halves.
+	function noteTryBlockBindingMatched(name ByteArray)
+		if self.tryBindingName.isEmpty() or not self.tryBindingName.equals(name) 'notTheHandlersBinding'
+			return
+		end 'notTheHandlersBinding'
+
+		self.tryBindingMatched = true
+	end 'noteTryBlockBindingMatched'
+
+	// The scrutinee token's name when a `match` names a BARE binding and nothing else — `match e 'k'`, an
+	// identifier followed immediately by the block label. Two facts about a block-form handler are asked of
+	// that name and neither survives `parseExpression` (which yields the flag phi, an integer like any
+	// other): whether the handler discriminated (E3084) and whether the scrutinee is a synthesized union.
+	// EMPTY for every other scrutinee shape, which is exactly "this is not that binding".
+	function matchScrutineeBareName(index TokenIndex) returns ByteArray
+		if self.kindAt(index) != TokenKind.identifier or self.kindAt(index + 1) != TokenKind.charLiteral 'notABareBinding'
+			return EmptySourceText
+		end 'notABareBinding'
+
+		return self.tokenAt(index).value
+	end 'matchScrutineeBareName'
+
 	// Parse an `otherwise` handler BLOCK (`otherwise ['(e)'] 'label' … end 'label'`) into the error block.
 	// The caught error is recovered by the shared `declareCaughtError` — the same decode `if try … else (e)`
 	// runs — in a fresh scope frame opened before the body and drained after it. Both forms are
 	// E2049 in a match arm (the block label is where the arm-body single-statement rule is violated).
-	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, errorType MaxonType) returns TryHandler throws ParseError
+	function parseOtherwiseBlock(func IrFunction, bindingName ByteArray, hasBinding bool, flag ValueId, errorType MaxonType, form CaughtErrorForm) returns TryHandler throws ParseError
 		if not self.at(TokenKind.charLiteral) 'noLabel'
 			let tok = self.current()
 			throw ParseError.matchMissingBlockId(tok.line, column: tok.column)
@@ -26726,10 +27271,33 @@ export type Parser
 		let ownedFloor = self.ownedBindings.count()
 		self.scope.pushScope()
 
-		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, anchor: labelTok)
+		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, form: form, anchor: labelTok)
+
+		// ⭐ **E3084's BRACKET.** A BLOCK-form handler is reached by every routed edge, so one that never
+		// `match`es on its binding has silently swallowed every error the body could raise; the single-call
+		// forms catch ONE call's error and are free to ignore it. The question is asked of the handler's own
+		// body and nothing else, so the state is saved and restored around exactly that parse — a nested `try`
+		// block inside this handler asks its own and gives this one back untouched.
+		let savedBindingName = self.tryBindingName
+		let savedBindingMatched = self.tryBindingMatched
+		self.tryBindingName = tryBlockBindingToMatch(form, bindingName: bindingName, hasBinding: hasBinding)
+		self.tryBindingMatched = false
+		let unionBindingDepth = self.errorUnionBindings.count()
 
 		let errEnd = try self.parseBlockBody(func, block: errBlock, label: labelTok.value)
 		self.scope.popScope()
+
+		let matchedTheBinding = self.tryBindingMatched
+		let requiredBindingName = self.tryBindingName
+		self.tryBindingName = savedBindingName
+		self.tryBindingMatched = savedBindingMatched
+		while self.errorUnionBindings.count() > unionBindingDepth 'closeUnionScope'
+			_ = try self.errorUnionBindings.pop() otherwise panic("parseOtherwiseBlock: errorUnionBindings.pop failed above the depth this handler recorded")
+		end 'closeUnionScope'
+
+		if not requiredBindingName.isEmpty() and not matchedTheBinding 'neverDiscriminated'
+			throw ParseError.tryBlockBindingNotMatched(String.from(requiredBindingName), line: labelTok.line, column: labelTok.column)
+		end 'neverDiscriminated'
 
 		// Release the caught box on whichever edge leaves the handler — a `__destruct_<U>`/decref on a live
 		// fall-through (into `errEnd`), the terminating statement's own `emitScopeDrops` on a return/throw —
@@ -26845,14 +27413,19 @@ export type Parser
 		// that reads or re-moves such a binding would be reasoning about a move that its own path never made.
 		self.restoreMoveMark(ctx.edgeMoveMark)
 
-		let handler = try self.parseOtherwiseBinding(func, flag: flagPhi, errorType: self.tryErrorEnumType(ctx.throwsClause))
+		// ⭐ **THE SYNTHESIZED ERROR UNION, BUILT ONLY NOW — the member list is complete exactly once the body
+		// is, and the fused phi must be the LAST block arg, so it cannot be minted before the last routed edge
+		// has recorded its own args.**
+		let errorUnion = self.synthesizeErrorUnion(ctx, errBlock: self.currentBlock)
+
+		let handler = try self.parseOtherwiseBinding(func, flag: flagPhi, errorType: self.tryErrorEnumType(ctx.throwsClause), form: CaughtErrorForm.blockForm(errorUnion))
 		var errEnd = self.currentBlock
 		let handlerMoveMark = self.captureMoveMark()
 
 		return try self.finishTryBlock(func, bodyEnd: bodyEnd, errEnd: errEnd, bodyVals: bodyVals, handler: handler, bodyMoveMark: bodyMoveMark, handlerMoveMark: handlerMoveMark, tryTok: tryTok)
 	end 'parseTryBlockStatement'
 
-	// **E3083 — a block-form `try` whose body holds no throwing call**, and the SECOND-ERROR-TYPE refusal
+	// **E3083 — a block-form `try` whose body holds no throwing call**, and the MOVED-BETWEEN-EDGES refusal
 	// that could not be raised where it was found. Both are questions about the WHOLE body, so both are
 	// asked once here, after it is parsed and before the handler is.
 	function requireRoutableTryBlockBody(ctx TryBlockContext, tryTok Token) throws ParseError
@@ -26864,19 +27437,6 @@ export type Parser
 			throw ParseError.tryBlockNoThrows(String.from(ctx.label), line: tryTok.line, column: tryTok.column)
 		end 'noThrowingCalls'
 
-		// ⚠ **TWO DIFFERENT ERROR TYPES REACHING ONE HANDLER IS A REAL MAXON PROGRAM SHV2 CANNOT YET LOWER.**
-		// The references synthesize an ad-hoc error UNION for it — v1's `errorTypeNames` + `__tryBlockDiscr`
-		// slot (`Parser.maxon:12686`), the bootstrap's `IrErrorUnionType` (`2-Parser.cs:9640`) — and the
-		// handler's `match e` then dispatches on `(discriminant, ordinal)` pairs with its own exhaustiveness,
-		// bare-name ambiguity and boxed-payload rules. shv2 has none of that: one flag phi carries one
-		// encoding, so a second enum's ordinals would be decoded as the first's — the exact silent miscompile
-		// E3059 refuses at the propagate door. Refused here until the union is built, rather than lowered
-		// wrongly. It cannot fire on a program that compiles today: no block-form `try` did.
-		if not ctx.conflictingType.isEmpty() 'twoErrorTypes'
-			let first = try throwsClauseName(ctx.throwsClause) otherwise panic("requireRoutableTryBlockBody: '{String.from(ctx.label)}' recorded a CONFLICTING error type against a `none` clause — a conflict is only ever recorded against a clause already set, and the throwing check above passed")
-			throw ParseError.unsupported("a block-form `try` whose body can throw TWO different error types ('{first}' and '{ctx.conflictingType}') — the shared handler binds ONE error enum, and shv2 has no synthesized error union to discriminate them (the references carry a per-block discriminant slot beside the flag). Give each error type its own `try` block, or route the second through a single-statement `try … otherwise`", line: tryTok.line, column: tryTok.column)
-		end 'twoErrorTypes'
-
 		// ⚠ **THE BODY GAVE AN OUTER VALUE AWAY BETWEEN TWO ROUTED CALLS, SO THE HANDLER'S ONE BLOCK IS
 		// REACHED WITH THAT VALUE BOTH LIVE AND ALREADY MOVED.** The construct's N throw edges all land on one
 		// error block, and the drop that reconciles a conditional move is emitted PER EDGE
@@ -26884,12 +27444,96 @@ export type Parser
 		// need its release placed on some throw edges and not others, which is a per-edge landing pad this
 		// block does not build (a site owing nothing gets no pad at all). Lowered anyway it is a leak on one
 		// edge or a double free on another, neither of which the type system would catch, so it is refused —
-		// the same call the two-error-type arm above makes, and the same one `poisonOwningBinding` makes for a
-		// move that escapes a LOOP, whose back edge poses this question in its own shape.
+		// the same call the too-wide-to-fuse arm above makes, and the same one `poisonOwningBinding` makes for
+		// a move that escapes a LOOP, whose back edge poses this question in its own shape.
+		// ⚠ **A MEMBER THE FUSED DISPATCH LINE CANNOT HOLD, and it only matters now.** The handler tells its
+		// members apart by a single integer built from each member's own tag range; a FLOAT-backed error enum's
+		// tags are IEEE-754 bit patterns, so one spanning a negative and a positive double is wider than i64
+		// and no such line exists. A block routing that type ALONE is unaffected — it fuses nothing — which
+		// is why the question is asked here, where the second member is known, rather than at the edge.
+		if ctx.members.count() > 1 and not ctx.unfusableMember.isEmpty() 'errorTypeTooWideToFuse'
+			throw ParseError.unsupported("a block-form `try` whose body routes '{ctx.unfusableMember}' alongside another error type — the shared handler tells its members apart by one integer built from each member's own case tags, and this one's tags span more of the i64 range than that line can hold (a FLOAT-backed enum's tags are IEEE-754 bit patterns, so two cases can be ~1.8e19 apart). Give it its own `try` block, or route it through a single-statement `try … otherwise`", line: tryTok.line, column: tryTok.column)
+		end 'errorTypeTooWideToFuse'
+
 		if ctx.conflictingMoveEdge 'movedBetweenThrowEdges'
 			throw ParseError.unsupported("a block-form `try` whose body MOVES a value declared outside the block (into a field, a union payload, a consuming call or a `return`) BETWEEN two throwing calls — the block's throw edges share one handler, and they would reach it with that value still owned on the earlier edges and already given away on the later ones, so its drop belongs on some throw edges and not others. Move the value before the `try` block or after it, or give the two throwing calls their own `try` blocks", line: tryTok.line, column: tryTok.column)
 		end 'movedBetweenThrowEdges'
 	end 'requireRoutableTryBlockBody'
+
+	// ⭐⭐ **BUILD THE SYNTHESIZED ERROR UNION — the `(e)` binding's type when the body routed TWO OR MORE
+	// distinct error enums, which is what most of `/specs/try-block.md` is made of.** Answers `notAUnion` for
+	// a body that routed one, and that answer costs nothing: no phi is minted, no edge is touched, and the
+	// block emits byte-for-byte what it emitted before this existed.
+	//
+	// ⭐ **THREE THINGS HAPPEN AND THEY ARE ONE THING: THE FUSED ORDINAL BECOMES A REAL SSA VALUE.**
+	//   1. A phi is APPENDED to the error block's args, past the flag and the carried set. Block args and edge
+	//      args are POSITIONAL, so appending on both sides in the same order IS the pairing — the contract
+	//      `parseTryBlockStatement` states for the flag phi, one slot further along. It is safe to append here
+	//      and nowhere earlier: every routed edge is recorded by the time the body's `end` is consumed.
+	//   2. Each recorded edge PUSHES its fused ordinal onto its own arg list — the very array the `BranchEdge`
+	//      holds, so the push IS the attachment.
+	//   3. A BOXED member's edge finally computes its ordinal, in the landing pad forced for it (see
+	//      `tryBlockThrowEdgeTarget`). It could not be computed at the edge: the load must not stand where the
+	//      flag may be `0`.
+	//
+	// ⭐ **THE LAYOUT IS A DISPATCH TABLE OVER `(member, case)` PAIRS**, in member-then-declaration order,
+	// carrying the FUSED tags. `ErrorUnionInfo`'s header says why it holds no payload slots and why it is
+	// registered nowhere.
+	function synthesizeErrorUnion(ctx TryBlockContext, errBlock IrBlock) returns ErrorUnionMatch
+		if ctx.members.count() < 2 'oneErrorTypeIsNoUnion'
+			return ErrorUnionMatch.notAUnion
+		end 'oneErrorTypeIsNoUnion'
+
+		let fusedPhi = self.mintPhi(errBlock, tag: ValueTypeTag.integer, nameId: UnnamedTypeId)
+
+		// ⚠ **TWO WALKS, AND THE SPLIT IS THE BORROW RULE.** Computing an ordinal EMITS (a boxed member's
+		// deferred tag load), so it mutates `self`; a borrow taken out of `ctx.routedEdges` — the edge's own
+		// arg list — may not be held across such a call (E3019). So every ordinal is computed first, into a
+		// list of this routine's own, and attached in a second walk that emits nothing.
+		var ordinals = ValueIdArray.create()
+		for k in 0 upto ctx.routedEdges.count() 'computeEach'
+			let edge = try ctx.routedEdges.get(k) otherwise panic("synthesizeErrorUnion: routedEdges.get OOB at {k} on a list walked to its own count")
+			let ordinal = self.routedEdgeOrdinalForUnion(edge.member, block: edge.block, flag: edge.flag, fusedValue: edge.fusedValue, anchor: edge.anchor)
+			ordinals.push(ordinal)
+		end 'computeEach'
+		for k in 0 upto ctx.routedEdges.count() 'attachEach'
+			let ordinal = try ordinals.get(k) otherwise panic("synthesizeErrorUnion: ordinals.get OOB at {k} — the list is filled one entry per edge in the walk above")
+			var edge = try ctx.routedEdges.get(k) otherwise panic("synthesizeErrorUnion: routedEdges.get OOB at {k} on a list walked to its own count")
+			edge.attachFusedOrdinal(ordinal)
+		end 'attachEach'
+
+		var layout = EnumLayout.create(SynthesizedErrorUnionName, isUnion: true, conformsTo: ByteArrayArray.create(), visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
+		var caseMembers = TryBlockErrorMemberArray.create()
+		for m in 0 upto ctx.members.count() 'eachMember'
+			let member = try ctx.members.get(m) otherwise panic("synthesizeErrorUnion: members.get OOB at {m} on a list walked to its own count")
+			for i in 0 upto member.layout.caseCount() 'eachCase'
+				layout.addCase(member.layout.caseNameAt(i), tag: member.layout.tagOfIndex(i) + member.fusedTagOffset, rawValue: "", payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+				caseMembers.push(member)
+			end 'eachCase'
+		end 'eachMember'
+
+		return ErrorUnionMatch.synthesized(ErrorUnionInfo.create(layout, caseMembers: caseMembers, fusedOrdinal: fusedPhi))
+	end 'synthesizeErrorUnion'
+
+	// The value one recorded edge contributes to the fused phi. The two SCALAR shapes settled theirs where the
+	// edge was built (`routedEdgeFusedValue`); a BOXED member's is emitted HERE, into the landing pad that
+	// exists for exactly this — the pad ends in an unconditional branch, which is what lets an op be appended
+	// to it after the fact, and it is reached only when the flag really is a box pointer.
+	function routedEdgeOrdinalForUnion(member TryBlockErrorMember, block IrBlock, flag ValueId, fusedValue ValueId, anchor Token) returns ValueId
+		if not member.isBoxed 'alreadyComputed'
+			return fusedValue
+		end 'alreadyComputed'
+
+		let saved = self.currentBlock
+		self.currentBlock = block
+		let tag = self.emitUnionTagLoad(flag, range: SourceRange.ofToken(anchor))
+		var fused = tag
+		if member.fusedTagOffset != 0 'shifted'
+			fused = self.emitAddLiteral(tag, addend: member.fusedTagOffset, anchor: anchor)
+		end 'shifted'
+		self.currentBlock = saved
+		return fused
+	end 'routedEdgeOrdinalForUnion'
 
 	// **E2050 — a block-form `try` must be followed by its `otherwise (e) 'label' … end` handler.** The
 	// construct exists to funnel several throwing calls into ONE handler; with no handler there is nothing
@@ -26898,10 +27542,23 @@ export type Parser
 	//
 	// The BINDING is required for the same reason it is there: `parseOtherwiseBinding` consumes the `(e)`,
 	// and the handler's whole job is to tell the routed errors apart, which needs a name to `match` on.
+	//
+	// ⭐ **TWO SPELLINGS OF ONE HANDLER, AND BOTH ARE CANONICAL.** The handler may be ATTACHED to the body's
+	// closer — `end 'work' otherwise (e) 'h'`, which `/specs/map-try-otherwise-block.md` uses and
+	// `specs-shv2/map-try-otherwise-block.md` pins — or STANDALONE, opening its own line after `end 'work'`,
+	// which is the only form `/specs/try-block.md` writes (30 times). The two differ by LAYOUT and nothing
+	// else: the newlines between the body's `end` and the `otherwise` are the whole difference, so the
+	// handler is looked for PAST them.
+	//
+	// ⚠ **THE CURSOR MOVES ONLY WHEN AN `otherwise` IS ACTUALLY THERE.** Skipping the newlines first and
+	// then testing would consume the layout ahead of an ordinary following statement, and the E2050 this
+	// routine raises would be anchored past it.
 	function requireTryBlockOtherwise(tryTok Token) throws ParseError
-		if not self.at(TokenKind.otherwise) 'noHandler'
+		let handlerIndex = self.indexPastNewlines(self.pos)
+		if self.kindAt(handlerIndex) != TokenKind.otherwise 'noHandler'
 			throw ParseError.tryBlockMissingOtherwise(false, line: tryTok.line, column: tryTok.column)
 		end 'noHandler'
+		self.pos = handlerIndex
 
 		try self.consume(TokenKind.otherwise)
 		if not self.at(TokenKind.leftParen) 'noBinding'
@@ -27024,7 +27681,7 @@ export type Parser
 		end 'cannotThrow'
 
 		var ctx = try self.tryBlocks.get(self.tryBlocks.count() - 1) otherwise panic("routeBareThrowingCallToTryBlock: tryBlocks.get failed on a non-empty stack")
-		self.recordRoutedEdge(ctx, clause: clause)
+		let member = self.recordRoutedEdge(ctx, clause: clause)
 
 		let flag = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.rewriteRoutedCallToTryCall(opIdx, flag: flag, callee: callee)
@@ -27033,16 +27690,14 @@ export type Parser
 		// call in the same body splits THIS block in turn — which is how N calls reach one handler with no
 		// N-aware bookkeeping anywhere.
 		let okBlock = self.newBlock(ctx.func, label: b"tryblkok", line: ctx.tryTok.line)
+		// ⚠ **THE FUSED ORDINAL IS COMPUTED HERE, WHILE THIS BLOCK STILL HAS NO TERMINATOR.** It is the ONE
+		// moment it can be: `IrModule.appendOp` refuses to append past a conditional branch (an op there would
+		// run on the not-taken edge only), and the branch is two statements away. A first SCALAR member spends
+		// nothing — see `routedEdgeFusedValue`.
+		let fused = self.routedEdgeFusedValue(ctx, member: member, flag: flag)
 		let isErr = self.emitCompareAgainstLiteral(flag, literal: NoErrorFlag, op: MaxonCmpOp.ne, opTok: ctx.tryTok)
 
-		// ⭐ **THE ERROR EDGE'S ARGS: THE FLAG, THEN EVERY CARRIED BINDING'S VALUE RIGHT HERE.** Positional
-		// against the phis `parseTryBlockStatement` minted in that order. `edgeArgsFor(preLoop: false)` reads
-		// each binding's CURRENT value, which is exactly what this point in the body left it holding.
-		var errArgs = ValueIdArray.create()
-		errArgs.push(flag)
-		for arg in self.edgeArgsFor(ctx.phiVars, preLoop: false) 'carried'
-			errArgs.push(arg)
-		end 'carried'
+		let errArgs = self.tryBlockErrorEdgeArgs(ctx, flag: flag)
 
 		// ⛔⛔ **THIS CALL'S OWN RESULT IS OWNED ONLY ON THE OK EDGE, SO IT COMES OUT OF THE PENDING LIST
 		// WHILE THE ERROR EDGE IS BUILT.** `emitCall` mints the result BEFORE it appends the op, and a managed
@@ -27067,7 +27722,7 @@ export type Parser
 			self.removeFromPendingTemps(result)
 		end 'offTheErrorEdge'
 
-		let errTargetId = self.tryBlockThrowEdgeTarget(ctx, errArgs: errArgs)
+		let errTargetId = self.tryBlockThrowEdgeTarget(ctx, errArgs: errArgs, flag: flag, member: member, fusedValue: fused, anchor: ctx.tryTok)
 
 		if resultIsOwnedTemp 'backOnTheOkPath'
 			self.pendingTempDrops.push(result)
@@ -27076,6 +27731,26 @@ export type Parser
 		self.emitCondBranch(self.currentBlock, cond: isErr, thenId: errTargetId, elseId: okBlock.id, ifTok: ctx.tryTok)
 		self.currentBlock = okBlock
 	end 'routeBareThrowingCallToTryBlock'
+
+	// ⭐⭐ **ONE ROUTED ERROR EDGE'S ARGUMENT LIST: THE FLAG FIRST, THEN EVERY CARRIED BINDING'S VALUE RIGHT
+	// HERE.** Positional against the phis `parseTryBlockStatement` minted in that order — and the fused
+	// ordinal `synthesizeErrorUnion` appends LAST lands past both, on this list and on `blockArgs` alike.
+	// `edgeArgsFor(preLoop: false)` reads each binding's CURRENT value, which is exactly what this point in
+	// the body left it holding.
+	//
+	// ⚠ **IT IS ONE ROUTINE BECAUSE THE ORDER IS AN ABI BETWEEN TWO SITES THAT CANNOT SEE EACH OTHER.** Both
+	// routing doors build this list and `errBlock.blockArgs` is matched against it BY POSITION, so a leading
+	// argument added to one copy and not the other is a phi reading another binding's value — a wrong answer,
+	// with nothing to report it. `parseWhileStatement` keeps its own edge list in one place
+	// (`loopHeaderArgs`) for the same reason.
+	function tryBlockErrorEdgeArgs(ctx TryBlockContext, flag ValueId) returns ValueIdArray
+		var errArgs = ValueIdArray.create()
+		errArgs.push(flag)
+		for arg in self.edgeArgsFor(ctx.phiVars, preLoop: false) 'carried'
+			errArgs.push(arg)
+		end 'carried'
+		return errArgs
+	end 'tryBlockErrorEdgeArgs'
 
 	// ⭐⭐ **WHERE THE THROW EDGE ACTUALLY GOES — the shared error block, or a LANDING PAD in front of it
 	// that releases what the body owns at THIS call.** A routed throw jumps over the body's `end`, so none
@@ -27091,11 +27766,17 @@ export type Parser
 	// BOTH of its edges drop at the fork — would leak them on the path that did not throw.
 	//
 	// A site owing nothing branches straight to the error block: no pad, no block, no drops.
-	function tryBlockThrowEdgeTarget(ctx TryBlockContext, errArgs ValueIdArray) returns BlockId
+	//
+	// ⚠ **A BOXED MEMBER'S EDGE ALWAYS TAKES A PAD, WHETHER OR NOT IT OWES A DROP.** Its fused ordinal is the
+	// tag LOADED out of the box, and on the success edge the flag is `0` — so the load has exactly one place
+	// it can stand: a block only the error edge reaches. That is what the pad is, and v1 builds the same block
+	// for the same reason under the name `boxland`.
+	function tryBlockThrowEdgeTarget(ctx TryBlockContext, errArgs ValueIdArray, flag ValueId, member TryBlockErrorMember, fusedValue ValueId, anchor Token) returns BlockId
 		let owesTemps = self.pendingTempDrops.count() > WholeStatementTempFloor
 		let owesBindings = self.ownedBindings.count() > ctx.ownedFloor
-		if not owesTemps and not owesBindings 'nothingToRelease'
+		if not owesTemps and not owesBindings and not member.isBoxed 'nothingToRelease'
 			self.recordBranchEdge(self.currentBlock, targetId: ctx.errBlockId, argIds: errArgs)
+			ctx.routedEdges.push(RoutedErrorEdge.create(errArgs, flag: flag, block: self.currentBlock, member: member, fusedValue: fusedValue, anchor: anchor))
 			return ctx.errBlockId
 		end 'nothingToRelease'
 
@@ -27112,9 +27793,46 @@ export type Parser
 		self.currentBlock = saved
 
 		self.recordBranchEdge(pad, targetId: ctx.errBlockId, argIds: errArgs)
+		ctx.routedEdges.push(RoutedErrorEdge.create(errArgs, flag: flag, block: pad, member: member, fusedValue: fusedValue, anchor: anchor))
 		self.emitBranch(pad, targetId: ctx.errBlockId)
 		return pad.id
 	end 'tryBlockThrowEdgeTarget'
+
+	// ⭐⭐ **THE FUSED ORDINAL THIS EDGE WILL CARRY, computed where the edge leaves from — or NOT computed at
+	// all, which is the case that matters most.** Three shapes, and `RoutedErrorEdge`'s header argues each:
+	//
+	//   • **the FIRST member, SCALAR** — its `fusedTagOffset` IS `ErrorFlagOrdinalBias`, so `tag + bias` is
+	//     already the fused ordinal and the flag serves unchanged. **Nothing is emitted.** Every block-form
+	//     `try` that turns out to route ONE error type is this shape, which is how the whole error-union
+	//     mechanism costs a single-member block exactly nothing.
+	//   • **a LATER member, SCALAR** — `flag + (offset - bias)`, emitted here. A second member exists only in a
+	//     block that IS a union, so the op is never dead.
+	//   • **a BOXED member** — the tag is a LOAD, and it cannot stand on a path where the flag may be `0`.
+	//     Deferred to the landing pad `tryBlockThrowEdgeTarget` forces for exactly this reason, and filled by
+	//     `routedEdgeOrdinalForUnion` only if the block turns out to be a union.
+	function routedEdgeFusedValue(ctx TryBlockContext, member TryBlockErrorMember, flag ValueId) returns ValueId
+		if member.isBoxed 'deferredToThePad'
+			return flag
+		end 'deferredToThePad'
+
+		let shift = member.fusedTagOffset - ErrorFlagOrdinalBias
+		if shift == 0 'theFlagIsAlreadyTheOrdinal'
+			return flag
+		end 'theFlagIsAlreadyTheOrdinal'
+
+		return self.emitAddLiteral(flag, addend: shift, anchor: ctx.tryTok)
+	end 'routedEdgeFusedValue'
+
+	// `subject + addend` as an integer value, through the two ops the fused-ordinal shift needs and nothing
+	// else. Its two callers are the two halves of that shift (the routing-time scalar form and the pad's
+	// deferred boxed form), so the addition is written once.
+	function emitAddLiteral(subject ValueId, addend ParsedInt, anchor Token) returns ValueId
+		let range = SourceRange.ofToken(anchor)
+		let rhs = self.emitLiteral(addend, valueType: MaxonType.integer, range: range)
+		let sum = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.binOp(sum, lhs: subject, rhs: rhs, op: MaxonBinOp.add), range: range)
+		return sum
+	end 'emitAddLiteral'
 
 	// Convert the routed call at `opIdx` into the `tryCall` / `witnessTryDispatch` that DEFINES `flag`,
 	// through the same two commit routines an explicit `try` uses — so a routed call and a `try`ed one carry
@@ -27132,39 +27850,118 @@ export type Parser
 		end 'routed'
 	end 'rewriteRoutedCallToTryCall'
 
-	// ⭐ **WHAT A ROUTED CALL TELLS THE SHARED HANDLER — the error TYPE it must bind and the OWNERSHIP state
-	// it will be entered with.** Both are settled by the FIRST routed call and every later one must AGREE
-	// with it, so both are asked off ONE "is this the first?" test rather than two that could drift apart.
-	// A disagreement on either axis is RECORDED for `requireRoutableTryBlockBody` to refuse at the body's
-	// end, because this path cannot throw (see `routeBareThrowingCallToTryBlock`).
-	function recordRoutedEdge(ctx TryBlockContext, clause ThrowsClause)
+	// ⭐ **WHAT A ROUTED EDGE TELLS THE SHARED HANDLER — which UNION MEMBER it raises, and the OWNERSHIP state
+	// the handler will be entered with.** Returns the member; the caller needs it to compute the edge's fused
+	// ordinal. Both routing doors (a bare throwing CALL, a bare `throw`) come through here, so the member set
+	// and the entry ownership are settled from one place whichever door produced the edge.
+	//
+	// The ownership half is settled by the FIRST routed edge and every later one must AGREE with it; a
+	// disagreement is RECORDED for `requireRoutableTryBlockBody` to refuse at the body's end, because this
+	// path cannot throw (see `routeBareThrowingCallToTryBlock`).
+	function recordRoutedEdge(ctx TryBlockContext, clause ThrowsClause) returns TryBlockErrorMember
 		// The outer bindings' move state ON THIS EDGE. Truncated to the block's owned floor: the body's own
 		// bindings vary in number between routed calls and the landing pad releases them anyway, so only the
 		// outer ones are comparable — and only they can still be owed a drop past the handler.
 		let edgeMark = moveMarkPrefix(self.captureMoveMark(), height: ctx.ownedFloor)
 
-		if not throwsClauseIsThrowing(ctx.throwsClause) 'firstRoutedCall'
+		if not throwsClauseIsThrowing(ctx.throwsClause) 'firstRoutedEdge'
 			ctx.throwsClause = clause
 			ctx.edgeMoveMark = edgeMark
-			return
-		end 'firstRoutedCall'
+		end 'firstRoutedEdge' else 'laterRoutedEdge'
+			if not moveMarksAgree(ctx.edgeMoveMark, b: edgeMark) 'movedBetweenEdges'
+				ctx.conflictingMoveEdge = true
+			end 'movedBetweenEdges'
+		end 'laterRoutedEdge'
 
-		if not moveMarksAgree(ctx.edgeMoveMark, b: edgeMark) 'movedBetweenEdges'
-			ctx.conflictingMoveEdge = true
-		end 'movedBetweenEdges'
-
-		let recorded = try throwsClauseName(ctx.throwsClause) otherwise panic("recordRoutedEdge: a clause that answers `throwing` has a name")
-		let arriving = try throwsClauseName(clause) otherwise panic("recordRoutedEdge: the caller routes only on a `throwing` clause")
-		if recorded == arriving 'sameErrorType'
-			return
-		end 'sameErrorType'
-
-		// FIRST conflict only: the message names the two types the block cannot reconcile, and a third would
-		// tell the author nothing the first pair does not.
-		if ctx.conflictingType.isEmpty() 'firstConflict'
-			ctx.conflictingType = arriving
-		end 'firstConflict'
+		return self.recordRoutedErrorType(ctx, clause: clause)
 	end 'recordRoutedEdge'
+
+	// ⭐⭐ **FIND OR ADD THIS ERROR TYPE AS A MEMBER OF THE BLOCK'S SYNTHESIZED UNION, AND FIX ITS SLICE OF THE
+	// FUSED DISPATCH LINE.** Deduped by NAME, in first-routed order — both references do exactly this and call
+	// the position a discriminant. shv2 spends the position differently: instead of carrying it on a second
+	// phi and testing a PAIR at every handler arm, each member is given `fusedTagOffset`, and
+	// `<member's own case tag> + fusedTagOffset` is the ONE number an arm tests.
+	//
+	// ⭐⭐ **WHY THAT NUMBER IS INJECTIVE, WHICH IS THE WHOLE CORRECTNESS ARGUMENT.** Each member is handed
+	// the CLOSED interval `[floor, floor + width]`, where `width` is its OWN tag range (`maxTag - minTag`)
+	// and `floor` is one past the previous member's top — so the intervals are disjoint and strictly
+	// ascending, and a member's own cases are distinct inside its interval because its tags are distinct
+	// (E3031 refuses two cases with one raw value). Hence distinct `(member, case)` pairs have distinct fused
+	// tags, for ANY tag numbering including explicit `= N` and negative raw values. **Nothing is joined and
+	// no name is a key** — which is the property `/specs/try-block.md`'s
+	// `union-member-names-join-injectively` was written to protect in a compiler that spells the union's
+	// identity as a string (see `ErrorUnionInfo` for that comparison).
+	//
+	// ⚠ **THE PLACEMENT CAN FAIL, AND FAILING IS NOT A PANIC.** A FLOAT-backed error enum is legal and
+	// throwable (MEASURED: `enum FErr implements Error  lo = -1.5  hi = 2.5 end` compiles and throws), and
+	// `tagOfIndex` hands back the IEEE-754 BIT PATTERN — so such a member can be wider than the whole i64
+	// line, and a second one placed above it would overflow `ParsedInt`, which is a ranged type and so a
+	// COMPILER PANIC rather than a wrapped number. `fusedPlacementAt` answers `tooWide` instead, and the
+	// block is refused when a second member proves it really had to fuse.
+	//
+	// ⚠ **THE FIRST MEMBER, WHEN SCALAR, IS GIVEN EXACTLY `ErrorFlagOrdinalBias` — and that is not an
+	// optimization, it is what keeps a ONE-member block byte-identical.** Such a member's flag already IS
+	// `tag + bias`, so its fused ordinal is the flag and the edge emits no op at all; a block that turns out
+	// to have one member therefore spends nothing on machinery it does not use.
+	function recordRoutedErrorType(ctx TryBlockContext, clause ThrowsClause) returns TryBlockErrorMember
+		let name = (try throwsClauseName(clause) otherwise panic("recordRoutedErrorType: both routing doors gate on `throwsClauseIsThrowing` before reaching here")).toByteArray()
+
+		for i in 0 upto ctx.members.count() 'seen'
+			let existing = try ctx.members.get(i) otherwise panic("recordRoutedErrorType: members.get OOB at {i} on a list walked to its own count")
+			if existing.name.equals(name) 'sameMember'
+				return existing
+			end 'sameMember'
+		end 'seen'
+
+		let layout = self.requireRoutedErrorLayout(name)
+		let isBoxed = layout.isBoxed()
+		let span = enumTagSpan(layout)
+
+		// A SCALAR member's runtime value is `tag + bias`; a BOXED member's is the tag loaded out of the box.
+		// Every member but the first takes the next free slice above the member before it; the first, when it
+		// is SCALAR, is pinned at exactly the bias so its fused ordinal IS the flag and its edges emit nothing.
+		var placement = FusedPlacement.tooWide()
+		if ctx.members.count() == 0 and not isBoxed 'firstScalarMemberIsTheFlagItself'
+			placement = fusedPlacementAtTheBias(span)
+		end 'firstScalarMemberIsTheFlagItself' else 'aboveWhatIsAlreadyPlaced'
+			placement = fusedPlacementAt(self.nextFusedFloor(ctx), span: span)
+		end 'aboveWhatIsAlreadyPlaced'
+
+		if not placement.fusable and ctx.unfusableMember.isEmpty() 'firstMemberTheLineCannotHold'
+			ctx.unfusableMember = String.from(name)
+		end 'firstMemberTheLineCannotHold'
+
+		let member = TryBlockErrorMember.create(name, clause: clause, isBoxed: isBoxed, layout: layout, placement: placement)
+		ctx.members.push(member)
+		return member
+	end 'recordRoutedErrorType'
+
+	// The first free position on the fused line — `0` for the first member, one past the previous member's
+	// top for every later one. The `+ 1` is safe without a check because a placed top is at most
+	// `FusedTagCeiling`, which is held short of `i64.max` by exactly this margin.
+	function nextFusedFloor(ctx TryBlockContext) returns ParsedInt
+		if ctx.members.count() == 0 'nothingPlacedYet'
+			return 0
+		end 'nothingPlacedYet'
+
+		let previous = try ctx.members.get(ctx.members.count() - 1) otherwise panic("nextFusedFloor: members.get failed on a list the line above tested is non-empty")
+		if not previous.fusable 'thePreviousOneDidNotFitEither'
+			return 0
+		end 'thePreviousOneDidNotFitEither'
+
+		return previous.fusedTop + 1
+	end 'nextFusedFloor'
+
+	// The declared layout of an error type a routed edge names. It is DECLARED by construction: a call routes
+	// only on a `throws E` clause the signature table produced, and a `throw` only on a value whose type the
+	// parser already resolved — so an undeclared name here is a compiler invariant break, not a user error
+	// (E3004 reports an unknown type long before a throw can name it).
+	function requireRoutedErrorLayout(name ByteArray) returns EnumLayout
+		match self.signatures.enumOf(name) 'declared'
+			declared(layout) then return layout
+			undeclared then panic("requireRoutedErrorLayout: '{String.from(name)}' is routed as an error type but declares no enum or union — every routing door reads the name off a resolved `throws` clause or a resolved thrown value")
+		end 'declared'
+	end 'requireRoutedErrorLayout'
 
 	// The MaxonType of the enum a throwing `callee` throws — the type an `(e)` binding recovers. A callee
 	// with no throws clause is rejected by SemanticCheck (E3055), so the fallback `integer` here is never
@@ -27201,13 +27998,24 @@ export type Parser
 	//
 	// A value whose type is not `named` at all (`throw 1`) is refused here too: the error flag encodes an enum
 	// ORDINAL or a union BOX POINTER and has no third shape, so there is nothing for the catch to decode.
-	function requireThrownTypeFitsEnclosing(func IrFunction, errorType MaxonType, anchor Token) throws ParseError
+	function requireThrownTypeFitsEnclosing(func IrFunction, errorType MaxonType, routed bool, anchor Token) throws ParseError
 		if maxonTypeTag(errorType) != ValueTypeTag.named 'notAnErrorType'
 			throw ParseError.thrownValueNotAnErrorEnum(anchor.line, column: anchor.column)
 		end 'notAnErrorType'
 
-		let thrownName = try self.artifact.typeNames.nameOf(typeNameIdOf(errorType)) otherwise panic("requireThrownTypeFitsEnclosing: a `named` MaxonType's TypeNameId did not resolve in the artifact's interner — every such id was minted by `intern` against this same interner")
-		try self.requireErrorTypeFitsEnclosing(func, errorType: String.from(thrownName), door: ErrorExitDoor.throwStatement, anchor: anchor)
+		// ⭐ **A ROUTED THROW OWES THE ENCLOSING CLAUSE NOTHING, AND THE PRECEDING CHECK IT STILL OWES.** The
+		// rule below is about the flag a function PUBLISHES to its CALLER; a throw routed to a block-form
+		// `try`'s handler publishes none — it branches inside this frame, and `main` may hold such a block
+		// while declaring no `throws` at all (`try-block.bare-throw-in-nested-if` is exactly that program).
+		// What it still owes is the line above: the error-flag ABI encodes an enum ORDINAL or a union BOX
+		// POINTER and has no third shape, so a `throw 1` has nothing for ANY catch to decode, handler or
+		// caller. The routed edge's own type agreement is `recordRoutedEdge`'s, one door over.
+		if routed 'toABlockHandler'
+			return
+		end 'toABlockHandler'
+
+		let thrownName = try throwsClauseName(self.thrownTypeClause(errorType)) otherwise panic("requireThrownTypeFitsEnclosing: `thrownTypeClause` answered `none` for a type the check above proved is `named`")
+		try self.requireErrorTypeFitsEnclosing(func, errorType: thrownName, door: ErrorExitDoor.throwStatement, anchor: anchor)
 	end 'requireThrownTypeFitsEnclosing'
 
 	// ⭐ **THE ONE PLACE AN OUTGOING ERROR TYPE IS MEASURED AGAINST THE ENCLOSING `throws` CLAUSE.** Refuses
@@ -29475,7 +30283,7 @@ export type Parser
 		// The decode (and, for a boxed error, the enrolment) belongs at the TOP of the error edge — before a
 		// nested `else if`'s own condition, and before the written body's first statement.
 		self.currentBlock = elseBlock
-		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, anchor: anchor)
+		try self.declareCaughtError(flag, errorType: errorType, bindingName: bindingName, hasBinding: hasBinding, form: CaughtErrorForm.singleCall, anchor: anchor)
 
 		var elseEnd = elseBlock
 		if elseWritten 'writtenBody'
@@ -33064,6 +33872,15 @@ export type Parser
 		// test goes into wherever the scrutinee left control — its exit block, not `block`.
 		let scrutTempFloor = self.pendingTempDrops.count()
 		let scrutStart = self.pos
+		// ⭐ **READ OFF THE TOKEN, BEFORE THE EXPRESSION IS PARSED AWAY.** A block-form `try`'s `(e)` binding
+		// evaluates to the error block's flag phi — an integer indistinguishable from any other — so the two
+		// questions its handler poses are asked of the NAME: has the handler discriminated at all (E3084), and
+		// is this scrutinee the synthesized error union (in which case the whole dispatch below reads a fused
+		// ordinal and a synthesized layout rather than the scrutinee's own type).
+		let scrutName = self.matchScrutineeBareName(scrutStart)
+		self.noteTryBlockBindingMatched(scrutName)
+		let errorUnion = self.errorUnionForScrutinee(scrutName)
+		let isErrorUnionMatch = errorUnionIsSynthesized(errorUnion)
 		let scrut = try self.parseExpression(func, block: block)
 		let scrutTag = self.tagOf(scrut)
 
@@ -33105,7 +33922,16 @@ export type Parser
 		// rule, coverage over the case set; every other scrutinee is a scalar match (Wave A). The two
 		// share this whole dispatch engine (the `condBranch` chain, the arm bodies, the merge); only
 		// the PATTERN emission, the `default` rule, and the exhaustiveness check branch on it.
-		let enumMatch = self.enumMatchFor(scrut)
+		// ⭐ **A SYNTHESIZED ERROR UNION TAKES THE ENUM PATH WITH A LAYOUT THAT IS NOT THE SCRUTINEE'S TYPE.**
+		// The value `e` holds is a bare flag; what an arm dispatches on is the `(member, case)` pair the routed
+		// edges fused into one ordinal, and the layout below is the table over those pairs. Everything after
+		// this point — coverage, the interval plan, the dispatch, the arm bodies, the merge — is the ordinary
+		// enum machinery, which is the whole reason shv2 needs no second match engine where both references
+		// wrote one (`parseErrorUnionMatch` / `ParseUnionMatch`).
+		var enumMatch = self.enumMatchFor(scrut)
+		if isErrorUnionMatch 'synthesizedLayout'
+			enumMatch = DeclaredEnum.declared(requireErrorUnionInfo(errorUnion).layout)
+		end 'synthesizedLayout'
 		let isEnumMatch = enumMatchIsDeclared(enumMatch)
 		// One coverage bit per case, in declaration order — the enum twin of `seenValues`. Populated
 		// only for an enum match; a bare case marks its bit, a range marks the slice it covers, and a
@@ -33129,7 +33955,11 @@ export type Parser
 		// (does this value belong to a declared enum at all?), where the helper's is about the LAYOUT. A
 		// scalar match has no layout to ask.
 		var dispatchSubject = scrut
-		if isEnumMatch 'enumDispatchSubject'
+		if isErrorUnionMatch 'fusedOrdinalIsTheSubject'
+			// Already merged through the error block's last phi — every routed edge computed it where the
+			// member was statically known, which is the only place a boxed member's tag COULD be read.
+			dispatchSubject = requireErrorUnionInfo(errorUnion).fusedOrdinal
+		end 'fusedOrdinalIsTheSubject' else if isEnumMatch 'enumDispatchSubject'
 			dispatchSubject = self.emitEnumTagOf(scrut, layout: requireEnumLayout(enumMatch), range: SourceRange.ofToken(matchTok))
 		end 'enumDispatchSubject'
 
@@ -33278,6 +34108,14 @@ export type Parser
 					planMissBlockId = defaultBody.id
 				end 'planMissTarget'
 
+				// ⭐ **A `default` ON AN ERROR UNION MAY BE HOLDING A BOX NOTHING ELSE WILL RELEASE.** Every
+				// PATTERN arm names its member, so a boxed one enrols the box and drops it (the arm's `enrollCaughtBox`);
+				// a `default` names none, and on the edges where a boxed member IS the error in flight the box
+				// would simply be abandoned. The cleanup runs first and the body is parsed into the block it
+				// leaves control in — so `defaultBody` is re-seated AFTER the miss target and the fallthrough
+				// phis, which both belong to the block the edges actually branch to.
+				defaultBody = self.emitErrorUnionDefaultCleanup(func, union: errorUnion, entry: defaultBody, flag: scrut, anchor: defTok)
+
 				// ⭐ **`default throws E.case` / `default panic("…")`** (P1.4b) — a DIVERGING catch-all that
 				// covers every unmatched case (so the match is exhaustive). It is the ONLY legal enum
 				// default; a scalar match may use it too. A PLAIN `default` (then/gives) stays E2046 on an
@@ -33290,6 +34128,9 @@ export type Parser
 				end 'defaultThrows' else if self.at(TokenKind.panic) 'defaultPanic'
 					try self.parsePanicStatement(func, block: defaultBody)
 				end 'defaultPanic' else 'plainDefault'
+					if isErrorUnionMatch 'errorUnionPlainDefault'
+						throw ParseError.errorUnionMatchDefaultMustThrow(defTok.line, column: defTok.column)
+					end 'errorUnionPlainDefault'
 					if isEnumMatch 'enumPlainDefault'
 						let layout = requireEnumLayout(enumMatch)
 						throw ParseError.matchDefaultEnumMustThrow(layout.kindWord(), typeName: String.from(layout.name), line: defTok.line, column: defTok.column)
@@ -33334,8 +34175,27 @@ export type Parser
 				self.currentBlock = currentTestBlock
 				var cond = 0 as ValueId
 				var payloadBindings = PayloadBindingArray.create()
+				// ⭐ **WHOSE LAYOUT THIS ARM'S PAYLOAD PLAYS BY.** For an ordinary enum match it is the
+				// scrutinee's own, as it always was. For an ERROR UNION it is the arm's MEMBER: the synthesized
+				// table carries no payload slots (it is a dispatch table — see `ErrorUnionInfo`), and a payload
+				// diagnostic must name the enum the author actually wrote rather than `__ErrorUnion`.
+				var armPayloadEnum = enumMatch
+				// Does this arm's member deliver a heap BOX the ARM must release? Only an error union can, and
+				// `armMemberBoxType` is read only under this flag — the `hasBinding`/`bindingName` pairing this
+				// file uses wherever one fact governs the meaning of another.
+				var armOwnsMemberBox = false
+				var armMemberBoxType = MaxonType.integer
 				let intervalMark = dispatchIntervals.count()
-				if isEnumMatch 'enumPattern'
+				if isErrorUnionMatch 'errorUnionPattern'
+					let arm = try self.collectErrorUnionPatternInterval(requireErrorUnionInfo(errorUnion), covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
+					payloadBindings = arm.bindings
+					armPayloadEnum = DeclaredEnum.declared(arm.member.layout)
+					armOwnsMemberBox = arm.member.isBoxed
+					armMemberBoxType = self.tryErrorEnumType(arm.member.clause)
+					if prevFallthrough 'ftTargetBindsUnion'
+						try self.rejectFallthroughIntoBindingArm(payloadBindings, layout: arm.member.layout, patternTok: patternTok)
+					end 'ftTargetBindsUnion'
+				end 'errorUnionPattern' else if isEnumMatch 'enumPattern'
 					let armLayout = requireEnumLayout(enumMatch)
 					payloadBindings = try self.collectEnumPatternIntervals(armLayout, covered: enumCovered, bodyBlockId: bodyBlock.id, into: dispatchIntervals)
 					// An `and fallthrough` edge reaches this arm's BODY from a different case, and this arm's
@@ -33384,11 +34244,25 @@ export type Parser
 				// `dropArmScopedOwned`) rather than accumulating there to be decref'd in the continuation,
 				// where a value defined in only one arm's block is garbage on every other arm's path.
 				let armOwnedFloor = self.ownedBindings.count()
+
+				// ⭐⭐ **AN ERROR-UNION ARM ON A BOXED MEMBER OWNS THE BOX FOR THE LENGTH OF THE ARM.** The `(e)`
+				// binding owns nothing (see `declareErrorUnionBinding`): the flag is a pointer on some incoming
+				// edges and an ordinal on others, so only here — where the arm has NAMED its member — is the
+				// answer known. Enrolled BELOW the payload bindings, so the reverse-order arm drop releases the
+				// payload's own reference first and the box last.
+				if armOwnsMemberBox 'boxedMemberArm'
+					self.currentBlock = bodyBlock
+					// The SAME enrolment a single-type boxed catch makes at the handler's head — co-owned for
+					// its stated reason (the throw may have RETAINED rather than moved). Only the SCOPE differs,
+					// and it differs because only an arm knows which member is in flight.
+					self.enrollCaughtBox(scrut, eType: armMemberBoxType, binding: VarInfo.createValueBinding(EmptySourceText, varType: armMemberBoxType, mutable: false, boundValue: scrut))
+				end 'boxedMemberArm'
+
 				let hasPayloadBindings = payloadBindings.count() > 0
 				if hasPayloadBindings 'openArmBindings'
 					self.currentBlock = bodyBlock
 					self.scope.pushScope()
-					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, layout: requireEnumLayout(enumMatch))
+					let armMovedManaged = try self.declarePayloadBindings(payloadBindings, scrutBox: scrut, scrutSolelyOwned: scrutSolelyOwned, scrutMutable: scrutMutable, layout: requireEnumLayout(armPayloadEnum))
 					if armMovedManaged 'consumed'
 						// The scrutinee is dead for the REST OF THIS ARM from here — its slot is nulled, so the
 						// arm body's own re-read must be E3102 rather than a null deref. See the match-consume
@@ -33417,6 +34291,15 @@ export type Parser
 				// and a give may therefore come back as a different SSA name — see `finishArmExit`, which is
 				// the one door all three of an arm's exit obligations go through.
 				armBody.give = try self.finishArmExit(armBody.give, tempFloor: armTempFloor, ownedFloor: armOwnedFloor, exitBlock: armBody.exitBlock, anchor: patternTok)
+
+				// ⚠ **AND THE FLAG GOES BACK TO BEING THE UNION BINDING.** One SSA value serves every arm of an
+				// error-union match, and a boxed arm re-typed it to ITS member so the drop `finishArmExit` has
+				// just emitted routes to that member's `__destruct_`. Left standing, the next arm — which may
+				// name a different member, or a scalar one — would see `e` typed as the previous arm's enum.
+				// The arms are mutually exclusive, so the claim is only ever true inside the arm that made it.
+				if armOwnsMemberBox 'flagIsTheUnionBindingAgain'
+					self.retypeValue(scrut, valueType: MaxonType.integer)
+				end 'flagIsTheUnionBindingAgain'
 
 				if armBody.fellThrough 'fellThrough'
 					prevFallthrough = true
@@ -33475,7 +34358,7 @@ export type Parser
 		// for an unmatched value). Both are anchored at the closing `end`, as both references anchor it.
 		if isEnumMatch and not sawDefault 'enumExhaustive'
 			// A `default throws`/`panic` covers every unmatched case, so the case-set need not be complete.
-			try self.checkEnumExhaustive(requireEnumLayout(enumMatch), covered: enumCovered)
+			try self.checkEnumExhaustive(requireEnumLayout(enumMatch), covered: enumCovered, union: errorUnion)
 		end 'enumExhaustive' else if not isEnumMatch and not sawDefault 'notExhaustive'
 			var subject = "match"
 			if isExpression 'exprSubject'
@@ -35025,6 +35908,219 @@ export type Parser
 		return bindings
 	end 'collectEnumPatternAtomIntervals'
 
+	// ⭐⭐ **ONE ARM OF A MATCH ON A SYNTHESIZED ERROR UNION.** The union path's twin of
+	// `collectEnumPatternAtomIntervals`, and it is a SEPARATE routine for one reason: an error-union arm names
+	// EXACTLY ONE `(member, case)` pair. It has no `or`-chain and no case RANGE — neither reference offers
+	// them either, and both would be meaningless here (a range over the fused line would span two enums'
+	// cases, which is not a thing an author can mean). What it does share is everything that matters: the
+	// coverage bitmap, the dispatch interval, the payload-binding parse and the arm machinery that follows.
+	//
+	// ⭐ **BOTH SPELLINGS OF THE PATTERN, and the qualified one is why `resolveEnumArmCase` could not serve.**
+	// That routine REFUSES `Enum.case` (E3075: the scrutinee's enum is already known, so the bare name
+	// suffices) — which is exactly backwards here, where the qualifier is the only way to say which member's
+	// `notFound` is meant. So: `Member.case` resolves against that member, a bare `case` resolves across all
+	// members and is E3085 when two of them share the name.
+	function collectErrorUnionPatternInterval(info ErrorUnionInfo, covered BoolArray, bodyBlockId BlockId, into DispatchIntervalArray) returns ErrorUnionArm throws ParseError
+		let firstTok = self.current()
+		if not tokenCanBeAName(firstTok) 'notACaseName'
+			throw ParseError.expectedExpression(expressionOperandDisplayText(firstTok), line: firstTok.line, column: firstTok.column)
+		end 'notACaseName'
+
+		// The CASE-name token — the qualified spelling's second half, and the anchor every diagnostic below
+		// uses. It is resolved before anything is consumed so the two spellings differ in one place only.
+		let qualified = self.kindAt(self.pos + 1) == TokenKind.dot
+		let caseTok = self.tokenAt(self.pos + 2) if qualified else firstTok
+		if not tokenCanBeAName(caseTok) 'notACaseNameAfterTheDot'
+			throw ParseError.expectedExpression(expressionOperandDisplayText(caseTok), line: caseTok.line, column: caseTok.column)
+		end 'notACaseNameAfterTheDot'
+
+		var index = 0 as CaseIndex
+		if qualified 'qualified'
+			self.advance()
+			try self.consume(TokenKind.dot)
+			self.advance()
+			index = try self.errorUnionQualifiedCaseIndex(info, memberTok: firstTok, caseTok: caseTok)
+		end 'qualified' else 'bare'
+			self.advance()
+			index = try self.errorUnionBareCaseIndex(info, caseTok: caseTok)
+		end 'bare'
+
+		let member = try info.caseMembers.get(index) otherwise panic("collectErrorUnionPatternInterval: caseMembers.get OOB at {index} — every resolver above returns an index into this column")
+		let memberCaseIndex = member.layout.indexOfCase(info.layout.caseNameAt(index))
+
+		var bindings = PayloadBindingArray.create()
+		if self.at(TokenKind.leftParen) 'payloadBind'
+			// ⚠ **THE ARITY IS CHECKED BEFORE THE LIST IS PARSED, because E3035's ANCHOR is the case name and
+			// the generic parse has already walked past it** — and because the message names the member
+			// (`'ErrA.bad' expects 2`), which only this path can spell. v1 checks it eagerly at the same point
+			// for the same reason. Everything the check passes then goes through the SHARED parse, so the
+			// discard rule (E3081) and the binding records are the ordinary ones.
+			try self.requireErrorUnionBindingCount(member, caseIndex: memberCaseIndex, caseTok: caseTok)
+			bindings = try self.parseCasePayloadBindings(member.layout, caseIndex: memberCaseIndex, caseTok: caseTok)
+		end 'payloadBind'
+
+		try self.markEnumCovered(covered, index: index, layout: info.layout, patternTok: caseTok)
+		let tag = info.layout.tagOfIndex(index)
+		into.push(DispatchInterval.create(tag, hi: tag, targetBlockId: bodyBlockId, edgeArgs: ValueIdArray.create()))
+		return ErrorUnionArm.create(member, bindings: bindings)
+	end 'collectErrorUnionPatternInterval'
+
+	// `Member.case` — the fused index of that pair. Both halves are E3034 with their own sentences, which is
+	// v1's split: a qualifier naming no member of THIS union, and a member that has no such case.
+	function errorUnionQualifiedCaseIndex(info ErrorUnionInfo, memberTok Token, caseTok Token) returns CaseIndex throws ParseError
+		var namesTheMember = false
+		var memberKindWord = ""
+		for i in 0 upto info.layout.caseCount() 'eachCase'
+			let member = try info.caseMembers.get(i) otherwise panic("errorUnionQualifiedCaseIndex: caseMembers.get OOB at {i} — the column is built case for case beside the layout's own")
+			if not member.name.equals(memberTok.value) 'anotherMember'
+				continue
+			end 'anotherMember'
+			namesTheMember = true
+			memberKindWord = member.layout.kindWord()
+			if info.layout.caseNameAt(i).equals(caseTok.value) 'found'
+				return i
+			end 'found'
+		end 'eachCase'
+
+		if not namesTheMember 'notAMember'
+			throw ParseError.errorUnionUnknownMember(String.from(memberTok.value), line: memberTok.line, column: memberTok.column)
+		end 'notAMember'
+
+		// The KIND WORD is the MEMBER's own — `ErrA.nope` on a scalar `enum ErrA` must not read "unknown union
+		// case". `memberKindWord` is set beside `namesTheMember` above, on the same pass, so the two cannot
+		// disagree about which member was found.
+		throw ParseError.enumUnknownCase(memberKindWord, caseName: "{String.from(memberTok.value)}.{String.from(caseTok.value)}", line: caseTok.line, column: caseTok.column)
+	end 'errorUnionQualifiedCaseIndex'
+
+	// A BARE `case` — the fused index of the one member that declares it, **E3085 when two do**. The
+	// ambiguity is the whole reason the qualified spelling exists, and it is scanned rather than precomputed
+	// into a map for `EnumLayout.indexOfCase`'s reason: a union's case count is tiny, and a map would be a
+	// second index of the one column above it.
+	function errorUnionBareCaseIndex(info ErrorUnionInfo, caseTok Token) returns CaseIndex throws ParseError
+		var found = info.layout.caseCount()
+		for i in 0 upto info.layout.caseCount() 'eachCase'
+			if not info.layout.caseNameAt(i).equals(caseTok.value) 'anotherCase'
+				continue
+			end 'anotherCase'
+			if found < info.layout.caseCount() 'sharedByTwoMembers'
+				throw ParseError.errorUnionAmbiguousBareCase(String.from(caseTok.value), line: caseTok.line, column: caseTok.column)
+			end 'sharedByTwoMembers'
+			found = i
+		end 'eachCase'
+
+		if found >= info.layout.caseCount() 'noSuchCase'
+			throw ParseError.errorUnionUnknownCase(String.from(caseTok.value), line: caseTok.line, column: caseTok.column)
+		end 'noSuchCase'
+		return found
+	end 'errorUnionBareCaseIndex'
+
+	// **E3035 — the binding count an error-union pattern supplies against the case's declared arity**, read
+	// off the TOKENS because the anchor is the case name and the shared parse consumes past it. The count is
+	// exact: a binding list is `( name [, name]* )` and every element is a single identifier (or `_`), so the
+	// identifiers between the parens ARE the bindings.
+	function requireErrorUnionBindingCount(member TryBlockErrorMember, caseIndex CaseIndex, caseTok Token) throws ParseError
+		let declared = member.layout.payloadArityAt(caseIndex)
+		var supplied = 0 as ElementCount
+		var scan = self.pos + 1
+		while self.kindAt(scan) != TokenKind.rightParen and self.kindAt(scan) != TokenKind.eof 'countNames'
+			if self.kindAt(scan) == TokenKind.identifier 'oneBinding'
+				supplied = supplied + 1
+			end 'oneBinding'
+			scan = scan + 1
+		end 'countNames'
+
+		if supplied == declared 'agrees'
+			return
+		end 'agrees'
+
+		throw ParseError.errorUnionWrongBindingCount("{String.from(member.name)}.{String.from(member.layout.caseNameAt(caseIndex))}", expected: declared as ElementCount, got: supplied, line: caseTok.line, column: caseTok.column)
+	end 'requireErrorUnionBindingCount'
+
+	// ⭐⭐ **RELEASE A BOXED MEMBER'S BOX ON THE PATH INTO A `default` ARM, WHICH NAMED NO MEMBER.** Returns
+	// the block the default's BODY should be parsed into — `entry` itself when there is nothing to clean, so
+	// the ordinary case adds no block at all.
+	//
+	// Every PATTERN arm releases the box through the member it named; a `default` reaches every uncovered
+	// case, boxed members' included, and would otherwise abandon it. The test is a RANGE over the fused line
+	// — a member owns a contiguous slice of it by construction (`recordRoutedErrorType`) — so one member costs
+	// two compares and a `__destruct_` call on the path where it is really in flight. The bootstrap emits the
+	// same chain (`EmitUnionDefaultCleanupBlock`); v1 needs none only because its box lives in a slot the
+	// handler's own scope drops.
+	function emitErrorUnionDefaultCleanup(func IrFunction, union ErrorUnionMatch, entry IrBlock, flag ValueId, anchor Token) returns IrBlock
+		if not errorUnionIsSynthesized(union) 'notAnErrorUnion'
+			return entry
+		end 'notAnErrorUnion'
+
+		let info = requireErrorUnionInfo(union)
+		var current = entry
+		for m in 0 upto info.caseMembers.count() 'eachCase'
+			let member = try info.caseMembers.get(m) otherwise panic("emitErrorUnionDefaultCleanup: caseMembers.get OOB at {m} on a column walked to its own count")
+			// One test per BOXED MEMBER, not per case — the column repeats a member once per case it declares,
+			// so the first case of each is where its range is emitted and the rest are skipped.
+			if not member.isBoxed or not self.isFirstCaseOfMember(info, index: m) 'nothingToReleaseForThisCase'
+				continue
+			end 'nothingToReleaseForThisCase'
+
+			match self.fusedSpanOfMember(member) 'span'
+				noCases then panic("emitErrorUnionDefaultCleanup: a member with no cases contributes no fused case, so this walk cannot reach one")
+				spanning(low, high) then current = self.emitErrorUnionMemberRelease(func, member: member, low: low, high: high, entry: current, fused: info.fusedOrdinal, flag: flag, anchor: anchor)
+			end 'span'
+		end 'eachCase'
+		return current
+	end 'emitErrorUnionDefaultCleanup'
+
+	// Is fused case `index` the FIRST case of its member — i.e. is this the position where that member's
+	// per-member work belongs? The column is grouped by member (`synthesizeErrorUnion` walks members
+	// outermost), so "the previous case has a different member" is the whole test.
+	function isFirstCaseOfMember(info ErrorUnionInfo, index CaseIndex) returns bool
+		if index == 0 'theVeryFirst'
+			return true
+		end 'theVeryFirst'
+
+		let here = try info.caseMembers.get(index) otherwise panic("isFirstCaseOfMember: caseMembers.get OOB at {index}")
+		let before = try info.caseMembers.get(index - 1) otherwise panic("isFirstCaseOfMember: caseMembers.get OOB at {index - 1}")
+		return not here.name.equals(before.name)
+	end 'isFirstCaseOfMember'
+
+	// The slice of the fused dispatch line this member owns — its own tag span, shifted by its offset, which
+	// is the interval `recordRoutedErrorType` placed it in. Recomputed from the same two facts rather than
+	// stored a second time; the shift cannot overflow because the placement checked exactly these two sums
+	// before it accepted the member.
+	function fusedSpanOfMember(member TryBlockErrorMember) returns EnumTagSpan
+		match enumTagSpan(member.layout) 'span'
+			noCases then panic("fusedSpanOfMember: '{String.from(member.name)}' declares no cases, so no fused case column can name it and the default cleanup never asks about it")
+			spanning(low, high) then return EnumTagSpan.spanning(low + member.fusedTagOffset, high: high + member.fusedTagOffset)
+		end 'span'
+	end 'fusedSpanOfMember'
+
+	// `if fused in [low, high] then <release the box as `member`>` — three blocks, and the block
+	// control continues in is returned so the caller can chain the next member onto it.
+	function emitErrorUnionMemberRelease(func IrFunction, member TryBlockErrorMember, low ParsedInt, high ParsedInt, entry IrBlock, fused ValueId, flag ValueId, anchor Token) returns IrBlock
+		var atOrAbove = self.newBlock(func, label: b"errunionclean", line: anchor.line)
+		var release = self.newBlock(func, label: b"errunionfree", line: anchor.line)
+		let after = self.newBlock(func, label: b"errunionnext", line: anchor.line)
+
+		self.currentBlock = entry
+		let notBelow = self.emitCompareAgainstLiteral(fused, literal: low, op: MaxonCmpOp.ge, opTok: anchor)
+		self.emitCondBranch(entry, cond: notBelow, thenId: atOrAbove.id, elseId: after.id, ifTok: anchor)
+
+		self.currentBlock = atOrAbove
+		let notAbove = self.emitCompareAgainstLiteral(fused, literal: high, op: MaxonCmpOp.le, opTok: anchor)
+		self.emitCondBranch(atOrAbove, cond: notAbove, thenId: release.id, elseId: after.id, ifTok: anchor)
+
+		// The retype is what tells `emitDecref` which `__destruct_` to call, and it is undone immediately:
+		// the value is the union's flag everywhere but inside this one release block, exactly as a pattern
+		// arm's is (see `parseMatchCommon`, which restores it after the arm's own drop).
+		self.currentBlock = release
+		self.retypeValue(flag, valueType: self.tryErrorEnumType(member.clause))
+		self.emitDecref(flag, range: SourceRange.ofToken(anchor))
+		self.retypeValue(flag, valueType: MaxonType.integer)
+		self.emitBranch(release, targetId: after.id)
+
+		self.currentBlock = after
+		return after
+	end 'emitErrorUnionMemberRelease'
+
 	// A payload binding is meaningful only where exactly one case matched — refuse it on an
 	// or-alternative (`stay or walk(dir)`), whose alternatives may be different cases of different
 	// arity. Positioned at the binding name.
@@ -35348,14 +36444,26 @@ export type Parser
 	end 'markEnumCovered'
 
 	// ⭐ **COMPARE A SCALAR AGAINST AN INTEGER LITERAL** — `subject <op> literal`, emitting `MaxonOp.compare`
-	// DIRECTLY rather than through `emitCompare`, and that bypass is load-bearing four times over.
+	// DIRECTLY rather than through `emitCompare`. The bypass is load-bearing at every one of its callers, and
+	// for one of two reasons each: `emitCompare` REFUSES a `union` operand (E3066), and `emitCompare` THROWS.
+	//
+	// ⚠⚠ **THIS LIST IS A CENSUS AND IT HAS ROTTED TWICE.** It said "four times over" while SIX families
+	// called it (the cursor-protocol test and the error-union cleanup were both absent), which is the
+	// enumerated-doors shape: a list that a new caller does not have to join in order to compile. Nothing
+	// checks it — so when you add a caller, add its bullet, and when you read it, read `grep` first.
 	//
 	//   • **The MATCH DISPATCH** — a point leaf's `==`, a range leaf's `>=`/`<=`, an internal node's `<`
-	//     pivot. `emitCompare` refuses a `union` operand (E3066), and a PAYLOAD-FREE union match dispatches
-	//     on the scrutinee itself (a `named(union)` value), so routing through it would reject `match u`.
+	//     pivot. A PAYLOAD-FREE union match dispatches on the scrutinee itself (a `named(union)` value), so
+	//     routing through `emitCompare` would reject `match u` outright.
 	//   • **A BLOCK-FORM `try`'s ERROR-FLAG TEST** (`flag != NoErrorFlag`), whose router is NON-THROWING by
 	//     construction — one of its two emit doors, `emitRuntimeCall`, is not a throwing function — and
 	//     `emitCompare` throws.
+	//   • **A `for … in <cursor>` LOOP'S ADVANCE TEST** (`emitCursorAdvance`'s `flag == 0`), the same
+	//     already-encoded error flag one construct over, in a routine that likewise cannot throw a compare's
+	//     diagnostic at a value the author never wrote.
+	//   • **A SYNTHESIZED ERROR UNION'S DEFAULT CLEANUP** (`emitErrorUnionMemberRelease`'s `>=`/`<=` pair) —
+	//     the range test that decides whether a BOXED member's box is the error in flight. Its subject is the
+	//     fused ordinal, a compiler-minted i64 that no source expression names.
 	//   • **AN `Ordering` VERDICT** (`emitOrderingVerdict`) — the tag test that turns a `compare` result into
 	//     an ordering operator's bool. Its subject is a `named(Ordering)` value, which `emitCompare` would
 	//     hand to the same `valueIsUnion` gate the match dispatch dodges.
@@ -35363,12 +36471,12 @@ export type Parser
 	//     branchless tag→index sum. Its subject is the same `named(<Enum>)` (or loaded i64) tag the match
 	//     dispatch tests, for the same E3066 reason, which is why the two read this one door.
 	//
-	// ⚠ **THE FOURTH CALLER IS THE FIRST WHOSE 0/1 IS NOT CONSUMED BY A BRANCH, AND THAT IS A REAL
-	// DIFFERENCE.** The three above feed the result to a `condBranch`, where a `boolean` mint is exactly
+	// ⚠ **THE ACCESSOR'S CASE SELECT IS THE ONLY CALLER WHOSE 0/1 IS NOT CONSUMED BY A BRANCH, AND THAT IS A
+	// REAL DIFFERENCE.** Every other one feeds the result to a `condBranch`, where a `boolean` mint is exactly
 	// right and the backends need never materialize it at all (x64 fuses the `cmp` into the `jcc`). The
 	// ordinal sum feeds it to a MULTIPLY, as a number — so it materializes, and its mint type becomes an
 	// arithmetic operand type. That caller re-records the result `integer` at its own site rather than
-	// changing this door's mint, which would move the other three (see `retypeValue`'s header, where the
+	// changing this door's mint, which would move all the others (see `retypeValue`'s header, where the
 	// safety of that re-record is argued).
 	//
 	// ⚠ **THE PARAMETER IS `literal`, NOT `tag`.** It was `tag` while the match dispatch was its only caller,
@@ -35453,22 +36561,45 @@ export type Parser
 	// An enum match must cover EVERY case. The uncovered ones (in declaration order) become E2026's
 	// `missing:` list, positioned at the closing `end` — the enum twin of the scalar exhaustiveness
 	// gate, and the mechanism that makes adding a case force every match site to handle it.
-	function checkEnumExhaustive(layout EnumLayout, covered BoolArray) throws ParseError
+	function checkEnumExhaustive(layout EnumLayout, covered BoolArray, union ErrorUnionMatch) throws ParseError
 		var missing = ""
 		for i in 0 upto layout.caseCount() 'eachCase'
 			let isCovered = try covered.get(i) otherwise panic("checkEnumExhaustive: covered.get OOB at {i} — the bitmap is sized to the enum's case count")
 			if not isCovered 'uncovered'
-				missing = appendCommaSeparated(missing, item: String.from(layout.caseNameAt(i)))
+				missing = appendCommaSeparated(missing, item: self.matchCaseDisplayName(layout, index: i, union: union))
 			end 'uncovered'
 		end 'eachCase'
 
 		// The list IS the flag — a case name is never empty, so an exhaustive match leaves it empty and
 		// there is no parallel `hasMissing` bool to keep in step with it.
-		if not missing.isEmpty() 'incomplete'
-			let endTok = self.current()
-			throw ParseError.enumMatchNotExhaustive(layout.kindWord(), typeName: String.from(layout.name), missing: missing, line: endTok.line, column: endTok.column)
-		end 'incomplete'
+		if missing.isEmpty() 'complete'
+			return
+		end 'complete'
+
+		// ⚠ ONE loop, TWO sentences: the case names and the subject both change for a synthesized error
+		// union, and nothing else does. Written as one walk with a per-case display name rather than a second
+		// copy of the walk — the shape both references took, and the copy each of them has to keep in step.
+		let endTok = self.current()
+		if errorUnionIsSynthesized(union) 'anErrorUnion'
+			throw ParseError.errorUnionMatchNotExhaustive(missing, line: endTok.line, column: endTok.column)
+		end 'anErrorUnion'
+
+		throw ParseError.enumMatchNotExhaustive(layout.kindWord(), typeName: String.from(layout.name), missing: missing, line: endTok.line, column: endTok.column)
 	end 'checkEnumExhaustive'
+
+	// How case `index` is SPELLED in a diagnostic: its bare name, or `Member.case` when the layout is a
+	// synthesized error union — where the bare name alone would be ambiguous and, for `missing:`, unusable
+	// (an author cannot act on `bang, splat` without knowing whose they are). Both references print the
+	// qualified form for exactly that reason.
+	function matchCaseDisplayName(layout EnumLayout, index CaseIndex, union ErrorUnionMatch) returns String
+		if not errorUnionIsSynthesized(union) 'anOrdinaryEnum'
+			return String.from(layout.caseNameAt(index))
+		end 'anOrdinaryEnum'
+
+		let info = requireErrorUnionInfo(union)
+		let member = try info.caseMembers.get(index) otherwise panic("matchCaseDisplayName: caseMembers.get OOB at {index} — the column is built case for case beside the layout's own")
+		return "{String.from(member.name)}.{String.from(layout.caseNameAt(index))}"
+	end 'matchCaseDisplayName'
 
 	// ⭐ **CLIP the raw arm intervals into a SORTED, DISJOINT set where EARLIER ARMS WIN.** Overlaps are
 	// legal on a scalar match (two ranges may overlap, or a later single value fall inside an earlier
@@ -56052,6 +57183,12 @@ export type Parser
 		// the pop. `loops`/`matches` two lines up carry exactly this pairing for exactly this reason.
 		let savedTryBlocks = self.tryBlocks
 		let savedRoutingSuppressed = self.tryBlockRoutingSuppressed
+		// A closure body is a DIFFERENT `IrFunction`, so an enclosing handler's error-union binding and its
+		// E3084 obligation must not be visible inside it — a `match e` there would name a fused phi from the
+		// function the closure was written in. See the fields for the measured shape this neighbourhood has.
+		let savedErrorUnionBindings = self.errorUnionBindings
+		let savedTryBindingName = self.tryBindingName
+		let savedTryBindingMatched = self.tryBindingMatched
 		let savedCurrentBlock = self.currentBlock
 		let savedValueTags = self.valueTags
 		let savedValueNameIds = self.valueNameIds
@@ -56431,6 +57568,9 @@ export type Parser
 		self.matches = savedMatches
 		self.tryBlocks = savedTryBlocks
 		self.tryBlockRoutingSuppressed = savedRoutingSuppressed
+		self.errorUnionBindings = savedErrorUnionBindings
+		self.tryBindingName = savedTryBindingName
+		self.tryBindingMatched = savedTryBindingMatched
 		self.currentBlock = savedCurrentBlock
 		self.valueTags = savedValueTags
 		self.valueNameIds = savedValueNameIds

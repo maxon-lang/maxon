@@ -394,6 +394,13 @@ export enum ErrorCode
 	enumRawValueTypeMismatch = "E3032"
 	// A match arm names a case the scrutinee's enum does not have.
 	enumUnknownCase = "E3034"
+	// A match arm's payload-binding pattern supplies the wrong number of bindings for the case's payload.
+	// a match-arm payload-binding pattern (`case(x, y)`) supplies
+	// the wrong number of bindings for the case's declared payload. Emitted
+	// by `parseCaseBindingPattern` when an arity check can be performed at
+	// parse time, or deferred to TypeResolution when the case's owning
+	// union isn't yet known.
+	enumWrongBindingCount = "E3035"
 	// A call passes a different number of arguments than the callee declares parameters.
 	callArgCountMismatch = "E3036"
 	// A call's 'name:' label names no parameter of the callee.
@@ -537,6 +544,17 @@ export enum ErrorCode
 	// a body that can never fail has no error to route, so the `otherwise`
 	// handler is dead. Mirrors the C# bootstrap's `SemanticTryBlockNoThrows`.
 	tryBlockNoThrows = "E3083"
+	// the `otherwise (e) 'label' ... end` handler of a block-form
+	// try must contain a `match` on the error binding `e`. Without it, the
+	// synthesized (possibly union) error value is never inspected and the
+	// handler cannot dispatch on which error occurred. Mirrors the C#
+	// bootstrap's `SemanticTryBlockBindingNotMatched`.
+	tryBlockBindingNotMatched = "E3084"
+	// a bare case-name pattern in a match on a synthesized error
+	// union is shared by two or more union members, so it is ambiguous --
+	// the user must qualify it as `EnumName.case`. Mirrors the C#
+	// bootstrap's `SemanticUnionMatchPatternAmbiguous`.
+	unionMatchPatternAmbiguous = "E3085"
 	// a struct literal omits a field that has no default value, is not a
 	// compiler-synthesized managed builtin, and (for a return-site `Self{...}`
 	// in a static factory) was not proven definitely assigned via `self.field =

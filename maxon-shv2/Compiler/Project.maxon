@@ -4453,6 +4453,47 @@ export type EnumLayout
 	end 'kindWord'
 end 'EnumLayout'
 
+// ⭐⭐ **THE CLOSED INTERVAL A DECLARATION'S CASE TAGS OCCUPY, or `noCases`** — and it is a union rather
+// than a pair with a sentinel because the two answers are genuinely different questions' answers: an empty
+// declaration inhabits NO value, which is not the same as inhabiting `[0, 0]`, and its two readers disagree
+// about what to do with it (`payloadFreeEnumTagSlot` gives it the machine word; a synthesized error union
+// gives it no slice of the dispatch line, because nothing can ever be thrown that lands in one).
+export union EnumTagSpan
+	noCases
+	spanning(low ParsedInt, high ParsedInt)
+end 'EnumTagSpan'
+
+// ⭐⭐ **THE SMALLEST AND LARGEST TAG A DECLARATION USES — ONE WALK, TWO READERS, AND THEY HAD ALREADY
+// DRIFTED.** `SignatureIndex.payloadFreeEnumTagSlot` (which sizes the storage slot an unboxed enum value
+// occupies) and `Parser.recordRoutedErrorType` (which measures a synthesized error union member's slice of
+// the fused dispatch line) want the same two numbers off the same column, and each had its own copy of the
+// loop. The copies differed on the ONE case where it matters: the storage one opened with a zero-case
+// guard and the parser's began `tagOfIndex(0)`, so a declaration with no cases PANICKED
+// `EnumLayout.tagOfIndex: caseTags.get OOB at 0` on one path and not the other.
+//
+// ⚠ It is asked of the TAGS and never of the case COUNT — the same number only for a declaration that
+// numbers nothing. A renumbered enum (`ok = 200  notFound = 404`) really does occupy that span, and a
+// FLOAT-backed one's tags are IEEE-754 bit patterns (`tagOfIndex`), which is how a two-case enum comes to
+// span most of the i64 line.
+export function enumTagSpan(layout EnumLayout) returns EnumTagSpan
+	if layout.caseCount() == 0 'noValuesToSpan'
+		return EnumTagSpan.noCases
+	end 'noValuesToSpan'
+
+	var low = layout.tagOfIndex(0)
+	var high = low
+	for i in 1 upto layout.caseCount() 'eachCase'
+		let tag = layout.tagOfIndex(i)
+		if tag < low 'newLow'
+			low = tag
+		end 'newLow'
+		if tag > high 'newHigh'
+			high = tag
+		end 'newHigh'
+	end 'eachCase'
+	return EnumTagSpan.spanning(low, high: high)
+end 'enumTagSpan'
+
 export typealias EnumLayoutArray = Array with EnumLayout
 
 // Registry: enum/union name -> its declaration. The twin of `StructLayoutMap`, filled from each

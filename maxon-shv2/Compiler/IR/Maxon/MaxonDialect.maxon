@@ -1399,6 +1399,21 @@ export union MaxonOp
 	// know a String's layout. It is a USE; the op defines nothing and never returns. Like `panicAbort` it is
 	// a BODY op followed by a dead return terminator.
 	panicAbortValue(messagePtr ValueId) = MaxonOpMeta{category: OpCategory.panicking}
+	// --- try-block: the error flag as a VALUE (a bare `throw` ROUTED to a block handler) ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `panicAbortValue`, per the band-append invariant: a
+	// mid-union insert is silently swallowed by any range arm. `OpCategory.plain` places it beside
+	// `literal`/`stringLiteral` — it stands alone, is matched by variant, allocates nothing and calls nothing.
+	//
+	// ⭐⭐ **THE VALUE FORM OF WHAT `throwError` DOES ON ITS WAY OUT OF THE FUNCTION, AND IT EXISTS SO THE
+	// ENCODE STAYS WRITTEN ONCE.** A bare `throw E.case` inside a block-form `try 'l' … end` body does NOT
+	// leave the function — it branches to the block's shared handler, whose phi merges error FLAGS — so the
+	// throw needs the flag as an SSA VALUE rather than as a terminator's side effect. `errorValue` and
+	// `errorIsBoxed` are `throwError`'s own two operands, unchanged and meaning exactly what they mean there,
+	// and `LowerMaxonToStd` lowers BOTH ops through the one `encodeScalarErrorFlag`. So a routed throw's flag
+	// cannot drift from a returned one's, which is the property the parser-side alternative could not have
+	// had: spelling `ordinal + ErrorFlagOrdinalBias` in the parser would be the ABI written at two tiers.
+	errorFlagEncode(result ValueId, errorValue ValueId, errorIsBoxed bool) = MaxonOpMeta{category: OpCategory.plain}
 end 'MaxonOp'
 
 // ⭐ **THE COMPANION ENVIRONMENT ARGUMENT AN `indirectCall` ALWAYS CARRIES, and it is why the op's `args`
@@ -1528,6 +1543,8 @@ export function maxonOpCalleeKind(op MaxonOp) returns MaxonCalleeKind
 		switch gives MaxonCalleeKind.noCallee
 		witnessDispatch gives MaxonCalleeKind.noCallee
 		witnessTryDispatch gives MaxonCalleeKind.noCallee
+		// The error-flag ENCODE is arithmetic on a value the parser already holds — it calls nothing.
+		errorFlagEncode gives MaxonCalleeKind.noCallee
 	end 'op'
 end 'maxonOpCalleeKind'
 

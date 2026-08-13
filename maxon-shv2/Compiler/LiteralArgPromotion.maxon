@@ -148,6 +148,8 @@ function opCallsAWritingCallee(op MaxonOp, mutationSummary ParamMutationSummary)
 		switch gives false
 		witnessDispatch to witnessTryDispatch gives false
 		panicAbortValue gives false
+		// The error-flag encode calls nothing, so it writes through no parameter.
+		errorFlagEncode gives false
 	end 'op'
 end 'opCallsAWritingCallee'
 
@@ -240,6 +242,9 @@ type ArgProvenance
 			switch then break 'op'
 			witnessDispatch to witnessTryDispatch then break 'op'
 			panicAbortValue then break 'op'
+			// The error-flag encode takes no ARGUMENT position — its operand is an enum value the parser already
+			// materialized, never a literal this pass could promote.
+			errorFlagEncode then break 'op'
 		end 'op'
 	end 'noteOp'
 
@@ -300,6 +305,8 @@ function promoteCallAt(project Project, module MaxonModule, opIdx OpIndex, func 
 		switch then break 'op'
 		witnessDispatch to witnessTryDispatch then break 'op'
 		panicAbortValue then break 'op'
+		// Same: no argument position, so no promotion decision to record for it.
+		errorFlagEncode then break 'op'
 	end 'op'
 
 	newRefs.push(opIdx)
