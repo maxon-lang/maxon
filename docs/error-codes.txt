@@ -2020,6 +2020,26 @@ E3129 SemanticMatchArmPayloadBindingConflict
 	doc arm body reached from a case that does not hold what its bindings destructure.
 	doc The cure is to give the disagreeing case its own arm, or to rename the colliding binding.
 
+E3130 SemanticGrantedConformanceMemberMismatch
+	shv2 semanticGrantedConformanceMemberMismatch
+	doc A payload-free `enum` declares a member named after a requirement of a conformance the COMPILER
+	doc grants it -- `hash` or `equals` -- with a signature that does not implement that requirement.
+	doc An enum without associated values conforms to `Hashable` and `Equatable` by declaration alone
+	doc (`specs/enum-hashable.md`), with no `implements` clause anywhere. So nothing an author writes asks
+	doc for the conformance, and nothing was validating a member that collides with one of its names --
+	doc unlike a `type X implements Hashable`, whose every requirement `checkConformance` matches (E3016).
+	doc The member is not dead: it WINS, at both doors. `e.hash()` resolves to it as an ordinary method
+	doc call, and `ProgramSignatures.enumConformanceImplName` stamps it into the enum's
+	doc `__witness_<Enum>.Hashable` slot so a `Map`/`Set` keyed by that enum hashes through it too --
+	doc which is the point (the two doors must reach ONE body, or a map and a direct call disagree about
+	doc one enum). What this code adds is the requirement the grant never stated.
+	doc MEASURED before it existed, on a program that compiled with no diagnostic at all: an enum
+	doc declaring `hash() returns String` was stamped into a slot the probe calls as `returns` i64, so a
+	doc String record POINTER was used as a hash and then leaked -- `map.get` answered 0 where the oracle
+	doc answers 20, and the process exited 101.
+	doc The cure is to make the member match the requirement it is named after, or to rename it. The
+	doc compiler's own implementation is used for every enum that declares neither.
+
 E6003 BinaryOutputNotWritten
 	shv2 binaryOutputNotWritten
 	doc The backend reported no failure, yet nothing exists at the output path after the write. The

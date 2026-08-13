@@ -1704,6 +1704,35 @@ end 'byteRecordTagOfTypeName'
 // and so must not become a second constant.
 export let BoolConformerName = b"bool"
 
+// ⭐⭐ **WHICH COMPILER-GRANTED CONFORMER A NAME IS — the half of the intrinsic-conformance answer that has
+// to be DISCOVERED FROM THE PROGRAM rather than read off the spelling.** Four of the rows below are keyed by
+// compiler-owned names this file may state (three keywords and `String`); the other two are keyed by a
+// declaration the corpus or the user wrote — the ARRAY RECORD, whose spelling is the corpus's to choose
+// (ARR6), and a payload-free `enum`, whose every spelling is the author's. Neither can be recognized by a
+// constant, so the caller discovers it once (`ProgramSignatures.discoveredConformerOf`) and hands the answer
+// in.
+//
+// ⚠ It replaced a bare `typeNamesTheArrayRecord bool`, and the shape is the point: a second parallel bool
+// would let a caller answer one question and forget the other, where a single value forces every door to
+// route through the one discovery.
+//
+// ⛔⛔ **APPEND ONLY — TWO MATCHES RANGE OVER THIS DECLARATION ORDER, AND AN INSERTED CASE WOULD JOIN THEM IN
+// SILENCE.** `isIntrinsicBuiltinConformance` reads `arrayRecord to payloadFreeEnum` (the granted rows) and
+// `LowerMaxonToStd.witnessSlotImpl` reads `none to arrayRecord` (the rows whose impl is their own join). A
+// case APPENDED after `payloadFreeEnum` falls outside both ranges and fails to compile at every exhaustive
+// reader — which is the guard. A case INSERTED between two existing members is swallowed by whichever range
+// spans it, and would silently inherit an answer nobody chose for it: a conformance granted, or an impl
+// symbol named by a join that does not exist. Both ranges consolidate arms that genuinely share a body, so
+// they are not splittable without duplicating one; the discipline is here instead, at the site an author
+// editing this enum reads first.
+export enum DiscoveredConformer
+	// The name is a keyword primitive, `String`, or a type whose conformances are all DECLARED — a struct's
+	// `implements`, which `typeDeclaresInterface` answers for and this table never speaks to.
+	none
+	arrayRecord
+	payloadFreeEnum
+end 'DiscoveredConformer'
+
 // ⭐ **THE INTRINSIC BUILTIN-TYPE CONFORMANCES (P1.7a slices 2b/2b-ii/2b-iii + its last slice, + P1.7b) —
 // the SINGLE source of "does a builtin type conform to this protocol?"** The primitives `int`/`float`/`bool`
 // AND the managed concrete `String` conform with NO user `implements`: shv2 synthesizes their
@@ -1745,7 +1774,7 @@ export let BoolConformerName = b"bool"
 // `hash`/`equals` through `__witness_String.*` slots, so all three doors land in the same two bodies — which
 // is why the reservation below (`TypeResolution.isCompilerOwnedTypeName`) had to cover `String` before any of
 // them could be trusted.
-export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray, typeNamesTheArrayRecord bool) returns bool
+export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
 	if typeName.equals(IntConformerName) 'int'
 		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName) or interfaceName.equals(ComparableInterfaceName)
 	end 'int'
@@ -1799,16 +1828,30 @@ export function isIntrinsicBuiltinConformance(typeName ByteArray, interfaceName 
 	// cases across `array-conditional-conformance-withheld` and `array-contains`, one of them a conformance
 	// GRANTED where the corpus pins a refusal.
 	//
-	// ⚠ **IT IS A `bool` AND NOT THE NAME, BECAUSE ONE FAMILY OF CALLERS PROVABLY HAS NO PROGRAM TO ASK.**
-	// `builtinConformerMethod` and its siblings serve the DIRECT dispatch, whose conformer comes from
-	// `BuiltinConformer` — the four reserved spellings, never the record — and their own callers reach down
-	// from `MmRuntime.reservedCalleeReasonOf`, a per-callee predicate in the target lowering with no
+	// ⚠ **IT IS A DISCOVERED SHAPE AND NOT THE NAME, BECAUSE ONE FAMILY OF CALLERS PROVABLY HAS NO PROGRAM
+	// TO ASK.** `builtinConformerMethod` and its siblings serve the DIRECT dispatch, whose conformer comes
+	// from `BuiltinConformer` — the four reserved spellings, never the record — and their own callers reach
+	// down from `MmRuntime.reservedCalleeReasonOf`, a per-callee predicate in the target lowering with no
 	// `ProgramSignatures` in reach. Handed a name they would have to invent one; handed the question they
-	// answer it exactly, with `false`, which is what their gate already guarantees.
-	if typeNamesTheArrayRecord 'array'
-		return interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
-	end 'array'
-	return false
+	// answer it exactly, with `none`, which is what their gate already guarantees.
+	//
+	// ⭐⭐ **AND A PAYLOAD-FREE `enum` IS THE SEVENTH CONFORMER, GRANTED THE SAME PAIR AND FOR A REASON THAT
+	// IS NOT THE ARRAY'S (enum-hashable).** `/specs/enum-hashable.md` states it outright — *"enums without
+	// associated values automatically conform to `Hashable` and `Equatable`"* — and both references grant it
+	// with no `implements` anywhere: the bootstrap appends the two names to an enum's conforming list
+	// (`2-Parser.cs:4529`, `if (!isUnion)`) and v1 synthesizes the two bodies (`Parser.maxon:5894`). It is
+	// `Hashable` and `Equatable` and emphatically NOT `Comparable`: measured on the oracle, `Box with Color`
+	// under `where T is Comparable` is `E3017` and `a.compare(b)` on an enum value is `E4006`.
+	//
+	// ⭐ **THE IMPLS IT NAMES ARE `int`'s, WHICH IS WHY THE GRANT COSTS NO SYNTHESIZED BODY** — an enum value
+	// IS its i64 tag (`TypeResolution.denotedNamedType`), so hashing and comparing one IS hashing and
+	// comparing that i64. `ProgramSignatures.enumConformanceImplName` is the one statement of that, read by
+	// the witness slot and by the direct dispatch alike; see its header for the two backings where the tag is
+	// not the declaration index and why that does not change the answer.
+	return match discovered 'discovered'
+		arrayRecord to payloadFreeEnum gives interfaceName.equals(HashableInterfaceName) or interfaceName.equals(EquatableInterfaceName)
+		none gives false
+	end 'discovered'
 end 'isIntrinsicBuiltinConformance'
 
 // --- Direct dispatch on a CONCRETE value (`i.compare(j)`) ---
@@ -1915,6 +1958,35 @@ export function builtinConformerName(conformer BuiltinConformer) returns ByteArr
 		notAConformer then panic("builtinConformerName: asked for the name of a value that carries no builtin conformance — every caller is gated on `isBuiltinConformer`, so the gate and the name must read one classifier")
 	end 'c'
 end 'builtinConformerName'
+
+// ⭐⭐ **WHICH CONFORMER A DIRECT `<value>.<method>(…)` DISPATCH IS SERVING — the impl symbol it calls and
+// what its `Self`-typed formals accept, as ONE value because they are one decision.** Split, a door could
+// call `int.equals` while admitting an argument of some other type, which is precisely the silent wrong
+// answer `Parser.requireBuiltinConformanceSelfArgs` exists to refuse.
+//
+// It is a payload-carrying union and so a heap box, which `BuiltinConformer`'s header rules out for the
+// CLASSIFICATION path — this is not that path. One of these is built per conformance call the parser is
+// about to EMIT, never per receiver it classifies.
+export union DirectConformanceTarget
+	// A builtin conformer: the receiver IS a value of it, the impl is `<conformer>.<method>`, and a `Self`
+	// formal takes any value of the same conformer (`Parser.valueIsConformer`, which collapses `Byte` to
+	// `int`).
+	builtinValue(conformer BuiltinConformer)
+	// A payload-free `enum`, whose granted `Hashable`/`Equatable` is served by the impls of its i64 TAG
+	// (`ProgramSignatures.enumConformanceImplName`). A `Self` formal takes a value of THAT enum and nothing
+	// else — an `int` actual would compare a tag against an unrelated number, and another enum's would
+	// compare two case indices that mean different things.
+	enumTagValue(enumName ByteArray)
+end 'DirectConformanceTarget'
+
+// The type a `Self` formal of a direct conformance dispatch is quoted as requiring: the conformer's own
+// name, or the ENUM's — which is the name the author wrote and the only one that would help them.
+export function conformanceSelfTypeNameOf(target DirectConformanceTarget) returns ByteArray
+	match target 'target'
+		builtinValue(conformer) then return builtinConformerName(conformer)
+		enumTagValue(enumName) then return enumName
+	end 'target'
+end 'conformanceSelfTypeNameOf'
 
 // ⭐ **IS `name` A SYMBOL ONLY THE DIRECT BUILTIN-CONFORMANCE DISPATCH CAN HAVE MINTED?** The second half
 // of `MmRuntime.isCompilerInternalCallee`, and the reason that predicate needed one: a synthesized impl is
@@ -2038,7 +2110,7 @@ function isSynthesizedConformerImpl(conformer ByteArray, methodName ByteArray) r
 		return false
 	end 'notABuiltinConformer'
 
-	return match builtinConformerMethod(conformer, methodName: methodName) 'lookup'
+	return match builtinConformerMethod(conformer, methodName: methodName, discovered: DiscoveredConformer.none) 'lookup'
 		supplied gives true
 		notSupplied gives false
 	end 'lookup'
@@ -2069,10 +2141,10 @@ end 'builtinConformableProtocolNames'
 // its element must satisfy (see `isIntrinsicBuiltinConformance`'s `Array` arm), so the availability check,
 // the sentence a withheld method is refused with, and this predicate's answer are one list. Written out as
 // `[Hashable, Equatable]` at those doors it would be the copy that stops matching the day the row moves.
-export function intrinsicConformanceProtocolNames(typeName ByteArray, typeNamesTheArrayRecord bool) returns ByteArrayArray
+export function intrinsicConformanceProtocolNames(typeName ByteArray, discovered DiscoveredConformer) returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	for protocolName in builtinConformableProtocolNames() 'eachProtocol'
-		if isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName, typeNamesTheArrayRecord: typeNamesTheArrayRecord) 'conforms'
+		if isIntrinsicBuiltinConformance(typeName, interfaceName: protocolName, discovered: discovered) 'conforms'
 			names.push(protocolName)
 		end 'conforms'
 	end 'eachProtocol'
@@ -2091,17 +2163,25 @@ end 'intrinsicConformanceProtocolNames'
 //     result) — all three fetched off the one declaration instead of respelled at the dispatch site, the
 //     same "fetch, don't describe" rule `requireBuiltinInterface` exists for.
 //
-// ⭐⭐ **AND IT IS ASKED ONLY OF THE FOUR *RESERVED* CONFORMERS, WHICH IS WHY IT CARRIES NO ARRAY ROW
-// (ARR6).** Every caller's `typeName` is `builtinConformerName`'s — `BuiltinConformer` is a closed,
-// payload-free enum of `int`/`float`/`bool`/`String` — or one of those two spellings written out. The array
-// record is deliberately not among them and may not become one: its direct `arr.hash()` / `a == b` dispatch
-// calls `__managed_hash`/`__managed_eq`, not `Array.<method>` (see `BuiltinConformanceRuntime`'s `Array`
-// note), and `namesADirectDispatchConformer` states the same bound from the reserved-callee side, where
-// admitting a name a user program may TAKE would wave that user's own `Array.hash` past E3004.
-// ⇒ `typeNamesTheArrayRecord: false` here and in the list below is that bound, not a convenience: these
-// callers hold no program to read the record's discovered name from, and they must not.
-export function builtinConformerMethod(typeName ByteArray, methodName ByteArray) returns BuiltinConformerMethodLookup
-	for protocolName in intrinsicConformanceProtocolNames(typeName, typeNamesTheArrayRecord: false) 'eachProtocol'
+// ⭐⭐ **THE ARRAY RECORD IS NEVER ONE OF THE CONFORMERS ASKED ABOUT HERE, WHICH IS WHY IT CARRIES NO ARRAY
+// ROW (ARR6).** A `BuiltinConformer` caller's `typeName` is `builtinConformerName`'s — a closed, payload-free
+// enum of `int`/`float`/`bool`/`String` — or one of those two spellings written out. The array record is
+// deliberately not among them and may not become one: its direct `arr.hash()` / `a == b` dispatch calls
+// `__managed_hash`/`__managed_eq`, not `Array.<method>` (see `BuiltinConformanceRuntime`'s `Array` note), and
+// `namesADirectDispatchConformer` states the same bound from the reserved-callee side, where admitting a name
+// a user program may TAKE would wave that user's own `Array.hash` past E3004.
+// ⇒ every caller passing `DiscoveredConformer.none` is stating that bound, not taking a convenience: it holds
+// no program to discover a conformer from, and it must not.
+//
+// ⚠ **THE ENUM ROW IS THE ONE EXCEPTION, AND IT ARRIVES WITH ITS PROGRAM IN HAND (enum-hashable).**
+// `Parser.enumGrantedConformanceMethod` asks with whatever `discoveredConformerOf` answers for the receiver's
+// own type — `payloadFreeEnum` for an enum, and `none` for the UNION receivers reaching that same dispatch,
+// which is how the granted row stays withheld from one — so that `e.hash()` resolves against the very row the
+// E3017 answer and the witness slot read: one derivation for the three. It carries none of the array's
+// hazard: the symbol it reaches is `ProgramSignatures.enumConformanceImplName`'s, which is `int.<method>`
+// (a KEYWORD qualifier no declaration can wear) precisely when the enum declares no such method of its own.
+export function builtinConformerMethod(typeName ByteArray, methodName ByteArray, discovered DiscoveredConformer) returns BuiltinConformerMethodLookup
+	for protocolName in intrinsicConformanceProtocolNames(typeName, discovered: discovered) 'eachProtocol'
 		// A DIRECT scan of the protocol's own methods, and deliberately not `interfaceWitnessSlots`: a
 		// synthesized protocol declares no `extends` (`singleMethodInterface`/`markerInterface` build them all
 		// with an empty list), so there is no chain to walk — and this dispatch wants the SIGNATURE, never a
@@ -2138,7 +2218,7 @@ end 'builtinConformerMethod'
 // from serves the four reserved direct-dispatch conformers and nothing else.
 export function builtinConformerMethodNameList(typeName ByteArray) returns ByteArrayArray
 	var names = ByteArrayArray.create()
-	for protocolName in intrinsicConformanceProtocolNames(typeName, typeNamesTheArrayRecord: false) 'eachProtocol'
+	for protocolName in intrinsicConformanceProtocolNames(typeName, discovered: DiscoveredConformer.none) 'eachProtocol'
 		let iface = requireBuiltinInterface(protocolName)
 		for method in iface.methods 'eachMethod'
 			names.push(method.name)
@@ -2185,12 +2265,25 @@ export function builtinConformerDispatchMethodNames(typeName ByteArray) returns 
 		names.push(loweredName)
 	end 'eachLowered'
 
-	var rendered = ""
+	var phrases = StringArray.create()
 	for methodName in names 'eachMethod'
+		phrases.push("`{String.from(methodName)}`")
+	end 'eachMethod'
+	return renderPhraseList(phrases)
+end 'builtinConformerDispatchMethodNames'
+
+// ⭐ **JOIN ALREADY-RENDERED PHRASES INTO A DIAGNOSTIC'S LIST** — `", "`, in one place, for the rosters that
+// are DERIVED from the very table their door tests against and so cannot be written out as prose. Its
+// entries are phrases rather than names because not every admitted thing HAS a name: a hash table's key
+// roster (`Parser.hashTableAdmittedKeys`) ends in a SHAPE, and quoting that as an identifier would print a
+// type nobody declared.
+export function renderPhraseList(phrases StringArray) returns String
+	var rendered = ""
+	for phrase in phrases 'eachPhrase'
 		if not rendered.isEmpty() 'separator'
 			rendered = "{rendered}, "
 		end 'separator'
-		rendered = "{rendered}`{String.from(methodName)}`"
-	end 'eachMethod'
+		rendered = "{rendered}{phrase}"
+	end 'eachPhrase'
 	return rendered
-end 'builtinConformerDispatchMethodNames'
+end 'renderPhraseList'

@@ -1156,6 +1156,24 @@ export enum ErrorCode
 	// arm body reached from a case that does not hold what its bindings destructure.
 	// The cure is to give the disagreeing case its own arm, or to rename the colliding binding.
 	matchArmPayloadBindingConflict = "E3129"
+	// A payload-free `enum` declares a member named after a requirement of a conformance the COMPILER
+	// grants it -- `hash` or `equals` -- with a signature that does not implement that requirement.
+	// An enum without associated values conforms to `Hashable` and `Equatable` by declaration alone
+	// (`specs/enum-hashable.md`), with no `implements` clause anywhere. So nothing an author writes asks
+	// for the conformance, and nothing was validating a member that collides with one of its names --
+	// unlike a `type X implements Hashable`, whose every requirement `checkConformance` matches (E3016).
+	// The member is not dead: it WINS, at both doors. `e.hash()` resolves to it as an ordinary method
+	// call, and `ProgramSignatures.enumConformanceImplName` stamps it into the enum's
+	// `__witness_<Enum>.Hashable` slot so a `Map`/`Set` keyed by that enum hashes through it too --
+	// which is the point (the two doors must reach ONE body, or a map and a direct call disagree about
+	// one enum). What this code adds is the requirement the grant never stated.
+	// MEASURED before it existed, on a program that compiled with no diagnostic at all: an enum
+	// declaring `hash() returns String` was stamped into a slot the probe calls as `returns` i64, so a
+	// String record POINTER was used as a hash and then leaked -- `map.get` answered 0 where the oracle
+	// answers 20, and the process exited 101.
+	// The cure is to make the member match the requirement it is named after, or to rename it. The
+	// compiler's own implementation is used for every enum that declares neither.
+	semanticGrantedConformanceMemberMismatch = "E3130"
 
 	// A field access could not be lowered: the base is not a struct, or the field has no slot.
 	invalidFieldAccess = "E4006"

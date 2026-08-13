@@ -6376,9 +6376,10 @@ end 'managedListMethodFreesANode'
 // *"a int"*, so without it the article would be written out once per refusal site and the three would be
 // free to disagree.
 //
-// ⚠ The three ADMITTED KEY types (`requireHashTableKeyType` passes `int`, `String` and `Character`) include
-// exactly one that takes *"an"*, which is why the test is the integral one and not a vowel scan over the
-// name. But `tag` is NOT confined to those three — a `Map`'s VALUE column is held to the wider
+// ⚠ Of the admitted KEY types whose TAG this can be handed (`requireHashTableKeyType` — `int`, `String`,
+// `Character`), exactly one takes *"an"*, which is why the test is the integral one and not a vowel scan over
+// the name. But `tag` is NOT confined to those — the roster also admits the array record and, since
+// enum-hashable, any payload-free `enum`, and a `Map`'s VALUE column is held to the wider
 // `slotTypeFitsOneWord`, and see `columnValueTagMatches`'s last arm for the measured reason a refused
 // instance reaches here with any column type at all — so the `"a"` branch is a real default and not an
 // unreachable one, and it is CORRECT for every remaining tag name (`float`, `bool`, `function`, a struct's
@@ -47335,8 +47336,12 @@ export type Parser
 	// ⭐ **DISPATCH A METHOD ON AN ENUM/UNION RECEIVER (D1).** The cursor sits on the member NAME. The
 	// callee is mangled from the receiver's declared ENUM NAME and the member name — the very key
 	// `parseFunction` declared the method under (`declaredMethodName`) — and the receiver is prepended as
-	// argument 0 by the shared `parseCallNamed`. That is the whole dispatch; nothing below the parser
-	// learns that enums have methods.
+	// argument 0 by the shared `parseCallNamed`. Nothing below the parser learns that enums have methods.
+	//
+	// ⚠ **THERE ARE TWO ARMS SINCE enum-hashable, and the mangled callee is only the FIRST.** A member the
+	// enum does not declare may still be one of the `Hashable`/`Equatable` requirements the compiler GRANTS
+	// every payload-free enum, which is a conformance dispatch and not a method call at all — see the arm
+	// below. Both arms are exhaustive over one lookup, so a member reaches exactly one of them.
 	//
 	// ⭐ **D1 GAVE IT A BINDING RECEIVER ONLY; ROUTING IT THROUGH THE ONE SWITCH GIVES IT A VALUE ONE FOR
 	// FREE (D2).** `pick().score()` and `Direction.south.score()` are programs the oracle runs (measured:
@@ -47360,8 +47365,65 @@ export type Parser
 		// The enum's name comes from the receiver's TYPE, never from the anchor token: the anchor is a
 		// variable's name (`d`), a `.` for a temporary, and `self` is not even an identifier.
 		let memberTok = self.current()
-		return try self.parseCallNamed(func, callee: qualifiedMethodName(self.internedName(recv.nameId), methodName: memberTok.value), anchor: memberTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
+		let enumName = self.internedName(recv.nameId)
+		let callee = qualifiedMethodName(enumName, methodName: memberTok.value)
+
+		// ⭐⭐ **`d.hash()` AND `a.equals(b)` ON AN ENUM ARE THE GRANTED CONFORMANCE, NOT A MISSING METHOD
+		// (enum-hashable).** Both were `E3004: call to undefined function 'Direction.hash'`, because the
+		// conformance every enum has by declaration alone had no door on the value side. This is that door,
+		// and it resolves the member against the SAME intrinsic-conformance row the E3017 answer and the
+		// witness slot read (`isIntrinsicBuiltinConformance`'s `payloadFreeEnum` arm) — so the set of members
+		// it serves cannot come to differ from the set of protocols the enum is held to conform to.
+		//
+		// ⚠ **IT IS ASKED ONLY WHERE THE ENUM DECLARES NO METHOD OF THAT NAME**, which is the precedence v1
+		// states — *"a user method wins, matching 'user override beats synthesis'"* — and here it costs
+		// nothing to honour: the declared method is the ordinary D1 call below, and
+		// `enumConformanceImplName` answers with that same key, so the witness slot follows the door rather
+		// than contradicting it.
+		match self.enumGrantedConformanceMethod(enumName, memberName: memberTok.value) 'granted'
+			supplied(method) then return try self.dispatchEnumConformanceMethod(func, recv: recv, enumName: enumName, method: method, memberTok: memberTok)
+			notSupplied then return try self.parseCallNamed(func, callee: callee, anchor: memberTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
+		end 'granted'
 	end 'dispatchEnumMethod'
+
+	// Which member of `enumName` this call reaches through the GRANTED conformance rather than through a
+	// declared method — `notSupplied` for every member an enum body declares itself, and for every name the
+	// granted row does not carry (a `union`'s, since the row is withheld from one, and anything that is not
+	// `hash`/`equals`). Its two answers are the two arms of the dispatch above, so a member cannot be claimed
+	// here and then looked for as a declaration.
+	//
+	// ⚠ **THE DECLARED-METHOD PROBE COMES FIRST AND IT IS WHAT KEEPS THIS OFF THE HOT PATH.** The row walk
+	// below builds a protocol-name array, and EVERY enum method call in every program arrives here — so
+	// `d.isNorth()` must not pay for it. A declared member is one map lookup and returns; the walk is reached
+	// only by a member no declaration answers, which is a call already bound for the granted conformance or
+	// for a diagnostic.
+	//
+	// ⚠⚠ **THE PROBE IS `ProgramSignatures.enumDeclaresOwnConformanceMethod` AND MAY NOT BE INLINED BACK TO
+	// A `declaresCallee` OF ITS OWN.** Three doors turn on this one question — this dispatch, the witness
+	// slot's impl name, and E3130's check — and they were two copies of the same join until the review
+	// caught it: refine the rule at one and `e.hash()` calls one body while the map stamps another.
+	function enumGrantedConformanceMethod(enumName ByteArray, memberName ByteArray) returns BuiltinConformerMethodLookup
+		if self.signatures.enumDeclaresOwnConformanceMethod(enumName, methodName: memberName) 'theEnumDeclaresIt'
+			return BuiltinConformerMethodLookup.notSupplied
+		end 'theEnumDeclaresIt'
+
+		return builtinConformerMethod(enumName, methodName: memberName, discovered: self.signatures.discoveredConformerOf(enumName))
+	end 'enumGrantedConformanceMethod'
+
+	// ⭐ **EMIT ONE GRANTED-CONFORMANCE CALL ON AN ENUM RECEIVER** — the cursor sits on the member NAME, which
+	// the shared `emitBuiltinConformanceCall` consumes along with the argument list, so the arity check, the
+	// `Self`-argument rule and the result typing are the ones every direct conformance dispatch already uses.
+	//
+	// ⭐ **THE RECEIVER AND ITS `Self` ARGUMENT TRAVEL AS THEIR ENUM-TYPED VALUES AND ARE NOT CONVERTED, WHICH
+	// IS THE `int` IMPL'S ABI ALREADY.** An enum value IS its i64 tag in a GPR and resolves to
+	// `MaxonType.integer` below the parser, so `int.hash`/`int.equals` receive exactly the i64 they expect —
+	// the same handoff `emitEnumRawValue` makes when it passes a tag straight to `__char_from_cp`. Emitting a
+	// `+ 0` retag (`enumTagAsANumber`) would buy nothing here: that exists to give an ORDINAL a type of its
+	// own, and no result of this call carries the enum's type.
+	function dispatchEnumConformanceMethod(func IrFunction, recv MethodReceiver, enumName ByteArray, method InterfaceMethodSig, memberTok Token) returns ValueId throws ParseError
+		try self.consume(TokenKind.identifier)
+		return try self.emitBuiltinConformanceCall(func, receiver: recv.value, target: DirectConformanceTarget.enumTagValue(enumName), method: method, baseTok: recv.anchor, methodTok: memberTok)
+	end 'dispatchEnumConformanceMethod'
 
 	// ⭐⭐ **THE BOX A BASE BINDING DENOTES — and a SELF-FIELD ALIAS is the one that has to be MATERIALIZED
 	// first.** Every other binding already holds its value; a self-field alias holds NONE.
@@ -48240,8 +48302,8 @@ export type Parser
 		// would decline to install, and the day `String` gains `Comparable` its `compare()` opens with no edit
 		// here. A name the row does not supply falls through to the roster below, which is what keeps a typo a
 		// typo rather than a permissions message.
-		match builtinConformerMethod(StringConformerName, methodName: methodTok.value) 'conformanceMethod'
-			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: recv.value, conformer: BuiltinConformer.stringConformer, method: method, baseTok: baseTok, methodTok: methodTok)
+		match builtinConformerMethod(StringConformerName, methodName: methodTok.value, discovered: DiscoveredConformer.none) 'conformanceMethod'
+			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: recv.value, target: DirectConformanceTarget.builtinValue(BuiltinConformer.stringConformer), method: method, baseTok: baseTok, methodTok: methodTok)
 			notSupplied then break 'conformanceMethod'
 		end 'conformanceMethod'
 
@@ -49774,8 +49836,8 @@ export type Parser
 			return try self.emitPrimitiveClone(receiver, methodTok: methodTok)
 		end 'cloneableLowering'
 
-		match builtinConformerMethod(typeName, methodName: methodTok.value) 'lookup'
-			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: receiver, conformer: conformer, method: method, baseTok: baseTok, methodTok: methodTok)
+		match builtinConformerMethod(typeName, methodName: methodTok.value, discovered: DiscoveredConformer.none) 'lookup'
+			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: receiver, target: DirectConformanceTarget.builtinValue(conformer), method: method, baseTok: baseTok, methodTok: methodTok)
 			notSupplied then throw ParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — a builtin-typed receiver supplies {builtinConformerDispatchMethodNames(typeName)}", line: methodTok.line, column: methodTok.column)
 		end 'lookup'
 	end 'dispatchBuiltinConformanceMethod'
@@ -49846,7 +49908,7 @@ export type Parser
 	// typed from the interface method's declared return (`interfaceReturnMaxonType` — the SAME typing the
 	// witness-dispatched form gets), so `compare`'s `Ordering` carries the enum's `named` tag a `match`
 	// recognizes and `hash`'s `HashValue` carries the ranged alias's.
-	function emitBuiltinConformanceCall(func IrFunction, receiver ValueId, conformer BuiltinConformer, method InterfaceMethodSig, baseTok Token, methodTok Token) returns ValueId throws ParseError
+	function emitBuiltinConformanceCall(func IrFunction, receiver ValueId, target DirectConformanceTarget, method InterfaceMethodSig, baseTok Token, methodTok Token) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		var args = ValueIdArray.create()
 		args.push(receiver)
@@ -49869,11 +49931,31 @@ export type Parser
 			throw ParseError.builtinArity(String.from(method.name), expected: method.paramTypeNames.count(), got: userArgs, line: methodTok.line, column: methodTok.column)
 		end 'arity'
 
-		try self.requireBuiltinConformanceSelfArgs(method, args: args, conformer: conformer, methodTok: methodTok)
+		try self.requireBuiltinConformanceSelfArgs(method, args: args, target: target, methodTok: methodTok)
 
 		let resultType = self.interfaceReturnMaxonType(method.returnTypeName)
-		return self.emitRuntimeCall(qualifiedMethodName(builtinConformerName(conformer), methodName: method.name), args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: SourceRange.between(baseTok, last: rparenTok))
+		return self.emitRuntimeCall(self.conformanceImplNameOf(target, methodName: method.name), args: args, resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: SourceRange.between(baseTok, last: rparenTok))
 	end 'emitBuiltinConformanceCall'
+
+	// The symbol a direct conformance dispatch calls. Both arms name a body that already exists — the
+	// synthesized `<conformer>.<method>`, or (for an enum) `int`'s own, which is the whole reason the enum
+	// grant mints nothing.
+	function conformanceImplNameOf(target DirectConformanceTarget, methodName ByteArray) returns ByteArray
+		match target 'target'
+			builtinValue(conformer) then return qualifiedMethodName(builtinConformerName(conformer), methodName: methodName)
+			enumTagValue(enumName) then return self.signatures.enumConformanceImplName(enumName, methodName: methodName)
+		end 'target'
+	end 'conformanceImplNameOf'
+
+	// Is `actual` a value this target's `Self` formal accepts? The two arms are the two identities a direct
+	// dispatch can have — a builtin CONFORMER, compared as conformers so `Byte` and `Integer` agree, and one
+	// specific ENUM, compared by name because two enums are two types however alike their tags look.
+	function valueSatisfiesConformanceSelf(actual ValueId, target DirectConformanceTarget) returns bool
+		match target 'target'
+			builtinValue(conformer) then return self.valueIsConformer(actual, conformer: conformer)
+			enumTagValue(enumName) then return self.tagOf(actual) == ValueTypeTag.named and self.internedName(self.valueNameId(actual)).equals(enumName)
+		end 'target'
+	end 'valueSatisfiesConformanceSelf'
 
 	// ⭐ **A `Self`-TYPED FORMAL TAKES A VALUE OF THE RECEIVER'S OWN CONFORMER, AND NOTHING ELSE.**
 	// `Equatable.equals` and `Comparable.compare` both declare `other Self`, and each impl reads its second
@@ -49888,8 +49970,13 @@ export type Parser
 	// earlier), but `equals`'s ARGUMENT reaches it here, and without the arm a legal `"ab".equals("ac")`
 	// would be refused for handing a String to a `Self` formal.
 	//
+	// ⚠ **"THE RECEIVER'S OWN CONFORMER" IS THE TARGET'S QUESTION AND NOT THIS ONE'S SINCE enum-hashable** —
+	// an ENUM receiver's `Self` is that one enum, not the `int` its granted impls belong to, so admitting by
+	// conformer there would compare a `Color` tag against a bare `int` or against another enum's case index.
+	// `valueSatisfiesConformanceSelf` holds both readings; this walk owns only WHICH formals are asked.
+	//
 	// Interface formal `j` is actual `j + BuiltinConformanceReceiverArgs`; arity was checked above.
-	function requireBuiltinConformanceSelfArgs(method InterfaceMethodSig, args ValueIdArray, conformer BuiltinConformer, methodTok Token) throws ParseError
+	function requireBuiltinConformanceSelfArgs(method InterfaceMethodSig, args ValueIdArray, target DirectConformanceTarget, methodTok Token) throws ParseError
 		for j in 0 upto method.paramTypeNames.count() 'eachFormal'
 			let formalTypeName = try method.paramTypeNames.get(j) otherwise panic("requireBuiltinConformanceSelfArgs: paramTypeNames.get OOB at {j} below count {method.paramTypeNames.count()}")
 			if not formalTypeName.equals(InterfaceSelfTypeName) 'notSelfFormal'
@@ -49897,8 +49984,8 @@ export type Parser
 			end 'notSelfFormal'
 
 			let actual = try args.get(j + BuiltinConformanceReceiverArgs) otherwise panic("requireBuiltinConformanceSelfArgs: args.get OOB at {j + BuiltinConformanceReceiverArgs} below count {args.count()} — the arity check ran first")
-			if not self.valueIsConformer(actual, conformer: conformer) 'notSameConformer'
-				throw ParseError.builtinOperandType(String.from(method.name), required: String.from(builtinConformerName(conformer)), got: typeTagName(self.tagOf(actual)), line: methodTok.line, column: methodTok.column)
+			if not self.valueSatisfiesConformanceSelf(actual, target: target) 'notSameConformer'
+				throw ParseError.builtinOperandType(String.from(method.name), required: String.from(conformanceSelfTypeNameOf(target)), got: typeTagName(self.tagOf(actual)), line: methodTok.line, column: methodTok.column)
 			end 'notSameConformer'
 		end 'eachFormal'
 	end 'requireBuiltinConformanceSelfArgs'
@@ -50934,27 +51021,107 @@ export type Parser
 	// ⚠ It is asked of a `Map`'s key as well as a `Set`'s, which is why the container is a parameter rather
 	// than the literal a `Set`-only gate would have spelled.
 	//
-	// ⭐⭐ **THE REFUSAL RENDERS THE ADMITTED SET FROM THE SAME THREE CONSTANTS THE TEST READS**, so a fourth
-	// admitted key type moves the sentence by being admitted. A hand-written roster that has to be edited
-	// beside the test is this project's most frequent single rot — the sentence stays true only until someone
-	// widens the test and not the prose, and nothing fails to say so.
+	// ⭐⭐ **THE REFUSAL RENDERS THE ADMITTED SET FROM THE SAME TWO SOURCES THE TEST READS**, so an admitted
+	// key type moves the sentence by being admitted. A hand-written roster that has to be edited beside the
+	// test is this project's most frequent single rot — the sentence stays true only until someone widens the
+	// test and not the prose, and nothing fails to say so.
 	//
-	// ⚠ The FOURTH entry is the exception that proves it: the test asks
-	// `ProgramSignatures.namesTheArrayRecordConformer` while the sentence renders
-	// `arrayRecordDeclaredName()`, because the record's spelling is the corpus's and not a constant this file
-	// may hold (ARR6). They are still one fact — the predicate IS that comparison, in its one home.
+	// ⚠ **AND IT IS TWO SOURCES RATHER THAN ONE, because the admitted keys are two KINDS of fact.** The
+	// RESERVED names are a list this file may hold, so both sides walk `reservedHashTableKeyNames`. The
+	// DISCOVERED ones have no spelling this file may hold (the array record's is the corpus's, ARR6; an
+	// enum's is the author's), so the test asks `ProgramSignatures.discoveredConformerOf` while the sentence
+	// renders `arrayRecordDeclaredName()` and, for an enum, a SHAPE — one fact each, and since enum-hashable
+	// both sides walk `DiscoveredConformer` under an EXHAUSTIVE match, so a category APPENDED there fails to
+	// compile in the test and in the sentence together (see that enum's header for the ordering the two
+	// range arms depend on).
 	function requireHashTableKeyType(giid GenericInstanceId, containerName String, tok Token) throws ParseError
-		// ⭐⭐ **`Array` IS THE FOURTH ADMITTED KEY, AND IT NEEDED NO SECOND PREDICATE (array-hashable)** —
-		// which is the reduction doing its job. An `Array with E` reduces to the conformer `Array` exactly
-		// when `E` satisfies the conditional conformance (`ProgramSignatures.conformerNameOfType`), so this
-		// one added name admits every array a witness slot can actually be stamped for; an array whose
-		// element does not conform keeps its own unreduced spelling and is refused below.
 		let keyType = self.signatures.conformerTypeArgName(giid, position: HashTableKeyArgPosition).toByteArray()
-		if not (keyType.equals(IntConformerName) or keyType.equals(StringConformerName) or keyType.equals(CharacterConformerName) or self.signatures.namesTheArrayRecordConformer(keyType)) 'unsupportedKey'
-			try self.requireArrayKeyElementConforms(giid, containerName: containerName, tok: tok)
-			throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be one of `{String.from(IntConformerName)}`, `{String.from(StringConformerName)}`, `{String.from(CharacterConformerName)}`, `{String.from(self.signatures.arrayRecordDeclaredName())}` — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
-		end 'unsupportedKey'
+		if self.hashTableKeyIsAdmitted(keyType) 'admitted'
+			return
+		end 'admitted'
+
+		try self.requireArrayKeyElementConforms(giid, containerName: containerName, tok: tok)
+		throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be a type that carries them: {self.hashTableAdmittedKeys()} — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
 	end 'requireHashTableKeyType'
+
+	// ⭐⭐ **MAY THIS TYPE BE A HASH TABLE'S KEY? — the three RESERVED intrinsic conformers, plus every
+	// conformer the compiler GRANTS its `Hashable`/`Equatable` pair to without an `implements`.**
+	//
+	// ⭐ **`Array` NEEDED NO SECOND PREDICATE AND NEITHER DOES AN `enum` (array-hashable, enum-hashable)** —
+	// which is the reduction and the discovery doing their job. An `Array with E` reduces to the conformer
+	// `Array` exactly when `E` satisfies the conditional conformance, and an `enum` names itself and is
+	// recognized by SHAPE (`namesAPayloadFreeEnum`); an array whose element does not conform keeps its own
+	// unreduced spelling and is refused, as is a `union`, which the granted row withholds.
+	//
+	// ⚠ **THE MATCH IS EXHAUSTIVE, AND THAT IS THE ROT GUARD THIS GATE'S HEADER DEMANDS** — a category added
+	// to `DiscoveredConformer` fails to compile here and in `hashTableAdmittedKeys` together, so a key can
+	// never be admitted by the test while the refusal goes on denying it.
+	//
+	// ⚠ **A USER TYPE DECLARING `implements Hashable, Equatable` IS DELIBERATELY NOT ADMITTED, and "a later
+	// slice" stays true of it**: its key column is a heap box whose ownership this container does not stamp.
+	// `Map` reaches such a key through its OWN declared `where` clause instead (`gateMapLiteralColumns` routes
+	// a corpus `Map` past this gate entirely) — a different mechanism, not this roster widened.
+	function hashTableKeyIsAdmitted(keyType ByteArray) returns bool
+		for reservedName in reservedHashTableKeyNames() 'eachReserved'
+			if keyType.equals(reservedName) 'aReservedIntrinsicConformer'
+				return true
+			end 'aReservedIntrinsicConformer'
+		end 'eachReserved'
+
+		return match self.signatures.discoveredConformerOf(keyType) 'discovered'
+			arrayRecord to payloadFreeEnum gives true
+			none gives false
+		end 'discovered'
+	end 'hashTableKeyIsAdmitted'
+
+	// The admitted key types AS THE REFUSAL PRINTS THEM — one phrase per arm of the test above: the reserved
+	// names off the very list that test walks, then the discovered categories in `DiscoveredConformer`'s own
+	// declaration order, so the sentence can omit neither.
+	function hashTableAdmittedKeys() returns String
+		var phrases = StringArray.create()
+		for reservedName in reservedHashTableKeyNames() 'eachReserved'
+			phrases.push("`{String.from(reservedName)}`")
+		end 'eachReserved'
+		for discovered in DiscoveredConformer.allCases 'eachCategory'
+			if discovered == DiscoveredConformer.none 'grantsNothingToName'
+				continue
+			end 'grantsNothingToName'
+
+			phrases.push(self.grantedConformerKeyPhrase(discovered))
+		end 'eachCategory'
+		return renderPhraseList(phrases)
+	end 'hashTableAdmittedKeys'
+
+	// ⭐⭐ **THE RESERVED CONFORMER NAMES A HASH TABLE ADMITS OUTRIGHT — ONE list, walked by the TEST and by
+	// the SENTENCE.** They were spelled out at both sites, agreeing only by inspection: a fourth added to the
+	// test would have left the refusal denying a key type the compiler accepts, which is the rot this gate's
+	// own header names as the project's most frequent — stated there while the code carried two copies of it.
+	//
+	// ⚠ The three are RESERVED spellings this file may hold (two keywords and one name
+	// `TypeResolution.isCompilerOwnedTypeName` refuses to every declaration), which is exactly what the
+	// DISCOVERED categories are not — theirs are the corpus's and the author's, so they cannot join this list
+	// and are asked through `ProgramSignatures.discoveredConformerOf` instead.
+	function reservedHashTableKeyNames() returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		names.push(IntConformerName)
+		names.push(StringConformerName)
+		names.push(CharacterConformerName)
+		return names
+	end 'reservedHashTableKeyNames'
+
+	// How ONE compiler-granted conformer category reads in that sentence. The array record is a NAME the
+	// corpus chose, so it is fetched; an enum has no one name, so what is printed is the shape the discovery
+	// actually tests for — which is the only rendering that stays true for every enum in every program.
+	//
+	// It PANICS on `none` for `IrInterface.builtinConformerName`'s reason: the category names no grant, so
+	// only a caller that has already skipped it may ask for a phrase.
+	function grantedConformerKeyPhrase(discovered DiscoveredConformer) returns String
+		match discovered 'discovered'
+			arrayRecord then return "`{String.from(self.signatures.arrayRecordDeclaredName())}`"
+			payloadFreeEnum then return "any `enum` with no associated values"
+			none then panic("grantedConformerKeyPhrase: `none` names no compiler-granted conformance and so no admitted key category — its one caller walks the granted categories and skips it")
+		end 'discovered'
+	end 'grantedConformerKeyPhrase'
 
 	// ⭐⭐ **AN ARRAY KEY THAT FAILED THE ROSTER FAILED IT FOR ITS ELEMENT, AND THE ROSTER SENTENCE MAY NOT
 	// SAY OTHERWISE (array-hashable review).** `Array` IS an admitted key, so "a '…' key is a later slice"
@@ -51176,7 +51343,37 @@ export type Parser
 		if arrGid == self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: MaxonType.string) 'stringKey'
 			return self.signatures.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
 		end 'stringKey'
-		throw ParseError.unsupported("`Set from […]` supports `int` and `String` keys — a struct / ByteArray literal is a later slice", line: setTok.line, column: setTok.column)
+
+		// ⛔⛔ **A NARROW-PACKED ELEMENT IS REFUSED FOR THE STRIDE, NOT FOR ITS TYPE — and the door that told
+		// an author otherwise was a MEASURED wrong answer waiting (enum-hashable).** `requireHashTableKeyType`
+		// admits an enum key, so this door was widened to match, and the program it then compiled was WRONG:
+		// `Set from [Color.red, Color.green, Color.red]` answered **`count=3`, `contains(Color.red)=false`**
+		// against the oracle's `count=2, contains=true` — three elements where two went in, and a member the
+		// set could not find.
+		//
+		// ⭐ **THE CAUSE IS THE ELEMENT STRIDE, AND IT IS NOT THE KEY'S CONFORMANCE.** An enum ARRAY packs to
+		// the enum's own narrow storage (`array-enum-element-size.md` — one byte for a three-case enum) while
+		// `__set_from` consumes its source buffer as 8-byte elements, so it hashed three garbage words and the
+		// probe, which hashes a real tag, matched none of them. The conformance, the witness tables and the
+		// `int.hash`/`int.equals` impls are all correct on this path — one buffer stride is not.
+		//
+		// ⚠⚠ **SO THE TEST IS THE STRIDE PREDICATE AND NOT "IS THIS AN ENUM", WHICH THE REVIEW CAUGHT AS A
+		// FALSE SENTENCE.** Asked by SHAPE, this told every payload-free enum its array "packs narrower" —
+		// including the wide-backed one MEASURED as correct on both compilers (`a = 5000000000` answers
+		// `count=2, contains=true`), which is precisely the case the claim does not describe. Asked by STRIDE
+		// it is true of exactly the arrays it refuses, and it is the SAME question — `arrayElementIsMachineWord`
+		// — that `parseListFromConstruction` guards the identical `__list_from` hazard with.
+		//
+		// ⚠ Both arms still throw, so no compiled program moved: a wide-backed enum falls through to the
+		// roster refusal below rather than being admitted, because `__set_from` taking an element SIZE is a
+		// runtime entry's ABI on three targets and not a rule this door can state. What changed is which
+		// sentence each author is told, and the working route is named: `Set with <Enum>` + `create()` +
+		// `insert`, whose column is built one member at a time and is measured correct on every backing.
+		if not self.signatures.arrayElementIsMachineWord(arrGid) 'packedElement'
+			throw ParseError.unsupported("`Set from […]` reads its source array one machine word per element, and this literal's elements are packed narrower — build the set with `{String.from(SetBuiltinBaseName)} with <element>` and `insert` instead", line: setTok.line, column: setTok.column)
+		end 'packedElement'
+
+		throw ParseError.unsupported("`Set from […]` supports `{String.from(IntConformerName)}` and `{String.from(StringConformerName)}` {HashTableKeyColumnNoun}s — a struct / ByteArray literal is a later slice", line: setTok.line, column: setTok.column)
 	end 'setInstanceForArrayLiteral'
 
 	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b).

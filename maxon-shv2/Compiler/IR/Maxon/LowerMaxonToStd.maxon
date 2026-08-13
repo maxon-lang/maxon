@@ -2026,16 +2026,26 @@ type MaxonToStdLowering
 	// impls are installed, so the three cannot come to disagree about which pairs are builtin. Any other miss
 	// means this table is stamping a slot no conformance accepted, which is a pipeline-ordering break rather
 	// than anything an author could be told to write differently.
+	//
+	// ⭐⭐ **AND A PAYLOAD-FREE `enum` IS THE ONE GRANTED CONFORMER WHOSE IMPL IS NOT ITS OWN JOIN
+	// (enum-hashable).** Every other row here names `<conformer>.<method>` because that IS the symbol its
+	// installer mints; an enum mints none, because its value IS an i64 tag and `int.hash`/`int.equals` already
+	// answer for it. `ProgramSignatures.enumConformanceImplName` is that decision's one home — shared with the
+	// direct `e.hash()` dispatch, so `Map with (Color, …)` and `Color.red.hash()` cannot reach two bodies.
 	function witnessSlotImpl(typeName ByteArray, interfaceName ByteArray, method InterfaceMethodSig) returns ByteArray
 		if let selected = try self.witnessSlotImpls.get(witnessSlotImplKey(typeName, interfaceName: interfaceName, methodName: method.name)) 'chosenByConformance'
 			return selected
 		end 'chosenByConformance'
 
-		if not isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, typeNamesTheArrayRecord: self.signatures.namesTheArrayRecordConformer(typeName)) 'noSelection'
+		let discovered = self.signatures.discoveredConformerOf(typeName)
+		if not isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, discovered: discovered) 'noSelection'
 			panic("witnessSlotImpl: no conformance selected a member for slot '{String.from(typeName)}.{String.from(interfaceName)}.{String.from(method.name)}' — `checkConformance` files one per accepted requirement before the pipeline runs, and lowering is only reached once it accepted every one, so this table is being built for a conformance that was never validated")
 		end 'noSelection'
 
-		return qualifiedMethodName(typeName, methodName: method.name)
+		return match discovered 'discovered'
+			payloadFreeEnum gives self.signatures.enumConformanceImplName(typeName, methodName: method.name)
+			none to arrayRecord gives qualifiedMethodName(typeName, methodName: method.name)
+		end 'discovered'
 	end 'witnessSlotImpl'
 
 	// Resolve an interface NAME when building a witness table (P1.7a slice 2a) — through `lookupInterface`,

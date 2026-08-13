@@ -3906,8 +3906,8 @@ let ReservedTypeNamePrefix = b"__"
 // the three is a conformance GRANTED where the corpus pins a refusal (`intrinsicConformanceProtocolNames`
 // answering the empty list makes the `where` clause vacuous, so `hash()` is served for every element). The
 // cure is the one ARRO used everywhere else — the discovered fact threaded in as a parameter:
-// `IrInterface.isIntrinsicBuiltinConformance` now takes `typeNamesTheArrayRecord`, derived once by
-// `namesTheArrayRecordConformer`, and `installBuiltinConformanceRuntime` takes the record's name outright,
+// `IrInterface.isIntrinsicBuiltinConformance` now takes a `DiscoveredConformer`, derived once by
+// `discoveredConformerOf`, and `installBuiltinConformanceRuntime` takes the record's name outright,
 // because it JOINS a symbol rather than comparing one.
 //
 // ⛔ **THE SEED ITSELF IS NOT RETIRABLE, AND THAT IS A CONCLUSION RATHER THAN A GAP (ARRO, RE-MEASURED AT
@@ -8332,8 +8332,107 @@ export type ProgramSignatures
 	// DISCOVERED name, and the row's key is now a question rather than a name, so the pairing of "the record's
 	// own spelling" with "this IS the record" is stated once here instead of agreed three times.
 	export function arrayConformanceProtocolNames() returns ByteArrayArray
-		return intrinsicConformanceProtocolNames(self.arrayRecordDeclaredName(), typeNamesTheArrayRecord: true)
+		return intrinsicConformanceProtocolNames(self.arrayRecordDeclaredName(), discovered: DiscoveredConformer.arrayRecord)
 	end 'arrayConformanceProtocolNames'
+
+	// ⭐⭐ **WHICH COMPILER-GRANTED CONFORMER A NAME IS — the ONE discovery every door that consults the
+	// intrinsic-conformance table routes through (enum-hashable).** Two of that table's rows are keyed by a
+	// declaration rather than by a compiler-owned spelling, so neither can be recognized without the program:
+	// the ARRAY RECORD, whose name the corpus chooses (ARR6), and a payload-free `enum`, whose name the author
+	// chooses. They are answered together because they are the same question — *"is this name one the compiler
+	// grants a conformance to without an `implements`?"* — and a caller that asked only one of them would
+	// silently withhold the other's row.
+	//
+	// ⚠ **THE ENUM ROW IS WITHHELD FROM A `union`, WHICH IS THE LANGUAGE'S RULE AND NOT A REPRESENTATION
+	// ONE.** `/specs/enum-hashable.md` grants the pair to enums *"without associated values"* and pins the
+	// refusal of a union that has them; the bootstrap withholds it from EVERY union (`2-Parser.cs:4530`,
+	// `if (!isUnion)`), including a payload-free one, and this follows that reading — a union is a nominal
+	// choice the author made and the conformance is the enum keyword's.
+	//
+	// ⚠ **`isBoxed()` IS A SECOND CONDITION AND NOT A RESTATEMENT OF THE FIRST**: it is the REPRESENTATION
+	// premise the granted impls rest on (`enumConformanceImplName` — the value must BE its i64 tag), and the
+	// keyword alone does not establish it. An `enum` whose case carries a payload is heap-boxed exactly as a
+	// union is, so hashing it as an i64 would hash a POINTER; whether such a declaration is refused earlier is
+	// a question about a diagnostic, and this predicate must not depend on the answer.
+	export function namesAPayloadFreeEnum(name ByteArray) returns bool
+		if let layout = try self.enumTypes.get(name) 'declared'
+			return not layout.isUnion and not layout.isBoxed()
+		end 'declared'
+		return false
+	end 'namesAPayloadFreeEnum'
+
+	export function discoveredConformerOf(name ByteArray) returns DiscoveredConformer
+		if self.namesTheArrayRecordConformer(name) 'theArrayRecord'
+			return DiscoveredConformer.arrayRecord
+		end 'theArrayRecord'
+		if self.namesAPayloadFreeEnum(name) 'anEnum'
+			return DiscoveredConformer.payloadFreeEnum
+		end 'anEnum'
+
+		return DiscoveredConformer.none
+	end 'discoveredConformerOf'
+
+	// ⭐⭐ **THE IMPL A PAYLOAD-FREE ENUM'S GRANTED `Hashable`/`Equatable` SLOT NAMES — the ONE answer, read by
+	// the WITNESS SLOT (`LowerMaxonToStd.witnessSlotImpl`) and by the DIRECT dispatch
+	// (`Parser.dispatchEnumConformanceMethod`), because a map that hashes a key one way and an `e.hash()` that
+	// answers another is a wrong answer no diagnostic can reach.**
+	//
+	// ⭐ **IT IS `int`'s IMPL, AND THAT IS THE WHOLE OF WHY THE GRANT SYNTHESIZES NO BODY.** An enum value IS
+	// its i64 tag — one `MaxonOp.literal` at every `Color.red` (`Parser.emitEnumTagLiteral`), resolving away to
+	// `MaxonType.integer` below the parser (`TypeResolution.denotedNamedType`) — so hashing an enum IS hashing
+	// that i64 and comparing two enums IS comparing two i64s. `int.hash`/`int.equals` are already synthesized,
+	// already witness-reachable and already the symbols `__witness_int.*` names, so the enum row reaches the
+	// same two bodies rather than minting a pair per enum in the program.
+	//
+	// ⭐ **AND THE TAG IS THE RIGHT THING TO HASH FOR EVERY BACKING, INCLUDING THE THREE WHERE IT IS NOT THE
+	// RAW VALUE.** A string-backed enum's tag is its declaration index and a function-backed one's likewise;
+	// a character-backed enum's is the codepoint; a float-backed one's is the f64's BIT PATTERN. In all four
+	// the tag is UNIQUE per case (E3031 refuses a duplicate raw value), so two cases are equal exactly when
+	// their tags are — which is the property a hash table needs, and it costs no String allocation per probe.
+	// The bootstrap reaches the same arrangement from the other side, hashing the ORDINAL rather than
+	// materializing a `String` rawValue (`2-Parser.cs`'s `SynthesizeEnumHashAndEquals`).
+	//
+	// ⚠ **A `float` BACKING IS WHERE THIS DEPARTS FROM v1, DELIBERATELY.** v1 dispatches a float-backed enum's
+	// hash to `float.hash` on the reinterpreted value (`Parser.maxon:19355`); shv2 hashes the BITS. The
+	// difference is visible on exactly one input — a NaN-backed case, which `float.equals` reports as unequal
+	// to ITSELF, so a map could never find the key it just inserted. Case identity is what an enum's
+	// `Equatable` means, and the bit compare is that; numeric equality is not.
+	//
+	// ⚠ **AN ENUM THAT DECLARES ITS OWN `hash`/`equals` KEEPS IT.** Its method is registered under this very
+	// key (`Parser.declaredMethodName`), it is what `d.hash()` already resolves to (D1), and v1 states the
+	// same precedence — *"a user method wins, matching 'user override beats synthesis'"* (`Parser.maxon:19342`).
+	// Answering `int.hash` regardless would leave the two doors disagreeing about one enum.
+	//
+	// ⛔⛔ **AND THAT BRANCH IS SOUND ONLY BECAUSE E3130 REFUSES A MEMBER THAT DOES NOT IMPLEMENT THE
+	// REQUIREMENT — it was a WRONG ANSWER AND A LEAK before that check existed.** Nothing validates an enum's
+	// members against `Hashable`/`Equatable` the way `checkConformance` validates a declared `implements`:
+	// the grant is the compiler's, so there is no `ConformanceDecl` to walk and `witnessSlotImpls` never
+	// holds a selection for one. MEASURED with the branch unguarded: an enum declaring
+	// `hash() returns String` was stamped into a slot the probe calls as `returns` i64, so `map.get`
+	// answered **0 against the oracle's 20 and the process exited 101** — a String pointer used as a hash
+	// and then leaked, compiling clean with no diagnostic anywhere.
+	// ⇒ `ConformanceCheck.checkGrantedEnumConformance` is the other half of THIS function and may not be
+	// removed while this branch stands.
+	export function enumConformanceImplName(enumName ByteArray, methodName ByteArray) returns ByteArray
+		if self.enumDeclaresOwnConformanceMethod(enumName, methodName: methodName) 'theEnumWritesItsOwn'
+			return qualifiedMethodName(enumName, methodName: methodName)
+		end 'theEnumWritesItsOwn'
+
+		return qualifiedMethodName(IntConformerName, methodName: methodName)
+	end 'enumConformanceImplName'
+
+	// ⭐⭐ **DOES THIS ENUM DECLARE A MEMBER OF ITS OWN UNDER A GRANTED REQUIREMENT'S NAME? — the ONE home of
+	// the override probe, read by all THREE doors that turn on it.** `Parser.enumGrantedConformanceMethod`
+	// decides whether `e.hash()` is a method call or the granted conformance; `enumConformanceImplName`
+	// decides which symbol the witness slot is stamped with; `ConformanceCheck.checkGrantedEnumConformance`
+	// decides which members it must hold to the requirement.
+	//
+	// ⚠ **THEY WERE TWO COPIES OF ONE JOIN AND THAT IS EXACTLY WHY THIS EXISTS**: refine the rule at one and
+	// the other keeps the old one, so `e.hash()` would call one body while the map stamped another — the
+	// single-home invariant this whole grant rests on, broken by the edit that was meant to tighten it.
+	export function enumDeclaresOwnConformanceMethod(enumName ByteArray, methodName ByteArray) returns bool
+		return self.declaresCallee(qualifiedMethodName(enumName, methodName: methodName))
+	end 'enumDeclaresOwnConformanceMethod'
 
 	// ⭐⭐ **THE SAME NAME AS THE *STDLIB* SPELLS IT — and THE base every compiler-MINTED array instance is
 	// interned under.** What `isArrayBaseName` recognizes as the corpus declaration MOVED; what a reader with
@@ -15001,7 +15100,7 @@ export type ProgramSignatures
 	export function arrayElementConstraintCheck(id GenericInstanceId, clauseInterfaces ByteArrayArray) returns ExtensionConstraintCheck
 		let element = self.containerElementConformerName(id).toByteArray()
 		for interfaceName in clauseInterfaces 'eachConstraint'
-			if not typeConformsTo(self.sweptConformanceIndex(), interfaces: self.interfaces, typeName: element, interfaceName: interfaceName, typeNamesTheArrayRecord: self.namesTheArrayRecordConformer(element)) 'violates'
+			if not typeConformsTo(self.sweptConformanceIndex(), interfaces: self.interfaces, typeName: element, interfaceName: interfaceName, discovered: self.discoveredConformerOf(element)) 'violates'
 				return ExtensionConstraintCheck.unmet(interfaceName, bindingName: element)
 			end 'violates'
 		end 'eachConstraint'

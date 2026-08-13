@@ -37,10 +37,15 @@
 // STALE: the generated corpus carries `y_iface_0.maxon` and `y_ifdisp.maxon`, four `implements` clauses each,
 // so this check runs on every rung of the ladder (measured while attributing A1w's +3 allocations, one of
 // which lands here). Do not use it as an example of the gate being taken.
+// ⚠ **THE FAST PATH ASKS ABOUT ENUMS TOO SINCE enum-hashable**, because the granted-conformance walk below
+// shares this function's index: a program that declares no `implements` at all may still declare an `enum`
+// whose `hash`/`equals` E3130 must hold to its requirement. It costs nothing in practice — any program
+// carrying the stdlib already has conformances — and skipping it would have made the new check silently
+// conditional on an unrelated declaration.
 export function checkConformance(project Project, module MaxonModule, signatures ProgramSignatures)
-	if project.conformances.count() == 0 'noConformances'
+	if project.conformances.count() == 0 and project.enumTypes.count() == 0 'nothingToCheck'
 		return
-	end 'noConformances'
+	end 'nothingToCheck'
 
 	// A duplicate-named method is E3006 (recorded by `commitFuncSignatures` during `queryAllModule`, so it
 	// already sits in `project.diagnostics` here). It leaves the module's function table and the
@@ -74,8 +79,107 @@ export function checkConformance(project Project, module MaxonModule, signatures
 		checkOneConformance(project, functionsByName: functionsByName, conformance: conformance, signatures: signatures)
 	end 'eachDecl'
 
+	checkGrantedEnumConformance(project, functionsByName: functionsByName, signatures: signatures)
 	checkAssociatedTypeAbiAgreement(project, module: module, signatures: signatures)
 end 'checkConformance'
+
+// ⭐⭐ **THE GRANTED CONFORMANCES' HALF OF `checkConformance` (enum-hashable).** Everything above walks
+// `project.conformances` — the `implements` clauses an AUTHOR wrote — and a payload-free `enum` writes none:
+// its `Hashable`/`Equatable` is granted by the compiler (`IrInterface.isIntrinsicBuiltinConformance`'s
+// `payloadFreeEnum` row). That is why no requirement of it was ever matched against anything, and why a
+// member colliding with one of its names went unexamined.
+//
+// ⛔⛔ **UNEXAMINED WAS NOT HARMLESS, BECAUSE THE MEMBER WINS.** `ProgramSignatures.enumConformanceImplName`
+// stamps a declared `<Enum>.hash` into the enum's witness slot — deliberately, so that `e.hash()` and a
+// `Map`/`Set` keyed by that enum reach ONE body — so a member whose shape disagrees with the requirement is
+// an ABI disagreement in a dictionary slot. MEASURED on a clean compile: `hash() returns String` put a String
+// record POINTER where the probe reads an i64 hash; `map.get` answered **0 against the oracle's 20** and the
+// process exited **101**, a leak, with no diagnostic anywhere. It is `checkInterfaceMethods`' own argument
+// for holding a `static` requirement to its shape, one grant over.
+//
+// ⭐ **IT ASKS `signatureMatches` — the SAME predicate a declared conformance is judged by** — so a member of
+// an enum and a member of a `type X implements Hashable` cannot come to be held to two different readings of
+// one requirement. What differs is only WHICH members are asked about (the ones the enum actually declares:
+// a requirement the enum is silent about is served by the compiler and is not the author's to meet) and where
+// the diagnostic is anchored (the METHOD's own name token — an enum has no `implements` clause to point at,
+// and the member is what the author would edit).
+//
+// ⚠ It is called FROM `checkConformance` and takes that function's index rather than building one. The two
+// walks read the same table behind the same two refusals — a module with errors, whose function table and
+// `funcSignatures` can disagree about arity, and a duplicate function name — so a second
+// `FunctionNameIndex.create` would be one more O(functions) map build per compile for an answer already in
+// hand.
+function checkGrantedEnumConformance(project Project, functionsByName FunctionNameIndex, signatures ProgramSignatures)
+	for (enumName, _) in project.enumTypes 'eachEnum'
+		if not signatures.namesAPayloadFreeEnum(enumName) 'grantsNothing'
+			continue
+		end 'grantsNothing'
+
+		checkOneGrantedEnumConformance(project, functionsByName: functionsByName, signatures: signatures, enumName: enumName)
+	end 'eachEnum'
+end 'checkGrantedEnumConformance'
+
+// Every requirement of every protocol this enum is GRANTED, held against the member the enum declares under
+// that name — if it declares one at all. The protocol list and the requirement list are both FETCHED from the
+// row that grants them (`intrinsicConformanceProtocolNames` → `requireBuiltinInterface`), never transcribed,
+// so the set of members this validates is the set of slots the witness table stamps, by construction.
+function checkOneGrantedEnumConformance(project Project, functionsByName FunctionNameIndex, signatures ProgramSignatures, enumName ByteArray)
+	for protocolName in intrinsicConformanceProtocolNames(enumName, discovered: DiscoveredConformer.payloadFreeEnum) 'eachProtocol'
+		let iface = requireBuiltinInterface(protocolName)
+		for method in iface.methods 'eachRequirement'
+			if not signatures.enumDeclaresOwnConformanceMethod(enumName, methodName: method.name) 'theCompilerServesIt'
+				continue
+			end 'theCompilerServesIt'
+
+			requireGrantedEnumMemberMatches(project, functionsByName: functionsByName, signatures: signatures, enumName: enumName, protocolName: protocolName, method: method)
+		end 'eachRequirement'
+	end 'eachProtocol'
+end 'checkOneGrantedEnumConformance'
+
+// ONE declared member against ONE granted requirement.
+//
+// ⚠ **AN OVERLOADED NAME IS REFUSED RATHER THAN RESOLVED, and that is the witness slot's shape talking**: a
+// slot holds exactly one address, and `enumConformanceImplName` names the BARE key, which under D7 is the
+// FIRST declaration of the name — so with two members the stamped one would be decided by declaration order.
+// `checkOverloadedMembers` resolves this for a declared conformance by matching the whole set and requiring
+// exactly one; there is no author-written clause here to hang that on, and no corpus enum overloads either
+// of these two names, so the refusal says so plainly instead of growing a second resolver.
+function requireGrantedEnumMemberMatches(project Project, functionsByName FunctionNameIndex, signatures ProgramSignatures, enumName ByteArray, protocolName ByteArray, method InterfaceMethodSig)
+	let qualifiedName = qualifiedMethodName(enumName, methodName: method.name)
+
+	// ⚠ A name the registry answers for but this module holds no function under cannot be validated here —
+	// and it cannot be silently wrong either: the witness slot would then be stamped with a symbol nothing
+	// installs, which `bakeFuncAbs64Relocs` reports outright. A LOUD failure is the safe direction, and it is
+	// also the only one available: with no declaration there is no position to anchor a diagnostic on.
+	if let implFunc = try functionsByName.funcNamed(qualifiedName) 'declared'
+		let implSig = conformanceImplSignature(project, name: qualifiedName)
+		let expected = formatInterfaceMethodSignature(method)
+
+		if project.overloadSets.contains(qualifiedName) 'overloaded'
+			reportGrantedEnumMemberMismatch(project, anchor: implFunc, enumName: enumName, protocolName: protocolName, methodName: method.name, why: "is overloaded, and a witness slot holds exactly one address", expected: expected)
+			return
+		end 'overloaded'
+
+		if signatureMatches(project, method: method, conformingType: enumName, implFunc: implFunc, implSig: implSig, typeParamNames: grantedEnumTypeParamNames, signatures: signatures) 'implementsTheRequirement'
+			return
+		end 'implementsTheRequirement'
+
+		reportGrantedEnumMemberMismatch(project, anchor: implFunc, enumName: enumName, protocolName: protocolName, methodName: method.name, why: "is declared {formatActualSignature(project, methodName: method.name, conformingType: enumName, implFunc: implFunc, implSig: implSig, typeParamNames: grantedEnumTypeParamNames, signatures: signatures)}", expected: expected)
+	end 'declared'
+end 'requireGrantedEnumMemberMatches'
+
+// E3130's sentence, anchored on the MEMBER — the token the author would edit, and the only position an enum
+// offers (its grant has no clause to blame). It says what the member IS as well as what is required, because
+// the whole difficulty of this diagnostic is that the author never asked for the conformance they are being
+// held to, so the sentence has to introduce it.
+function reportGrantedEnumMemberMismatch(project Project, anchor IrFunction, enumName ByteArray, protocolName ByteArray, methodName ByteArray, why String, expected String)
+	reportPositioned(project, code: ErrorCode.semanticGrantedConformanceMemberMismatch, message: "`enum {String.from(enumName)}` conforms to '{String.from(protocolName)}' automatically — an enum without associated values is `Hashable` and `Equatable` with no `implements` clause — and its '{String.from(methodName)}' {why}, which does not implement {expected}. That member is what a `Map`/`Set` keyed by '{String.from(enumName)}' hashes and compares through, so it must implement the requirement; rename it if it means something else", line: anchor.nameLine, column: anchor.nameColumn, filePath: anchor.sourceFilePath)
+end 'reportGrantedEnumMemberMismatch'
+
+// An `enum` declares no `uses` names, so the renderer that re-spells a member's declared types has none to
+// re-spell against. Shared rather than built per member for `SignatureIndex.sharedEmptyTypeParamNames`'
+// reason: it is read on a cold path, and an empty array per call is an allocation with no content.
+let grantedEnumTypeParamNames = ByteArrayArray.create()
 
 // ⭐⭐ **AN ASSOCIATED TYPE A DISPATCHED REQUIREMENT WRITES IN AN ABI POSITION HAS EXACTLY ONE LEGAL BINDING
 // *WHERE NO DISPATCH SITE SAYS OTHERWISE* (E3119), AND MUST NOT BE MANAGED WHEN IT IS THE RESULT (E3120).**
@@ -415,7 +519,7 @@ function checkOneHeldBinding(project Project, signatures ProgramSignatures, decl
 	// this site was simply not going through it — the arguments are not lost by that, they are checked at the
 	// instantiation SITE by `checkOneInstantiation`'s E3017, which is where a base's `where` clause lives.
 	let boundConformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
-	if typeConformsTo(declared, interfaces: project.interfaces, typeName: boundConformer, interfaceName: heldAt, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(boundConformer)) 'widensIntoTheHolding'
+	if typeConformsTo(declared, interfaces: project.interfaces, typeName: boundConformer, interfaceName: heldAt, discovered: signatures.discoveredConformerOf(boundConformer)) 'widensIntoTheHolding'
 		return
 	end 'widensIntoTheHolding'
 
@@ -745,7 +849,7 @@ function checkStructInstantiationConstraints(project Project, signatures Program
 		end 'opaqueArgument'
 
 		let conformerType = signatures.conformerTypeArgName(site.gid, position: constraint.typeParamIndex).toByteArray()
-		if not typeConformsTo(declared, interfaces: project.interfaces, typeName: conformerType, interfaceName: constraint.interfaceName, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(conformerType)) 'violates'
+		if not typeConformsTo(declared, interfaces: project.interfaces, typeName: conformerType, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformerType)) 'violates'
 			reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 		end 'violates'
 	end 'eachConstraint'
@@ -784,14 +888,14 @@ end 'constrainedTypeParamName'
 // which a ranged-int alias's `int` or a `String` argument's `String` never collides with, so the OR is
 // unambiguous.
 //
-// ⚠ **`typeNamesTheArrayRecord` IS THE INTRINSIC TABLE'S ARRAY ROW, AND EVERY CALLER DERIVES IT THROUGH
-// `ProgramSignatures.namesTheArrayRecordConformer` (ARR6)** — never by comparing against a name of its own.
-// The row's key is the spelling the CORPUS declares the record under, discovered from the
-// `BuiltinArrayLiteral` marker, and it is the same discovered answer `conformerNameOfType` already reduced
-// `typeName` to. Asking one home means the reduction and the row cannot come to disagree about which
-// conformer an array is.
-export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray, typeNamesTheArrayRecord bool) returns bool
-	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, typeNamesTheArrayRecord: typeNamesTheArrayRecord) 'intrinsic'
+// ⚠ **`discovered` IS THE INTRINSIC TABLE'S TWO PROGRAM-KEYED ROWS, AND EVERY CALLER DERIVES IT THROUGH
+// `ProgramSignatures.discoveredConformerOf` (ARR6, enum-hashable)** — never by comparing against a name of
+// its own. The array row's key is the spelling the CORPUS declares the record under, discovered from the
+// `BuiltinArrayLiteral` marker; the enum row's is whatever the author named their `enum`. Both are the same
+// discovered answer `conformerNameOfType` already reduced `typeName` to. Asking one home means the reduction
+// and the rows cannot come to disagree about which conformer a name is.
+export function typeConformsTo(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray, discovered DiscoveredConformer) returns bool
+	if isIntrinsicBuiltinConformance(typeName, interfaceName: interfaceName, discovered: discovered) 'intrinsic'
 		return true
 	end 'intrinsic'
 	return typeDeclaresInterface(declared, interfaces: interfaces, typeName: typeName, interfaceName: interfaceName)
@@ -820,7 +924,7 @@ export function receiverMeetsExtensionConstraints(signatures ProgramSignatures, 
 		// label are both filed under (`conformerTypeArgName`); the MESSAGE prints the source spelling, which
 		// is `checkOneInstantiation`'s split applied at the other end of the same mechanism.
 		let conformer = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
-		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(conformer)) 'violates'
+		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformer)) 'violates'
 			return ExtensionConstraintOnReceiver.unmet(constraint.interfaceName, argDisplayName: signatures.instanceArgDisplayName(gid, position: constraint.typeParamIndex))
 		end 'violates'
 	end 'eachConstraint'
@@ -952,7 +1056,7 @@ export function checkExtensionConstraints(signatures ProgramSignatures, constrai
 		let constraint = try constraints.get(i) otherwise panic("checkExtensionConstraints: constraints.get OOB at {i} below count {constraints.count()}")
 		let binding = try bindings.get(constraint.typeParamIndex) otherwise return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: UnboundAssociatedTypePhrase)
 		let conformer = signatures.conformerNameOfDeclaredName(binding).toByteArray()
-		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(conformer)) 'violates'
+		if not typeConformsTo(signatures.sweptConformanceIndex(), interfaces: signatures.interfaceMap(), typeName: conformer, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformer)) 'violates'
 			return ExtensionConstraintCheck.unmet(constraint.interfaceName, bindingName: binding)
 		end 'violates'
 	end 'eachConstraint'
@@ -1011,7 +1115,7 @@ export function valueWidensToInterface(project Project, signatures ProgramSignat
 	end 'alreadyExistential'
 
 	let conformer = signatures.conformerNameOfType(valueType, idsFrom: project.typeNames).toByteArray()
-	return typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: conformer, interfaceName: interfaceName, typeNamesTheArrayRecord: signatures.namesTheArrayRecordConformer(conformer))
+	return typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: conformer, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(conformer))
 end 'valueWidensToInterface'
 
 // Build the DECLARED-conformance index from `project.conformances` — a type NAME to the set of interfaces it
