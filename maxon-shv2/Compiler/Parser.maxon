@@ -11006,9 +11006,15 @@ export type Parser
 		// ⚠ **AN INSTANCE method** (`push(item Element)`) prepends `self` as parameter 0 (`parseFunction`), so
 		// the recorded facts must be CALL-ALIGNED — `SelfParamName` is prepended by the walk above so
 		// `feeds[i]`/`bits[i]` name the same slot the receiver-prepending call site (`parseCallNamed`) does. A
-		// direct `Self{f: p}` store in an instance method is deliberately left to the callee-side
-		// borrowed-value refusal (`moveInPayload`'s clean E2015) — so no instance method that does not FEED
-		// changes its consume facts (`detectFieldStores: false`).
+		// direct `Self{f: p}` store in an instance method does not have to be scanned for
+		// (`detectFieldStores: false`), because such a store never CONSUMES `p`.
+		// ⚠ **THE CONCLUSION IS UNCHANGED BUT ITS REASON EXPIRED ON 2026-08-04, so do not re-derive the old
+		// one.** It used to hold because a borrowed value in that position was REFUSED outright
+		// (`moveInPayload`'s clean E2015), which made the case vacuous. The transitive-consume ruling replaced
+		// that refusal with CO-OWNERSHIP, so the store now succeeds — and it is still not a consume, because
+		// `coOwnBorrowedForConsume` takes a second reference and deliberately does NOT poison the source
+		// ("AND IT IS NOT A MOVE", at its own definition). ⇒ the parameter's consume facts are the same either
+		// way. A future change that made this position POISON its source would invalidate the skip.
 		//
 		// ⚠ **THE OPAQUE-`T` FEED SHAPES ARE SCANNED FOR ON BOTH SIDES, and W10 is why.** They used to be probed
 		// only under a literal `self` token, which made them an instance method's business by construction; a
@@ -41213,8 +41219,9 @@ export type Parser
 	// ownership, the exact mirror of `emitEnumBox`'s payload move. A scalar field is stored as-is; a managed
 	// field (a `String` or a nested `struct`) transfers its value into the box: a borrowed String literal is
 	// promoted to an owned copy, an owned temporary is consumed out of the pending drops, a bare-local
-	// reference is poisoned (E3102 on later use), and a borrowed struct is refused (`moveInPayload` — the
-	// cross-call consume). The box becomes the field's sole owner, and its `__destruct_<Struct>` cascade
+	// reference is poisoned (E3102 on later use), and a borrowed struct is CO-OWNED — the box becomes a second
+	// owner and the borrow's own owner is untouched (`moveInPayload` — the cross-call consume; it used to be
+	// an E2015 refusal until the transitive-consume ruling of 2026-08-04). The box becomes the field's sole owner, and its `__destruct_<Struct>` cascade
 	// drops the field once when the box is dropped.
 	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, fieldBareLocal BoolArray, anchor Token, range SourceRange) returns ValueId throws ParseError
 		// ⭐⭐ **A FUSED WRAPPER'S LITERAL IS NOT A STRUCT LITERAL, AND THE LOOP BELOW WOULD CORRUPT IT.**
@@ -42454,7 +42461,7 @@ export type Parser
 	// an existential answers with the reference it TOOK — that may be a fresh record). Precondition: the value
 	// is managed.
 	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, anchor Token, range SourceRange) returns ValueId throws ParseError
-		// ⭐⭐ **A TUPLE IS COPIED HERE, NOT MOVED — BECAUSE A TUPLE IS A VALUE (P1.10).** A struct is refused
+		// ⭐⭐ **A TUPLE IS COPIED HERE, NOT MOVED — BECAUSE A TUPLE IS A VALUE (P1.10).** A struct is CO-OWNED
 		// below when it is borrowed and MOVED when it is owned, and both are right for a struct: it has
 		// reference identity a program can observe (an alias, a mutation through one), so a second record
 		// would be a second thing. A tuple has none — the only way to obtain one is the expression that just
@@ -51892,7 +51899,7 @@ export type Parser
 		let index = try self.parseExpression(func, block: self.currentBlock)
 		try self.consumeArrayArgLabel(ArrayValueLabel, required: secondArgLabelled)
 		// The value is a managed-element MOVE-IN, so it is consumed exactly as `push` is —
-		// `moveElementIntoContainer` promotes a borrowed String, transfers an owned value, refuses a borrowed
+		// `moveElementIntoContainer` promotes a borrowed String, transfers an owned value, co-owns a borrowed
 		// aggregate. `__managed_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
 		// slot), so no leak. The TYPE check precedes the move-in for the reason `requireContainerElementType` states.
 		let valueStart = self.pos
@@ -51940,8 +51947,9 @@ export type Parser
 	// ⭐ **MOVE A PARSED ELEMENT INTO A MANAGED-ELEMENT ARRAY (P1.7 slice 3).** The array becomes the element's
 	// sole owner (its `__managed_decref` walk destroys it), so the source is consumed exactly as a struct-field /
 	// union-payload move-in (`moveManagedValueInto`): a borrowed String literal is promoted to an owned copy,
-	// an owned value is transferred (bare local poisoned / temp de-listed), a borrowed struct/union is refused
-	// (no clone). A TRIVIAL-element array's value owns no heap and passes through unchanged. Shared by
+	// an owned value is transferred (bare local poisoned / temp de-listed), a borrowed struct/union is CO-OWNED
+	// (no clone exists, so the container takes a second reference to the same record rather than refusing —
+	// the transitive-consume ruling of 2026-08-04). A TRIVIAL-element array's value owns no heap and passes through unchanged. Shared by
 	// push/set/insert. `valueStart` locates the value's first token — its bare-local source and the diagnostic
 	// anchor both.
 	function moveElementIntoContainer(value ValueId, giid GenericInstanceId, valueStart TokenIndex) returns ValueId throws ParseError
@@ -52644,8 +52652,9 @@ export type Parser
 		let value = try self.requireFieldType(layout, index: index, fieldType: self.storedFieldType(receiver, layout: layout, index: index), value: parsed, anchor: fieldTok)
 
 		// Routed through `emitFieldWrite`, exactly as `parseFieldAssignment` is: a MANAGED self-field
-		// (`name = n`) must drop its old value and MOVE the new one in (a borrowed String is promoted, a
-		// borrowed struct refused), not a raw store that leaks the old value and dangles behind a borrow.
+		// (`name = n`) must MOVE the new value in and only THEN drop the value it displaces (a borrowed String
+		// is promoted, a borrowed struct is co-owned), not a raw store that leaks the old value and dangles
+		// behind a borrow. ⚠ The acquire-before-release order is load-bearing — `emitFieldWrite` says why.
 		try self.emitFieldWrite(receiver, layout: layout, index: index, value: value, argBareLocal: self.rhsWasBareLocalReference(valueStart), anchor: fieldTok, range: range)
 	end 'emitCheckedSelfFieldStore'
 
@@ -52860,11 +52869,12 @@ export type Parser
 
 	// ⭐ **WRITE A FIELD, DROPPING THE OLD MANAGED VALUE AND MOVING THE NEW ONE IN** (P1.4a wave 2) — the
 	// assignment counterpart of the construct-time `emitStructLiteral` move. A SCALAR field is a plain store.
-	// A MANAGED field (a `String` or a `struct`) DROPS its current value first (`emitDecref`, tag-routed —
-	// the old String/struct is freed) and then MOVES the new value in (`moveInPayload` — a borrowed literal
-	// is promoted, an owned value transfers, a borrowed struct is refused), so the field owns exactly one
-	// value across the write and the old one is freed exactly once. Mirrors the `var`-String reassignment
-	// drop model, one indirection out.
+	// A MANAGED field (a `String` or a `struct`) first MOVES the new value in (`moveInPayload` — a borrowed
+	// literal is promoted, an owned value transfers, a borrowed struct is CO-OWNED) and only THEN drops the
+	// value it displaces (`emitDecref`, tag-routed), so the field owns exactly one value across the write and
+	// the old one is freed exactly once. Mirrors the `var`-String reassignment drop model, one indirection out.
+	// ⛔ **THE ACQUIRE-THEN-RELEASE ORDER IS LOAD-BEARING AND WAS THE OTHER WAY ROUND UNTIL 2026-08-12** — see
+	// the measured use-after-free at the emission site.
 	// ⚠ **A FIELD WRITE DELIBERATELY RECORDS NO PARAMETER MUTATION (E3019, the call-site half)** — and since
 	// PBR-1 that is a RULING rather than a vacuous truth. It used to be vacuous: the only box a write could
 	// reach was the enclosing `self`, because a field write through a PARAMETER was refused outright (E2013),
@@ -52957,11 +52967,38 @@ export type Parser
 		try self.requireSharedBodyReassignHasAStaticDrop(box, layout: layout, index: index, fieldType: fieldType, anchor: anchor)
 
 		let old = self.emitFieldLoad(box, layout: layout, index: index, range: range)
-		self.emitDecref(old, range: range)
+
+		// ⛔⛔ **ACQUIRE THE NEW VALUE BEFORE RELEASING THE OLD ONE — THE OTHER ORDER IS A USE-AFTER-FREE WHEN
+		// THEY ARE THE SAME RECORD.** This door emitted the release FIRST until 2026-08-12, which made an
+		// INDIRECT self-assignment free the value and then incref the freed memory.
+		//
+		// ⚠ **MEASURED**, `function assign(dst Blk, src Blk)` doing `dst.args = src.args`, called as
+		// `assign(a, src: a)`: a struct is a pointer to a shared heap box, so both parameters name ONE box and
+		// the store's two operands are the same `Array` record. Release-first took its refcount 1 → 0 (freed),
+		// the acquire then touched freed memory and the program exited **0xC0000005**. Acquire-first makes the
+		// same store a net no-op (1 → 2 → 1), which is what it must be. The bootstrap gets this WRONG too — it
+		// prints the element as `0` and reports `mm_decref: refcount underflow` — so it is not the oracle here.
+		//
+		// ⚠ **NO STATIC CHECK CAN STAND IN FOR THIS.** The LEXICAL no-op `self.args = self.args` is refused by
+		// E3067 (`rejectDegenerateAssignment`), and that refusal is exactly what hid the defect: it masks the
+		// spelling while the aliasing route through two parameters is a genuine store whose operands only
+		// coincide at RUN TIME. The store protocol itself has to be safe, so the fix is the order, not a wider
+		// refusal. Pinned by `specs-shv2/managed-field-store-order.md`.
+		//
+		// This is the order the other DURABLE-STORAGE writes in this file already use and state for themselves —
+		// `reassignCellBinding` ("the release must come AFTER the new value is settled and BEFORE the store"),
+		// `emitCheckedGlobalStore`, and `reassignBindingValue` in an inline comment rather than its header.
+		// ⚠ **ONE DOOR STILL RELEASES FIRST AND IS DELIBERATELY LEFT THAT WAY: `emitOpaqueFieldReassign`**, this
+		// same function's other arm. It is safe only because of a PRECONDITION, not because it follows the rule
+		// — the reason is written at its own decref, and a widening that gives it a real acquire must move that
+		// decref down. Do not read this paragraph as "every other door is ordered correctly".
+		//
 		// An opaque `T` field is settled above by `emitOpaqueFieldReassign`, so the class here is always a
 		// concrete managed one and the `owner` is never read — it is passed because the box IS the owner of
 		// whatever lands in the slot, which is the fact the parameter names.
 		let stored = try self.moveInPayload(class, arg: value, argBareLocal: argBareLocal, owner: box, anchor: anchor, range: range)
+
+		self.emitDecref(old, range: range)
 		self.emitFieldStore(box, layout: layout, index: index, value: stored, range: range)
 	end 'emitFieldWrite'
 
@@ -53068,6 +53105,18 @@ export type Parser
 			throw ParseError.unsupported("reassigning the type-parameter field '{String.from(anchor.value)}' of '{String.from(layout.name)}' in a shared generic body, where a trivial-struct instantiation co-owns the field — the box retains a co-owned trivial struct at construction and drops it once at destruction, but a shared-body reassignment cannot drop the old co-owned value (the descriptor-gated single-value drop for a trivial struct is a later slice); reassign the field on a concrete instance, or use a managed element type", line: anchor.line, column: anchor.column)
 		end 'coOwnedTrivialReassign'
 
+		// ⛔ **THIS DOOR RELEASES BEFORE IT "ACQUIRES", THE OPPOSITE OF `emitFieldWrite`, AND IT IS SAFE ONLY
+		// BECAUSE OF THE `valueIsOwnedHeap` REFUSAL ABOVE.** That refusal means the acquire here is
+		// `transferOwnedInto`, which is pure compile-time bookkeeping — it poisons the move source and de-lists
+		// a temp, and emits NO op that reads the record. So there is nothing for a freed record to be read by,
+		// and aliasing cannot underflow it either: an owned RHS already carries a reference of its own, so if
+		// the value IS the displaced occupant the record is at refcount ≥ 2 when this decref runs.
+		// ⚠ **THE MOMENT THIS DOOR TAKES A REAL REFERENCE, THIS ORDER IS THE USE-AFTER-FREE `emitFieldWrite`
+		// FIXED ON 2026-08-12 — MOVE THE DECREF BELOW THE ACQUIRE THEN.** That widening is already scheduled:
+		// the `notOwned` refusal above says in its own message that "aliasing one opaque field into another
+		// needs the descriptor-gated copy a later slice adds", and the container twin has already widened a
+		// borrowed opaque element to a real retain through `retainFunc@64`. See
+		// `specs-shv2/managed-field-store-order.md` for what the ordering costs when it is wrong.
 		if self.signatures.genericTypeFieldHasManagedInstantiation(typeNameIdOf(fieldType)) 'managedDrop'
 			let old = self.emitFieldLoad(box, layout: layout, index: index, range: range)
 			self.emitDecref(old, range: range)
