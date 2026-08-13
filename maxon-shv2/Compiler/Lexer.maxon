@@ -221,6 +221,18 @@ export enum TokenKind
 	// through a sub-parser for every `{...}` segment.
 	stringInterpStart = "interpolation start"
 	stringInterpEnd = "interpolation end"
+	// ⭐ **A FORMAT SPECIFIER IS ONE TOKEN OF RAW SOURCE — `"{n:08x}"` emits
+	//   stringInterpStart intLiteral(n) stringFormatSpec("08x") stringInterpEnd.**
+	// It is captured by the LEXER rather than reassembled by the parser from the tokens
+	// the DFA would otherwise make of it, because those tokens do not carry the text
+	// back: `08x` lexes as `intLiteral("08") identifier("x")` and `.2` as `dot`
+	// `intLiteral("2")`, and a `dot` carries `EmptySourceText` (its kind implies its
+	// text), so a reassembly would silently drop every punctuator the spec contains.
+	// (v1's `Parser.parseInterpFormatSpec` concatenates token values for exactly this
+	// job and can only do so because v1's lexer gives every token a source-aligned
+	// value; shv2's does not, by design.) The bytes between the `:` and the closing `}`
+	// are therefore taken verbatim, once, by `scanInterpFormatSpec`.
+	stringFormatSpec = "format specifier"
 	// Identifiers
 	identifier = "identifier"
 	// Punctuation
@@ -988,8 +1000,32 @@ type Lexer
 	//     a literal brace the user meant to escape — emit unescapedBrace.
 	//   * Otherwise the source genuinely ran out before the interp closed —
 	//     emit unterminatedString.
+	//
+	// ⭐⭐ **IT ALSO DECIDES WHERE THE EXPRESSION STOPS AND A FORMAT SPECIFIER STARTS**, which is
+	// the ONE place a token may legally follow an interpolated expression. The rule is the one
+	// `specs/string-interpolation.md` states in as many words: the `:` that opens a specifier is
+	// the one found at **brace depth zero AND group depth zero**. It is decidable HERE because
+	// every byte this loop sees at the top is a token boundary — a sub-scanner consumes whole
+	// strings, char literals and comments before returning.
+	//
+	// ⛔ **THAT MAKES A STANDING OBLIGATION ON THE GRAMMAR, NOT A CLOSED LIST OF CONSTRUCTS.** The
+	// bracket counting is exact only while EVERY `:` an expression can own sits inside `(`, `[` or
+	// `{`. That holds of all eleven `TokenKind.colon` consumers today — a named argument's inside
+	// `(…)` (`{add(1, b: 2)}`), a struct literal's inside `{…}` (`{Pt{x: 7}}`), a map literal's
+	// inside `[…]` (`{["a": 1].count()}`) — and it is a PREMISE, not a proof. **A future construct
+	// that admits a bare `:` at the top level of an expression silently turns into a format
+	// specifier here**, with no diagnostic on either side, so such a construct owes this function a
+	// change. Adding one more bracket family is a line; a colon with no bracket around it is not.
+	//
+	// ⚠ **THE BRACKET FAMILY IS COUNTED, AND THE BOOTSTRAP COUNTS ONLY TWO OF THE THREE.**
+	// `2-Parser.cs`'s `nestDepth` walks `(`/`{` and not `[`, so `"{["a": 1].count()}"` splits at
+	// the MAP literal's colon there. Counting `[` is a departure, and it is the same argument the
+	// bootstrap's own comment makes for counting `{`.
 	function scanInterp(openLine LineNumber, openCol ColumnNumber) throws CursorError
 		var depth = 1
+		// Parens and brackets the interpolation body has left open. Braces are `depth`'s, since
+		// they also decide where the body ENDS; these only decide whether a `:` is the body's own.
+		var groupDepth = 0
 		// Cursor position right after the opening `{` — used on failure to
 		// scan the consumed body for `"`. We can't track this via a flag set
 		// in scanInterp's outer loop because sub-scanners like the char-literal
@@ -997,6 +1033,18 @@ type Lexer
 		let bodyStart = cursor.index()
 		while cursor.index() < len 'interp'
 			let ch = cursor.current()
+			if ch == ':' and depth == 1 and groupDepth == 0 'formatSpecifier'
+				try scanInterpFormatSpec(openLine, openCol: openCol, bodyStart: bodyStart)
+				return
+			end 'formatSpecifier'
+			if ch == '(' or ch == '[' 'openGroup'
+				groupDepth = groupDepth + 1
+			end 'openGroup'
+			// A close with nothing open is a source error the PARSER reports against the tokens;
+			// the count simply stays at the floor rather than going negative behind it.
+			if (ch == ')' or ch == ']') and groupDepth > 0 'closeGroup'
+				groupDepth = groupDepth - 1
+			end 'closeGroup'
 			if ch == '}' 'closeBrace'
 				depth = depth - 1
 				if depth == 0 'atClose'
@@ -1032,6 +1080,64 @@ type Lexer
 		// Loop guard `cursor.index() < len` failed without a matching `}`.
 		try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
 	end 'scanInterp'
+
+	// ⭐ **THE SPECIFIER'S BYTES, VERBATIM.** Cursor enters AT the `:` `scanInterp` found at the
+	// body's own depth; returns with cursor AT the closing `}` — `scanInterp`'s own postcondition,
+	// so its caller needs to know nothing about specifiers.
+	//
+	// Nothing between the two is lexed. What a specifier MEANS depends on the type of the value it
+	// decorates — `x` is hexadecimal on an integer and ignored on a float, `verbose` is an argument
+	// to a `toString(format String)` — so the only representation that serves every reader is the
+	// text the author wrote. `Parser.acceptInterpFormatSpec` takes the token and
+	// `InterpFormatSpec.parse` is the one place those bytes are given a meaning.
+	//
+	// A `}` ends it: a specifier holds no nested construct that could own one, and the brace that
+	// would have opened such a construct is the one already excluded by the depth test that got us
+	// here.
+	//
+	// ⛔⛔ **AND SO DOES A NEWLINE, WHICH IS THE ONE THING THIS SCANNER MUST NOT LEAVE OUT.** Every
+	// other byte-consuming body in this lexer stops at `Ascii.lf` — `scanDoubleQuoteString`,
+	// `scanSingleQuoteString`, `scanByteStringLiteralBody` — and this one did not. MEASURED before
+	// the fix: `print("a{x:")` on one line followed by `print("b{y}")` on the next COMPILED CLEAN and
+	// printed `a1`. The specifier body had eaten `")`, the newline and `print("b{y`, stopping at the
+	// NEXT LINE's `}`; the following `"` then closed the string tidily and the whole second statement
+	// was gone, with no diagnostic from either the lexer or the parser. Silently deleting a statement
+	// is the worst answer a compiler can give, and one missing `}` was enough to get it.
+	//
+	// ⚠ It also kept the LINE COUNTER honest. `tryAdvance` moves `column`; only `newline()` moves
+	// `line`. A body that swallows newlines leaves `line` short by however many it ate, so every
+	// diagnostic in the rest of the file is reported against the wrong line.
+	//
+	// `failInterp` is what both exits take, and it needs no case of its own here: it scans the
+	// consumed body for a `"` and reports the unescaped-brace reading when it finds one — which is
+	// exactly the shape above, and exactly what the bootstrap says about it
+	// (`E1006` at the opening `{`).
+	function scanInterpFormatSpec(openLine LineNumber, openCol ColumnNumber, bodyStart CharOffset) throws CursorError
+		// The `:` positions the token — an EMPTY specifier (`"{x:}"`) has no byte of its own to
+		// blame, and the colon is what the author typed to ask for one either way.
+		let specLine = line
+		let specCol = column
+		if not tryAdvance() 'colonAtEof'
+			try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+		end 'colonAtEof'
+
+		let specStart = cursor.index()
+		while cursor.index() < len 'specBody'
+			let ch = cursor.current()
+			if ch == '}' 'specEnd'
+				emitStringLit(TokenKind.stringFormatSpec, strStart: specStart, endByte: cursor.index(), startLine: specLine, startCol: specCol)
+				return
+			end 'specEnd'
+			if ch == Ascii.lf 'lineEndedFirst'
+				break
+			end 'lineEndedFirst'
+			if not tryAdvance() 'advEof'
+				break
+			end 'advEof'
+		end 'specBody'
+
+		try failInterp(openLine, openCol: openCol, bodyStart: bodyStart)
+	end 'scanInterpFormatSpec'
 
 	// Stash the right LexerError for a scanInterp that ran out of input
 	// without finding `}`. Looks at the bytes consumed since the opening
@@ -1488,7 +1594,10 @@ end 'tokenize'
 
 // --- Pure helpers ---
 
-function isDigit(b Byte) returns bool
+// Exported for `isHexDigit`'s reason, and to its own second reader: `InterpFormatSpec.digitsEnd`
+// scans the width and precision of a format specifier, and "is this byte a decimal digit?" is the
+// number lexer's question asked about a different run of bytes — one predicate, not a second copy.
+export function isDigit(b Byte) returns bool
 	return b >= '0' and b <= '9'
 end 'isDigit'
 

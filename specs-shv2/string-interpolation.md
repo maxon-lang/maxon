@@ -234,7 +234,6 @@ Value: -10
 ### Float Interpolation
 
 <!-- test: float-interpolation -->
-<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let pi = 3.14159
@@ -252,7 +251,6 @@ Pi: 3.14159
 ### Float Literal Interpolation
 
 <!-- test: float-literal -->
-<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	print("Value: {2.5}\n")
@@ -269,7 +267,6 @@ Value: 2.5
 ### Negative Float
 
 <!-- test: negative-float -->
-<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let temp = -3.5
@@ -594,7 +591,6 @@ x and y: false
 ### Float Arithmetic
 
 <!-- test: float-arithmetic -->
-<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let r = 2.0
@@ -648,7 +644,6 @@ Max int: 2147483647
 ### Zero Values
 
 <!-- test: zero-values -->
-<!-- P1.2 wave B-float: float interpolation (blocked: shv2 has no f64 function-argument ABI) -->
 ```maxon
 function main() returns ExitCode
 	let i = 0
@@ -796,8 +791,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: stringable-format-spec -->
-<!-- BLOCKED ON TWO THINGS, IN THIS ORDER, and the first is why only the first is measurable (R10d, corrected by its review). (1) `{x:spec}` FORMAT-SPEC INTERPOLATION PARSING — MEASURED 2026-07-31, not inferred: this exact program gives `error E2010: Expected 'interpolation end' but got ':'`, so it fails in the PARSER and never reaches dispatch. (2) INTERPOLATION CARRYING THE PARSED SPEC TO THE 2-ARG MEMBER, which is READ off the code rather than measured, because blocker (1) hides it: `Parser.materializeStructToStringPart` builds a receiver-ONLY argument list, and no part of the compiler names a format spec (`grep formatSpec` over maxon-shv2/Compiler is empty), so the syntax parsing alone would still dispatch to `toString()`. An earlier wording of this comment said "and on nothing else", which a parse error cannot establish about anything behind it. The two halves that ARE closed: the method-overload half by D7 (`toString()` and `toString(format String)` register as distinct members), and interp dispatch to the ZERO-arg member on a dual-conforming type, pinned live by the case above and by `interface-conformance/overloaded-tostring-satisfies-stringable-and-formatted`. One Stringable-protocol rung owns both remaining halves — they cannot land separately, since (1) alone parses a spec nothing consumes. -->
+<!-- test: stringable-format-spec -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -937,7 +931,7 @@ Color value: 2
 ### Simple Enum Interpolation
 
 <!-- disabled-test: simple-enum-interpolation -->
-<!-- P1.2 wave B-enum: enum case-name / raw-string rendering (int-backed enums render via the integer path today) -->
+<!-- ⚠ MEASURED 2026-08-13, not inferred: shv2 prints `Direction: 2` — the ORDINAL, not the case NAME. Every enum reaches interpolation through the INTEGER arm (`Parser.materializeInterpExpr` decodes only a FLOAT backing before choosing one), so an enum value's BACKING KIND never arrives at the site and the case name exists nowhere in the emitted program. NOT a format-specifier gap — this program writes no specifier. `string-enum-interpolation` below is the other half of the same missing mechanism. -->
 ```maxon
 enum Direction
 	north
@@ -962,7 +956,7 @@ Direction: east
 ### String-Backed Enum Interpolation
 
 <!-- disabled-test: string-enum-interpolation -->
-<!-- P1.2 wave B-enum: enum case-name / raw-string rendering (int-backed enums render via the integer path today) -->
+<!-- ⚠ MEASURED 2026-08-13, not inferred: shv2 prints `Status: 0` — the ORDINAL, not the raw STRING. The same missing mechanism `simple-enum-interpolation` above states, and the two are one rung rather than two. -->
 ```maxon
 enum Status
 	active = "Active"
@@ -1118,8 +1112,7 @@ end 'main'
 
 ### Integer Format Specifier - Zero Padding
 
-<!-- disabled-test: int-format-zero-pad -->
-<!-- P1.2 wave B-format: format specifiers -->
+<!-- test: int-format-zero-pad -->
 ```maxon
 function main() returns ExitCode
 	let n = 42
@@ -1142,8 +1135,7 @@ end 'main'
 
 ### Integer Format Specifier - Hex
 
-<!-- disabled-test: int-format-hex -->
-<!-- P1.2 wave B-format: format specifiers -->
+<!-- test: int-format-hex -->
 ```maxon
 function main() returns ExitCode
 	let n = 255
@@ -1175,8 +1167,7 @@ that as "negative", started at index 1, and overwrote the digit it had just shif
 `{255:08x}` printed `f000000f`. Width alone did not catch it (`{high:016x}` is already 16
 chars wide, so it never pads); only a value SHORTER than its field reaches the fill loop.
 
-<!-- disabled-test: int-format-zero-padded-unsigned -->
-<!-- P1.2 wave B-format: format specifiers -->
+<!-- test: int-format-zero-padded-unsigned -->
 ```maxon
 function main() returns ExitCode
 	let n = 255
@@ -1205,8 +1196,7 @@ end 'main'
 
 ### Integer Format Specifier - Hex High Bit (unsigned bases)
 
-<!-- disabled-test: int-format-high-bit-unsigned -->
-<!-- P1.2 wave B-format: format specifiers -->
+<!-- test: int-format-high-bit-unsigned -->
 ```maxon
 function main() returns ExitCode
 	// Values with bit 63 set exceed i64.max (negative as signed i64). The
@@ -1238,8 +1228,7 @@ B000000000000000
 
 ### Integer Format Specifier - Width
 
-<!-- disabled-test: int-format-width -->
-<!-- P1.2 wave B-format: format specifiers -->
+<!-- test: int-format-width -->
 ```maxon
 function main() returns ExitCode
 	let n = 42
@@ -1258,8 +1247,7 @@ end 'main'
 
 ### Integer Format Specifier - Negative Zero Padding
 
-<!-- disabled-test: int-format-neg-zero-pad -->
-<!-- P1.2 wave B-format: format specifiers -->
+<!-- test: int-format-neg-zero-pad -->
 ```maxon
 function main() returns ExitCode
 	let n = -42
@@ -1274,6 +1262,68 @@ end 'main'
 -00042
 ```
 
+### Integer Format Specifier - A Field Wider Than Any Buffer
+
+⭐ **A WIDTH IS A NUMBER THE PROGRAM ASKED FOR, NOT A BUDGET THE RUNTIME SET.** The formatted
+integer converter used to write into a fixed 72-byte scratch and take the field width from the
+spec with nothing checking it against that size, so `"{n:200}"` wrote 200 bytes into 72. It
+neither crashed nor reported anything: the NEXT part's block was carved inside the overrun and
+the first part then read those bytes back as its own padding, so `"A<{a:200}>B<{b:X}>"` printed
+`DEADBEEF` in the middle of the spaces and lost every character after it. A field is built in
+`stdlib` over a String that grows, so a width has no ceiling left to breach.
+
+<!-- test: int-format-wide-field -->
+```maxon
+function main() returns ExitCode
+	let a = 7
+	let b = 3735928559
+	print("A<{a:200}>B<{b:X}>\n")
+	print("{a:120}|\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+A<                                                                                                                                                                                                       7>B<DEADBEEF>
+                                                                                                                       7|
+```
+
+### Integer Format Specifier - Int-Backed Enum
+
+A bare `"{e}"` on an enum with explicit integer backing values renders that value, so a format
+specifier on one has exactly the meaning it has on any other integer. It used to be dropped in
+silence — `"{code:08}"` printed `404` rather than `00000404`, and `"{code:x}"` printed `404`
+rather than `194` — because the enum arm of interpolation took no format specifier at all.
+
+<!-- test: int-format-enum-backing -->
+```maxon
+enum ErrorCode
+	ok = 0
+	notFound = 404
+end 'ErrorCode'
+
+function main() returns ExitCode
+	let code = ErrorCode.notFound
+	print("[{code}]\n")
+	print("[{code:08}]\n")
+	print("[{code:x}]\n")
+	print("[{code:6}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[404]
+[00000404]
+[194]
+[   404]
+```
+
+
 ### Integer Format Specifier - Unsigned Decimal
 
 ⭐ **A FORMAT SPECIFIER NEVER CHANGES WHICH NUMBER IS BEING PRINTED.** An `int(0 to u64.max)`
@@ -1283,8 +1333,7 @@ it from the type the compiler already knew, so `"{u:d}"` read `u64.max` as `-1` 
 the unformatted spelling printed as `18446744073709551615`. Signedness is decided once, by the
 compiler, and handed to the renderer.
 
-<!-- disabled-test: int-format-unsigned-decimal -->
-<!-- P1.2 wave B-format: format specifiers -->
+<!-- test: int-format-unsigned-decimal -->
 ```maxon
 typealias Wide = int(0 to u64.max)
 
@@ -1460,8 +1509,7 @@ end 'main'
 
 ### Float Format Specifier - Precision
 
-<!-- disabled-test: float-format-precision -->
-<!-- P1.2 wave B-format: float format specifiers (blocked: no f64 function-argument ABI) -->
+<!-- test: float-format-precision -->
 ```maxon
 function main() returns ExitCode
 	let f = 3.14159
@@ -1483,8 +1531,7 @@ end 'main'
 
 ### Float Format Specifier - Width and Precision
 
-<!-- disabled-test: float-format-width-precision -->
-<!-- P1.2 wave B-format: float format specifiers (blocked: no f64 function-argument ABI) -->
+<!-- test: float-format-width-precision -->
 ```maxon
 function main() returns ExitCode
 	let f = 3.14
@@ -1501,8 +1548,7 @@ end 'main'
 
 ### Enum Raw Value Format Specifier
 
-<!-- disabled-test: enum-rawvalue-format -->
-<!-- P1.2 wave B-format: format specifiers -->
+<!-- test: enum-rawvalue-format -->
 ```maxon
 enum ErrorCode
 	ok = 0
@@ -1537,8 +1583,7 @@ fragment's `try` merge block — leaving it without a terminator, which tripped
 `assertAllBlocksTerminated` (a parser-internal panic) before any user
 diagnostic could be reported.
 
-<!-- disabled-test: multiple-try-fragments -->
-<!-- P1.4: try-expression inside interpolation -->
+<!-- test: multiple-try-fragments -->
 ```maxon
 typealias Idx = int(i64.min to i64.max)
 typealias IdxList = List with Idx
@@ -1562,8 +1607,7 @@ a=10 b=20
 
 An unescaped `{` in a string literal that is not part of an interpolation expression produces a clear error. Use `\{` for literal braces.
 
-<!-- disabled-test: error.unescaped-brace -->
-<!-- P1.7a: string interpolation error cases -->
+<!-- test: error.unescaped-brace -->
 ```maxon
 function main() returns ExitCode
 	print("Expected '{' here")
@@ -1574,6 +1618,34 @@ end 'main'
 error E1006: specs/fragments/string-interpolation/error.unescaped-brace.test:3:19: Unescaped '{' in string literal — use '\{' for a literal brace
 ```
 
+### Error: An unclosed format specifier stops at the line, and does not eat the next statement
+
+⛔⛔ **A MISSING `}` AFTER A FORMAT SPECIFIER SILENTLY DELETED THE FOLLOWING STATEMENT.** shv2-authored
+regression, and the worst answer a compiler can give: this exact program **compiled clean, exited 0 and
+printed `a1`** — line 5's entire `print` was gone, with no diagnostic from the lexer or the parser. The
+specifier's scanner had no newline bound while every other quoted body in the lexer has one, so it ate
+`")`, the newline and `print("b{y`, stopped at the NEXT line's `}`, and the `"` after that closed the
+string tidily. The garbage in between then read as a legal specifier (width 0, decimal), because nothing
+in it is a digit or a base letter.
+
+⚠ **The control is the same program with the `:` removed**, which has always been refused at the same
+code, position and message (it reaches `scanInterp`'s own newline handling instead). The two must agree:
+a format specifier is not a place where a missing brace becomes invisible.
+
+<!-- test: error.unclosed-format-spec -->
+```maxon
+function main() returns ExitCode
+	let x = 1
+	let y = 2
+	print("a{x:")
+	print("b{y}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E1006: <fragment>:5:10: Unescaped '{' in string literal — use '\{' for a literal brace
+```
+
 ### Error: operator '+' on String produces a semantic error, not a compiler crash
 
 Maxon's `String` doesn't overload `+`; string concatenation is done through interpolation
@@ -1581,7 +1653,7 @@ Maxon's `String` doesn't overload `+`; string concatenation is done through inte
 of crashing in the binop constructor.
 
 <!-- disabled-test: error.plus-on-string -->
-<!-- P1.7a: string interpolation error cases -->
+<!-- ⚠ NOT A MISSING REFUSAL — A DIFFERENT ONE. MEASURED 2026-08-13 on this exact program: shv2 says `error E2004: …:4:12: Cannot operate on String and String`, canonical says `error E3005: …:5:12: operator '+' is not defined for type 'String'`. So the program IS refused, at the same column, and what differs is the CODE and the SENTENCE: shv2 reports it through the general binary-operand rule (`ParseError.nonNumericOperands`), canonical through a String-specific one. Giving `String` its own arm is a change to a diagnostic family pinned live by 20+ committed expectations across `bool-int-type-discipline`, `character-type`, `cross-file-signatures` and `generic-types` (`Cannot operate on <a> and <b>`), which is a rung of its own and is not what a format specifier unblocks. -->
 ```maxon
 function main() returns ExitCode
 	let a = "foo"
@@ -1796,11 +1868,15 @@ end 'main'
 ### The expression boundary is exact around a format specifier
 
 The `:` that opens a format specifier is the one place a token legitimately follows the expression,
-so the boundary rule and the specifier split are the same decision read twice. shv2 has no format
-specifiers yet, so this half of the boundary is pinned and disabled rather than dropped.
+so the boundary rule and the specifier split are the same decision read twice. In shv2 they are
+literally one decision: `Lexer.scanInterp` finds that `:` at brace depth zero AND group depth zero,
+and the specifier is everything from it to the closing `}`.
 
-<!-- disabled-test: interp-expression-boundary-format-spec -->
-<!-- P1.2 wave B-format: format specifiers -->
+⚠ It is split out of `interp-expression-boundary-forms` above, where canonical writes `[{a:8}]` as one
+more form in that case's single `print`. The split dates from when this half could not parse; the two
+cases together assert exactly what canonical's one asserts.
+
+<!-- test: interp-expression-boundary-format-spec -->
 ```maxon
 function main() returns ExitCode
 	let a = 3

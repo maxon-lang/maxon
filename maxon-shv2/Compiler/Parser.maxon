@@ -217,6 +217,17 @@ export union ParseError implements Error
 	// real value that will not fit, this is text that names no value at all. Carries the raw token text
 	// for the same reason they do.
 	malformedNumericLiteral(literal String, line LineNumber, column ColumnNumber)
+	// A field width or a decimal precision in a string interpolation's format specifier that is past
+	// `stdlib/Builtins.maxon`'s `PadWidth` / `DecimalPrecision` (`int(0 to u32.max)`). It shares the
+	// overflow variants' error CODE — a number outside the range of its type — and carries the whole
+	// SPECIFIER rather than the offending digit run, because `"{a:200.99999999999}"` has two places a
+	// number can sit and the author is looking for the one they wrote.
+	//
+	// ⚠ A bound is what the hand-emitted converters this replaces did not have: `"{n:200}"` wrote 200
+	// bytes into a 72-byte scratch in both references, silently, with the next interpolation part's
+	// block carved inside the overrun (`specs/string-interpolation.md`'s `int-format-wide-field`).
+	// stdlib's field is a String that grows, so what is bounded here is only the type of its width.
+	formatFieldOverflow(spec String, line LineNumber, column ColumnNumber)
 	// An INTEGRAL-ONLY operator (`mod`, the bit band, or a prefix `not`) applied to a float. Both
 	// the binary and the unary raiser reach it, because it is one rule — see
 	// `TypeRules.operatorIsIntegral`, which is where the operator set is decided, and
@@ -9500,6 +9511,219 @@ end 'noteForwardCall'
 function receiverIsTheEnclosingType(kind TokenKind) returns bool
 	return kind == TokenKind.self or kind == TokenKind.selfType
 end 'receiverIsTheEnclosingType'
+
+// --- `"{n:08x}"`, `"{f:8.2}"`, `"{c:verbose}"`: A FORMAT SPECIFIER ---
+
+// ⭐⭐ **THE SPECIFIER IS READ ONCE, HERE, INTO THE COMPILE-TIME CONSTANTS THE RENDERERS TAKE.**
+// `stdlib/Builtins.maxon`'s `__int_toStringFormatted` / `__float_toStringPadded` /
+// `__float_toStringFixed` take a width, a fill, a base and a signedness as ARGUMENTS and read no text
+// — so the text is given its meaning at exactly one place in the compiler, and nothing downstream
+// carries a specifier it might interpret a second way. (The bootstrap keeps the raw string on the
+// interpolation part and re-reads it during lowering, which is why its `MaxonToStandardConversion`
+// has to carry an internal-error arm for "this integer part still carries a format spec".)
+//
+// ⚠ **`text` OUTLIVES THE NUMERIC READING BECAUSE ONE CONSUMER IS NOT NUMERIC.** A user type
+// implementing `FormattedStringable` receives the specifier VERBATIM as a `String` argument
+// (`"{c:verbose}"` → `c.toString("verbose")`), so the bytes are part of the parsed form rather than
+// something the parse consumes.
+//
+// ⭐ **ONE PREFIX GRAMMAR FOR BOTH NUMERIC FAMILIES, WHICH IS A DEPARTURE FROM THE BOOTSTRAP.** It
+// has two readers, `ParseIntegerFormatSpec` (`[0][width][base]`) and `ParseFloatFormatSpec`
+// (`[0][width][.precision]`), which differ in ONE decision: the float one refuses to read a leading
+// `0` as the fill unless a second character follows it that is not `.`. That distinction cannot be
+// observed — it only ever fires where the width is 0, and a zero-wide field pads nothing whichever
+// fill it names — so the two readings agree on every program and this reads the prefix once.
+//
+// ⚠ **THE TAILS SHARE A POSITION, AND THAT IS DELIBERATE RATHER THAN INCIDENTAL.** A base letter is
+// meaningless to a float and a `.precision` is meaningless to an integer, so each family reads only
+// the field it understands — but BOTH read it at the same index, the one right after the width.
+// Reading the precision first and then looking for the base at the position it left would make the
+// effective integer grammar `[0][width][.precision][base]`, under which `"{n:8.2x}"` is hexadecimal
+// here and decimal in both references. The base is therefore taken at `tailStart`, before the
+// precision scan moves anything, which is `ParseIntegerFormatSpec`'s own position exactly.
+type InterpFormatSpec
+	// Did the author write a `:` at all? Distinct from an EMPTY specifier (`"{x:}"`), which is a
+	// specifier the author wrote and which a `FormattedStringable` still receives.
+	export let present as bool
+	// The bytes between `:` and `}`, exactly as written.
+	export let text as ByteArray
+	export let zeroFill as bool
+	export let width as FormatFieldWidth
+	// A float renders with EXACTLY this many decimals when the specifier gave one. Absent is not
+	// "zero": `"{f:8}"` is the language's own spelling of the value right-aligned, and defaulting it
+	// to a number of decimals is what would let a WIDTH silently change the DIGITS.
+	export let hasPrecision as bool
+	export let precision as FormatFieldWidth
+	export let halfRadix as FormatHalfRadix
+	export let uppercase as bool
+	// Does this base spell a sign? Only decimal does — `x`, `X`, `o` and `b` spell the bit pattern,
+	// which is what makes `"{allBits:x}"` on `0 - 1` say `ffffffffffffffff` rather than `-1`.
+	export let spellsASign as bool
+
+	// No `:` was written. Every numeric field is inert, because every arm that reads one is behind
+	// `present`.
+	export static function absent() returns Self
+		return Self{present: false, text: EmptySourceText, zeroFill: false, width: 0, hasPrecision: false, precision: 0, halfRadix: DecimalHalfRadix, uppercase: false, spellsASign: true}
+	end 'absent'
+
+	// Read the specifier's text into the constants above. `tok` is the specifier token, which
+	// positions the one diagnostic this can raise.
+	export static function parse(tok Token) returns Self throws ParseError
+		let text = tok.value
+
+		// A leading `0` is the FILL, never the width's first digit. The two readings can only
+		// differ where the width is 0, and a zero-wide field pads nothing under either fill.
+		let zeroFill = Self.byteIs(text, index: 0, marker: b"0")
+		var pos = 0 as CharOffset
+		if zeroFill 'fillIsNotAWidthDigit'
+			pos = 1
+		end 'fillIsNotAWidthDigit'
+
+		let widthEnd = Self.digitsEnd(text, from: pos)
+		let width = try Self.number(text, from: pos, to: widthEnd, tok: tok)
+
+		// ⭐ **BOTH TAILS READ FROM HERE — see the header.** The base is taken at `tailStart` rather
+		// than after the precision scan, so a precision cannot move the position the base is read
+		// from and `"{n:8.2x}"` means what it means in both references.
+		let tailStart = widthEnd
+
+		var hasPrecision = false
+		var precision = 0 as FormatFieldWidth
+		if Self.byteIs(text, index: tailStart, marker: b".") 'precisionFollows'
+			let precisionStart = tailStart + 1
+			hasPrecision = true
+			precision = try Self.number(text, from: precisionStart, to: Self.digitsEnd(text, from: precisionStart), tok: tok)
+		end 'precisionFollows'
+
+		let halfRadix = Self.halfRadixAt(text, index: tailStart)
+
+		return Self{present: true, text: text, zeroFill: zeroFill, width: width, hasPrecision: hasPrecision, precision: precision, halfRadix: halfRadix, uppercase: Self.byteIs(text, index: tailStart, marker: b"X"), spellsASign: halfRadix == DecimalHalfRadix}
+	end 'parse'
+
+	// ⭐ **A LETTER THAT NAMES NO BASE MEANS DECIMAL, AND THAT IS THE CONTRACT — NOT AN UNHANDLED
+	// CASE.** A specifier's meaning depends on the type it decorates, and a user type implementing
+	// `FormattedStringable` may define any spelling it likes (`"{c:verbose}"`). Every such specifier
+	// passes through this reader on its way to that type, so refusing an unrecognized letter here
+	// would refuse them. A specifier that RAN OUT names no base either, and means the same thing.
+	// Both references take this view.
+	static function halfRadixAt(text ByteArray, index CharOffset) returns FormatHalfRadix
+		let base = try text.get(index) otherwise return DecimalHalfRadix
+
+		if base == 'x' or base == 'X' 'hexadecimal'
+			return HexHalfRadix
+		end 'hexadecimal'
+
+		if base == 'o' 'octal'
+			return OctalHalfRadix
+		end 'octal'
+
+		if base == 'b' 'binary'
+			return BinaryHalfRadix
+		end 'binary'
+
+		return DecimalHalfRadix
+	end 'halfRadixAt'
+
+	// Is `text[index]` this byte? Answers `false` past the end, which is the reading every caller
+	// wants: a specifier that stopped has not written the byte being asked about.
+	//
+	// ⚠ **THE MARKER IS A ONE-BYTE BYTE STRING BECAUSE IT IS PASSED, NOT COMPARED.** `halfRadixAt`
+	// three lines up writes `base == 'x'` and `number` writes `b - '0'`, and both are correct: a
+	// character LITERAL coerces against a `Byte` in an expression. What it cannot do is cross a
+	// parameter — `'0'` is a `Character`, a struct, and `'0' as Byte` is `E3009: Cannot cast from
+	// struct to int`. `b"0"` reads the same at the call site and is the right type;
+	// `primitiveStaticSourceSpelling` takes its separator out of a one-byte `b""` for this reason.
+	static function byteIs(text ByteArray, index CharOffset, marker ByteArray) returns bool
+		let here = try text.get(index) otherwise return false
+		return here == (try marker.get(0) otherwise panic("InterpFormatSpec.byteIs: marker '{String.from(marker)}' is not one byte"))
+	end 'byteIs'
+
+	// Index of the first byte at or after `from` that is not a decimal digit — the end of a width or
+	// a precision, and `from` itself when neither was written. The digit test is the LEXER's
+	// (`Lexer.isDigit`), which is the same question about a different run of bytes.
+	static function digitsEnd(text ByteArray, from CharOffset) returns CharOffset
+		var stop = from
+		while stop < text.count() 'scan'
+			if not isDigit(try text.get(stop) otherwise panic("InterpFormatSpec.digitsEnd: text.get OOB at {stop} inside its own count()")) 'notADigit'
+				return stop
+			end 'notADigit'
+			stop = stop + 1
+		end 'scan'
+		return stop
+	end 'digitsEnd'
+
+	// The number the digits in `[from, to)` spell. An empty run is 0 — a specifier that named no
+	// width asked for no field, which is what a width of 0 means to every renderer.
+	//
+	// ⚠ **THE ACCUMULATOR IS WIDER THAN THE RESULT ON PURPOSE.** A digit run can walk past the bound
+	// (and past an i64) long before it ends, so the running value is a `ParsedInt` tested at every
+	// step rather than a `FormatFieldWidth` that would trap inside the multiply.
+	//
+	// ⚠ **THE GUARD AND THE NARROWING `as` BELOW ARE THE SAME BOUND READ TWICE**, and a disagreement
+	// between them is not a wrong answer but a compiler PANIC where an E2011 belongs. The two cannot
+	// be joined syntactically (see `MaxFormatFieldWidth`, which records both attempts and their
+	// diagnostics); what holds them together is that the constant is DECLARED at `FormatFieldWidth`,
+	// so narrowing the type without narrowing the constant fails to build.
+	static function number(text ByteArray, from CharOffset, to CharOffset, tok Token) returns FormatFieldWidth throws ParseError
+		var value = 0 as ParsedInt
+		var i = from
+		while i < to 'eachDigit'
+			let b = try text.get(i) otherwise panic("InterpFormatSpec.number: text.get OOB at {i} — `digitsEnd` bounded `to` by count()")
+			value = value * 10 + ((b - '0') as ParsedInt)
+			if value > MaxFormatFieldWidth 'pastTheBound'
+				throw ParseError.formatFieldOverflow(String.from(text), line: tok.line, column: tok.column)
+			end 'pastTheBound'
+			i = i + 1
+		end 'eachDigit'
+		return value as FormatFieldWidth
+	end 'number'
+end 'InterpFormatSpec'
+
+// ⛔⛔ **THESE TWO BOUNDS MUST EQUAL `stdlib/Builtins.maxon`'s, AND NOTHING CAN CHECK THAT.**
+// `FormatFieldWidth` is the compiler's ACCEPTANCE bound and `PadWidth`/`DecimalPrecision`
+// (`Builtins.maxon:1734-1735`) are the stdlib PARAMETER bound; `FormatHalfRadix` and `HalfRadix`
+// (`:1843`) are the same pair one column over. `materializeFormattedIntPart` emits literals of the
+// former straight into parameters of the latter.
+//
+// **They cannot be joined under one name, and the reason is not tidiness — it is that the two are
+// SEPARATELY COMPILED ARTIFACTS.** The compiler's own source declares its types (`ParsedInt` lives in
+// `NumberParsing.maxon`, not in stdlib, for exactly this reason), and the stdlib a compile emits
+// calls INTO is whichever tree the user's program loads — not the one this binary was built against.
+// A shared typealias would bake THIS build's bound into a call resolved against THAT one, which is
+// the same disagreement wearing a single name.
+//
+// ⇒ **So it is a contract, and here is which way it breaks.** NARROW stdlib's below the compiler's
+// and neither tree fails to build: the compiler goes on accepting `"{n:4294967295}"` and minting that
+// literal, and the failure lands as a **runtime range panic inside every emitted program that formats
+// a number** past the new bound. WIDEN stdlib's and the cost is only an over-refusal — E2011 on a
+// program stdlib could have served. The dangerous direction is the narrowing one, and it is silent.
+typealias FormatFieldWidth = int(0 to u32.max)
+
+// HALF of the base, which is the form `stdlib`'s `__unsignedDigitStep` takes — see there for why
+// halving the 64-bit pattern before dividing is what lets one signed division serve every base and
+// still convert a value with bit 63 set.
+typealias FormatHalfRadix = int(1 to 8)
+
+let DecimalHalfRadix = 5 as FormatHalfRadix
+let HexHalfRadix = 8 as FormatHalfRadix
+let OctalHalfRadix = 4 as FormatHalfRadix
+let BinaryHalfRadix = 1 as FormatHalfRadix
+
+// ⭐⭐ **DECLARED AT `FormatFieldWidth`, WHICH IS WHAT MAKES THE PAIR ABOVE CHECKED RATHER THAN
+// MERELY ADJACENT.** `InterpFormatSpec.number` tests its accumulator against this and then narrows
+// with an `as` — safe only while the guard and the range name the same number. Neither direction of
+// the obvious join compiles: a range bound admits only a literal or `type.max`
+// (**`E2010: Expected numeric literal, 'min', 'max', or 'type.min'/'type.max' in range bound`** for
+// `int(0 to MaxFormatFieldWidth)`), and a ranged typealias has no `.max` accessor to read back
+// (**`E3003: 'FormatFieldWidth' is a type and cannot be used directly as a value`**). Both were
+// tried. What IS expressible is this: giving the constant the NARROW type makes the compiler check
+// that the bound fits it, so narrowing `FormatFieldWidth` without touching this line is a build
+// failure here instead of a guard that admits a value the `as` then panics on — the E2011 this code
+// exists to raise, turned into a compiler crash.
+//
+// Exported because the diagnostic quotes it (`Queries.reportParseError`): a limit named at an author
+// must be the limit that fired.
+export let MaxFormatFieldWidth = u32.max as FormatFieldWidth
 
 export type Parser
 	var tokens as TokenArray
@@ -42596,14 +42820,26 @@ export type Parser
 			try self.consume(TokenKind.stringInterpStart)
 			let exprTok = self.current()
 			let exprVal = try self.parseExpression(func, block: self.currentBlock)
+			let format = try self.acceptInterpFormatSpec()
 			try self.consume(TokenKind.stringInterpEnd)
-			try self.materializeInterpExpr(exprVal, exprTok: exprTok, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			try self.materializeInterpExpr(exprVal, exprTok: exprTok, format: format, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			try self.materializeLiteralFragment(partBufs, partLens: partLens, range: range)
 		end 'parts'
 		self.materializeFragmentBytes(suffix, partBufs: partBufs, partLens: partLens, range: range)
 
 		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 	end 'parseStringInterpolation'
+
+	// The `:08x` of `"{n:08x}"`, if the author wrote one. The lexer has already decided WHERE the
+	// expression stopped and the specifier began (`Lexer.scanInterp`), so this is a token test and not a
+	// second reading of the same boundary question.
+	function acceptInterpFormatSpec() returns InterpFormatSpec throws ParseError
+		if not self.at(TokenKind.stringFormatSpec) 'noSpecifier'
+			return InterpFormatSpec.absent()
+		end 'noSpecifier'
+
+		return try InterpFormatSpec.parse(try self.consume(TokenKind.stringFormatSpec))
+	end 'acceptInterpFormatSpec'
 
 	// Consume the current literal fragment token and, if it decodes to a non-empty byte run, materialize it
 	// as a part. An EMPTY fragment (the `""` the lexer emits around adjacent interpolations, `"{a}{b}"`)
@@ -42630,7 +42866,7 @@ export type Parser
 	// `__bool_to_string`, a float via `__float_toString` and a user struct via its own `toString`. An enum
 	// renders its VALUE — the integer for an int backing, the decoded double for a float one; its case NAME
 	// is a later rung (`string-interpolation.md`'s two `disabled-test:` cases).
-	function materializeInterpExpr(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
+	function materializeInterpExpr(exprVal ValueId, exprTok Token, format InterpFormatSpec, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
 		// ⚠ **THE RAW TAG IS CORRECT HERE, AND THAT WAS MEASURED RATHER THAN ASSUMED.** `tagIsIntegral`
 		// answers `true` for a `named` tag deliberately (its own header records the trade), so a float
 		// carrying one would be claimed by the INTEGRAL arm below and rendered through `__int_to_string`
@@ -42654,6 +42890,13 @@ export type Parser
 		// value and blitted, which is a question about the RECORD. A Character carries the same record, so
 		// `"{c}"` is the identical two loads — and interpolation is how a Character reaches stdout at all,
 		// `print` itself taking a String and refusing one.
+		//
+		// ⚠ **A SPECIFIER ON TEXT IS IGNORED, WHICH IS THE ORACLE'S ANSWER AND WAS MEASURED, NOT
+		// ASSUMED.** `print("[{s:8}]")` on a `String` prints `[hi]` under the bootstrap, as do `"{b:8}"`
+		// on a bool and `"{c:8}"` on a Character — a field width is a NUMERIC field in both references,
+		// and no spec in either corpus pins any other reading. Refusing one here would refuse programs
+		// the language accepts today; padding one would be this compiler inventing a rule. It is left
+		// exactly where the references leave it, named rather than fallen through.
 		if tagIsByteRecord(tag) 'byteRecordPart'
 			self.materializeStringRecordPart(value, partBufs: partBufs, partLens: partLens, range: range)
 			return
@@ -42668,16 +42911,34 @@ export type Parser
 		// non-negative range selects the unsigned entry point; a folded constant that merely FITS one does
 		// not (`valueRendersUnsigned`), which is X10's rule verbatim and what keeps the corpus movement to
 		// the values that actually carry a declared type.
-		//
-		// ⚠ The NAME and the SCRATCH BUDGET both come off the one signedness, because they are two halves
-		// of one choice: the signed budget carries a sign byte the unsigned rendering never writes, and
-		// the signed renderer taken with the unsigned budget would write one byte past `i64.min`'s scratch.
 		if tagIsIntegral(tag) 'intPart'
-			let signedness = DivideSignedness.unsigned if valueRendersUnsigned(self.integerValueDomain(value)) else DivideSignedness.signed
+			let rendersUnsigned = valueRendersUnsigned(self.integerValueDomain(value))
+
+			// ⭐⭐ **ONLY THE FORMATTED SPELLING MOVES TO stdlib, AND THAT IS THE REFERENCES' TRADE TOO.**
+			// `"{n}"` keeps `__int_to_string` into a scratch buffer, whose budget is bounded BY
+			// CONSTRUCTION (an i64 has at most 20 digits and a sign) — it is the hot path the fused
+			// single-allocation record rests on, and the defect a field width introduces cannot exist
+			// there. A FIELD has no such bound (`"{n:200}"`), so it is built over a String that grows.
+			//
+			// ⚠ The two cannot drift the way a second hand-written converter would: decimal conversion of
+			// a magnitude has exactly one answer, and the one thing that DID differ in the references —
+			// signedness — is decided HERE, once, off the value's declared type, and handed over as an
+			// argument rather than re-derived from bit 63 at the far end.
+			if format.present 'formattedIntPart'
+				try self.materializeFormattedIntPart(value, exprTok: exprTok, format: format, rendersUnsigned: rendersUnsigned, partBufs: partBufs, partLens: partLens, range: range)
+				return
+			end 'formattedIntPart'
+
+			// ⚠ The NAME and the SCRATCH BUDGET both come off the one signedness, because they are two
+			// halves of one choice: the signed budget carries a sign byte the unsigned rendering never
+			// writes, and the signed renderer taken with the unsigned budget would write one byte past
+			// `i64.min`'s scratch.
+			let signedness = DivideSignedness.unsigned if rendersUnsigned else DivideSignedness.signed
 			self.materializeScratchPart(value, converter: integerToStringName(signedness), scratchBytes: integerToStringScratchBytes(signedness), partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			return
 		end 'intPart'
 
+		// A specifier on a bool is ignored — see the byte-record arm above for the measurement.
 		if tagIsBool(tag) 'boolPart'
 			self.materializeScratchPart(value, converter: BoolToStringName, scratchBytes: BoolToStringScratchBytes, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			return
@@ -42697,7 +42958,7 @@ export type Parser
 		// `trackOwnedTemp`) and freed at statement end, its bytes spliced by
 		// `materializeStringRecordPart` exactly as any other String part's are.
 		if tagIsFloat(tag) 'floatPart'
-			try self.materializeFloatToStringPart(value, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
+			try self.materializeFloatToStringPart(value, exprTok: exprTok, format: format, partBufs: partBufs, partLens: partLens, range: range)
 			return
 		end 'floatPart'
 
@@ -42706,7 +42967,7 @@ export type Parser
 		// monomorphizing bootstrap emits). Witnesses are needed only for an UNKNOWN concrete type — a
 		// constrained type parameter — which is slice 2.
 		if tag == ValueTypeTag.structRef 'structPart'
-			try self.materializeStructToStringPart(value, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
+			try self.materializeStructToStringPart(value, exprTok: exprTok, format: format, partBufs: partBufs, partLens: partLens, range: range)
 			return
 		end 'structPart'
 
@@ -42728,21 +42989,80 @@ export type Parser
 	// (`SemanticCheck` → `primitiveStaticSourceSpelling`) — the noun for what the interpolation does,
 	// rather than a reserved symbol nobody wrote. The struct arm one function down takes the same view of
 	// its own call for the same reason.
-	function materializeFloatToStringPart(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
+	function materializeFloatToStringPart(exprVal ValueId, exprTok Token, format InterpFormatSpec, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
 		var args = ValueIdArray.create()
 		args.push(exprVal)
-		var argLabels = ByteArrayArray.create()
-		argLabels.push(EmptySourceText)
-		var argRanges = SourceRangeArray.create()
-		argRanges.push(range)
 
 		// The callee is spelled by `primitiveStaticCallee`, the ONE speller of a primitive's reserved-space
 		// static, out of the same two components a source `float.toString(x)` would join — so this lowering
 		// cannot come to name a function the mint would spell differently.
-		let callee = primitiveStaticCallee(FloatConformerName, methodName: ToStringMethodName)
-		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
-		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
+		//
+		// ⭐ **A PRECISION IS ABSENT RATHER THAN DEFAULTED, AND THAT IS WHY THERE ARE TWO CALLEES.**
+		// `"{f:8}"` is the language's own spelling of the value — the shortest decimal that reads back —
+		// right-aligned in a field; `"{f:.2}"` is two decimals. Giving the padded form a default number of
+		// decimals is what would let a WIDTH silently change the DIGITS, so the two are different
+		// functions rather than one with a sentinel precision.
+		var method = ToStringMethodName
+		if format.present 'inAField'
+			method = FloatToStringPaddedMethodName
+			if format.hasPrecision 'fixedDecimals'
+				method = FloatToStringFixedMethodName
+				args.push(self.emitLiteral(format.precision, valueType: MaxonType.integer, range: range))
+			end 'fixedDecimals'
+			args.push(self.emitLiteral(format.width, valueType: MaxonType.integer, range: range))
+			args.push(self.emitLiteral(boolPayload(format.zeroFill), valueType: MaxonType.boolean, range: range))
+		end 'inAField'
+
+		try self.materializeCallPart(primitiveStaticCallee(FloatConformerName, methodName: method), args: args, mint: CalleeMint.primitiveStatic, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeFloatToStringPart'
+
+	// ⭐⭐ **`"{n:08x}"` → `stdlib/Builtins.maxon`'s `__int_toStringFormatted`, WHICH TAKES CONSTANTS AND
+	// READS NO TEXT.** Every one of its five trailing arguments is a compile-time answer this parse
+	// already has: the width and the fill from the specifier, the base and its letter case from the
+	// specifier, and the SIGNEDNESS from the value's declared type.
+	//
+	// ⚠ **`signed` IS THE COMPILER'S ANSWER, NOT A RE-READING OF BIT 63, AND IT IS AN `and` OF TWO
+	// FACTS.** A base that spells the bit pattern (`x`, `X`, `o`, `b`) never writes a sign whatever the
+	// value's type — `"{allBits:x}"` on `0 - 1` is `ffffffffffffffff`. And a DECIMAL rendering of a value
+	// whose declared range is non-negative is unsigned — `"{u:d}"` on `u64.max` is
+	// `18446744073709551615`, the same number `"{u}"` prints, because a format specifier never changes
+	// WHICH number is being printed. The renderer this replaces in both references derived signedness
+	// from the sign bit and answered `-1`.
+	function materializeFormattedIntPart(exprVal ValueId, exprTok Token, format InterpFormatSpec, rendersUnsigned bool, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
+		var args = ValueIdArray.create()
+		args.push(exprVal)
+		args.push(self.emitLiteral(boolPayload(format.spellsASign and not rendersUnsigned), valueType: MaxonType.boolean, range: range))
+		args.push(self.emitLiteral(format.halfRadix, valueType: MaxonType.integer, range: range))
+		args.push(self.emitLiteral(boolPayload(format.uppercase), valueType: MaxonType.boolean, range: range))
+		args.push(self.emitLiteral(format.width, valueType: MaxonType.integer, range: range))
+		args.push(self.emitLiteral(boolPayload(format.zeroFill), valueType: MaxonType.boolean, range: range))
+
+		try self.materializeCallPart(primitiveStaticCallee(IntConformerName, methodName: IntToStringFormattedMethodName), args: args, mint: CalleeMint.primitiveStatic, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
+	end 'materializeFormattedIntPart'
+
+	// ⭐⭐ **ONE PART, RENDERED BY A CALL — the shared spelling of every `toString`-shaped arm.** The
+	// float arms, the formatted-integer arm and the user-struct arm choose a different callee and hand
+	// over different arguments; every step after that is the SAME protocol, and the steps are not
+	// optional: the call's String result is classified +1 OWNED by `emitCall` (`enrolOwnedCallTemp` →
+	// `trackOwnedTemp`) so it is freed at STATEMENT END, after `emitStringInterp` has copied its bytes,
+	// and its bytes are spliced by `materializeStringRecordPart` exactly as any other String part's are.
+	// Written once because a step added to one copy and not the others is a leak or a use-after-free at
+	// RUNTIME rather than a compile error — the bootstrap's `EmitStdlibTextCall` records the same reason.
+	//
+	// ⚠ **THE LABELS ARE EMPTY AND THE ARGUMENTS ARE THEREFORE POSITIONAL** (`argSlotPosition`), which is
+	// what a compiler-minted call wants: these arguments have no author-written spelling to agree with,
+	// and binding them by NAME would couple this lowering to the parameter names `stdlib` happens to use.
+	function materializeCallPart(callee ByteArray, args ValueIdArray, mint CalleeMint, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
+		var argLabels = ByteArrayArray.create()
+		var argRanges = SourceRangeArray.create()
+		for _ in 0 upto args.count() 'eachArg'
+			argLabels.push(EmptySourceText)
+			argRanges.push(range)
+		end 'eachArg'
+
+		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: mint)
+		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
+	end 'materializeCallPart'
 
 	// ⭐ **INTERPOLATE A USER STRUCT VIA A DIRECT `<Type>.toString()` CALL (P1.7a slice 1).** A struct is
 	// interpolable iff it HAS a `toString` method (by NAME, not by declaring `Stringable` — the oracle's
@@ -42752,7 +43072,21 @@ export type Parser
 	// bytes are spliced exactly as a `{s}` String part's are (`materializeStringRecordPart`), the same
 	// machinery a String-returning call already interpolates through. Without the owned classify, one
 	// String would leak per interpolated struct (a v1 leak trap).
-	function materializeStructToStringPart(exprVal ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
+	//
+	// ⭐⭐ **A FORMAT SPECIFIER MAKES IT THE `FormattedStringable` OVERLOAD — `"{c:verbose}"` IS
+	// `c.toString("verbose")`.** The specifier's text is handed over as an ordinary `String` argument,
+	// so the SELECTION is the language's own overload resolution rather than a rule this lowering
+	// invents: the call is emitted under the bare `<Type>.toString` name with two arguments, and
+	// `SemanticCheck.resolveOverloadedCalls` retargets it to the member whose arity and parameter type
+	// fit — the same machinery that sends the ZERO-argument `"{c}"` to `toString()` on a type declaring
+	// both (`string-interpolation/stringable-and-formatted-interp-selects-the-zero-arg-overload`).
+	//
+	// ⚠ A type that declares only `toString()` and is interpolated WITH a specifier is therefore
+	// reported by the ordinary argument-count check against the member it does declare, not by a rule
+	// here. That is deliberate: the parser has no per-callee arity to ask (`declaresCallee` is a name
+	// lookup, see its header), and inventing a second answer to "which overload did this mean?" is the
+	// thing overload resolution exists to prevent.
+	function materializeStructToStringPart(exprVal ValueId, exprTok Token, format InterpFormatSpec, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange) throws ParseError
 		let structName = self.internedName(self.valueNameId(exprVal))
 		let callee = qualifiedMethodName(structName, methodName: ToStringMethodName)
 
@@ -42770,15 +43104,21 @@ export type Parser
 
 		var args = ValueIdArray.create()
 		args.push(exprVal)
-		var argLabels = ByteArrayArray.create()
-		argLabels.push(EmptySourceText)
-		var argRanges = SourceRangeArray.create()
-		argRanges.push(range)
+		if format.present 'formattedOverload'
+			// ⚠ **THESE BYTES ARE RAW, AND `emitStringLiteral`'s header asks for DECODED ones.** Every
+			// other caller hands it the output of `decodeEscapes`, because every other caller is
+			// emitting a string LITERAL the author quoted and `\n` in one means a newline. A specifier
+			// is not quoted: `Lexer.scanInterpFormatSpec` takes its bytes verbatim and stops at the
+			// first `}` whatever precedes it, so there is no escape grammar over them to decode and
+			// `"{c:a\nb}"` names a three-character format `a\nb` — which is the string the author's
+			// `toString(format String)` compares against. Decoding here would hand it a different one.
+			args.push(self.emitStringLiteral(format.text, range: range))
+		end 'formattedOverload'
+
 		// `resolvedTypeQualifier`: the reserved-space door must judge this exactly as it judges the same call
 		// spelled out (`p.toString()`), and that is the same mint the written form takes — the head is the
 		// interpolated value's resolved type, and here the author wrote no member name either (F31).
-		let result = try self.emitCall(callee, anchor: exprTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: exprTok, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
-		self.materializeStringRecordPart(result, partBufs: partBufs, partLens: partLens, range: range)
+		try self.materializeCallPart(callee, args: args, mint: CalleeMint.resolvedTypeQualifier, exprTok: exprTok, partBufs: partBufs, partLens: partLens, range: range)
 	end 'materializeStructToStringPart'
 
 	// ⭐ **ONE VALUE'S TEXT, WITH NOTHING AROUND IT — `"{x}"` MINUS THE LITERAL FRAGMENTS.** The whole of
@@ -42793,11 +43133,14 @@ export type Parser
 	// The result is an owned temporary exactly as an interpolation's is (`emitStringInterp` →
 	// `trackOwnedTemp`): `let s = x.toString()` transfers it to a scope-exit drop through `parseBinding`,
 	// and a bare `x.toString()` statement drops at statement end.
+	//
+	// ⚠ A format specifier is a property of an INTERPOLATION HOLE, and `x.toString()` is not one — the
+	// spelling that takes one is `x.toString(spec)`, a written call this lowering is not on the path of.
 	function emitValueToString(exprVal ValueId, exprTok Token, range SourceRange) returns ValueId throws ParseError
 		var partBufs = ValueIdArray.create()
 		var partLens = ValueIdArray.create()
 		var scratchIds = ValueIdArray.create()
-		try self.materializeInterpExpr(exprVal, exprTok: exprTok, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+		try self.materializeInterpExpr(exprVal, exprTok: exprTok, format: InterpFormatSpec.absent(), partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 		return self.emitStringInterp(partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 	end 'emitValueToString'
 

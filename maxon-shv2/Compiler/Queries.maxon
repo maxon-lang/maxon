@@ -1390,7 +1390,11 @@ function reportLexerError(project Project, path FilePath, error LexerError)
 		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.lexerUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
 		unterminatedString(line, column) then reportPositioned(project, code: ErrorCode.lexerUnterminatedString, message: "Unterminated string literal", line: line, column: column, filePath: path)
 		unterminatedBlockComment(line, column) then reportPositioned(project, code: ErrorCode.lexerUnterminatedBlockComment, message: "Unterminated block comment", line: line, column: column, filePath: path)
-		unescapedBrace(line, column) then reportPositioned(project, code: ErrorCode.lexerUnescapedBrace, message: "Unescaped '\{' in string literal", line: line, column: column, filePath: path)
+		// ⚠ The sentence carries the CURE, and it is the language's own wording — `specs/string-interpolation.md`'s
+		// `error.unescaped-brace` pins it verbatim and the bootstrap emits it (`1-Lexer.cs:623`). shv2 printed the
+		// first clause only, which names what is wrong and not what to write instead, on the one diagnostic whose
+		// whole subject is a two-character spelling.
+		unescapedBrace(line, column) then reportPositioned(project, code: ErrorCode.lexerUnescapedBrace, message: "Unescaped '\{' in string literal — use '\\\{' for a literal brace", line: line, column: column, filePath: path)
 		unknownDirective(name, line, column) then reportPositioned(project, code: ErrorCode.lexerUnknownDirective, message: "Unknown compiler directive '#{name}'", line: line, column: column, filePath: path)
 	end 'kind'
 end 'reportLexerError'
@@ -1494,6 +1498,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// limit is `f64.max`, which no i64 span describes, so the float wording names the TYPE and
 		// stops there rather than spelling out a bound.
 		floatLiteralOverflow(literal, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "Float literal '{literal}' is outside the range of float", line: line, column: column, filePath: path)
+		// The third variant on the overflow code, for the same reason the float one is a second: a
+		// width past `PadWidth` is a number outside the range of its type, and the type is neither
+		// `int` nor `float` but `stdlib`'s own field width, so the message names ITS limit.
+		formatFieldOverflow(spec, line, column) then reportPositioned(project, code: ErrorCode.parserLiteralOverflow, message: "A width or precision in format specifier '{spec}' is larger than {MaxFormatFieldWidth}", line: line, column: column, filePath: path)
 		// E2068 — not an overflow. The message says what is wrong with the TEXT, because there is no
 		// value to talk about a range of.
 		malformedNumericLiteral(literal, line, column) then reportPositioned(project, code: ErrorCode.parserMalformedNumericLiteral, message: "Numeric literal '{literal}' is not a number", line: line, column: column, filePath: path)
