@@ -1020,3 +1020,37 @@ main.maxon:32 num
 main.maxon:33 text
 main.maxon:34 flag
 ```
+
+<!-- test: error.overloads-disagree-on-a-defaulted-parameters-type -->
+The members agree on the SHAPE of their defaults — the same parameter names, the same defaulted position —
+so the set is admitted at its declarations, and the argument `f(true)` omits is supplied while the call is
+parsed from a whole-program index that records ONE answer per name. That answer is the `Num` member's, and
+this call resolves to the `Real` member: its helper returns a float, in a different REGISTER FILE from the
+`int` the caller minted the value as, so the call would read the result out of the wrong register. It is the
+`overloads-disagree-*` pair's own rule at a second op — the difference is only that the value in question is
+one the compiler supplied, so the sentence names the parameter POSITION rather than a return type.
+```maxon
+typealias Num = int(-1000 to 1000)
+typealias Real = float(f64.min to f64.max)
+
+function f(a bool, x Real = 2.5) returns Num
+	if a 'yes'
+		if x > 1.0 'big'
+			return 7
+		end 'big'
+		return 3
+	end 'yes'
+	return 0
+end 'f'
+
+function f(a Num, x Num = 1) returns Num
+	return a + x
+end 'f'
+
+function main() returns ExitCode
+	return f(true) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:20:9: the overloads of 'f' do not agree on the TYPE of parameter 1, which this call omitted and the compiler supplied from that parameter's default ('int' and 'float'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and the overload is resolved a whole pass later — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload
+```

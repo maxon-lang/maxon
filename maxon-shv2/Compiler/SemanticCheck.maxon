@@ -175,7 +175,7 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 end 'resolveOverloadedCalls'
 
 // ⭐⭐ **WHICH OP DEFINES EACH VALUE OF THE FUNCTION BEING WALKED (W74)** — the one thing
-// `retargetDefaultedArgHelpers` needs and the op stream does not offer: a synthesized default argument is
+// `repointDefaultedArgHelpers` needs and the op stream does not offer: a synthesized default argument is
 // named to the call by its `ValueId`, and re-pointing it means rewriting the op that PRODUCED it.
 //
 // ⚠ **`Project.valueOrigins` ALREADY ANSWERS THIS AND MAY NOT BE USED FOR IT.** That table is
@@ -570,20 +570,30 @@ end 'overloadArgTypeFit'
 // first. The cure for that residual is to key the site by its call's op index, which is a change to the P1.9
 // record and its pass, not to this one.
 function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray, member ByteArray, defaultArgOrigins DefaultArgOrigins)
-	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, member: member, disagreement: theCallsOwnResult)
-	// ⚠ **BEFORE the early return, and deliberately.** A defaulted argument's TYPE is read off a by-name
-	// registry that is last-wins over the whole set, so the member that KEPT the bare name owes the same
-	// reconcile every other member owes — its helper's callee is already right and its result's tag may
-	// still be another member's. See `retargetDefaultedArgHelpers`.
-	retargetDefaultedArgHelpers(project, module: module, func: func, op: op, callee: callee, member: member, origins: defaultArgOrigins)
+	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, member: member, disagreement: sharedCallResultSubject)
+	match overloadCallArgs(op) 'args'
+		supplied(args, _, defaultSlots) then bindOverloadChoiceArguments(project, module: module, func: func, opIndex: opIndex, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: defaultArgOrigins)
+	end 'args'
+end 'bindOverloadChoice'
+
+// The two obligations a resolved call's ARGUMENT LIST carries, off ONE destructure of the op — the
+// constant-argument range sites this header describes, and the defaulted arguments W74 added. They share the
+// destructure because a `match` binding does not outlive the arm that binds it, so two askers of
+// `overloadCallArgs` would be two spellings of "what did this call pass".
+//
+// ⚠ **THE DEFAULT RE-POINT RUNS BEFORE THE `member == callee` RETURN, and the range retarget after it.** They
+// gate differently because they are asked of different things: a range SITE names the callee, so a member
+// that kept the bare name has nothing to move — while a defaulted argument's TYPE was read off a by-name
+// registry that is LAST-WINS over the whole set, so that member's argument may still be tagged as another
+// member's and owes the same reconcile every other member owes.
+function bindOverloadChoiceArguments(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins DefaultArgOrigins)
+	repointDefaultedArgHelpers(project, module: module, func: func, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: origins)
 	if member.equals(callee) 'firstMemberKeptTheBareName'
 		return
 	end 'firstMemberKeptTheBareName'
 
-	match overloadCallArgs(op) 'args'
-		supplied(args, _, _) then retargetArgRangeSites(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args)
-	end 'args'
-end 'bindOverloadChoice'
+	retargetArgRangeSites(project, func: func, opIndex: opIndex, callee: callee, member: member, args: args)
+end 'bindOverloadChoiceArguments'
 
 // Point every constant-argument range-check site this call owns at the member it resolved to. A function with
 // no such site files no entry at all (`Parser.commitRangeChecks`), which is the common case and costs one
@@ -643,12 +653,6 @@ end 'valueIdArrayContains'
 //
 // A CALLER-LOCATION slot is skipped: nothing was synthesized for it, and the constant the fill emitted is
 // the caller's own line or path — the same value whichever member wins.
-function retargetDefaultedArgHelpers(project Project, module MaxonModule, func IrFunction, op MaxonOp, callee ByteArray, member ByteArray, origins DefaultArgOrigins)
-	match overloadCallArgs(op) 'args'
-		supplied(args, _, defaultSlots) then repointDefaultedArgHelpers(project, module: module, func: func, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: origins)
-	end 'args'
-end 'retargetDefaultedArgHelpers'
-
 function repointDefaultedArgHelpers(project Project, module MaxonModule, func IrFunction, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins DefaultArgOrigins)
 	if defaultSlots.count() == 0 'thisCallOmittedNothingTheCalleeDefaults'
 		return
@@ -699,7 +703,7 @@ end 'OverloadDisagreementSubject'
 
 // The `theCallsResult` answer, shared: a payload-free union case is still a heap object in Maxon, and
 // `commitOverloadChoice` runs at every resolved overloaded call in the program.
-let theCallsOwnResult = OverloadDisagreementSubject.theCallsResult
+let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
 
 // ⭐⭐ **THE ONE THING SELECTING LATE COSTS: the parser has ALREADY TYPED the call's result, and it typed it
 // from a registry that cannot tell overloads apart.**
