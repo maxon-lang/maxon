@@ -123,9 +123,19 @@ export type FuncSignatureEntry
 	export var nameLine as LineNumber
 	export var nameColumn as ColumnNumber
 	export var sourceFilePath as FilePath
+	// ⭐⭐ **DID THE COMPILER MINT THIS FUNCTION, OR DID THE AUTHOR WRITE IT? — the bit
+	// `commitFuncSignatures` needs to keep a duplicate diagnostic on a name the author can grep for (W74).**
+	// A default value is compiled as a synthesized nullary function named after the declaration that owns it
+	// (`Project.paramDefaultHelperName`), so two of THEM colliding is never a fact of its own: the join is
+	// injective, so one helper name means one owner registration name and one parameter position — and two
+	// declarations claiming one registration name is the duplicate `commitFuncSignatures` reports, in the same
+	// run, at a position the author wrote. STATED here rather than decoded from the name's `__` prefix at the
+	// merge, for the reason this file keeps: a minted name is a thing to be RECORDED, never a thing to be
+	// read back apart.
+	export var synthesized as bool
 
-	export static function create(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath) returns FuncSignatureEntry
-		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath}
+	export static function create(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool) returns FuncSignatureEntry
+		return Self{name: name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized}
 	end 'create'
 end 'FuncSignatureEntry'
 
@@ -435,8 +445,8 @@ export type FileParseArtifact
 	// a function — NEVER touching `Project` (mirrors `recordFuncReturnType`). The
 	// name's source position travels with the entry so a merge-time duplicate can be
 	// positioned on the offending declaration.
-	export function recordFuncSignature(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath)
-		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath))
+	export function recordFuncSignature(name ByteArray, signature FuncSignature, nameLine LineNumber, nameColumn ColumnNumber, sourceFilePath FilePath, synthesized bool)
+		self.funcSignatures.push(FuncSignatureEntry.create(name, signature: signature, nameLine: nameLine, nameColumn: nameColumn, sourceFilePath: sourceFilePath, synthesized: synthesized))
 	end 'recordFuncSignature'
 
 	// Record the whole current member list of one overloaded bare name (D7). REPLACES rather than appends:
@@ -1183,7 +1193,16 @@ end 'commitFuncReturnTypes'
 function commitFuncSignatures(project Project, artifact FileParseArtifact)
 	for entry in artifact.funcSignatures 'each'
 		if project.funcSignatures.contains(entry.name) 'duplicate'
-			reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: entry.name), line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
+			// ⚠ **A SYNTHESIZED FUNCTION'S DUPLICATE IS THE SHADOW OF ONE THE AUTHOR CAN SEE, AND IS NOT
+			// REPORTED TWICE (W74).** See `FuncSignatureEntry.synthesized` for why the two always arrive
+			// together. MEASURED before the gate, on two files each declaring `f(a Num = 1)`: the correct
+			// `Duplicate function 'f'` came with a second E3006 naming `__paramDefault#f#0` and explaining it
+			// as a parameter-SPELLING collision — a symbol absent from the source, described by a sentence
+			// about a mechanism the author never used. The first entry is still kept, exactly as for a
+			// reported duplicate: the two paths differ in what they SAY, never in what the registry holds.
+			if not entry.synthesized 'theAuthorWroteThisName'
+				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: entry.name), line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
+			end 'theAuthorWroteThisName'
 			continue
 		end 'duplicate'
 		project.funcSignatures.upsert(entry.name, value: entry.signature)

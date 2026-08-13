@@ -1016,7 +1016,7 @@ end 'main'
 11
 ```
 ```stdout
-main.maxon:33 num
-main.maxon:34 text
-main.maxon:35 flag
+main.maxon:32 num
+main.maxon:33 text
+main.maxon:34 flag
 ```

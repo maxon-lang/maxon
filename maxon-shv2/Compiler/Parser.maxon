@@ -2036,8 +2036,25 @@ end 'ClosureParamTypeHint'
 //     field reader mints the identical name on both walks by construction. It is minted at the
 //     declaration, because the LAYOUT has to carry it too (`FieldDefault.helper`), and the same bytes ride
 //     here rather than being derived a second time.
+//
+// ⭐⭐ **THE PARAMETER ARM CARRIES TWO NAMES, AND THE SECOND IS WHAT LETS AN OVERLOAD SET DEFAULT ANYTHING
+// (W74).** The sweep publishes ONE entry per bare name and cannot see parameter types, so every member of an
+// overload set is published under one key and mints one helper name — while each member needs a helper of its
+// OWN, because the whole point is that each carries its own default expression. So:
+//
+//   • `sourceName` is the sweep's KEY: what a call site in any file looks the default up by, and what the
+//     drain reads its own slot's producer back from. It is `declaredMethodName`'s answer.
+//   • `registrationName` is the name this DECLARATION claimed (`overloadRegistrationNameFor`), which is
+//     unique by construction across a file's overload set — and the helper is EMITTED under it. For the
+//     first declaration of a name the two are the SAME string, which is every function in every program that
+//     does not overload a defaulted name, so nothing about those moves.
+//
+// It is seeded with the source name at the capture and REPLACED by `parseFunction` once the registration name
+// is decided, because a parameter list is read before its own registration name can be: the name depends on
+// the parameter TYPES this very list is producing. The seed is not a sentinel — it is the correct answer for
+// every declaration that turns out to be the first of its name.
 union DefaultHelperOwner
-	parameter(ownerName ByteArray, paramIndex ParamCount)
+	parameter(sourceName ByteArray, registrationName ByteArray, paramIndex ParamCount)
 	field(helperName ByteArray)
 end 'DefaultHelperOwner'
 
@@ -2049,7 +2066,10 @@ end 'DefaultHelperOwner'
 // column reset, the `IrFunction` and the end-of-default check are the same for a parameter and a field;
 // only the name and the tier differ, and `DefaultHelperOwner` is exactly those two.
 type PendingDefaultHelper
-	export let owner as DefaultHelperOwner
+	// ⚠ **MUTABLE for exactly one write** — `Parser.claimDefaultHelpersForRegistrationName`, which re-points a
+	// parameter default at the registration name its declaration turned out to claim. See `DefaultHelperOwner`
+	// for why the name cannot be known when the parameter list is read.
+	export var owner as DefaultHelperOwner
 	export let declaredType as MaxonType
 	export let exprStart as TokenIndex
 	// The token the CAPTURE skipped to — the `,`/`)` that ends a parameter default (`skipParamDefault`),
@@ -14096,14 +14116,17 @@ export type Parser
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations NAMES `{String.from(ManagedMemoryTypeName)}` in its return type, and the whole-program declaration sweep publishes that SPELLING under the name the source wrote, so a call to this name cannot be told whether its result carries the buffer's member roster or the `Array`'s. The surface is chosen when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'bufferReturningOverload'
 
-		// ⭐ **PARAMETER DEFAULTS (BATCH2 slice 4) — the `throws` clause's exact shape, one declaration fact
-		// over.** A default is published by the sweep under the name the SOURCE wrote, and the omitted
-		// argument is filled when the call is PARSED (`fillOmittedArgDefaults`) — a whole pass before
-		// `resolveOverloadedCalls` picks a member. So a short call to an overloaded name would be filled from
-		// whichever declaration the by-name sweep recorded last, and the helper it calls returns THAT
-		// declaration's parameter type: a silently wrong value, of a possibly wrong type, at run time. It is
-		// also what makes the helper's own name unique by construction (`paramDefaultHelperName` keys on the
-		// source name, which every member of an overload set shares).
+		// ⭐⭐ **PARAMETER DEFAULTS WERE THE FIFTH REFUSAL HERE AND ARE NOT ANY MORE (W74).** They were refused
+		// on the sentence the four above are refused on — a default is published under the name the SOURCE
+		// wrote, and the omitted argument is filled when the call is PARSED, a whole pass before
+		// `resolveOverloadedCalls` picks a member — and that sentence is TRUE. What was wrong is the
+		// conclusion: it is only unanswerable when the members DISAGREE, and the fill commits to nothing an
+		// agreeing set can be wrong about (`SignatureIndex.ParamDefaultInfo.matches` states exactly which
+		// facts those are). So the question moved to the SWEEP, which sees every declaration of the name in
+		// the whole program rather than the ones this file happens to hold, and the refusal moved to the `=`
+		// that writes the disagreeing default (`captureParamDefault`). MEASURED against the oracle, which
+		// accepts what shv2 refused: two `Expect.equal` overloads with `message String = "ni"` and
+		// `= "nope"`, each returning `message.count()`, answer **6**.
 		// ⭐⭐ **A BY-REFERENCE PARAMETER (PBR-2) — the same unattributable-sweep-fact shape as the four above,
 		// and the one whose consequence is not a wrong diagnostic but a wrong ABI.** The declaration sweep
 		// publishes by-reference columns under the name the SOURCE wrote, and the caller decides whether to
@@ -14150,10 +14173,6 @@ export type Parser
 		if self.signatures.calleeTakesAnyParamByRef(base) 'byReferenceOverload'
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations REASSIGNS a parameter (or hands one to something that does), so that parameter is passed by REFERENCE, and the whole-program declaration sweep publishes that under the name the source wrote. A call to this name cannot be told which overload's parameter is an address, and the choice is made when the call is PARSED while the overload is resolved a whole pass later. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'byReferenceOverload'
-
-		if self.signatures.declaresParamDefaults(base) 'defaultedOverload'
-			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations gives a parameter a DEFAULT VALUE, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which overload's default to supply. The argument is filled when the call is parsed and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names, or drop the default", line: nameTok.line, column: nameTok.column)
-		end 'defaultedOverload'
 	end 'requireOverloadableName'
 
 	// Does this signature declare a parameter whose OWNERSHIP a call can transfer — a managed value (String,
@@ -19983,6 +20002,9 @@ export type Parser
 		end 'receiverParam'
 
 		try self.consume(TokenKind.leftParen)
+		// The height BEFORE the list is read, so `claimDefaultHelpersForRegistrationName` below can tell this
+		// declaration's own captures from every earlier one's — see there, and `DefaultHelperOwner`.
+		let firstPendingDefault = self.pendingDefaultHelpers.count()
 		try self.parseFunctionParameters(paramNames, paramTypes: paramTypes, paramRanges: paramRanges, paramSurfaces: paramSurfaces, paramTypeStarts: paramTypeStarts, owner: ParamDefaultOwner.declaredFunction(sourceName), paramTypeHint: ClosureParamTypeHint.none)
 		try self.consume(TokenKind.rightParen)
 
@@ -20010,6 +20032,9 @@ export type Parser
 		// a mangled variant for a later overload (D7). Decided HERE: the parameter list is complete and
 		// struct-resolved, and nothing has yet been recorded under a name.
 		let name = try self.overloadRegistrationNameFor(sourceName, paramTypes: paramTypes, paramNames: paramNames, takesReceiver: takesReceiver, nameTok: nameTok)
+		// ⭐ **AN OVERLOAD MEMBER'S DEFAULTS FOLLOW ITS REGISTRATION NAME (W74)** — the sweep published one
+		// helper name for the whole set, and each member has to emit a helper of its own.
+		self.claimDefaultHelpersForRegistrationName(firstPendingDefault, sourceName: sourceName, registrationName: name)
 
 		// Fresh per-function value numbering, seeded at the function's paramCount so
 		// parameter ids occupy 0..paramCount-1 by Std-ABI convention (a body value
@@ -20333,7 +20358,7 @@ export type Parser
 
 		self.publishExistentialInstances(func)
 		self.artifact.recordFuncReturnType(name, returnType: returnType, declaredSurface: declaredReturnSurface)
-		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(name, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: self.returnExistentialSitesOf(returnType, returnTypeStart: returnTypeStart), extensionConstraints: self.enclosingExtensionConstraints), nameLine: nameTok.line, nameColumn: nameTok.column, sourceFilePath: self.filePath, synthesized: false)
 		self.commitRangeChecks(name)
 	end 'parseFunction'
 
@@ -21203,19 +21228,26 @@ export type Parser
 			declaredFunction then break 'owner'
 		end 'owner'
 
-		// ⭐ **THE FOURTH REFUSAL: THE NAME THIS DEFAULT WOULD BE PUBLISHED UNDER IS NOT THIS DECLARATION'S
-		// ALONE.** `requireOverloadableName` refuses a DELIBERATE second declaration of a defaulted name; a
-		// second one written by accident — the same `function f` in two files — is E3006, and E3006 is
-		// reported only once every file has parsed. Until then the losing file's own drain reads the
-		// WINNER's shape out of the by-name registry and finds no helper at its parameter's position, which
-		// reached `requireSweptHelperName`'s panic: MEASURED as a compiler crash with no diagnostic and no
-		// source position, where the identical program without the defaults answers a clean E3006. So the
-		// collision is refused HERE, at the `=`, with a position — and the drain's panic goes back to
-		// meaning only what it says, that ONE declaration's two walks came apart.
+		// ⭐⭐ **THE FOURTH REFUSAL: THIS NAME'S DECLARATIONS DO NOT DESCRIBE ONE DEFAULT SHAPE, SO NO CALL CAN
+		// BE FILLED FOR ALL OF THEM.** The whole-program sweep publishes defaults under the name the SOURCE
+		// wrote, and a short call is filled while it is PARSED — a whole pass before `resolveOverloadedCalls`
+		// picks a member. An OVERLOAD SET whose members publish the IDENTICAL shape is filled the same way
+		// whichever member wins and needs no refusal (W74; the resolved member's own default EXPRESSION is
+		// supplied by `SemanticCheck.retargetDefaultedArgHelpers`). One whose declarations disagree — a
+		// different parameter list, a different set of defaulted positions, or a sibling that defaults nothing
+		// at all — has no one answer to fill from, and is refused HERE, at the `=`, with a position.
+		//
+		// ⚠ **IT ALSO COVERS THE CASE THAT IS NOT AN OVERLOAD SET: the same `function f` written in two
+		// files.** That is E3006, and E3006 is reported only once every file has parsed; until then the losing
+		// file's own drain reads the WINNER's shape out of the by-name registry and finds no helper at its
+		// parameter's position, which reached `requireSweptHelperName`'s panic — MEASURED as a compiler crash
+		// with no diagnostic and no source position, where the identical program without the defaults answers
+		// a clean E3006. Two files whose declarations happen to AGREE fall through to that clean E3006 now,
+		// which is the better diagnostic and was always the one the program deserved.
 		let ownerName = paramDefaultOwnerName(owner)
-		if self.signatures.paramDefaultsCollide(ownerName) 'twoDeclarationsOfOneName'
-			throw ParseError.unsupported("a default value on parameter '{String.from(paramName)}' of '{String.from(ownerName)}' — that name is declared more than once in this program, each declaration with its own parameter defaults, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which declaration's default to supply. Remove the duplicate declaration, or drop the default", line: eqTok.line, column: eqTok.column)
-		end 'twoDeclarationsOfOneName'
+		if self.signatures.paramDefaultsCollide(ownerName) 'declarationsDisagree'
+			throw ParseError.unsupported("a default value on parameter '{String.from(paramName)}' of '{String.from(ownerName)}' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default", line: eqTok.line, column: eqTok.column)
+		end 'declarationsDisagree'
 
 		// ⚠ **THE HELPER'S NAME IS NOT MINTED HERE — IT IS READ BACK FROM THE SWEEP AT THE DRAIN**
 		// (`parseDefaultHelper`). The sweep is the PARAMETER mint's one home, because it is the mint a CALL
@@ -21238,7 +21270,7 @@ export type Parser
 
 		try self.requireNoEmbeddedCallerLocation(self.pos, exprEnd: exprEnd)
 		self.pendingDefaultHelpers = materializedPendingDefaultHelpers(self.pendingDefaultHelpers)
-		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.parameter(ownerName, paramIndex: paramIndex), declaredType: paramType, exprStart: (self.pos + 1) as TokenIndex, exprEnd: exprEnd, enclosingType: self.enclosingType))
+		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.parameter(ownerName, registrationName: ownerName, paramIndex: paramIndex), declaredType: paramType, exprStart: (self.pos + 1) as TokenIndex, exprEnd: exprEnd, enclosingType: self.enclosingType))
 		self.pos = exprEnd
 	end 'captureParamDefault'
 
@@ -21284,6 +21316,56 @@ export type Parser
 		// the parser next to be surprised by.
 		self.closeTypeParamScope()
 	end 'parseDefaultHelpers'
+
+	// ⭐⭐ **THE NAME THIS DECLARATION'S OWN DEFAULT HELPER IS EMITTED UNDER (W74)** — the swept name for the
+	// declaration that keeps its source spelling, and the REGISTRATION name's own for an overload member that
+	// does not.
+	//
+	// ⚠ **THE SWEPT LOOKUP RUNS EITHER WAY, and that is the point rather than a leftover.** Its panic is the
+	// standing check that the sweep and the real parse walked one parameter list to the same conclusion — that
+	// this slot holds a default at all, that it sits where both think it does, and that it is not a
+	// caller-location keyword (`requireSweptHelperName` names all three). A member that mints its own name
+	// still owes that agreement: what an overload changes is the SYMBOL a helper is published as, never
+	// whether the two walks agree about the parameter list.
+	//
+	// ⚠ **AND THE MINT IS `paramDefaultHelperName`, THE SWEEP'S OWN JOIN.** One speller, called with two
+	// different bases, is not two derivations of one name — it is the same construction the N1c refile already
+	// uses when it re-points a contested free function's helpers at the directory-qualified spelling. What is
+	// NOT allowed is a second join written here, and the reason is measured: a name derived in two places
+	// disagreed about the parameter's index and the disagreement surfaced as a backend `call to unknown
+	// function` with no source position.
+	function declaredParamDefaultHelperName(sourceName ByteArray, registrationName ByteArray, paramIndex ParamCount) returns ByteArray
+		let swept = self.sweptParamDefaultHelperName(sourceName, paramIndex: paramIndex)
+		if registrationName.equals(sourceName) 'theFirstDeclarationOfThisName'
+			return swept
+		end 'theFirstDeclarationOfThisName'
+
+		return paramDefaultHelperName(registrationName, paramIndex: paramIndex)
+	end 'declaredParamDefaultHelperName'
+
+	// ⭐ **RE-POINT THE DEFAULTS THIS DECLARATION'S PARAMETER LIST JUST CAPTURED AT THE REGISTRATION NAME IT
+	// CLAIMED (W74).** Called by `parseFunction` at the one moment both halves exist: the parameter list is
+	// read (so the pendings are pushed) and `overloadRegistrationNameFor` has answered. `firstPending` is the
+	// list's height taken BEFORE the parameter list was read, so this touches this declaration's own captures
+	// and no earlier one's.
+	//
+	// A declaration that keeps its source spelling — every function in every program that does not overload a
+	// defaulted name — is left alone, so the common path writes nothing.
+	function claimDefaultHelpersForRegistrationName(firstPending ParamCount, sourceName ByteArray, registrationName ByteArray)
+		if registrationName.equals(sourceName) 'theFirstDeclarationOfThisName'
+			return
+		end 'theFirstDeclarationOfThisName'
+
+		for i in firstPending upto self.pendingDefaultHelpers.count() 'eachCaptureOfThisDeclaration'
+			var pending = try self.pendingDefaultHelpers.get(i) otherwise panic("claimDefaultHelpersForRegistrationName: pendingDefaultHelpers.get OOB at {i} inside its own count()")
+			match pending.owner 'owner'
+				parameter(capturedSource, _, paramIndex) then pending.owner = DefaultHelperOwner.parameter(capturedSource, registrationName: registrationName, paramIndex: paramIndex)
+				// A FIELD default is captured from a `type` body and never from a parameter list, so none can
+				// have been pushed between this declaration's two ends.
+				field then panic("claimDefaultHelpersForRegistrationName: a FIELD default was captured while '{String.from(sourceName)}'s parameter list was read — a field default is only captured from a `type` body, and a parameter list declares no field")
+			end 'owner'
+		end 'eachCaptureOfThisDeclaration'
+	end 'claimDefaultHelpersForRegistrationName'
 
 	// The name the SWEEP published for this captured default — the mechanism's one mint, read back rather
 	// than re-derived (see `captureParamDefault`). It panics rather than falling back to a fresh mint,
@@ -21371,7 +21453,7 @@ export type Parser
 		match pending.owner 'owner'
 			// ⭐ GLOBAL: a defaulted parameter of an `export function` is omitted by call sites in OTHER
 			// files, and each of them emits a call to this helper by name.
-			parameter(ownerName, paramIndex) then try self.parseDefaultHelperBody(self.sweptParamDefaultHelperName(ownerName, paramIndex: paramIndex), visibility: Visibility.global, pending: pending)
+			parameter(sourceName, registrationName, paramIndex) then try self.parseDefaultHelperBody(self.declaredParamDefaultHelperName(sourceName, registrationName: registrationName, paramIndex: paramIndex), visibility: Visibility.global, pending: pending)
 			// ⭐ FILE, and the difference from the parameter tier is a real fact rather than caution: a struct
 			// literal may only be written inside the type's OWN body (`requireConstructible`'s E3076), so
 			// every call to a field default's helper is in the file that declares the type. A lifted closure
@@ -21539,7 +21621,7 @@ export type Parser
 		// parameterized existential cannot have a default: `E3121`/`E2010` aside, a default is an EXPRESSION and
 		// there is no literal of an interface type to write.
 		self.publishExistentialInstances(helper)
-		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(helperName, signature: FuncSignature.create(ByteArrayArray.create(), paramTypes: MaxonTypeArray.create(), paramAggregateNames: ByteArrayArray.create(), paramDeclaredNames: ByteArrayArray.create(), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: sharedEmptyParamExistentialSites, returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: anchor.line, nameColumn: anchor.column, sourceFilePath: self.filePath, synthesized: true)
 		self.commitRangeChecks(helperName)
 	end 'parseDefaultHelperBody'
 
@@ -58495,7 +58577,7 @@ export type Parser
 		// every declared function's do, while its return type is INFERRED from the body and names no token for
 		// `declaredExistentialInstanceAt` to read.
 		self.publishExistentialInstances(lifted)
-		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath)
+		self.artifact.recordFuncSignature(closureName, signature: FuncSignature.create(paramNames, paramTypes: paramTypes, paramAggregateNames: self.paramAggregateNamesOf(paramTypes), paramDeclaredNames: self.paramDeclaredNamesOf(paramTypes), returnAggregateName: self.erasedAggregateNameOfReturn(returnType), paramExistentialSites: self.paramExistentialSitesOf(paramTypes, paramTypeStarts: paramTypeStarts), returnExistentialSites: sharedEmptyReturnExistentialSites, extensionConstraints: sharedEmptyWhereConstraints), nameLine: functionTok.line, nameColumn: functionTok.column, sourceFilePath: self.filePath, synthesized: false)
 		self.closureReturns.upsert(closureName, value: returnType)
 		// Commit the closure's OWN range-check sites under its OWN lifted name, so `InsertRangeChecks`
 		// resolves them against the function whose SSA space numbered them. It sits here — after the body,

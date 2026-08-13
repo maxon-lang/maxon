@@ -11,17 +11,24 @@ category: core
 
 A parameter default is compiled as a synthesized nullary function, and a call site that omits the
 argument emits a call to it. Everything therefore hangs off ONE thing: a name the call site can look the
-declaration up by. Three declaration forms cannot supply one, and a fourth supplies one that is not the
-declaration's alone — each is refused where the `=` is written, rather than mis-served.
+declaration up by. Two declaration forms cannot supply one, and a third supplies one that several
+declarations answer to differently — each is refused where the `=` is written, rather than mis-served.
 
 - A CLOSURE literal is called indirectly, through a function value; the call site has no callee name.
 - An INTERFACE requirement is in no signature registry; a witness dispatch slots against the interface's
   formals.
-- An OVERLOADED name is resolved a whole pass after the argument is filled, so a short call would be
-  filled from whichever declaration the by-name sweep recorded last.
-- A name DECLARED TWICE, each declaration defaulting something, has the same problem by accident rather
-  than by intent — and is refused at the `=` because the duplicate-definition diagnostic (E3006) is only
-  reported once every file has parsed, which is after the losing declaration's own helper is built.
+- A name whose DECLARATIONS DISAGREE about their defaults. A short call is filled while it is parsed, from
+  a registry keyed by the name the source wrote, and the overload is resolved a whole pass later — so the
+  fill has to be the same for every declaration wearing that name. Declarations that differ in their
+  parameter list, in which positions default, or in whether they default anything at all have no one shape
+  to be filled from. The same refusal catches a name DECLARED TWICE by accident, whose duplicate-definition
+  diagnostic (E3006) is only reported once every file has parsed — after the losing declaration's own
+  helper is built.
+
+⚠ **AN OVERLOAD SET WHOSE MEMBERS AGREE ON THAT SHAPE IS NOT REFUSED, AND USED TO BE (W74).** Members that
+declare the same parameters and default the same positions are filled identically whichever one a call
+resolves to, so there is nothing for a call to be told apart by — and each member's own default EXPRESSION
+is supplied once the member is known. `function-overloads.md` carries that half.
 
 These cases exist because a refusal nothing runs is a claim, not a door.
 
@@ -65,6 +72,13 @@ error E2015: <fragment>:5:31: Unsupported: a default value on interface requirem
 ```
 
 <!-- test: error-default-on-overloaded-name -->
+One member defaults its only parameter and the other defaults nothing, so the two disagree about the shape
+of a short call: filled from the entry the sweep holds, `show()` would carry ONE argument and exclude the
+`String` member on arity. MEASURED against the oracle on that shape (`g(a Num)` beside `g(a Num, b Num = 5)`,
+called `g(1)`): the bootstrap selects the ONE-parameter member, so a fill-then-resolve that quietly took the
+defaulted member would be a wrong ANSWER rather than a missing refusal. The sibling that defaults nothing is
+seen because the sweep counts DECLARATIONS as well as defaulting ones — it reaches the defaults registry not
+at all, so no test written over that registry alone could find it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -81,14 +95,15 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:10: Unsupported: overloading 'show' — one of its declarations gives a parameter a DEFAULT VALUE, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which overload's default to supply. The argument is filled when the call is parsed and the overload is resolved a whole pass later, so nothing downstream can repair it. Give the overloads distinct names, or drop the default
+error E2015: <fragment>:4:25: Unsupported: a default value on parameter 'n' of 'show' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
 ```
 
 <!-- test: error-default-on-a-name-declared-twice -->
-Both declarations default a parameter, so neither is the overload set's sole owner of the name. Without
-this refusal the losing declaration's drain reads the winner's shape out of the by-name registry, finds
-no helper at its own parameter's position, and the compiler PANICS with no source position at all — while
-the identical program with the defaults removed answers a clean E3006.
+Both declarations default a parameter and the two shapes DIFFER — one parameter against two — so neither
+is the name's sole answer for a short call. Without this refusal the losing declaration's drain reads the
+winner's shape out of the by-name registry, finds no helper at its own parameter's position, and the
+compiler PANICS with no source position at all — while the identical program with the defaults removed
+answers a clean E3006.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -105,7 +120,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:4:22: Unsupported: a default value on parameter 'a' of 'f' — that name is declared more than once in this program, each declaration with its own parameter defaults, and the whole-program declaration sweep publishes defaults under the name the source wrote, so a call that omits an argument cannot be told which declaration's default to supply. Remove the duplicate declaration, or drop the default
+error E2015: <fragment>:4:22: Unsupported: a default value on parameter 'a' of 'f' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
 ```
 
 <!-- test: error-param-default-trailing-tokens -->

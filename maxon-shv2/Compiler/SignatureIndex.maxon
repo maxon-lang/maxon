@@ -3131,7 +3131,71 @@ export type ParamDefaultInfo
 	export function renameHelper(index ParamCount, renamedTo ByteArray)
 		try self.producers.set(index, value: ParamDefaultProducer.helper(renamedTo)) otherwise panic("ParamDefaultInfo.renameHelper: producers.set OOB at {index} — the caller walks this list's own count()")
 	end 'renameHelper'
+
+	// ⭐⭐ **DO TWO DECLARATIONS OF ONE NAME DESCRIBE THE SAME DEFAULT SHAPE? — the test that decides whether
+	// an OVERLOAD SET may carry defaults at all (W74).** `OpaqueParamInfo.matches`' twin, one declaration fact
+	// over, and the same reason it exists: the sweep keys by bare name and an overload set shares one key.
+	//
+	// ⭐ **IT COMPARES THE SHAPE, WHICH IS EVERYTHING EXCEPT THE DEFAULT'S EXPRESSION** — and that is the whole
+	// of what makes per-overload defaults expressible. A call's argument list is BUILT while the call is parsed
+	// and the overload is picked a whole pass later, so every fact the fill commits to must be one every member
+	// agrees on: the call-aligned parameter NAMES (which decide what a labelled argument occupies), and per
+	// position what PRODUCES the default (which decides how many arguments the fill appends, and what ops it
+	// emits for each). Two members that agree on all of that are filled identically whichever one wins, so
+	// nothing the parse decided can be wrong. What is left over — the expression — is a function BODY, and
+	// `SemanticCheck.retargetDefaultedArgHelpers` re-points the emitted call at the resolved member's own once
+	// the member is known.
+	//
+	// The HELPER NAME rides this comparison and costs nothing: the sweep mints it from the BARE name
+	// (`recordScannedParamDefaults`), so two agreeing members publish the identical string. The name each
+	// member's helper is EMITTED under is a different question, answered at the declaration from the
+	// registration name (`Parser.parseDefaultHelper`).
+	export function matches(other ParamDefaultInfo) returns bool
+		if self.paramNames.count() != other.paramNames.count() or self.producers.count() != other.producers.count() 'differentShape'
+			return false
+		end 'differentShape'
+
+		for i in 0 upto self.paramNames.count() 'eachName'
+			let mine = try self.paramNames.get(i) otherwise panic("ParamDefaultInfo.matches: paramNames.get OOB at {i} despite i < count")
+			if not mine.equals(try other.paramNames.get(i) otherwise panic("ParamDefaultInfo.matches: other.paramNames.get OOB at {i} despite the counts being equal")) 'renamedSlot'
+				return false
+			end 'renamedSlot'
+		end 'eachName'
+
+		for i in 0 upto self.producers.count() 'eachSlot'
+			if not paramDefaultProducersAgree(self.producerFor(i), other: other.producerFor(i)) 'differentProducer'
+				return false
+			end 'differentProducer'
+		end 'eachSlot'
+
+		return true
+	end 'matches'
 end 'ParamDefaultInfo'
+
+// Do two slots produce their default the same way? A free function because a `match` pair is the whole body,
+// and it is spelled over `defaultProducerMark` rather than over the arms so that a producer added to the union
+// cannot be compared as equal to a different one by an arm nobody remembered to write: the mark is the one
+// place a producer's identity is enumerated, and it already refuses to compile with a case missing.
+// A `helper` compares by NAME, which for two declarations of one bare name the sweep mints identically.
+function paramDefaultProducersAgree(producer ParamDefaultProducer, other ParamDefaultProducer) returns bool
+	if defaultProducerMark(producer) != defaultProducerMark(other) 'differentKind'
+		return false
+	end 'differentKind'
+
+	return match producer 'produces'
+		required to callerFile gives true
+		helper(name) gives name.equals(paramDefaultHelperNameOf(other))
+	end 'produces'
+end 'paramDefaultProducersAgree'
+
+// The helper name a producer the caller has ALREADY established to be a `helper` carries — the extraction the
+// comparison above cannot spell inline, because a `match` binding does not outlive the arm that binds it.
+function paramDefaultHelperNameOf(producer ParamDefaultProducer) returns ByteArray
+	return match producer 'produces'
+		required to callerFile panic("paramDefaultHelperNameOf: asked of a producer that synthesizes no function — the caller compares `defaultProducerMark` first, which is what establishes that both sides are helpers")
+		helper(name) gives name
+	end 'produces'
+end 'paramDefaultHelperNameOf'
 
 export type ParamDefaultEntry
 	export let name as ByteArray
@@ -3256,14 +3320,37 @@ export typealias ContestedOpaqueParamNameSet = Set with ByteArray
 // hottest path, for a record that says "nothing to do".
 export let sharedNoOpaqueParams = OpaqueParamInfo.create(ByteArrayArray.create(), positions: TypeParamPositionArray.create(), typeParamCount: 0)
 
-// ⭐ **THE NAMES TWO DIFFERENT DECLARATIONS BOTH CLAIMED, EACH WITH ITS OWN PARAMETER DEFAULTS.** The
-// defaults registry is keyed by the name the SOURCE wrote and is last-wins, exactly as `funcParamConsumes`
-// is — and a name may be written twice, in two files, which is E3006 and is reported after every file has
-// parsed. Until then the loser's own parse reads the WINNER's shape out of this registry, so the position
-// its `=` sits at may hold no helper: `Parser.captureParamDefault` asks this set so that collision earns a
-// positioned refusal instead of the drain's internal-consistency panic, which is about a different defect
-// entirely (the sweep and the real parse disagreeing about ONE declaration) and must stay loud.
-typealias CollidingParamDefaultNameSet = Set with ByteArray
+// ⭐ **THE NAMES WHOSE DECLARATIONS DISAGREE ABOUT THEIR DEFAULT SHAPE (W74).** The defaults registry is
+// keyed by the name the SOURCE wrote and is last-wins, exactly as `funcParamConsumes` is — so a name declared
+// twice leaves ONE entry, and the loser's own parse would read the WINNER's shape out of it and find no helper
+// at the position its `=` sits at. `Parser.captureParamDefault` asks this set so that earns a positioned
+// refusal instead of the drain's internal-consistency panic, which is about a different defect entirely (the
+// sweep and the real parse disagreeing about ONE declaration) and must stay loud.
+//
+// ⚠ **IT USED TO HOLD EVERY MULTIPLY-DECLARED NAME AND NOW HOLDS ONLY THE DISAGREEING ONES.** An OVERLOAD SET
+// whose members publish the IDENTICAL shape has nothing for a call to be told apart by and needs telling apart
+// by nothing: the fill is the same whichever member wins (`ParamDefaultInfo.matches` states the property in
+// full). A name whose declarations do NOT all publish that one shape is still unanswerable and is still
+// refused here — including the case that is not an overload set at all, one `function f` written in two files,
+// which is E3006 and is reported only once every file has parsed.
+typealias DisagreeingParamDefaultNameSet = Set with ByteArray
+
+// How many declarations of one name the sweep has folded — kept ONLY for a name that has more than one, so a
+// program in which every function is declared once carries an empty map and pays a single `contains` probe
+// that `record` was already making. `1` is therefore the answer for a name with no entry, and it is a real
+// answer rather than a fallback: a name the sweep recorded at all was declared at least once.
+//
+// ⭐ **TWO COUNTS ARE KEPT, AND THE COMPARISON BETWEEN THEM IS THE POINT.** `paramDefaultsCollide` needs to
+// know that EVERY declaration of a name published defaults, and a declaration that publishes none reaches
+// `recordParamDefaults` not at all — so its absence is invisible to any test written over the defaults
+// registry alone. `f(n Integer = 1)` beside `f(s String)` is exactly that program: one entry, two
+// declarations, and a short `f()` filled from the entry would append an argument the OTHER member does not
+// take, which excludes it on arity. MEASURED against the oracle on the same shape (`g(a Num)` beside
+// `g(a Num, b Num = 5)`, called `g(1)`): the bootstrap selects the ONE-parameter member and answers 2, so a
+// fill-then-resolve that silently selected the defaulted member would be a wrong answer rather than a
+// missing refusal.
+typealias FunctionDeclarationCount = int(1 to u32.max)
+typealias FunctionDeclarationCountMap = Map with (ByteArray, FunctionDeclarationCount)
 
 // The answer to "does this callee declare any parameter default?" — a union so "no recorded entry" is an
 // ANSWER (every parameter is mandatory), never confused with an empty-but-present one. `CalleeConsume`'s
@@ -7680,9 +7767,15 @@ export type ProgramSignatures
 	// The names two declarations described DIFFERENTLY — an overload set, whose members the sweep cannot tell
 	// apart. See `OpaqueParamInfo.matches` for the wrong answer this exists to refuse.
 	var contestedOpaqueParams as ContestedOpaqueParamNameSet
-	// The names `funcParamDefaults` had to overwrite with a DIFFERENT declaration's defaults — see
-	// `CollidingParamDefaultNameSet`. Empty for every program that declares each function once.
-	var collidingParamDefaults as CollidingParamDefaultNameSet
+	// The names whose declarations do not all describe ONE default shape — see
+	// `DisagreeingParamDefaultNameSet` and `ParamDefaultInfo.matches`. Empty for every program that declares
+	// each function once, and for every overload set whose members agree.
+	var disagreeingParamDefaults as DisagreeingParamDefaultNameSet
+	// How many declarations of a name the sweep folded, and how many of them published parameter defaults —
+	// two counts, compared by `paramDefaultsCollide`. See `FunctionDeclarationCountMap` for why the comparison
+	// is the point and why both maps are empty for a program that declares each function once.
+	var funcDeclarationCounts as FunctionDeclarationCountMap
+	var funcDefaultingDeclarationCounts as FunctionDeclarationCountMap
 	// ⭐ **EVERY FUNCTION WHOSE DECLARED RETURN TYPE NAMED `__ManagedMemory` ANYWHERE, AND WHERE (A2j / A2m).**
 	// `declaredReturnSurface(callee)` is the door `Parser.emitCall` asks "does this call's result denote the
 	// BUFFER, or a tuple with a buffer in it, or the `Array` around it?" — a question no `MaxonReturnType` can
@@ -8045,7 +8138,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -8651,6 +8744,12 @@ export type ProgramSignatures
 		// declaration reaches here exactly once and writes it, so a name already present is a name some
 		// other declaration already claimed. It is `recordParamDefaults`' membership test, one registry over.
 		let secondDeclaration = self.returnTypes.contains(key)
+		// ⭐ **THE ARRIVAL COUNT, KEPT ONLY ONCE A NAME HAS MORE THAN ONE DECLARATION (W74)** — the half of
+		// `paramDefaultsCollide`'s comparison that a declaration publishing NO defaults contributes, and the
+		// only place in the sweep that sees one. See `FunctionDeclarationCountMap`.
+		if secondDeclaration 'anotherDeclarationOfThisName'
+			self.noteRepeatedDeclaration(self.funcDeclarationCounts, name: key)
+		end 'anotherDeclarationOfThisName'
 		self.returnTypes.upsert(key, value: returnType)
 		if not surfaceIsPlain(declaredSurface) 'namesTheBufferAlias'
 			self.declaredReturnSurfaces.upsert(key, value: declaredSurface)
@@ -9475,15 +9574,25 @@ export type ProgramSignatures
 	// `recordParamConsume`'s reason. A function with NO default is not recorded (its default answer is
 	// "every parameter is required"), so the common function costs no map entry and no hash movement.
 	function recordParamDefaults(name ByteArray, info ParamDefaultInfo)
-		// ⚠ **THE OVERWRITE IS NOTED, BECAUSE THE KEY IS NOT UNIQUE.** Two files may each declare
-		// `function f` with defaults; the map keeps one, and the other file's own parse would then look up
-		// a position the winner holds no helper at. MEMBERSHIP IS THE WHOLE TEST — a name reaches here once
-		// per DECLARATION that defaults something, so a second arrival IS a second declaration, and the two
-		// need not be compared. (A program that declares one name twice is E3006 either way; all that is
-		// decided here is whether it is refused with a position or with the drain's panic.)
-		if self.funcParamDefaults.contains(name) 'twoDeclarationsOfOneName'
-			self.collidingParamDefaults.insert(name)
-		end 'twoDeclarationsOfOneName'
+		// ⚠ **THE OVERWRITE IS COMPARED, BECAUSE THE KEY IS NOT UNIQUE.** Two declarations may wear one name —
+		// legitimately, as an OVERLOAD SET, or by accident, as the same `function f` written in two files —
+		// and the map keeps one of them. Whether that matters is exactly whether the two describe the same
+		// SHAPE: agreeing members are filled identically whichever one a call resolves to, and a disagreement
+		// leaves the loser's own parse looking up a position the winner holds no helper at.
+		// `ParamDefaultInfo.matches` carries the property in full; this records the verdict, and the count
+		// beside it is what catches the third shape, a sibling that publishes nothing at all
+		// (`FunctionDeclarationCountMap`).
+		//
+		// ⚠ **THE VERDICT IS NOT MIXED INTO THE HASH, and it does not need to be.** It is DERIVED from the
+		// infos this loop mixes one per declaration, and from `record`'s per-declaration mix — so a program
+		// that gains or loses a sibling declaration moves the hash through the write that made it, which is
+		// `refileContestedFreeFunction`'s "no hash mixing" argument at a second door.
+		if let incumbent = try self.funcParamDefaults.get(name) 'anotherDeclarationOfThisName'
+			self.noteRepeatedDeclaration(self.funcDefaultingDeclarationCounts, name: name)
+			if not incumbent.matches(info) 'twoDeclarationsDisagree'
+				self.disagreeingParamDefaults.insert(name)
+			end 'twoDeclarationsDisagree'
+		end 'anotherDeclarationOfThisName'
 
 		self.funcParamDefaults.upsert(name, value: info)
 		var state = mixBytes(mix(self.hash, value: DeclShapeParamDefault), bytes: name)
@@ -9528,11 +9637,42 @@ export type ProgramSignatures
 		return self.funcParamDefaults.contains(callee)
 	end 'declaresParamDefaults'
 
-	// Did TWO declarations of `name` each publish parameter defaults, so that the registry holds one and
-	// the other cannot find itself? See `CollidingParamDefaultNameSet`.
+	// ⭐⭐ **DO THIS NAME'S DECLARATIONS DISAGREE ABOUT THEIR DEFAULT SHAPE? — the door
+	// `Parser.captureParamDefault` refuses at (W74).** Two ways they can, and the sweep sees each from a
+	// different side:
+	//
+	//   • **Two published shapes differ** — recorded by `recordParamDefaults`, which compares them.
+	//   • **A sibling published NOTHING** — invisible to the defaults registry, because a declaration with no
+	//     default never reaches it. That is what the two counts are for: every declaration is counted by
+	//     `record`, only the defaulting ones by `recordParamDefaults`, and a difference IS the missing
+	//     sibling. See `FunctionDeclarationCountMap` for the measured wrong answer it stops.
+	//
+	// A name with no defaults entry has nothing to disagree about. That is the answer for a declaration whose
+	// defaults the tolerant sweep ABANDONED (a parameter type it could not read), and it is the right one: the
+	// real parse is about to report that declaration with a position of its own.
 	export function paramDefaultsCollide(name ByteArray) returns bool
-		return self.collidingParamDefaults.contains(name)
+		if not self.funcParamDefaults.contains(name) 'thisNameDeclaresNoDefault'
+			return false
+		end 'thisNameDeclaresNoDefault'
+
+		if self.disagreeingParamDefaults.contains(name) 'twoShapes'
+			return true
+		end 'twoShapes'
+
+		return self.declarationCountIn(self.funcDeclarationCounts, name: name) != self.declarationCountIn(self.funcDefaultingDeclarationCounts, name: name)
 	end 'paramDefaultsCollide'
+
+	// Count one more declaration of `name` in `counts`, seeding at the one already folded — see
+	// `FunctionDeclarationCountMap` for why the map holds only names with more than one, and why `1` is the
+	// answer a missing entry gives rather than a fallback. ONE routine for both counts: they are the same
+	// tally taken over two populations, and two spellings of it would be two chances to seed differently.
+	function noteRepeatedDeclaration(counts FunctionDeclarationCountMap, name ByteArray)
+		counts.upsert(name, value: self.declarationCountIn(counts, name: name) + 1)
+	end 'noteRepeatedDeclaration'
+
+	function declarationCountIn(counts FunctionDeclarationCountMap, name ByteArray) returns FunctionDeclarationCount
+		return try counts.get(name) otherwise 1
+	end 'declarationCountIn'
 
 	// Record one function's `throws E` clause AND fold it into the hash — the one write, for `record`'s
 	// reason. A NON-throwing function is not recorded (its default answer is "does not throw"), so the

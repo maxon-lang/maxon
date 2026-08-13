@@ -158,11 +158,15 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 		return
 	end 'noOverloadInThisProgram'
 
+	// ONE column for the whole pass, re-keyed to each function and FILLED only by a call that actually has a
+	// defaulted argument to re-point — see `DefaultArgOrigins`.
+	var defaultArgOrigins = DefaultArgOrigins.create()
 	for func in module.functions 'eachFunc'
+		defaultArgOrigins.beginFunction()
 		for opIdx in module.liveOpIndices(func) 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("resolveOverloadedCalls: opIdx {opIdx} from liveOpIndices is not in module.ops")
 			match maxonOpCalleeKind(op) 'callee'
-				direct then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, op: op, callee: maxonOpCalleeName(op))
+				direct then resolveOneOverloadedCall(project, module: module, func: func, opIndex: opIdx, op: op, callee: maxonOpCalleeName(op), defaultArgOrigins: defaultArgOrigins)
 				functionValue then refuseOverloadedFunctionValue(project, func: func, opIndex: opIdx, name: maxonOpCalleeName(op))
 				noCallee then break 'callee'
 			end 'callee'
@@ -170,9 +174,80 @@ function resolveOverloadedCalls(project Project, module MaxonModule)
 	end 'eachFunc'
 end 'resolveOverloadedCalls'
 
+// ⭐⭐ **WHICH OP DEFINES EACH VALUE OF THE FUNCTION BEING WALKED (W74)** — the one thing
+// `retargetDefaultedArgHelpers` needs and the op stream does not offer: a synthesized default argument is
+// named to the call by its `ValueId`, and re-pointing it means rewriting the op that PRODUCED it.
+//
+// ⚠ **`Project.valueOrigins` ALREADY ANSWERS THIS AND MAY NOT BE USED FOR IT.** That table is
+// whole-program and its `lookup` is a linear scan its own header calls THE COLD PATH — one diagnostic
+// asks it, once. Asked once per re-pointed argument it would be O(program values) per call, which is a
+// quadratic in a test file whose every assertion is an overloaded defaulted call. This is the same
+// question asked per FUNCTION, off the walk that is happening anyway.
+//
+// ⚠ **AND IT IS FILLED LAZILY, so a program that re-points nothing pays nothing.** `beginFunction` only
+// clears a flag; the two columns are built by the first lookup in a function, which happens only for a
+// function containing a call that both resolved to an overload member and omitted a defaulted argument.
+type DefaultArgOrigins
+	// Do the columns below describe the function currently being walked? Cleared as each function is
+	// entered, set by the fill.
+	var filled as bool
+	var definedAt as OpIndexArray
+	var isDefined as BoolArray
+
+	export static function create() returns DefaultArgOrigins
+		return Self{filled: false, definedAt: OpIndexArray.create(), isDefined: BoolArray.create()}
+	end 'create'
+
+	export function beginFunction()
+		self.filled = false
+	end 'beginFunction'
+
+	// The op that defined `value` in `func`. It PANICS for a value no op defines, because the one caller
+	// asks only about a value `Parser.emitDefaultArgValue` synthesized — the result of a nullary helper
+	// `call`, and of nothing else: `retypeOpaqueMethodResult` answers `asItStands` on an empty argument
+	// list, so no reinterpretation is ever wrapped around it and the call's own result IS the argument.
+	export function definingOp(module MaxonModule, func IrFunction, value ValueId) returns OpIndex
+		if not self.filled 'theFirstAskInThisFunction'
+			self.fill(module, func: func)
+		end 'theFirstAskInThisFunction'
+
+		if not (try self.isDefined.get(value) otherwise panic("DefaultArgOrigins.definingOp: value v{value} is past '{String.from(func.name)}'s own value count — every SSA value is minted through Parser.mintValue, which is what sizes this column")) 'noOpDefinesIt'
+			panic("DefaultArgOrigins.definingOp: value v{value} of '{String.from(func.name)}' is defined by no live op — it was read back as a synthesized default ARGUMENT, which `Parser.emitDefaultArgValue` produces as a nullary call's result")
+		end 'noOpDefinesIt'
+
+		return try self.definedAt.get(value) otherwise panic("DefaultArgOrigins.definingOp: definedAt.get OOB at v{value} — the two columns are pushed in lockstep")
+	end 'definingOp'
+
+	function fill(module MaxonModule, func IrFunction)
+		self.definedAt = OpIndexArray.create()
+		self.isDefined = BoolArray.create()
+		for _ in 0 upto func.valueTags.count() 'oneSlotPerValue'
+			// Filler, never read: `isDefined` is what says whether the slot beside it means anything, so
+			// this is the array's zero rather than a "no op" index anything could mistake for one.
+			self.definedAt.push(0)
+			self.isDefined.push(false)
+		end 'oneSlotPerValue'
+
+		for opIdx in module.liveOpIndices(func) 'eachOp'
+			let op = try module.ops.get(opIdx) otherwise panic("DefaultArgOrigins.fill: opIdx {opIdx} from liveOpIndices is not in module.ops")
+			match maxonOpResultValue(op) 'result'
+				value(id) then self.record(id, at: opIdx, func: func)
+				none then break 'result'
+			end 'result'
+		end 'eachOp'
+
+		self.filled = true
+	end 'fill'
+
+	function record(value ValueId, at OpIndex, func IrFunction)
+		try self.definedAt.set(value, value: at) otherwise panic("DefaultArgOrigins.record: op {at} of '{String.from(func.name)}' defines v{value}, which is past the function's own value count")
+		try self.isDefined.set(value, value: true) otherwise panic("DefaultArgOrigins.record: isDefined.set OOB at v{value} — the two columns are pushed in lockstep")
+	end 'record'
+end 'DefaultArgOrigins'
+
 // One call. A callee that names no overload set is left exactly as the parser wrote it, which is every call
 // in the program but the handful this rung is about.
-function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray)
+function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray, defaultArgOrigins DefaultArgOrigins)
 	let members = try project.overloadSets.get(callee) otherwise return
 	let candidates = overloadCandidates(project, members: members)
 	if candidates.count() > 1 and callPassesOpaqueArg(func, op: op) 'cannotDiscriminate'
@@ -181,7 +256,7 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFu
 	end 'cannotDiscriminate'
 
 	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
-		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, callee: callee, member: member)
+		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, callee: callee, member: member, defaultArgOrigins: defaultArgOrigins)
 		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied)
 		// Nothing the call could mean. Left on a DECLARED member deliberately — see this pass's header,
 		// step 5, and `leaveUnmatchedCallOnFirstCandidate` for the one set where "left alone" is not that.
@@ -494,8 +569,13 @@ end 'overloadArgTypeFit'
 // sites are then indistinguishable, so the second claim is refused rather than allowed to overwrite the
 // first. The cure for that residual is to key the site by its call's op index, which is a change to the P1.9
 // record and its pass, not to this one.
-function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray, member ByteArray)
-	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, member: member)
+function bindOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, callee ByteArray, member ByteArray, defaultArgOrigins DefaultArgOrigins)
+	commitOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, member: member, disagreement: theCallsOwnResult)
+	// ⚠ **BEFORE the early return, and deliberately.** A defaulted argument's TYPE is read off a by-name
+	// registry that is last-wins over the whole set, so the member that KEPT the bare name owes the same
+	// reconcile every other member owes — its helper's callee is already right and its result's tag may
+	// still be another member's. See `retargetDefaultedArgHelpers`.
+	retargetDefaultedArgHelpers(project, module: module, func: func, op: op, callee: callee, member: member, origins: defaultArgOrigins)
 	if member.equals(callee) 'firstMemberKeptTheBareName'
 		return
 	end 'firstMemberKeptTheBareName'
@@ -543,13 +623,83 @@ function valueIdArrayContains(values ValueIdArray, value ValueId) returns bool
 	return false
 end 'valueIdArrayContains'
 
+// ⭐⭐ **SUPPLY THE RESOLVED MEMBER'S OWN PARAMETER DEFAULT, IN PLACE OF THE ONE THE PARSE COULD ONLY GUESS
+// (W74).**
+//
+// A short call is FILLED while it is parsed, from a registry keyed by the name the source wrote — so every
+// member of an overload set publishes one entry and one synthesized helper name, and the fill emits a call to
+// it. That is sound for everything the members must agree on (`SignatureIndex.ParamDefaultInfo.matches` lists
+// exactly what, and `Parser.captureParamDefault` refuses a set that does not), and it leaves precisely one
+// thing still owed: the default's own EXPRESSION, which is a function BODY and belongs to one member.
+//
+// So each member emits its helper under its own REGISTRATION name (`Parser.declaredParamDefaultHelperName`),
+// and this re-points the emitted call the moment the member is known. It is the same move
+// `commitOverloadChoice` makes for the call itself, one op earlier in the block — including the RESULT-TYPE
+// reconcile, which is owed for the same reason: the argument's tag was minted from
+// `ProgramSignatures.returnTypeOf`, whose entry for the shared helper name is last-wins across the set. A
+// member whose defaulted parameter is declared at a different type therefore hands the call a value tagged
+// as another member's, and where the two live in different REGISTER FILES that is a wrong answer rather than
+// a wrong diagnostic — which is exactly the quadrant `reconcileOverloadResultType` refuses.
+//
+// A CALLER-LOCATION slot is skipped: nothing was synthesized for it, and the constant the fill emitted is
+// the caller's own line or path — the same value whichever member wins.
+function retargetDefaultedArgHelpers(project Project, module MaxonModule, func IrFunction, op MaxonOp, callee ByteArray, member ByteArray, origins DefaultArgOrigins)
+	match overloadCallArgs(op) 'args'
+		supplied(args, _, defaultSlots) then repointDefaultedArgHelpers(project, module: module, func: func, callee: callee, member: member, args: args, defaultSlots: defaultSlots, origins: origins)
+	end 'args'
+end 'retargetDefaultedArgHelpers'
+
+function repointDefaultedArgHelpers(project Project, module MaxonModule, func IrFunction, callee ByteArray, member ByteArray, args ValueIdArray, defaultSlots ParamCountArray, origins DefaultArgOrigins)
+	if defaultSlots.count() == 0 'thisCallOmittedNothingTheCalleeDefaults'
+		return
+	end 'thisCallOmittedNothingTheCalleeDefaults'
+
+	let shape = match programSignaturesIn(project, asker: "repointDefaultedArgHelpers").defaultsOf(callee) 'defaults'
+		defaults(info) gives info
+		allRequired panic("repointDefaultedArgHelpers: a call to '{String.from(callee)}' carries {defaultSlots.count()} synthesized default argument(s) and the declaration sweep publishes no defaults for that name — `Parser.fillOmittedArgDefaults` reads the same registry to decide what to fill")
+	end 'defaults'
+
+	// The synthesized arguments are the TRAILING run, in `argDefaultSlots` order — `MaxonOp.call`'s contract.
+	let sourceCount = args.count() - defaultSlots.count()
+	for k in 0 upto defaultSlots.count() 'eachSuppliedDefault'
+		let slot = try defaultSlots.get(k) otherwise panic("repointDefaultedArgHelpers: defaultSlots.get OOB at {k} inside its own count()")
+		match shape.producerFor(slot) 'produces'
+			required to callerFile then continue
+			helper then break 'produces'
+		end 'produces'
+
+		let argValue = try args.get(sourceCount + k) otherwise panic("repointDefaultedArgHelpers: args.get OOB at {sourceCount + k} — the synthesized defaults are the trailing run of args")
+		let helperOpIndex = origins.definingOp(module, func: func, value: argValue)
+		let helperOp = try module.ops.get(helperOpIndex) otherwise panic("repointDefaultedArgHelpers: ops.get OOB at {helperOpIndex} — the index came from this function's own live ops")
+		commitOverloadChoice(project, module: module, func: func, opIndex: helperOpIndex, op: helperOp, member: paramDefaultHelperName(member, paramIndex: slot), disagreement: OverloadDisagreementSubject.aDefaultedArgument(callee, slot: slot))
+	end 'eachSuppliedDefault'
+end 'repointDefaultedArgHelpers'
+
 // Bind the call to the member it chose: rewrite the op's callee IN PLACE, at the same `module.ops` index —
 // `block.opRefs` indexes that array, so appending a replacement instead would orphan every reference to it —
 // and then reconcile the RESULT's type.
-function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray)
+//
+// `disagreement` names what the reconcile is ABOUT, because this routine now serves two ops of one call: the
+// call itself, and the synthesized helper behind an argument it omitted. The two need one rule and two
+// sentences — see `OverloadDisagreementSubject`.
+function commitOverloadChoice(project Project, module MaxonModule, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
 	try module.ops.set(opIndex, value: withRewrittenCallee(op, callee: member)) otherwise panic("commitOverloadChoice: ops.set({opIndex}) OOB — the index came from liveOpIndices")
-	reconcileOverloadResultType(project, func: func, opIndex: opIndex, op: op, member: member)
+	reconcileOverloadResultType(project, func: func, opIndex: opIndex, op: op, member: member, disagreement: disagreement)
 end 'commitOverloadChoice'
+
+// ⭐ **WHICH VALUE OF A RESOLVED CALL THE RETURN-TYPE RECONCILE IS ABOUT** — the call's own result, or the
+// nullary helper standing behind an argument the call omitted (W74). One RULE (`reconcileOverloadResultType`)
+// and two sentences: the second names a parameter position rather than a return type, and a reader handed the
+// first about a symbol no source wrote — `__paramDefault#Expect.equal#2` — would be reading about a name
+// they cannot find and a construct they did not write.
+union OverloadDisagreementSubject
+	theCallsResult
+	aDefaultedArgument(callee ByteArray, slot ParamCount)
+end 'OverloadDisagreementSubject'
+
+// The `theCallsResult` answer, shared: a payload-free union case is still a heap object in Maxon, and
+// `commitOverloadChoice` runs at every resolved overloaded call in the program.
+let theCallsOwnResult = OverloadDisagreementSubject.theCallsResult
 
 // ⭐⭐ **THE ONE THING SELECTING LATE COSTS: the parser has ALREADY TYPED the call's result, and it typed it
 // from a registry that cannot tell overloads apart.**
@@ -581,18 +731,18 @@ end 'commitOverloadChoice'
 // is a false diagnostic, not a wrong answer, and it cannot arise for a set whose members agree on their
 // return type — which no `/specs` case violates except through labels, where the resolver is exact. The real
 // cure is per-member return types in the declaration sweep.
-function reconcileOverloadResultType(project Project, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray)
+function reconcileOverloadResultType(project Project, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
 	match overloadResultValue(op) 'result'
-		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, result: result, member: member)
+		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, result: result, member: member, disagreement: disagreement)
 		definesNothing then break 'result'
 	end 'result'
 end 'reconcileOverloadResultType'
 
-function reconcileOverloadResultTag(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray)
+function reconcileOverloadResultTag(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
 	let declared = try project.funcReturnTypes.get(member) otherwise return
 	match declared 'declared'
-		value(returnType) then requireOverloadResultTagAgrees(project, func: func, opIndex: opIndex, result: result, member: member, declared: returnType)
-		void then requireOverloadVoidResult(project, func: func, opIndex: opIndex, result: result, member: member)
+		value(returnType) then requireOverloadResultTagAgrees(project, func: func, opIndex: opIndex, result: result, member: member, declared: returnType, disagreement: disagreement)
+		void then requireOverloadVoidResult(project, func: func, opIndex: opIndex, result: result, member: member, disagreement: disagreement)
 	end 'declared'
 end 'reconcileOverloadResultTag'
 
@@ -614,16 +764,16 @@ end 'reconcileOverloadResultTag'
 //
 // A `void`-tagged result is the agreement, and it is the only one: no repair is possible in either
 // direction, because the divergence is over whether there is a value AT ALL.
-function requireOverloadVoidResult(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray)
+function requireOverloadVoidResult(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, disagreement OverloadDisagreementSubject)
 	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadVoidResult: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
 	if currentTag == ValueTypeTag.void 'alreadyRight'
 		return
 	end 'alreadyRight'
 
-	reportOverloadReturnDisagreement(project, func: func, opIndex: opIndex, member: member, current: currentTag, declared: ValueTypeTag.void)
+	reportOverloadReturnDisagreement(project, func: func, opIndex: opIndex, member: member, current: currentTag, declared: ValueTypeTag.void, disagreement: disagreement)
 end 'requireOverloadVoidResult'
 
-function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, declared MaxonType)
+function requireOverloadResultTagAgrees(project Project, func IrFunction, opIndex OpIndex, result ValueId, member ByteArray, declared MaxonType, disagreement OverloadDisagreementSubject)
 	let currentTag = try func.valueTags.get(result) otherwise panic("requireOverloadResultTagAgrees: value v{result} of '{String.from(func.name)}' has no recorded type — every SSA value is minted through Parser.mintValue")
 	let declaredTag = maxonTypeTag(declared)
 	if overloadResultTagAgrees(currentTag, declared: declaredTag) 'alreadyRight'
@@ -631,7 +781,7 @@ function requireOverloadResultTagAgrees(project Project, func IrFunction, opInde
 	end 'alreadyRight'
 
 	if not tagIsPlainOverloadScalar(currentTag) or not tagIsPlainOverloadScalar(declaredTag) 'notRepairable'
-		reportOverloadReturnDisagreement(project, func: func, opIndex: opIndex, member: member, current: currentTag, declared: declaredTag)
+		reportOverloadReturnDisagreement(project, func: func, opIndex: opIndex, member: member, current: currentTag, declared: declaredTag, disagreement: disagreement)
 		return
 	end 'notRepairable'
 
@@ -642,9 +792,16 @@ end 'requireOverloadResultTagAgrees'
 // ONE sentence for every quadrant of the disagreement — value-vs-value that no retype can repair, and
 // value-vs-void which nothing can. Spelling it in each arm is how the two would drift into two accounts of
 // one rule, and the void arm's own history is that a second account of it was simply MISSING.
-function reportOverloadReturnDisagreement(project Project, func IrFunction, opIndex OpIndex, member ByteArray, current ValueTypeTag, declared ValueTypeTag)
+function reportOverloadReturnDisagreement(project Project, func IrFunction, opIndex OpIndex, member ByteArray, current ValueTypeTag, declared ValueTypeTag, disagreement OverloadDisagreementSubject)
 	let range = project.opRanges.get(opIndex)
-	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "the overloads of '{String.from(member)}' do not agree on their return type ('{typeTagName(current)}' and '{typeTagName(declared)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type", line: range.line, column: range.column, filePath: func.sourceFilePath)
+	let message = match disagreement 'about'
+		theCallsResult gives "the overloads of '{String.from(member)}' do not agree on their return type ('{typeTagName(current)}' and '{typeTagName(declared)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type"
+		// The op being reconciled is the synthesized helper behind an omitted argument, so `member` is a
+		// symbol no source wrote. The sentence names the PARAMETER POSITION and the overloaded name the
+		// author did write, and asks for the one thing that repairs it.
+		aDefaultedArgument(callee, slot) gives "the overloads of '{bareMethodName(callee)}' do not agree on the TYPE of parameter {slot}, which this call omitted and the compiler supplied from that parameter's default ('{typeTagName(current)}' and '{typeTagName(declared)}'). A defaulted argument's type is fixed while the call is parsed, from a whole-program index that records one answer per NAME, and the overload is resolved a whole pass later — so only a difference between plain scalars can be corrected by then. Declare that parameter at the same type in every overload"
+	end 'about'
+	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: message, line: range.line, column: range.column, filePath: func.sourceFilePath)
 end 'reportOverloadReturnDisagreement'
 
 // ⭐ **IS THE PARSER'S TAG STILL RIGHT FOR THIS MEMBER'S DECLARED RETURN? — asked so that RESOLUTION cannot
