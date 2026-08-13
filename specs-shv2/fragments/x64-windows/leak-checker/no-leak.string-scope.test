@@ -1,0 +1,47 @@
+// Test: no-leak.string-scope
+function make_string()
+	let s = "this string is long enough to require heap allocation for sure and even more text"
+	print(s)
+end 'make_string'
+
+function main() returns ExitCode
+	make_string()
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+func @make_string {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect print
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect make_string
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
