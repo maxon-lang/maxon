@@ -137,7 +137,7 @@ via the `__Managed*Error` precedent (`Project.declaredBuiltinErrorEnum`).
 | `Json.maxon` | 1080 | ~~`E2015 :77:37`~~ -> **`E2015 :281:3`** | ✅ **THE FIELD-DEFAULT BLOCKER IS GONE — `S2f` closed it 2026-08-05.** Re-probed on `ba7f8271f`: this module now advances 204 lines to a **field access through `doc`, a struct-typed FIELD of the enclosing type**. A different mechanism, unowned by any row. |
 | `Set.maxon` | 396 | ~~`E2015 :19:33`~~ -> ~~`E3076 :43:15`~~ -> **`E2015 :55:11`** | ✅ TWO blockers cleared: the field default (`S2f`) and `ElementArray{}` (`S2i`). Now stops at **`insert` reading `sizeof` of the type parameter** — a generics rung, not a stdlib one. |
 | `List.maxon` | 175 | `E3086 :21:10` | field `chain` uninitialized by the literal and has no default — the same mechanism, one door over |
-| `Vector.maxon` | 50 | `E3086 :19:10` | field `managed` uninitialized by the literal |
+| `Vector.maxon` | 50 | ~~`E3086 :19:10`~~ → **`E3001` only** | ✅ **CLEARED, and the module type-checks clean** (`W86`, re-measured 2026-08-13). ⛔ **The real blocker was never a field default: it is the SIZE.** `Self` inside `type Vector uses Element` states no count, while every vector VALUE has one (`GenericInstanceRegistry.fixedSizes`, part of the intern key), so a corpus method's `self` can never match its receiver — `E3005 expected 'Vector_Int', got 'Vec3'`. See `W86`. |
 | `Testing.maxon` | 343 | `E2051 :34:13` | `__TestReport` is `__`-reserved — needs the exemption `Builtins.maxon` has via `Queries.CompilerInternalDeclaringModule` |
 
 ⭐ **Four of these are ONE mechanism**: a **non-literal field default** (`Json`, `Set`) and its dual, a
@@ -203,7 +203,7 @@ All 34 unlisted modules re-probed after `S2f` (field defaults may be an arbitrar
 | `Json.maxon` | `E2015 :77:37` field default | **`E2015 :281:3`** — struct-typed field access through `doc` |
 | `Set.maxon` | `E2015 :19:33` field default | **`E3076 :43:15`** — `ElementArray{}`, see `S2i` |
 | `Ascii.maxon` | `E2028 :10:4` pattern type | **`E3001` only** (BATCH23) |
-| `List.maxon` · `Vector.maxon` | `E3086` | **unchanged** — they need v1's THIRD arm (a managed-builtin init for an omitted builtin-typed field), which `S2f` deliberately did not build |
+| `List.maxon` · `Vector.maxon` | `E3086` | ~~**unchanged** — they need v1's THIRD arm (a managed-builtin init for an omitted builtin-typed field), which `S2f` deliberately did not build~~ ⛔ **THAT PREDICTION IS FALSE FOR `Vector`, MEASURED 2026-08-13 (`W86`)** — the module now probes **`E3001` alone**, so whatever cleared the field-default family reached it and no "third arm" is owed. The prediction named a CURE from a symptom, which is this file's own standing warning. `List.maxon` still reads `E3086 :21:10` and is **unre-diagnosed** — do not assume it shares `Vector`'s story either. |
 
 ⚠ **RE-PROBE BEFORE TRUSTING THE LIST BELOW — it is dated 2026-08-05 and four rungs have landed since.** Known movement: `Ascii` and `Log` are now LISTED, not merely ready; `Sha256` compiles and runs (above); `Json` and `Set` advanced past their field-default blocker via `S2f`; `Set` then advanced again via `S2i`. The probe is one command per file and takes seconds — see "Reproducing this table".
 
