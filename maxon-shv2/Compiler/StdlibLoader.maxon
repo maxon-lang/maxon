@@ -1662,13 +1662,27 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     still answers **2**, and the emitted program is **byte-identical at 5,225 bytes both ways**. Then
 	//     the stronger form: with an UNDEFINED CALL injected into that same `count()` body, a program that
 	//     calls `s.count()` **compiles clean, exit 0, prints 1** — so the whitelisted module is not merely
-	//     out-voted at the use site, it is never analyzed at all. **The entry is inert.**
+	//     out-voted at the use site, its BODIES are never analyzed. **The entry buys nothing a cone entry
+	//     is for.**
+	//
+	//     ⚠ **IT IS PARSED, THOUGH, AND "never analyzed at all" WAS TOO STRONG — REVIEW RE-MEASURED IT,
+	//     BATCH36.** Reproduced independently (entry live, undefined call in `Set.count()`, program prints
+	//     `2` and exits 0); but with SYNTAX GARBAGE at `Set.maxon:3` the same program fails
+	//     `E2001 … Expected function declaration, got '@'`. So the file is read and parsed and only its
+	//     semantics are dead. A parse gate is not a compile cone, so the withdrawal stands — but a later
+	//     reader must not infer from this note that the file is untouched by a build.
+	//
+	//     ⛔ **AND `Map` IS NOT THE PARALLEL THIS PARAGRAPH ONCE CLAIMED — MEASURED, same review.** The
+	//     identical injection in LISTED `stdlib/Map.maxon`'s `count()` body answers
+	//     `E3004 … 'NoSuchType.definitelyUndefined'` at `stdlib/Map.maxon:170`, and a `Map.insert` call
+	//     answers `E3057` naming the module's own throwing signature. Map's module is LIVE; Set's is not.
+	//     Whatever still calls `Map` synthesized, it is not the same relationship, so `W52`'s row is not
+	//     evidence about `Set` and this one is not evidence about `Map`.
 	//
 	//     ⇒ **This is `W8`'s hazard, and the whitelist line is not what fixes it.** Listing waits on the
-	//     synthesized `Set` being retired in favour of the declaration — the same convergence `W52` records
-	//     for `Map`, which `W43` LISTED and which is still synthesized today. A whitelist entry that
-	//     changes no emitted byte and survives its own module being sabotaged is not a cone entry; it is a
-	//     green light over a module nothing reads.
+	//     synthesized `Set` being retired in favour of the declaration. A whitelist entry that changes no
+	//     emitted byte and survives its own module's BODIES being sabotaged is not a cone entry; it is a
+	//     green light over a module nothing compiles.
 
 	return listed
 end 'whitelistedStdlibModules'

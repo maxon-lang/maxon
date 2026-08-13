@@ -4215,20 +4215,15 @@ let BuiltinsFloatToBitsName = b"__Builtins.floatToBits"
 // the builtins that are permanently compiler-owned because each IS a machine instruction and will never
 // acquire a declaration to take labels from. These two acquired one.
 //
-// ⚠ **shv2 REQUIRES the label; the bootstrap merely ACCEPTS it.** Both compile the corpus spelling; only
-// shv2 refuses the unlabelled one (E2053, its universal rule). The asymmetry is the safe direction — a
-// compiler refusing MORE than the oracle cannot break the differential gate — and it is the same
-// asymmetry the bootstrap's own `MissingArgLabel` header already records for every other call door.
+// ⚠ **BOTH COMPILERS NOW REQUIRE THE LABEL, and they differ only in the CODE — MEASURED after W64 landed
+// in both, on `ucdByteAt("__ucd_bmp", 65)`: shv2 answers E2053 and the bootstrap E3005, at the identical
+// position.** (An earlier draft of this header said the bootstrap merely ACCEPTED the unlabelled spelling.
+// It did, right up until the same commit gave it a declaration: `ParseUcdTableLoadArgs` raises
+// `MissingArgLabel` for the missing label exactly as every other bootstrap call door does.) The surviving
+// difference is the pre-existing E3005/E2053 parity gap that `MissingArgLabel`'s own header names as a
+// separate rung, and it is not specific to these two intrinsics.
 let BuiltinsUcdByteAtName = b"__Builtins.ucdByteAt"
 let BuiltinsUcdI64AtName = b"__Builtins.ucdI64At"
-
-// The DECLARED name of each intrinsic's second parameter — the authority a `name:` label is checked
-// against, and the only spelling of it. `offset` counts BYTES into the directly-indexed BMP table;
-// `index` counts 8-byte ENTRIES into the sorted supplementary table, and the two words say which.
-// Both reference compilers use these same two names (v1 registers them as real signatures,
-// `LowerMaxonToStd.maxon:1110-1111`; the bootstrap's rows carry them since W64).
-let UcdByteAtIndexParamName = b"offset"
-let UcdI64AtIndexParamName = b"index"
 
 // `floatToBits(x)` takes exactly one FLOAT and `bitsToFloat(b)` exactly one INTEGER. Stated here beside
 // the intrinsics for `CommandLineArgArity`'s reason — an intrinsic has no signature for SemanticCheck's
@@ -57880,12 +57875,17 @@ export type Parser
 		//
 		// A receiver cannot have been prepended: `__Builtins` is a compiler TYPE, so both these callees
 		// arrive through `parseQualifiedCall` with `ReceiverArg.none`.
+		//
+		// ⚠ Each arm states WHICH TABLE and nothing else: the label it must be given, the leaf it lowers to
+		// and its second parameter's name are all derived from that one value (`ucdTableStemOf` and its two
+		// siblings). Passing the four separately let a call site pair an intrinsic with the other table's
+		// stem — a load of the wrong blob at the wrong stride, out of a build with no error in it.
 		if callee.equals(BuiltinsUcdByteAtName) 'ucdByteAt'
-			return try self.parseUcdTableLoad(func, callee: callee, tableStem: UcdBmpStem, runtimeName: UcdBmpAtName, indexParamName: UcdByteAtIndexParamName, anchor: anchor)
+			return try self.parseUcdTableLoad(func, callee: callee, load: UcdTableStride.byteIndexed, anchor: anchor)
 		end 'ucdByteAt'
 
 		if callee.equals(BuiltinsUcdI64AtName) 'ucdI64At'
-			return try self.parseUcdTableLoad(func, callee: callee, tableStem: UcdSuppStem, runtimeName: UcdSuppAtName, indexParamName: UcdI64AtIndexParamName, anchor: anchor)
+			return try self.parseUcdTableLoad(func, callee: callee, load: UcdTableStride.packedEntry, anchor: anchor)
 		end 'ucdI64At'
 
 		var args = ValueIdArray.create()
@@ -58471,10 +58471,16 @@ export type Parser
 	end 'emitBuiltinsStreamWrite'
 
 	// ⭐⭐ **`__Builtins.ucdByteAt("__ucd_bmp", offset: cp)` — A RAW READ OF A CHECKED-IN UNICODE TABLE
-	// (W64).** Serves both intrinsics, differing only in the table, the leaf and the parameter NAME, which
-	// is what makes the two impossible to enforce differently: the sibling door is where this repo's
-	// recorded scar lives (a rule applied to the one name that forced the question and left standing one
-	// name over).
+	// (W64).** Serves both intrinsics, differing only in `load` — the TABLE — which is what makes the two
+	// impossible to enforce differently: the sibling door is where this repo's recorded scar lives (a rule
+	// applied to the one name that forced the question and left standing one name over).
+	//
+	// ⚠ **THE TABLE IS THE ONLY THING A CALLER STATES.** The label this demands, the leaf it emits a call
+	// to and the parameter name it checks are DERIVED from `load` (`ucdTableStemOf` / `ucdRuntimeNameOf` /
+	// `ucdIndexParamNameOf`), because all three are one fact about one table. Threaded as separate
+	// arguments they were three chances for a call site to demand one table's label and read the other's
+	// bytes — a wrong ANSWER with nothing to catch it, since neither the label check nor the emitted call
+	// can see what the other was handed.
 	//
 	// ⭐⭐ **IT PARSES ITS OWN ARGUMENTS, AND ONLY THE LABEL IS THE REASON.** The label selects a blob the
 	// compiler LINKS, so it has to be known while the call is parsed; taken off its token, a computed
@@ -58494,7 +58500,7 @@ export type Parser
 	// arm records — a ranged alias carries the `named` tag until TypeResolution collapses it, and an index
 	// is exactly the sort of value a corpus spells with one (`stdlib/helpers/string/unicodeCategory.maxon`
 	// hands over a `Codepoint`).
-	function parseUcdTableLoad(func IrFunction, callee ByteArray, tableStem String, runtimeName ByteArray, indexParamName ByteArray, anchor Token) returns ValueId throws ParseError
+	function parseUcdTableLoad(func IrFunction, callee ByteArray, load UcdTableStride, anchor Token) returns ValueId throws ParseError
 		// The table label is the FIRST argument and is therefore positional — the language's rule for the
 		// first argument of every call, inherited rather than restated. Asked BEFORE the literal is
 		// consumed so a labelled one earns E2052 instead of "expected a string literal".
@@ -58502,7 +58508,7 @@ export type Parser
 
 		let labelTok = try self.consume(TokenKind.stringLiteral)
 		let label = try self.decodedStringLiteralBytes(labelTok)
-		let table = ucdLabel(tableStem)
+		let table = ucdLabel(ucdTableStemOf(load))
 		if not label.equals(table.toByteArray()) 'notThisIntrinsicsTable'
 			throw ParseError.ucdTableLabelUnknown(String.from(callee), table: table, label: String.from(label), line: labelTok.line, column: labelTok.column)
 		end 'notThisIntrinsicsTable'
@@ -58514,7 +58520,7 @@ export type Parser
 
 		let indexTok = self.current()
 		let argLabel = try self.consumeArgLabel(1 as ParamCount, rule: ArgLabelRule.ordinary)
-		if not argLabel.equals(indexParamName) 'notTheDeclaredParameter'
+		if not argLabel.equals(ucdIndexParamNameOf(load)) 'notTheDeclaredParameter'
 			throw ParseError.builtinUnknownArgLabel(String.from(callee), label: String.from(argLabel), line: indexTok.line, column: indexTok.column)
 		end 'notTheDeclaredParameter'
 
@@ -58525,7 +58531,7 @@ export type Parser
 
 		try self.consume(TokenKind.rightParen)
 
-		return self.emitRuntimeCall(runtimeName, args: singletonArgs(index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
+		return self.emitRuntimeCall(ucdRuntimeNameOf(load), args: singletonArgs(index), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(anchor))
 	end 'parseUcdTableLoad'
 
 	// ⭐⭐⭐ **`__Builtins.writeStdout(s.addressableBytes())` BECOMES `__write_stdout(s)` — ONE OP REWRITTEN, ONE
@@ -61077,14 +61083,9 @@ export type Parser
 	end 'fieldAssignsAt'
 
 	// **The token shape of a STATIC MEMBER STORE (W65)** — `<Type> . <member> =`, where the base names a
-	// declared type rather than a value and the qualified name is a binding the program declared.
-	//
-	// ⭐ **A VALUE IN SCOPE OUTRANKS THE TYPE READING, and that test is why this is not merely a name probe.**
-	// A local called `Counter` shadows `Counter.` exactly as a local `OFFSET` shadows a top-level constant of
-	// that name — the rule `baseNamesAValueInScope` carries — so `Counter.count = 1` with such a local in
-	// scope is a FIELD store on that local and must fall through to `fieldAssignsAt` below. `Self` is
-	// excluded from the shadowing test by that same function, which is what makes `Self.count = 1` inside a
-	// static method reach here.
+	// declared type rather than a value and the qualified name is a binding the program declared. The
+	// shadowing rule and the resolution are `staticMemberBaseAt`'s, stated there once for this door and its
+	// call-shaped twin; what is decided HERE is only the token that must follow the pair.
 	//
 	// The `=` is what separates a store from a read: `Counter.count + 1` has no trailing `=` and belongs to
 	// the expression arm, and `Counter.count == 1` lexes its operator as one `equalsEquals` token. It is

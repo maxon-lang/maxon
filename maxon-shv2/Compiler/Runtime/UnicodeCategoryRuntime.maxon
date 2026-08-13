@@ -169,22 +169,61 @@ end 'buildUcdCategory'
 // the compiler's own plumbing and the index is the caller's obligation; a check here would sit on the
 // hot path of every `trim()` and would still be a divergence from the oracle this compiler is graded on.
 function buildUcdTableLoads(module StdModule)
-	buildUcdTableLoad(module, name: UcdBmpAtName, load: UcdTableStride.byteIndexed)
-	buildUcdTableLoad(module, name: UcdSuppAtName, load: UcdTableStride.packedEntry)
+	buildUcdTableLoad(module, load: UcdTableStride.byteIndexed)
+	buildUcdTableLoad(module, load: UcdTableStride.packedEntry)
 end 'buildUcdTableLoads'
 
 // Which table a raw load reads and how it strides — ONE fact, because the two are inseparable: the BMP
 // table holds one byte per codepoint and the supplementary table holds 8-byte packed entries, so a stride
 // names a table and a table names a stride. It is what makes the pairing check in the parser (E2070) a
 // statement about this enum rather than a second rule about labels.
-enum UcdTableStride
+export enum UcdTableStride
 	byteIndexed
 	packedEntry
 end 'UcdTableStride'
 
-// One raw-load leaf: one parameter, one table read, one `ret`.
-function buildUcdTableLoad(module StdModule, name ByteArray, load UcdTableStride)
-	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+// ⭐⭐ **THE THREE DERIVED HALVES OF ONE TABLE, KEYED BY THE STRIDE THAT NAMES IT — so a caller states
+// WHICH TABLE and nothing else.** The stem the `.rdata` label and the checked-in file both come from, the
+// runtime leaf a `__Builtins.ucd*` call lowers to, and the DECLARED name of that intrinsic's second
+// parameter are one fact per table, and they were four independent arguments at the parser's two call
+// sites: `parseUcdTableLoad(tableStem: UcdBmpStem, runtimeName: UcdBmpAtName, indexParamName: …)`. Nothing
+// made those four agree, and disagreeing is not a compile error — a call site pairing `ucdByteAt` with the
+// SUPPLEMENTARY stem would demand the label `__ucd_supp` and then emit a call that reads the BMP blob one
+// byte at a time. That is a WRONG ANSWER out of a green build, which is exactly the shape the bootstrap's
+// `UcdTableLoadIntrinsic` row exists to make impossible on its side.
+export function ucdTableStemOf(load UcdTableStride) returns String
+	return match load 'stride'
+		byteIndexed gives UcdBmpStem
+		packedEntry gives UcdSuppStem
+	end 'stride'
+end 'ucdTableStemOf'
+
+export function ucdRuntimeNameOf(load UcdTableStride) returns ByteArray
+	return match load 'stride'
+		byteIndexed gives UcdBmpAtName
+		packedEntry gives UcdSuppAtName
+	end 'stride'
+end 'ucdRuntimeNameOf'
+
+// `offset` counts BYTES into the directly-indexed BMP table; `index` counts 8-byte ENTRIES into the sorted
+// supplementary table — so the word IS the stride, which is why the name lives here beside it rather than
+// beside the callee spellings in the parser. Both reference compilers use these two names (v1 registers
+// them as real signatures, `LowerMaxonToStd.maxon:1110-1111`; the bootstrap's rows carry them since W64).
+export function ucdIndexParamNameOf(load UcdTableStride) returns ByteArray
+	return match load 'stride'
+		byteIndexed gives UcdByteAtIndexParamName
+		packedEntry gives UcdI64AtIndexParamName
+	end 'stride'
+end 'ucdIndexParamNameOf'
+
+let UcdByteAtIndexParamName = b"offset"
+let UcdI64AtIndexParamName = b"index"
+
+// One raw-load leaf: one parameter, one table read, one `ret`. Its NAME is derived from the stride like
+// every other half of the table, so the leaf this builds and the leaf the parser emits a call to are one
+// spelling rather than two that happen to match.
+function buildUcdTableLoad(module StdModule, load UcdTableStride)
+	var func = IrFunction.createFromStd(ucdRuntimeNameOf(load), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -193,7 +232,7 @@ function buildUcdTableLoad(module StdModule, name ByteArray, load UcdTableStride
 
 	let value = match load 'stride'
 		byteIndexed gives emitBmpCategoryByte(module, block: entry, index: index, ids: ids)
-		packedEntry gives emitSuppEntryAt(module, block: entry, base: emitRdataAddr(module, block: entry, label: ucdLabel(UcdSuppStem), ids: ids), index: index, ids: ids)
+		packedEntry gives emitSuppEntryAt(module, block: entry, base: emitRdataAddr(module, block: entry, label: ucdLabel(ucdTableStemOf(load)), ids: ids), index: index, ids: ids)
 	end 'stride'
 
 	module.setTerminator(entry, op: StdOp.ret(value))
