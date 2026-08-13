@@ -2754,12 +2754,29 @@ let CallerFileDefaultName = b"__file__"
 // of this feature (the default classifier, the two E2060 doors, and the declaration refusal that keeps an
 // exempt stdlib module from taking either name). Written once so "is this a caller-location keyword" cannot
 // be answered two ways.
-// ⭐ **THE "NOWHERE ELSE" RULE, WORDED ONCE (W72).** Three positions raise it and all three raise it from
-// here, because they are one rule seen from three sides: an ordinary EXPRESSION evaluating the name
-// (`emitFunctionRef`), a struct FIELD default capturing it (`readStructFieldInto`), and a DECLARATION in the
-// one kind of file that may otherwise take a `__` name (`requireUnreservedName`) — the spec's "Both names
-// are reserved words, so no program can declare or shadow them", which W72's own door (b) would have opened
-// a hole in.
+// ⭐ **E2060, WORDED ONCE (W72).** Three positions raise it and all three raise it from here, because they
+// are one rule seen from three sides: an ordinary EXPRESSION evaluating the name (`emitFunctionRef`), a
+// struct FIELD default capturing it (`readStructFieldInto`), and a DECLARATION in the one kind of file that
+// may otherwise take a `__` name (`requireUnreservedName`) — the spec's "Both names are reserved words, so
+// no program can declare or shadow them", which W72's own door (b) would have opened a hole in.
+//
+// ⚠⚠ **THESE THREE ARE THE POSITIONS THAT RAISE *E2060*, AND NOT THE WHOLE OF "NOWHERE ELSE" — which this
+// header claimed to be until the W72 review MEASURED the rest.** `emitFunctionRef` is the last-resort door
+// for a bare name READ, so it is reached by the identifier forms that resolve to a value and by no other:
+// the CALL form (`__line__()`), the DOTTED form (`__file__.length()`) and the STRUCT-LITERAL form
+// (`__file__{}`) each split off in `parsePrimary` one token earlier and are refused by the door they land
+// in instead — E3004 `unknownCompilerIntrinsic` for the first two, E3076 for the third; a bare statement
+// call is E3004 and a TOP-LEVEL `let here = __line__` is E2004. **Every one of them IS refused** (swept
+// 2026-08-13: no position outside a parameter default compiles), so the LANGUAGE rule holds; what varies is
+// which code the refusal wears.
+//
+// ⇒ **That is a consequence of the deliberate choice above not to lex these as a token KIND**, and the
+// bootstrap does not have it because it does: it answers E2060 for the call, dotted and struct-literal
+// forms, and is itself inconsistent at statement position (E2001). Bringing the codes into line means
+// asking this question where `parsePrimary` splits the four identifier forms, which is the path every
+// identifier in every program takes — a hot-path cost, and its own decision. NOT attempted at W72; the
+// three spec-pinned positions (`error.line-outside-default`, `error.file-outside-default`,
+// `error.field-default`) match the oracle byte for byte.
 //
 // `name` is passed rather than read off `at` for `requireUnreservedName`'s reason, which applies here
 // unchanged: an IMPLICITLY BACKED enum case DECLARES the DECODED content while its token's text is the
@@ -15575,9 +15592,18 @@ export type Parser
 
 		// ⭐ **THE CAPTURE-POSITION HALF OF E2060 (W72).** A field default shares the `= <expr>` spelling with
 		// a parameter default and is a different thing: it expands at a struct LITERAL, which is not a call
-		// and has no caller to name. Raised HERE rather than left to the helper body's own expression check
-		// because a field default no `Self{…}` ever omits is never expanded at all, so the misuse would
-		// otherwise go undiagnosed in exactly the program that wrote it and never used it.
+		// and has no caller to name.
+		//
+		// ⚠ **IT IS A FIRST-REPORT GUARANTEE, NOT THE ONLY DIAGNOSIS — and this comment used to claim it was
+		// (W72 review).** The claim was that a field default no `Self{…}` ever omits "is never expanded at
+		// all", so the misuse would go undiagnosed without this raise. MEASURED false on this tree: an
+		// annotated default is not `defaultRegionIsLiteral`, so it is CAPTURED as a helper, and `parseModule`
+		// DRAINS every captured helper whether or not any literal omits the field — the body's own
+		// `emitFunctionRef` door then reports the same E2060 at the same token. The probe that separates the
+		// two is `= 1 + __line__`, where `self.current()` is `1` and this raise cannot fire: it is still
+		// refused, at the `__line__` token. What this raise actually buys is that the whole-region shapes and
+		// the bare-keyword shape report identically, from one wording, before any drain ordering can vary
+		// which of them speaks first.
 		let annotatedDefaultTok = self.current()
 		try requireNotACallerLocationDefault(annotatedDefaultTok.value, at: annotatedDefaultTok)
 
@@ -57492,12 +57518,18 @@ export type Parser
 	end 'requireNameIsUsableAsFunctionValue'
 
 	function emitFunctionRef(tok Token) returns ValueId throws ParseError
-		// ⭐ **THE EXPRESSION-POSITION HALF OF E2060 (W72).** This is the LAST-RESORT door for a bare name —
-		// not a local, not a captured binding, not a global, not a constant — so a `__line__` written in an
-		// ordinary expression arrives here and nowhere earlier, and a name that DID bind is never asked.
-		// Placed here rather than at the top of the primary parse for exactly that reason: the check then
-		// costs nothing on the path every identifier in every program takes, and runs only on a program
+		// ⭐ **THE EXPRESSION-POSITION HALF OF E2060 (W72).** This is the LAST-RESORT door for a bare name
+		// READ — not a local, not a captured binding, not a global, not a constant — so a `__line__` whose
+		// form is a plain identifier READ arrives here and nowhere earlier, and a name that DID bind is never
+		// asked. Placed here rather than at the top of the primary parse for exactly that reason: the check
+		// then costs nothing on the path every identifier in every program takes, and runs only on a program
 		// already destined for a diagnostic.
+		//
+		// ⚠ **"A BARE NAME READ" IS NARROWER THAN "AN ORDINARY EXPRESSION", WHICH THIS COMMENT USED TO SAY
+		// (W72 review).** `parsePrimary` splits the four forms an identifier can open one token before this
+		// door, so the CALL, DOTTED and STRUCT-LITERAL forms never reach it and are refused under their own
+		// codes. See `requireNotACallerLocationDefault`'s header for the measured table and for why the codes
+		// are not brought into line here.
 		try requireNotACallerLocationDefault(tok.value, at: tok)
 		try self.requireNameIsUsableAsFunctionValue(tok)
 
