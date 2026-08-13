@@ -561,3 +561,56 @@ nothing to do with the injection and everything to do with the copy's PATH. ⇒ 
 ⇒ **the remaining bring-up is ONE listing, ONE parser feature, and NINE modules behind four workstreams
 that only direct work moves.** The optimistic reading — *"four ordinary gaps will keep falling out"* —
 survives for exactly one module.
+
+---
+
+## ⛔⛔ AND THE LAST "ORDINARY GAP" IS NOT ONE EITHER — MEASURED 2026-08-13, THIRD SWEEP, AFTER `W81`
+
+The section above corrected three of the four "ordinary compiler gaps" and let the fourth stand:
+*"`PrimitiveExtensions` … ✅ **CORRECT — the only one**"*. **That was wrong too, and it was wrong in the
+way this file keeps warning about: I classified it from its FIRST DIAGNOSTIC and never asked the
+synthesized-twin question.**
+
+`stdlib/PrimitiveExtensions.maxon` is three `extension <primitive> implements …` blocks — `int` (`:2`),
+`float` (`:30`), `bool` (`:75`) — declaring `Hashable`, `Equatable`, `Comparable`, `Stringable`,
+`Cloneable`. Its first blocker is real (`E2010 :2:11`, `extension int` does not parse). **Behind it is a
+synthesized twin, and the compiler says so in its own source:**
+
+> `Compiler/ConformanceCheck.maxon:780` — *"An intrinsic builtin-type conformance (`int`/`String`
+> implements `Hashable`/`Equatable`, **synthesized natively**) ORed with the user-declared registry — so
+> 'int conforms to Hashable' is decided in …"*
+
+**MEASURED behaviourally, on `0bd44d3641` with the module UNLISTED**, which is the whole point:
+
+```
+let a = 7   a.equals(b) => false    a.hash() => 7    a.toString() => "7"    a.clone() => 7
+let f = 2.5 f.equals(f) => true     f.toString() => "2.5"
+let t = true                        t.toString() => "true"
+```
+
+**Every member the module declares already resolves and runs without it.** ⇒ listing it would put a
+SECOND declaration of facts the compiler already synthesizes into the program, and the synthesized one
+wins silently — `W63`/`BATCH36`'s hazard exactly. **The `extension int` parse gap is the FIRST blocker,
+not the LAST one**, and clearing it alone would buy an inert entry.
+
+### ⇒ THE BRING-UP HAS NO ORDINARY COMPILER GAPS LEFT. NONE.
+
+| kind | modules | can an unrelated rung clear it? |
+|---|---|---|
+| **Synthesized-twin chains** | `Set` (`W8`) · `Vector` · `List` · `PrimitiveExtensions` · (`Map` `W52`, already listed and inert) | ⛔ no |
+| **Inert-if-listed** | `unicodeCategory` | ⛔ no |
+| **Convergence** (compiler-owned name) | `CharacterSet` | ⛔ no |
+| **Runtime slices** (intrinsics that do not exist) | `Subprocess` · `TcpClient` → `HttpClient` → `httpHelpers` | ⛔ no |
+
+**10 actionable modules, and not one of them is a diagnostic away from listing.** The earlier reading —
+*"the four ordinary gaps will keep falling out of unrelated rungs"* — is now **zero**: `Json` and
+`Testing` were the two that really were ordinary, and both have LANDED (`W69`, `W81`). What is left is
+the residue, and residue does not fall out of anything.
+
+⚠ **THE LESSON THIS FILE KEEPS RE-LEARNING, NOW AT THREE DIFFERENT DEPTHS.** A module's class is not its
+first diagnostic. It takes THREE questions, and the tree has been bitten by each in turn: *(1) does it
+compile?* (the probe) — *(2) are its bodies ANALYZED?* (the injection control, which the six
+`helpers/sort/*` files fail) — *(3) does the compiler already SYNTHESIZE what it declares?* (the
+differing-declarations control, which `Set`, `Vector`, `Map`, `unicodeCategory` and now
+`PrimitiveExtensions` fail). **A row that answers only (1) is a guess wearing a measurement's clothes**,
+and four of my own rows this morning were exactly that.
