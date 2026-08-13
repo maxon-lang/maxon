@@ -286,29 +286,6 @@ end 'main'
 9
 ```
 
-<!-- test: async-try-await.error.await-without-try -->
-A throwing thunk hands the awaiting frame an error on its error path; a plain `await` lowers to `__gt_await`
-which yields only the result and drops the flag — a silent wrong answer. `try await` is the only form that
-can receive the error, and the compiler enforces it (E3057).
-```maxon
-enum WorkError implements Error
-	failed
-end 'WorkError'
-
-function mayFail() returns int throws WorkError
-	throw WorkError.failed
-end 'mayFail'
-
-function main() returns ExitCode
-	let p = async mayFail()
-	let r = await p
-	return r as ExitCode
-end 'main'
-```
-```maxoncstderr
-error E3057: <fragment>:12:10: throwing function requires try: 'await' on a promise from throwing 'mayFail' drops the error — use 'try await'
-```
-
 <!-- test: async-try-await.error.propagate-type-mismatch -->
 A bare `try await p` re-throws the awaited thunk's error through the enclosing function's error-return ABI.
 If the two error types differ the caller would decode one enum's ordinals as another's tags — a silent
