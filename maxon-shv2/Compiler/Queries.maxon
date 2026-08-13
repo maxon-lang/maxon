@@ -1207,9 +1207,30 @@ end 'livesUnderStdlibDirectory'
 // declarations with E2051), but the exemption and the listing can no longer be given DIFFERENT files.
 export let CompilerInternalDeclaringModule = "Builtins.maxon"
 
-// ⭐ **IS THIS FILE THE ONE THAT DECLARES THE RESERVED NAMESPACE (D6)?** Read by the parser's single
-// declaration choke point (`Parser.requireUnreservedName`, where the rule and its bootstrap lineage are
-// stated in full).
+// ⭐⭐ **THE SECOND SUCH MODULE, AND THE ONE THIS EXEMPTION BECAME A SET FOR (W72)** — `stdlib/Testing.maxon`,
+// whose `export type __TestReport` is the reporting surface a test binary speaks to its runner through. It
+// is the compiler that emits the calls to it, so the name is `__`-prefixed for the same reason
+// `Builtins.maxon`'s are, and `E2051` was the whole of what stood between shv2 and that module.
+//
+// ⛔⛔ **THE EXEMPTION IS A LIST OF NAMED MODULES AND *NOT* "ANY LISTED STDLIB MODULE, EXCEPT A NAME AN
+// INTRINSIC ALREADY CLAIMS" — BECAUSE NOTHING IN THIS COMPILER CAN ANSWER THE EXCEPT-CLAUSE.** That
+// broader rule is the real invariant and it needs a REGISTRY of the names the compiler emits; there is
+// none. The nearest thing, `MmRuntime.isSignaturelessCompilerCallee`, is `isCompilerInternalCallee(name)
+// AND NOT funcSignatures.contains(name)` — the intrinsic set defined by ABSENCE from the source index, not
+// by enumeration. Under a blanket rule a stdlib module declaring `__mm_incref` would therefore not COLLIDE
+// with anything: it would silently flip that predicate false and start routing the compiler's own emitted
+// calls through the full user-function battery. A refusal you cannot state is worse than a list you must
+// extend, so the door stays a list — one literal per module, each granting exactly the file it names.
+//
+// ⚠ **AND IT IS NOT THE LOADER'S WHITELIST EITHER**, which would have been the tidy derivation: this module
+// is deliberately NOT listed yet (listing it is its own decision, needing its own collision-rule pass), and
+// an exemption derived from the listing could not clear the door ahead of that decision — which is what
+// `maxon-shv2 build stdlib/Testing.maxon` measures the module's remaining blockers WITH.
+export let TestReportDeclaringModule = "Testing.maxon"
+
+// ⭐ **IS THIS FILE ONE OF THOSE THAT DECLARE THE RESERVED NAMESPACE (D6, widened to a set at W72)?** Read
+// by the parser's single declaration choke point (`Parser.requireUnreservedName`, where the rule and its
+// bootstrap lineage are stated in full).
 //
 // ⚠ **AN IDENTITY TEST, NOT A CONTAINMENT ONE, AND NOT `isStdlibSourceFile`'s ANSWER.** That function
 // decides VISIBILITY and deliberately hands a project rooted under `stdlib/` its own files back as the
@@ -1228,16 +1249,28 @@ export let CompilerInternalDeclaringModule = "Builtins.maxon"
 //
 // It is a PREFILTER and not the answer: a user's own `src/Builtins.maxon` passes it and is then refused by
 // the path compare, which is exactly the case `Parser.declaresCompilerInternalNames` must get right.
+//
+// ⚠ **ONE ENTRY PER MODULE, EACH ASKED THROUGH THE SAME TWO-STEP TEST**, so a second exempt module costs
+// one more basename byte-scan per file and no second path probe: the guarded shape the paragraph above
+// measured is the shape every entry gets, rather than a shape the first entry got and the second copied
+// wrong.
 function declaresCompilerInternalNames(project Project, path FilePath) returns bool
-	if not path.toString().endsWith(CompilerInternalDeclaringModule) 'notEvenTheName'
+	return declaresReservedNamesAs(project, path: path, relative: CompilerInternalDeclaringModule) or declaresReservedNamesAs(project, path: path, relative: TestReportDeclaringModule)
+end 'declaresCompilerInternalNames'
+
+// One entry of the set above: is `path` the stdlib module `relative` names? Named as the loader names
+// its own listing argument (`StdlibLoader.listWhitelistedModule`), because it is the same thing: a path
+// relative to `stdlib/`, joined against the very directory the loader enumerates.
+function declaresReservedNamesAs(project Project, path FilePath, relative String) returns bool
+	if not path.toString().endsWith(relative) 'notEvenTheName'
 		return false
 	end 'notEvenTheName'
 
 	// Interpolated so the argument is a committed `String`: a bare module-`let` literal stays untyped and
 	// matches BOTH `FilePath.join` overloads (String / FilePath) — an E3007 ambiguity — exactly as
 	// `StdlibSource.locateStdlibDir` records for `StdlibDirName`.
-	return path.resolve(Directory.currentPath()).equals(project.stdlibDir.join("{CompilerInternalDeclaringModule}"))
-end 'declaresCompilerInternalNames'
+	return path.resolve(Directory.currentPath()).equals(project.stdlibDir.join("{relative}"))
+end 'declaresReservedNamesAs'
 
 // ⭐⭐ **THE ONE CONSTRUCTION OF A FILE'S `Parser` — every pass that reads a file reads it through here.**
 // Four passes build a reader over the same file: the per-file signature sweep (`foldOneFileInto`), the
@@ -1444,6 +1477,10 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// bootstrap reports this same program under this same code). Byte-for-byte the bootstrap's sentence,
 		// pinned by `field-defaults.missing-type-annotation-errors`.
 		uninferrableFieldDefault(line, column) then reportPositioned(project, code: ErrorCode.parserExpressionError, message: "Expected default value: literal (int, float, bool, or enum case). For other expressions, add a type annotation: 'var name Type = expr'.", line: line, column: column, filePath: path)
+		// E2060 (W72). Byte-for-byte the bootstrap's sentence (`2-Parser.cs:25902-25905`), pinned by
+		// `source-location-defaults`' three refusal cases; the CURE it names is the feature's only legal
+		// spelling, which is why it names both keywords whichever one was written.
+		callerLocationOutsideDefault(name, line, column) then reportPositioned(project, code: ErrorCode.parserCallerLocationOutsideDefault, message: "'{name}' is only valid as a function parameter's default value, where it expands to the caller's location at each call site. Declare a parameter such as 'at SourceLineNumber = __line__' or 'from String = __file__' and read the value from there.", line: line, column: column, filePath: path)
 		unexpectedEof(line, column) then reportPositioned(project, code: ErrorCode.parserUnexpectedEof, message: "Unexpected end of input", line: line, column: column, filePath: path)
 		// The literal is quoted VERBATIM — `0x1ff_ffffffffffffff`, separators and radix prefix intact —
 		// because the source's own spelling is what the reader has to find, and the decoded value does

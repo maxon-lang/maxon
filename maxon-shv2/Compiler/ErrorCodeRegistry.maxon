@@ -129,6 +129,18 @@ export enum ErrorCode
 	// A generic instantiation supplies the wrong number of type arguments -- 'Pair with Integer'
 	// where 'type Pair uses A, B' expects two (P1.6-A).
 	genericArityMismatch = "E2056"
+	// '__line__' or '__file__' appeared somewhere other than a function parameter's default
+	// value -- in an ordinary expression, or as a struct FIELD default, which is a different
+	// thing despite the shared '= <expr>' spelling.
+	// These two are a CALLING CONVENTION, not a reflection facility: each expands at the CALL
+	// SITE, and a parameter default is the only position that has a call site to expand
+	// against. A field default expands at a struct literal and an ordinary expression expands
+	// nowhere, so neither has an answer to give.
+	// Raised at TWO grammar positions, from one rule: the expression position catches it when
+	// the token is evaluated, and the field-default position catches it when the tokens are
+	// CAPTURED. The capture-side check is not merely a better error location -- without it a
+	// field default nobody triggers is never expanded, and the misuse would go undiagnosed.
+	parserCallerLocationOutsideDefault = "E2060"
 	// A 'Base with Args' instantiation supplies a BARE numeric primitive keyword -- 'Box with int',
 	// 'Array with float' -- where the ranged-typealias rule requires a declared domain
 	// ('typealias Integer = int(i64.min to i64.max)', then 'Box with Integer'). It is the same rule

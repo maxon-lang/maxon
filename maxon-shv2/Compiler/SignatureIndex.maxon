@@ -441,9 +441,17 @@ let ReceiverShapePresent = 62 as ContentHash
 // that emits a helper invocation, and one that LOSES it does the reverse — in both directions the caller's
 // own bytes never move, so only this hash can carry it. The pair distinguishes "param 0 defaulted, param 1
 // not" from the reverse, exactly as `ConsumeBitSet`/`ConsumeBitClear` do.
+// ⭐ **AND THE TWO CALLER-LOCATION ARMS ARE THEIR OWN MARKS, NOT A THIRD SPELLING OF `DefaultBitSet`
+// (W72)** — because what a caller COPIES differs between them. A `helper` slot compiles to a `call` whose
+// bytes never move; a `callerLine` slot compiles to the caller's own line NUMBER and a `callerFile` slot to
+// its path, so a declaration that changes `= __line__` to `= __file__`, or either to an ordinary
+// expression, changes what every caller emits while the callers' own bytes stay put. That is exactly the
+// condition this hash exists for, and a shared "has a default" bit would fail it silently.
 let DeclShapeParamDefault = 63 as ContentHash
 let DefaultBitSet = 64 as ContentHash
 let DefaultBitClear = 65 as ContentHash
+let DefaultBitCallerLine = 99 as ContentHash
+let DefaultBitCallerFile = 100 as ContentHash
 
 // ⭐ A method's OPAQUE (bare type-parameter) PARAMETER POSITIONS (ARRR), mixed for `DeclShapeParamConsume`'s
 // reason and carrying exactly what a CALL SITE compiles to: which `uses` slot a parameter names decides
@@ -2831,12 +2839,16 @@ let sharedEmptyMethodNodes = CsrColumn.create()
 //     a `MaxonOp.call`. v1 has to pin its helper in `project.livenessRoots` by hand precisely because its
 //     synthesized call is minted at Std level, below the tier DFE walks.
 //
-// ⚠ **THE CONSEQUENCE, RECORDED SO IT IS NOT LATER READ AS AN OVERSIGHT:** a helper is compiled ONCE, at
-// the declaration, so it cannot see anything about the CALL SITE. Caller-location defaults —
-// `__line__`/`__file__`, which `specs/source-location-defaults.md` is built on end to end — are therefore
-// not expressible under this design and are OUT of scope here. They need the default materialized at the
-// caller from caller-side facts, which is a different mechanism, not a missing arm of this one. v1 has the
-// identical limitation for the identical reason.
+// ⚠ **A HELPER IS COMPILED ONCE, AT THE DECLARATION, SO IT CANNOT SEE THE CALL SITE — WHICH IS WHY
+// CALLER-LOCATION DEFAULTS ARE A SECOND MECHANISM BESIDE IT AND NOT AN ARM OF IT (W72).** `__line__` /
+// `__file__` (`specs/source-location-defaults.md`) need the default materialized AT THE CALLER from
+// caller-side facts; this paragraph used to say they were therefore "not expressible", and what was true
+// was the narrower sentence above it. They are expressible, by NOT minting a helper: the sweep publishes
+// `ParamDefaultProducer.callerLine` / `.callerFile` at that slot and the fill emits a `literal` /
+// `stringLiteral` op at the call — the very ops the caller would have emitted had it written the value
+// out. So the two doors meet at `ParamDefaultProducer` and share everything downstream of it (the
+// call-aligned slotting, the label, `argDefaultSlots`, the arity gate), and differ only in what produces
+// the value. v1 has neither door.
 //
 // ⚠ There is no constant fast path (v1 splits `intLiteral`/`boolLiteral`/`floatLiteralBits`/`byteLiteral`/
 // `enumCase` out of `helper`). One mechanism means one place a default's value is produced: a constant arm
@@ -2847,37 +2859,81 @@ let sharedEmptyMethodNodes = CsrColumn.create()
 //
 // The name is minted by `Project.paramDefaultHelperName` (there, so the `#` join keeps its one speller).
 //
+// ⭐⭐ **WHAT PRODUCES ONE PARAMETER'S DEFAULT VALUE AT A CALL SITE — the per-slot fact the whole-program
+// index publishes, and the meeting point of the language's two default doors (W72).**
+//
+//   • `required` — the parameter declares no default; a call that omits it is E3036.
+//   • `helper(name)` — the synthesized nullary function above. The call emits a `call` to it.
+//   • `callerLine` / `callerFile` — a CALLER-LOCATION default. Nothing is synthesized and nothing is
+//     called: the fill emits the constant the caller's own position names.
+//
+// ⚠ **IT IS A UNION AND NOT A NAME-OR-EMPTY, WHICH IT WAS UNTIL W72.** A `ByteArray` column can say
+// "helper" and "no default" but has no third thing to say, and the two candidate encodings for a third are
+// both the shape this project keeps paying for: a sentinel name (a tag hidden inside a value) or a second
+// parallel column (one fact written twice, free to disagree with the first about whether a slot defaults at
+// all). The union makes the three answers exhaustive, so every reader must `match` and none can fall
+// through — `recordParamDefaults`' hash bit and `renameParamDefaultHelpers`' skip both got this wrong for
+// free under the old shape, because a caller-location slot READ as "no default".
+// ⚠ **THE THREE ARMS THAT SYNTHESIZE NOTHING ARE DECLARED FIRST AND CONTIGUOUSLY**, so the readers that
+// care only whether a slot OWNS A FUNCTION — `renameParamDefaultHelpers`, and any future walk of the
+// synthesized set — say `required to callerFile` in one arm rather than listing the three and being free to
+// forget the one added next.
+export union ParamDefaultProducer
+	required
+	callerLine
+	callerFile
+	helper(name ByteArray)
+end 'ParamDefaultProducer'
+
+export typealias ParamDefaultProducerArray = Array with ParamDefaultProducer
+
+// The content-hash mark one slot's producer folds in — see `DeclShapeParamDefault` for why the four answers
+// are four marks. A free function because a `match` is the whole body and `recordParamDefaults` is inside a
+// loop that has no room for one.
+function defaultProducerMark(producer ParamDefaultProducer) returns ContentHash
+	return match producer 'produces'
+		required gives DefaultBitClear
+		callerLine gives DefaultBitCallerLine
+		callerFile gives DefaultBitCallerFile
+		helper gives DefaultBitSet
+	end 'produces'
+end 'defaultProducerMark'
+
 // ⭐ **A FUNCTION'S PER-PARAMETER DEFAULTS** — the call-aligned `paramNames` (so a call site can slot a
 // LABELLED argument to its position before any `FuncSignature` exists, exactly as `ParamConsumeInfo` does)
-// and, per position, the synthesized helper's NAME, or `EmptySourceText` when that parameter has no
-// default. The sweep computes it from tokens — the only whole-program input a pure per-file parse may read
-// — and records one entry per function that declares AT LEAST ONE default, so a program with none costs a
-// single empty map. It travels by NAME with no interner ids, exactly like `ParamConsumeEntry`.
+// and, per position, what PRODUCES that parameter's default (`ParamDefaultProducer`). The sweep computes it
+// from tokens — the only whole-program input a pure per-file parse may read — and records one entry per
+// function that declares AT LEAST ONE default, so a program with none costs a single empty map. It travels
+// by NAME with no interner ids, exactly like `ParamConsumeEntry`.
 export type ParamDefaultInfo
 	export let paramNames as ByteArrayArray
-	export let helperNames as ByteArrayArray
+	export let producers as ParamDefaultProducerArray
 
-	export static function create(paramNames ByteArrayArray, helperNames ByteArrayArray) returns ParamDefaultInfo
-		return Self{paramNames: paramNames, helperNames: helperNames}
+	export static function create(paramNames ByteArrayArray, producers ParamDefaultProducerArray) returns ParamDefaultInfo
+		return Self{paramNames: paramNames, producers: producers}
 	end 'create'
 
-	// The helper that produces parameter `index`'s default, or EMPTY when it has none — the door the
-	// call-site fill asks per unfilled slot. An index past the recorded list answers EMPTY, the same
-	// "absence is the answer" default `ParamConsumeInfo.isConsumed` rests on.
-	export function helperFor(index ParamCount) returns ByteArray
-		if index >= self.helperNames.count() 'past'
-			return EmptySourceText
+	// What produces parameter `index`'s default, or `required` when it has none — the door the call-site
+	// fill asks per unfilled slot. An index past the recorded list answers `required`, the same
+	// "absence is the answer" default `ParamConsumeInfo.isConsumed` rests on. Minted rather than served
+	// from one shared binding because the branch is reached only when the two walks of a parameter list
+	// have come apart — `sweptParamDefaultHelperName`'s panic is the next thing that happens — so there is
+	// no allocation here worth sharing, and a shared managed value on a path nothing exercises is a
+	// refcount shape nothing would test.
+	export function producerFor(index ParamCount) returns ParamDefaultProducer
+		if index >= self.producers.count() 'past'
+			return ParamDefaultProducer.required
 		end 'past'
-		return try self.helperNames.get(index) otherwise panic("ParamDefaultInfo.helperFor: helperNames.get OOB at {index} despite index < count")
-	end 'helperFor'
+		return try self.producers.get(index) otherwise panic("ParamDefaultInfo.producerFor: producers.get OOB at {index} despite index < count")
+	end 'producerFor'
 
 	// ⭐ **RE-POINT ONE SLOT AT A DIFFERENTLY-NAMED HELPER** — the one mutation this record admits, and it
 	// exists for exactly one caller: `ProgramSignatures.renameParamDefaultHelpers`, which follows a
 	// contested free function's declaration onto its directory-qualified registration name (N1c review).
 	// Written here rather than as a field poke so the slot index is bounds-checked by the record that owns
-	// the list, exactly as `helperFor` reads it.
+	// the list, exactly as `producerFor` reads it.
 	export function renameHelper(index ParamCount, renamedTo ByteArray)
-		try self.helperNames.set(index, value: renamedTo) otherwise panic("ParamDefaultInfo.renameHelper: helperNames.set OOB at {index} — the caller walks this list's own count()")
+		try self.producers.set(index, value: ParamDefaultProducer.helper(renamedTo)) otherwise panic("ParamDefaultInfo.renameHelper: producers.set OOB at {index} — the caller walks this list's own count()")
 	end 'renameHelper'
 end 'ParamDefaultInfo'
 
@@ -9128,8 +9184,7 @@ export type ProgramSignatures
 		// which is the `var`-payload mistake one registry over.
 		for i in 0 upto info.paramNames.count() 'eachName'
 			let paramName = try info.paramNames.get(i) otherwise panic("recordParamDefaults: paramNames.get OOB at {i} despite i < count")
-			let hasDefault = not info.helperFor(i).isEmpty()
-			state = mix(mixBytes(state, bytes: paramName), value: DefaultBitSet if hasDefault else DefaultBitClear)
+			state = mix(mixBytes(state, bytes: paramName), value: defaultProducerMark(info.producerFor(i)))
 		end 'eachName'
 		self.hash = state
 	end 'recordParamDefaults'
@@ -10269,11 +10324,15 @@ export type ProgramSignatures
 	// is an accident: remove the `stating.paramDefaults` gate at the call site and this becomes the same bug
 	// one registry over, since a file declaring no default would arrive holding a predecessor's helper facts.
 	function renameParamDefaultHelpers(info ParamDefaultInfo, bareName ByteArray, registrationName ByteArray)
-		for i in 0 upto info.helperNames.count() 'eachCallAlignedSlot'
+		for i in 0 upto info.producers.count() 'eachCallAlignedSlot'
 			let slot = i as ParamCount
-			if info.helperFor(slot).isEmpty() 'thisParameterHasNoDefault'
-				continue
-			end 'thisParameterHasNoDefault'
+			// ⚠ A CALLER-LOCATION slot is skipped with the undefaulted ones, and for a stronger reason than
+			// theirs: it has no synthesized function anywhere to rename, so the four column moves below would
+			// each find nothing and `renameHelper` would invent a helper the drain never declared (W72).
+			match info.producerFor(slot) 'produces'
+				required to callerFile then continue
+				helper then break 'produces'
+			end 'produces'
 
 			let swept = paramDefaultHelperName(bareName, paramIndex: slot)
 			let renamed = paramDefaultHelperName(registrationName, paramIndex: slot)

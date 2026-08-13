@@ -192,6 +192,15 @@ export union ParseError implements Error
 	// inference rule rather than an arm of this one. Naming it in the sentence keeps the message the
 	// language's own rather than this compiler's current reach.
 	uninferrableFieldDefault(line LineNumber, column ColumnNumber)
+	// ⭐ **`__line__` / `__file__` WRITTEN ANYWHERE BUT A FUNCTION PARAMETER'S DEFAULT (W72)** — E2060,
+	// `specs/source-location-defaults.md`'s "Nowhere else". `name` is the keyword the author wrote, so one
+	// variant serves both and the sentence quotes the one in front of the reader.
+	//
+	// Two grammar positions raise it, from `requireNotACallerLocationDefault` so that they cannot come to
+	// say different things: an ordinary EXPRESSION evaluating the name, and a struct FIELD default
+	// CAPTURING it. The capture-side raise is not merely a better position — a field default no literal
+	// ever omits is never expanded, so an expansion-only check would let the misuse through undiagnosed.
+	callerLocationOutsideDefault(name String, line LineNumber, column ColumnNumber)
 	unexpectedEof(line LineNumber, column ColumnNumber)
 	// An integer literal whose magnitude does not fit an i64. `literal` is the token's RAW TEXT —
 	// radix prefix and `_` separators intact — because the diagnostic quotes what the source WROTE
@@ -2728,6 +2737,102 @@ let ParametersAreMutable = false
 // (`_` means discard), spelled once.
 let DiscardBindingName = b"_"
 
+// ⭐⭐ **THE TWO CALLER-LOCATION KEYWORDS (W72)** — `specs/source-location-defaults.md`. They are ORDINARY
+// IDENTIFIER tokens, not a lexer keyword pair, and that is deliberate: `__`-prefixed names are already
+// reserved from every user declaration (`requireUnreservedName`), so the bytes can only ever mean this, and
+// a new `TokenKind` would put a third spelling of "reserved" beside the prefix rule and the callee rule.
+//
+// The bootstrap DOES lex them (`1-Lexer.cs:251-252`, `TokenType.CallerLine`/`CallerFile`) and shv2 does not
+// follow it here, because the bootstrap needs a token KIND anyway: it replays a default's TOKENS at each
+// call site, so the expansion happens in the middle of an expression parse where only a token can carry the
+// fact. shv2 classifies the default's tokens ONCE, at its declaration, and publishes the answer — so the
+// fact travels as a `ParamDefaultProducer`, and the tokens need say nothing.
+let CallerLineDefaultName = b"__line__"
+let CallerFileDefaultName = b"__file__"
+
+// Which of the two, if either, the identifier `name` spells — the ONE byte comparison behind every reader
+// of this feature (the default classifier, the two E2060 doors, and the declaration refusal that keeps an
+// exempt stdlib module from taking either name). Written once so "is this a caller-location keyword" cannot
+// be answered two ways.
+// ⭐ **THE "NOWHERE ELSE" RULE, WORDED ONCE (W72).** Three positions raise it and all three raise it from
+// here, because they are one rule seen from three sides: an ordinary EXPRESSION evaluating the name
+// (`emitFunctionRef`), a struct FIELD default capturing it (`readStructFieldInto`), and a DECLARATION in the
+// one kind of file that may otherwise take a `__` name (`requireUnreservedName`) — the spec's "Both names
+// are reserved words, so no program can declare or shadow them", which W72's own door (b) would have opened
+// a hole in.
+//
+// `name` is passed rather than read off `at` for `requireUnreservedName`'s reason, which applies here
+// unchanged: an IMPLICITLY BACKED enum case DECLARES the DECODED content while its token's text is the
+// escape sequence, so `enum E { "\x5f\x5fline\x5f\x5f" }` declares `__line__` behind a token that spells
+// nothing of the sort. The token is here for the POSITION.
+function requireNotACallerLocationDefault(name ByteArray, at Token) throws ParseError
+	match callerLocationNamed(name) 'keyword'
+		none then break 'keyword'
+		line to file then throw ParseError.callerLocationOutsideDefault(String.from(name), line: at.line, column: at.column)
+	end 'keyword'
+end 'requireNotACallerLocationDefault'
+
+// ⭐⭐ **WHICH OF THE TWO CALLER-LOCATION KEYWORDS A DEFAULT IS, OR NEITHER (W72)** — the answer
+// `callerLocationDefaultAt` reads off a default's TOKENS, and the one BOTH walks of a parameter list ask:
+// the declaration sweep, which publishes the slot, and the real parse, which must mint no helper for it.
+// One classifier, so the two cannot come to disagree about what a slot is — the failure
+// `sweptParamDefaultHelperName`'s panic exists to name.
+//
+// ⚠ It lives HERE and not beside `SignatureIndex.ParamDefaultProducer`, which the sweep PROJECTS it onto,
+// because the two answer different questions and only one of them travels: this is a fact about a region of
+// TOKENS, read by this file alone; that is a fact about a CALL SITE, published whole-program. A projection
+// is not a duplicate, and putting the syntactic half in the index would have made the index depend on the
+// grammar it is fed by.
+//
+// `none` is the overwhelming common answer, and is the ordinary default the helper mechanism owns.
+union CallerLocationDefault
+	none
+	line
+	file
+end 'CallerLocationDefault'
+
+// Does this slot declare no default at all? The one gate `fillArgsFromParamDefaults` needs before it
+// commits a slot — `emitDefaultArgValue` covers the other three arms and panics on this one, so the two
+// together are exhaustive over the union with no arm answered in two places.
+function producerIsRequired(producer ParamDefaultProducer) returns bool
+	return match producer 'produces'
+		required gives true
+		callerLine to helper gives false
+	end 'produces'
+end 'producerIsRequired'
+
+// Does a classified default region name one of the two? The `match` both the sweep and the real parse
+// branch on, written once rather than as two `is`-chains that could come to cover different arms.
+function isCallerLocationDefault(kind CallerLocationDefault) returns bool
+	return match kind 'kind'
+		none gives false
+		line to file gives true
+	end 'kind'
+end 'isCallerLocationDefault'
+
+// The whole-program slot a caller-location default publishes. It panics on `none` because the sweep asks it
+// only inside the branch `isCallerLocationDefault` has already claimed — the alternative, an arm answering
+// `required` for it, would publish "this parameter has no default" for a parameter that plainly has one.
+function paramDefaultProducerOf(kind CallerLocationDefault) returns ParamDefaultProducer
+	return match kind 'kind'
+		none panic("paramDefaultProducerOf: `none` is not a caller-location default — the only caller asks this inside the branch `isCallerLocationDefault` already answered true for")
+		line gives ParamDefaultProducer.callerLine
+		file gives ParamDefaultProducer.callerFile
+	end 'kind'
+end 'paramDefaultProducerOf'
+
+function callerLocationNamed(name ByteArray) returns CallerLocationDefault
+	if name.equals(CallerLineDefaultName) 'line'
+		return CallerLocationDefault.line
+	end 'line'
+
+	if name.equals(CallerFileDefaultName) 'file'
+		return CallerLocationDefault.file
+	end 'file'
+
+	return CallerLocationDefault.none
+end 'callerLocationNamed'
+
 // How far past a `.` a member's ARGUMENT LIST begins: the member name, then its `(`. Named because the
 // offset is a claim about the grammar (`recv . name ( args )`) rather than a step count — see
 // `noteMethodCallMutabilityUses`, its one reader.
@@ -4335,8 +4440,8 @@ let NanosPerMillisecond = 1000000
 // past `requireUnreservedName`, and wrote that exemption on the DECLARATION side only: the module could
 // declare `__int_fromString` at `:214` and then not call it at `:322`, which is where compiling it stopped.
 // A rule stated on one side of a name is a rule that has lapsed on the other, so the CALL side now reads the
-// same one bit the declaration side does (`declaresCompilerInternalNames`, an identity compare against
-// `<stdlibDir>/Builtins.maxon` — never a basename, see `Queries.declaresCompilerInternalNames`).
+// same one bit the declaration side does (`declaresCompilerInternalNames`, an identity compare against each
+// exempt module's `<stdlibDir>/<name>` — never a basename, see `Queries.declaresCompilerInternalNames`).
 //
 // ⚠ **THE `declaresCallee` CLAUSE IS THE OTHER HALF, AND WITHOUT IT THE EXEMPTION IS FAR WIDER THAN D6's.**
 // The declaration exemption admits the names that module WRITES; a bare file test here would admit every
@@ -10359,11 +10464,13 @@ export type Parser
 	// and asked only of a `typealias` declaration (`typeAliasVisibility`). It is what makes a
 	// stdlib-internal alias nameable from every file without a path probe anywhere near the hot path.
 	let isStdlibSource as bool
-	// ⭐ **MAY THIS FILE DECLARE `__`-PREFIXED NAMES (D6)?** True for exactly `stdlib/Builtins.maxon` —
-	// the module that DECLARES the reserved space rather than merely using it (`__ManagedFileError`,
-	// `__int_fromString`), which is what its own header calls itself. Decided once per file by `Queries`,
-	// the only tier holding the project, and read by the one choke point every new declaration goes
-	// through (`requireUnreservedName`).
+	// ⭐ **MAY THIS FILE DECLARE `__`-PREFIXED NAMES (D6; a SET of modules since W72)?** True for the
+	// modules that DECLARE the reserved space rather than merely using it — `stdlib/Builtins.maxon`
+	// (`__ManagedFileError`, `__int_fromString`) and `stdlib/Testing.maxon` (`__TestReport`) — which is what
+	// each of their own headers calls itself. Decided once per file by `Queries`, the only tier holding the
+	// project, and read by the one choke point every new declaration goes through (`requireUnreservedName`).
+	// See `Queries.TestReportDeclaringModule` for why the set is a LIST of named modules and not the
+	// loader's whitelist, nor "any `__` name no intrinsic claims".
 	//
 	// ⚠ **IT IS DELIBERATELY NOT `isStdlibSource`, AND THE TWO ANSWER DIFFERENT QUESTIONS.**
 	// `isStdlibSource` decides VISIBILITY, and its root-inside-`stdlib/` arm hands a project rooted under
@@ -11650,10 +11757,10 @@ export type Parser
 		end 'noDefaults'
 
 		var names = ByteArrayArray.create()
-		var helperNames = ByteArrayArray.create()
+		var producers = ParamDefaultProducerArray.create()
 		if takesReceiver 'prependReceiver'
 			names.push(SelfParamName)
-			helperNames.push(EmptySourceText)
+			producers.push(ParamDefaultProducer.required)
 		end 'prependReceiver'
 
 		let resume = self.pos
@@ -11664,36 +11771,46 @@ export type Parser
 			let typeEnd = self.skipParamType(typeStart)
 			let itemEnd = self.paramItemEndFrom(typeEnd)
 			if self.kindAt(typeEnd) != TokenKind.equals 'noDefault'
-				helperNames.push(EmptySourceText)
+				producers.push(ParamDefaultProducer.required)
 			end 'noDefault' else 'hasDefault'
-				// The helper RETURNS the parameter's declared type, so the default expression is typed and
-				// range-checked against exactly what the parameter demands, by the ordinary `return` rules.
-				self.pos = typeStart
-				let paramType = try self.parseTypeReference() otherwise 'malformedType'
-					self.pos = resume
-					return
-				end 'malformedType'
-				// ⚠ **THE INDEX IS THE PARAMETER'S CALL-ALIGNED POSITION, NOT ITS SOURCE POSITION**, which for
-				// an instance method differ by the prepended receiver. `helperNames.count()` IS that position
-				// — one entry has been pushed per parameter already named, plus one for the receiver — and it
-				// is also the index `ParamDefaultInfo.helperFor` is asked with, so the mint and the lookup
-				// cannot key on different numbers. (They did: minted from the SOURCE index, a defaulted
-				// instance method published `#0` and its declaration looked up `#1`, and the divergence
-				// surfaced as a backend `call to unknown function` with no source position at all.)
-				let helperName = paramDefaultHelperName(funcName, paramIndex: helperNames.count())
-				helperNames.push(helperName)
-				// ⭐ **AND ITS PRE-ERASURE SPELLING RIDES TOO (A2j / A2m).** The helper's return type IS the
-				// parameter's declared type, so if the parameter was written `__ManagedMemory` — or a TUPLE
-				// with a buffer in a slot — the helper RETURNS that surface, and `emitCall`'s
-				// `markDeclaredSurface` reads it off the whole-program index by callee name, which for this
-				// callee is the entry pushed here. Hardcoded plain, a defaulted buffer parameter would hand
-				// its call site a value bearing the `Array` member roster instead of the buffer's: a wrong
-				// surface, which is a wrong answer rather than a compile error. Asked at `typeStart`, the one
-				// place the spelling is still readable, through the same door `parseFunctionParameters` uses.
-				// `slotElementsFromAliases: false` for `returnDeclaredSurface`'s reason, and it is the same
-				// reason: this helper is published by the SWEEP, whose copy is the one the whole-program index
-				// stores, so a SLOT's element bit read here would be how far the sweep had got.
-				entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false), visibility: visibility))
+				let callerLocation = self.callerLocationDefaultAt(typeEnd, exprEnd: itemEnd)
+				if isCallerLocationDefault(callerLocation) 'materializedAtEachCallSite'
+					// ⭐ **A CALLER-LOCATION SLOT PUBLISHES THE KEYWORD AND NOTHING ELSE (W72)** — no helper
+					// name, and so no `FuncReturnTypeEntry` either: there is no synthesized function whose
+					// return type a caller could need. The parameter's own declared type is not read here
+					// for the same reason, so a malformed one no longer abandons this function's defaults on
+					// the sweep's account — the real parse reports it with a position, as it always did.
+					producers.push(paramDefaultProducerOf(callerLocation))
+				end 'materializedAtEachCallSite' else 'synthesizedHelper'
+					// The helper RETURNS the parameter's declared type, so the default expression is typed and
+					// range-checked against exactly what the parameter demands, by the ordinary `return` rules.
+					self.pos = typeStart
+					let paramType = try self.parseTypeReference() otherwise 'malformedType'
+						self.pos = resume
+						return
+					end 'malformedType'
+					// ⚠ **THE INDEX IS THE PARAMETER'S CALL-ALIGNED POSITION, NOT ITS SOURCE POSITION**, which for
+					// an instance method differ by the prepended receiver. `producers.count()` IS that position
+					// — one entry has been pushed per parameter already named, plus one for the receiver — and it
+					// is also the index `ParamDefaultInfo.producerFor` is asked with, so the mint and the lookup
+					// cannot key on different numbers. (They did: minted from the SOURCE index, a defaulted
+					// instance method published `#0` and its declaration looked up `#1`, and the divergence
+					// surfaced as a backend `call to unknown function` with no source position at all.)
+					let helperName = paramDefaultHelperName(funcName, paramIndex: producers.count())
+					producers.push(ParamDefaultProducer.helper(helperName))
+					// ⭐ **AND ITS PRE-ERASURE SPELLING RIDES TOO (A2j / A2m).** The helper's return type IS the
+					// parameter's declared type, so if the parameter was written `__ManagedMemory` — or a TUPLE
+					// with a buffer in a slot — the helper RETURNS that surface, and `emitCall`'s
+					// `markDeclaredSurface` reads it off the whole-program index by callee name, which for this
+					// callee is the entry pushed here. Hardcoded plain, a defaulted buffer parameter would hand
+					// its call site a value bearing the `Array` member roster instead of the buffer's: a wrong
+					// surface, which is a wrong answer rather than a compile error. Asked at `typeStart`, the one
+					// place the spelling is still readable, through the same door `parseFunctionParameters` uses.
+					// `slotElementsFromAliases: false` for `returnDeclaredSurface`'s reason, and it is the same
+					// reason: this helper is published by the SWEEP, whose copy is the one the whole-program index
+					// stores, so a SLOT's element bit read here would be how far the sweep had got.
+					entries.push(FuncReturnTypeEntry.create(helperName, returnType: MaxonReturnType.value(paramType), declaredSurface: self.declaredSurfaceAt(typeStart, slotElementsFromAliases: false), visibility: visibility))
+				end 'synthesizedHelper'
 			end 'hasDefault'
 
 			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
@@ -11703,7 +11820,7 @@ export type Parser
 		end 'params'
 		self.pos = resume
 
-		paramDefaults.push(ParamDefaultEntry.create(funcName, info: ParamDefaultInfo.create(names, helperNames: helperNames)))
+		paramDefaults.push(ParamDefaultEntry.create(funcName, info: ParamDefaultInfo.create(names, producers: producers)))
 	end 'recordScannedParamDefaults'
 
 	// Does the parameter list at `parenPos` declare a default on ANY parameter? A peek-only, allocation-free
@@ -13595,6 +13712,48 @@ export type Parser
 		panic("skipParamDefault: the loop only exits by returning at `,`, `)` or EOF")
 	end 'skipParamDefault'
 
+	// ⭐⭐ **IS THIS PARAMETER DEFAULT ONE OF THE TWO CALLER-LOCATION KEYWORDS? (W72)** — asked of the token
+	// region `(fromEquals, exprEnd)` a default occupies, by BOTH walks of a parameter list: the declaration
+	// sweep, which publishes the slot's `ParamDefaultProducer`, and the real parse, which must mint no helper
+	// for one. ONE classifier, for `sweptParamDefaultHelperName`'s reason — two walks answering this
+	// differently give a call site a helper the drain never declares, or a drain a helper nothing calls.
+	//
+	// ⚠ **EXACTLY ONE TOKEN, NOT "CONTAINS ONE"** — `= __line__ + 1` is REFUSED rather than expanded (see
+	// `requireNoEmbeddedCallerLocation`), and the reason is architectural rather than a reach limit: the value
+	// must be materialized AT THE CALLER, and a caller cannot re-parse the declaring file's tokens — that
+	// impossibility is the very property making shv2's per-file parse a pure function
+	// (`SignatureIndex.ParamDefaultInfo`). The bootstrap accepts the arithmetic because replaying a default's
+	// tokens at each call site is exactly what it does.
+	function callerLocationDefaultAt(fromEquals TokenIndex, exprEnd TokenIndex) returns CallerLocationDefault
+		let onlyToken = fromEquals + 1
+		if exprEnd != onlyToken + 1 or self.kindAt(onlyToken) != TokenKind.identifier 'notASingleName'
+			return CallerLocationDefault.none
+		end 'notASingleName'
+
+		return callerLocationNamed(self.tokenAt(onlyToken).value)
+	end 'callerLocationDefaultAt'
+
+	// The refusal the classifier above owes the region it just called ORDINARY: a default that MENTIONS
+	// `__line__`/`__file__` without being one. Asked only by the real parse — the sweep publishes a helper
+	// for such a region and the parse then refuses the file, so the two never disagree about a program that
+	// compiles.
+	//
+	// It is a separate diagnostic from E2060 and not that one reworded: E2060's sentence says the keyword is
+	// legal only as a parameter default, and here it IS in one. What is wrong is the ARITHMETIC around it.
+	function requireNoEmbeddedCallerLocation(fromEquals TokenIndex, exprEnd TokenIndex) throws ParseError
+		var q = fromEquals + 1
+		while q < exprEnd 'scan'
+			if self.kindAt(q) == TokenKind.identifier 'aName'
+				let tok = self.tokenAt(q)
+				match callerLocationNamed(tok.value) 'keyword'
+					none then break 'keyword'
+					line to file then throw ParseError.unsupported("'{String.from(tok.value)}' inside a larger default expression — a caller-location default is materialized AT THE CALL SITE, from the caller's own position, and the declaring file's expression is not available there to evaluate around it. The whole default must be the keyword alone; do the arithmetic in the body", line: tok.line, column: tok.column)
+				end 'keyword'
+			end 'aName'
+			q = q + 1
+		end 'scan'
+	end 'requireNoEmbeddedCallerLocation'
+
 	// The name a `function <nameTok>` is DECLARED under: its own, at file scope; `Point.create`
 	// inside `type Point`.
 	//
@@ -15349,6 +15508,15 @@ export type Parser
 			// the whole of the type inference — see `readFieldDefaultLiteral`.
 			let inferrableEnd = self.fieldDefaultEnd(self.pos)
 			try self.consume(TokenKind.equals)
+			// ⭐ **BEFORE THE LITERAL TEST BELOW, BECAUSE THAT TEST WOULD ANSWER FIRST AND ANSWER THE WRONG
+			// THING (W72).** `let at = __line__` is not a field whose type cannot be inferred; it is a
+			// caller-location keyword in a position that has no caller. Asked in the other order it earned
+			// E2004 "add a type annotation", which sends the author to write `let at as SourceLineNumber =
+			// __line__` — the very program the annotated shape refuses. The two field shapes therefore ask
+			// this ONE question in the same place relative to their own inference, and the reference answers
+			// E2060 for both.
+			let inferrableDefaultTok = self.current()
+			try requireNotACallerLocationDefault(inferrableDefaultTok.value, at: inferrableDefaultTok)
 			// ⭐ **AND THAT IS WHY THE SHORTHAND ADMITS ONLY A BARE LITERAL (S2f).** An annotated field takes
 			// an arbitrary expression, because the annotation says what the expression must produce; here
 			// there is no annotation, and a type read off the raw tokens of `IntArray.create()` or `7 + 1`
@@ -15404,6 +15572,14 @@ export type Parser
 
 		let defaultEnd = self.fieldDefaultEnd(self.pos)
 		try self.consume(TokenKind.equals)
+
+		// ⭐ **THE CAPTURE-POSITION HALF OF E2060 (W72).** A field default shares the `= <expr>` spelling with
+		// a parameter default and is a different thing: it expands at a struct LITERAL, which is not a call
+		// and has no caller to name. Raised HERE rather than left to the helper body's own expression check
+		// because a field default no `Self{…}` ever omits is never expanded at all, so the misuse would
+		// otherwise go undiagnosed in exactly the program that wrote it and never used it.
+		let annotatedDefaultTok = self.current()
+		try requireNotACallerLocationDefault(annotatedDefaultTok.value, at: annotatedDefaultTok)
 
 		if not self.defaultRegionIsLiteral(self.pos, regionEnd: defaultEnd) 'anExpression'
 			let helperName = self.captureFieldDefault(layout.name, fieldName: nameTok.value, fieldType: fieldType, regionEnd: defaultEnd)
@@ -20896,6 +21072,18 @@ export type Parser
 		// either finds the sweep's answer or says so. (A FIELD default's name IS minted at its capture, and
 		// safely — see `DefaultHelperOwner` for the property a field name has that a position does not.)
 		let exprEnd = self.skipParamDefault(self.pos)
+
+		// ⭐⭐ **A CALLER-LOCATION DEFAULT SYNTHESIZES NOTHING, SO IT CAPTURES NOTHING (W72).** There is no
+		// expression for a helper to return: the sweep published `callerLine`/`callerFile` at this slot from
+		// this same classifier, and `fillArgsFromParamDefaults` emits the constant at each call. Pushing a
+		// pending helper here would declare a function under a name the sweep never minted — the exact
+		// disagreement `requireSweptHelperName` panics on.
+		if isCallerLocationDefault(self.callerLocationDefaultAt(self.pos, exprEnd: exprEnd)) 'materializedAtEachCallSite'
+			self.pos = exprEnd
+			return
+		end 'materializedAtEachCallSite'
+
+		try self.requireNoEmbeddedCallerLocation(self.pos, exprEnd: exprEnd)
 		self.pendingDefaultHelpers = materializedPendingDefaultHelpers(self.pendingDefaultHelpers)
 		self.pendingDefaultHelpers.push(PendingDefaultHelper.create(DefaultHelperOwner.parameter(ownerName, paramIndex: paramIndex), declaredType: paramType, exprStart: (self.pos + 1) as TokenIndex, exprEnd: exprEnd, enclosingType: self.enclosingType))
 		self.pos = exprEnd
@@ -20958,21 +21146,22 @@ export type Parser
 	function sweptParamDefaultHelperName(ownerName ByteArray, paramIndex ParamCount) returns ByteArray
 		match self.signatures.defaultsOf(ownerName) 'swept'
 			allRequired then break 'swept'
-			defaults(info) then return self.requireSweptHelperName(info.helperFor(paramIndex), ownerName: ownerName, paramIndex: paramIndex)
+			defaults(info) then return self.requireSweptHelperName(info.producerFor(paramIndex), ownerName: ownerName, paramIndex: paramIndex)
 		end 'swept'
 
-		return self.requireSweptHelperName(EmptySourceText, ownerName: ownerName, paramIndex: paramIndex)
+		return self.requireSweptHelperName(ParamDefaultProducer.required, ownerName: ownerName, paramIndex: paramIndex)
 	end 'sweptParamDefaultHelperName'
 
-	// The panic the lookup above owes when the sweep has no name at the position the parse captured — one
-	// sentence for both ways that happens (no entry for the function at all, or an entry with nothing at
-	// this position), because they are one defect: the two walks of one parameter list have come apart.
-	function requireSweptHelperName(helperName ByteArray, ownerName ByteArray, paramIndex ParamCount) returns ByteArray
-		if helperName.isEmpty() 'sweepRecordedNoDefaultHere'
-			panic("sweptParamDefaultHelperName: '{String.from(ownerName)}' declares a default on CALL-ALIGNED parameter {paramIndex}, and the declaration sweep published no helper at that position — `recordScannedParamDefaults` and `parseFunctionParameters` walk the same parameter list and have come apart on whether it holds a `=`, or on where the parameter sits in it")
-		end 'sweepRecordedNoDefaultHere'
-
-		return helperName
+	// The panic the lookup above owes when the sweep published no HELPER at the position the parse captured
+	// one for — one sentence for all three ways that happens (no entry for the function at all, an entry
+	// with no default at this position, or an entry calling it a CALLER-LOCATION slot), because they are one
+	// defect: the two walks of one parameter list have come apart. The third way is W72's and is named
+	// separately in the sentence, because `callerLocationDefaultAt` is what the two would have disagreed on.
+	function requireSweptHelperName(producer ParamDefaultProducer, ownerName ByteArray, paramIndex ParamCount) returns ByteArray
+		match producer 'produces'
+			required to callerFile then panic("sweptParamDefaultHelperName: '{String.from(ownerName)}' declares a default on CALL-ALIGNED parameter {paramIndex} that the real parse captured as an expression, and the declaration sweep published no helper at that position — `recordScannedParamDefaults` and `parseFunctionParameters` walk the same parameter list and have come apart on whether it holds a `=`, on where the parameter sits in it, or on whether `callerLocationDefaultAt` calls that default a caller-location keyword")
+			helper(name) then return name
+		end 'produces'
 	end 'requireSweptHelperName'
 
 	// ⭐⭐ **RE-OPEN THE DECLARATION SCOPE A CAPTURED DEFAULT WAS WRITTEN INSIDE (W43)** — the drain runs at
@@ -24376,6 +24565,13 @@ export type Parser
 		// in — and the compiler already learns each of these names by parsing the declaration, so a second
 		// copy could only ever be the stale one.
 		if self.declaresCompilerInternalNames 'theReservedSpacesOwnFile'
+			// ⛔ **THE ONE THING AN EXEMPT MODULE STILL MAY NOT DECLARE (W72).** `__line__` and `__file__` are
+			// reserved WORDS, not merely reserved-prefix names — `specs/source-location-defaults.md`: "no
+			// program can declare or shadow them" — and the file exemption above is precisely the hole that
+			// sentence would otherwise acquire the day a second module was listed. It costs a byte compare per
+			// declared name in the exempt files ALONE, which is why it sits inside the branch rather than
+			// above it: every other file already refuses both names on the prefix rule below.
+			try requireNotACallerLocationDefault(declaredName, at: nameTok)
 			return
 		end 'theReservedSpacesOwnFile'
 
@@ -24391,14 +24587,16 @@ export type Parser
 		// exactly one boundary in this door (`2-Parser.cs:27418`: the `self` throw is inside the same function
 		// the stdlib-file exemption returns from), and a second boundary here would be one door with two
 		// shapes. Nothing shv2 parses rides on the choice: MEASURED across every module
-		// `whitelistedStdlibModules` lists and `stdlib/Builtins.maxon` besides (which reaches the parser as the
-		// exempt file rather than as one of the listed ones), ZERO declare a binding named `self`.
+		// `whitelistedStdlibModules` lists and the exempt modules besides (`stdlib/Builtins.maxon`, and
+		// `stdlib/Testing.maxon` since W72, which reach the parser as exempt files rather than as listed ones),
+		// ZERO declare a binding named `self`.
 		//
 		// ⛔ **AND THE FILE THAT WOULD — `stdlib/Internals.maxon`, 24 of them, `__destruct___ManagedMemory(self
 		// MachineWord)` and its siblings — IS NOT EXEMPT IN shv2 AND MUST NOT BE ASSUMED TO BE.** The bootstrap
 		// exempts three BASENAMES (`2-Parser.cs:27401-27402`: `Builtins.maxon`, `Internals.maxon`,
 		// `Testing.maxon`); shv2's `declaresCompilerInternalNames` is an identity compare against
-		// `Builtins.maxon` ALONE. `whitelistedStdlibModules` does not list `Internals.maxon`, so shv2 never
+		// `Builtins.maxon` and `Testing.maxon` — two of that three, and W72 added the second.
+		// `whitelistedStdlibModules` does not list `Internals.maxon`, so shv2 never
 		// parses it and the gap costs nothing today — but whoever lists it inherits NOTHING from the reference:
 		// it goes red on the `__` rule first (every one of those function NAMES is `__`-prefixed), and widening
 		// the exemption is what that day's work is. This rule rides along with that decision; it does not
@@ -57294,6 +57492,13 @@ export type Parser
 	end 'requireNameIsUsableAsFunctionValue'
 
 	function emitFunctionRef(tok Token) returns ValueId throws ParseError
+		// ⭐ **THE EXPRESSION-POSITION HALF OF E2060 (W72).** This is the LAST-RESORT door for a bare name —
+		// not a local, not a captured binding, not a global, not a constant — so a `__line__` written in an
+		// ordinary expression arrives here and nowhere earlier, and a name that DID bind is never asked.
+		// Placed here rather than at the top of the primary parse for exactly that reason: the check then
+		// costs nothing on the path every identifier in every program takes, and runs only on a program
+		// already destined for a diagnostic.
+		try requireNotACallerLocationDefault(tok.value, at: tok)
 		try self.requireNameIsUsableAsFunctionValue(tok)
 
 		let result = self.mintValue(ValueTypeTag.function, nameId: self.artifact.typeNames.intern(tok.value))
@@ -60939,8 +61144,8 @@ export type Parser
 				continue
 			end 'alreadyGiven'
 
-			let helperName = info.helperFor(slot)
-			if helperName.isEmpty() 'noDefault'
+			let producer = info.producerFor(slot)
+			if producerIsRequired(producer) 'noDefault'
 				continue
 			end 'noDefault'
 
@@ -60950,14 +61155,66 @@ export type Parser
 			defaultSlots.push(slot)
 
 			let paramName = try info.paramNames.get(slot) otherwise panic("fillArgsFromParamDefaults: paramNames.get OOB at {slot} despite slot < paramCount")
-			// The helper is nullary, so this recursion bottoms out at once: no helper declares a parameter,
-			// hence none is in `funcParamDefaults` and `fillOmittedArgDefaults` returns on its first match.
-			let value = try self.emitCall(helperName, anchor: anchor, args: ValueIdArray.create(), argLabels: ByteArrayArray.create(), argRanges: SourceRangeArray.create(), argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.paramDefaultHelper)
+			let value = try self.emitDefaultArgValue(producer, anchor: anchor)
 			pushDefaultedCallArg(args, argLabels: argLabels, argRanges: argRanges, value: value, label: paramName, range: SourceRange.ofToken(anchor))
 		end 'fillDefaults'
 
 		return defaultSlots
 	end 'fillArgsFromParamDefaults'
+
+	// ⭐⭐ **THE VALUE ONE OMITTED ARGUMENT TAKES — THE POINT THE LANGUAGE'S TWO DEFAULT DOORS DIVERGE, AND
+	// THE ONLY ONE (W72).** Everything around it — the slot bookkeeping, the parameter-name label,
+	// `argDefaultSlots`, and every check downstream that cannot tell a defaulted argument from a written one
+	// — is shared, because what differs between the doors is exactly and only what produces the value.
+	//
+	// ⚠ **A CALLER-LOCATION DEFAULT EMITS THE OPS THE CALLER WOULD HAVE EMITTED HAD IT WRITTEN THE VALUE
+	// OUT**, and that is what makes it need no rule of its own anywhere else. An `at SourceLineNumber =
+	// __line__` filled here is the same `literal` op as a hand-written `at: 7`, so the ranged-alias check in
+	// front of the call (`recordConstantArgRangeChecks`) reads it, `SemanticCheck` types it, and the backend
+	// sees a constant. A `from String = __file__` is the same immortal `.rdata` record a hand-written
+	// `"main.maxon"` is, with the same (absent) ownership obligation.
+	function emitDefaultArgValue(producer ParamDefaultProducer, anchor Token) returns ValueId throws ParseError
+		let range = SourceRange.ofToken(anchor)
+		return match producer 'produces'
+			required panic("emitDefaultArgValue: parameter is `required`, which the caller skips before asking — a slot with no default is left empty on purpose (E3036 reports it from the resolved signature)")
+			// ⭐ **THE LINE OF THE TOKEN NAMING THE CALLEE**, which `anchor` is at every one of the doors that
+			// funnel through `emitCall` — a free call's identifier, a method's name after the final `.`, a
+			// static's after the type. That is the spec's rule word for word, and it is what makes two calls
+			// to one function on two lines produce two values.
+			callerLine gives self.emitLiteral(anchor.line as ParsedInt, valueType: MaxonType.integer, range: range)
+			callerFile gives self.emitStringLiteral(self.sourceFileDisplayPath(), range: range)
+			// The synthesized nullary function (`SignatureIndex.ParamDefaultInfo`). It is nullary, so this
+			// recursion bottoms out at once: no helper declares a parameter, hence none is in
+			// `funcParamDefaults` and `fillOmittedArgDefaults` returns on its first match.
+			helper(name) gives try self.emitCall(name, anchor: anchor, args: ValueIdArray.create(), argLabels: ByteArrayArray.create(), argRanges: SourceRangeArray.create(), argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.none, mint: CalleeMint.paramDefaultHelper)
+		end 'produces'
+	end 'emitDefaultArgValue'
+
+	// ⭐ **HOW THE FILE BEING PARSED NAMES ITSELF INSIDE EMITTED CODE (W72)** — its path relative to the
+	// compile root, `/`-separated on every host, which is what `__file__` expands to.
+	//
+	// It is DERIVED from the module directory the whole-program index already stamped for this file
+	// (`Queries.moduleDirectoryForFile`, which is `Project.deriveModuleDirectory` against the compile
+	// anchor) rather than measured a second time here. That directory is already root-relative and already
+	// `/`-joined — the separator rewrite lives there, once — so the only thing left to add is the file's own
+	// name. A second `relativeTo` here would be the same derivation written twice, free to disagree with the
+	// one every namespace and every `Visibility.module` answer is decided on.
+	//
+	// ⚠ RELATIVE AND NOT ABSOLUTE BY CHOICE, and the reason is a gate rather than taste: an absolute path is
+	// a fact about the machine that ran the compiler, so embedding one makes two builds of one commit on two
+	// machines emit different bytes — exactly what the golden fragments exist to detect.
+	//
+	// MEASURED against the oracle, which is canonical for `/specs`: a `__file__` default filled from
+	// `sub/helper.maxon` in a directory build prints `sub/helper.maxon`, and one filled from the root file
+	// prints `main.maxon`.
+	function sourceFileDisplayPath() returns ByteArray
+		let directory = self.signatures.moduleDirectoryOf(self.filePath)
+		if directory.isEmpty() 'atTheCompileRoot'
+			return self.filePath.filename().toByteArray()
+		end 'atTheCompileRoot'
+
+		return "{directory}/{self.filePath.filename()}".toByteArray()
+	end 'sourceFileDisplayPath'
 
 	// ⭐ **RETYPE-OF-T AT A CONCRETE METHOD'S RETURN (D7) — `emitFieldLoad`'s rule, reached one op further.**
 	// `c.unwrap()` on a `Cell with Wide` returns what the SHARED body declared, the opaque `T`, and an opaque
