@@ -61245,7 +61245,12 @@ export type Parser
 			return self.filePath.filename().toByteArray()
 		end 'atTheCompileRoot'
 
-		return "{directory}/{self.filePath.filename()}".toByteArray()
+		// ⚠ JOINED WITH `ModuleDirectorySeparator` AND NOT A LITERAL `/` (W72 review). The paragraph above
+		// argues that the separator rewrite lives in `deriveModuleDirectory` once — and a hardcoded `/` here
+		// would be a second speller of the very joiner it is arguing about, free to disagree with
+		// `moduleDirectoryContains`' `"{outer}{ModuleDirectorySeparator}"` and with `namespaceForModuleDirectory`'s
+		// inversion. It would disagree by emitting a WRONG PATH STRING, not by failing to compile.
+		return "{directory}{ModuleDirectorySeparator}{self.filePath.filename()}".toByteArray()
 	end 'sourceFileDisplayPath'
 
 	// ⭐ **RETYPE-OF-T AT A CONCRETE METHOD'S RETURN (D7) — `emitFieldLoad`'s rule, reached one op further.**
