@@ -1,0 +1,49 @@
+// Test: w61.interface-scoped-alias-in-a-requirement
+typealias Num = int(0 to 1000)
+
+interface Holder uses Element
+	typealias ElementArray = Array with Element
+	function absorb(value ElementArray)
+end 'Holder'
+
+interface Maker
+	static function spawn() returns Self
+end 'Maker'
+
+type Bag uses Element implements Holder with Element, Maker
+	typealias ElementArray = Array with Element
+	var items as ElementArray = ElementArray.create()
+
+	export static function spawn() returns Self
+		return Self{}
+	end 'spawn'
+
+	export function absorb(value ElementArray)
+		items = value.clone()
+	end 'absorb'
+
+	export function count() returns Num
+		return items.count()
+	end 'count'
+end 'Bag'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}

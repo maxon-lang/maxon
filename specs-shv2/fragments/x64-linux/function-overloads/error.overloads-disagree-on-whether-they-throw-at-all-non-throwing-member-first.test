@@ -1,0 +1,29 @@
+// Test: error.overloads-disagree-on-whether-they-throw-at-all-non-throwing-member-first
+typealias Num = int(-1000 to 1000)
+
+enum Boom
+	bad
+end 'Boom'
+
+function want(actual bool) returns Num
+	if actual 'yes'
+		return 9
+	end 'yes'
+	return 2
+end 'want'
+
+function want(actual Num) returns Num throws Boom
+	if actual < 0 'neg'
+		throw Boom.bad
+	end 'neg'
+	return 5
+end 'want'
+
+function main() returns ExitCode
+	let a = try want(1) otherwise 0
+	let b = want(true)
+	return (a + b) as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:15:10: Unsupported: overloading 'want' — its declarations do not all state the same `throws` clause, and the whole-program declaration sweep publishes a function's throws clause under the name the source wrote, so a `try` at a call to this name cannot be told whether the call throws at all or which error type it recovers. The `try` is desugared when the call is PARSED and the overload is resolved a whole pass later, so nothing downstream can repair it. Give every overload the same `throws` clause, or give the overloads distinct names

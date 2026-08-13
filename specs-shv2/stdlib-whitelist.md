@@ -163,7 +163,7 @@ The refusal that reaches this today is the TARGET gate, `E3104`. It is reported 
 crossing from user code INTO stdlib, and it names the stdlib function the user actually wrote:
 
 ```text
-error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:16: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
 ```
 
 The requirement is TRANSITIVE through the stdlib call graph: `Clock.elapsedMs` names no runtime entry
@@ -372,7 +372,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:16: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-whitelist.target-refusal-blames-the-crossing-call-arm64 -->
@@ -390,7 +390,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no arm64-macos implementation
+error E3104: <fragment>:3:16: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no arm64-macos implementation
 ```
 
 <!-- test: stdlib-whitelist.target-refusal-is-transitive -->
@@ -408,7 +408,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:10: this construct is x64-windows only at this rung: 'Clock.elapsedMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:16: this construct is x64-windows only at this rung: 'Clock.elapsedMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-whitelist.target-refusal-blames-the-users-own-helper -->
@@ -429,7 +429,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:9: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:15: this construct is x64-windows only at this rung: 'Clock.nowMs' lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
 ```
 
 <!-- test: stdlib-whitelist.unreached-clock-still-compiles-on-wasm -->

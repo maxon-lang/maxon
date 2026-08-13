@@ -1,0 +1,186 @@
+// Test: try-block.bare-throw-routed
+typealias Count = int(0 to 1000)
+
+enum Kind
+    alpha
+    beta
+    gamma
+end 'Kind'
+
+enum MyError implements Error
+    fooErr
+    barErr
+end 'MyError'
+
+function dispatch(k Kind) returns Count throws MyError
+    var result = 0
+    try 'd'
+        match k 'm'
+            alpha then result = 1
+            beta then throw MyError.barErr
+            default throws MyError.fooErr
+        end 'm'
+    end 'd' otherwise (e) 'h'
+        match e 'he'
+            fooErr then result = 40
+            barErr then result = 80
+        end 'he'
+    end 'h'
+    return result
+end 'dispatch'
+
+function main() returns ExitCode
+    let a = try dispatch(Kind.alpha) otherwise panic("alpha escaped")
+    let b = try dispatch(Kind.beta) otherwise panic("beta escaped")
+    let c = try dispatch(Kind.gamma) otherwise panic("gamma escaped")
+    return a + b + c
+end 'main'
+---
+ExitCode: 121
+---
+func @dispatch {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm#2
+    x64.jmp matchnext#5
+  matcharm#2:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont#6
+  matchcont#6:
+    x64.jmp tryblkcont
+  matchnext#5:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm#3
+    x64.jmp matchdefault
+  matcharm#3:
+    x64.movRegImm32 rax, 1
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp tryblkerr
+  matchdefault:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp tryblkerr
+  tryblkerr:
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#7
+    x64.jmp matchnext#10
+  matcharm#7:
+    x64.movRegImm32 rax, 40
+    x64.jmp matchcont#11
+  matchnext#10:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#8
+    x64.jmp matchdead
+  matcharm#8:
+    x64.movRegImm32 rax, 80
+    x64.jmp matchcont#11
+  matchcont#11:
+    x64.movRegReg r8, rax
+    x64.jmp tryblkcont
+  tryblkcont:
+    x64.movRegImm32 r10, 0
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 1000
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_3]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect dispatch
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect dispatch
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#4
+    x64.jmp tryok#3
+  tryerr#4:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#3:
+    x64.movRegImm32 rcx, 2
+    x64.callDirect dispatch
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr#6
+    x64.jmp tryok#5
+  tryerr#6:
+    x64.leaRegRdata rcx, [rip + __str_blob_2]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#5:
+    x64.leaRegRegReg rax, rbx, r12
+    x64.leaRegRegReg r8, rax, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

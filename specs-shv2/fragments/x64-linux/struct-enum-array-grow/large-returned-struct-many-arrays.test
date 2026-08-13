@@ -1,0 +1,875 @@
+// Test: large-returned-struct-many-arrays
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+typealias StringArray = Array with String
+
+export union CfOp
+		br(target Integer)
+end 'CfOp'
+
+export union IrOp
+		cf(op CfOp)
+end 'IrOp'
+
+typealias OpArray = Array with IrOp
+
+export type Block
+		export var id as Integer
+		export var label as String
+		export var ops as OpArray
+		export var terminator as IrOp
+		export var hasTerminator as bool
+
+		static function create(id Integer, label String, ops OpArray, terminator IrOp, hasTerminator bool) returns Self
+			return Self{id: id, label: label, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
+		end 'create'
+end 'Block'
+
+export type Region
+		export var blocks as IntArray
+		export var nextBlockId as Integer
+
+		static function create(blocks IntArray, nextBlockId Integer) returns Self
+			return Self{blocks: blocks, nextBlockId: nextBlockId}
+		end 'create'
+end 'Region'
+
+export type Func
+		export var name as String
+		export var returnType as String
+		export var region as Region
+
+		static function create(name String, returnType String, region Region) returns Self
+			return Self{name: name, returnType: returnType, region: region}
+		end 'create'
+end 'Func'
+
+typealias FuncArray = Array with Func
+
+export type Module
+		export var functions as FuncArray
+
+		static function create(functions FuncArray) returns Self
+			return Self{functions: functions}
+		end 'create'
+end 'Module'
+
+export type ModuleMemo
+		export var value as Module
+		export var computedAt as Integer
+		export var verifiedAt as Integer
+
+		static function create(value Module, computedAt Integer, verifiedAt Integer) returns Self
+			return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
+		end 'create'
+end 'ModuleMemo'
+
+export type CodeResult
+		export var code as IntArray
+		export var offset as Integer
+
+		static function create(code IntArray, offset Integer) returns Self
+			return Self{code: code, offset: offset}
+		end 'create'
+end 'CodeResult'
+
+export type CodeMemo
+		export var value as CodeResult
+		export var computedAt as Integer
+		export var verifiedAt as Integer
+
+		static function create(value CodeResult, computedAt Integer, verifiedAt Integer) returns Self
+			return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
+		end 'create'
+end 'CodeMemo'
+
+export type QueryDatabase
+		export var currentRevision as Integer
+		export var sourcePaths as StringArray
+		export var allModuleCache as ModuleMemo
+		export var allMidCache as ModuleMemo
+		export var codeCache as CodeMemo
+		export var dependencies as IntArray
+		export var activeQueryStack as IntArray
+		export var tokenHits as Integer
+		export var tokenMisses as Integer
+		export var parseHits as Integer
+		export var parseMisses as Integer
+
+		static function create(currentRevision Integer, sourcePaths StringArray, allModuleCache ModuleMemo, allMidCache ModuleMemo, codeCache CodeMemo, dependencies IntArray, activeQueryStack IntArray, tokenHits Integer, tokenMisses Integer, parseHits Integer, parseMisses Integer) returns Self
+			return Self{currentRevision: currentRevision, sourcePaths: sourcePaths, allModuleCache: allModuleCache, allMidCache: allMidCache, codeCache: codeCache, dependencies: dependencies, activeQueryStack: activeQueryStack, tokenHits: tokenHits, tokenMisses: tokenMisses, parseHits: parseHits, parseMisses: parseMisses}
+		end 'create'
+end 'QueryDatabase'
+
+export type Project
+		export var db as QueryDatabase
+		export var dbInitialized as bool
+		export var nextValueId as Integer
+		export var parserVarNames as StringArray
+		export var parserVarSlots as IntArray
+		export var parserNextSlot as Integer
+		export var rootPath as String
+		export var isSingleFile as bool
+		export var currentBlock as Block
+		export var currentFunction as Func
+		export var currentModule as Module
+
+		static function create(db QueryDatabase, dbInitialized bool, nextValueId Integer, parserVarNames StringArray, parserVarSlots IntArray, parserNextSlot Integer, rootPath String, isSingleFile bool, currentBlock Block, currentFunction Func, currentModule Module) returns Self
+			return Self{db: db, dbInitialized: dbInitialized, nextValueId: nextValueId, parserVarNames: parserVarNames, parserVarSlots: parserVarSlots, parserNextSlot: parserNextSlot, rootPath: rootPath, isSingleFile: isSingleFile, currentBlock: currentBlock, currentFunction: currentFunction, currentModule: currentModule}
+		end 'create'
+end 'Project'
+
+function createProject(rootPath String) returns Project
+		let emptyModuleMemo = ModuleMemo.create(Module.create(FuncArray.create()), computedAt: 0, verifiedAt: 0)
+		let emptyCodeMemo = CodeMemo.create(CodeResult.create(IntArray.create(), offset: 0), computedAt: 0, verifiedAt: 0)
+		let db = QueryDatabase.create(0, sourcePaths: StringArray.create(), allModuleCache: emptyModuleMemo, allMidCache: emptyModuleMemo, codeCache: emptyCodeMemo, dependencies: IntArray.create(), activeQueryStack: IntArray.create(), tokenHits: 0, tokenMisses: 0, parseHits: 0, parseMisses: 0)
+		let emptyBlock = Block.create(0, label: "", ops: OpArray.create(), terminator: IrOp.cf(CfOp.br(0)), hasTerminator: false)
+		let emptyFunc = Func.create("", returnType: "", region: Region.create(IntArray.create(), nextBlockId: 0))
+		let emptyModule = Module.create(FuncArray.create())
+		return Project.create(db, dbInitialized: false, nextValueId: 0, parserVarNames: StringArray.create(), parserVarSlots: IntArray.create(), parserNextSlot: 0, rootPath: rootPath, isSingleFile: false, currentBlock: emptyBlock, currentFunction: emptyFunc, currentModule: emptyModule)
+end 'createProject'
+
+function main() returns ExitCode
+		var p = createProject("test")
+		p.db.dependencies.push(1)
+		p.db.dependencies.push(2)
+		p.db.dependencies.push(3)
+		p.db.dependencies.push(4)
+		p.db.dependencies.push(5)
+		p.db.activeQueryStack.push(10)
+		return p.db.dependencies.count() + p.db.activeQueryStack.count()
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Block.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegReg r14, r9
+    x64.storeSlotReg slot0, rsi
+    x64.movRegImm32 rcx, 40
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r15 + 8], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 16], r13
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 24], r14
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.byte [r15 + 32], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_IrOp
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r15
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Region.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Func.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 0], r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r14 + 8], r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Region
+    x64.movRegReg rcx, r12
+    x64.callDirect __str_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Module.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ModuleMemo.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r14 + 0], rbx
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Module
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @CodeResult.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 0], rbx
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @CodeMemo.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r14 + 0], rbx
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.storeBaseDispReg.word64 [r14 + 16], r13
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_CodeResult
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @QueryDatabase.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.storeSlotReg slot5, r12
+    x64.movRegReg r13, rax
+    x64.storeSlotReg slot7, r13
+    x64.movRegReg r14, r9
+    x64.storeSlotReg slot8, rsi
+    x64.storeSlotReg slot6, rdi
+    x64.loadRegBaseDisp.word64 rax, [rbp + 48]
+    x64.storeSlotReg slot4, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 56]
+    x64.storeSlotReg slot3, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 64]
+    x64.storeSlotReg slot2, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 72]
+    x64.storeSlotReg slot1, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 80]
+    x64.storeSlotReg slot0, rax
+    x64.movRegImm32 rcx, 88
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.storeBaseDispReg.word64 [r15 + 0], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 8], r12
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 16], r13
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 24], r14
+    x64.loadRegSlot rbx, slot8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 32], rbx
+    x64.loadRegSlot r12, slot6
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 40], r12
+    x64.loadRegSlot r13, slot4
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 48], r13
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.word64 [r15 + 56], rax
+    x64.loadRegSlot rax, slot2
+    x64.storeBaseDispReg.word64 [r15 + 64], rax
+    x64.loadRegSlot rax, slot1
+    x64.storeBaseDispReg.word64 [r15 + 72], rax
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [r15 + 80], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_CodeMemo
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_ModuleMemo
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __destruct_ModuleMemo
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r15
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Project.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 104
+    x64.movRegReg rbx, rcx
+    x64.storeSlotReg slot5, rbx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegReg r14, r9
+    x64.storeSlotReg slot7, r14
+    x64.storeSlotReg slot8, rsi
+    x64.storeSlotReg slot6, rdi
+    x64.loadRegBaseDisp.word64 rax, [rbp + 48]
+    x64.storeSlotReg slot4, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 56]
+    x64.storeSlotReg slot3, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 64]
+    x64.storeSlotReg slot2, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 72]
+    x64.storeSlotReg slot1, rax
+    x64.loadRegBaseDisp.word64 rax, [rbp + 80]
+    x64.storeSlotReg slot0, rax
+    x64.movRegImm32 rcx, 88
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 0], rbx
+    x64.storeBaseDispReg.byte [r15 + 8], r12
+    x64.storeBaseDispReg.word64 [r15 + 16], r13
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 24], r14
+    x64.loadRegSlot rbx, slot8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 32], rbx
+    x64.loadRegSlot rax, slot6
+    x64.storeBaseDispReg.word64 [r15 + 40], rax
+    x64.loadRegSlot rbx, slot4
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r15 + 48], r8
+    x64.loadRegSlot rax, slot3
+    x64.storeBaseDispReg.byte [r15 + 56], rax
+    x64.loadRegSlot r12, slot2
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 64], r12
+    x64.loadRegSlot r13, slot1
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 72], r13
+    x64.loadRegSlot r14, slot0
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r15 + 80], r14
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_Module
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Func
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Block
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.loadRegSlot rcx, slot8
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot7
+    x64.callDirect __managed_decref
+    x64.loadRegSlot rcx, slot5
+    x64.callDirect __destruct_QueryDatabase
+    x64.movRegReg r8, r15
+    x64.epilogue 104
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @createProject {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 152
+    x64.storeSlotReg slot4, rcx
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Func]
+    x64.callDirect __managed_create
+    x64.movRegReg rcx, r8
+    x64.callDirect Module.create
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect ModuleMemo.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect CodeResult.create
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect CodeMemo.create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [rsp + 32], r15
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rsp + 40], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rsp + 48], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rsp + 56], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rsp + 64], rax
+    x64.movRegImm32 rcx, 0
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.movRegReg r9, rbx
+    x64.movRegReg rsi, r12
+    x64.movRegReg rdi, r14
+    x64.callDirect QueryDatabase.create
+    x64.storeSlotReg slot6, r8
+    x64.leaRegRdata rbx, [rip + __str_rec_2]
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_IrOp]
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 r13, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r14 + 0], rax
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot7, r8
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], r14
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRegImm32 rcx, rbx, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, rbx
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegImm32 rcx, 0
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r12
+    x64.loadRegSlot r9, slot7
+    x64.movRegImm32 rsi, 0
+    x64.callDirect Block.create
+    x64.storeSlotReg slot3, r8
+    x64.leaRegRdata rbx, [rip + __str_rec_2]
+    x64.leaRegRdata r12, [rip + __str_rec_2]
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, r8
+    x64.callDirect Region.create
+    x64.storeSlotReg slot8, r8
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 8]
+    x64.leaRegRegImm32 rcx, rbx, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, rbx
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.loadRegBaseDisp.word64 rbx, [r12 + 0]
+    x64.loadRegBaseDisp.word64 r12, [r12 + 8]
+    x64.leaRegRegImm32 rcx, r12, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r15, r13, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r15
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r13
+    x64.loadRegSlot rax, slot8
+    x64.callDirect Func.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __destruct_Func]
+    x64.callDirect __managed_create
+    x64.movRegReg rcx, r8
+    x64.callDirect Module.create
+    x64.storeSlotReg slot9, r8
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __str_decref]
+    x64.callDirect __managed_create
+    x64.storeSlotReg slot5, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.storeSlotReg slot2, r8
+    x64.loadRegSlot rcx, slot6
+    x64.callDirect __mm_incref
+    x64.loadRegSlot rax, slot4
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.loadRegSlot r12, slot3
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.loadRegSlot r13, slot9
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [rsp + 32], r14
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [rsp + 40], rax
+    x64.storeBaseDispReg.word64 [rsp + 48], r12
+    x64.storeBaseDispReg.word64 [rsp + 56], rbx
+    x64.storeBaseDispReg.word64 [rsp + 64], r13
+    x64.loadRegSlot r14, slot6
+    x64.movRegReg rcx, r14
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 0
+    x64.loadRegSlot r9, slot5
+    x64.loadRegSlot rsi, slot2
+    x64.movRegImm32 rdi, 0
+    x64.callDirect Project.create
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Module
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Func
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Block
+    x64.movRegReg rcx, r14
+    x64.callDirect __destruct_QueryDatabase
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __destruct_CodeMemo
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_ModuleMemo
+    x64.movRegReg r8, r15
+    x64.epilogue 152
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect createProject
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.movRegImm32 rdx, 1
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.movRegImm32 rdx, 2
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.movRegImm32 rdx, 3
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.movRegImm32 rdx, 4
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.movRegImm32 rdx, 5
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 48]
+    x64.movRegImm32 rdx, 10
+    x64.callDirect __managed_push
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 40]
+    x64.callDirect __managed_count
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 48]
+    x64.callDirect __managed_count
+    x64.leaRegRegReg r12, r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Project
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_4]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

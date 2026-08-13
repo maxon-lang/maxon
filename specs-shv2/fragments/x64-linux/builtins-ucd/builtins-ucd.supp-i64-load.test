@@ -1,0 +1,132 @@
+// Test: builtins-ucd.supp-i64-load
+function main() returns ExitCode
+	let entry = __Builtins.ucdI64At("__ucd_supp", index: 0)
+	let next = __Builtins.ucdI64At("__ucd_supp", index: 1)
+	var score = 0
+	if (entry and 2097151) == 65536 'rangeStart'
+		score = score + 1
+	end 'rangeStart'
+	if ((entry shr 21) and 2097151) == 65547 'rangeEnd'
+		score = score + 1
+	end 'rangeEnd'
+	if ((entry shr 42) and 31) == 5 'category'
+		score = score + 1
+	end 'category'
+	if (next and 2097151) == 65549 'nextRangeStart'
+		score = score + 1
+	end 'nextRangeStart'
+	if ((next shr 21) and 2097151) == 65574 'nextRangeEnd'
+		score = score + 1
+	end 'nextRangeEnd'
+	if (next and 2097151) > ((entry shr 21) and 2097151) 'sortedAndDisjoint'
+		score = score + 1
+	end 'sortedAndDisjoint'
+	return score as ExitCode
+end 'main'
+---
+ExitCode: 6
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __ucd_supp_at
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.callDirect __ucd_supp_at
+    x64.movRegImm32 rax, 0
+    x64.movRegReg rcx, rbx
+    x64.andRegImm32 rcx, rbx, 2097151
+    x64.cmpRegImm32 rcx, 65536
+    x64.jcc equal, rangeStart
+    x64.jmp critsplit#16
+  rangeStart:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#2
+  critsplit#16:
+    x64.jmp ifcont#2
+  ifcont#2:
+    x64.movRegReg rcx, rbx
+    x64.sarRegImm8 rcx, rbx, 21
+    x64.andRegImm32 rcx, rcx, 2097151
+    x64.cmpRegImm32 rcx, 65547
+    x64.jcc equal, rangeEnd
+    x64.jmp critsplit#17
+  rangeEnd:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#4
+  critsplit#17:
+    x64.jmp ifcont#4
+  ifcont#4:
+    x64.movRegReg rcx, rbx
+    x64.sarRegImm8 rcx, rbx, 42
+    x64.andRegImm32 rcx, rcx, 31
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc equal, category
+    x64.jmp critsplit#18
+  category:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#6
+  critsplit#18:
+    x64.jmp ifcont#6
+  ifcont#6:
+    x64.movRegReg rcx, r8
+    x64.andRegImm32 rcx, r8, 2097151
+    x64.cmpRegImm32 rcx, 65549
+    x64.jcc equal, nextRangeStart
+    x64.jmp critsplit#19
+  nextRangeStart:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#8
+  critsplit#19:
+    x64.jmp ifcont#8
+  ifcont#8:
+    x64.movRegReg rcx, r8
+    x64.sarRegImm8 rcx, r8, 21
+    x64.andRegImm32 rcx, rcx, 2097151
+    x64.cmpRegImm32 rcx, 65574
+    x64.jcc equal, nextRangeEnd
+    x64.jmp critsplit#20
+  nextRangeEnd:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#10
+  critsplit#20:
+    x64.jmp ifcont#10
+  ifcont#10:
+    x64.andRegImm32 r8, r8, 2097151
+    x64.sarRegImm8 rbx, rbx, 21
+    x64.andRegImm32 rbx, rbx, 2097151
+    x64.cmpRegReg r8, rbx
+    x64.jcc greater, sortedAndDisjoint
+    x64.jmp critsplit#21
+  sortedAndDisjoint:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#12
+  critsplit#21:
+    x64.jmp ifcont#12
+  ifcont#12:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r8, rax, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

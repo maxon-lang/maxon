@@ -1,0 +1,70 @@
+// Test: static-var-bool-adjacent-globals
+var flag = false
+var counter = 42
+
+function main() returns ExitCode
+	if flag 'checkFalse'
+		print("flag should be false\n")
+		return 1
+	end 'checkFalse'
+	if counter == 42 'checkCounter'
+		return 0
+	end 'checkCounter'
+	print("counter wrong\n")
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __data_counter@0 = i64 42
+  __data_flag@8 = i1 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.leaRegGlobal rax, __data_flag
+    x64.loadRegBaseDisp.byte rax, [rax + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, checkFalse
+    x64.jmp ifcont#2
+  checkFalse:
+    x64.leaRegRdata rcx, [rip + __str_rec_2]
+    x64.callDirect print
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.leaRegGlobal rax, __data_counter
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.cmpRegImm32 rax, 42
+    x64.jcc equal, checkCounter
+    x64.jmp ifcont#4
+  checkCounter:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.leaRegRdata rcx, [rip + __str_rec_3]
+    x64.callDirect print
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

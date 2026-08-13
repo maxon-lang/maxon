@@ -317,7 +317,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:9: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_now_ns', which has no wasm32-wasi implementation
 ```
 
 <!-- test: builtins-clock.wall-clock-rejected-on-wasm -->
@@ -329,5 +329,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:9: this construct is x64-windows only at this rung: it lowers to the runtime entry '__clock_now_unix_s', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:20: this construct is x64-windows only at this rung: it lowers to the runtime entry '__clock_now_unix_s', which has no wasm32-wasi implementation
 ```

@@ -1,0 +1,168 @@
+// Test: try-block.array-many-ops
+typealias Score = int(0 to 100)
+typealias ScoreArray = Array with Score
+
+function main() returns ExitCode
+    var arr = ScoreArray.create()
+    arr.push(0)
+    arr.push(0)
+    arr.push(0)
+
+    var sum = 0
+    try 'work'
+        arr.set(0, value: 10)
+        arr.set(1, value: 20)
+        arr.set(2, value: 30)
+        let a = arr.get(0)
+        let b = arr.get(1)
+        let c = arr.get(2)
+        sum = a + b + c
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            indexOutOfBounds then sum = 99
+            emptySlot then sum = 99
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 60
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit#17
+    x64.jmp tryblkok#2
+  critsplit#17:
+    x64.jmp tryblkerr
+  tryblkok#2:
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 rax, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit#18
+    x64.jmp tryblkok#3
+  critsplit#18:
+    x64.jmp tryblkerr
+  tryblkok#3:
+    x64.movRegImm32 rdx, 2
+    x64.movRegImm32 rax, 30
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_set
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit#19
+    x64.jmp tryblkok#4
+  critsplit#19:
+    x64.jmp tryblkerr
+  tryblkok#4:
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit#20
+    x64.jmp tryblkok#5
+  critsplit#20:
+    x64.jmp tryblkerr
+  tryblkok#5:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r13, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit#21
+    x64.jmp tryblkok#6
+  critsplit#21:
+    x64.jmp tryblkerr
+  tryblkok#6:
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit#22
+    x64.jmp tryblkok#7
+  critsplit#22:
+    x64.jmp tryblkerr
+  tryblkerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#8
+    x64.jmp matchnext
+  matcharm#8:
+    x64.movRegImm32 rax, 99
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#9
+    x64.jmp matchdead
+  matcharm#9:
+    x64.movRegImm32 rax, 99
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg r12, rax
+    x64.jmp tryblkcont
+  matchdead:
+  tryblkok#7:
+    x64.leaRegRegReg rax, r12, r13
+    x64.leaRegRegReg r12, rax, r8
+    x64.jmp tryblkcont
+  tryblkcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

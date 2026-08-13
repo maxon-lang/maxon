@@ -1,0 +1,109 @@
+// Test: try-block.single-enum-error-path
+typealias Score = int(0 to 100)
+
+enum MyError implements Error
+    failed
+end 'MyError'
+
+function maybeFail(x bool) returns Score throws MyError
+    if x 'check'
+        throw MyError.failed
+    end 'check'
+    return 7
+end 'maybeFail'
+
+function main() returns ExitCode
+    var sum = 0
+    try 'work'
+        let a = maybeFail(false)
+        let b = maybeFail(true)
+        sum = a + b
+    end 'work'
+    otherwise (e) 'h'
+        match e 'k'
+            failed then sum = 42
+        end 'k'
+    end 'h'
+    return sum
+end 'main'
+---
+ExitCode: 42
+---
+func @maybeFail {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 7
+    x64.movRegImm32 r10, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect maybeFail
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit#11
+    x64.jmp tryblkok#2
+  critsplit#11:
+    x64.jmp tryblkerr
+  tryblkok#2:
+    x64.movRegImm32 rcx, 1
+    x64.callDirect maybeFail
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, critsplit#12
+    x64.jmp tryblkok#3
+  critsplit#12:
+    x64.jmp tryblkerr
+  tryblkerr:
+    x64.leaRegRegImm32 rax, r10, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 42
+    x64.jmp matchcont
+  matchcont:
+    x64.jmp tryblkcont
+  matchdead:
+  tryblkok#3:
+    x64.leaRegRegReg r8, rbx, r8
+    x64.jmp tryblkcont
+  tryblkcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

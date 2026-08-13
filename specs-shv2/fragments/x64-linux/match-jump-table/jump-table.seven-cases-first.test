@@ -1,0 +1,75 @@
+// Test: jump-table.seven-cases-first
+enum Weekday
+		mon
+		tue
+		wed
+		thu
+		fri
+		sat
+		sun
+end 'Weekday'
+
+function main() returns ExitCode
+		let w = Weekday.mon
+		let name = match w 'w'
+				mon gives "Monday"
+				tue gives "Tuesday"
+				wed gives "Wednesday"
+				thu gives "Thursday"
+				fri gives "Friday"
+				sat gives "Saturday"
+				sun gives "Sunday"
+		end 'w'
+		print(name)
+		return 0
+end 'main'
+---
+ExitCode: unpinned
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rax, 0
+    x64.jumpTable rax, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5, [5]=matcharm#6, [6]=matcharm#7] @__jumptable_14
+  matchdead:
+  matcharm#1:
+    x64.leaRegRdata rcx, [rip + __str_rec_7]
+    x64.jmp matchcont
+  matcharm#2:
+    x64.leaRegRdata rcx, [rip + __str_rec_8]
+    x64.jmp matchcont
+  matcharm#3:
+    x64.leaRegRdata rcx, [rip + __str_rec_9]
+    x64.jmp matchcont
+  matcharm#4:
+    x64.leaRegRdata rcx, [rip + __str_rec_10]
+    x64.jmp matchcont
+  matcharm#5:
+    x64.leaRegRdata rcx, [rip + __str_rec_11]
+    x64.jmp matchcont
+  matcharm#6:
+    x64.leaRegRdata rcx, [rip + __str_rec_12]
+    x64.jmp matchcont
+  matcharm#7:
+    x64.leaRegRdata rcx, [rip + __str_rec_13]
+    x64.jmp matchcont
+  matchcont:
+    x64.callDirect print
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

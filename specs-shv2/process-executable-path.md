@@ -211,5 +211,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3104: <fragment>:3:11: this construct is x64-windows only at this rung: it lowers to the runtime entry '__proc_exe_path', which has no wasm32-wasi implementation
+error E3104: <fragment>:3:22: this construct is x64-windows only at this rung: it lowers to the runtime entry '__proc_exe_path', which has no wasm32-wasi implementation
 ```
