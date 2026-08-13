@@ -911,3 +911,64 @@ still cannot manufacture a second: RE-MEASURED at `ARR3b`, a user `extension Arr
 type — `nums.filter(10)` reports `E3005 'if' requires a bool condition, got 'struct'`, i.e. it binds the
 stdlib member. That is a separate finding about overload resolution across a contested set, not a vehicle
 for these two.
+
+## `stdlib/Range.maxon` — the entry W62 added, and the two things that make it real
+
+**Listed 2026-08-12 (BATCH36).** Its one blocker was `W60`: `RangeIterator implements Iterator with
+RangeBound, BidirectionalIterator`, where `BidirectionalIterator extends Iterator`, had the inherited
+`current()` checked with NO binding, so the module read `expected current() returns Element` against its
+own `returns RangeBound`. With that cured it probes `E3001` and nothing else.
+
+⚠ **A GREEN `E3001` IS EVIDENCE ONLY FOR THE DECLARATIONS THE COMPILER ACTUALLY ANALYZED**, so the entry
+was checked the two ways this file's siblings demand rather than on the probe alone:
+
+- **The injection control FIRES.** `let bogus = NoSuchType.definitelyUndefined(1)` placed in
+  `RangeIterator.current()`'s body answers `E3001` **+ `E3004`** — the control the six `helpers/sort/*`
+  files fail, so this module's readiness is not the vacuous kind.
+- **The entry is BYTE-NEUTRAL, measured both ways on one tree** rather than against a constant remembered
+  from another rung: `function main() returns ExitCode / return 7` compiles to **1,592 bytes of code with
+  the entry and 1,592 without**, from two full compiler builds differing only in the whitelist line.
+  *(The executable-level `cmp` that `S2k` also ran was NOT repeated here; this is the codeBytes match.)*
+
+⭐ **AND THE MODULE IS REACHED THROUGH THE PROTOCOL, NOT MERELY LOADED.** `Range implements Iterable with
+(RangeBound, RangeIterator)`, so the case below drives `createIterator()` -> `current()` -> `advance()`
+across the witness edge — which is `W60`'s cure doing work in a real program rather than in a reduction.
+**Capability oracle-agreed: the bootstrap answers 25 for the identical source.**
+
+<!-- test: stdlib-whitelist.range-iterates-through-its-iterable-conformance -->
+```maxon
+function main() returns ExitCode
+	let r = Range.create(3, finish: 7)
+	var total = 0
+	for v in r 'loop'
+		total = total + v
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+25
+```
+
+⚠ **WHAT THE ENTRY DOES NOT BUY, MEASURED: `to` IN EXPRESSION POSITION.** `Range.maxon`'s own header
+describes it as producing *"first-class iterable values produced by `start to end` … used in expression
+position"*, and that syntax is **still `E2001`** on this tree — `let r = 3 to 7` does not parse. The
+desugaring of a `for … in` header remains the direct while-loop it always was. So the module is listed and
+reachable **by name**, and the surface its own documentation advertises is a separate door that no row yet
+owns. Pinned here rather than left in a rung report, because the next reader of this entry will otherwise
+assume the entry delivered it.
+
+<!-- test: stdlib-whitelist.error.range-is-not-yet-constructible-from-to-in-expression-position -->
+```maxon
+function main() returns ExitCode
+	let r = 3 to 7
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2001: <fragment>:3:12: unexpected token: 'to'
+```
