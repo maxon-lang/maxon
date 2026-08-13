@@ -1321,6 +1321,44 @@ end 'main'
 [   404]
 ```
 
+### A specifier on a NAME- or TEXT-rendering enum is ignored
+
+⭐ **A FORMAT SPECIFIER IS A NUMERIC ONE, SO IT REACHES ONLY THE ARM THAT RENDERS A NUMBER.**
+`int-format-enum-backing` above pins the raw-number arm, where the specifier APPLIES. These are the
+other two arms, and they are the ones that break SILENTLY: an enum declaring no raw values renders
+its CASE NAME and a string-backed one renders its DECLARED TEXT, and neither is a number to pad or
+to re-base. Nothing pinned them before — `enum-rawvalue-format` writes `.rawValue` explicitly, so it
+never reaches the enum arm at all — which is exactly how a shared integer-rendering path can start
+padding a case name without a single test noticing. Oracle-agreed on this source.
+
+<!-- test: format-spec-on-a-text-rendering-enum-is-ignored -->
+```maxon
+enum Plain
+	red
+	green
+end 'Plain'
+
+enum Text
+	active = "Active"
+	idle = "Idle"
+end 'Text'
+
+function main() returns ExitCode
+	let p = Plain.green
+	let t = Text.idle
+	print("[{p}] [{p:6}] [{p:08}] [{p:x}]\n")
+	print("[{t}] [{t:6}] [{t:08}] [{t:x}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[green] [green] [green] [green]
+[Idle] [Idle] [Idle] [Idle]
+```
+
 
 ### Integer Format Specifier - Unsigned Decimal
 

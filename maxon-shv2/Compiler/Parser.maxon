@@ -43307,7 +43307,7 @@ export type Parser
 		if self.tagOf(value) == ValueTypeTag.named 'possiblyAnEnum'
 			let decl = self.enumMatchFor(value)
 			if enumMatchIsDeclared(decl) 'anEnumPart'
-				try self.materializeEnumPart(requireEnumLayout(decl), value: value, exprTok: exprTok, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+				try self.materializeEnumPart(requireEnumLayout(decl), value: value, exprTok: exprTok, format: format, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 				return
 			end 'anEnumPart'
 		end 'possiblyAnEnum'
@@ -43349,20 +43349,13 @@ export type Parser
 			// a magnitude has exactly one answer, and the one thing that DID differ in the references —
 			// signedness — is decided HERE, once, off the value's declared type, and handed over as an
 			// argument rather than re-derived from bit 63 at the far end.
-			if format.present 'formattedIntPart'
-				try self.materializeFormattedIntPart(value, exprTok: exprTok, format: format, rendersUnsigned: valueRendersUnsigned(self.integerValueDomain(value)), partBufs: partBufs, partLens: partLens, range: range)
-				return
-			end 'formattedIntPart'
-
-			// ⚠ **THE UNFORMATTED PATH GOES THROUGH `materializeDecimalPart`, WHICH IS ALSO THE ENUM ARM'S
-			// `rawNumber` ANSWER (W81).** The NAME and the SCRATCH BUDGET are two halves of one signedness
-			// choice — the signed budget carries a sign byte the unsigned rendering never writes, and the
-			// signed renderer taken with the unsigned budget would write one byte past `i64.min`'s scratch —
-			// so the pairing is spelled ONCE, in that helper. An int-backed enum renders exactly as the
-			// integer it is, and a second spelling here would be free to pick the other entry point for the
-			// same value. The FORMATTED path above cannot share it: it needs the signedness as a value to
-			// hand on, not an entry point to select.
-			self.materializeDecimalPart(value, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			// ⚠ **BOTH BRANCHES LIVE IN `materializeIntegerPart`, BECAUSE THE ENUM ARM NEEDS THE SAME
+			// ANSWER (W81).** An int-backed enum renders EXACTLY as the integer it is — specifier included —
+			// so if the choice between the formatted and the scratch path were spelled here, the enum arm
+			// would have to spell it a second time. It did, and the second spelling silently DROPPED the
+			// specifier: `"{code:08}"` on an int-backed enum printed `404` where the oracle prints
+			// `00000404` (`string-interpolation/int-format-enum-backing`).
+			try self.materializeIntegerPart(value, exprTok: exprTok, format: format, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			return
 		end 'intPart'
 
@@ -43405,13 +43398,26 @@ export type Parser
 		throw ParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — no conversion to text exists for it", line: exprTok.line, column: exprTok.column)
 	end 'materializeInterpExpr'
 
-	// ⭐ **RENDER AN i64 AS DECIMAL — the integral arm's body, shared with the enum arm's `rawNumber`
-	// answer.** Split out because an int-backed enum renders EXACTLY as the integer it is, and a second
-	// spelling of the signedness choice would be free to pick the other entry point for the same value.
-	function materializeDecimalPart(value ValueId, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange)
+	// ⭐⭐ **RENDER AN INTEGER — FORMATTED OR PLAIN — AND IT IS THE ENUM ARM'S `rawNumber` ANSWER TOO.**
+	// The integral arm and an int-backed enum are the SAME question: an enum with a raw number renders
+	// exactly as that number, specifier and all. Keeping the formatted/plain choice here rather than at
+	// the two call sites is not tidiness — when the enum arm spelled it separately it simply had no
+	// formatted branch, so `"{code:08}"` printed `404` against the oracle's `00000404`.
+	//
+	// ⚠ The NAME and the SCRATCH BUDGET are two halves of ONE signedness choice: the signed budget
+	// carries a sign byte the unsigned rendering never writes, and the signed renderer taken with the
+	// unsigned budget would write one byte past `i64.min`'s scratch. The FORMATTED path cannot select an
+	// entry point that way — it needs the signedness as a VALUE to hand on — which is why the two
+	// branches ask `valueRendersUnsigned` separately rather than sharing a local.
+	function materializeIntegerPart(value ValueId, exprTok Token, format InterpFormatSpec, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
+		if format.present 'formatted'
+			try self.materializeFormattedIntPart(value, exprTok: exprTok, format: format, rendersUnsigned: valueRendersUnsigned(self.integerValueDomain(value)), partBufs: partBufs, partLens: partLens, range: range)
+			return
+		end 'formatted'
+
 		let signedness = DivideSignedness.unsigned if valueRendersUnsigned(self.integerValueDomain(value)) else DivideSignedness.signed
 		self.materializeScratchPart(value, converter: integerToStringName(signedness), scratchBytes: integerToStringScratchBytes(signedness), partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
-	end 'materializeDecimalPart'
+	end 'materializeIntegerPart'
 
 	// ⭐⭐ **INTERPOLATE AN ENUM / UNION VALUE (W81)** — see `materializeInterpExpr`'s arm for the measured
 	// table this dispatch was written from. The rendering is decided by `enumInterpRendering` below and the
@@ -43425,13 +43431,18 @@ export type Parser
 	//
 	// A selected case NAME or raw TEXT is an immortal `.rdata` String record, so its bytes are spliced by
 	// `materializeStringRecordPart` exactly as a `{s}` part's are and nothing is owned or dropped.
-	function materializeEnumPart(layout EnumLayout, value ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
+	// ⚠ **THE SPECIFIER REACHES THE `rawNumber` ARM AND NOTHING ELSE, AND THAT IS MEASURED RATHER THAN
+	// ASSUMED.** A format specifier is a NUMERIC one, so the two TEXT arms have nothing to do with it.
+	// The oracle, on one program carrying all three backings: `"{code:08}"` on an int-backed enum gives
+	// `00000404`, while `"{p:6}"` on a plain enum gives `green` and `"{t:6}"` on a string-backed one
+	// gives `Active` — both IGNORING the specifier, exactly as the bool and byte-record arms above do.
+	function materializeEnumPart(layout EnumLayout, value ValueId, exprTok Token, format InterpFormatSpec, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
 		let tag = self.emitEnumTagOf(value, layout: layout, range: range)
 
 		match enumInterpRendering(layout) 'rendering'
 			caseName then self.materializeStringRecordPart(try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.caseName, valueType: MaxonType.string, anchor: exprTok, range: range), partBufs: partBufs, partLens: partLens, range: range)
 			declaredText then self.materializeStringRecordPart(try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.declaredRawValue, valueType: MaxonType.string, anchor: exprTok, range: range), partBufs: partBufs, partLens: partLens, range: range)
-			rawNumber then self.materializeDecimalPart(tag, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			rawNumber then try self.materializeIntegerPart(tag, exprTok: exprTok, format: format, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 		end 'rendering'
 	end 'materializeEnumPart'
 
