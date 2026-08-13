@@ -1,0 +1,282 @@
+// Test: repeated-persist-overwrites-decref-old
+typealias Payload = int(0 to u64.max)
+
+type Chunk
+	export var payload as Payload
+
+	static function create(payload Payload) returns Chunk
+		return Self{payload: payload}
+	end 'create'
+end 'Chunk'
+
+interface ChunkMaker
+	function makeChunk() returns Chunk
+end 'ChunkMaker'
+
+type Backend implements ChunkMaker
+	export let seed as Payload
+
+	static function create(seed Payload) returns Backend
+		return Self{seed: seed}
+	end 'create'
+
+	function makeChunk() returns Chunk
+		return Chunk.create(self.seed)
+	end 'makeChunk'
+end 'Backend'
+
+type Store
+	export var saved as Chunk
+
+	static function create() returns Store
+		return Self{saved: Chunk.create(0)}
+	end 'create'
+
+	function refresh(maker ChunkMaker)
+		self.saved = maker.makeChunk()
+	end 'refresh'
+
+	function readSaved() returns Payload
+		return self.saved.payload
+	end 'readSaved'
+end 'Store'
+
+function obtainMaker(seed Payload) returns ChunkMaker
+	return Backend.create(seed)
+end 'obtainMaker'
+
+function main() returns ExitCode
+	var store = Store.create()
+	let maker = obtainMaker(40)
+	var i = 1
+	while i <= 4 'loop'
+		store.refresh(maker)
+		i = i + 1
+	end 'loop'
+	print("{store.readSaved()}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Chunk.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Backend.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Backend.makeChunk {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect Chunk.create
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Store.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Chunk.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Store.refresh {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rax
+    x64.movRegReg rcx, rdx
+    x64.callMem [r12 + 24]
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Store.readSaved {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @obtainMaker {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect Backend.create
+    x64.leaRegRdata r10, [rip + __witness_Backend.ChunkMaker]
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 88
+    x64.callDirect Store.create
+    x64.movRegReg rbx, r8
+    x64.storeSlotReg slot0, rbx
+    x64.movRegImm32 rcx, 40
+    x64.callDirect obtainMaker
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegReg r13, r10
+    x64.storeSlotReg slot2, r13
+    x64.movRegImm32 r14, 1
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 r14, 4
+    x64.jcc lessEqual, loop
+    x64.jmp whileexit
+  loop:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Store.refresh
+    x64.leaRegRegImm32 r14, r14, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Store.readSaved
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 20
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot3, r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __uint_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_15]
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.loadRegBaseDisp.word64 r14, [rax + 8]
+    x64.leaRegRegReg rax, rbx, r14
+    x64.storeSlotReg slot4, rax
+    x64.leaRegRegImm32 rcx, rax, 49
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot5, r8
+    x64.leaRegRegImm32 r15, r8, 48
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r15, rbx
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r14
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r14
+    x64.loadRegSlot rbx, slot5
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot4
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegSlot rdx, slot1
+    x64.callDirect __drop_existential
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __destruct_Store
+    x64.movRegReg r8, rbx
+    x64.epilogue 88
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

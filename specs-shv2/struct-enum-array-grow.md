@@ -223,8 +223,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: shared-nested-struct-in-literal -->
-<!-- move-only sharing (E3102) — the same owned value reaches TWO consuming argument positions and shv2 has no incref, so the second is "use of moved value"; a consume-analysis divergence from the bootstrap -->
+<!-- test: shared-nested-struct-in-literal -->
 Same nested struct reference used for two fields of another struct.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -266,8 +265,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: large-returned-struct-many-arrays -->
-<!-- move-only sharing (E3102) — the same owned value reaches TWO consuming argument positions and shv2 has no incref, so the second is "use of moved value"; a consume-analysis divergence from the bootstrap -->
+<!-- test: large-returned-struct-many-arrays -->
 Large returned struct with many array fields and nested structs with enum fields.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

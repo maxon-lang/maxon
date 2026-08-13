@@ -449,7 +449,8 @@ func @ArrayIterator.create {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.callDirect __managed_cursor_create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
@@ -459,7 +460,8 @@ func @ArrayIterator.create {
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -467,9 +469,16 @@ func @ArrayIterator.create {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_cursor_decref
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -2172,10 +2181,14 @@ func @Array.mergeTopTwo {
     x64.leaRegRegReg rdx, rax, rdx
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.callDirect SortRun.init
+    x64.movRegReg rbx, r8
     x64.loadRegSlot rax, slot1
-    x64.leaRegRegImm32 rdx, rax, -1
+    x64.leaRegRegImm32 r12, rax, -1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
     x64.loadRegSlot rcx, slot0
-    x64.movRegReg rax, r8
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#10
@@ -2211,6 +2224,8 @@ func @Array.mergeTopTwo {
     x64.ret
   tryok#11:
     x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.epilogue 120
     x64.popReg r15
@@ -2548,13 +2563,18 @@ func @Array.driftsortRange {
   ifcont#33:
     x64.leaRegRdata rcx, [rip + __str_rec_43]
     x64.callDirect Log.trace
+    x64.loadRegSlot rbx, slot1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
     x64.loadRegSlot rcx, slot15
-    x64.loadRegSlot rdx, slot1
+    x64.movRegReg rdx, rbx
     x64.callDirect __managed_push
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot2
-    x64.leaRegRegReg rax, rax, rcx
-    x64.movRegReg rbx, rax
+    x64.leaRegRegReg r13, rax, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rbx, r13
     x64.jmp whilehdr#14
   whileexit#16:
     x64.jmp whilehdr#34

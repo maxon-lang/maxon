@@ -62,7 +62,8 @@ func @TestFile.openWrite {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.callDirect __mf_open_write
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
@@ -72,7 +73,8 @@ func @TestFile.openWrite {
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -80,9 +82,16 @@ func @TestFile.openWrite {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_destruct
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -93,7 +102,8 @@ func @TestFile.openRead {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.callDirect __mf_open_read
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
@@ -103,7 +113,8 @@ func @TestFile.openRead {
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -111,9 +122,16 @@ func @TestFile.openRead {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mf_destruct
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

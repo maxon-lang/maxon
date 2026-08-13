@@ -1209,12 +1209,13 @@ end 'main'
 0
 ```
 
-<!-- test: error.alias-named-type-argument-is-moved-not-borrowed -->
-⭐ **The narrowing that comes with it, and the half that proves the move is real.** An owning argument
-is MOVED into the box, so the source is no longer the caller's to read. Spelled through the alias this
-used to be a BORROW the caller kept — the box merely `__mm_incref`'d it — so this program compiled;
-the `Box with (Box with S0)` spelling below is the same program and has always been refused, which is
-the disagreement this rung removes.
+<!-- test: alias-named-type-argument-is-consumed-and-co-owned -->
+⭐ **The narrowing that comes with it, and the half that proves the CONSUME is real.** An owning argument
+is CONSUMED into the box, which since the durable-sink ruling (⚖ 2026-08-12) means the box takes its OWN
+reference rather than stealing the caller's — so `v0` stays readable and releases its reference at scope
+exit. What the rung fixed is still pinned here: the alias spelling and the inline spelling must agree
+about the argument being OWNING at all, and they now do. (Both spellings were E3102 at `v0.value` while a
+consume was a MOVE; the classification they pin is unchanged, only its refcount consequence is.)
 ```maxon
 type S0
 	export var s as String
@@ -1234,15 +1235,19 @@ function main() returns ExitCode
 	let v0 = N0.create(S0.make("x"))
 	let v1 = N1.create(v0)
 	let again = v0.value
+	print("{again.s}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:19:14: use of moved value 'v0': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+x
 ```
 
-<!-- test: error.inline-nested-type-argument-is-moved-not-borrowed -->
-The inline spelling of the case above, refused identically. It is the CONTROL that makes the pair a
+<!-- test: inline-nested-type-argument-is-consumed-and-co-owned -->
+The inline spelling of the case above, accepted identically. It is the CONTROL that makes the pair a
 statement about agreement rather than about one spelling: its argument arrives tagged
 `genericInstance`, which `typeArgIsOwned` has always classified through the instance, so this half was
 already correct and did not move.
@@ -1265,11 +1270,15 @@ function main() returns ExitCode
 	let v0 = N0.create(S0.make("x"))
 	let v1 = N1.create(v0)
 	let again = v0.value
+	print("{again.s}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:19:14: use of moved value 'v0': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+x
 ```
 
 <!-- test: error.bare-generic-constructor-unbound-t -->

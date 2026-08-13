@@ -67,15 +67,23 @@ func @Item.create {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.prologue 32
+    x64.pushReg r13
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.movRegReg r12, rdx
     x64.movRegImm32 rcx, 16
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.storeBaseDispReg.word64 [r8 + 8], r12
-    x64.epilogue 32
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_retain
+    x64.storeBaseDispReg.word64 [r13 + 0], r8
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -87,7 +95,8 @@ func @Reader.create {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.callDirect Array.cursor
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
@@ -97,7 +106,8 @@ func @Reader.create {
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -105,9 +115,16 @@ func @Reader.create {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_ArrayIterator_Item
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -358,7 +375,8 @@ func @ArrayIterator.create {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
     x64.callDirect __managed_cursor_create
     x64.movRegReg rbx, r8
     x64.cmpRegImm32 r10, 0
@@ -368,7 +386,8 @@ func @ArrayIterator.create {
     x64.movRegImm32 rax, 0
     x64.leaRegRegImm32 r10, rax, 1
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -376,9 +395,16 @@ func @ArrayIterator.create {
     x64.movRegImm32 rcx, 8
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_cursor_decref
     x64.movRegImm32 r10, 0
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

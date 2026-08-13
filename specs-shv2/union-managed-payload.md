@@ -16,10 +16,22 @@ pointer.
 
 Ownership is static single-owner, exactly as for a `String` or a struct binding:
 
-- **Construct is a MOVE.** `U.case(s)` transfers ownership of `s` into the box's
-  payload slot — no incref, no copy. The source binding is moved-from (a later
-  read is `E3102`). A borrowed String literal payload is promoted to an owned
-  heap copy first, so the box always owns a droppable payload.
+- **Construct gives the payload slot its OWN reference (⚖ user ruling,
+  2026-08-12).** `U.case(s)` leaves the slot holding exactly one reference, and
+  which act supplies it depends on what `s` is: a borrowed String literal is
+  promoted to an owned heap copy; an owned TEMPORARY has no other owner, so the
+  slot ADOPTS its `+1`; and a live owned BINDING is CO-OWNED — the slot increfs
+  and `s` stays readable, releasing its own reference at scope exit. Either way
+  the box owns a droppable payload and releases exactly what it took.
+
+  > This bullet used to read *"Construct is a MOVE … no incref, no copy. The
+  > source binding is moved-from (a later read is `E3102`)"*. The move-only
+  > premise behind it was retracted: two sinks for one value each need a
+  > reference of their own. `construct-co-owns-string-source` and
+  > `construct-co-owns-struct-source` below are the two cases that were flipped.
+  > **The MOVE-OUT rules below are a different question and are unchanged** — a
+  > `match` binding still moves a payload OUT of a solely-owned box, because it
+  > nulls the slot rather than adding an owner.
 - **A match binding on a SOLELY-OWNED union is a MOVE-OUT.** `match u { case(x) then … }`
   loads the managed field into `x` (which becomes an owned binding, dropped at its
   own scope exit) and clears the box slot. After the match `u` is moved-from (a
@@ -1414,8 +1426,11 @@ end 'main'
 reassign first payload string long enough to be a real heap allocationreassign second payload string long enough to be a real heap allocation
 ```
 
-<!-- test: error.construct-moves-string-source -->
-Moving a String binding into a union payload poisons it; a later read is E3102.
+<!-- test: construct-co-owns-string-source -->
+Storing a String binding into a union payload CO-OWNS it (⚖ 2026-08-12): the payload slot takes its own
+reference, `msg` stays live, and its scope-exit drop releases the reference it always held. The record is
+freed exactly once, by whichever of the two owners drops last. (This construct used to POISON `msg`, on
+the premise that shv2 has no incref — retracted when a durable store started taking a reference.)
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1435,12 +1450,17 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:16:8: use of moved value 'msg': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+v1
 ```
 
-<!-- test: error.construct-moves-struct-source -->
-Moving a struct binding into a union payload poisons it; a later read is E3102.
+<!-- test: construct-co-owns-struct-source -->
+The struct spelling of the case above. `Shape.solid(b)` gives the payload slot its own reference to `b`'s
+box; `b` stays readable and drops its own reference at scope exit, so the box is released once by the
+union's destructor and once by `b` — matching the two references taken.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1463,8 +1483,8 @@ function main() returns ExitCode
 	return b.mass
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:20:9: use of moved value 'b': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+5
 ```
 
 <!-- test: error.match-consume-then-use -->

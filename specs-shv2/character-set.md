@@ -213,10 +213,12 @@ false
 false
 ```
 
-<!-- test: member-set-moved-into-from -->
-### `CharacterSet.from` CONSUMES its member set
-The box becomes the set's sole owner, so a bare local that reaches `from` is moved out and may not be
-read again. Without the poison the set would be freed twice.
+<!-- test: member-set-co-owned-by-from -->
+### `CharacterSet.from` CO-OWNS its member set
+`from` consumes its argument, and a consuming position is a DURABLE SINK: the set takes its own reference
+to the member box (⚖ 2026-08-12) rather than stealing the caller's. `members` therefore stays readable and
+releases its own reference at scope exit, so the box is freed once — exactly the two references, exactly
+two drops. (It used to be a MOVE, and `members.count()` here was E3102.)
 ```maxon
 function main() returns ExitCode
 	let members = CharSet from ['x']
@@ -225,26 +227,33 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:5:10: use of moved value 'members': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+1
 ```
 
-<!-- test: member-set-consumed-twice -->
-### One member set cannot fill two CharacterSets
-The second `from` reads a value the first already took ownership of — an ARGUMENT position rather than
-the method-receiver position above, so the poison is caught at both of the two sites a moved member set
-can be read from.
+<!-- test: one-member-set-fills-two-character-sets -->
+### One member set can fill two CharacterSets
+The refcount consequence of the case above, and the reason it is not merely a relaxation: EACH `from`
+takes its own reference, so the box ends at three (two sets plus `members`) and is released three times.
+Under the old move rule the second `from` was E3102, because a single transferred `+1` could not answer
+for two owners.
 ```maxon
 function main() returns ExitCode
 	let members = CharSet from ['x']
 	let first = CharacterSet.from(members)
 	let second = CharacterSet.from(members)
-	print("{first.contains('x')}")
+	print("{first.contains('x')}{second.contains('x')}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:5:33: use of moved value 'members': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+truetrue
 ```
 
 <!-- test: member-set-dropped-unused -->

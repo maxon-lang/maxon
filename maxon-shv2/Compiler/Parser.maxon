@@ -23402,11 +23402,11 @@ export type Parser
 	// SCRATCH cell's spill. Both owe the identical three steps (allocate, take ownership, store), and the
 	// ownership step is the one that must not be written twice: a managed value moved into durable storage
 	// has to be de-listed from the statement's pending drops, or the statement end frees what the cell holds.
-	function fillFreshCell(value ValueId, declared MaxonType, rhsWasBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+	function fillFreshCell(value ValueId, declared MaxonType, rhsWasBareLocal bool, range SourceRange) returns ValueId
 		let cell = self.allocateCell(declared, range: range)
 		var stored = value
 		if self.signatures.typeIsManaged(declared, from: self.artifact.typeNames) 'cellTakesOwnership'
-			stored = try self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(declared)), anchor: anchor, range: range)
+			stored = self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(declared)), range: range)
 		end 'cellTakesOwnership'
 
 		self.emitIndirectStore(cell, offset: CellContentOffset, value: stored, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(declared)), range: range)
@@ -23434,7 +23434,7 @@ export type Parser
 	function declareCellLocal(func IrFunction, nameTok Token, boundValue ValueId, rhsWasBareLocal bool) throws ParseError
 		let range = SourceRange.ofToken(nameTok)
 		let declared = self.typeOf(boundValue)
-		let cell = try self.fillFreshCell(boundValue, declared: declared, rhsWasBareLocal: rhsWasBareLocal, anchor: nameTok, range: range)
+		let cell = self.fillFreshCell(boundValue, declared: declared, rhsWasBareLocal: rhsWasBareLocal, range: range)
 		var binding = try self.scope.declareCellBinding(nameTok.value, varType: declared, mutable: true, cell: cell, isParameter: false) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
 		self.attachPendingBorrows(func, borrower: binding, boundValue: boundValue, liveUntil: self.pos)
 
@@ -23466,7 +23466,7 @@ export type Parser
 		let declared = self.typeOf(value)
 		// An r-value is not a bare local reference by construction — the call site only reaches here when the
 		// argument did NOT resolve to a cell-resident binding — so it moves nothing out of another name.
-		let cell = try self.fillFreshCell(value, declared: declared, rhsWasBareLocal: false, anchor: anchor, range: range)
+		let cell = self.fillFreshCell(value, declared: declared, rhsWasBareLocal: false, range: range)
 		self.markValueOwnsHeap(cell, exclusivity: OwnedHeapExclusivity.sole)
 		self.ownedBindings.push(VarInfo.createCellBinding(EmptySourceText, varType: declared, mutable: false, cell: cell, isParameter: false))
 		return cell
@@ -23498,11 +23498,19 @@ export type Parser
 			return
 		end 'scalarCell'
 
-		// The cell is DURABLE STORAGE, exactly as a global's slot or a struct field is, so the new value moves
-		// IN: a borrowed RHS (an element read out of a container, a String literal) is promoted to something the
-		// cell may own and drop, and an owned temporary is de-listed from the statement's pending drops so the
-		// statement end does not free what the cell now holds.
-		let owned = try self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(binding.varType)), anchor: nameTok, range: range)
+		// The cell is DURABLE STORAGE, exactly as a global's slot or a struct field is, so the new value is
+		// stored through the one door all of them share: a borrowed RHS (an element read out of a container, a
+		// String literal) is promoted to something the cell may own and drop, and an owned temporary is de-listed
+		// from the statement's pending drops so the statement end does not free what the cell now holds.
+		//
+		// ⭐⭐ **AND AN OWNED VALUE A LIVE BINDING KEEPS IS CO-OWNED — SO THIS IS THE ONE REBIND THAT IS NOT A
+		// MOVE (⚖ user ruling, 2026-08-12).** `byRefParam = t` reads as a rebind and is a durable STORE, because
+		// the cell is the CALLER's storage and outlives this frame: the caller will read what is written here
+		// long after `t`'s scope has ended. So the cell takes its own reference and `t` stays live with its own
+		// — where a plain local rebind (`s = t`, `reassignBindingValue`) still MOVES, the new name inheriting the
+		// drop the old one owed. `moveManagedValueInto`'s header states the rule and names this exception; the
+		// two are stated together because "a rebind moves" is true of one door and false of this one.
+		let owned = self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(binding.varType)), range: range)
 		self.emitDecref(self.emitCellLoad(binding, range: range), range: range)
 		self.emitCellStore(binding, value: owned, range: range)
 	end 'reassignCellBinding'
@@ -23773,11 +23781,12 @@ export type Parser
 		end 'scalarGlobal'
 
 		// The slot is DURABLE STORAGE, exactly as a struct field or a union payload is, so the new value
-		// arrives through the one door that decides copy-vs-move for all of them: a borrowed String is
-		// COPIED into a fresh owned record, an already-owned value is MOVED (its source binding poisoned,
-		// or its pending statement-end drop cancelled). A second spelling here would be free to leak the
-		// temporary or double-free the source.
-		let owned = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsByteRecord(maxonTypeTag(valueType)), anchor: nameTok, range: range)
+		// arrives through the one door that decides copy-vs-co-own-vs-adopt for all of them: a borrowed String
+		// is COPIED into a fresh owned record, an owned value held by a LIVE BINDING is CO-OWNED (the slot takes
+		// its own reference and the binding keeps its own — the 2026-08-12 durable-store ruling), and an owned
+		// TEMPORARY is ADOPTED, its pending statement-end drop cancelled. A second spelling here would be free
+		// to leak the temporary or double-free the source.
+		let owned = self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsByteRecord(maxonTypeTag(valueType)), range: range)
 
 		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range), range: range)
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
@@ -39881,9 +39890,9 @@ export type Parser
 	// on the comma after the first element, which the caller has already parsed.
 	//
 	// It ends at `emitStructLiteral` — the very routine `Self{…}` uses — so the box, its `__mm_alloc`, the
-	// per-element `storeIndirect` at `offsetOfField(i)` and the MOVE-IN of a managed element (`moveInPayload`,
-	// which promotes a borrowed String literal and transfers an owned value) are all the machinery that
-	// already exists. A tuple gets nothing of its own, which is the point of `TupleTypeNamePrefix`.
+	// per-element `storeIndirect` at `offsetOfField(i)` and the STORE of a managed element (`moveInPayload`,
+	// which promotes a borrowed String literal, co-owns a value a live binding keeps and adopts an owned
+	// temporary) are all the machinery that already exists. A tuple gets nothing of its own, which is the point of `TupleTypeNamePrefix`.
 	//
 	// ⚠ **THE ELEMENT TYPES ARE THE VALUES' OWN, so there is no declared type to coerce against** — the one
 	// step a struct literal takes that this cannot (`requireFieldType`). A tuple declares no field types; it
@@ -39892,9 +39901,11 @@ export type Parser
 		var elementValues = ValueIdArray.create()
 		var elementBareLocal = BoolArray.create()
 		var elementTypes = MaxonTypeArray.create()
-		// ⭐ The values already MOVED into an owning slot of this literal — `parseStructLiteralFields`'
-		// `movedOwningValues`, for its reason: shv2 is move-only, so `(s, s)` over a String would drop one
-		// value twice. A second reference to a moved value at an owning slot is E3102.
+		// ⭐ The values already stored into an owning slot of this literal — `parseStructLiteralFields`'
+		// `movedOwningValues`, for its reason and with its gate: a slot that takes its OWN reference may be
+		// repeated freely (`(s, s)` over a String now co-owns twice and is released twice), and only a slot
+		// that INHERITS this frame's single reference makes a second occurrence E3102
+		// (`repeatedOwningDestinationWouldDoubleFree`).
 		var movedOwningValues = ValueIdArray.create()
 
 		try self.collectTupleElement(elementValues, elementBareLocal: elementBareLocal, elementTypes: elementTypes, movedOwningValues: movedOwningValues, value: first, valueStart: firstStart)
@@ -39920,7 +39931,7 @@ export type Parser
 	// The element's own type is what is passed as `fieldType`: a tuple ADOPTS its element types, so the slot
 	// a value moves into is owning iff the value itself owns heap.
 	function collectTupleElement(elementValues ValueIdArray, elementBareLocal BoolArray, elementTypes MaxonTypeArray, movedOwningValues ValueIdArray, value ValueId, valueStart TokenIndex) throws ParseError
-		try self.rejectDoubleOwningStore(movedOwningValues, value: value, fieldType: self.typeOf(value), valueStart: valueStart)
+		try self.rejectDoubleOwningStore(movedOwningValues, value: value, valueStart: valueStart)
 		elementValues.push(value)
 		elementBareLocal.push(self.rhsWasBareLocalReference(valueStart))
 		elementTypes.push(self.typeOf(value))
@@ -40799,9 +40810,9 @@ export type Parser
 	// `String` (promoted/moved in, dropped through `__str_decref`), a `struct` (moved in, dropped through
 	// its own `__destruct_<Struct>`), and a payload-bearing (boxed) UNION field (moved in, dropped through
 	// the union's `__destruct_<U>` or the trivial `__mm_decref` for a scalar-only box — P1.4b wave 2c). The
-	// box becomes the field's sole owner and its `__destruct_<Struct>` cascade drops it exactly once. A
-	// borrowed struct/union value has no `clone`, so moving one into durable storage is refused
-	// (`moveInPayload` — the transitive cross-call consume the call-graph fixpoint owns).
+	// box holds exactly ONE reference to each and its `__destruct_<Struct>` cascade releases exactly those. A
+	// borrowed struct/union value has no `clone`, so it is CO-OWNED rather than copied (`moveInPayload` — the
+	// transitive-consume ruling of 2026-08-04).
 	function parseStructLiteral(func IrFunction) returns ValueId throws ParseError
 		// `Self{…}` and `Point{…}` arrive as ONE token here — `typeBaseTokenAt` has already turned the keyword
 		// into the name it denotes — so the literal's own reader knows nothing about `Self`.
@@ -41120,10 +41131,11 @@ export type Parser
 			return
 		end 'noFields'
 
-		// ⭐ **THE VALUES ALREADY MOVED INTO AN OWNING FIELD OF THIS LITERAL (P1.6-B2 double-free fix).** shv2
-		// is move-only (no `__mm_incref`), so a single value cannot be OWNED by two fields — `Self{a: v, b: v}`
-		// would drop the same String twice (refcount underflow / double-free). Each value moved into an owning
-		// field is recorded here; a second reference to it at an owning field is a USE-AFTER-MOVE (E3102).
+		// ⭐ **THE VALUES ALREADY STORED INTO AN OWNING FIELD OF THIS LITERAL (P1.6-B2 double-free fix).** A
+		// field that takes its OWN reference may hold a value a second field holds too — `Self{a: v, b: v}` over
+		// a concrete managed `v` increfs per slot and is released per slot (the 2026-08-12 ruling). What is
+		// still refused is a repeat at a field that INHERITS this frame's single reference, which would drop it
+		// twice; `rejectDoubleOwningStore` asks that through the gate the ARGUMENT guard asks too.
 		var movedOwningValues = ValueIdArray.create()
 
 		while true 'fieldLoop'
@@ -41150,7 +41162,7 @@ export type Parser
 			// widened f64, not the integer's bytes. A widening only ever produces a fresh scalar, so the
 			// ownership questions below still read the value the source actually named.
 			let value = try self.requireFieldType(layout, index: index, fieldType: fieldType, value: parsed, anchor: nameTok)
-			try self.rejectDoubleOwningStore(movedOwningValues, value: parsed, fieldType: fieldType, valueStart: valueStart)
+			try self.rejectDoubleOwningStore(movedOwningValues, value: parsed, valueStart: valueStart)
 
 			// ⭐ **ESCAPE (P1.5-A2b): a capturing closure may not fill a struct field at CONSTRUCTION either** —
 			// a `Self{op: closure}` box is the same heap slot `x.op = closure` writes (one carries only the
@@ -41233,35 +41245,50 @@ export type Parser
 		return stored
 	end 'requireFieldType'
 
-	// ⭐ **REJECT A DOUBLE-MOVE OF ONE VALUE INTO TWO OWNING FIELDS (P1.6-B2)** — the move-only guard that
-	// makes `Self{a: v, b: v}` a clean E3102 instead of a double-free. A value stored into an OWNING field is
-	// MOVED, not copied: an OWNED managed value (its heap object would be aliased and dropped twice), or ANY
-	// TYPE-PARAMETER field (opaque in the shared body — for a MANAGED instance both fields alias and the
-	// instance destructor drops both; rejected even for a trivial instance, since the body is compiled once
-	// and move-only has no clone). A SCALAR field COPIES its value, and a BORROWED managed value is PROMOTED
-	// to a fresh owned copy per field (`moveInPayload`), so neither aliases — both stay legal. It runs at
-	// PARSE, before any move-in, so the value is still live at both references; `valueStart`'s token names and
-	// positions the second use.
-	function rejectDoubleOwningStore(movedOwningValues ValueIdArray, value ValueId, fieldType MaxonType, valueStart TokenIndex) throws ParseError
-		if not (self.valueIsOwnedHeap(value) or maxonTypeTag(fieldType) == ValueTypeTag.typeParameter) 'copiedOrPromoted'
+	// ⭐ **REJECT A REPEATED OWNING STORE OF ONE VALUE INTO TWO FIELDS OF ONE LITERAL (P1.6-B2)** — a clean E3102
+	// on `Self{a: v, b: v}` instead of a double-free, for the ONE class of value whose store still INHERITS this
+	// frame's reference rather than taking its own. Which class that is, is not this door's to decide:
+	// `repeatedOwningDestinationWouldDoubleFree` is the shared gate, and the ARGUMENT guard asks it too. It runs
+	// at PARSE, before any move-in, so the value is still live at both references; `valueStart`'s token names
+	// and positions the second use.
+	//
+	// ⛔⛔ **IT USED TO REFUSE AN OWNED CONCRETE MANAGED VALUE, AND THAT ARM IS RETRACTED (⚖ user ruling,
+	// 2026-08-12).** Its whole justification was *"shv2 is move-only (no `__mm_incref`), so a single owned value
+	// cannot be OWNED by two destinations"* — which stopped being true the day a durable store started taking
+	// its own reference (`moveManagedValueInto`). `Self{a: v, b: v}` over a concrete managed `v` now increfs
+	// twice, so the record ends at refcount 3 against two slots plus the source binding and is released exactly
+	// three times. Keeping the refusal would have meant a diagnostic whose stated reason the file next door
+	// contradicts, which is this project's signature defect rather than a conservative choice.
+	//
+	// ⛔ **AND IT USED TO ASK ABOUT THE FIELD'S DECLARED TYPE, WHERE ITS SIBLING ASKED ABOUT THE VALUE — TWO
+	// ANSWERS TO ONE QUESTION (found at review).** An opaque field holding a value the descriptor CAN retain
+	// (`opaqueSlotTakesItsOwnReference`) takes one reference per slot and was refused here while the identical
+	// repeat at two consuming ARGUMENTS was accepted; a substituted-concrete value in an opaque field was
+	// refused for the same non-reason. Both doors now read the value, through one predicate.
+	function rejectDoubleOwningStore(movedOwningValues ValueIdArray, value ValueId, valueStart TokenIndex) throws ParseError
+		if not self.repeatedOwningDestinationWouldDoubleFree(value) 'everyDestinationTakesItsOwnReference'
 			return
-		end 'copiedOrPromoted'
+		end 'everyDestinationTakesItsOwnReference'
 		if self.isRepeatedOwningMove(movedOwningValues, value: value) 'doubleMove'
 			let valueTok = self.tokenAt(valueStart)
 			throw ParseError.useAfterMove(String.from(valueTok.value), line: valueTok.line, column: valueTok.column)
 		end 'doubleMove'
 	end 'rejectDoubleOwningStore'
 
-	// ⭐ **THE ONE "same owned value moved into two owning destinations" DETECTOR (P1.7 slice 3a).** shv2 is
-	// move-only (no `__mm_incref`), so a single owned value cannot be OWNED by two destinations — the second owner
-	// would drop a value the first already owns (a double-free). Returns true when `value` was ALREADY recorded in
-	// `movedOwningValues` (a REPEAT owning move — the caller throws its own positioned E3102), else records it and
-	// returns false. Shared by the STRUCT-LITERAL guard (`rejectDoubleOwningStore` — `Self{a: v, b: v}`) and the
-	// CALL-ARGUMENT double-consume guard (`transferConsumedArgs` — `Pair.create(box, b: box)`), so the two sites
-	// cannot drift on what a repeated owning move IS. Each caller keeps its own "is this destination OWNING?" gate
-	// (an owned-heap or type-parameter field; a consuming argument position holding an owned-heap value) and its
-	// own diagnostic name+position — the name is resolved only on a repeat, where the value is always a bound
-	// local (a temporary is minted by one expression and cannot reach two destinations), never an anonymous temp.
+	// ⭐ **THE ONE "this value has ALREADY reached an owning destination in this construct" LEDGER (P1.7 slice
+	// 3a).** Returns true when `value` was ALREADY recorded in `movedOwningValues` (the caller throws its own
+	// positioned E3102), else records it and returns false. Shared by the STRUCT-LITERAL guard
+	// (`rejectDoubleOwningStore` — `Self{a: v, b: v}`) and the CALL-ARGUMENT double-consume guard
+	// (`transferConsumedArgs` — `Pair.create(box, b: box)`), so the two sites cannot drift on what a REPEAT is —
+	// and, since review, they no longer drift on WHICH VALUES it is asked of either: both gate on the one shared
+	// `repeatedOwningDestinationWouldDoubleFree`. What each caller still keeps is its own diagnostic name and
+	// position — the name is resolved only on a repeat, where the value is always a bound local (a temporary is
+	// minted by one expression and cannot reach two destinations), never an anonymous temp.
+	//
+	// ⛔ **BOTH GATES USED TO ADMIT A CONCRETE OWNED MANAGED VALUE, ON THE PREMISE THAT shv2 HAS NO
+	// `__mm_incref` — RETRACTED 2026-08-12.** A concrete durable store now takes its own reference, so two of
+	// them are two references and nothing is dropped twice. What is left is the opaque case alone, whose reason
+	// is a MISSING DESCRIPTOR rather than a missing instruction.
 	function isRepeatedOwningMove(movedOwningValues ValueIdArray, value ValueId) returns bool
 		for prior in movedOwningValues 'eachPrior'
 			if prior == value 'doubleMove'
@@ -41564,12 +41591,12 @@ export type Parser
 	// tag and owns nothing.
 	// ⭐ **A MANAGED FIELD IS MOVED IN** (`moveInPayload`) — the struct half of static single-owner
 	// ownership, the exact mirror of `emitEnumBox`'s payload move. A scalar field is stored as-is; a managed
-	// field (a `String` or a nested `struct`) transfers its value into the box: a borrowed String literal is
-	// promoted to an owned copy, an owned temporary is consumed out of the pending drops, a bare-local
-	// reference is poisoned (E3102 on later use), and a borrowed struct is CO-OWNED — the box becomes a second
-	// owner and the borrow's own owner is untouched (`moveInPayload` — the cross-call consume; it used to be
-	// an E2015 refusal until the transitive-consume ruling of 2026-08-04). The box becomes the field's sole owner, and its `__destruct_<Struct>` cascade
-	// drops the field once when the box is dropped.
+	// field (a `String` or a nested `struct`) stores its value into the box: a borrowed String literal is
+	// promoted to an owned copy, an owned TEMPORARY is adopted out of the pending drops, an owned value a LIVE
+	// BINDING keeps is CO-OWNED (the binding stays readable and releases its own reference at scope exit — the
+	// 2026-08-12 ruling), and a borrowed struct is CO-OWNED as well (`moveInPayload` — the cross-call consume;
+	// it used to be an E2015 refusal until the transitive-consume ruling of 2026-08-04). Whichever arm ran, the
+	// box holds exactly ONE reference per field and its `__destruct_<Struct>` cascade releases exactly that.
 	function emitStructLiteral(layout StructLayout, fieldValues ValueIdArray, fieldBareLocal BoolArray, anchor Token, range SourceRange) returns ValueId throws ParseError
 		// ⭐⭐ **A FUSED WRAPPER'S LITERAL IS NOT A STRUCT LITERAL, AND THE LOOP BELOW WOULD CORRUPT IT.**
 		// `type String`'s `managed` is embedded whole at offset 0 (`StructLayout.isInlineManagedField`), so
@@ -42252,7 +42279,7 @@ export type Parser
 		if self.atStaticEnumMember(EnumAllCaseNamesMemberName) 'allCaseNames'
 			let memberTok = self.current()
 			self.advance()
-			return try self.emitEnumAllCaseNames(layout, memberTok: memberTok, range: SourceRange.ofToken(typeTok))
+			return try self.emitEnumAllCaseNames(layout, range: SourceRange.ofToken(typeTok))
 		end 'allCaseNames'
 
 		// ⭐⭐ **`allCases` AND `fromRawValue` ARE BOTH *ENUM*-ONLY (WHERE `allCaseNames` IS ON BOTH), AND A
@@ -42566,13 +42593,13 @@ export type Parser
 	// move-in door, because the array's `element_destroy@40` stamp releases every live slot: a borrowed
 	// literal handed straight in would be released by an owner it never gave a reference to. `argBareLocal`
 	// is `false` and cannot be otherwise — the value was minted two lines up and names no binding to poison.
-	function emitEnumAllCaseNames(layout EnumLayout, memberTok Token, range SourceRange) returns ValueId throws ParseError
+	function emitEnumAllCaseNames(layout EnumLayout, range SourceRange) returns ValueId throws ParseError
 		let giid = self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: MaxonType.string)
 		let arr = try self.emitArrayCreateOp(giid, range: range)
 
 		for i in 0 upto layout.caseCount() 'eachCase'
 			let literal = self.emitStringLiteral(layout.caseNameAt(i), range: range)
-			let owned = try self.moveManagedValueInto(literal, argBareLocal: false, isString: true, anchor: memberTok, range: range)
+			let owned = self.moveManagedValueInto(literal, argBareLocal: false, isString: true, range: range)
 			self.emitArrayPush(arr, element: owned, range: range)
 		end 'eachCase'
 
@@ -42792,7 +42819,7 @@ export type Parser
 
 	// ⭐ **MOVE A MANAGED VALUE INTO DURABLE STORAGE** — a union payload slot or a struct field, the
 	// construct half of static single-owner ownership and the mirror of `parseBinding`'s move-on-bind. A
-	// scalar is stored as-is. A managed value transfers into the box, which becomes its sole owner:
+	// scalar is stored as-is. A managed value is stored so the box holds exactly ONE reference to it:
 	//   • a BORROWED String literal/param is PROMOTED to an owned heap copy first (`promoteToOwnedString`),
 	//     so the box owns a droppable payload — the copy is a fresh temp, removed from the pending list;
 	//   • an already-OWNED value (an owned String, an interpolation temp, an owned struct/union box, a
@@ -42826,7 +42853,7 @@ export type Parser
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
 		end 'scalar'
-		return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: payloadClassIsString(class), anchor: anchor, range: range)
+		return self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: payloadClassIsString(class), range: range)
 	end 'moveInPayload'
 
 	// ⭐⭐ **MOVE A VALUE INTO A SLOT DECLARED AT THE ENCLOSING GENERIC'S OWN TYPE PARAMETER (W41-opaque)** —
@@ -42846,21 +42873,58 @@ export type Parser
 				return arg
 			end 'trivialConcrete'
 
-			return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: tagIsByteRecord(self.tagOf(arg)), anchor: anchor, range: range)
+			return self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: tagIsByteRecord(self.tagOf(arg)), range: range)
 		end 'substitutedToAConcreteType'
 
-		if self.valueIsOpaqueOwned(arg) 'ownedOpaque'
+		if self.opaqueSlotTakesItsOwnReference(arg) 'referenceThroughTheDescriptor'
+			// The record becomes the reference's owner, so it owes the release if IT is dropped here — recorded at
+			// the one line that takes the reference, which is what makes the store half and the drop half one act
+			// rather than two that agree.
+			self.markRecordOwningOpaqueSlots(owner)
+			return self.coOwnBorrowedOpaque(arg, range: range)
+		end 'referenceThroughTheDescriptor'
+
+		// The slot INHERITS the reference this frame holds (`opaqueSlotTakesItsOwnReference` names the three
+		// shapes and why each takes nothing). Only the OWNED one has bookkeeping left: this frame stops owing the
+		// drop. The other two owe nothing here, because the reference the slot ends up holding was never this
+		// frame's to give away.
+		if self.valueIsOpaqueOwned(arg) 'thisFrameStopsOwningIt'
 			try self.transferOwnedInto(arg, argBareLocal: argBareLocal, anchor: anchor)
-			return arg
-		end 'ownedOpaque'
+		end 'thisFrameStopsOwningIt'
+
+		return arg
+	end 'moveOpaqueValueInto'
+
+	// ⭐⭐ **DOES AN OPAQUE `T` DESTINATION TAKE ITS OWN REFERENCE TO `value`, OR INHERIT THE ONE THIS FRAME
+	// HOLDS? — THE one home of that routing question, because THREE doors ask it and a disagreement between them
+	// is a double free rather than a diagnostic.** The STORE acts on the answer (`moveOpaqueValueInto`); the two
+	// REPEAT guards read it to decide whether ONE value may fill TWO owning destinations in a single construct
+	// (`rejectDoubleOwningStore` for `Self{a: v, b: v}`, `transferConsumedArgs` for `Pair.create(v, b: v)`, both
+	// through `repeatedOwningDestinationWouldDoubleFree`). A destination that takes its OWN reference may be
+	// repeated — N destinations take N references and each is released by its own owner; one that INHERITS may
+	// not, because the single reference this frame holds cannot answer for two owners.
+	//
+	// ⛔⛔ **THREE SHAPES INHERIT, AND "IS IT OWNED" NAMES ONLY THE FIRST.** A constructor FEED parameter and a
+	// generic no `with` ever names both read as BORROWED to the ownership bit while taking no reference at all,
+	// so a guard asking `valueIsOpaqueOwned` alone would admit a repeat of either — two owners of one `+1`. Each
+	// arm below says why it takes nothing; the consequence for a repeat is identical across all three.
+	//
+	// Precondition: `value` carries the opaque `typeParameter` tag. A SUBSTITUTED value is concrete and is
+	// routed through the ordinary doors, which CO-OWN and may therefore always be repeated.
+	function opaqueSlotTakesItsOwnReference(value ValueId) returns bool
+		// An already-OWNED value is TRANSFERRED — a consumed feed parameter moved into `Self{value: v}` or into
+		// an opaque array. The caller already handed over its `+1`, so a reference taken here would leak it.
+		if self.valueIsOpaqueOwned(value) 'ownedIsTransferred'
+			return false
+		end 'ownedIsTransferred'
 
 		// ⭐⭐ **A `constructedValue` FEED PARAMETER IS ALREADY PAID FOR AT THE CALL SITE (W41-opaque).**
 		// `Box.create(v T)`'s `Self{value: v}` is the whole of P1.6-B2's constructor feed: the CONCRETE caller
 		// consumed its argument precisely because this store takes ownership of it, so a reference here would be
 		// a second one and the caller's would leak. It reads as a BORROW to the ownership bit — deliberately, so
 		// the shared body drops nothing (`bindParameters`) — which is exactly why it needs its own mark.
-		if self.constructorFeedParams.contains(arg) 'settledByTheCallSite'
-			return arg
+		if self.constructorFeedParams.contains(value) 'settledByTheCallSite'
+			return false
 		end 'settledByTheCallSite'
 
 		// ⭐ **A GENERIC NO `with` EVER NAMES HAS NO `T` TO REFERENCE, AND THIS IS THE SAME PREDICATE THE
@@ -42883,16 +42947,19 @@ export type Parser
 		// in the CONSUME sense (`typeArgIsOwned` false — the call site borrows it and the caller keeps it) and
 		// is a refcounted heap box all the same, so its word is `__mm_retain` and always was. The two senses
 		// share a word and do not share a boundary; `typeOwnershipProtocol` is the one that decides this slot.
-		if not self.signatures.typeParamOwnerIsInstantiated(self.valueNameId(arg)) 'noInstantiationToReference'
-			return arg
-		end 'noInstantiationToReference'
+		return self.signatures.typeParamOwnerIsInstantiated(self.valueNameId(value))
+	end 'opaqueSlotTakesItsOwnReference'
 
-		// The record becomes the reference's owner, so it owes the release if IT is dropped here — recorded at
-		// the one line that takes the reference, which is what makes the store half and the drop half one act
-		// rather than two that agree.
-		self.markRecordOwningOpaqueSlots(owner)
-		return self.coOwnBorrowedOpaque(arg, range: range)
-	end 'moveOpaqueValueInto'
+	// ⭐ **THE REPEAT GUARDS' SHARED GATE: would a SECOND owning destination for `value` in this construct free
+	// one reference twice?** Only an opaque `T` value whose destination INHERITS this frame's reference can —
+	// everything else takes an independent reference per destination and may repeat freely: a concrete managed
+	// value co-owns (the 2026-08-12 ruling), a substituted opaque is concrete, and a borrowed opaque the
+	// descriptor can retain takes one per slot. Spelled once because its two askers must ask the SAME question:
+	// the field guard used to test the DESTINATION's declared type and the argument guard the VALUE's ownership,
+	// which made `Self{a: v, b: v}` and `Pair.create(v, b: v)` two answers to one question about one value.
+	function repeatedOwningDestinationWouldDoubleFree(value ValueId) returns bool
+		return self.tagOf(value) == ValueTypeTag.typeParameter and not self.opaqueSlotTakesItsOwnReference(value)
+	end 'repeatedOwningDestinationWouldDoubleFree'
 
 	// ⭐⭐ **BECOME A SECOND OWNER OF A BORROWED OPAQUE `T`, THROUGH THE ENCLOSING INSTANCE'S DESCRIPTOR
 	// (W41-opaque)** — `coOwnBorrowedForConsume`'s arm for the type the shared body cannot name.
@@ -42926,14 +42993,45 @@ export type Parser
 		return self.emitRuntimeCall(RetainTypeParamName, args: singletonArgs(value), resultTag: self.tagOf(value), resultNameId: self.valueNameId(value), range: range)
 	end 'coOwnBorrowedOpaque'
 
-	// ⭐ **MOVE AN ALREADY-CLASSIFIED-MANAGED VALUE INTO DURABLE STORAGE** — the core of `moveInPayload`,
+	// ⭐ **STORE AN ALREADY-CLASSIFIED-MANAGED VALUE INTO DURABLE STORAGE** — the core of `moveInPayload`,
 	// factored out so a struct field / union payload (`moveInPayload`) and an ARRAY element (P1.7 slice 3,
 	// `moveElementIntoContainer`) share the ONE transfer rule and cannot drift on it. A borrowed String is promoted
-	// to an owned copy (a fresh temp de-listed); an owned managed value is transferred (bare local poisoned,
-	// temp de-listed); a borrowed struct/union/existential is CO-OWNED (`coOwnBorrowedForConsume`, which for
-	// an existential answers with the reference it TOOK — that may be a fresh record). Precondition: the value
-	// is managed.
-	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, anchor Token, range SourceRange) returns ValueId throws ParseError
+	// to an owned copy (a fresh temp de-listed); a borrowed struct/union/existential is CO-OWNED
+	// (`coOwnBorrowedForConsume`, which for an existential answers with the reference it TOOK — that may be a
+	// fresh record); an owned value held by a LIVE BINDING is CO-OWNED too (`storeOwnedValueIntoDurableSink`,
+	// the ruling below); an owned TEMPORARY is adopted outright, its statement-end drop cancelled. Precondition:
+	// the value is managed.
+	//
+	// ⭐⭐ **A DURABLE STORE OF AN OWNED MANAGED VALUE INCREFS — IT DOES NOT MOVE (⚖ user ruling, 2026-08-12).**
+	// It used to POISON the source binding, on the premise that shv2 is move-only and one `+1` cannot be owned
+	// twice. That premise made the two-sink program the language's own witness-return case is built from — persist
+	// into a durable field AND push into a transient local array — an E3102 that no rewriting of the source can
+	// avoid, because BOTH sinks genuinely need a reference. The ruling is that each durable store ADDS one: the
+	// sinks co-own, the source binding stays LIVE, and its own scope-exit drop releases the reference it has
+	// always held. Net refcount for the ordinary single-sink store is unchanged (+1 here, −1 at scope exit).
+	//
+	// ⚠ **A REBIND OF A PLAIN LOCAL IS NOT A DURABLE STORE AND IS UNTOUCHED.** `let u = t` / `s = t` over an
+	// ordinary local still MOVE (`reassignBindingValue`, `declareInitializedBinding` → `poisonMoveSource`), so
+	// `specs-shv2/moves.md`'s use-after-move family is exactly as it was. A second NAME for a value is not a
+	// sink: it owes no drop of its own, it inherits the one the old name owed.
+	//
+	// ⚠⚠ **THE EXCEPTION IS A CELL-RESIDENT BINDING, AND IT IS A REBIND THAT *IS* A DURABLE STORE.** `s = t`
+	// where `s` is a by-reference parameter (PBR-2) never reaches `reassignBindingValue` at all —
+	// `parseAssignment` routes it to `reassignCellBinding`, which discharges the write through THIS door and so
+	// co-owns. That is right, and it is right for the ruling's own reason: a cell is the CALLER's storage and
+	// outlives this frame, exactly as a field or a global's slot does (`reassignCellBinding` says so in its own
+	// words). Routing it back to a move would rebuild the inconsistency in the other direction — `self.f = t`
+	// co-owning while `byRefParam = t` moved.
+	//
+	// ⚠ **THE OPAQUE `T` DOORS DELIBERATELY STILL MOVE** (`moveOpaqueValueInto`, `moveElementIntoContainer`'s
+	// opaque arm, `transferConsumedArg`'s opaque arm). A shared generic body cannot name an incref: its only
+	// retain is `retainFunc@64` out of the enclosing instance's layout descriptor, which a body carrying no
+	// descriptor (a `static` over a trivial instantiation) does not have — so co-owning there converts a working
+	// program into a refusal, where here it converts a refusal into a working program. Those doors already take a
+	// reference at the one place a move is provably wrong (W58/W60: across a loop back edge), which is the part of
+	// this ruling they can express. Widening the rest of the way needs the descriptor-need seed
+	// `handleEscapingBorrowFeed` names, and that is a rung.
+	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, range SourceRange) returns ValueId
 		// ⭐⭐ **A TUPLE IS COPIED HERE, NOT MOVED — BECAUSE A TUPLE IS A VALUE (P1.10).** A struct is CO-OWNED
 		// below when it is borrowed and MOVED when it is owned, and both are right for a struct: it has
 		// reference identity a program can observe (an alias, a mutation through one), so a second record
@@ -42944,10 +43042,16 @@ export type Parser
 		// one record twice. The bootstrap states the same rule from the other end (`IrStructType.
 		// IsTwoRegisterValueTuple`: *"a tuple returned by value has no prior identity to break"*).
 		//
-		// ⚠ **ONLY A TRIVIAL-ELEMENT TUPLE, and the restriction is a soundness one rather than a scope one.**
-		// shv2 is move-only, so the copy of a MANAGED element would have to be a deep clone; a shallow one
-		// would leave two records pointing at one String and free it twice. A managed-element tuple therefore
-		// keeps the struct rules below — stricter, never wrong — until the rung that gives it the deep clone.
+		// ⚠ **ONLY A TRIVIAL-ELEMENT TUPLE, AND THE RESTRICTION IS NOW A DELIBERATE NON-GOAL RATHER THAN A
+		// SOUNDNESS ONE.** It read *"a shallow copy would leave two records pointing at one String and free it
+		// twice"* — an argument from move-only that the durable-store ruling retired: a per-element retain is
+		// available today and would make a shallow copy of a managed-element tuple perfectly droppable. What is
+		// NOT available is the VALUE semantics a copy exists for. A retain hands back a second record whose
+		// elements ALIAS the first's, so a write through one tuple would show on the other — precisely what a
+		// trivial tuple's copy exists to prevent, and what `returned-tuple-copies-only-when-trivial` pins from
+		// the other side. A managed-element tuple therefore keeps the struct rules below (share one record,
+		// co-own it) until the rung that gives it a DEEP clone, the only copy that would mean what a tuple
+		// means.
 		// The copy is de-listed from the statement's pending drops for the promoted String's reason one branch
 		// down: the durable slot owns it now, and a statement-end `__mm_decref` on it would free a record the
 		// box still holds.
@@ -42977,10 +43081,73 @@ export type Parser
 			end 'borrowedManaged'
 		end 'structOrUnion'
 
-		// An already-owned managed value moves out of its source into the box.
-		try self.transferOwnedInto(arg, argBareLocal: argBareLocal, anchor: anchor)
+		// The owned-set scan inside runs only under the cheap syntactic `argBareLocal` gate, which is the same
+		// arrangement (and the same reason) `poisonMoveSource`'s callers use: an unconditional O(ownedBindings)
+		// scan on every store is quadratic in a long function body.
+		if argBareLocal 'sourceMayBeALiveBinding'
+			return self.storeOwnedValueIntoDurableSink(arg, isString: isString, range: range)
+		end 'sourceMayBeALiveBinding'
+
+		// With the gate false the value came from an EXPRESSION rather than a name, so no binding owns it and
+		// the slot simply ADOPTS the `+1` it was just handed — the statement-end drop is cancelled and nothing
+		// is poisoned, because there is no source to poison. Spelled here rather than routed through
+		// `transferOwnedInto`: that door's other arm is the move-poison, which is now unreachable from this
+		// function, and calling it with a statically-false flag would read as though a move could still happen.
+		self.removeFromPendingTemps(arg)
 		return arg
 	end 'moveManagedValueInto'
+
+	// ⭐⭐ **HAND AN OWNED CONCRETE MANAGED VALUE TO A DURABLE SINK — THE ONE ACT, SHARED BY THE DIRECT STORE AND
+	// THE CONSUMING ARGUMENT** (`moveManagedValueInto`, which carries the 2026-08-12 ruling, and
+	// `transferConsumedArg`, which is the same sink one call boundary out). Written twice, the two would be free
+	// to settle differently on what a durable sink owes a value — a leak on one side and a double free on the
+	// other, from a distinction the language does not draw.
+	//
+	// **THE SPLIT IS "IS THERE A SECOND OWNER TO KEEP ALIVE?"** A value a LIVE BINDING holds keeps that binding
+	// and its scope-exit drop, so the sink must take its OWN reference. An owned TEMPORARY has no other owner at
+	// all, so the sink ADOPTS the `+1` the expression just minted and the statement-end drop is cancelled — an
+	// incref/decref pair around a value nothing else reads would be pure churn.
+	//
+	// ⚠⚠ **THE SPLIT IS AN `if`/`else`, WHICH MAKES A PRECONDITION LOAD-BEARING THAT USED TO BE BELT-AND-BRACES:
+	// A VALUE IS NEVER IN `ownedBindings` AND `pendingTempDrops` AT THE SAME TIME.** The door this replaced at
+	// `transferConsumedArg` ran the poison AND `removeFromPendingTemps` unconditionally, on the argument that
+	// each is a no-op on the other's case — so it stayed correct even if a value were somehow in both. This one
+	// takes the co-own arm for a bound value and never de-lists, so a value in both lists would keep a
+	// statement-end `__mm_decref` against a reference the SINK now owns: a use-after-free on the next read, not
+	// a leak. The invariant is `markValueOwnsHeap`'s and `trackOwnedTemp`'s to keep — the two owned-bit doors
+	// exist precisely because a binding's drop and a statement's drop are alternatives, never both (see
+	// `markValueOwnsHeap`, whose header carries the measured double-free from adding a pending entry for a
+	// consumed parameter that already dropped through `ownedBindings`).
+	//
+	// Two retain protocols, and they are the SAME two the BORROWED arms already route between: a byte record
+	// through `__str_retain` (an incref on the heap branch, a copy of an immortal `.rdata` literal on the other),
+	// an aggregate or existential through `coOwnBorrowedForConsume`. The RESULT is what the sink receives and
+	// never `arg` — both of those may hand back a DIFFERENT record, which is the measured access violation
+	// `coOwnBorrowedForConsume` records.
+	//
+	// ⭐ **THE SOURCE IS STILL MARKED "MUTABILITY EXERCISED", THOUGH IT IS NO LONGER MOVED OUT OF.** E3077 asks
+	// whether a `var` had to be a `var`, and `poisonOwningBinding` answered YES for every move-out — a door its own
+	// header calls "broader than the argument", since `let` would have been legal for a store. Narrowing it here
+	// would make `var b = …` + `xs.push(b)` a fresh E3077 on programs this ruling exists to ACCEPT, which is a
+	// second behaviour change riding a refcount fix. The answer is deliberately held at exactly what it was.
+	function storeOwnedValueIntoDurableSink(arg ValueId, isString bool, range SourceRange) returns ValueId
+		let index = self.liveOwnerIndexOf(arg)
+		if self.noLiveOwner(index) 'ownedTemporaryIsAdopted'
+			self.removeFromPendingTemps(arg)
+			return arg
+		end 'ownedTemporaryIsAdopted'
+
+		// A `var` bound from `.get(index)`: the mark is written THROUGH the shared `VarInfo` reference (the
+		// `Scope.setValue` idiom `poisonOwningBinding` uses), so every holder observes it.
+		var owner = try self.ownedBindings.get(index) otherwise panic("storeOwnedValueIntoDurableSink: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		self.markMutabilityExercised(owner)
+
+		if isString 'byteRecord'
+			return self.retainBorrowedByteRecord(arg, range: range)
+		end 'byteRecord'
+
+		return self.coOwnBorrowedForConsume(arg, range: range)
+	end 'storeOwnedValueIntoDurableSink'
 
 	// Transfer an already-OWNED managed value into durable storage: a bare-local reference to a binding is
 	// POISONED (`movedFrom` — E3102 on later use); an owned temporary is removed from the statement's pending
@@ -46126,17 +46293,16 @@ export type Parser
 	// way in, exactly as a source `insert` does. So a predefined set's members are owned by the set and
 	// released by `__cs_decref` → `__set_decref`, with nothing aliased to `.rdata`.
 	function emitPredefinedCharacterSet(preset CharacterSetPreset, range SourceRange) returns ValueId throws ParseError
-		let chars = try self.emitCharacterMemberSet(preset.members, range: range)
-		return try self.emitCharacterSetBox(chars, categoryMask: preset.categoryMask, argBareLocal: false, anchor: self.current(), range: range)
+		let chars = self.emitCharacterMemberSet(preset.members, range: range)
+		return self.emitCharacterSetBox(chars, categoryMask: preset.categoryMask, argBareLocal: false, range: range)
 	end 'emitPredefinedCharacterSet'
 
 	// A fresh `Set with Character` seeded from a preset's byte sequences. Each member is a `Character`
 	// LITERAL the parser mints, promoted to an owned copy on the way in exactly as a source `insert` is.
-	function emitCharacterMemberSet(members ByteArrayArray, range SourceRange) returns ValueId throws ParseError
+	function emitCharacterMemberSet(members ByteArrayArray, range SourceRange) returns ValueId
 		let chars = self.emitEmptyCharacterMemberSet(range)
-		let anchor = self.current()
 		for bytes in members 'eachMember'
-			let owned = try self.moveManagedValueInto(self.emitCharacterLiteral(bytes, range: range), argBareLocal: false, isString: true, anchor: anchor, range: range)
+			let owned = self.moveManagedValueInto(self.emitCharacterLiteral(bytes, range: range), argBareLocal: false, isString: true, range: range)
 			self.emitCharacterMemberInsert(chars, member: owned, range: range)
 		end 'eachMember'
 		return chars
@@ -46156,7 +46322,7 @@ export type Parser
 			if self.tagOf(member) != ValueTypeTag.character 'notACharacter'
 				throw ParseError.builtinOperandType(String.from(CharacterMemberSetAliasName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(member)), line: memberTok.line, column: memberTok.column)
 			end 'notACharacter'
-			self.emitCharacterMemberInsert(chars, member: try self.moveManagedValueInto(member, argBareLocal: self.rhsWasBareLocalReference(memberStart), isString: true, anchor: memberTok, range: range), range: range)
+			self.emitCharacterMemberInsert(chars, member: self.moveManagedValueInto(member, argBareLocal: self.rhsWasBareLocalReference(memberStart), isString: true, range: range), range: range)
 			if not self.at(TokenKind.rightBracket) 'moreMembers'
 				try self.consume(TokenKind.comma)
 			end 'moreMembers'
@@ -46185,11 +46351,13 @@ export type Parser
 	// ⭐ **THE ONE DOOR A `CharacterSet` BOX IS BORN THROUGH** — `__cs_make(chars, categoryMask)`, whose
 	// result is an OWNED box tracked so an unbound one drops at statement end and a bound one at scope exit,
 	// through `__cs_decref` (`managedNameDropCallee`'s `CharacterSet` arm).
-	// The member set is MOVED in: the box becomes its sole owner, so an owned temporary is de-listed from the
-	// statement's pending drops and a bare local is POISONED — the SAME `moveManagedValueInto` a set key and
-	// an array element take, so a member set that reaches a box cannot also be freed by its own scope.
-	function emitCharacterSetBox(chars ValueId, categoryMask ParsedInt, argBareLocal bool, anchor Token, range SourceRange) returns ValueId throws ParseError
-		let owned = try self.moveManagedValueInto(chars, argBareLocal: argBareLocal, isString: false, anchor: anchor, range: range)
+	// The member set is STORED in: the box holds exactly ONE reference to it, so an owned temporary is
+	// de-listed from the statement's pending drops and a value a live binding keeps is CO-OWNED (the binding
+	// stays readable and releases its own reference at scope exit — the 2026-08-12 ruling) — the SAME
+	// `moveManagedValueInto` a set key and an array element take, so a member set that reaches a box is never
+	// released more times than it was referenced.
+	function emitCharacterSetBox(chars ValueId, categoryMask ParsedInt, argBareLocal bool, range SourceRange) returns ValueId
+		let owned = self.moveManagedValueInto(chars, argBareLocal: argBareLocal, isString: false, range: range)
 		let mask = self.emitLiteral(categoryMask, valueType: MaxonType.integer, range: range)
 		return self.emitOwnedRuntimeResult(CharSetMakeName, args: pairArgs(owned, second: mask), resultTag: ValueTypeTag.structRef, resultNameId: self.characterSetNameId(), range: range)
 	end 'emitCharacterSetBox'
@@ -46208,7 +46376,7 @@ export type Parser
 		end 'notACharacterSet'
 		let bareLocal = self.rhsWasBareLocalReference(argStart)
 		try self.consume(TokenKind.rightParen)
-		return try self.emitCharacterSetBox(chars, categoryMask: CharSetNoCategories, argBareLocal: bareLocal, anchor: argTok, range: range)
+		return self.emitCharacterSetBox(chars, categoryMask: CharSetNoCategories, argBareLocal: bareLocal, range: range)
 	end 'parseCharacterSetFrom'
 
 	// Is `value` a `Set with Character` — the one argument `CharacterSet.from` accepts? Asked of the VALUE's
@@ -48042,7 +48210,7 @@ export type Parser
 	// `( key )` — a single positional key argument for `insert`/`contains`/`remove` (P1.7b). The BRACKETS are
 	// what is left here: the argument itself is parsed, type-checked and moved in by the shared
 	// `parseHashTableColumnArg`, which a `Map`'s two columns ride too. For `insert` (`consume: true`) a managed
-	// (String) key is MOVED into the set — the set becomes its sole owner; `contains`/`remove` (`consume: false`)
+	// (String) key is stored into the set, which then holds one reference to it; `contains`/`remove` (`consume: false`)
 	// BORROW the key for the compare (its owned temp drops at statement end). A trivial int key is a scalar —
 	// no move either way.
 	//
@@ -48064,7 +48232,7 @@ export type Parser
 
 	// ⭐⭐ **ONE HASH-TABLE COLUMN ARGUMENT, PARSED — a `Set`'s key, a `Map`'s key and a `Map`'s VALUE.** Parse
 	// the expression, characterize a lone literal against the column's declared type, refuse a mismatched tag,
-	// and — when the callee KEEPS the value (`consume`) — move it in so the table becomes its sole owner. The
+	// and — when the callee KEEPS the value (`consume`) — store it so the table holds its own reference. The
 	// three columns differ in the column TYPE they read and in the SUBJECT of their refusal, and in nothing
 	// else, which is why those two are parameters and the sequence is not.
 	//
@@ -48117,7 +48285,7 @@ export type Parser
 			return parsed
 		end 'borrowed'
 
-		return try self.moveColumnValueIntoTable(parsed, columnType: columnType, valueStart: valueStart)
+		return self.moveColumnValueIntoTable(parsed, columnType: columnType, valueStart: valueStart)
 	end 'parseHashTableColumnArg'
 
 	// ⭐⭐ **THE NOMINAL IDENTITY OF A COLUMN'S RESOLVED DECLARED TYPE — the ONE expression the three column
@@ -48147,7 +48315,7 @@ export type Parser
 	// owns what it holds is DERIVED from that type here, through the same `slotTypeIsManaged` the stamped
 	// destructor is chosen by (`columnDestroyValue`): a caller that passed the answer in would be a second
 	// place deciding which type argument is the key, and the move-in and the stamp could then disagree.
-	function moveColumnValueIntoTable(value ValueId, columnType MaxonType, valueStart TokenIndex) returns ValueId throws ParseError
+	function moveColumnValueIntoTable(value ValueId, columnType MaxonType, valueStart TokenIndex) returns ValueId
 		if not self.signatures.slotTypeIsManaged(columnType) 'trivial'
 			return value
 		end 'trivial'
@@ -48155,9 +48323,10 @@ export type Parser
 		// `tagIsByteRecord`, mirroring `moveElementIntoContainer`: the flag names the fused-record COPY
 		// protocol, a question about the key's REPRESENTATION — and since P1.8 Slice D a `Set with Character`
 		// reaches it, which is exactly the day this spelling was written for. A borrowed `.rdata` Character
-		// literal is promoted to an owned copy here; an owned one is transferred.
+		// literal is promoted to an owned copy here; an owned one is CO-OWNED when a live binding keeps it and
+		// ADOPTED when it is a temporary with no other owner.
 		let isString = tagIsByteRecord(maxonTypeTag(columnType))
-		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
+		return self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, range: SourceRange.ofToken(anchor))
 	end 'moveColumnValueIntoTable'
 
 	// --- The `Map` builtin generic: `create` / `upsert` / `contains` / `get` / `count` ---
@@ -48236,7 +48405,7 @@ export type Parser
 			return value
 		end 'theUpsertCallTakesOwnership'
 
-		return try self.moveColumnValueIntoTable(value, columnType: columnType, valueStart: valueStart)
+		return self.moveColumnValueIntoTable(value, columnType: columnType, valueStart: valueStart)
 	end 'moveMapLiteralColumnValue'
 
 	// Emit `__map_create(keyDrop, valueDrop)` for instance `giid`, yielding the empty map record. The record is
@@ -52379,9 +52548,9 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		let index = try self.parseExpression(func, block: self.currentBlock)
 		try self.consumeArrayArgLabel(ArrayValueLabel, required: secondArgLabelled)
-		// The value is a managed-element MOVE-IN, so it is consumed exactly as `push` is —
-		// `moveElementIntoContainer` promotes a borrowed String, transfers an owned value, co-owns a borrowed
-		// aggregate. `__managed_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
+		// The value is a managed-element STORE, so it is handled exactly as `push` is —
+		// `moveElementIntoContainer` promotes a borrowed String, co-owns an owned value a live binding keeps,
+		// adopts an owned temporary, and co-owns a borrowed aggregate. `__managed_set` destroys the LIVE occupant it overwrites (its element_destroy walk of one
 		// slot), so no leak. The TYPE check precedes the move-in for the reason `requireContainerElementType` states.
 		let valueStart = self.pos
 		let raw = try self.parseExpression(func, block: self.currentBlock)
@@ -52417,20 +52586,24 @@ export type Parser
 		let value = try self.parseExpression(func, block: self.currentBlock)
 		// The move-in MUST run before the `)` is consumed: `rhsWasBareLocalReference` reads `[valueStart, self.pos)`
 		// to decide whether the arg is a bare local to POISON, and a consumed `)` would widen that window past a
-		// single-identifier arg (`push(node)`) — the poison would silently not fire and the moved binding would
-		// drop a second time at scope exit (a double-free / over-release, exit 101).
+		// single-identifier arg (`push(node)`) — the store would silently take NO reference and the container
+		// would hold a slot it does not own, released a second time when the binding drops at scope exit (a
+		// double-free / over-release, exit 101). The ordering requirement is unchanged by the 2026-08-12
+		// ruling; only the op that goes missing is — an `__mm_incref` where it used to be a move poison.
 		let checked = try self.requireContainerElementType(giid, value: value, valueStart: valueStart, methodTok: methodTok)
 		let moved = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 		return moved
 	end 'parseContainerElementArg'
 
-	// ⭐ **MOVE A PARSED ELEMENT INTO A MANAGED-ELEMENT ARRAY (P1.7 slice 3).** The array becomes the element's
-	// sole owner (its `__managed_decref` walk destroys it), so the source is consumed exactly as a struct-field /
-	// union-payload move-in (`moveManagedValueInto`): a borrowed String literal is promoted to an owned copy,
-	// an owned value is transferred (bare local poisoned / temp de-listed), a borrowed struct/union is CO-OWNED
-	// (no clone exists, so the container takes a second reference to the same record rather than refusing —
-	// the transitive-consume ruling of 2026-08-04). A TRIVIAL-element array's value owns no heap and passes through unchanged. Shared by
+	// ⭐ **STORE A PARSED ELEMENT INTO A MANAGED-ELEMENT ARRAY (P1.7 slice 3).** The array holds exactly ONE
+	// reference per slot (its `__managed_decref` walk releases it), so the source is handled exactly as a
+	// struct-field / union-payload store is (`moveManagedValueInto`): a borrowed String literal is promoted to
+	// an owned copy, an owned value a LIVE BINDING keeps is CO-OWNED (the binding stays readable and releases
+	// its own reference at scope exit — the 2026-08-12 ruling), an owned TEMPORARY is ADOPTED (de-listed from
+	// the pending drops), and a borrowed struct/union is CO-OWNED too (no clone exists, so the container takes
+	// a second reference to the same record rather than refusing — the transitive-consume ruling of
+	// 2026-08-04). A TRIVIAL-element array's value owns no heap and passes through unchanged. Shared by
 	// push/set/insert. `valueStart` locates the value's first token — its bare-local source and the diagnostic
 	// anchor both.
 	function moveElementIntoContainer(value ValueId, giid GenericInstanceId, valueStart TokenIndex) returns ValueId throws ParseError
@@ -52488,7 +52661,7 @@ export type Parser
 		// says it lacks, while the identical literal into a struct FIELD was accepted (that door asks
 		// `classifyUnionPayload`, which already answers `isString: true` for a Character).
 		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.containerElementType(giid)))
-		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, anchor: anchor, range: SourceRange.ofToken(anchor))
+		return self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, range: SourceRange.ofToken(anchor))
 	end 'moveElementIntoContainer'
 
 	// ⭐⭐ **THE MACHINE WORD A TRIVIAL ELEMENT IS STORED AS — the FLOAT boundary, and the only element type
@@ -59872,12 +60045,16 @@ export type Parser
 	// (an arity mismatch, an unknown label) leaves the position `>= paramNames.count()`, which `isConsumed`
 	// answers false, so it is left untouched here and reported by SemanticCheck against the real registry.
 	function transferConsumedArgs(info ParamConsumeInfo, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, anchor Token, constructorInstance ConstructorInstance) throws ParseError
-		// shv2 is move-only, so one OWNED value consumed at TWO argument positions of a single call would be
-		// dropped twice — a double-free — the call analog of the struct-literal `rejectDoubleOwningStore`
-		// (`Self{a: v, b: v}`). Track each owned value moved in at a CONSUMING position; a repeat is
-		// use-after-move (E3102), positioned on the second occurrence. A BORROWED consumed arg is promoted to a
+		// An OPAQUE `T` value consumed at TWO argument positions of a single call inherits ONE reference twice and
+		// so would be dropped twice — a double-free — the call analog of the struct-literal
+		// `rejectDoubleOwningStore` (`Self{a: v, b: v}`), asking that door's own gate. Track each such value at a
+		// CONSUMING position; a repeat is use-after-move (E3102), positioned on the second occurrence. A BORROWED
+		// consumed arg is promoted to a
 		// FRESH owned copy per position (`transferConsumedArg`), so it never aliases and is not tracked; a scalar
 		// is inert. A two-BORROW call (`sum(box, b: box)`) reaches no consuming position, so it is never rejected.
+		// ⛔ **A CONCRETE OWNED MANAGED VALUE IS NO LONGER TRACKED HERE (⚖ 2026-08-12).** It CO-OWNS at each
+		// consuming position now (`transferConsumedArg`), so `Pair.create(box, b: box)` takes two references and
+		// the two destructor drops release exactly those two — see `isRepeatedOwningMove` for the retraction.
 		var consumedOwned = ValueIdArray.create()
 		for i in 0 upto args.count() 'eachArg'
 			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
@@ -59900,11 +60077,13 @@ export type Parser
 				try args.set(i, value: self.handleEscapingBorrowFeed(info, position: position, argValue: argValue, anchor: anchor)) otherwise panic("transferConsumedArgs: args.set OOB at {i}")
 				continue
 			end 'borrowed'
-			// Only an OWNED managed value can double-free: it MOVES (no per-position copy), so the same value at a
-			// second consuming position is the double-consume. A borrowed arg is promoted per position and a scalar
-			// is inert, so neither is tracked. The gate mirrors `transferConsumedArg`'s own owned-move path. The name
-			// is resolved only on a repeat (`consumedArgName`), where the value is always a bound local.
-			if self.valueIsOwnedHeap(argValue) and self.isRepeatedOwningMove(consumedOwned, value: argValue) 'doubleConsume'
+			// Only a value whose destination INHERITS this frame's reference can double-free, so the same value at
+			// a second consuming position is the double-consume. A borrowed arg is promoted or co-owned per
+			// position, a concrete owned one takes a reference per position, and a scalar is inert, so none of the
+			// three is tracked — `repeatedOwningDestinationWouldDoubleFree` is that question, and the STRUCT-LITERAL
+			// guard asks the identical one. The name is resolved only on a repeat (`consumedArgName`), where the
+			// value is always a bound local.
+			if self.repeatedOwningDestinationWouldDoubleFree(argValue) and self.isRepeatedOwningMove(consumedOwned, value: argValue) 'doubleConsume'
 				let range = try argRanges.get(i) otherwise panic("transferConsumedArgs: argRanges.get OOB at {i} — args and argRanges are pushed in lockstep")
 				throw ParseError.useAfterMove(String.from(self.consumedArgName(argValue)), line: range.line, column: range.column)
 			end 'doubleConsume'
@@ -60101,11 +60280,12 @@ export type Parser
 		end 'f'
 	end 'instanceFeedConsumesFor'
 
-	// Transfer one consumed argument out of its owner, returning the value the call must actually carry. A
-	// SCALAR argument owns no heap and the consume is inert (returns itself). An OWNED managed value moves — a
-	// live owned BINDING is poisoned (E3102 on later use), an owned TEMPORARY is drained from the statement's
-	// pending drops (the callee owns it now); `poisonMoveSource` and `removeFromPendingTemps` are each a no-op
-	// on the other's case, so both run without a bare-local flag to gate them (returns itself). A BORROWED
+	// Hand one consumed argument to the callee, returning the value the call must actually carry. A
+	// SCALAR argument owns no heap and the consume is inert (returns itself). An OWNED CONCRETE managed value
+	// held by a live BINDING is CO-OWNED (the 2026-08-12 durable-sink ruling — the binding stays live and keeps
+	// its own scope-exit drop); an owned TEMPORARY is ADOPTED, drained from the statement's pending drops
+	// because the callee owns it now. Both go through the shared sink door
+	// (`storeOwnedValueIntoDurableSink`), which is where that split and its ruling live. A BORROWED
 	// STRING (a long rdata literal, or a borrowed String parameter/field) has a cheap owning copy, so it is
 	// PROMOTED into a fresh owned record the callee can move into its field — exactly as a DIRECT struct-field /
 	// union-payload move-in does (`moveManagedValueInto`) — and THAT copy is returned to replace the borrowed
@@ -60158,9 +60338,16 @@ export type Parser
 			end 'byteRecord'
 			return self.coOwnBorrowedForConsume(argValue, range: SourceRange.ofToken(anchor))
 		end 'borrowedManaged'
-		try self.poisonMoveSource(argValue, anchor: anchor)
-		self.removeFromPendingTemps(argValue)
-		return argValue
+
+		// ⭐⭐ **A CONSUMING ARGUMENT IS A DURABLE SINK, SO IT CO-OWNS RATHER THAN MOVING (⚖ user ruling,
+		// 2026-08-12).** The callee stores what it is handed, which is exactly the obligation the DIRECT store
+		// door discharges one frame in — so both go through the ONE sink door
+		// (`storeOwnedValueIntoDurableSink`, which carries the ruling and the live-binding-vs-temporary split).
+		// Two spellings of one sink would be the shape this file keeps naming: `self.saved = chunk` legal and
+		// `store(chunk)` an E3102, decided by which door happened to serve the statement. Its owned-set scan is
+		// the same one `poisonMoveSource` ran here unconditionally, so the widening costs no lookup that was not
+		// already paid.
+		return self.storeOwnedValueIntoDurableSink(argValue, isString: tagIsByteRecord(self.tagOf(argValue)), range: SourceRange.ofToken(anchor))
 	end 'transferConsumedArg'
 
 	// Mint the SSA value a call to `calleeTok` defines, typed from the WHOLE-PROGRAM signature index

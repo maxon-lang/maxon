@@ -13,25 +13,40 @@ A `type` (struct) field may now be **managed** — a `String`, another `struct`,
 a payload-bearing `union`. Such a field holds an owned heap pointer, and the
 struct box takes ownership of it:
 
-- **Construct moves the value into the field.** `Self{name: value}` transfers
-  ownership of `value` into the field slot — no incref, no copy. A borrowed
-  `String` literal is promoted to an owned heap copy first; an owned temporary
-  (`Inner.create(5)`) is consumed; a bare reference to an owned binding is
-  moved-from (a later read is `E3102`).
+- **Construct gives the field its OWN reference (⚖ user ruling, 2026-08-12).**
+  `Self{name: value}` leaves the field slot holding exactly one reference, and
+  which act supplies it depends on what `value` is: a borrowed `String` literal
+  is promoted to an owned heap copy; an owned TEMPORARY (`Inner.create(5)`) has
+  no other owner, so the slot ADOPTS the `+1` it already carries; and a bare
+  reference to a live owned BINDING is CO-OWNED — the slot increfs, the binding
+  stays readable, and each releases the one reference it took.
+
+  > This bullet used to read *"transfers ownership … no incref, no copy … a bare
+  > reference to an owned binding is moved-from (a later read is `E3102`)"*. That
+  > was the move-only rule, retracted because two sinks for one value each need a
+  > reference of their own. `consume-then-reuse-co-owns` and
+  > `managed-double-store-co-owns` below are the two cases that were flipped.
 - **The struct drops each managed field.** A struct with at least one managed
   field gets a synthesized `__destruct_<Struct>` that drops every managed field
   through its own type's destructor — a `String` via `__str_decref`, a nested
   managed struct via *its* `__destruct_<Struct>`, a scalar-only struct via
   `__mm_decref` — then frees the box. There is no tag switch: every field is
   always present. A moved-out field slot is null and its null-guard skips it.
-- **A field write drops the old value and moves the new one in.**
-  `s.name = value` decrefs the field's current value before storing `value`.
-- **A parameter moved into a durable field is CONSUMED.** A constructor
-  `create(inner Inner) returns Self` whose body stores `inner` into a field
-  consumes its parameter: the caller's argument is moved-from at the call site (a
-  later read is `E3102`), and the struct's destructor drops the field exactly
-  once. A borrowed argument passed at a consuming position is refused (`E2015` —
-  the transitive-consume case arrives with the call-graph fixpoint).
+- **A field write acquires the new value before releasing the old.**
+  `s.name = value` takes the field's reference to `value` and only THEN decrefs
+  the record the slot was holding. The order is load-bearing rather than
+  cosmetic: released first, an indirect self-assignment (`dst.f = src.f` where
+  both names reach one box) frees the record and then increfs freed memory. See
+  `managed-field-store-order.md`.
+- **A parameter stored into a durable field is CONSUMED, and the call site
+  CO-OWNS.** A constructor `create(inner Inner) returns Self` whose body stores
+  `inner` into a field consumes its parameter — so the CALLER hands over a
+  reference. Since the 2026-08-12 ruling that reference is a fresh one the caller
+  increfs rather than the one its own binding holds, so the caller's argument
+  stays readable (`consume-then-reuse-co-owns`) and the struct's destructor
+  releases exactly the reference the call took. A BORROWED argument at a
+  consuming position is co-owned by the same rule (the transitive-consume ruling
+  of 2026-08-04), not refused.
 
 ## Tests
 
@@ -289,8 +304,11 @@ end 'main'
 2
 ```
 
-<!-- test: error.consume-then-reuse -->
-Reusing an argument after it was consumed into a struct field is use-after-move.
+<!-- test: consume-then-reuse-co-owns -->
+Reusing an argument after it was consumed into a struct field is LEGAL: a consuming position is a durable
+sink, so `Outer.create(i)` gives the field its own reference (⚖ 2026-08-12) rather than stealing `i`'s.
+`i` stays live and drops its own reference at scope exit, so `Inner`'s box is released exactly the two
+times it was referenced. (It used to be E3102 at `i.x`.)
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -316,17 +334,22 @@ function main() returns ExitCode
 	return i.x
 end 'main'
 ```
-```maxoncstderr
-error E3102: specs/fragments/struct-managed-field/error.consume-then-reuse.test:23:9: use of moved value 'i': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+10
 ```
 
-<!-- test: error.managed-double-store -->
-Storing one managed value into TWO owning fields of a struct literal is use-after-move.
-shv2 is move-only (no incref), so a single String cannot be owned by two fields — dropping
-it twice would double-free — so the second store is `E3102`.
-```maxon
-typealias Integer = int(i64.min to i64.max)
+<!-- test: managed-double-store-co-owns -->
+Storing one managed value into TWO owning fields of a struct literal is legal, and the two fields
+CO-OWN it. `Self{a: v, b: v}` takes a reference per slot, so the String record ends at three (both
+fields plus the consumed parameter `v`) and is released three times — twice by `Pair`'s destructor,
+once by `v`'s scope-exit drop. Reading both fields back is what makes the aliasing observable rather
+than merely tolerated.
 
+⛔ **This was E3102, justified as *"shv2 is move-only (no incref), so a single String cannot be owned by
+two fields"* — a premise the durable-store ruling (⚖ 2026-08-12) retracted.** The repeated-owning-move
+guard survives only for an OPAQUE `T` field, whose shared body has no descriptor to take a reference
+through; `generic-types/error.generic-double-store-managed` is that surviving case.
+```maxon
 type Pair
 	export var a as String
 	export var b as String
@@ -338,11 +361,15 @@ end 'Pair'
 
 function main() returns ExitCode
 	let p = Pair.create("{7}")
+	print("{p.a}{p.b}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:9:24: use of moved value 'v': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+77
 ```
 
 <!-- disabled-test: error.borrowed-param-consumed -->

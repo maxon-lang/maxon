@@ -1909,17 +1909,17 @@ func @String.filter {
     x64.callReg r12
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, match
-    x64.jmp iffalse
+    x64.jmp ifcont
   match:
+    x64.movRegReg rcx, r15
+    x64.callDirect __str_retain
     x64.movRegReg rcx, r14
-    x64.movRegReg rdx, r15
+    x64.movRegReg rdx, r8
     x64.callDirect __managed_push
     x64.jmp ifcont
-  iffalse:
+  ifcont:
     x64.movRegReg rcx, r15
     x64.callDirect __str_decref
-    x64.jmp ifcont
-  ifcont:
     x64.jmp forstep
   forstep:
     x64.loadRegSlot rax, slot0

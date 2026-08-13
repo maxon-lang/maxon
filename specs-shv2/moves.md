@@ -10,7 +10,11 @@ category: memory
 ## Documentation
 
 Under shv2's static single-owner model an owned heap value (an owned `String`, a struct box) has
-exactly ONE owner and is dropped exactly once, at that owner's scope exit.
+exactly ONE owner **per NAME that holds it**: a binding owns one reference and releases it once, at
+its scope exit. A value reaches a second owner only by a DURABLE STORE, which takes a reference of its
+own (⚖ 2026-08-12) — so the record's refcount always equals the number of live owners, and each owner
+releases exactly the reference it took. What a binding-to-binding bind may never do is CONFER a second
+owner without a second reference, which is what the move rule below exists to prevent.
 
 **What decides whether a bare-reference bind MOVES that ownership or merely ALIASES it is the
 SOURCE's MUTABILITY** (`specs/ownership.md`; user ruling, 2026-08-04). Maxon is single-ownership and
@@ -43,9 +47,27 @@ as **E3078**, because it would reach the immutable name's storage through a writ
 When a move does happen the source is left MOVED-FROM: reading it is a compile error
 (use-after-move), and its scope-exit drop is SKIPPED — the value drops once, through its new owner. A
 fresh owned temporary (`build()`, `"{x}"`) is owned by no binding, so binding it is a CONSUME, not a
-move — nothing is poisoned. A CONSUMING hand-off (a call argument, a struct-literal field, a
-container element) moves the value out of whichever binding owns it regardless of mutability, and
-poisons every live name that reads it — an alias included.
+move — nothing is poisoned.
+
+⭐ **A DURABLE STORE IS NOT A MOVE, AND THAT IS THE BOUNDARY OF EVERYTHING ABOVE (⚖ user ruling,
+2026-08-12).** A CONSUMING hand-off — a call argument the callee keeps, a struct-literal or union-payload
+field, a container element, a write into a field, a global's slot, or a by-reference parameter's cell —
+hands the value to storage that owes a drop of its OWN. So the sink takes its own reference and the
+source binding stays LIVE, releasing the reference it always held at its own scope exit. Both sinks
+co-own; the refcount rises by one per sink and falls by one per owner. No name is poisoned, and an ALIAS
+of the source stays readable too.
+
+> This prose used to say the opposite — that a consuming hand-off *"moves the value out of whichever
+> binding owns it regardless of mutability, and poisons every live name that reads it"*. The
+> justification was that shv2 is move-only and has no `__mm_incref`. It does have one, and the rule was
+> retracted: a value stored into a long-lived field AND into a transient local array needs a reference
+> for each, and no rewriting of the source can supply that under a move
+> (`specs-shv2/witness-managed-return.md` is the program that forced it).
+
+⚠ **A second NAME is still not a sink.** `let u = t` / `s = t` over an ordinary local gives `u` no drop
+of its own — it inherits the one `t` owed — so it MOVES, and every use-after-move case below is
+unchanged. The one rebind that IS a durable store is a write to a by-reference parameter, whose cell is
+the CALLER's storage and outlives this frame.
 
 A WRITE to a moved-from `var` REVIVES it: the binding owns the new value and is usable again. A value
 moved on some-but-not-all paths of an `if`/`else`/`match` is DROPPED path-sensitively — its drop is
@@ -112,13 +134,22 @@ end 'main'
 v1v1
 ```
 
-### An Alias Is Poisoned When The Value Is CONSUMED Through Any Name
+### A CONSUME Through Any Name Leaves Every Name Live
 
-`let b = a` aliases; `take(b)` then hands the value to a callee that owns it. The frame no longer owns
-the box through EITHER name, so a later `print(a)` is use-after-move — reported against the name that
-was read. Poisoning only the owner would leave the alias reading a box the callee has freed.
+`let b = a` aliases; `Box.create(b)` then hands the value to a callee that stores it. A consuming
+argument is a DURABLE SINK, so the callee takes its OWN reference (⚖ 2026-08-12) instead of stealing this
+frame's — the frame still owns the box through both names, and the later `print(a)` reads a live record.
+The box carries two references and is released twice: once by `held`'s destructor, once by `a`'s
+scope-exit drop.
 
-<!-- test: consume-through-an-alias-poisons-both -->
+⚠ **This is the ONE boundary of the move rule the rest of this file pins.** A move happens between
+BINDINGS (`let u = t`, `s = t`), where the new name owes the drop the old one owed; it does not happen
+into a durable sink, where the sink owes a drop of its OWN. Every use-after-move case below is a
+binding-to-binding move and is unaffected by that distinction; the two consuming-hand-off cases that are
+NOT (this one and `call-arg-consumed-at-two-positions`) both show the co-owning side. (This case used to
+be E3102, on the premise that shv2 has no `__mm_incref`.)
+
+<!-- test: consume-through-an-alias-keeps-both-live -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -143,8 +174,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:21:8: use of moved value 'a': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+v1v1
 ```
 
 ### Use After Move-On-Bind
@@ -541,17 +575,23 @@ end 'main'
 ```stdout
 ```
 
-### Cross-Argument Double-Consume of One Owned Value (E3102)
+### One Owned Value at TWO Consuming Argument Positions
 
-`Pair.create(box, b: box)` hands the SAME owned `box` to TWO CONSUMING factory parameters. shv2 is
-move-only (no `__mm_incref`), so the second owner would drop a box the first already owns — a double-free
-(it compiled and exited 101 before this guard). It is the CALL analog of the struct-literal
-double-owning-store guard (`Self{a: v, b: v}`), routed through the same repeat-detection core
-(`rejectRepeatedOwningMove`) to the same E3102 verdict, positioned on the second argument. (The reference
-oracle refcounts and would accept this, so `struct-enum-array-grow/shared-nested-struct-in-literal` stays
-disabled for that divergence; this bespoke test pins shv2's move-only rejection instead.)
+`Pair.create(box, b: box)` hands the SAME owned `box` to TWO CONSUMING factory parameters. Each
+consuming position is a durable sink and takes its OWN reference (⚖ 2026-08-12), so the box ends at
+three — `a`, `b` and the caller's `box` — and is released three times: twice by `Pair`'s destructor
+cascade, once by `box`'s scope-exit drop. Both fields print the same name, which is the observable half
+of "one record, two owners".
 
-<!-- test: error.call-arg-double-consume -->
+⛔ **This was E3102 until the durable-sink ruling, and the reason it was is now false.** The guard's
+justification was that shv2 is move-only and a single transferred `+1` cannot answer for two owners —
+true of a move, and not of a reference taken per position. It is the CALL analog of the struct-literal
+double-owning-store case (`struct-managed-field/managed-double-store-co-owns`), which was retracted in
+the same change and for the same reason; the repeat-detection core survives for the one sink that still
+MOVES, an opaque `T` slot in a shared generic body. The reference oracle refcounts and has always
+accepted this program.
+
+<!-- test: call-arg-consumed-at-two-positions -->
 ```maxon
 type Box
 	export var name as String
@@ -573,11 +613,19 @@ end 'Pair'
 function main() returns ExitCode
 	let box = Box.create("a long string that needs real heap allocation for the box")
 	let p = Pair.create(box, b: box)
+	print("{p.a.name}\n")
+	print("{p.b.name}\n")
+	print("{box.name}\n")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:21:27: use of moved value 'box': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+a long string that needs real heap allocation for the box
+a long string that needs real heap allocation for the box
+a long string that needs real heap allocation for the box
 ```
 
 ### Same Owned Value at Two BORROW Parameters (Positive Control)

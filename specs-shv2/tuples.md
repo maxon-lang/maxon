@@ -816,18 +816,24 @@ end 'main'
 7
 ```
 
-<!-- test: error.duplicate-owned-element -->
-shv2 is move-only, so one owned value cannot be owned by two slots of one record — the tuple's cascade
-would drop it twice.
+<!-- test: duplicate-owned-element-co-owns -->
+One owned value CAN fill two slots of one record: each slot is a durable sink and takes its own reference
+(⚖ 2026-08-12), so the tuple's drop cascade releases exactly the two it took and `s` releases the one it
+always held. It used to be E3102, on the premise that shv2 is move-only and the cascade would drop one
+`+1` twice.
 ```maxon
 function main() returns ExitCode
 	var s = "hello"
 	let t = (s, s)
+	print("{t.0}{t.1}{s}")
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3102: <fragment>:4:14: use of moved value 's': its ownership moved to another binding at an earlier bind or assignment
+```exitcode
+0
+```
+```stdout
+hellohellohello
 ```
 
 <!-- test: returned-tuple-copies-only-when-trivial -->

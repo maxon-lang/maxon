@@ -2377,10 +2377,14 @@ func @Array.mergeTopTwo {
     x64.leaRegRegReg rdx, rax, rdx
     x64.loadRegBaseDisp.word64 rax, [rbx + 16]
     x64.callDirect SortRun.init
+    x64.movRegReg rbx, r8
     x64.loadRegSlot rax, slot1
-    x64.leaRegRegImm32 rdx, rax, -1
+    x64.leaRegRegImm32 r12, rax, -1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
     x64.loadRegSlot rcx, slot0
-    x64.movRegReg rax, r8
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, rbx
     x64.callDirect __managed_set
     x64.cmpRegImm32 r10, 0
     x64.jcc notEqual, tryerr#10
@@ -2416,6 +2420,8 @@ func @Array.mergeTopTwo {
     x64.ret
   tryok#11:
     x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
     x64.callDirect __mm_decref
     x64.epilogue 120
     x64.popReg r15
@@ -2753,13 +2759,18 @@ func @Array.driftsortRange {
   ifcont#33:
     x64.leaRegRdata rcx, [rip + __str_rec_104]
     x64.callDirect Log.trace
+    x64.loadRegSlot rbx, slot1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
     x64.loadRegSlot rcx, slot15
-    x64.loadRegSlot rdx, slot1
+    x64.movRegReg rdx, rbx
     x64.callDirect __managed_push
     x64.loadRegSlot rax, slot0
     x64.loadRegSlot rcx, slot2
-    x64.leaRegRegReg rax, rax, rcx
-    x64.movRegReg rbx, rax
+    x64.leaRegRegReg r13, rax, rcx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg rbx, r13
     x64.jmp whilehdr#14
   whileexit#16:
     x64.jmp whilehdr#34
