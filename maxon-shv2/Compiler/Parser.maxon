@@ -19661,7 +19661,7 @@ export type Parser
 		if resolved == ValueTypeTag.boolean 'boolDomain'
 			return EnumBackingFieldDomain.booleanWord
 		end 'boolDomain'
-		if resolved == ValueTypeTag.integer or resolved == ValueTypeTag.exitCode 'integerDomain'
+		if tagIsPlainInteger(resolved) 'integerDomain'
 			return EnumBackingFieldDomain.integerWord
 		end 'integerDomain'
 		if resolved == ValueTypeTag.named 'aNamedType'
@@ -36428,7 +36428,7 @@ export type Parser
 		let nameId = self.valueNameId(give)
 
 		// A plain `int` or an `ExitCode` is an integer-domain number — always promotable.
-		if tagIsInteger(tag) or tag == ValueTypeTag.exitCode 'plainInteger'
+		if tagIsPlainInteger(tag) 'plainInteger'
 			return true
 		end 'plainInteger'
 
@@ -50389,7 +50389,27 @@ export type Parser
 	// touching it.
 	function literalColumnTypeFor(value ValueId, literalKind String, columnNoun String, valueTok Token) returns MaxonType throws ParseError
 		let tag = self.tagOf(value)
-		if tag == ValueTypeTag.integer 'int'
+		// ⛔⛔ **`exitCode` RIDES HERE, AND WITHOUT IT THIS DOOR REFUSED A PROGRAM ITS OWN SENTENCE PERMITTED.**
+		// `typeTagName(exitCode)` is `"int"`, so an `ExitCode`-tagged element fell to the throw as *"an array
+		// literal element of type 'int' — a literal's elements are an integer, …"* — the identical self-refuting
+		// shape this door carried for a container, one tag over. MEASURED on this tree; the bootstrap oracle
+		// COMPILES the same program and prints `9`, so it was a false refusal and not a policy:
+		//
+		//     typealias IntThunk = function() returns ExitCode
+		//     function useIt(t IntThunk) returns Integer
+		//         let v = t()
+		//         var arr = [v, v]          // ← E2015 before this arm
+		//
+		// ⚠ **A DIRECT CALL CANNOT REACH IT, WHICH IS WHY IT SURVIVED REVIEW.** `[code(), code()]` over a
+		// `function code() returns ExitCode` compiles, because a direct call's result is not `exitCode`-tagged.
+		// `wordSlotStorageType`'s header names the two doors that DO mint one — `mintIndirectCallResult` (an
+		// indirect call through a function alias) and `interfaceReturnMaxonType` (an interface method
+		// `returns ExitCode`) — and both reach this column. That header is also this arm's ANSWER: it maps
+		// `exitCode` to `MaxonType.integer` at the env-slot sink because an `exitCode` lowers to `StdType.u32`,
+		// for which `accessWidthFor` has no memory-access form and panics on every backend. An
+		// `Array with ExitCode` would put exactly that width on the element load, so `integer` is the only safe
+		// column type here, not merely the simplest.
+		if tagIsPlainInteger(tag) 'int'
 			return MaxonType.integer
 		end 'int'
 		if tag == ValueTypeTag.boolean or tagIsFloat(tag) 'scalar'
@@ -50401,6 +50421,40 @@ export type Parser
 		if self.signatures.tagMayNameAggregate(tag) 'aggregate'
 			return self.signatures.namedElementType(self.internedName(self.valueNameId(value)))
 		end 'aggregate'
+
+		// ⭐⭐ **A CONTAINER VALUE — A GENERIC INSTANCE, WHOSE COLUMN TYPE IS THE INSTANCE ITSELF.** `[list1, list2]`
+		// over two `List with Integer` locals is an `Array with (List with Integer)`, and that nested instance is a
+		// type this door can name outright.
+		//
+		// ⭐⭐ **IT IS THE ONE ARM OF THIS DOOR THAT MAY USE THE SHARED REBUILD, AND THE ASYMMETRY IS THE REASON.**
+		// `typeOf` is `maxonTypeOfTag(tagOf, nameId: valueNameId)`, whose `genericInstance` arm is exactly the type
+		// wanted here — so open-coding it would be a second spelling of a rule that already has a home, and
+		// `valueIsUnsigned`'s header records what that costs (X10 landed "the file's THIRD copy of that walk").
+		// The `named` and `function` arms genuinely CANNOT use it: their ids are the parser's FILE-LOCAL interner's
+		// and must cross into the signature index's as BYTES, which is why each hands a name to
+		// `signatures.namedElementType` / `functionElementType` instead. A generic instance needs no crossing
+		// because **there is exactly ONE `GenericInstanceRegistry` in the compiler** (`SignatureIndex.maxon`), so
+		// every giid — from whichever of the ~20 sites minted this value — is already in the index's space by
+		// construction. That is a property of the registry, not a list of mint sites that could go stale.
+		//
+		// ⭐ **THE MECHANISM WAS ALREADY WHOLE; ONLY THIS DOOR WAS UNWIRED.** `typealias L = Array with IntList`
+		// plus `.create()`/`.push()` compiles and runs today (2/2/10 on this spec's own program), because a
+		// nested instance is a MANAGED element like any other: `arrayElementSize` stamps the 8-byte pointer slot,
+		// `arrayElementDestroyValue` stamps the element's drop callee, and `containerElementType` reads the
+		// instance back for `get`. What a bare `[…]` had no way to do was NAME that element type, exactly as the
+		// `function` arm below records for a function value.
+		//
+		// ⚠ **NO `interfaceRef` SPLIT IS OWED HERE, AND THE REASON IS THE VALUE COLUMN — NOT `instanceDenotedType`.**
+		// That door decides `interfaceRef`-vs-`genericInstance` for a TYPE REFERENCE, and two sites
+		// (`parseTypeReference`'s scoped arm, `promoteBareGenericResultToCalleeScope`) mint
+		// `MaxonType.genericInstance` without asking it — so it is not a claim this arm may lean on. What this arm
+		// dispatches on is the VALUE's tag, where the split is already made by the tag set's own definition: an
+		// existential tags the fat pointer's value half `interfaceRef` (see `ValueTypeTag.interfaceRef`), never
+		// `genericInstance`. A value reaching here is a box.
+		if tag == ValueTypeTag.genericInstance 'containerValue'
+			return self.typeOf(value)
+		end 'containerValue'
+
 		// ⭐⭐ **A FUNCTION VALUE, WHOSE COLUMN TYPE IS ITS OWN GOVERNING NAME.** `Array with UnaryOp` has always
 		// been buildable through `.create()`/`.push()` — the sibling case
 		// `capturing-closure-into-container-errors` is written against one — so the runtime side of a
@@ -50422,6 +50476,21 @@ export type Parser
 		if tag == ValueTypeTag.function 'functionValue'
 			return self.signatures.functionElementType(self.internedName(self.valueNameId(value)))
 		end 'functionValue'
+
+		// ⛔⛔ **THE ROSTER BELOW IS HAND-WRITTEN AND IT NO LONGER LISTS EVERY ARM ABOVE IT — MEASURED, NOT
+		// SUSPECTED.** It names an integer, a float, a bool, a String, a struct and a boxed union, and the arms
+		// admit two more: a FUNCTION VALUE (`[double, triple]`, admitted by the arm directly above and never
+		// listed) and, since spec-port `monomorphization-recursive-type`, a CONTAINER (`[list1, list2]`). A
+		// sentence that under-states what it admits is this project's most frequent single rot, and it is the
+		// exact shape `requireHashTableKeyType` retired one door over by rendering its roster from the very list
+		// its test walks (`reservedHashTableKeyNames` + `DiscoveredConformer`'s exhaustive match).
+		//
+		// ⚠ **IT IS NOT RENDERED FROM THE ARMS HERE BECAUSE THE SENTENCE IS PINNED BYTE-FOR-BYTE BY A SECOND
+		// SPEC.** `specs-shv2/character-ownership.md` quotes the composed message in TWO `maxoncstderr` blocks
+		// (`an-array-literal-element-is-not-a-character`, `an-ascii-array-literal-is-a-character-array-too`),
+		// which shv2's `--update-required` does not regenerate. Rendering the roster from the tag arms therefore
+		// rewrites a committed expectation belonging to a spec this tick does not own, and that is a decision for
+		// whoever owns that file — not a side effect of adding an arm here.
 		throw ParseError.unsupported("{literalKind} {columnNoun} of type '{typeTagName(tag)}' — a literal's {columnNoun}s are an integer, a float, a bool, a String, a struct, or a boxed union (a bare `[…]` infers the type from the first {columnNoun})", line: valueTok.line, column: valueTok.column)
 	end 'literalColumnTypeFor'
 

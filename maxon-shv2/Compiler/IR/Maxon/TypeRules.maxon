@@ -844,6 +844,33 @@ export function tagIsInteger(tag ValueTypeTag) returns bool
 	return tag == ValueTypeTag.integer
 end 'tagIsInteger'
 
+// ⭐⭐ **AN INTEGER CARRYING NO ALIAS IDENTITY — a bare `int` or an `ExitCode`, and ONLY those two.** The
+// question every door asks when it wants "a plain machine integer" rather than "something integral": it is
+// `tagIsIntegral` MINUS `named`, and that subtraction is the whole point. A `named` value is a ranged alias
+// whose NAME is part of its type (`Array with Score` is not `Array with int`), so a door that means the
+// plain integer must not absorb it.
+//
+// ⚠ **IT EXISTS BECAUSE THE SET WAS ALREADY WRITTEN DOWN TWICE, IN TWO SPELLINGS** —
+// `Parser.enumBackingFieldDomainOf` (`resolved == ValueTypeTag.integer or resolved == ValueTypeTag.exitCode`)
+// and `Parser.giveIsPromotableToFloat` (`tagIsInteger(tag) or tag == ValueTypeTag.exitCode`), each labelling
+// its branch `integerDomain`/`plainInteger` for the same fact. `literalColumnTypeFor` needed it as a THIRD,
+// which is the point at which one fact with several writings becomes this repo's signature bug rather than a
+// coincidence.
+//
+// ⚠ **NOT `tagIsIntegral`, AND THAT IS MEASURED, NOT STYLISTIC.** That predicate answers TRUE for `named`,
+// and a literal's element column reads a `named` element through `namedElementType` to keep the alias's
+// identity (`[0 as Q, 1 as Q]` is an `Array with Q`, not an `Array with int` — see
+// `Parser.arrayLiteralInstanceFor`'s ⭐ block and the packing ladder it turns on). Folding `named` in here
+// would silently retype every ranged-alias literal.
+//
+// ⚠ **THE `boolean`-INCLUSIVE SET IS A DIFFERENT ONE AND IS DELIBERATELY NOT THIS FUNCTION.** Three sites
+// spell `integer or boolean or exitCode` (`Parser.matchScrutineeIsPlainInteger`-shaped arms and
+// `SemanticCheck`); they are asking "does this lower to a GPR", not "is this an integer", and merging the two
+// would put a `bool` where an arithmetic domain is meant.
+export function tagIsPlainInteger(tag ValueTypeTag) returns bool
+	return tagIsInteger(tag) or tag == ValueTypeTag.exitCode
+end 'tagIsPlainInteger'
+
 // True for the tag of a `float`, and ONLY for it — the same DEFINITELY question `tagIsBool` and
 // `tagIsInteger` ask, for the type whose operations are a different INSTRUCTION SET rather than a
 // different reading of the same bits.
