@@ -197,6 +197,115 @@ end 'main'
 error E2015: <fragment>:15:26: Unsupported: a default value on parameter 'b' of 'T.m' — a `static` member and an instance member of this type both wear that name, so the two are registered under DIFFERENT keys while the whole-program declaration sweep publishes parameter defaults under the one name the source wrote. A call that omits an argument cannot be told which of the two members' default to supply, and a call to the `static` half cannot find one at all. Give the two members distinct names, or drop the default
 ```
 
+<!-- test: error-default-on-an-overloaded-name-a-second-directory-contests -->
+⛔⛔ **THE REFUSAL ABOVE, WITH ONE MORE DIRECTORY IN THE PROGRAM — AND UNTIL W78 THAT WAS ENOUGH TO TURN IT
+INTO A WRONG ANSWER.** These are the same two declarations `error-default-on-overloaded-name` refuses:
+`pick(a Num)` beside `pick(a Num, b Num = 5)`, called with one argument. `beta/` declares a `pick` of its
+own, which makes the bare name contested — so the sweep registers `alpha/`'s two declarations under
+`alpha.pick` while leaving the disagreement verdict and both declaration tallies on the bare `pick`. Every
+gate keyed on the registration name then read maps nothing had written for that key, answered "these
+declarations agree", and the short call was filled from the DEFAULTED member. MEASURED on `main`:
+**shv2 answered 210** (`2*100 + 5 + 5`) where the oracle answers **2**, silently, with no diagnostic and a
+green suite. ⚠ **Still narrower than the language**: the oracle compiles this program and selects the
+one-parameter member. shv2 refuses it for the same reason it refuses the root-level shape one case above —
+the fill happens while the call is parsed, a pass before the overload is resolved.
+```maxon
+// --- file: alpha/a.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num) returns Num
+	return a
+end 'pick'
+
+export function pick(a Num, b Num = 5) returns Num
+	return a * 100 + b + 5
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small) returns Small
+	return a + 50
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return alpha.pick(2) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: alpha/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-a-second-directory-contests.test:9:32: Unsupported: a default value on parameter 'b' of 'alpha.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+```
+
+<!-- test: error-default-on-an-overloaded-name-a-second-directory-contests-defaulted-first -->
+⭐ **THE SAME TWO DECLARATIONS IN THE OTHER ORDER.** Last-wins keying means only the reversal can tell a
+correct verdict from a lucky one: the by-name registries keep whichever declaration folded last, so a gate
+that happens to read the defaulted member's entry answers correctly in one order and not in the other.
+MEASURED before W78: **210 here too**, so the defect was not order-dependent — but a fix that only worked
+in one order would have looked identical from the case above.
+```maxon
+// --- file: alpha/a.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num, b Num = 5) returns Num
+	return a * 100 + b + 5
+end 'pick'
+
+export function pick(a Num) returns Num
+	return a
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small) returns Small
+	return a + 50
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return alpha.pick(2) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: alpha/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-a-second-directory-contests-defaulted-first.test:5:32: Unsupported: a default value on parameter 'b' of 'alpha.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+```
+
+<!-- test: error-default-on-an-overloaded-name-the-contestant-declares-first -->
+⭐ **THE THIRD ORDER, AND IT IS A DIFFERENT ONE: WHICH DIRECTORY THE SWEEP FOLDS FIRST.** Here the
+single-declaration contestant is in `alpha/` and the overload set is in `beta/`, so the contest is already
+known by the time the set's own file is folded — the opposite arrangement from the two cases above, where
+the set folded first and had to be moved off the bare key afterwards. The sweep reaches the tally through
+two different paths in the two arrangements, and only running both says whether they agree. MEASURED
+before W78: **210** here as well.
+```maxon
+// --- file: alpha/a.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small) returns Small
+	return a + 50
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num) returns Num
+	return a
+end 'pick'
+
+export function pick(a Num, b Num = 5) returns Num
+	return a * 100 + b + 5
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return beta.pick(2) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: beta/specs/fragments/param-default-refusals/error-default-on-an-overloaded-name-the-contestant-declares-first.test:15:32: Unsupported: a default value on parameter 'b' of 'beta.pick' — that name is declared more than once in this program and the declarations do not agree about their defaults: they differ in their parameter list, in which positions default, or in whether they default anything at all. The whole-program declaration sweep publishes defaults under the name the source wrote and a short call is filled when it is PARSED, a whole pass before the overload is resolved, so a call that omits an argument cannot be told which declaration's shape to fill. Give every declaration of this name the same parameters and the same defaults, or drop the default
+```
+
 <!-- test: two-files-agreeing-on-their-defaults-report-ONE-duplicate -->
 Two files declaring one `f` with the SAME default shape are no longer refused at the `=` (W74) — they fall
 through to the duplicate-definition diagnostic the program always deserved. ⚠ **AND THEY MUST EARN EXACTLY

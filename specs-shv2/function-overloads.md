@@ -1593,3 +1593,39 @@ end 'main'
 ```maxoncstderr
 error E2015: alpha/specs/fragments/function-overloads/error.a-throwing-overload-set-whose-bare-name-another-directory-declares.test:16:17: Unsupported: overloading 'alpha.want' — one of its declarations `throws`, and this name is ALSO declared as a free function in another directory, so the declaration sweep moved its throws clause onto the directory-qualified key and left behind the tally that would say whether the overloads agree about it. With nothing to compare, a `try` at a call to this name cannot be told which overload's error type it recovers. Give the overloads distinct names, or stop contesting the bare name across directories
 ```
+
+<!-- test: contested-directory-overload-set-agreeing-on-defaults -->
+⭐ **THE CONTROL FOR W78's PER-KEY TALLY: A CONTESTED OVERLOAD SET WHOSE MEMBERS *AGREE* MUST STILL
+COMPILE.** `alpha/`'s two `pick` members declare the same parameter names and default the same position, so
+a short call is filled identically whichever one resolves — the W74 rule — and `beta/`'s own `pick` merely
+contests the bare name. Before W78 this compiled for the wrong reason (the verdict was read off a key
+nothing had written, which answers "agree" for every program); it must go on compiling once the tally is
+kept per registration key, or the cure has bought its correctness by refusing what the language allows.
+The oracle answers **65** too.
+```maxon
+// --- file: alpha/a.maxon
+typealias Num = int(-1000 to 1000)
+
+export function pick(a Num, b Num = 5) returns Num
+	return a + b
+end 'pick'
+
+export function pick(a bool, b Num = 5) returns Num
+	return b if a else 0
+end 'pick'
+
+// --- file: beta/b.maxon
+typealias Small = int(-1000 to 1000)
+
+export function pick(a Small) returns Small
+	return a + 50
+end 'pick'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return (alpha.pick(2) + alpha.pick(true) + beta.pick(3)) as ExitCode
+end 'main'
+```
+```exitcode
+65
+```
