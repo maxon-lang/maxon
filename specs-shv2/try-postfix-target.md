@@ -453,7 +453,7 @@ a bare-name `print` would fail here.
 trailing quote, and a module-qualified name where shv2 prints the bare one.
 
 ⚠⚠ **AND THAT DIFFERENCE IS NOW HALF CLOSED, WHICH IS WHY THIS FILE PINS BOTH SPELLINGS.** W81 taught shv2
-to name a callee it has RESOLVED by its module — `error.two-throwing-calls-in-one-chain` below expects
+to name a callee it has RESOLVED by its module — `error.two-throwing-calls-in-one-chain` above expects
 `'stdlib.Array.slice'` — because `specs/testing-assertions.md`'s `error.forgotten-try` demands it. It was
 wired to **E3057 alone**, so this E3055 case still expects the bare `'print'`. The same rule puts E3055,
 E3008, E3088 and E3036 on the qualified side and moving them rewrites ~50 committed expectations, so it is

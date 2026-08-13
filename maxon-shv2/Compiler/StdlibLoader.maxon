@@ -1785,9 +1785,17 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     `__TestReport.threw`'s body answers `E3001` **+ `E3004 call to undefined function
 	//     'NoSuchType.definitelyUndefined'` at `stdlib/Testing.maxon:53:15`**, so its bodies are analyzed;
 	//   • there is NO SYNTHESIZED TWIN, the hazard that made `Set`/`Vector`/`unicodeCategory` INERT when
-	//     listed: `grep b"Testing" b"Expect" b"TestFailure" b"__TestReport"` over `maxon-shv2/Compiler/` is
-	//     EMPTY, and none of the seven `*BuiltinBaseName` roots (`SignatureIndex.maxon:3943-4097`) names any
-	//     of them.
+	//     listed: none of the seven `*BuiltinBaseName` roots in `SignatureIndex.maxon` (`Set`, `Map`, `List`,
+	//     `ManagedList`, `ManagedListNode`, `ManagedMemoryCursor`, `Vector` — named rather than cited by line,
+	//     since this entry's line range was already stale by six) names any of them, and no
+	//     `type`/`enum`/`typealias` DECLARATION
+	//     anywhere under `maxon-shv2/Compiler/` spells `TestFailure`, `__TestReport` or `Expect`.
+	//     ⚠ **STATED AS A DECLARATION SWEEP AND NOT AS A GREP, BECAUSE THE GREP DOES NOT COME BACK EMPTY AND
+	//     THIS ENTRY SAID IT DID** (W81 review). A plain `grep b"Testing" b"Expect" b"TestFailure"
+	//     b"__TestReport"` over `Compiler/` hits `Queries.TestReportDeclaringModule`, every `Expected '…'`
+	//     diagnostic in the lexer and parser, and every `Testing/ladders/…` citation — a dozen files, on
+	//     `main`, before this rung. The CONCLUSION is unchanged and the roots check is what carries it; what
+	//     is corrected is the evidence, which a later reader would have run and disbelieved.
 	//
 	// ⚠⚠ **THE CONTROL HAD TO BE RUN IN PLACE, AND `STDLIB-BRINGUP.md`'s RECIPE ANSWERS THE WRONG QUESTION
 	// FOR THIS MODULE.** That recipe copies the module OUTSIDE `stdlib/` before injecting, which for this one
@@ -1807,7 +1815,8 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//     reach, and this module declares neither.
 	//   • TYPE NAMES: `TestFailure`, `__TestReport`, `Expect` — three, all nominal, so a user program
 	//     spelling one wins and this module's moves into the reserved space (A1s wave 2). No other file
-	//     under `stdlib/` declares any of them, checked at the source across all 51.
+	//     under `stdlib/` declares any of them, checked at the source across all 50 (`find stdlib -name
+	//     '*.maxon' | wc -l` — this entry said 51; re-counted at the W81 review).
 	//   • TYPEALIASES: `AssertedInt` (`int(i64.min to i64.max)`), `AssertedReal` (`float(f64.min to f64.max)`)
 	//     and `Tolerance` (`float(0.0 to f64.max)`) — declared nowhere else under `stdlib/`, so
 	//     `RangedAliasRegistry`'s whole-program fold has no range to contest. It USES a fourth,

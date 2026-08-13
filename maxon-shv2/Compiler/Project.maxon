@@ -5306,7 +5306,7 @@ end 'staticMemberRegistrationName'
 // The uniqueness argument survives the correction because it never rested on the refusal: it rests on the
 // key being a REGISTRATION name.
 export function paramDefaultHelperName(funcName ByteArray, paramIndex ParamCount) returns ByteArray
-	return paramDefaultHelperNameAtSlotSpelling(funcName, slotSpelling: "{paramIndex}".toByteArray())
+	return mintedHelperName(ParamDefaultHelperPrefix, head: funcName, tail: "{paramIndex}".toByteArray())
 end 'paramDefaultHelperName'
 
 // ⭐⭐ **THE SAME PARAMETER SLOT'S HELPER, ON ANOTHER MEMBER OF THE CALLEE'S OVERLOAD SET (W81)** — the
@@ -5321,26 +5321,47 @@ end 'paramDefaultHelperName'
 // `ParamDefaultInfo` would be the second derivation of one name this mint's header records a backend
 // `call to unknown function` for.
 export function paramDefaultHelperNameOnMember(helperName ByteArray, member ByteArray) returns ByteArray
-	return paramDefaultHelperNameAtSlotSpelling(member, slotSpelling: splitMintedHelperName(helperName, prefix: ParamDefaultHelperPrefix, mint: "CalleeMint.paramDefaultHelper").tail)
+	return mintedHelperName(ParamDefaultHelperPrefix, head: member, tail: splitMintedHelperName(helperName, prefix: ParamDefaultHelperPrefix, mint: "CalleeMint.paramDefaultHelper").tail)
 end 'paramDefaultHelperNameOnMember'
 
-// The join itself, with the slot already spelled — the one place `__paramDefault#<name>#<slot>` is built.
-// The two exported doors above differ only in where the slot's bytes come from (a `ParamCount` at a
-// declaration, an existing helper name at a re-key), and a second copy of the join is the thing this mint's
-// header forbids.
-function paramDefaultHelperNameAtSlotSpelling(funcName ByteArray, slotSpelling ByteArray) returns ByteArray
-	return overloadRegistrationName(overloadRegistrationName(ParamDefaultHelperPrefix.toByteArray(), suffix: funcName), suffix: slotSpelling)
-end 'paramDefaultHelperNameAtSlotSpelling'
+// ⭐⭐ **THE JOIN ITSELF — the ONE place a `<prefix>#<head>#<tail>` helper name is built, for EITHER mint
+// (W81 review).** The parameter mint's two doors above and the field mint one door down differ only in which
+// prefix they carry and where the two halves come from; `splitMintedHelperName`'s self-check re-joins what it
+// split and must be re-joining by the SAME rule it is checking, or the check tests a rule nobody uses.
+//
+// ⛔ **IT WAS SPELLED THREE TIMES — the parameter join, the field join and that re-join — while the parameter
+// mint's own header said "a second copy of the join is the thing this mint's header forbids".** Two of the
+// three would have failed LOUDLY had the shape moved (the re-join's panic), but the field mint would have
+// gone on minting the old shape silently, and the property this file's headers rest on — that a helper name
+// is derived in exactly one place — was not true of the file that asserted it.
+function mintedHelperName(prefix ByteArray, head ByteArray, tail ByteArray) returns ByteArray
+	return overloadRegistrationName(overloadRegistrationName(prefix, suffix: head), suffix: tail)
+end 'mintedHelperName'
 
 // ⭐ **IS `callee` ONE OF THE PARAMETER MINT ABOVE? (W81)** — the gate the reachability walk asks before it
 // decodes a name, since `splitMintedHelperName` panics on anything this mint did not produce. It reads the
 // prefix for `isFieldDefaultHelperName`'s reason one door down, and lives beside the join so the prefix keeps
 // its one speller.
 export function isParamDefaultHelperName(callee ByteArray) returns bool
-	return bytesStartWith(callee, prefix: ParamDefaultHelperPrefix.toByteArray())
+	return bytesStartWith(callee, prefix: ParamDefaultHelperPrefix)
 end 'isParamDefaultHelperName'
 
-let ParamDefaultHelperPrefix = "__paramDefault"
+// ⚠⚠ **`b"…"`, NOT A `String`, AND THAT IS A MEASUREMENT RATHER THAN A STYLE (W81 review).** Both this and
+// the field twin below are read as BYTES at every one of their five uses, and both were `String`s asked for
+// `.toByteArray()` at each — which is `managed.slice` + `ByteArray.init`, an allocation per ask. That put one
+// allocation per CALL EDGE inside `StdlibSource.markReachable`, the demand walk's inner loop, and one per
+// call op inside `LowerMaxonToStd.materializeLayoutArgFor`.
+//
+// MEASURED on a 400-function, 2,007-line program, same tree, two binaries differing only in this:
+// `phase:deriveRuntimeNeeds` **15,003 → 7,539 allocations** (half the phase), whole compile **2,218,726 →
+// 2,181,702 (−1.67%)** and **−1.63 MB**. That is the W81 ladder's whole "+1.18%, all in
+// `deriveRuntimeNeeds` and the unbracketed region, +0 in every front-end phase" — it was never the widened
+// mark; it was this.
+//
+// ⇒ It is also the ONE spelling of the prefix. A `String` beside a `b"…"` twin would buy the same allocation
+// back as a second copy of the literal, which is the trade this file exists to refuse; the two panics that
+// wanted a `String` take `String.from(prefix)` at the panic instead, where the cost is a crash away.
+let ParamDefaultHelperPrefix = b"__paramDefault"
 
 // ⭐ **THE NAME OF THE SYNTHESIZED NULLARY FUNCTION THAT PRODUCES FIELD `fieldName`'s DEFAULT VALUE** (S2f)
 // — `__fieldDefault#Bag#items`. See `FieldDefault.helper` for what the mechanism is; this is only where
@@ -5362,7 +5383,7 @@ let ParamDefaultHelperPrefix = "__paramDefault"
 // prefix puts the result in the reserved space no declaration may enter (E2051); and `#` is not in the
 // identifier alphabet, so the two joins are injective by character class.
 export function fieldDefaultHelperName(typeName ByteArray, fieldName ByteArray) returns ByteArray
-	return overloadRegistrationName(overloadRegistrationName(FieldDefaultHelperPrefix.toByteArray(), suffix: typeName), suffix: fieldName)
+	return mintedHelperName(FieldDefaultHelperPrefix, head: typeName, tail: fieldName)
 end 'fieldDefaultHelperName'
 
 // ⭐ **IS `callee` ONE OF THE MINT ABOVE? (W43b)** — the question `LowerMaxonToStd.materializeLayoutArgFor`
@@ -5371,10 +5392,12 @@ end 'fieldDefaultHelperName'
 // than a `CalleeMint`, because the mint is a parse-time fact and does not ride the op; it lives beside the
 // join so the prefix keeps its one speller.
 export function isFieldDefaultHelperName(callee ByteArray) returns bool
-	return bytesStartWith(callee, prefix: FieldDefaultHelperPrefix.toByteArray())
+	return bytesStartWith(callee, prefix: FieldDefaultHelperPrefix)
 end 'isFieldDefaultHelperName'
 
-let FieldDefaultHelperPrefix = "__fieldDefault"
+// `b"…"` for the parameter twin's measured reason — see its header; `isFieldDefaultHelperName` is the per-op
+// caller that was paying the same allocation.
+let FieldDefaultHelperPrefix = b"__fieldDefault"
 
 // ⭐ **THE INVERSE OF THE PARAMETER MINT: WHICH CALL DID THE AUTHOR ACTUALLY WRITE?** A helper call is a
 // call the author wrote NO part of — they wrote `greet()`, and the compiler supplied the argument — so a
@@ -5417,7 +5440,7 @@ end 'MintedHelperNameParts'
 // separator and the trailing part is one run — re-joining the pieces and comparing turns those premises
 // into a check the mint owns. `mint` names the `CalleeMint` arm entitled to ask, so a panic here says which
 // call site is at fault rather than merely which name looked wrong.
-function splitMintedHelperName(helperName ByteArray, prefix String, mint String) returns MintedHelperNameParts
+function splitMintedHelperName(helperName ByteArray, prefix ByteArray, mint String) returns MintedHelperNameParts
 	let separator = try OverloadNameSeparator.toByteArray().get(0) otherwise panic("splitMintedHelperName: OverloadNameSeparator is a one-byte literal")
 
 	var firstSplit = helperName.count()
@@ -5433,14 +5456,14 @@ function splitMintedHelperName(helperName ByteArray, prefix String, mint String)
 	end 'scan'
 
 	if firstSplit == lastSplit 'fewerThanTwoSeparators'
-		panic("splitMintedHelperName: '{String.from(helperName)}' holds fewer than two '{OverloadNameSeparator}' separators, so the '{prefix}' mint cannot have produced it — only a call site the op marks `{mint}` may be asked")
+		panic("splitMintedHelperName: '{String.from(helperName)}' holds fewer than two '{OverloadNameSeparator}' separators, so the '{String.from(prefix)}' mint cannot have produced it — only a call site the op marks `{mint}` may be asked")
 	end 'fewerThanTwoSeparators'
 
 	let head = try helperName.slice(firstSplit + 1, endIndex: lastSplit) otherwise panic("splitMintedHelperName: slice [{firstSplit + 1}, {lastSplit}) of a {helperName.count()}-byte name is in range by the indices just found")
 	let tail = try helperName.slice(lastSplit + 1, endIndex: helperName.count()) otherwise panic("splitMintedHelperName: slice [{lastSplit + 1}, {helperName.count()}) is in range by the index just found")
-	let remint = overloadRegistrationName(overloadRegistrationName(prefix.toByteArray(), suffix: head), suffix: tail)
+	let remint = mintedHelperName(prefix, head: head, tail: tail)
 	if not remint.equals(helperName) 'decodeDisagreesWithTheMint'
-		panic("splitMintedHelperName: '{String.from(helperName)}' splits as ('{String.from(head)}', '{String.from(tail)}'), which the '{prefix}' mint re-joins as '{String.from(remint)}' — the join and its inverse have come apart")
+		panic("splitMintedHelperName: '{String.from(helperName)}' splits as ('{String.from(head)}', '{String.from(tail)}'), which the '{String.from(prefix)}' mint re-joins as '{String.from(remint)}' — the join and its inverse have come apart")
 	end 'decodeDisagreesWithTheMint'
 
 	return MintedHelperNameParts.create(head, tail: tail)
