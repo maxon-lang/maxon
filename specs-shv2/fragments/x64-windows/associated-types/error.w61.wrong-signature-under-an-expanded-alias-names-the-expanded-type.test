@@ -1,0 +1,30 @@
+// Test: error.w61.wrong-signature-under-an-expanded-alias-names-the-expanded-type
+typealias Num = int(0 to 1000)
+typealias Other = int(0 to 7)
+
+interface Holder uses Element
+	typealias ElementArray = Array with Element
+	function absorb(value ElementArray)
+end 'Holder'
+
+typealias OtherStore = Array with Other
+
+type Crate implements Holder with Num
+	var items as OtherStore = OtherStore.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function absorb(value OtherStore)
+		items = value.clone()
+	end 'absorb'
+end 'Crate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+---
+CompilerError:
+error E3016: <fragment>:12:6: Partial interface implementation: type 'Crate' has 1 method(s) with wrong signature:
+  - absorb(value Array_Other) returns void (expected absorb(value Array_Num) returns void)

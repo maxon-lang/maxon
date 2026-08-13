@@ -1786,6 +1786,11 @@ let sharedEmptyScannedParamNames = ByteArrayArray.create()
 let sharedEmptyInnerAliases = InnerAliasNameSet.create()
 let sharedEmptyInstanceAliasMap = ValueInstanceAliasMap.create()
 
+// The same COW anchor for the GENERIC-INSTANCE typealiases declared in an `interface` body (W61) — see
+// `Parser.interfaceAliasScratch`. An interface that declares none, which is every interface in the corpus
+// outside `stdlib/Builtins.maxon` and `specs-shv2/associated-types.md`, INCREFS this rather than allocating.
+let sharedEmptyInterfaceAliases = GenericAliasEntryArray.create()
+
 // The same anchor for the two ASSOCIATED-TYPE columns an interface-extension body is parsed under
 // (conditional extensions) — see `Parser.extensionAssociatedTypeNames`. Never mutated: an extension pass
 // REPLACES both columns wholesale and the reset points them back here, so one allocation serves every parser
@@ -9530,6 +9535,18 @@ export type Parser
 	// still walking this very type). Written by the `typealias` member arm and cleared in lockstep with
 	// `enclosingType` (`parseTypeDeclaration`/`recordScannedType` are the writers).
 	var enclosingInnerAliases as InnerAliasNameSet
+	// ⭐⭐ **THE GENERIC-INSTANCE TYPEALIASES OF THE `interface` CURRENTLY BEING READ (W61)** —
+	// `typealias ElementArray = Array with Element` inside `interface Holder uses Element`, whose right-hand
+	// side `readInterfaceDeclaration` used to accept and then THROW AWAY. It is the RHS, and only the RHS,
+	// that says what a requirement written `absorb(value ElementArray)` actually requires; without it the
+	// conformance check compares an unresolved name against the conformer's resolved instance and refuses
+	// every conformer (see `ProgramSignatures.interfaceAliases`).
+	//
+	// ⚠ **IT IS DRAINED BY THE FOLD AND IGNORED BY THE REAL PARSE.** `foldInterfaceDeclarationInto` is the
+	// one caller that hands it to the index — the same split every other whole-program registry keeps, and
+	// the reason the real parse may stay a pure function of its own file. `readInterfaceDeclaration` resets it
+	// per declaration, so a real parse simply fills it and lets the next declaration drop it.
+	var interfaceAliasScratch as GenericAliasEntryArray
 	// ⭐ **ARE THE ENCLOSING TYPE'S NESTED TYPEALIASES IN SCOPE THROUGH THE WHOLE-PROGRAM INDEX RATHER THAN
 	// THROUGH THE SET ABOVE (W43)?** True in exactly one place — inside a captured DEFAULT expression being
 	// drained (`restoreDeclaringTypeScope`), where the body walk that built that set finished long ago and
@@ -10080,6 +10097,7 @@ export type Parser
 			lastWitnessDispatchName: EmptySourceText,
 			lastWitnessDispatchThrows: ThrowsClause.none,
 			enclosingInnerAliases: sharedEmptyInnerAliases,
+			interfaceAliasScratch: sharedEmptyInterfaceAliases,
 			innerAliasesFromIndex: false,
 			tupleLayouts: sharedEmptyTupleLayouts,
 			descriptorScanSites: sharedEmptyDescriptorScanSites,
@@ -13905,6 +13923,11 @@ export type Parser
 		// declaration this same reader folds.
 		self.clearPendingRequirementParam()
 		index.recordInterfaceDeclaration(iface)
+		// ⭐ **AND THE BODY'S GENERIC-INSTANCE TYPEALIASES (W61)** — drained HERE and nowhere else, because
+		// this is the one read of an interface that is allowed to write whole-program state. The reader's
+		// own interner is handed over with them: their right-hand sides carry `MaxonType`s minted against
+		// it, which only the index can remap into its own (`recordInterfaceAliases`).
+		index.recordInterfaceAliases(self.interfaceAliasScratch, interfaceName: iface.name, fileTypeNames: self.artifact.typeNames)
 	end 'foldInterfaceDeclarationInto'
 
 	// ⭐ **CONSUME A WHOLE `extension <Interface>` DECLARATION IN THE TOLERANT SWEEP** — the twin of
@@ -15751,6 +15774,17 @@ export type Parser
 		return NestedAliasResult.ranged(alias)
 	end 'readNestedTypeAlias'
 
+	// ⭐ **KEEP ONE `interface`-SCOPED GENERIC-INSTANCE TYPEALIAS FOR THE FOLD (W61).** It is re-keyed under
+	// `<Interface>.<member>` by the SAME `qualifiedInnerGenericAlias` a `type` body's nested alias goes
+	// through — one re-keying rule, and it is what keeps two interfaces declaring `ElementArray` distinct.
+	// COPY-ON-WRITE off the shared empty, `recordInnerAliasName`'s discipline for its reason.
+	function noteInterfaceAlias(entry GenericAliasEntry)
+		if self.interfaceAliasScratch is sharedEmptyInterfaceAliases 'stillShared'
+			self.interfaceAliasScratch = GenericAliasEntryArray.create()
+		end 'stillShared'
+		self.interfaceAliasScratch.push(self.qualifiedInnerGenericAlias(entry))
+	end 'noteInterfaceAlias'
+
 	// Record a nested alias's bare member into `enclosingInnerAliases` so the rest of the body's bare
 	// references resolve. COPY-ON-WRITE off the shared empty set: only a type that actually declares a nested
 	// typealias gets its own set here, so the generics-free corpus never allocates one (the reset points at
@@ -17204,6 +17238,10 @@ export type Parser
 		// thing the kind decides: a `Self` in an interface method's signature is a `structRef`, which is what
 		// `checkConformance` substitutes the CONFORMING type into (and only a `type` may conform at this rung).
 		self.enterTypeScope(nameTok.value, isEnum: false)
+		// Per DECLARATION, so the entries a previous interface in this file left behind cannot be folded under
+		// this one's name. It points back at the shared empty rather than allocating, so an interface that
+		// declares no generic-instance alias — every interface in the corpus but a handful — costs nothing.
+		self.interfaceAliasScratch = sharedEmptyInterfaceAliases
 
 		var extendsInterfaces = ByteArrayArray.create()
 		var associatedTypeNames = ByteArrayArray.create()
@@ -17277,14 +17315,25 @@ export type Parser
 				// reached first. Read and validated here — `parseTupleTypeReference` checks its elements — and
 				// entered into `enclosingInnerAliases`, which is all an interface requirement's RENDERED
 				// signature needs.
-				let declaresFunctionType = match try self.readNestedTypeAlias(try self.consumeOptionalVisibility(), recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished) 'nested'
-					ranged to tupleAlias gives false
-					functionAlias gives true
+				// ⭐⭐ **THE GENERIC-INSTANCE FORM'S RIGHT-HAND SIDE IS KEPT NOW (W61)** — the arm below used to
+				// fall into the `ranged to tupleAlias` range and be discarded with them, and discarding it is
+				// what made `function absorb(value ElementArray)` unsatisfiable: the requirement renders the
+				// unresolved name `Holder.ElementArray` while every conformer's own alias renders a resolved
+				// `Array_…`, so the two were compared as different strings and EVERY conformer was refused
+				// (measured: `stdlib/Set.maxon` conforms today only because it happens to spell its own alias
+				// with the same member name, which the reference compilers rely on and shv2 deliberately no
+				// longer does — see `ProgramSignatures.interfaceAliases`).
+				//
+				// The other two per-instance forms are still discarded, and correctly: a RANGED inner alias
+				// erases to `integer` and a TUPLE one resolves straight through to the interned tuple's own
+				// `structRef`, so in both cases the requirement's rendered type is already the type, with
+				// nothing left for a right-hand side to say.
+				match try self.readNestedTypeAlias(try self.consumeOptionalVisibility(), recordFunctionSignature: false, tupleOwner: TupleAliasOwner.unpublished) 'nested'
+					ranged then break 'nested'
+					genericInstance(entry) then self.noteInterfaceAlias(entry)
+					tupleAlias then break 'nested'
+					functionAlias then throw ParseError.unsupported("a function typealias inside an `interface` body is a later slice — the declaration sweep does not read an interface's members, so the alias would name a type only its own file could resolve; declare it at file scope", line: aliasTok.line, column: aliasTok.column)
 				end 'nested'
-
-				if declaresFunctionType 'functionAliasInInterface'
-					throw ParseError.unsupported("a function typealias inside an `interface` body is a later slice — the declaration sweep does not read an interface's members, so the alias would name a type only its own file could resolve; declare it at file scope", line: aliasTok.line, column: aliasTok.column)
-				end 'functionAliasInInterface'
 
 				continue
 			end 'associatedTypeAlias'

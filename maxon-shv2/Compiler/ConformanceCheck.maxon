@@ -1188,7 +1188,7 @@ end 'checkOneInterfaceConformance'
 // INSTANCE method) and wrong about how far that reaches: the fix is to make the lookup receiver-aware
 // (`signatureMatches`' staticness test), not to stop asking.
 function checkInterfaceMethods(project Project, functionsByName FunctionNameIndex, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray, signatures ProgramSignatures)
-	let collected = collectInterfaceMethods(project, conformance: conformance, entry: entry, iface: iface)
+	let collected = collectInterfaceMethods(project, signatures: signatures, conformance: conformance, entry: entry, iface: iface, typeParamNames: typeParamNames)
 
 	var missing = StringArray.create()
 	var wrongSignature = StringArray.create()
@@ -1269,29 +1269,98 @@ end 'checkInterfaceMethods'
 // silent default belongs here: a name no entry of this clause binds is left denoting ITSELF, which is what
 // `error.inherited-uses-name-unparenthesized-is-still-a-signature-error` pins and what this rung must not move.
 //
-// ⚠ **THE FAST PATH IS NOW "THIS CLAUSE BINDS NOTHING AT ALL", WHICH IS BOTH WIDER AND EXACT.** It has to
-// move, because "the ROOT interface declares no associated type" is precisely the wrong question after the
-// paragraph above. Asking whether ANY entry wrote a `with` argument is one pass over a handful of entries,
-// allocates nothing, needs no interface lookup, and is a sufficient condition by construction: every binding
-// this function can apply comes from one of those lists. Every conformance in the corpus outside
-// `specs-shv2/associated-types.md` binds nothing, so it still hands the slot list straight back.
-function collectInterfaceMethods(project Project, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface) returns CollectedInterfaceMethodArray
+// ⭐⭐ **AND AN INTERFACE-SCOPED `typealias` IS EXPANDED AT THIS SAME DOOR (W61).** `function absorb(value
+// ElementArray)` inside `interface Holder uses Element` renders its parameter as the unresolved name
+// `Holder.ElementArray`, while every conformer's own alias renders a RESOLVED `Array_…` — so the two sides
+// of one requirement were compared as an unresolved name against an instance and every conformer was
+// refused. Expansion belongs HERE and not at a second site for R5's reason above: the expanded name is what
+// the verdict compares AND what the diagnostic prints.
+//
+// ⚠ **EXPAND FIRST, THEN SUBSTITUTE — the order is not a preference, the reverse is undefined.** Before
+// expansion the requirement mentions no associated type at all: `Holder.ElementArray` is one opaque name.
+// It is the right-hand side that exposes `Element`, and the bound spellings the expansion is handed are
+// produced by `boundTypeName` — the same two-pair lookup every other position uses — so the two rules
+// compose rather than each having its own idea of what a name means.
+//
+// ⚠ **THE FAST PATH IS TWO CONDITIONS NOW, AND BOTH ARE EXACT.** "This clause binds nothing" has to
+// replace "the ROOT interface declares no associated type", which is precisely the wrong question after the
+// W60 paragraph: asking whether ANY entry wrote a `with` argument is one pass over a handful of entries,
+// allocates nothing, needs no interface lookup, and is sufficient by construction, since every binding this
+// function can apply comes from one of those lists. But a clause that binds nothing can still need
+// EXPANSION — `interface Sink` with `typealias Bytes = Array with Byte` and no `uses` at all was equally
+// broken (measured) — so `anySlotDeclarerHasAnAlias` rides beside it. That one is asked PER DECLARING
+// INTERFACE and not program-wide, for the reason its own header gives: `stdlib/Builtins.maxon` declares an
+// alias, so a program-wide bool is true for every program that loads the stdlib and would put every
+// conformance in the corpus back on the substituting path. Both conditions fail for every conformance
+// outside this rung's cases and the two stdlib literal-init conformers, and the slot list is handed
+// straight back.
+function collectInterfaceMethods(project Project, signatures ProgramSignatures, conformance ConformanceDecl, entry InterfaceConformance, iface IrInterface, typeParamNames ByteArrayArray) returns CollectedInterfaceMethodArray
 	let slots = interfaceWitnessSlots(project.interfaces, iface: iface)
-	if conformanceBindsNothing(conformance) 'noBindingsAnywhere'
+	if conformanceBindsNothing(conformance) and not anySlotDeclarerHasAnAlias(signatures, slots: slots) 'nothingToSubstituteOrExpand'
 		return slots
-	end 'noBindingsAnywhere'
+	end 'nothingToSubstituteOrExpand'
 
 	let clauseNames = pairableAssociatedTypeNames(iface.associatedTypeNames, boundTypeNames: entry.withArgs)
 	var substituted = CollectedInterfaceMethodArray.create()
 	for i in 0 upto slots.count() 'eachSlot'
 		let slot = try slots.get(i) otherwise panic("collectInterfaceMethods: slots.get OOB at {i} below count {slots.count()}")
+		let ownerNames = associatedTypeNamesDeclaredBy(project, iface: iface, interfaceName: slot.sourceInterfaceName)
 		let declaredArgs = boundArgumentsFor(conformance, entry: entry, interfaceName: slot.sourceInterfaceName)
-		let declaredNames = pairableAssociatedTypeNames(associatedTypeNamesDeclaredBy(project, iface: iface, interfaceName: slot.sourceInterfaceName), boundTypeNames: declaredArgs)
-		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, clauseNames: clauseNames, clauseArgs: entry.withArgs, declaredNames: declaredNames, declaredArgs: declaredArgs), sourceInterfaceName: slot.sourceInterfaceName))
+		let under = RequirementSubstitution.create(signatures, clauseNames: clauseNames, clauseArgs: entry.withArgs, declaredNames: pairableAssociatedTypeNames(ownerNames, boundTypeNames: declaredArgs), declaredArgs: declaredArgs, ownerNames: ownerNames, ownerInterfaceName: slot.sourceInterfaceName, conformerName: conformance.typeName, conformerTypeParams: typeParamNames)
+		substituted.push(CollectedInterfaceMethod.create(substituteAssociatedTypes(slot.method, under: under), sourceInterfaceName: slot.sourceInterfaceName))
 	end 'eachSlot'
 
 	return substituted
 end 'collectInterfaceMethods'
+
+// ⭐⭐ **EVERYTHING ONE REQUIREMENT IS SUBSTITUTED UNDER, IN ONE VALUE.** It replaced eight parallel
+// parameters threaded through three functions, which is the shape that lets a caller pass the CLAUSE pair
+// where the DECLARER's belongs and be caught by nothing. One is built per SLOT, and only on the path the
+// fast path above did not take — a program that neither binds nor declares an interface alias allocates none.
+type RequirementSubstitution
+	// The entry the walk started from, and this type's own conformance entry for the interface that DECLARED
+	// the requirement. Asked in that order — see `collectInterfaceMethods` for why clause-first is a rule.
+	export let clauseNames as ByteArrayArray
+	export let clauseArgs as ByteArrayArray
+	export let declaredNames as ByteArrayArray
+	export let declaredArgs as ByteArrayArray
+	// ⚠ The declaring interface's `uses` names UNGATED by `pairableAssociatedTypeNames`, unlike
+	// `declaredNames` above. The alias expansion pairs them against `boundTypeName`'s answers, which is
+	// defined for every name whether or not an argument list could pair with it — where the substitution
+	// proper indexes an argument list directly and must not be handed a name it cannot reach.
+	export let ownerNames as ByteArrayArray
+	export let ownerInterfaceName as ByteArray
+	export let signatures as ProgramSignatures
+	export let conformerName as ByteArray
+	export let conformerTypeParams as ByteArrayArray
+
+	export static function create(signatures ProgramSignatures, clauseNames ByteArrayArray, clauseArgs ByteArrayArray, declaredNames ByteArrayArray, declaredArgs ByteArrayArray, ownerNames ByteArrayArray, ownerInterfaceName ByteArray, conformerName ByteArray, conformerTypeParams ByteArrayArray) returns RequirementSubstitution
+		return Self{clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs, ownerNames: ownerNames, ownerInterfaceName: ownerInterfaceName, signatures: signatures, conformerName: conformerName, conformerTypeParams: conformerTypeParams}
+	end 'create'
+end 'RequirementSubstitution'
+
+// Could any requirement in this slot list spell an interface-scoped `typealias`? A requirement can only
+// name an alias its OWN interface declared, so the question is exactly "does any interface that declared
+// one of these requirements declare an alias" — a set membership per slot, and no allocation.
+//
+// ⚠ **THE WHOLE-PROGRAM BOOL IS ASKED FIRST AND IS NOT SUFFICIENT ALONE.** `stdlib/Builtins.maxon`
+// declares `InitableFromArrayLiteral`'s `typealias ElementArray`, so it is TRUE for every program that
+// loads the stdlib — which is every program. It buys the O(1) exit for a program with no interface alias
+// at all; the per-slot walk is what keeps every OTHER conformance off the substituting path, where each
+// requirement would otherwise cost a rebuilt slot record and a `RequirementSubstitution`.
+function anySlotDeclarerHasAnAlias(signatures ProgramSignatures, slots CollectedInterfaceMethodArray) returns bool
+	if not signatures.declaresInterfaceAliases() 'noneInTheProgram'
+		return false
+	end 'noneInTheProgram'
+
+	for slot in slots 'eachSlot'
+		if signatures.interfaceDeclaresAlias(slot.sourceInterfaceName) 'itsDeclarerHasOne'
+			return true
+		end 'itsDeclarerHasOne'
+	end 'eachSlot'
+
+	return false
+end 'anySlotDeclarerHasAnAlias'
 
 // Did this `implements` clause write a `with` argument anywhere? A clause that wrote none can bind nothing,
 // whichever interface declared a requirement — the allocation-free gate above.
@@ -1363,13 +1432,13 @@ end 'pairableAssociatedTypeNames'
 // than merged into one, because merging them is not free of meaning: their lengths are what pairs them
 // positionally, so a concatenation would have to be two arrays anyway, and it would allocate a pair per
 // requirement of every binding conformance to say what four already-built lists say.
-function substituteAssociatedTypes(method InterfaceMethodSig, clauseNames ByteArrayArray, clauseArgs ByteArrayArray, declaredNames ByteArrayArray, declaredArgs ByteArrayArray) returns InterfaceMethodSig
+function substituteAssociatedTypes(method InterfaceMethodSig, under RequirementSubstitution) returns InterfaceMethodSig
 	var paramTypeNames = ByteArrayArray.create()
 	for i in 0 upto method.paramTypeNames.count() 'eachParam'
-		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs))
+		paramTypeNames.push(boundTypeName(try method.paramTypeNames.get(i) otherwise panic("substituteAssociatedTypes: paramTypeNames.get OOB at {i}"), under: under))
 	end 'eachParam'
 
-	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs), paramIsBuffer: method.paramIsBuffer)
+	return InterfaceMethodSig.create(method.name, paramNames: method.paramNames, paramTypeNames: paramTypeNames, returnTypeName: boundTypeName(method.returnTypeName, under: under), isStatic: method.isStatic, throwsClause: substituteThrowsClause(method.throwsClause, under: under), paramIsBuffer: method.paramIsBuffer)
 end 'substituteAssociatedTypes'
 
 // What ONE written type name in a requirement denotes under this conformance's bindings: the argument bound
@@ -1378,27 +1447,64 @@ end 'substituteAssociatedTypes'
 // rule and not a preference. The scan that decides WHICH `uses` parameter a name is lives in
 // `IrInterface.namePositionIn` — one statement of it, because the witness-call lowering asks the same
 // question for a different reason (see there).
-function boundTypeName(name ByteArray, clauseNames ByteArrayArray, clauseArgs ByteArrayArray, declaredNames ByteArrayArray, declaredArgs ByteArrayArray) returns ByteArray
-	if let clausePosition = try namePositionIn(clauseNames, name: name) 'boundByTheClause'
-		return try clauseArgs.get(clausePosition) otherwise panic("boundTypeName: clauseArgs.get OOB at {clausePosition} below name count {clauseNames.count()} — `pairableAssociatedTypeNames` empties the NAME list whenever the arguments cannot pair with it positionally, so a name reaching this point always has an argument at its own index")
+function boundTypeName(name ByteArray, under RequirementSubstitution) returns ByteArray
+	let bound = boundAssociatedTypeName(name, under: under)
+	if not bound.equals(name) 'anAssociatedTypeOfEitherPair'
+		return bound
+	end 'anAssociatedTypeOfEitherPair'
+
+	// ⭐ **A NAME NEITHER PAIR SPELLS MAY STILL BE THE DECLARING INTERFACE'S OWN `typealias` (W61).** It is
+	// asked LAST because the lookup above is what its own expansion is defined in terms of: an associated type
+	// resolves to a binding, and only then does the alias's right-hand side mean anything. An interface that
+	// declares no alias, and a name that is not one of its members, fall straight through to the name itself —
+	// which is every requirement in the corpus outside this rung's cases.
+	return try expandedInterfaceAlias(name, under: under) otherwise return name
+end 'boundTypeName'
+
+// ⛔ **THE ASSOCIATED-TYPE HALF ALONE, AND IT IS A SEPARATE FUNCTION TO MAKE THE RECURSION IMPOSSIBLE RATHER
+// THAN MERELY UNREACHED.** The expansion below resolves the declaring interface's `uses` names through this
+// door, and the first cut of this rung had it call `boundTypeName` — whose last act is to expand. Every name
+// that reached the expansion therefore re-entered it, rebuilding the same spelling list for ever: **MEASURED
+// as `panic: stack overflow … in Compiler.expandedInterfaceAlias / in Compiler.boundTypeName`, on all four
+// W61 shapes at once.** That cut's header argued the recursion was bounded "by construction" because an
+// associated type is found by one of the two pair lookups — an argument true only while both pairs are
+// non-empty, which `pairableAssociatedTypeNames` exists to make false. A structure that CANNOT recurse needs
+// no such argument.
+function boundAssociatedTypeName(name ByteArray, under RequirementSubstitution) returns ByteArray
+	if let clausePosition = try namePositionIn(under.clauseNames, name: name) 'boundByTheClause'
+		return try under.clauseArgs.get(clausePosition) otherwise panic("boundAssociatedTypeName: clauseArgs.get OOB at {clausePosition} below name count {under.clauseNames.count()} — `pairableAssociatedTypeNames` empties the NAME list whenever the arguments cannot pair with it positionally, so a name reaching this point always has an argument at its own index")
 	end 'boundByTheClause'
 
-	if let declaredPosition = try namePositionIn(declaredNames, name: name) 'boundByItsDeclarer'
-		return try declaredArgs.get(declaredPosition) otherwise panic("boundTypeName: declaredArgs.get OOB at {declaredPosition} below name count {declaredNames.count()} — the same `pairableAssociatedTypeNames` gate applies to the declaring interface's pair")
+	if let declaredPosition = try namePositionIn(under.declaredNames, name: name) 'boundByItsDeclarer'
+		return try under.declaredArgs.get(declaredPosition) otherwise panic("boundAssociatedTypeName: declaredArgs.get OOB at {declaredPosition} below name count {under.declaredNames.count()} — the same `pairableAssociatedTypeNames` gate applies to the declaring interface's pair")
 	end 'boundByItsDeclarer'
 
 	return name
-end 'boundTypeName'
+end 'boundAssociatedTypeName'
+
+// The alias's right-hand side under this conformance's bindings, as the canonical instance name the
+// conformer's own declared parameter renders to. The bound spellings are the ASSOCIATED-TYPE lookup's answers
+// for the declaring interface's `uses` names, which is what makes the expansion and the substitution ONE rule
+// rather than two: whatever `Element` means in a requirement's parameter position is what it means inside the
+// alias.
+function expandedInterfaceAlias(name ByteArray, under RequirementSubstitution) returns ByteArray throws MapError
+	var boundSpellings = ByteArrayArray.create()
+	for ownerName in under.ownerNames 'eachAssociatedType'
+		boundSpellings.push(boundAssociatedTypeName(ownerName, under: under))
+	end 'eachAssociatedType'
+
+	return try under.signatures.expandInterfaceAlias(name, associatedTypeNames: under.ownerNames, boundSpellings: boundSpellings, conformerName: under.conformerName, conformerTypeParams: under.conformerTypeParams, declaringInterfaceName: under.ownerInterfaceName)
+end 'expandedInterfaceAlias'
 
 // The `throws E` clause under the same bindings. It substitutes for the reason every other position does —
 // `function next() throws Element` is as much an associated-type USE as a parameter is, and the throws
 // relation is compared by NAME (`requireSameErrorType`), so an unsubstituted clause would reject a
 // conforming impl. v1 substitutes it too, and says why in one line (`substituteThrowsName`,
 // `TypeResolution.maxon:1249-1252`).
-function substituteThrowsClause(clause ThrowsClause, clauseNames ByteArrayArray, clauseArgs ByteArrayArray, declaredNames ByteArrayArray, declaredArgs ByteArrayArray) returns ThrowsClause
+function substituteThrowsClause(clause ThrowsClause, under RequirementSubstitution) returns ThrowsClause
 	match clause 'declared'
 		none then return ThrowsClause.none
-		throwing(name) then return ThrowsClause.throwing(String.from(boundTypeName(name.toByteArray(), clauseNames: clauseNames, clauseArgs: clauseArgs, declaredNames: declaredNames, declaredArgs: declaredArgs)))
+		throwing(name) then return ThrowsClause.throwing(String.from(boundTypeName(name.toByteArray(), under: under)))
 	end 'declared'
 end 'substituteThrowsClause'
 

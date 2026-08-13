@@ -3451,39 +3451,36 @@ error E3016: specs/fragments/associated-types/error.extends.wrong-signature-unde
 ```
 
 
-### An interface-scoped `typealias` in a requirement (W61) — BLOCKED, and the plan for it needs a ruling
+### An interface-scoped `typealias` in a requirement is EXPANDED, not name-matched (W61)
 
-⛔ **NOT DISABLED FOR "shv2 cannot do it yet". Disabled because WHAT IT SHOULD DO IS AN OPEN DESIGN
-QUESTION, and both cases below are MEASURED.** `interface Holder uses Element` declaring
-`typealias ElementArray = Array with Element` renders its requirement's parameter as the qualified NAME
-`Holder.ElementArray` — `Parser.readInterfaceDeclaration` accepts the alias and DISCARDS its right-hand
-side (the declaration sweep reads no interface BODY, so the name is keyed in no whole-program registry),
-while the conformer's own `ElementArray` IS keyed and resolves to the instance `Array_T…`. So the two
-sides of one requirement are compared as an unresolved name against a resolved instance:
+⭐⭐ **AN INTERFACE'S `typealias` IS LOCAL SHORTHAND, NOT PART OF ITS REQUIREMENT SURFACE.**
+`interface Holder uses Element` declaring `typealias ElementArray = Array with Element` requires, of
+`absorb`, a parameter of the type that alias's RIGHT-HAND SIDE names under this conformance's bindings —
+`Array with <whatever Element was bound to>` — and NOT a parameter spelled `ElementArray`. Before W61 the
+requirement rendered the unresolved name `Holder.ElementArray` while every conformer's own alias rendered a
+resolved instance, so the two sides of one requirement were compared as a name against a type and EVERY
+conformer was refused:
 
 ```
 E3016 … - absorb(value Array_T779624e88745be2b) returns void (expected absorb(value Holder.ElementArray) returns void)
 ```
 
-⚠ **AND THE TWO REFERENCES DO NOT EXPAND THE ALIAS EITHER — THEY MATCH ITS SPELLING.** Measured on the
-bootstrap: the first case below (both sides spelling the alias `ElementArray`) COMPILES; the second
-(the conformer spelling its alias `NumStore` over the identical right-hand side) is REFUSED, with
-`absorb(value NumStore) returns void (expected absorb(value ElementArray) returns void)`. v1 throws the
-line away outright (`Parser.maxon:6578-6585`). So `stdlib/Set.maxon` and `stdlib/List.maxon` conform
-through `InitableFromArrayLiteral` **only because both files happen to write the same member name** —
-which is the mechanism, in both references, and not an accident of these examples.
+⛔ **BOTH REFERENCE COMPILERS MATCH THE ALIAS'S SPELLING INSTEAD, AND CANONICAL `/specs` HAS NO CASE FOR THE
+SHAPE AT ALL.** Measured on the bootstrap: the first case below compiles, and the second — the conformer
+spelling its own alias `NumStore` over the identical right-hand side — is REFUSED with
+`absorb(value NumStore) returns void (expected absorb(value ElementArray) returns void)`. v1 discards the
+alias line outright (`Parser.maxon:6578-6585`). So `stdlib/Set.maxon` and `stdlib/List.maxon` conform
+through `InitableFromArrayLiteral` only because two files independently wrote the member name
+`ElementArray`. And a conformer cannot avoid inventing a name: `value Array with Element` in a parameter
+list is **E2010**, and `var items as Array with Element` in a field is **E3005 … Define a typealias
+first** — so under the references the language forces every conformer to guess the interface's private
+spelling, and refuses it with a diagnostic naming a type its program never wrote.
 
-⇒ **Two shapes, and the choice is a RULING rather than a port.** (a) NAME-MATCHING — a requirement's
-`<Interface>.<member>` denotes the conformer's `<Conformer>.<member>`, which is `substituteSelf` one level
-up and reachable from `ConformanceCheck` alone; it reproduces both references, and the second case below
-stays REFUSED. (b) RIGHT-HAND-SIDE EXPANSION — `Holder.ElementArray` becomes
-`Array with <whatever this conformance bound Element to>`, which is strictly better and which neither
-reference has; it needs the interface's discarded right-hand side to be recorded, i.e.
-`Parser.readInterfaceDeclaration`, and it makes the second case PASS. Enable whichever the ruling picks,
-and delete the other's `exitcode` block.
+⚖ **USER RULING (BATCH36): conformance is decided on the UNDERLYING TYPE. shv2 therefore accepts programs
+both references refuse, deliberately.** A reader who finds an oracle disagreement here has found the ruling,
+not a bug.
 
-<!-- disabled-test: w61.interface-scoped-alias-in-a-requirement -->
-<!-- BATCH36 W61 — blocked on the ruling above, not on a missing mechanism. -->
+<!-- test: w61.interface-scoped-alias-in-a-requirement -->
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -3521,8 +3518,16 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: w61.conformer-names-the-alias-differently -->
-<!-- BATCH36 W61 — the case that SEPARATES the two shapes. Under (a) it must stay refused (which is what the bootstrap does today); under (b) it must print 2. Do not enable it without the ruling. -->
+
+### …and the case the ruling turns on: the conformer names its alias something else
+
+⭐⭐ **`stdlib/Set.maxon`'s SHAPE WITH THE COINCIDENCE REMOVED.** The conformer writes
+`typealias NumStore = Array with Num` and binds `Holder with Num`; nothing but the underlying type is
+shared with the interface's own `ElementArray`. This is the ONE program that separates name-matching from
+right-hand-side expansion — it is what both references refuse and what the ruling requires — so it is also
+the case a future regression toward the reference behaviour would land on first.
+
+<!-- test: w61.conformer-names-the-alias-differently -->
 ```maxon
 typealias Num = int(0 to 1000)
 
@@ -3564,4 +3569,187 @@ end 'main'
 ```
 ```stdout
 2
+```
+
+
+### …and an alias over a CONCRETE type, in an interface with no `uses` at all
+
+The half that says this is about ALIASES and not about associated types. `interface Sink` binds nothing, so
+the substitution has nothing to do and the EXPANSION is the whole of the work — which is why the check's
+fast path asks two questions rather than one (`collectInterfaceMethods`). It was equally broken:
+`expected write(data Sink.Bytes)` against the conformer's `Array_Byte`.
+
+<!-- test: w61.interface-alias-over-a-concrete-type -->
+```maxon
+typealias Byte = int(0 to 255)
+
+interface Sink
+	typealias Bytes = Array with Byte
+	function write(data Bytes)
+end 'Sink'
+
+typealias Buf = Array with Byte
+
+type Log implements Sink
+	var kept as Buf = Buf.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function write(data Buf)
+		kept = data.clone()
+	end 'write'
+
+	export function count() returns Byte
+		return kept.count()
+	end 'count'
+end 'Log'
+
+function main() returns ExitCode
+	var l = Log.create()
+	var b = Buf.create()
+	b.push(7)
+	l.write(b)
+	print("{l.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+
+### …and the expansion descends into a NESTED instance argument
+
+`typealias Nested = Array with (Array with Element)` expands as far as it is written — the substitution
+recurses through the inner instance rather than stopping at the outer one. It is the case that says the
+expansion works on the alias's TYPE and not on a one-level spelling.
+
+<!-- test: w61.expansion-descends-into-a-nested-instance-argument -->
+```maxon
+typealias Num = int(0 to 1000)
+
+interface Holder uses Element
+	typealias Nested = Array with (Array with Element)
+	function absorb(value Nested)
+end 'Holder'
+
+typealias NumStore = Array with Num
+typealias NumStoreStore = Array with NumStore
+
+type Crate implements Holder with Num
+	var items as NumStoreStore = NumStoreStore.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function absorb(value NumStoreStore)
+		items = value.clone()
+	end 'absorb'
+
+	export function count() returns Num
+		return items.count()
+	end 'count'
+end 'Crate'
+
+function main() returns ExitCode
+	var c = Crate.create()
+	var outer = NumStoreStore.create()
+	var inner = NumStore.create()
+	inner.push(3)
+	outer.push(inner)
+	c.absorb(outer)
+	print("{c.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
+
+### …and an alias naming ANOTHER alias of the same interface is still refused, at the parse
+
+⚖ **MEASURED, and it is why this rung needed no fixpoint.** An interface alias's arguments are read by the
+same `readGenericInstanceAlias` a file-scope one is, and a bare member name is not resolvable there — so the
+expansion can only ever descend into instances spelled INLINE, which are strictly smaller than their parent.
+The refusal below is pre-existing and unchanged by W61; it is committed so that a later rung which makes
+this shape legal has to decide the fixpoint deliberately rather than discover it as a hang.
+
+<!-- test: error.w61.interface-alias-naming-another-interface-alias -->
+```maxon
+typealias Num = int(0 to 1000)
+
+interface Holder uses Element
+	typealias ElementArray = Array with Element
+	typealias Nested = Array with ElementArray
+	function absorb(value Nested)
+end 'Holder'
+
+type Crate implements Holder with Num
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function absorb(value Num)
+		print("{value}\n")
+	end 'absorb'
+end 'Crate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3011: specs/fragments/associated-types/error.w61.interface-alias-naming-another-interface-alias.test:6:32: Unknown type 'Holder.ElementArray'
+```
+
+
+### …and a genuinely wrong signature under an EXPANDED alias names the EXPANDED type
+
+⛔ **W61's twin of the W60 message case, and it pins the same hazard.** The expansion arrives at the ONE
+substitution site (`collectInterfaceMethods`), so the string the verdict compares and the string the
+diagnostic prints are one string. A fix that expanded for the comparison and not for the message would
+leave this program correctly rejected while telling its author the requirement is `Holder.ElementArray` — a
+type their program cannot write, and one no positive case can see.
+
+<!-- test: error.w61.wrong-signature-under-an-expanded-alias-names-the-expanded-type -->
+```maxon
+typealias Num = int(0 to 1000)
+typealias Other = int(0 to 7)
+
+interface Holder uses Element
+	typealias ElementArray = Array with Element
+	function absorb(value ElementArray)
+end 'Holder'
+
+typealias OtherStore = Array with Other
+
+type Crate implements Holder with Num
+	var items as OtherStore = OtherStore.create()
+
+	export static function create() returns Self
+		return Self{}
+	end 'create'
+
+	export function absorb(value OtherStore)
+		items = value.clone()
+	end 'absorb'
+end 'Crate'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3016: specs/fragments/associated-types/error.w61.wrong-signature-under-an-expanded-alias-names-the-expanded-type.test:12:6: Partial interface implementation: type 'Crate' has 1 method(s) with wrong signature:
+  - absorb(value Array_Other) returns void (expected absorb(value Array_Num) returns void)
 ```

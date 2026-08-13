@@ -7011,6 +7011,32 @@ export type ProgramSignatures
 	// through, and the one the instantiation checks read the base + args from. It carries no ids of its
 	// own (the giid indexes `genericInstances`), so it travels by name.
 	var genericAliases as GenericAliasMap
+	// ⭐⭐ **`<Interface>.<member>` ⇒ THE INSTANCE ITS RIGHT-HAND SIDE NAMES (W61)** — `Holder.ElementArray`
+	// ⇒ the giid for `Array with <Holder's Element>`, from `typealias ElementArray = Array with Element`
+	// written inside `interface Holder uses Element`.
+	//
+	// ⚖ **IT IS A SEPARATE MAP FROM `genericAliases` ABOVE, AND THE SPLIT IS THE USER RULING.** That map is
+	// the set of names a READER may write, and putting an interface's member in it would make
+	// `parseTypeReference` resolve the requirement's `ElementArray` to a `genericInstance` — which would
+	// render the requirement as a mangled `Array_T…` and leave a diagnostic quoting a digest at an author who
+	// wrote a name. An interface's `typealias` is LOCAL SHORTHAND: it names no type outside its own body, and
+	// its one job downstream is to say what a requirement that spells it actually requires. So the requirement
+	// keeps rendering `Holder.ElementArray`, and exactly one consumer — `ConformanceCheck` — expands it.
+	//
+	// ⛔ **BOTH REFERENCE COMPILERS MATCH THE ALIAS'S SPELLING INSTEAD, AND shv2 DELIBERATELY DOES NOT.**
+	// The bootstrap compares the two bodies' member NAMES (measured: a conformer spelling its own alias
+	// `NumStore` over the identical right-hand side is refused, `expected absorb(value ElementArray)`); v1
+	// discards the line outright (`Parser.maxon:6578-6585`). So `stdlib/Set.maxon` and `stdlib/List.maxon`
+	// conform through `InitableFromArrayLiteral` only because two files independently wrote `ElementArray`.
+	// A conformer CANNOT avoid inventing a name — `value Array with Element` is E2010 in a parameter list and
+	// E3005 in a field — so under the references the language forces every conformer to guess the interface's
+	// private spelling. ⚖ **USER RULING: conformance is decided on the UNDERLYING TYPE**, so shv2 accepts
+	// programs both references refuse. `specs-shv2/associated-types.md`'s `w61.*` cases carry the measurement.
+	var interfaceAliases as GenericAliasMap
+	// Which interfaces declared one of the above — the per-interface half of the same fact, and the only
+	// form of it the conformance check's fast path can use (see `interfaceDeclaresAlias`). Derived in the
+	// same act as the map, so the two cannot disagree about whether an interface has an alias.
+	var interfaceAliasOwners as InterfaceNameSet
 	// ⭐⭐ **THE GENERIC-ALIAS NAMES TWO FILES DISAGREE ABOUT (N3)** — the map above is keyed by the bare NAME
 	// alone, which is exactly what `RangedAliasRegistry` was before file scoping and had exactly its defect:
 	// the last file folded won and every other file silently got its instance. A non-exported `typealias` is
@@ -7654,7 +7680,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), collidingParamDefaults: CollidingParamDefaultNameSet.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9531,6 +9557,140 @@ export type ProgramSignatures
 		end 'eachHash'
 		self.hash = state
 	end 'recordGenericAlias'
+
+	// ⭐⭐ **RECORD ONE `interface` BODY'S GENERIC-INSTANCE TYPEALIASES (W61)** — `recordGenericAlias`'s twin,
+	// differing in exactly two things and in nothing else: the entries land in `interfaceAliases` rather than
+	// `genericAliases` (see that field for the ruling), and they do NOT ride the content hash.
+	//
+	// ⚠ **THEY DO NOT RIDE THE HASH BECAUSE NO PARSE COPIES THEM** — ARCHITECTURE's "MIX WHAT A READER
+	// COPIES" rule. The index's hash keys every parse memo, and a requirement's rendered parameter type is
+	// `Holder.ElementArray` whether this map holds the alias or not; the ONE consumer is `checkConformance`,
+	// which runs on the merged project on every compile and memoizes nothing. Mixing it would re-parse the
+	// whole program whenever an interface edited a private shorthand, which is the "sound, and useless"
+	// pessimal key the query spine's header names.
+	//
+	// It takes the reader's own interner rather than a `TypeNameRemap` because the FOLD, unlike `foldFile`,
+	// has no remap in hand: `foldInterfaceDeclarations` builds one reader per FILE and seats it at each site,
+	// so the fold is per DECLARATION and the interner is the file's. The fold is skipped entirely for an
+	// interface that declares no such alias — every interface in the corpus but a handful — so the walk of
+	// the reader's interner is paid only where there is something to remap.
+	export function recordInterfaceAliases(entries GenericAliasEntryArray, interfaceName ByteArray, fileTypeNames TypeNameInterner)
+		if entries.count() == 0 'declaresNone'
+			return
+		end 'declaresNone'
+
+		self.interfaceAliasOwners.insert(interfaceName)
+		let remap = self.typeNames.foldInto(fileTypeNames)
+		for entry in entries 'eachAlias'
+			let baseId = self.typeNames.intern(entry.baseName)
+			let args = self.resolveGenericArgs(entry, remap: remap)
+			self.interfaceAliases.upsert(entry.aliasName, value: self.genericInstances.intern(baseId, args: args, fixedSize: entry.fixedSize))
+		end 'eachAlias'
+	end 'recordInterfaceAliases'
+
+	// Does the program declare ANY interface-scoped generic-instance typealias? The whole-program gate the
+	// conformance check gets its fast path from: a program with none — every program in the corpus outside
+	// `stdlib/Builtins.maxon` and this rung's cases — can have no requirement to expand, so the check never
+	// asks a second question.
+	export function declaresInterfaceAliases() returns bool
+		return self.interfaceAliases.count() != 0
+	end 'declaresInterfaceAliases'
+
+	// ⭐ **AND THE SAME QUESTION OF ONE INTERFACE — the gate that keeps the whole-program bool above from
+	// being the whole answer.** `stdlib/Builtins.maxon` declares `InitableFromArrayLiteral`'s
+	// `typealias ElementArray`, so the program-wide bool is TRUE for every program that loads the stdlib,
+	// which is every program: used alone it would put every conformance in the corpus back on the
+	// substituting path. Asked per DECLARING interface it is exact — a requirement can only spell an alias
+	// its own interface declared — and it is a set membership rather than an allocation.
+	export function interfaceDeclaresAlias(name ByteArray) returns bool
+		return self.interfaceAliasOwners.contains(name)
+	end 'interfaceDeclaresAlias'
+
+	// ⭐⭐ **WHAT A REQUIREMENT SPELLING `<Interface>.<member>` ACTUALLY REQUIRES, under this conformance's
+	// bindings (W61)** — the alias's RIGHT-HAND SIDE with each of the declaring interface's associated types
+	// replaced by what the conformance bound it to, rendered to the SAME canonical instance name the
+	// conformer's own declared parameter renders to (`renderDeclaredTypeName` → `canonicalInstanceName`).
+	// That is what makes the expansion arrive at `ConformanceCheck`'s ONE substitution site as an ordinary
+	// substituted name, so the verdict and the diagnostic still read one string (R5).
+	//
+	// `boundSpellings` is parallel to `associatedTypeNames` — the caller resolves each name through the same
+	// two-pair lookup every other position uses, so ORDER is: EXPAND first (the alias is what says an
+	// associated type is used at all), then SUBSTITUTE into what the expansion exposed. The reverse order is
+	// not merely slower, it is undefined: before expansion the requirement mentions no associated type.
+	//
+	// ⛔ **IT BUILDS THE NAME AND MUST NOT INTERN ONE.** Interning the substituted instance would MINT a
+	// fresh `GenericInstanceId` on the FAILING path — the path where no conformer declares that type — long
+	// after `deriveInstanceNames` warmed the set and while `checkTypeSymbolNamespace`'s compiled-name walk
+	// still has the whole instance space to enumerate. A name is all any caller wants; the memoized namer is
+	// still what names every part of it that did not move.
+	export function expandInterfaceAlias(qualifiedName ByteArray, associatedTypeNames ByteArrayArray, boundSpellings ByteArrayArray, conformerName ByteArray, conformerTypeParams ByteArrayArray, declaringInterfaceName ByteArray) returns ByteArray throws MapError
+		let id = try self.interfaceAliases.get(qualifiedName)
+		return self.substitutedInstanceName(id, associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, conformerName: conformerName, conformerTypeParams: conformerTypeParams, declaringInterfaceName: declaringInterfaceName)
+	end 'expandInterfaceAlias'
+
+	// The canonical name of `id` with every associated-type argument substituted — the recursion above seeds.
+	// It mirrors `canonicalNameWithin`'s join (stem, then `_` and each argument's canonical form) and cannot
+	// simply CALL it, because that one names the instance as interned and this one names the instance the
+	// conformance means. A NESTED instance argument recurses, which is what makes
+	// `typealias Nested = Array with (Array with Element)` expand as far as it is written.
+	//
+	// No cycle guard, and none is reachable: an interface alias's arguments are the ones `readGenericInstanceAlias`
+	// parsed, and an argument naming another alias of the same interface is refused at that parse
+	// (`E3011 Unknown type 'Holder.ElementArray'` — measured), so this walk descends only into instances
+	// spelled inline and therefore strictly smaller than their parent.
+	function substitutedInstanceName(id GenericInstanceId, associatedTypeNames ByteArrayArray, boundSpellings ByteArrayArray, conformerName ByteArray, conformerTypeParams ByteArrayArray, declaringInterfaceName ByteArray) returns ByteArray
+		var out = self.instanceNameStem(id)
+		for arg in self.genericInstances.instanceArgs(id) 'eachArg'
+			out.append("_")
+			out.append(self.substitutedArgName(arg, associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, conformerName: conformerName, conformerTypeParams: conformerTypeParams, declaringInterfaceName: declaringInterfaceName))
+		end 'eachArg'
+		return out.toByteArray()
+	end 'substitutedInstanceName'
+
+	// ONE argument of the walk above. Three answers, and only the first is this rung's: an argument that IS
+	// one of the declaring interface's associated types becomes whatever the conformance bound that name to;
+	// a nested instance recurses; anything else is named exactly as `canonicalTypeArgName` names it, which is
+	// what keeps a concrete argument (`typealias Bytes = Array with Byte`, an interface declaring no `uses`
+	// at all) reaching the same string the conformer's own declaration renders.
+	function substitutedArgName(arg MaxonType, associatedTypeNames ByteArrayArray, boundSpellings ByteArrayArray, conformerName ByteArray, conformerTypeParams ByteArrayArray, declaringInterfaceName ByteArray) returns String
+		// `typeParamPositionIn` is the ONE reader of a type-parameter token, and it is the stronger test than a
+		// bare tag check: a token minted by some OTHER declaration fails it rather than subscripting this
+		// interface's list at a position that happens to be in range.
+		if maxonTypeTag(arg) == ValueTypeTag.typeParameter 'maybeAnAssociatedType'
+			if let position = try typeParamPositionIn(typeNameIdOf(arg), declarationName: declaringInterfaceName, paramNames: associatedTypeNames) 'oneOfTheDeclarersOwn'
+				return self.canonicalArgNameOfSpelling(try boundSpellings.get(position) otherwise panic("substitutedArgName: boundSpellings.get OOB at {position} — it is built parallel to associatedTypeNames, which is the list that position was just read out of"), conformerName: conformerName, conformerTypeParams: conformerTypeParams)
+			end 'oneOfTheDeclarersOwn'
+		end 'maybeAnAssociatedType'
+
+		if maxonTypeTag(arg) == ValueTypeTag.genericInstance 'aNestedInstance'
+			return String.from(self.substitutedInstanceName(typeNameIdOf(arg), associatedTypeNames: associatedTypeNames, boundSpellings: boundSpellings, conformerName: conformerName, conformerTypeParams: conformerTypeParams, declaringInterfaceName: declaringInterfaceName))
+		end 'aNestedInstance'
+
+		var path = GenericInstanceIdArray.create()
+		return self.canonicalTypeArgName(arg, path: path)
+	end 'substitutedArgName'
+
+	// The canonical argument name of a SPELLING — a conformance's `with` argument is a source name, and this
+	// is the one place one is turned into the string an interned argument of the same type would carry.
+	// It routes BOTH answers through `canonicalTypeArgName`, the one speller, rather than restating either:
+	// a name the conformer declares as its own type PARAMETER is that parameter's token (which is how the
+	// conformer's own `Array with Element` was interned), and every other name denotes whatever it denotes —
+	// a generic alias resolves through the alias table, a struct or ranged alias is its own name — which is
+	// exactly the `named` leaf that speller already decides.
+	//
+	// ⚠ It INTERNS the spelling, and that is safe where interning an INSTANCE would not be: `intern` is
+	// append-only and idempotent, nothing reads this interner by index after the fold, and a name carries no
+	// place in the instance space `checkTypeSymbolNamespace` enumerates. The read-only half (`idOf`) cannot
+	// serve here — a name it misses has no id to build a `MaxonType` from, and the miss is exactly the case
+	// that still has to be named.
+	function canonicalArgNameOfSpelling(spelling ByteArray, conformerName ByteArray, conformerTypeParams ByteArrayArray) returns String
+		var path = GenericInstanceIdArray.create()
+		if namesInclude(conformerTypeParams, name: spelling) 'theConformersOwnParameter'
+			return self.canonicalTypeArgName(MaxonType.typeParameter(typeParamTokenFor(conformerName, paramName: spelling)), path: path)
+		end 'theConformersOwnParameter'
+
+		return self.canonicalTypeArgName(MaxonType.named(self.typeNames.intern(spelling)), path: path)
+	end 'canonicalArgNameOfSpelling'
 
 	// Resolve an alias entry's flat pre-order arg tree to concrete `MaxonType`s in THIS index's interner
 	// (P1.6-B2) — interning nested instances DEPTH-FIRST. A leaf remaps its file-interner type through
