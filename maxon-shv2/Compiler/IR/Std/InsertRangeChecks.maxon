@@ -207,8 +207,16 @@ export function insertRangeChecks(project Project, module StdModule)
 		// REACHABLE stdlib function is not in the set, so its guards and its compile-time E3005 are emitted
 		// exactly as before, and no user function is ever in it.
 		//
-		// ⚠⚠ **THIS SHUTS ONE DOOR ONTO `nextStringId`; THE OTHER ONE IS `lowerMaxonToStd`, AND A1s SHUT IT
-		// TOO.** That pass runs one pass EARLIER and is equally pre-elimination, and its
+		// ⚠⚠ **THIS SHUTS ONE DOOR ONTO `nextStringId`; THERE ARE THREE, AND THE OTHER TWO ARE BOTH
+		// `lowerMaxonToStd`'s — A1s SHUT ONE AND W69 THE OTHER.** ⛔ This paragraph said "the OTHER ONE" for
+		// six rungs and the count was WRONG, which is this project's signature bug with a number as the
+		// fact: `registerProgramLiteralBlobs` runs EARLIER THAN EITHER of the two named here and had no
+		// reachability test at all, so it registered the very blob they exist to prevent. Found by listing
+		// `stdlib/Json.maxon`, whose `export var stringValue as String = ""` mints a nullary field-default
+		// helper — a `return 7` program grew a `.rdata` SECTION it had never had. See that entry in
+		// `StdlibLoader.maxon` for the measurement and `registerProgramLiteralBlobs` for the gate.
+		//
+		// The door A1s shut runs one pass EARLIER than this one and is equally pre-elimination, and its
 		// `lowerStringLiteral`/`lowerConstArrayLiteral` registered `.rdata` for the body of ANY function —
 		// including a whitelisted stdlib function no path from `main` reaches. It was MEASURED when filed (an
 		// unreachable string-returning function appended to `stdlib/helpers/string/utf16.maxon` moved a
@@ -218,7 +226,7 @@ export function insertRangeChecks(project Project, module StdModule)
 		// unreachable stdlib BODY with this same test, stated the same way, and `eliminateDeadFunctions`
 		// PROVES the skip (`requireUnreachableStdlibStayedDead`) rather than assuming it.
 		//
-		// ⚠ **THE CLASS IS NOT CLOSED — only the two PRE-ELIMINATION doors are.** A dead `.rdata` payload
+		// ⚠ **THE CLASS IS NOT CLOSED — only the three PRE-ELIMINATION doors are.** A dead `.rdata` payload
 		// registered by a REACHABLE function is untouched, and so is the debt
 		// `DeadFunctionElimination`'s header files — *"it prunes FUNCTIONS, never `.rdata`. Dead-`.rdata`
 		// elimination is a separate rung with its own goldens"*. What holds today is narrower and exact: no

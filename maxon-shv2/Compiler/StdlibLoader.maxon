@@ -1735,17 +1735,30 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// claimed the class was shut at two. Gating it is `W69`'s one compiler change; with it, the A/B above
 	// is **1,592 code bytes both ways and the two executables byte-for-byte identical at 5,567 bytes**.
 	//
-	// ⚠ **AND THE GATE IS WORTH MORE THAN THIS ENTRY: IT REMOVED ORPHANS THAT WERE ALREADY THERE.** Five
-	// committed goldens in this spec alone move DOWNWARDS (`__str_rec_10` ⇒ `__str_rec_4`), which is dead
-	// `.rdata` leaving the image of every program that reaches stdlib at all — a cost the tree has been
-	// paying since the first listed module with an unreachable literal-bearing body.
+	// ⚠⚠ **AND THE GATE IS WORTH FAR MORE THAN THIS ENTRY: IT REMOVED ORPHANS THAT WERE ALREADY THERE, IN
+	// NEARLY EVERY PROGRAM IN THE SUITE.** MEASURED as a DELTA against a base built from source in this
+	// same worktree — not by `git status`, which cannot answer the question: the base drifts on **0** of
+	// 5,573 committed fragments and the tip on **1,228** of 5,575. Every one of them is a pure
+	// `.rdata` LABEL RENUMBER and every one goes DOWNWARDS (`advent/day4a`: `__str_rec_127` ⇒
+	// `__str_rec_1`; `abs.rt-float`: `__str_rec_135` ⇒ `__str_rec_46`) — the first-difference pairs
+	// compared with their label suffixes erased came out **all identical and 0 structural**. Not one instruction
+	// in the suite changed. ⇒ that is dead `.rdata` leaving the image of every program that reaches stdlib
+	// at all, a cost the tree has been paying since the first listed module with an unreachable
+	// literal-bearing body.
+	//
+	// ⚠ **THE SLOTS REMOVED VASTLY OUTNUMBER THE BYTES, and the reason is DEDUP — do not read one as the
+	// other.** `registerRdataConstant` pools by bytes, so an orphan blob that matches a live one costs a
+	// COUNTER SLOT and no image space at all. MEASURED on `let s = "hello world"` + one `print`: `.rdata`
+	// 2,704 ⇒ 2,656 bytes (the file unchanged at 18,877, section alignment absorbing it) against label
+	// indices that move by tens. The win this gate is FOR is the invariant, not the bytes.
 	//
 	// ⭐ **THE CAPABILITY IS REAL RATHER THAN MERELY LOADABLE, and for a module this size that is the
 	// point.** `specs-shv2/stdlib-whitelist.md`'s two `json-*` cases are the differing-declarations control
 	// in spec form: one parses a document and reads five values back out through the arena (its last read
 	// NEGATIVE, so a `findKeyInNode` answering with any id would fail rather than pass), the other builds
 	// an arena by hand and serializes it, checking the emitted text literally and then re-parsing it. Both
-	// are oracle-agreed on the identical source, and neither can pass against an inert entry.
+	// are oracle-agreed on the identical source, and neither can pass against an inert entry. Neither
+	// carries a `targets:` restriction and both were RUN on `wasm32-wasi`, not merely left unrestricted.
 	try listWhitelistedModule(stdlibDir, relative: "Json.maxon", into: listed)
 
 	//     ⛔⛔ **`stdlib/Set.maxon` IS NOT LISTED, AND THE REASON IS A MEASUREMENT RATHER THAN A BLOCKER

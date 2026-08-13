@@ -993,14 +993,22 @@ module whose name the compiler might SYNTHESIZE it is not evidence at all — th
   `*BuiltinBaseName` roots (`Set`, `Map`, `List`, `Vector` and the three `__Managed*`), and the whole
   compiler mentions the name only in prose. So the listed declaration is the only one there is.
 
+⛔ **AND THE ENTRY WAS NOT BYTE-NEUTRAL WHEN FIRST ADDED — `a-listed-modules-literals-are-byte-neutral`
+CAUGHT IT, WHICH IS WHAT THAT CASE IS FOR.** The fault was not this module's: a STRING field default
+mints a nullary helper, and `LowerMaxonToStd.registerProgramLiteralBlobs` walked it with no
+unreachable-stdlib gate — a THIRD pre-elimination door onto `GlobalDataTable.nextStringId` where
+`InsertRangeChecks`'s header claims the class is shut at two. The measurement and the cure are recorded
+once, at the entry in `StdlibLoader.maxon`; what belongs here is only that the case fired and was not
+re-minted to make it stop.
+
 ⭐ **AND THE TWO CASES BELOW ARE THE DIFFERING-DECLARATIONS CONTROL IN SPEC FORM.** Neither can pass
 against an inert entry and neither can pass by merely NAMING the type: each drives the module's own
 logic end to end and checks a value only that logic can produce. Both are oracle-agreed — the bootstrap,
 which loads all of `stdlib/`, answers identically on the identical source.
 
 <!-- test: stdlib-whitelist.json-parse-and-read-from-the-whitelist -->
-`Json.parse` over a document holding all four scalar kinds and an array, then five accessors reading
-back out. What it exercises is the parse machinery: `JsonParser`'s whitespace skipping, its object and
+`Json.parse` over a document holding a number, a string, a bool and an array, then five accessors
+reading back out. What it exercises is the parse machinery: `JsonParser`'s whitespace skipping, its object and
 array recursion, its string and number scanners, `findKeyInNode`'s linear key walk, and `JsonDoc`'s
 arena indirection — `second` is read through `doc.get(id).numberValue`, so the node id the array
 returned has to name the right arena slot. The last read is NEGATIVE and is the one worth having:
