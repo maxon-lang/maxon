@@ -471,6 +471,15 @@ let DeclShapeOpaqueParams = 89 as ContentHash
 let DeclShapeParamByRef = 90 as ContentHash
 let ByRefBitSet = 91 as ContentHash
 let ByRefBitClear = 92 as ContentHash
+// The three `ForwardCall` shapes and the three `ByRefCallability` answers, as distinct hash marks — a
+// declaration that MOVES into or out of a type body, and a call that gains or loses a receiver, each change
+// an ABI without changing a parameter name, so both must move the memo key.
+let BareCallShape = 93 as ContentHash
+let ReceiverCallShape = 94 as ContentHash
+let SelfCallShape = 95 as ContentHash
+let RootFreeFunctionDecl = 96 as ContentHash
+let RoutableFreeFunctionDecl = 97 as ContentHash
+let MethodDecl = 98 as ContentHash
 
 // ⭐ A free function's NAMESPACE-QUALIFIED SPELLING (N1b) — `utils.helper` for a `helper` declared in
 // `utils/`. Its own discriminator for `DeclShapeAlias`'s reason, and load-bearing for a reason NO other
@@ -2422,10 +2431,10 @@ export typealias ParamConsumeMap = Map with (ByteArray, ParamConsumeInfo)
 //     `reassign`.
 //
 // The sweep cannot settle the second at fold time (the callee may sit in a file that has not folded), so it
-// records the raw material — `forwarded`, a per-parameter bit, and `calleeNames`, the BARE names this body
-// hands a bare parameter to — and `ProgramSignatures.closeByRefForwarding` settles it once every file is in.
+// records the raw material — `forwarded`, a per-parameter bit, and `forwardCalls`, the calls this body hands
+// a bare parameter to — and `ProgramSignatures.closeByRefForwarding` settles it once every file is in.
 //
-// ⚠⚠ **`calleeNames` IS WHAT KEEPS THE OVER-APPROXIMATION FROM SWALLOWING THE STDLIB, AND WITHOUT IT THIS
+// ⚠⚠ **`forwardCalls` IS WHAT KEEPS THE OVER-APPROXIMATION FROM SWALLOWING THE STDLIB, AND WITHOUT IT THIS
 // DESIGN IS UNSHIPPABLE.** The obvious rule — *"a parameter handed to any call might be forwarded"* — is
 // sound and catastrophic: the moment ONE program reassigns ONE parameter, every `stdlib` parameter that
 // appears as a bare argument in its own body (`arr.get(index)`, `push(item)`) becomes an address and every
@@ -2439,6 +2448,22 @@ export typealias ParamConsumeMap = Map with (ByteArray, ParamConsumeInfo)
 // is per-BODY rather than per-parameter: a body that forwards nothing to a reassigning name is untouched,
 // which is every function in `stdlib/` on every program written so far.
 //
+// ⛔⛔ **BUT THE BARE NAME ALONE WAS NOT A SOUND *WIDENING*, IT WAS A FALSE REJECT, AND THE STDLIB PAID IT.**
+// The header below used to justify the whole over-approximation as *"a cell is always a legal way to hold a
+// value ... wasteful, never wrong"*. That is a claim about CODEGEN and it is true; it is NOT a claim about
+// DIAGNOSTICS, and `Parser.requireOverloadableName` turns "this name takes a parameter by reference" into a
+// hard E2015 the moment the name is overloaded. MEASURED: a user program declaring a free `swap` that
+// reassigns a parameter failed to compile with *"overloading 'Array.sort'"* — because `stdlib`'s
+// `Array.swap` wears the bare name `swap`, inherited the user's by-reference-ness, and carried it up
+// `compareAndSwap` → `smallSortRange` → the overloaded `Array.sort`. Renaming the user's function to `zzz`
+// compiled the identical program. ⇒ **the widening must not cross a boundary the SOURCE SYNTAX already
+// draws**, which is what `ForwardCall` below is.
+//
+// ⛔ **AND IT IS NOT WHOLLY CLOSED — `Parser.requireOverloadableName` carries the exact residual and the
+// measured program.** Two declarations a SPELLING cannot tell apart still share a node, so a user METHOD
+// whose name reaches a `stdlib` method through a non-`self` dotted call is still refused. Do not read the
+// paragraph above as "fixed"; read it as "fixed for the shapes named at that refusal".
+//
 // ⚠ **THE WIDENING IS PER-BODY, SO A BODY THAT FORWARDS ANYTHING TO A REASSIGNING NAME HAS *ALL* ITS
 // FORWARDED PARAMETERS WIDENED.** `helper(cur, f, replacement)` forwarding `cur` and `replacement` into a
 // reassigning `reassign` marks both, though only `cur` lands at the by-reference slot. Sound — a cell is
@@ -2447,24 +2472,34 @@ export typealias ParamConsumeMap = Map with (ByteArray, ParamConsumeInfo)
 //
 // ⇒ **`isByRef` is the ONE reader that combines the two columns**, so the caller side and the callee side
 // cannot come to disagree about an ABI. Never test the columns directly.
+
 export type ParamReassignInfo
 	// Call-aligned, exactly as `ParamConsumeInfo.paramNames` is: `self` is prepended for an instance method,
 	// so a call site can slot a LABELLED argument to its position before any `FuncSignature` exists.
 	export let paramNames as ByteArrayArray
 	export let direct as BoolArray
 	export let forwarded as BoolArray
-	// The BARE callee names this body hands a bare parameter to — the forwarding edges, un-resolved. Empty for
-	// a body that forwards no parameter, which is exactly when `forwarded` is all-clear.
-	export let calleeNames as ByteArrayArray
+	// The calls this body hands a bare parameter to — the forwarding edges, un-resolved, each carrying the
+	// SHAPE the source wrote it in (see `ForwardCall`). Empty for a body that forwards no parameter, which is
+	// exactly when `forwarded` is all-clear.
+	export let forwardCalls as ForwardCallArray
 	// This function's OWN bare name — `reassign` for a `Forwarder.reassign`, which is the spelling an edge from
 	// another body carries. It rides on the record rather than being split back out of the registration key at
 	// closure time: the SWEEP holds both spellings already (`nameTok.value` and `declaredMethodName`), and
 	// re-deriving one from the other here would be a fourth speller of the `.` join — which this file argues
 	// against by name at `TupleElementSeparator`.
 	export let bareName as ByteArray
+	// ⭐⭐ **WHICH CALL SHAPES CAN NAME THIS DECLARATION** — the declaration half of `ForwardCall`'s partition.
+	// See `ByRefCallability` for the three answers and where each comes from.
+	//
+	// ⚠ **THE BARE DIRECTION IS *NOT* NARROWED, AND MEASURING IT IS WHAT KEPT THIS SOUND.** A BARE call
+	// reaches a method too — `helper(1)` inside a sibling method resolves through implicit `self` (MEASURED:
+	// it returned 2, i.e. `Holder.helper(1)`) — so `bare` widens over EVERY declaration wearing the name,
+	// exactly as this whole mechanism did before. Only the DOTTED directions narrow.
+	export let callability as ByRefCallability
 
-	export static function create(paramNames ByteArrayArray, direct BoolArray, forwarded BoolArray, calleeNames ByteArrayArray, bareName ByteArray) returns ParamReassignInfo
-		return Self{paramNames: paramNames, direct: direct, forwarded: forwarded, calleeNames: calleeNames, bareName: bareName}
+	export static function create(paramNames ByteArrayArray, direct BoolArray, forwarded BoolArray, forwardCalls ForwardCallArray, bareName ByteArray, callability ByRefCallability) returns ParamReassignInfo
+		return Self{paramNames: paramNames, direct: direct, forwarded: forwarded, forwardCalls: forwardCalls, bareName: bareName, callability: callability}
 	end 'create'
 
 	// ⭐ **THE ABI ANSWER FOR ONE POSITION.** `forwardingIsLive` is this function's settled answer to "does any
@@ -2499,6 +2534,112 @@ export type ParamReassignInfo
 		return self.reassignsAnyParam() or self.forwardsAnyParam()
 	end 'statesAnything'
 end 'ParamReassignInfo'
+
+// ⭐⭐ **ONE FORWARDING EDGE, CARRYING THE ONE THING ABOUT A CALL THE SWEEP CAN READ WITHOUT RESOLVING IT:
+// WHETHER THE SOURCE WROTE A RECEIVER IN FRONT OF THE NAME.**
+//
+// That single token — the `.` before the callee — is a hard partition of what a call can name, and it needs
+// no type, no scope and no overload set to read:
+//
+//   • **`f(…)`** may name a free `f` OR, through implicit `self`, a sibling METHOD `f`. It widens over both,
+//     which is what this mechanism always did.
+//   • **`x.f(…)`** can name only a METHOD `f`, or a free `f` reached by the directory ROUTE `utils.f(…)`.
+//     It can NEVER name a plain root-level free function — that name has no qualified spelling to be
+//     written after a dot. This is the arm that stops `stdlib`'s `Array.swap` inheriting a user program's
+//     free `swap` (see `ParamReassignInfo`'s header for the measurement).
+//
+//   • **`self.f(…)` / `Self.f(…)`** narrows that once more: the receiver's type is the ENCLOSING TYPE,
+//     statically and syntactically, so the call can name only THAT type's `f`. It is the same fact
+//     `ByRefCallability.methodOf` reads off a declaration, asked at the call.
+//
+// ⚠ **THE `self.` ARM IS SOUND BECAUSE THE SWEEP ENTERS EACH CONFORMER'S SCOPE, NOT THE INTERFACE'S**, and
+// that was CHECKED rather than assumed: an interface extension's default body is swept once per conformer
+// under `enterTypeScope(conformer)` (`Parser.foldExtensionDeclaration`, the same loop the real parse runs),
+// so a `self.f()` inside one is recorded against the CONFORMER — which is also the type its own declaration
+// is filed under. An `interface` declaration itself carries signatures and no bodies, so it records no edge
+// at all. There is no route by which `self.f()` names a method of a type other than the one enclosing it.
+//
+// ⚠ **IT DELIBERATELY DOES NOT CARRY THE ASSEMBLED CHAIN.** `resolvesAsNamespaceQualifiedFunction` could
+// answer "is `utils.helper` a route to a free `helper`?" exactly, but asking it would mean assembling the
+// written chain at every recorded edge and holding the bytes until the closure runs. The declaration-side
+// answer (`ByRefCallability`) buys the same soundness for one union case: a free function that HAS a
+// namespace is admitted to the receiver-reachable side whether or not this particular chain names it. Wider
+// than the exact question, and wider only across `stdlib`'s own free functions, which are few.
+export union ForwardCall
+	bare(name ByteArray)
+	throughAReceiver(name ByteArray)
+	throughSelf(typeName ByteArray, name ByteArray)
+end 'ForwardCall'
+
+export typealias ForwardCallArray = Array with ForwardCall
+
+// The callee name an edge carries, whichever shape it was written in — the one place the arms' shared
+// payload is read, so a fourth reader cannot come to match one arm and forget the others.
+export function forwardCallName(call ForwardCall) returns ByteArray
+	return match call 'c'
+		bare(name) gives name
+		throughAReceiver(name) gives name
+		throughSelf(_, name) gives name
+	end 'c'
+end 'forwardCallName'
+
+// The shape as a value that can be COMPARED and HASHED — what the memo fold and the per-body edge
+// de-duplication both need, neither of which dispatches on the arm. A `throughSelf` folds its type name in
+// too, because `self.f()` in two different types states two different edges.
+function forwardCallShapeMark(call ForwardCall) returns ContentHash
+	return match call 'c'
+		bare gives BareCallShape
+		throughAReceiver gives ReceiverCallShape
+		throughSelf gives SelfCallShape
+	end 'c'
+end 'forwardCallShapeMark'
+
+// Do two edges state the SAME thing? Name, shape and — for a `self.` call — the type it is `self` of. Used
+// only to de-duplicate a body's own handful of edges (`Parser.noteForwardCall`).
+export function forwardCallsAreEqual(a ForwardCall, b ForwardCall) returns bool
+	if forwardCallShapeMark(a) != forwardCallShapeMark(b) 'differentShapes'
+		return false
+	end 'differentShapes'
+
+	return forwardCallName(a).equals(forwardCallName(b)) and forwardCallSelfType(a).equals(forwardCallSelfType(b))
+end 'forwardCallsAreEqual'
+
+// One declaration's callability, folded into the memo hash — the twin of `forwardCallShapeMark` on the
+// declaration side, and a `match` so a fourth answer fails to compile here rather than hashing as a third.
+function foldCallability(state ContentHash, callability ByRefCallability) returns ContentHash
+	return match callability 'c'
+		bareCallOnly gives mix(state, value: RootFreeFunctionDecl)
+		bareCallOrDirectoryRoute gives mix(state, value: RoutableFreeFunctionDecl)
+		methodOf(typeName) gives mixBytes(mix(state, value: MethodDecl), bytes: typeName)
+	end 'c'
+end 'foldCallability'
+
+// The type a `self.`-qualified edge is `self` of, or EMPTY for the two shapes that name no type. Empty is
+// not a sentinel here: it is compared only against another edge's answer, and the shape mark has already
+// established that both are `throughSelf` or neither is.
+function forwardCallSelfType(call ForwardCall) returns ByteArray
+	return match call 'c'
+		bare gives EmptySourceText
+		throughAReceiver gives EmptySourceText
+		throughSelf(typeName, _) gives typeName
+	end 'c'
+end 'forwardCallSelfType'
+
+// ⭐⭐ **WHICH CALLS CAN NAME THIS DECLARATION?** — the declaration-side half of `ForwardCall`'s partition,
+// and the three answers are decided from two facts the sweep holds outright, with nothing resolved:
+// whether the declaration sits inside a `type`/`extension` body, and whether its file has a directory
+// namespace.
+export union ByRefCallability
+	// A free function at the compile ANCHOR. Only a BARE call can name it: it has no qualified spelling
+	// (`namespaceQualifiedName` panics if asked for one), so no dotted call anywhere can reach it. This is
+	// the arm that stops a user program's free `swap` from making `stdlib`'s `Array.swap` by-reference.
+	bareCallOnly
+	// A free function in a NON-ROOT directory: a bare call, or the directory route `utils.f(…)` (N1b).
+	bareCallOrDirectoryRoute
+	// A method of `typeName`: a bare call (implicit `self` reaches a sibling — MEASURED), any
+	// receiver-qualified call, and a `self.`/`Self.`-qualified call inside `typeName`'s own body.
+	methodOf(typeName ByteArray)
+end 'ByRefCallability'
 
 // One bool column read at a position that may be past its end — the shared short-column read the two
 // `ParamReassignInfo` columns are asked through, so "recorded nothing here" has one spelling rather than two.
@@ -2540,6 +2681,135 @@ export typealias ByRefBareNameSet = Set with ByteArray
 // A bare name -> its dense node in the forwarding graph `closeByRefForwarding` closes. The CSR key space must
 // be dense and 0-based (see `CsrGraph`), and a bare name is neither, so it is interned into one.
 typealias ByRefBareNameIndex = Map with (ByteArray, CsrIndex)
+
+// A bare name -> every METHOD node wearing it. A method's node is keyed by its QUALIFIED spelling, so a
+// call that knows only the final segment (`x.swap(…)`) needs this to reach them; a `self.swap(…)` does not,
+// because it knows the type. Built by `ByRefNodeSpace.internMethod` as it mints each method node.
+typealias ByRefMethodNodesByName = Map with (ByteArray, CsrColumn)
+
+// ⭐⭐ **THE NODE SPACE `closeByRefForwarding` CLOSES OVER — ONE NODE PER DECLARATION, THREE WAYS TO FIND
+// IT.** A declaration gets exactly one node (that is what makes a mark on it mean one thing); which INDEX
+// it is filed in is `ParamReassignInfo.callability`, and which indexes an EDGE consults is
+// `ForwardCall`'s shape. The two meet in `forwardCallTargets`, which is the ONLY place the shape→node rule
+// is written.
+//
+// ⚠ **ONE NODE PER DECLARATION IS A CORRECTNESS PROPERTY, NOT A TIDINESS ONE.** Filing a method under both
+// its bare name and its qualified one would give it two nodes, and `reverseReachabilityMark` marks NODES —
+// so a mark arriving through the bare node would be invisible to a `self.`-qualified edge asking the
+// qualified one, which is a MISSED by-reference parameter and therefore a wrong ABI. The bare-name reach is
+// served by `methodNodesByName` (an index onto the same node) rather than by a second node.
+type ByRefNodeSpace
+	// Per node, in mint order: the declaration's BARE name (what the published set is keyed by) and whether
+	// any declaration on that node reassigns a parameter of its own (the closure's seed).
+	export let bareNames as ByteArrayArray
+	export let seeds as BoolArray
+	// A free function at the compile ANCHOR, keyed by its bare name. Only a bare call reaches these.
+	export let rootFreeFunctions as ByRefBareNameIndex
+	// A free function with a directory route, keyed by its bare name. A bare call or any dotted call.
+	export let routableFreeFunctions as ByRefBareNameIndex
+	// A method, keyed by its QUALIFIED `Type.name` spelling — which is what makes `Array.swap` and
+	// `Holder.swap` two nodes rather than one.
+	export let methods as ByRefBareNameIndex
+	export let methodNodesByName as ByRefMethodNodesByName
+
+	static function create() returns ByRefNodeSpace
+		return Self{bareNames: ByteArrayArray.create(), seeds: BoolArray.create(), rootFreeFunctions: ByRefBareNameIndex.create(), routableFreeFunctions: ByRefBareNameIndex.create(), methods: ByRefBareNameIndex.create(), methodNodesByName: ByRefMethodNodesByName.create()}
+	end 'create'
+
+	// ⭐ **THE NODE A DECLARATION OWNS** — minted on first sight, and the one place a `callability` is turned
+	// into an index. The METHOD arm also files the node under its bare name, because that is how a call that
+	// wrote only the final segment finds it.
+	export function nodeFor(bareName ByteArray, callability ByRefCallability) returns CsrIndex
+		return match callability 'c'
+			bareCallOnly gives self.intern(self.rootFreeFunctions, key: bareName, bareName: bareName)
+			bareCallOrDirectoryRoute gives self.intern(self.routableFreeFunctions, key: bareName, bareName: bareName)
+			methodOf(typeName) gives self.internMethod(typeName, bareName: bareName)
+		end 'c'
+	end 'nodeFor'
+
+	function internMethod(typeName ByteArray, bareName ByteArray) returns CsrIndex
+		let node = self.intern(self.methods, key: qualifiedMethodName(typeName, methodName: bareName), bareName: bareName)
+		var wearers = try self.methodNodesByName.get(bareName) otherwise CsrColumn.create()
+		for existing in wearers 'alreadyListed'
+			if existing == node 'sameNode'
+				return node
+			end 'sameNode'
+		end 'alreadyListed'
+
+		wearers.push(node)
+		self.methodNodesByName.upsert(bareName, value: wearers)
+		return node
+	end 'internMethod'
+
+	// `key`'s dense node in `index`, minting one on first sight. The three columns move together — the name,
+	// its node and its seed bit — because a node with no seed slot would read a bit belonging to a different
+	// declaration, which is the one way a counting-sorted key space can be corrupted silently.
+	function intern(index ByRefBareNameIndex, key ByteArray, bareName ByteArray) returns CsrIndex
+		if let existing = try index.get(key) 'alreadyANode'
+			return existing
+		end 'alreadyANode'
+
+		let node = self.bareNames.count()
+		self.bareNames.push(bareName)
+		self.seeds.push(false)
+		index.upsert(key, value: node)
+		return node
+	end 'intern'
+
+	// ⭐⭐ **THE NODES A CALL CAN NAME — THE ONE HOME OF THE SHAPE→FAMILY RULE.** Both sides of the closure
+	// spend it: `closeByRefForwarding` builds an edge per target, and then asks the SAME function which
+	// targets to consult when publishing each key's answer.
+	//
+	// ⛔ **WRITING IT TWICE IS A WRONG ABI AND NOT A COMPILE ERROR.** Admit some new spelling to a family on
+	// the build side while the query side still consults the old set, and `calleeTakesAnyParamByRef` answers
+	// FALSE for a callee the graph marked by-reference — so the caller passes a value where the callee
+	// dereferences an address. Nothing in the type system catches that; only having one function does.
+	//
+	// A name no recorded declaration wears yields NO targets, and that is the answer: nothing can ever make
+	// it by-reference.
+	export function targetsOf(call ForwardCall) returns CsrColumn
+		var targets = CsrColumn.create()
+		let name = forwardCallName(call)
+		match call 'c'
+			// `self.f(…)` / `Self.f(…)`: the receiver's type IS the enclosing type, so exactly one node.
+			throughSelf(typeName, _) then self.pushIfPresent(targets, index: self.methods, key: qualifiedMethodName(typeName, methodName: name))
+			// `x.f(…)`: a method wearing the name, or a free function with a directory route.
+			throughAReceiver then self.pushDottedTargets(targets, name: name)
+			// `f(…)`: everything a dotted call reaches, plus a root-level free function.
+			bare then self.pushBareTargets(targets, name: name)
+		end 'c'
+		return targets
+	end 'targetsOf'
+
+	// The targets EVERY dotted shape shares: the methods wearing the name, and the free function a
+	// directory route could reach. `throughSelf` deliberately does not come through here — it names one
+	// method and no free function at all.
+	function pushDottedTargets(targets CsrColumn, name ByteArray)
+		for node in try self.methodNodesByName.get(name) otherwise sharedEmptyMethodNodes 'eachMethodWearingIt'
+			targets.push(node)
+		end 'eachMethodWearingIt'
+		self.pushIfPresent(targets, index: self.routableFreeFunctions, key: name)
+	end 'pushDottedTargets'
+
+	// A bare call reaches everything a dotted one does — implicit `self` makes it name a sibling METHOD, and
+	// a free function is nameable bare whether or not it also has a directory route — PLUS the root-level
+	// free function no dotted spelling can reach. Stated as "the dotted set plus one" rather than as its own
+	// list, because that containment IS the rule and a second list could stop expressing it.
+	function pushBareTargets(targets CsrColumn, name ByteArray)
+		self.pushDottedTargets(targets, name: name)
+		self.pushIfPresent(targets, index: self.rootFreeFunctions, key: name)
+	end 'pushBareTargets'
+
+	function pushIfPresent(targets CsrColumn, index ByRefBareNameIndex, key ByteArray)
+		if let node = try index.get(key) 'namesARecordedDeclaration'
+			targets.push(node)
+		end 'namesARecordedDeclaration'
+	end 'pushIfPresent'
+end 'ByRefNodeSpace'
+
+// The shared EMPTY method-node list `targetsOf` walks when no method wears the name — read-only, so one
+// instance serves every miss rather than allocating a column per lookup.
+let sharedEmptyMethodNodes = CsrColumn.create()
 
 // ⭐⭐ **A DEFAULT VALUE IS A SYNTHESIZED NULLARY FUNCTION, AND THIS IS ITS NAME (BATCH2 slice 4).**
 // `function greet(name String = "World")` declares a second function, `__paramDefault#greet#0`, whose whole
@@ -2796,35 +3066,22 @@ export union CalleeByRefParams
 	allByValue
 end 'CalleeByRefParams'
 
-// `bareName`'s dense node in the forwarding graph `closeByRefForwarding` closes, minting one on first sight.
-// The three columns move together — the name, its node and its seed bit — because a node with no seed slot
-// would read a bit belonging to a different name, which is the one way a counting-sorted key space can be
-// corrupted silently.
-function internByRefNode(bareNames ByteArrayArray, nodeOfBareName ByRefBareNameIndex, seeds BoolArray, bareName ByteArray) returns CsrIndex
-	if let existing = try nodeOfBareName.get(bareName) 'alreadyANode'
-		return existing
-	end 'alreadyANode'
-
-	let node = bareNames.count()
-	bareNames.push(bareName)
-	seeds.push(false)
-	nodeOfBareName.upsert(bareName, value: node)
-	return node
-end 'internByRefNode'
-
-// Does any of `calleeNames` name something that takes a parameter by reference? Asked ONCE per recorded
-// function, against the SETTLED name set, to publish the per-registration-key answer — a linear scan of a
-// handful of names against a set, on a path that runs only for a program that reassigns a parameter
-// somewhere. (It used to be a round's edge test, asked once per function PER ROUND; see
-// `closeByRefForwarding` for what that cost.)
-function edgesReachAByRefName(calleeNames ByteArrayArray, byRefNames ByRefBareNameSet) returns bool
-	for calleeName in calleeNames 'eachEdge'
-		if byRefNames.contains(calleeName) 'reachesOne'
-			return true
-		end 'reachesOne'
+// ⭐ **DOES ANY CALL THIS BODY MAKES NAME SOMETHING THAT TAKES A PARAMETER BY REFERENCE?** Asked ONCE per
+// recorded function, after the mark has settled, to publish the per-registration-key answer. It asks
+// `ByRefNodeSpace.targetsOf` — the very function that built the edges — so the query and the graph cannot
+// come to disagree about which declarations a spelling can name. (It used to be a round's edge test, asked
+// once per function PER ROUND; see `closeByRefForwarding` for what that cost.)
+function forwardsIntoAMarkedNode(forwardCalls ForwardCallArray, nodes ByRefNodeSpace, takesByRef BoolArray) returns bool
+	for call in forwardCalls 'eachEdge'
+		for node in nodes.targetsOf(call) 'eachTargetItCanName'
+			let marked = try takesByRef.get(node) otherwise panic("forwardsIntoAMarkedNode: takesByRef.get OOB at {node}, which `targetsOf` minted below the node count the graph was built over")
+			if marked 'reachesOne'
+				return true
+			end 'reachesOne'
+		end 'eachTargetItCanName'
 	end 'eachEdge'
 	return false
-end 'edgesReachAByRefName'
+end 'forwardsIntoAMarkedNode'
 
 // ⭐ **IS THE ARGUMENT AT `argIndex` PASSED BY REFERENCE?** — the call site's whole by-reference question in
 // one place, the exact twin of `calleeConsumesArgument`: the recorded columns, read at the position the
@@ -7000,11 +7257,16 @@ export type ProgramSignatures
 	// READ rather than done per fold — and it must run exactly once, because it is a fixpoint over the whole
 	// recorded set rather than an accumulation.
 	var byRefForwardingClosed as bool
-	// ⭐ **THE BARE NAMES THAT TAKE SOMETHING BY REFERENCE** — the closure's working set, kept because the
-	// PARSER's local-cell prescan needs exactly it. That prescan reads a callee out of TOKENS, so all it has is
-	// what the source wrote before the `(` (`reassign`), never the registration key a method is filed under
-	// (`Forwarder.reassign`); a lookup by the qualified key would answer false for every method call and the
-	// caller's `var` would never get a cell.
+	// ⭐ **THE BARE NAMES A *BARE* CALL CAN REACH SOMETHING BY-REFERENCE THROUGH** — the closure's working set,
+	// kept because the PARSER's local-cell prescan needs exactly it. That prescan reads a callee out of TOKENS,
+	// so all it has is what the source wrote before the `(` (`reassign`), never the registration key a method is
+	// filed under (`Forwarder.reassign`); a lookup by the qualified key would answer false for every method call
+	// and the caller's `var` would never get a cell.
+	//
+	// It is the WIDER of the two published sets (a bare call reaches both node families — see `ForwardCall`),
+	// which is what makes it the right one for the prescan and for `programTakesAParamByRef`: over-approximating
+	// a LOCAL's cell costs an allocation and can produce no wrong answer, so the prescan takes the widest
+	// honest answer rather than a shape-sensitive one.
 	var byRefBareNames as ByRefBareNameSet
 	// ⭐ Function name -> its `throws E` clause (P1.4b). `throwsOf(callee)` is the door a call site asks
 	// "does this callee throw, and what error type?". Filled by `recordThrows` from each file's scanned
@@ -8611,10 +8873,16 @@ export type ProgramSignatures
 		// The forwarding EDGES ride too, and they must: a body that starts or stops handing a parameter to a
 		// reassigning name changes its OWN ABI without changing one byte of any caller. The BARE name rides for
 		// the mirror-image reason — it is what OTHER bodies' edges match against, so renaming a method changes
-		// which of them are widened.
+		// which of them are widened, and so does MOVING it into or out of a type body (which is what
+		// `callability` says, and why it rides beside the name rather than being re-derived).
 		state = mixBytes(state, bytes: info.bareName)
-		for calleeName in info.calleeNames 'eachEdge'
-			state = mixBytes(state, bytes: calleeName)
+		state = foldCallability(state, callability: info.callability)
+		for call in info.forwardCalls 'eachEdge'
+			// The SHAPE rides with the name: `swap(x)`, `x.swap(x)` and `self.swap(x)` reach different nodes, so
+			// two bodies differing only in a receiver state different things and must not hash alike. The `self.`
+			// arm's TYPE rides inside the name it is folded through (`targetsOf` joins the same two halves).
+			state = mixBytes(state, bytes: forwardCallName(call))
+			state = mixBytes(mix(state, value: forwardCallShapeMark(call)), bytes: forwardCallSelfType(call))
 		end 'eachEdge'
 		self.hash = state
 	end 'recordParamReassign'
@@ -8669,11 +8937,16 @@ export type ProgramSignatures
 	// COUNTED, not assumed — 191 function declarations across the 49 generated files, and not one reassigns a
 	// parameter, so `sawParamReassignment` is false at every rung and this returns before the graph exists.
 	//
-	// ⚠ **THE MATCH IS ON THE BARE NAME, DELIBERATELY** — see `ParamReassignInfo`. A recorded key is either a
-	// free function's bare name or `Type.method`, and an edge carries only what the source wrote before the
-	// `(`, so `Forwarder.reassign` is reached through `reassign`. Widening on the bare name is what lets this
-	// stay a closure over recorded edges instead of a second overload resolver — and it is why the graph's NODE
-	// is a bare name while the published answer is per registration KEY.
+	// ⚠ **THE MATCH IS ON WHAT THE SOURCE WROTE, NEVER ON A RESOLUTION** — see `ForwardCall`. An edge carries
+	// only the spelling before the `(`, so widening is what lets this stay a closure over recorded edges
+	// instead of a second overload resolver, and it is why the graph's NODE is a spelling while the published
+	// answer is per registration KEY.
+	//
+	// ⭐⭐ **BUT A SPELLING IS NOT THE WHOLE NODE, AND THE REST OF IT IS THE RECEIVER.** Nodes and the rule
+	// that maps a call onto them live in `ByRefNodeSpace`; `targetsOf` is the ONE place the mapping is
+	// written, and both the edge build and the per-key publish below spend it. Without that split, `stdlib`'s
+	// `Array.swap` shared a node with a user program's free `swap`, inherited its by-reference-ness and
+	// carried it up to the overloaded `Array.sort`, which E2015 then refused.
 	function closeByRefForwarding()
 		if self.byRefForwardingClosed 'alreadySettled'
 			return
@@ -8695,23 +8968,18 @@ export type ProgramSignatures
 			return
 		end 'everyForwardIsDead'
 
-		// The dense BARE-NAME key space the graph is built over, plus the SEED bit per name: does any function
-		// wearing it reassign a parameter of its own? Only a reassignment can seed — a body that merely forwards
-		// cannot make itself live — and two functions sharing a bare name share the node, which is the same
-		// widening every other reader of `byRefBareNames` already performs.
-		var bareNames = ByteArrayArray.create()
-		var nodeOfBareName = ByRefBareNameIndex.create()
-		var seeds = BoolArray.create()
+		// One node per recorded declaration, plus its SEED bit: does it reassign a parameter of its own? Only a
+		// reassignment can seed — a body that merely forwards cannot make itself live.
+		var nodes = ByRefNodeSpace.create()
 		for (_, info) in self.funcParamReassigns 'eachRecorded'
-			let node = internByRefNode(bareNames, nodeOfBareName: nodeOfBareName, seeds: seeds, bareName: info.bareName)
+			let node = nodes.nodeFor(info.bareName, callability: info.callability)
 			if info.reassignsAnyParam() 'reassignsItsOwn'
-				try seeds.set(node, value: true) otherwise panic("closeByRefForwarding: seeds.set OOB at {node} despite the node having just been interned")
+				try nodes.seeds.set(node, value: true) otherwise panic("closeByRefForwarding: seeds.set OOB at {node} despite the node having just been interned")
 			end 'reassignsItsOwn'
 		end 'eachRecorded'
 
 		// The forwarding edges, REVERSED — a forward `caller -> callee` is recorded as `callee -> caller`, so a
-		// seed's row lists the names that forward INTO it and the mark propagates back up the chain. An edge to
-		// a name no recorded function wears is dropped: nothing can ever make it by-reference.
+		// seed's row lists the declarations that forward INTO it and the mark propagates back up the chain.
 		var edgeCallee = CsrColumn.create()
 		var edgeForwarder = CsrColumn.create()
 		for (_, info) in self.funcParamReassigns 'eachForwarder'
@@ -8719,29 +8987,31 @@ export type ProgramSignatures
 				continue
 			end 'carriesNothingAlong'
 
-			let forwarder = try nodeOfBareName.get(info.bareName) otherwise panic("closeByRefForwarding: '{String.from(info.bareName)}' has no node — every recorded function's bare name was interned above")
-			for calleeName in info.calleeNames 'eachEdge'
-				if let callee = try nodeOfBareName.get(calleeName) 'namesARecordedFunction'
+			let forwarder = nodes.nodeFor(info.bareName, callability: info.callability)
+			for call in info.forwardCalls 'eachEdge'
+				for callee in nodes.targetsOf(call) 'eachTargetItCanName'
 					edgeCallee.push(callee)
 					edgeForwarder.push(forwarder)
-				end 'namesARecordedFunction'
+				end 'eachTargetItCanName'
 			end 'eachEdge'
 		end 'eachForwarder'
 
-		let takesByRef = reverseReachabilityMark(buildCsr(edgeCallee, to: edgeForwarder, nodeCount: bareNames.count()), seeds: seeds)
-		for node in 0 upto bareNames.count() 'publishNames'
+		let takesByRef = reverseReachabilityMark(buildCsr(edgeCallee, to: edgeForwarder, nodeCount: nodes.bareNames.count()), seeds: nodes.seeds)
+		// The BARE names of every marked node — the widest answer, and the only one published as a name set.
+		// Its two readers (`bareNameTakesAParamByRef`, `programTakesAParamByRef`) both want the widest.
+		for node in 0 upto nodes.bareNames.count() 'publishNames'
 			let marked = try takesByRef.get(node) otherwise panic("closeByRefForwarding: takesByRef.get OOB at {node} below the node count it was built over")
 			if marked 'takesSomethingByRef'
-				self.byRefBareNames.insert(try bareNames.get(node) otherwise panic("closeByRefForwarding: bareNames.get OOB at {node} below its own count"))
+				self.byRefBareNames.insert(try nodes.bareNames.get(node) otherwise panic("closeByRefForwarding: bareNames.get OOB at {node} below its own count"))
 			end 'takesSomethingByRef'
 		end 'publishNames'
 
-		// The per-KEY answer, off the settled name set: `forwardingIsLiveFor` is asked under the REGISTRATION
-		// name, and two keys wearing one bare name may carry different edges. One pass over the edges, through
-		// the same `edgesReachAByRefName` a round used to ask — the difference is that it is now asked once per
-		// function instead of once per function per round.
+		// ⭐ The per-KEY answer, asked of the NODES rather than of a name set — the same `targetsOf` that built
+		// the edges, so the question "did any callee this call can name end up marked?" cannot come to disagree
+		// with the graph that answered it. `forwardingIsLiveFor` is asked under the REGISTRATION name, and two
+		// keys wearing one bare name may carry different edges, so it is per key and not per node.
 		for (name, info) in self.funcParamReassigns 'publishKeys'
-			if info.forwardsAnyParam() and edgesReachAByRefName(info.calleeNames, byRefNames: self.byRefBareNames) 'forwardsIntoOne'
+			if info.forwardsAnyParam() and forwardsIntoAMarkedNode(info.forwardCalls, nodes: nodes, takesByRef: takesByRef) 'forwardsIntoOne'
 				self.byRefForwardingLive.upsert(name, value: true)
 			end 'forwardsIntoOne'
 		end 'publishKeys'
@@ -8760,6 +9030,12 @@ export type ProgramSignatures
 	// out of tokens (see `byRefBareNames`). Over-approximate by construction: every `reassign` in the program
 	// answers for every other, so a `var` handed to an unrelated same-named callee gets a cell it does not
 	// need. Sound — a cell is a legal home for any value — and confined to programs that reassign a parameter.
+	//
+	// ⚠ **IT ASKS THE WIDER SET AND DOES NOT SPLIT ON THE CALL'S SHAPE, AND THAT IS DELIBERATE RATHER THAN AN
+	// OVERSIGHT.** The shape split exists because an over-approximation there becomes a hard E2015 through the
+	// overload refusal; here the only consequence is a heap cell a local did not need, which is the case the
+	// paragraph above already argues is free. Narrowing it would buy an allocation and risk a MISSING cell,
+	// which is a wrong answer.
 	export function bareNameTakesAParamByRef(bareName ByteArray) returns bool
 		self.closeByRefForwarding()
 		return self.byRefBareNames.contains(bareName)

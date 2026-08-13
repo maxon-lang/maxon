@@ -3275,9 +3275,13 @@ end 'isQualifiedUnderTypeName'
 export let TrivialDestructor = 0 as ParsedInt
 
 // ⭐ **A CELL HOLDS EXACTLY ONE VALUE, AT OFFSET 0 (PBR-2).** Named rather than spelled as a bare `0` at the
-// four sites that address one, for the reason a global's read names its own: the offset field is not dead
+// FIVE sites that address one, for the reason a global's read names its own: the offset field is not dead
 // weight — it is what says the address is already the exact one, so a reader can tell "the whole of this box"
 // from "a slot inside it".
+//
+// ⚠ The fifth is in ANOTHER FILE and arrived a rung later: `InsertRangeChecks.emitCellLoad` dereferences a
+// by-reference parameter for its entry range guard. The count is DERIVED by grepping `CellContentOffset`,
+// not remembered — a stale census is this project's own recurring defect.
 export let CellContentOffset = 0 as ByteOffset
 
 // The local NAMES of one function body that must live in a cell (PBR-2) — see
@@ -8745,18 +8749,30 @@ end 'callAlignedFrom'
 
 // Record a forwarding edge, de-duplicated. The list is per BODY and a body forwards to a handful of names,
 // so a linear membership test beats a set's allocation — the same trade `captureSlotFor` makes one column over.
-function noteForwardCallee(callees ByteArrayArray, name ByteArray)
-	if name.isEmpty() 'notACall'
+//
+// ⚠ **THE SHAPE IS PART OF THE IDENTITY.** A body that writes both `swap(x)` and `self.swap(x)` states two
+// DIFFERENT edges — they reach different node families — so de-duplicating on the name alone would drop one
+// of them, and which one it dropped would depend on the order the tokens happen to appear in.
+function noteForwardCall(calls ForwardCallArray, call ForwardCall)
+	if forwardCallName(call).isEmpty() 'notACall'
 		return
 	end 'notACall'
 
-	for existing in callees 'each'
-		if existing.equals(name) 'alreadyRecorded'
+	for existing in calls 'each'
+		if forwardCallsAreEqual(existing, b: call) 'alreadyRecorded'
 			return
 		end 'alreadyRecorded'
 	end 'each'
-	callees.push(name)
-end 'noteForwardCallee'
+	calls.push(call)
+end 'noteForwardCall'
+
+// Does a receiver token spelled like this name the ENCLOSING TYPE? `self` (the instance) and `Self` (the
+// type, for a static call) both do, and nothing else can: they are KEYWORDS, so no binding can shadow them
+// and no resolution is involved. Named rather than inlined because `forwardCallOpeningAt` is the only asker
+// today and a second one must not spell the pair differently.
+function receiverIsTheEnclosingType(kind TokenKind) returns bool
+	return kind == TokenKind.self or kind == TokenKind.selfType
+end 'receiverIsTheEnclosingType'
 
 export type Parser
 	var tokens as TokenArray
@@ -11249,7 +11265,7 @@ export type Parser
 			reassignedDirect.push(false)
 			reassignedForwarded.push(false)
 		end 'initByRefBits'
-		var forwardCallees = ByteArrayArray.create()
+		var forwardCalls = ForwardCallArray.create()
 		var statesByRef = false
 		// The type-parameter FEED map is a fresh array pre-filled with `none` ONLY inside a generic type's
 		// body — a feed requires a type-parameter-typed field, so a top-level function and a non-generic type's
@@ -11259,14 +11275,11 @@ export type Parser
 		let genericScope = self.enclosingTypeParams.count() > 0
 		var feeds = self.initialTypeParamFeeds(paramNames.count(), genericScope: genericScope)
 		var any = false
-		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`/`[`. The innermost open
-		// bracket being a `{` is what distinguishes a struct-field `:` from a labelled-call-argument one.
+		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`. A `[` is not pushed at all
+		// (`trackBracketAt`). The innermost open bracket being a `{` is what distinguishes a struct-field `:`
+		// from a labelled-call-argument one.
 		var braceStack = BoolArray.create()
-		// ⭐ **THE CALLEE NAME OF EACH OPEN `(`, IN LOCKSTEP WITH `braceStack`** — what the forwarding probe
-		// records as an edge. It is captured when the bracket OPENS (the token before it), which is O(1) and
-		// exact; walking left from an argument to its own `(` would mean re-balancing brackets backwards at every
-		// candidate. A `{` and a grouping paren push an EMPTY name, which no function ever wears.
-		var openCallees = ByteArrayArray.create()
+		var openBrackets = TokenIndexArray.create()
 		var blockDepth = 0 as BlockDepth
 
 		var q = bodyStart
@@ -11277,7 +11290,7 @@ export type Parser
 			end 'funcEnd'
 
 			let kind = self.kindAt(q)
-			self.trackBracketAt(q, braceStack: braceStack, openCallees: openCallees)
+			self.trackBracketAt(q, braceStack: braceStack, openBrackets: openBrackets)
 
 			// ⭐⭐ **PBR-2's SEED: `p =` AT STATEMENT POSITION.** Asked through `assignsAt` — the SAME predicate the
 			// loop-phi scan decides a loop's carried vars by — so "what does a rebind look like in tokens" has one
@@ -11303,7 +11316,7 @@ export type Parser
 				let forwarded = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
 				if forwarded < byRefParamNames.count() 'ofOwnParameter'
 					try reassignedForwarded.set(forwarded, value: true) otherwise panic("scanBodyParamFacts: reassignedForwarded.set OOB at {forwarded} despite forwarded < byRefParamNames.count()")
-					noteForwardCallee(forwardCallees, name: try openCallees.get(openCallees.count() - 1) otherwise panic("scanBodyParamFacts: openCallees is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`"))
+					noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyParamFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
 					statesByRef = true
 				end 'ofOwnParameter'
 			end 'handedOn'
@@ -11386,9 +11399,24 @@ export type Parser
 		// does — which is every function in every program written before PBR-2, so the whole-program map stays
 		// empty and `programTakesAParamByRef` answers false after one `count()`.
 		if statesByRef 'takesOrForwardsAByRefParam'
-			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(byRefParamNames, direct: reassignedDirect, forwarded: reassignedForwarded, calleeNames: forwardCallees, bareName: funcBareName)))
+			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(byRefParamNames, direct: reassignedDirect, forwarded: reassignedForwarded, forwardCalls: forwardCalls, bareName: funcBareName, callability: self.declarationCallability())))
 		end 'takesOrForwardsAByRefParam'
 	end 'scanBodyParamFacts'
+
+	// ⭐⭐ **WHICH CALL SHAPES CAN NAME THE DECLARATION THE SWEEP IS STANDING ON (PBR-2)** — decided here
+	// because this is where both its inputs are. `enclosingType` says "a method" (the same test
+	// `declaredMethodName` qualifies on, and the same name it qualifies WITH, so a `self.`-shaped edge and
+	// this declaration join the identical two halves) and `namespace` says "this file has a directory route"
+	// (the same test `recordScannedSignature` publishes a namespace-qualified spelling on). Neither survives
+	// past this scan, and neither is derivable from the registration name: a root-level free function and a
+	// method in a namespace-free program are both spelled bare.
+	function declarationCallability() returns ByRefCallability
+		if not self.enclosingType.isEmpty() 'aMethod'
+			return ByRefCallability.methodOf(self.enclosingType)
+		end 'aMethod'
+
+		return ByRefCallability.bareCallOrDirectoryRoute if not self.namespace.isEmpty() else ByRefCallability.bareCallOnly
+	end 'declarationCallability'
 
 	// The type-parameter-feed array `scanBodyParamFacts` starts from: the SHARED empty array outside a generic
 	// type (no feed is possible, ⚡ no allocation), or a fresh `count`-long array pre-filled with `none` inside
@@ -13268,6 +13296,41 @@ export type Parser
 		// against whichever declaration the by-name sweep recorded last: the callee would dereference an
 		// integer, or read a pointer as its declared type. Nothing downstream can repair it, and unlike the
 		// four above there is no diagnostic to be missing — the program simply runs wrong.
+		//
+		// ⛔⛔ **THE MESSAGE SAYS "ONE OF ITS DECLARATIONS", AND IT CAN STILL FIRE WHERE NEITHER DOES. READ
+		// THIS BEFORE BELIEVING A REPORT OF IT.**
+		//
+		// The by-reference answer it reads is a whole-program CLOSURE that matches a call to a declaration by
+		// what the SOURCE WROTE before the `(`, never by resolution (`SignatureIndex.ForwardCall`). Two
+		// declarations a spelling cannot tell apart share a node, and a mark on either marks both — so an
+		// unrelated user function can make a `stdlib` method by-reference and the mark can travel up to an
+		// overloaded name that reassigns and forwards nothing. **The clause is not the thing to weaken**: an
+		// overload set really does share one registration key and that key really is the source name, so the
+		// sentence is true of this refusal's actual subject. What was wrong is which programs reach it.
+		//
+		// ✅ **CLOSED, both MEASURED against `stdlib/Array.maxon`'s overloaded `sort`:**
+		//   • a ROOT-LEVEL FREE function sharing a `stdlib` METHOD's name — `function swap(n Node)` that
+		//     reassigns `n`. A dotted call can never name a root-level free function (it has no qualified
+		//     spelling), so the two no longer share a node.
+		//   • a user METHOD sharing the name of a `stdlib` method that is only ever called `self.`-qualified —
+		//     `Holder.compareAndSwap`, and with it `reverseRange`, `smallSortRange`, `sortNetwork*`,
+		//     `driftsortRange` and every other sort helper. A `self.`/`Self.` receiver IS the enclosing type,
+		//     statically, so those calls name one type's method and no other's.
+		//
+		// ⛔ **STILL OPEN, and it is a FALSE REJECT with no workaround but renaming**: a user METHOD sharing
+		// the name of a `stdlib` method that is reached through a NON-`self` dotted call. `temp/methodswap`
+		// is the measured program — `type Holder` with a reassigning `swap(n Node)` — and it fails on this
+		// very line. The carrier is `stdlib/helpers/sort/smallSort.maxon:32`, `Array.swap`'s own
+		// `try managed.swap(i, j: j)`: the receiver is a FIELD, so the sweep can read neither its type nor
+		// the callee's, and the bare `swap` reaches every method wearing that name. **ATTRIBUTION PROVED BY
+		// SABOTAGE, not inferred**: routing that call's two arguments through locals (so the body forwards no
+		// parameter) makes the identical program compile and exit 99, then reverted.
+		//
+		// ⚠ **DO NOT "FIX" IT IN `stdlib`.** Rewriting `Array.swap` to dodge the widening is an accommodation
+		// in library source hiding a compiler limitation, and it would hold only until the next stdlib method
+		// hands a bare parameter to a dotted call. Closing it needs the RECEIVER'S TYPE at the sweep — either
+		// a field-type roster available before bodies are scanned, or an arity/labels test on the edge — and
+		// neither is this rung's.
 		if self.signatures.calleeTakesAnyParamByRef(base) 'byReferenceOverload'
 			throw ParseError.unsupported("overloading '{String.from(base)}' — one of its declarations REASSIGNS a parameter (or hands one to something that does), so that parameter is passed by REFERENCE, and the whole-program declaration sweep publishes that under the name the source wrote. A call to this name cannot be told which overload's parameter is an address, and the choice is made when the call is PARSED while the overload is resolved a whole pass later. Give the overloads distinct names", line: nameTok.line, column: nameTok.column)
 		end 'byReferenceOverload'
@@ -54130,9 +54193,27 @@ export type Parser
 	// The declared type goes through `resolveFloatAliasType` for `emitCaptureRead`'s reason: a ranged INT alias
 	// must stay `named` (its NAME carries the signedness `valueIsUnsigned` reads), while the one alias whose
 	// VALUE is a different machine class is collapsed here so the load is minted at the right register class.
+	//
+	// ⭐⭐ **A CELL IS THE THIRD REBINDABLE SLOT, AND IT WAS THE ONE W41 NEVER REACHED.** `rebindableSlotReads`
+	// names its producers as *"the TWO ways a managed value comes out of storage a later statement can
+	// overwrite"* — a mutable FIELD and a `var` GLOBAL. A cell is a third: `emitCellStore` decrefs the
+	// occupant it displaces (`reassignBindingValue`'s cell arm), so `let old = n` + `n = Node.create(99)` on a
+	// by-reference parameter leaves `old` naming freed memory for word-for-word W41's reason. MEASURED before
+	// this line existed: `refcount-reassigned-slot-borrow/byref-param-reassign-then-read-borrow` returned
+	// **1061109567** (`0x3F3F3F3F`, the freed-slab fill) where the spec pins 5.
+	//
+	// ⚠ **IT IS MARKED AT THE LOAD, NOT AT THE PARAMETER**, because that is where its two siblings mark and
+	// because the parameter is not the only cell: a `var` LOCAL promoted to a cell (`declareCellLocal`, so a
+	// callee can write it) is rebindable by this frame's own store and dangles identically. One door covers
+	// both, which is the census argument `bindingValue` makes directly above.
 	function emitCellLoad(binding VarInfo, range SourceRange) returns ValueId
 		let cellType = self.resolveFloatAliasType(binding.varType)
-		return self.emitIndirectLoad(cellType, box: binding.boundValue, offset: CellContentOffset, storageType: self.wordSlotStorageType(cellType), range: range)
+		let loaded = self.emitIndirectLoad(cellType, box: binding.boundValue, offset: CellContentOffset, storageType: self.wordSlotStorageType(cellType), range: range)
+		if self.valueIsManagedHeap(loaded) 'managedOccupant'
+			self.markRebindableSlotRead(loaded)
+		end 'managedOccupant'
+
+		return loaded
 	end 'emitCellLoad'
 
 	// ⭐⭐ **WRITE A CELL-RESIDENT BINDING (PBR-2)** — the rebind, which for this binding kind is a store and
@@ -54704,11 +54785,17 @@ export type Parser
 	// ⭐⭐ **THE ONE WRITER OF `rebindableSlotReads` (W41)** — `markImmutableGlobalRead`'s twin, for the
 	// identical copy-on-write hazard and through the same one home for it (`privateValueMarkSet`).
 	//
-	// Its TWO producers are the two ways a managed value comes out of storage a later statement can
-	// overwrite: `emitFieldLoad` (every `self.items`, `h.items` and chain hop funnels through it) and
-	// `recordGlobalReadValue`'s WRITABLE arm (the exact complement of the immutable arm one function up).
-	// Both gate on the value being MANAGED, so a scalar field — which owns no heap and can be freed by
-	// nothing — never enters the set and never costs a hash.
+	// Its THREE producers are the three ways a managed value comes out of storage a later statement can
+	// overwrite: `emitFieldLoad` (every `self.items`, `h.items` and chain hop funnels through it),
+	// `recordGlobalReadValue`'s WRITABLE arm (the exact complement of the immutable arm one function up), and
+	// `emitCellLoad` (PBR-2's by-reference parameter and cell-resident `var`, whose store decrefs the
+	// occupant it displaces exactly as the other two do). All three gate on the value being MANAGED, so a
+	// scalar field — which owns no heap and can be freed by nothing — never enters the set and never costs a
+	// hash.
+	//
+	// ⚠ **THE LIST WAS "TWO" FOR A RUNG AND A HALF WHILE THE THIRD SLOT KIND EXISTED AND DANGLED.** It is
+	// DERIVED by grepping `self.markRebindableSlotRead(` rather than remembered — the census
+	// `markBufferSurface` keeps two functions down, for this reason.
 	function markRebindableSlotRead(value ValueId)
 		self.rebindableSlotReads = privateValueMarkSet(self.rebindableSlotReads, anchor: sharedEmptyRebindableSlotReads)
 		self.rebindableSlotReads.insert(value)
@@ -60058,26 +60145,30 @@ export type Parser
 	// whole declaration) and `collectCellLocalNames` (the parse's, over one body, ONCE — never over one
 	// binding's remaining scope, which is the Θ(vars × tokens) shape that header rejects by name). They ask
 	// different questions and need the identical state, and a second copy of a push/pop pair is a second chance
-	// for the two columns to fall out of lockstep — at which point `openCallees`' top names the wrong call and
+	// for the two columns to fall out of lockstep — at which point `openBrackets`' top names the wrong call and
 	// a forwarding edge is recorded against a function that never saw the argument.
 	//
-	// `openCallees` carries the callee name of each open `(` (EMPTY for a `{` and for a grouping paren), which
-	// is what makes "which call is this argument in?" an O(1) read of the top rather than a backwards walk.
-	function trackBracketAt(index TokenIndex, braceStack BoolArray, openCallees ByteArrayArray)
+	// `openBrackets` carries the TOKEN INDEX of each open `(` or `{`, which is what makes "which call is this
+	// argument in?" an O(1) read of the top rather than a backwards walk. ⚠ A `[` is NOT tracked by either
+	// walk — an index expression opens no call and holds no struct literal — so a future subscript rule must
+	// teach `trackBracketAt` before relying on the stack's depth to describe one.
+	//
+	// ⭐ **IT HOLDS THE INDEX AND NOT THE CALLEE NAME, AND THAT IS BOTH CHEAPER AND MORE HONEST.** An index is
+	// a scalar push where a name was a `ByteArray` one, and it is pushed for every `(` and `{` in every body
+	// — while the two things a reader actually wants (`calleeNameOpeningAt`, `forwardCallOpeningAt`) are needed
+	// only at a real forwarding candidate, which is rare. It also lets those readers see the bracket's own KIND
+	// rather than trusting the pusher to have blanked a `{`, so "a struct literal opens no call" is checked
+	// where it is spent instead of maintained across a column.
+	function trackBracketAt(index TokenIndex, braceStack BoolArray, openBrackets TokenIndexArray)
 		let kind = self.kindAt(index)
-		if kind == TokenKind.leftBrace 'openBrace'
-			braceStack.push(true)
-			openCallees.push(EmptySourceText)
-		end 'openBrace'
-
-		if kind == TokenKind.leftParen 'openParen'
-			braceStack.push(false)
-			openCallees.push(self.calleeNameOpeningAt(index))
-		end 'openParen'
+		if kind == TokenKind.leftBrace or kind == TokenKind.leftParen 'open'
+			braceStack.push(kind == TokenKind.leftBrace)
+			openBrackets.push(index)
+		end 'open'
 
 		if (kind == TokenKind.rightBrace or kind == TokenKind.rightParen) and braceStack.count() > 0 'close'
 			_ = try braceStack.pop() otherwise panic("trackBracketAt: braceStack.pop on non-empty stack failed")
-			_ = try openCallees.pop() otherwise panic("trackBracketAt: openCallees.pop failed — it is pushed and popped in lockstep with braceStack")
+			_ = try openBrackets.pop() otherwise panic("trackBracketAt: openBrackets.pop failed — it is pushed and popped in lockstep with braceStack")
 		end 'close'
 	end 'trackBracketAt'
 
@@ -60149,7 +60240,7 @@ export type Parser
 		var insideAClosureBody = false
 		var closureBodyDepth = 0 as ElementCount
 		var braceStack = BoolArray.create()
-		var openCallees = ByteArrayArray.create()
+		var openBrackets = TokenIndexArray.create()
 		var blockDepth = 0 as BlockDepth
 
 		var q = bodyStart
@@ -60158,7 +60249,7 @@ export type Parser
 				break
 			end 'bodyEnds'
 
-			self.trackBracketAt(q, braceStack: braceStack, openCallees: openCallees)
+			self.trackBracketAt(q, braceStack: braceStack, openBrackets: openBrackets)
 
 			// A closure LITERAL, not a declaration: `function` followed by `(` (a declaration puts its name
 			// between the two). The same test `scanForClosureLiterals` gates the whole walk on.
@@ -60186,7 +60277,7 @@ export type Parser
 					assigned.insert(name)
 				end 'reassigned'
 
-				if self.bareCallArgumentAt(q, braceStack: braceStack) and self.signatures.bareNameTakesAParamByRef(try openCallees.get(openCallees.count() - 1) otherwise EmptySourceText) 'handedToAByRefPosition'
+				if self.bareCallArgumentAt(q, braceStack: braceStack) and self.signatures.bareNameTakesAParamByRef(self.calleeNameOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("collectCellLocalNames: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`"))) 'handedToAByRefPosition'
 					handedOverByReference.insert(name)
 				end 'handedToAByRefPosition'
 			end 'aName'
@@ -60232,7 +60323,7 @@ export type Parser
 	//
 	// ⚠ It over-detects a GROUPING paren whose whole contents are one name — `(x)` reads as an argument. The
 	// edge it records then carries whatever name preceded the paren, which no function wears, so
-	// `noteForwardCallee` drops it and only the parameter's own `forwarded` bit is set. Harmless: a forwarded
+	// `noteForwardCall` drops it and only the parameter's own `forwarded` bit is set. Harmless: a forwarded
 	// bit with no live edge never widens anything.
 	function bareCallArgumentAt(index TokenIndex, braceStack BoolArray) returns bool
 		if braceStack.count() == 0 or self.braceStackInnermostIsBrace(braceStack) 'notInsideACallsParens'
@@ -60252,20 +60343,48 @@ export type Parser
 		return after == TokenKind.comma or after == TokenKind.rightParen
 	end 'bareCallArgumentAt'
 
-	// The callee name of the `(` at `index`, or EMPTY when the paren opens no call — PBR-2's forwarding EDGE.
+	// The callee name of the bracket at `index`, or EMPTY when it opens no call — PBR-2's forwarding EDGE.
 	// It is the token immediately before, which for `reassign(…)`, `f.reassign(…)` and `Type.create(…)` alike
 	// is the BARE name, exactly the spelling `ProgramSignatures.closeByRefForwarding` matches against.
 	//
-	// ⭐ **CAPTURED WHEN THE BRACKET OPENS, WHICH IS WHY IT IS O(1).** The alternative — walking left from an
-	// argument to its own `(` — means re-balancing brackets backwards at every candidate token, a quadratic
-	// shape inside a scan that already walks every token of every body.
+	// A `{` opens a STRUCT LITERAL and never a call, so it answers EMPTY however nameable the token before it
+	// is — `Self{tag: t}` must not read as a call to `Self`.
 	function calleeNameOpeningAt(index TokenIndex) returns ByteArray
+		if self.kindAt(index) != TokenKind.leftParen 'opensNoCall'
+			return EmptySourceText
+		end 'opensNoCall'
+
 		if index == 0 or not tokenCanBeAName(self.tokenAt(index - 1)) 'aGroupingParen'
 			return EmptySourceText
 		end 'aGroupingParen'
 
 		return self.tokenAt(index - 1).value
 	end 'calleeNameOpeningAt'
+
+	// ⭐⭐ **THE FORWARDING EDGE THE BRACKET AT `index` STATES, SHAPE AND ALL (PBR-2).** The name is
+	// `calleeNameOpeningAt`'s — it is the same name, and asking it twice is how the two would come apart — and
+	// the SHAPE is read off the one or two tokens before it, which is a hard partition of what the call can
+	// name (see `ForwardCall`). An EMPTY name means the bracket opened no call at all, which `noteForwardCall`
+	// drops; the shape of a non-call is never read.
+	//
+	// ⭐ **`self.f(` AND `Self.f(` ARE THE NARROWEST SHAPE, AND BOTH KEYWORDS MEAN THE ENCLOSING TYPE** — the
+	// instance receiver and the static one name the same declaration space, so `Self.create(…)` is as
+	// precisely attributable as `self.swap(…)`. It must be `<self> . <name> (` EXACTLY: a longer chain
+	// (`self.managed.swap(`) has a receiver that is a FIELD, whose type this walk cannot know, so it falls
+	// through to the wide receiver shape — which is why `Array.swap`'s own `managed.swap(i, j: j)` still
+	// widens (see `Parser.requireOverloadableName` for what that leaves open).
+	function forwardCallOpeningAt(index TokenIndex) returns ForwardCall
+		let name = self.calleeNameOpeningAt(index)
+		if index < 2 or self.kindAt(index - 2) != TokenKind.dot 'noReceiverWasWritten'
+			return ForwardCall.bare(name)
+		end 'noReceiverWasWritten'
+
+		if index >= 3 and receiverIsTheEnclosingType(self.kindAt(index - 3)) and not self.enclosingType.isEmpty() 'theEnclosingTypesOwnMethod'
+			return ForwardCall.throughSelf(self.enclosingType, name: name)
+		end 'theEnclosingTypesOwnMethod'
+
+		return ForwardCall.throughAReceiver(name)
+	end 'forwardCallOpeningAt'
 
 	// ⭐⭐ **E3067 — THE TWO DEGENERATE ASSIGNMENT STATEMENTS, REFUSED AT ONE DOOR, PURELY TEXTUALLY.**
 	//

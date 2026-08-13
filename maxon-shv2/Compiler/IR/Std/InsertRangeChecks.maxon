@@ -116,6 +116,27 @@ union RangeGuardVerdict
 	guard(alias RangedTypeAlias)
 end 'RangeGuardVerdict'
 
+// ⭐⭐ **WHAT THE CASCADE COMPARES: THE VALUE ITSELF, OR WHAT A BY-REFERENCE PARAMETER'S CELL HOLDS.**
+//
+// A parameter its callee REASSIGNS arrives as the ADDRESS of a caller-owned cell (PBR-2 —
+// `IrFunction.reassignedParamMask`, and `LowerMaxonToStd`'s `stdTypeOf` types that slot `i64` for exactly
+// this reason). Its `param` op's ValueId therefore holds a POINTER, and the entry guard was comparing THAT
+// against the declared bounds: `function bump(n Int)` over `typealias Int = int(0 to 1000000)` panicked
+// *"value outside typealias 'Int'"* on every call, because a heap address is not in `0 to 1000000`. The
+// bounds describe what the CALLER passed, which lives one dereference away.
+//
+// ⚠ **A FULL-RANGE ALIAS HID IT, AND THAT IS WHY IT READ AS A TYPE PROBLEM RATHER THAN AN ABI ONE.** A
+// `int(i64.min to i64.max)` parameter is `noGuard` (`rangeIsFull`), so the identical program with a wide
+// alias ran correctly — the split was never between two types, it was between guarded and unguarded.
+//
+// It is a union rather than a bool beside a ValueId because the two carry different things: `asIs` names
+// the value to compare, while `pointeeOf` names an address whose loaded contents do not exist yet and are
+// minted by the guard itself.
+union GuardedOperand
+	asIs(value ValueId)
+	pointeeOf(cell ValueId)
+end 'GuardedOperand'
+
 // The block whose terminator is this site's own `ret` — the return site to guard.
 //
 // ⚠ `notFound` IS REACHABLE, on a program that compiles today, and it means "this site's `ret` is not
@@ -381,7 +402,7 @@ type RangeCheckEmitter
 	function processSite(site RangeCheckSite, filePath FilePath)
 		match self.guardVerdict(site.value, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(alias) then self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), value: site.value, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
+			guard(alias) then self.emitGuardAt(self.guardSiteAt(site.block, stdOpPos: site.stdOpPos), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(site.block))
 		end 'verdict'
 	end 'processSite'
 
@@ -460,13 +481,34 @@ type RangeCheckEmitter
 	// ⭐ **A `function f(x T) returns T … return x` GUARDS THE VALUE ONCE — HERE.** The `return` site's
 	// own guard is elided against this one, and the argument for that lives at `entryGuardAlreadyCovers`,
 	// which is where the two facts it needs are both in hand. This site emits exactly as it always did.
+	//
+	// ⭐⭐ **AND IT IS THE ONE DOOR THAT MAY BE HANDED AN ADDRESS RATHER THAN A VALUE (PBR-2)** — see
+	// `GuardedOperand`. `rangedParamValue(site)` is the parameter's own `param` op, which for a
+	// by-reference parameter defines a CELL POINTER; the range describes what the cell holds. The other two
+	// doors cannot reach this shape: a cast and a `return` both name a value the body computed, and a cell
+	// binding's read is already a `loadIndirect` by the time either sees it.
 	function guardRangedParam(site RangeCheckParamSite, entryId BlockId, filePath FilePath)
 		let paramValue = rangedParamValue(site)
 		match self.guardVerdict(paramValue, aliasName: site.aliasName, guard: RangeCheckGuard.runtime, line: site.line, column: site.column, aliasFilePath: filePath, filePath: filePath) 'verdict'
 			noGuard then return
-			guard(alias) then self.emitGuardAt(self.guardSiteAt(entryId, stdOpPos: self.func.paramCount), value: paramValue, alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
+			guard(alias) then self.emitGuardAt(self.guardSiteAt(entryId, stdOpPos: self.func.paramCount), operand: self.paramOperand(site), alias: alias, message: self.rangeCheckMessage(filePath, line: site.line, aliasName: site.aliasName), chain: GuardChain.blockChain(entryId))
 		end 'verdict'
 	end 'guardRangedParam'
+
+	// Is this parameter an address or a value? `reassignedParamMask` is the ABI's own answer — the same bit
+	// `LowerMaxonToStd` types the slot from and `transferFuncs` shapes the callee's signature with — so this
+	// door and the representation cannot come to disagree.
+	//
+	// It takes the SITE and re-derives both halves through `rangedParamValue`, because the value and the
+	// parameter position are ONE number (see that function): passing them side by side would be two spellings
+	// of one identity, free to be handed different sites on the day someone splits the call.
+	function paramOperand(site RangeCheckParamSite) returns GuardedOperand
+		if maskHasParam(self.func.reassignedParamMask, param: site.index) 'arrivesAsACellAddress'
+			return GuardedOperand.pointeeOf(rangedParamValue(site))
+		end 'arrivesAsACellAddress'
+
+		return GuardedOperand.asIs(rangedParamValue(site))
+	end 'paramOperand'
 
 	// ---- call-argument sites ----
 
@@ -558,7 +600,7 @@ type RangeCheckEmitter
 
 			match self.retBlockOf(site) 'ret'
 				notFound then break 'ret'
-				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), value: site.value, alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain)
+				found(retBlock) then self.emitGuardAt(GuardSite.create(retBlock, position: retBlock.opRefs.count()), operand: GuardedOperand.asIs(site.value), alias: alias, message: self.rangeCheckMessage(checks.filePath, line: site.line, aliasName: checks.returnAliasName), chain: GuardChain.retChain)
 			end 'ret'
 		end 'eachSite'
 	end 'guardReturns'
@@ -635,7 +677,7 @@ type RangeCheckEmitter
 	// Split the site's block, emit the panic block, thread the compare cascade between them, and extend
 	// `chain` onto the continuation so the NEXT guard on this path lands after this one (see `GuardChain`
 	// for why only an alias-named site has a chain to extend).
-	function emitGuardAt(site GuardSite, value ValueId, alias RangedTypeAlias, message ByteArray, chain GuardChain)
+	function emitGuardAt(site GuardSite, operand GuardedOperand, alias RangedTypeAlias, message ByteArray, chain GuardChain)
 		let isFloat = aliasIsFloat(alias)
 		let checks = boundChecks(alias.low, high: alias.high, isFloat: isFloat)
 		if checks.isEmpty() 'noBoundNeeded'
@@ -648,9 +690,37 @@ type RangeCheckEmitter
 		// ⚠ **THE SPLIT ADVANCES THE CHAIN INSIDE ITSELF, BEFORE `emitPanicBlock`, AND THE ORDER IS
 		// LOAD-BEARING** — see `extendGuardChain`.
 		let ok = self.splitFor(site, chain: chain)
+		// ⚠ **THE DEREFERENCE GOES IN BETWEEN, AND ITS POSITION IS THE WHOLE OF WHY IT IS HERE AND NOT AT
+		// THE CALLER.** `site.block` is the guard's HEAD: after the split it holds exactly the ops that
+		// stood before the site, so appending the load here puts it past the `param` ops and immediately
+		// ahead of the cascade that reads it. It appends an OP and never a BLOCK, so `extendGuardChain`'s
+		// "the last block registered is the continuation" invariant is untouched.
+		let compared = self.comparedValue(operand, head: site.block, isFloat: isFloat)
 		let panicBlock = self.emitPanicBlock(message)
-		self.emitCascade(site.block, value: value, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
+		self.emitCascade(site.block, value: compared, checks: checks, panicId: panicBlock.id, okId: ok.id, isFloat: isFloat)
 	end 'emitGuardAt'
+
+	// ⭐⭐ **THE VALUE THE CASCADE ACTUALLY COMPARES — see `GuardedOperand` for why a parameter can be a
+	// cell.** The load's type is the CASCADE's operand type rather than the parameter's declared Std type,
+	// and the two cannot disagree: a cell holds one full machine word (`Parser.allocateCell` boxes
+	// `CellPayloadBytes`), and `emitCascade` materializes its bounds in the very same `f64`/`i64` the domain
+	// of the alias picks — so the load, the bounds and the compare are one width by construction.
+	function comparedValue(operand GuardedOperand, head IrBlock, isFloat bool) returns ValueId
+		return match operand 'o'
+			asIs(value) gives value
+			pointeeOf(cell) gives self.emitCellLoad(head, cell: cell, isFloat: isFloat)
+		end 'o'
+	end 'comparedValue'
+
+	// Load what a by-reference parameter's cell holds, appended to `head`. The one place this pass reads
+	// through a pointer, for `emitZeroConstOf`'s reason: a second spelling of the offset or the width would
+	// be a second answer to "what does a cell hold". The offset is `Parser.CellContentOffset`, the same
+	// named constant the parser's own cell load and store address through.
+	function emitCellLoad(head IrBlock, cell ValueId, isFloat bool) returns ValueId
+		let loaded = self.mintId()
+		self.module.appendOp(head, op: StdOp.loadIndirect(loaded, addrId: cell, offset: CellContentOffset, valueType: StdType.f64 if isFloat else StdType.i64))
+		return loaded
+	end 'emitCellLoad'
 
 	// Move `siteBlockId`'s chain end onto the continuation `splitChainEnd` just made, so the next guard in
 	// that source block lands after this one instead of before it.
