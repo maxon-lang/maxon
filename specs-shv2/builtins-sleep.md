@@ -115,7 +115,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:3:16: Function '__Builtins.sleep' does not return a value
+error E2004: <fragment>:3:27: Function '__Builtins.sleep' does not return a value
 ```
 
 <!-- test: builtins-sleep.arity-rejected -->
@@ -128,7 +128,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:2: '__Builtins.sleep' takes exactly 1 argument, but 0 were given
+error E3036: <fragment>:3:13: '__Builtins.sleep' takes exactly 1 argument, but 0 were given
 ```
 
 <!-- test: builtins-sleep.float-arg-rejected -->
@@ -145,7 +145,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:2: '__Builtins.sleep' requires a integer, but its argument is float
+error E3005: <fragment>:3:13: '__Builtins.sleep' requires a integer, but its argument is float
 ```
 
 <!-- test: builtins-sleep.unknown-member-in-statement-position -->
@@ -159,7 +159,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:3:2: call to undefined function '__Builtins.nope': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
+error E3004: <fragment>:3:13: call to undefined function '__Builtins.nope': the '__' prefix names a compiler intrinsic, and no intrinsic of that name exists
 ```
 
 <!-- test: builtins-sleep.rejected-on-wasm -->

@@ -676,6 +676,35 @@ end 'calleeThreadsAWitnessTable'
 function markReachable(name ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	markOneReachable(name, byName: byName, reached: reached, worklist: worklist, names: names)
 
+	// ⭐⭐ **A MINTED PARAMETER-DEFAULT HELPER IS PROVISIONAL FOR THE SAME REASON THE BASE CALLEE BESIDE IT
+	// IS, AND ONLY THE BASE WAS WIDENED (W81).** The two names are emitted by one act: filling a short call
+	// appends `f(x, m: __paramDefault#f#2())`, both spellings taken from the sweep's by-name registry, and
+	// `SemanticCheck.resolveOverloadedCalls` then re-points BOTH — the call at `commitOverloadChoice`, the
+	// helper at `repointDefaultedArgHelpers`, at the resolved member's own
+	// `__paramDefault#f#<member suffix>#2`. So a helper name standing in this walk denotes a SET exactly as
+	// its base does, and it is handled here rather than in a second reader for that reason.
+	//
+	// ⛔ **THE MISS WAS SILENT FOR EVERY OVERLOAD SET WHOSE FIRST MEMBER HAPPENS TO DEFAULT SOMETHING, WHICH
+	// IS WHY IT SURVIVED W74.** The first declaration of a name KEEPS its source spelling
+	// (`Parser.declaredParamDefaultHelperName`), so ITS helper is named by the swept name and this walk found
+	// it; every later member's helper is named by the member's mangled registration name and nothing marked
+	// it. MEASURED at `stdlib/Testing.maxon`'s listing, on three programs differing only in one argument's
+	// type: `Expect.equal(5, expected: 5)` compiles (the `AssertedInt` arm is declared first), while
+	// `Expect.equal(true, expected: true)` and `Expect.equal("x", expected: "x")` are
+	// `requireUnreachableStdlibStayedDead` panics naming that member's own helper — the two derivations
+	// disagreeing over an ordinary CALL edge, with no data edge anywhere near it. Supplying the argument
+	// (`message: "m"`) compiles either way, since then no helper is minted at all.
+	//
+	// ⚠ **THE SHORT-CIRCUIT SIDE OWES NOTHING HERE, and that is an argument rather than an omission.**
+	// `nameReachesStdlib` asks whether user code crosses into stdlib at all, and a helper call is only ever
+	// emitted as an ARGUMENT of the call whose parameter it defaults — the same function, the same block. So
+	// the base callee's own op is always present for that scan to answer TRUE on, by whichever of its two
+	// clauses applies, and a helper name can never be a program's only edge into stdlib.
+	if isParamDefaultHelperName(name) 'aMintedDefaultHelper'
+		markEveryMembersOwnDefaultHelper(name, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		return
+	end 'aMintedDefaultHelper'
+
 	// ⭐⭐ **THE PROVISIONAL-CALLEE RULE, AND IT HAS A SECOND READER ONE SCREEN DOWN
 	// (`nameReachesStdlib`).** A call op carries the overload SET's BASE name until
 	// `SemanticCheck.resolveOverloadedCalls` rebinds it to a member, so a base names EVERY member. This
@@ -711,6 +740,29 @@ function markReachable(name ByteArray, project Project, byName FuncIndexByName, 
 		markOneReachable(member, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachMember'
 end 'markReachable'
+
+// One provisional helper name, widened over the callee's overload set — the member half of `markReachable`'s
+// helper rule, split out so the two widenings read as the two they are rather than one nested pair.
+//
+// The callee it defaults is recovered through `paramDefaultCalleeSpelling` and the member's own helper minted
+// through `paramDefaultHelperNameOnMember`, both at the mint, because a name derived a second time is what
+// that mint's header records a backend `call to unknown function` for. A name the set does not hold — every
+// helper of every unoverloaded callee, which is nearly all of them — widens to nothing and costs one map
+// miss, the accounting the base widening below is written for.
+//
+// `markOneReachable` and not `markReachable`: a member's own helper is the name a declaration published, so
+// it stands for itself and there is nothing further to widen.
+function markEveryMembersOwnDefaultHelper(helperName ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	let callee = paramDefaultCalleeSpelling(helperName)
+	if not project.overloadSets.contains(callee) 'theCalleeIsNotOverloaded'
+		return
+	end 'theCalleeIsNotOverloaded'
+
+	let members = try project.overloadSets.get(callee) otherwise panic("markEveryMembersOwnDefaultHelper: overloadSets lost the key '{String.from(callee)}' between `contains` and `get`")
+	for member in members 'eachMember'
+		markOneReachable(paramDefaultHelperNameOnMember(helperName, member: member), byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'eachMember'
+end 'markEveryMembersOwnDefaultHelper'
 
 // ⭐⭐ **DOES `name` REACH A STDLIB FUNCTION? — the SHORT-CIRCUIT's half of `markReachable`'s
 // provisional-callee rule, and the half that did not exist (X-array-retire).** A name reaches stdlib

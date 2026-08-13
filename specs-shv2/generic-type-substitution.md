@@ -577,7 +577,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:22:10: argument type mismatch for 'v': expected 'Inner.UArr', got 'Outer.OArr'
+error E3005: <fragment>:22:16: argument type mismatch for 'v': expected 'Inner.UArr', got 'Outer.OArr'
 ```
 
 <!-- test: own-name-in-a-generic-body-is-still-Self -->

@@ -615,7 +615,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:3:14: call to undefined function 'byte.frobnicate'
+error E3004: <fragment>:3:19: call to undefined function 'byte.frobnicate'
 ```
 
 <!-- test: error.minted-callee-arity-names-the-source-spelling -->
@@ -641,7 +641,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:14: 'int.fromString' expects 1 argument(s) but 0 were provided
+error E3036: <fragment>:3:18: 'int.fromString' expects 1 argument(s) but 0 were provided
 ```
 
 <!-- test: error.minted-callee-missing-try-names-the-source-spelling -->
@@ -658,5 +658,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3057: <fragment>:3:10: throwing function requires try: 'int.fromString'
+error E3057: <fragment>:3:14: throwing function requires try: 'int.fromString'
 ```

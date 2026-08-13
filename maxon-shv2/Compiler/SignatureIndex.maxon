@@ -90,6 +90,13 @@ let DeclShapeEnum = 20 as ContentHash
 let EnumKindEnum = 21 as ContentHash
 let EnumKindUnion = 22 as ContentHash
 
+// Whether any case of a declared enum/union WROTE a raw value (W81) — two distinct constants, mixed beside
+// the kind above and for exactly its reason: the two shapes are otherwise indistinguishable to this hash, and
+// what separates them is how a reading file renders an interpolated value of the type. See
+// `EnumLayout.declaresRawValues`.
+let EnumAutoTagged = 101 as ContentHash
+let EnumDeclaresRawValues = 102 as ContentHash
+
 // ⭐ **HOW A DECLARED ENUM'S TAGS ARE TO BE READ** (`EnumBacking`), mixed beside the case list for
 // `EnumKindEnum`'s reason one step sharper: the two backings can produce the SAME tag column
 // (`z = 0` and `z = 0.0` both fold to 0), so without a discriminator of its own the edit between them is
@@ -10125,6 +10132,14 @@ export type ProgramSignatures
 		// class `mixEnumCase`'s raw-value line exists for, and it is a per-DECLARATION fact rather than a
 		// per-case one, so it rides here and not there. `EmptySourceText` for every other backing.
 		state = mixBytes(state, bytes: layout.backingStructName)
+		// ⭐⭐ **WHETHER ANY CASE *WROTE* A RAW VALUE, WHICH NOTHING ELSE FOLDED HERE CAN CARRY (W81).**
+		// `enum C red green` and `enum C red = 0 green = 1` agree on the name, the kind, the backing
+		// discriminator, the backing struct name, the conformances and — case by case — on the name, the tag
+		// and (the identity being `theTag`) nothing further. So the two declarations hashed IDENTICALLY, while
+		// a file interpolating one of them compiles `green` for the first and `1` for the second: a warm
+		// rebuild across that edit would have served a parse of the reading file that renders the other one.
+		// A per-DECLARATION fact, so it rides here beside the struct name and not in `mixEnumCase`.
+		state = mix(state, value: EnumDeclaresRawValues if layout.declaresRawValues else EnumAutoTagged)
 		// The `implements` list rides for the field list's reason (A1s wave 2) — see `mixDeclaredConformances`,
 		// which states it once for both declaration kinds.
 		state = mixDeclaredConformances(state, conformsTo: layout.conformsTo, shape: DeclShapeDeclaredConformance)
@@ -16232,6 +16247,66 @@ export type ProgramSignatures
 
 		return CalleeVisibility.hidden(site.visibility)
 	end 'calleeVisibilityFrom'
+
+	// ⭐⭐ **HOW A DIAGNOSTIC SPELLS A CALLEE IT HAS RESOLVED: BY ITS MODULE NAMESPACE (W81).**
+	// `stdlib.Expect.equal`, not `Expect.equal`. `specs/testing-assertions.md`'s `error.forgotten-try` is the
+	// canonical pin and shv2 answered the bare name, which named a function the reader can find but a MODULE
+	// they cannot — the same shortfall E3095's candidate list already refuses to make when two directories
+	// contest a name.
+	//
+	// ⭐ **THE RULE IS THE REFERENCE'S AND IT IS NOT A STDLIB SPECIAL CASE.** The bootstrap qualifies EVERY
+	// declaration by its path relative to the compile root (`2-Parser.cs:1184`
+	// `NamespaceFromProjectRelativePath`), which is what makes `api.unusedHelper` and `stdlib.helpers.…` one
+	// rule rather than two. shv2 keeps its registration names BARE — namespace-qualifying them is a
+	// resolution decision it takes only under contest — so the qualification is applied HERE, at the render,
+	// which is the one thing the reference's registration name was doing for a human.
+	//
+	// A callee no file declares — a runtime symbol, a builtin, a name the program got wrong — has no
+	// namespace and is returned unchanged; so is a ROOT-level declaration, which is every user function in
+	// every fragment the suite compiles. That is what keeps this confined to the callees whose declaring
+	// directory the author never opened.
+	//
+	// ⛔⛔ **IT HAS EXACTLY ONE ASKER TODAY, AND THAT IS A SCOPE DECISION RATHER THAN THE END OF THE RULE.**
+	// The asker is E3057's sentence, at the line where `throwsMap.contains(callee)` has just PROVEN the name
+	// resolves to a declared throwing function — which is the whole of the line that holds: **qualify a
+	// declaration the compiler RESOLVED; never a name it could not.** The reference draws the same line, by
+	// accident rather than by rule (its registration name simply IS qualified, so a diagnostic shows it iff
+	// it reads the symbol table rather than the source token) — and its unresolved-name messages print the
+	// author's spelling for that reason.
+	//
+	// ⚠ **THE SAME LINE PUTS FOUR MORE DIAGNOSTIC FAMILIES ON THIS SIDE OF IT, AND W81 DID NOT MOVE THEM.**
+	// E3055 (*"does not throw"*), E3008 / E3088 (not exported / module-scoped — where the namespace is the
+	// very fact the sentence is about) and E3036 (arity) all speak about a declaration that resolved, and the
+	// oracle qualifies every one of them. MEASURED by building it: doing so moves **~50 committed expectations
+	// across 12+ spec files**, three of which (`console-stdin.md:58`, `try-postfix-target.md:452`,
+	// `void-call-result.md:489`) carry PROSE recording the bare spelling as a deliberate difference from the
+	// reference. That is a tree-wide diagnostic-naming policy with its own corpus churn, not a side effect of
+	// listing a stdlib module, so it is reported rather than taken here.
+	//
+	// ⛔ **AND THE BLANKET VERSION IS UNSOUND, WHICH IS THE OTHER HALF OF WHY THE ASKER IS ONE.** Applied at
+	// `SemanticCheck.callDiagnosticNoun` — the single door every call diagnostic already shares — it also
+	// qualifies the messages about a name that resolved to NOTHING: `call to undefined function 'helper'`
+	// became `… 'alpha.helper'`, naming a symbol absent from the program. That door's header carries the
+	// measurement.
+	//
+	// ⚠ **AN ALREADY-QUALIFIED REGISTRATION NAME IS LEFT ALONE, and the test is the SET that made it
+	// qualified rather than a re-scan of its bytes.** A contested free function registers as `alpha.pick`
+	// (`freeFunctionRegistrationName`), and joining its namespace again would read `alpha.alpha.pick`.
+	// `namespaceQualifiedFunctions` is exactly "this spelling already carries its directory", so the guard
+	// and the mint cannot come to disagree about which names do.
+	export function diagnosticCalleeSpelling(callee ByteArray) returns ByteArray
+		let site = try self.funcDeclSites.get(callee) otherwise return callee
+		if self.namespaceQualifiedFunctions.contains(callee) 'theSpellingAlreadyCarriesItsDirectory'
+			return callee
+		end 'theSpellingAlreadyCarriesItsDirectory'
+
+		let namespace = self.namespaceOf(site.declFilePath)
+		if namespace.isEmpty() 'aRootLevelDeclaration'
+			return callee
+		end 'aRootLevelDeclaration'
+
+		return namespaceQualifiedName(namespace, name: callee)
+	end 'diagnosticCalleeSpelling'
 
 	// ⭐ **WHAT A CANDIDATE TOP-LEVEL FACTORY RETURNS, CLASSIFIED FOR THE ONE DECISION THAT READS IT** — may
 	// a `.data` slot hold it? A RECORD can (the slot holds a pointer `__module_init` fills); a scalar cannot

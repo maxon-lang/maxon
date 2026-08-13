@@ -1993,7 +1993,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:15:10: Value 505 is outside the range of 'Percent' (int(0 to 100))
+error E3005: <fragment>:15:13: Value 505 is outside the range of 'Percent' (int(0 to 100))
 ```
 
 ### Type-parameter argument: runtime panic

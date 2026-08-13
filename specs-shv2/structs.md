@@ -451,7 +451,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/structs/error.callarg-wrong-struct-consumed.test:26:10: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
+error E3005: specs/fragments/structs/error.callarg-wrong-struct-consumed.test:26:16: argument type mismatch for 'inner': expected 'BoxA', got 'BoxB'
 ```
 
 <!-- test: error.callarg-wrong-struct-borrowed -->

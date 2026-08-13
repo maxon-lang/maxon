@@ -2472,6 +2472,16 @@ end 'erasedFormalIdentity'
 //
 // The decode itself is `Parser.primitiveStaticSourceSpelling`, which lives beside the mint and re-mints what
 // it split — so this pass owns no copy of the joining rule and cannot drift from it.
+//
+// ⛔⛔ **IT IS DELIBERATELY NOT NAMESPACE-QUALIFIED, AND W81 MEASURED WHY.** The canonical corpus spells a
+// resolved stdlib callee `stdlib.Expect.equal` and shv2 spells it bare, so the obvious cure is to put
+// `ProgramSignatures.diagnosticCalleeSpelling` here — one door, every message. **BUILT AND REVERTED**: this
+// noun also serves the messages about a name that resolved to NOTHING, and there the author's own spelling
+// is the only honest one. MEASURED, on `namespace-qualified-resolution`'s
+// `error.contested-bare-call-with-exactly-one-visible-candidate`: `call to undefined function 'helper'`
+// became `… 'alpha.helper'` — a symbol the author never wrote, about a call they wrote as `helper()`, which
+// is D11c's defect class arriving in the pass that already refused it once. See
+// `diagnosticCalleeSpelling`'s own header for the line that does hold and for what is still owed.
 function callDiagnosticNoun(callee ByteArray, mint CalleeMint) returns ByteArray
 	match mint 'm'
 		notMinted then return callee
@@ -2634,7 +2644,7 @@ function validatePlainCall(project Project, func IrFunction, signatures ProgramS
 		let callRange = project.opRanges.get(opIndex)
 		// ⚠ The NOUN, not the callee: a bare `int.fromString(s)` is the shape an author most often writes by
 		// mistake, and it used to be told about `'__int_fromString'` — see `callDiagnosticNoun`.
-		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(callDiagnosticNoun(callee, mint: mint)), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+		reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: throwingCallRequiresTryMessage(signatures.diagnosticCalleeSpelling(callDiagnosticNoun(callee, mint: mint))), line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
 	end 'throwing'
 end 'validatePlainCall'
 
@@ -4097,7 +4107,29 @@ function checkArgTypes(project Project, func IrFunction, result ValueId, sig Fun
 		// DECLARED SPELLING; see `checkOneArgType`.
 		let preErasedAggregate = try sig.paramAggregateNames.get(i) otherwise panic("checkArgTypes: paramAggregateNames.get OOB at {i} — a signature's param columns (names, types, aggregate names) are built in lockstep")
 		let declaredParamName = try sig.paramDeclaredNames.get(i) otherwise panic("checkArgTypes: paramDeclaredNames.get OOB at {i} — a signature's param columns (names, types, aggregate names, declared names) are built in lockstep")
+		// ⭐⭐ **ONE CALL EARNS ONE ARGUMENT DIAGNOSTIC — the FIRST (W81).** Past that the call is already
+		// refused, and every later argument's verdict is a second sentence about it; the reference emits only
+		// the first and the corpus is written from the reference. MEASURED against the oracle on
+		// `Box.take(1.5, b: 2.5)`, both arguments wrong: **one** E3009, naming `a`. `testing-assertions`'
+		// `error.float-has-no-equal` is the canonical pin — shv2 emitted a second line for `expected` that no
+		// spec in either corpus expects, and NO `maxoncstderr` block in `/specs` or `specs-shv2` carries two
+		// E3009s (swept 2026-08-13).
+		//
+		// ⚠ **IT IS THE ONE CALL'S RULE AND NOT A FIRST-ERROR GATE.** Two separately-bad calls still earn two
+		// diagnostics here, which is shv2's own design and where it deliberately parts from the bootstrap
+		// (measured: the oracle reports one for the whole file). Nothing in the corpus asks for the narrower
+		// behaviour, and `project.diagnostics` being first-class is the point of the departure.
+		//
+		// ⚠ **ASKED OF `project.diagnostics` RATHER THAN THREADED BACK AS A BOOL**, and that is the safer
+		// spelling rather than the lazier one: `checkOneArgType` reports from six sites across four functions,
+		// so a returned flag is six places to remember and one place to silently forget — where the record
+		// that a diagnostic exists cannot be forgotten by a new report site. It is `Queries.foldOneFileInto`'s
+		// own before/after idiom.
+		let reportedBefore = project.diagnostics.count()
 		checkOneArgType(project, func: func, paramType: paramType, preErasedAggregate: preErasedAggregate, declaredParamName: declaredParamName, paramName: paramName, position: i, argId: argId, callInstanceSubject: instanceSubject, paramExistentialSites: sig.paramExistentialSites, callRange: callRange, filePath: filePath)
+		if project.diagnostics.count() > reportedBefore 'thisArgumentWasRefused'
+			return
+		end 'thisArgumentWasRefused'
 	end 'eachArg'
 end 'checkArgTypes'
 

@@ -196,7 +196,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:9: '__Builtins.executablePath' takes exactly 0 argument, but 1 were given
+error E3036: <fragment>:3:20: '__Builtins.executablePath' takes exactly 0 argument, but 1 were given
 ```
 
 <!-- test: process-executable-path.rejected-on-wasm -->

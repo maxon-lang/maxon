@@ -930,8 +930,7 @@ Color value: 2
 
 ### Simple Enum Interpolation
 
-<!-- disabled-test: simple-enum-interpolation -->
-<!-- ⚠ MEASURED 2026-08-13, not inferred: shv2 prints `Direction: 2` — the ORDINAL, not the case NAME. Every enum reaches interpolation through the INTEGER arm (`Parser.materializeInterpExpr` decodes only a FLOAT backing before choosing one), so an enum value's BACKING KIND never arrives at the site and the case name exists nowhere in the emitted program. NOT a format-specifier gap — this program writes no specifier. `string-enum-interpolation` below is the other half of the same missing mechanism. -->
+<!-- test: simple-enum-interpolation -->
 ```maxon
 enum Direction
 	north
@@ -955,8 +954,7 @@ Direction: east
 
 ### String-Backed Enum Interpolation
 
-<!-- disabled-test: string-enum-interpolation -->
-<!-- ⚠ MEASURED 2026-08-13, not inferred: shv2 prints `Status: 0` — the ORDINAL, not the raw STRING. The same missing mechanism `simple-enum-interpolation` above states, and the two are one rung rather than two. -->
+<!-- test: string-enum-interpolation -->
 ```maxon
 enum Status
 	active = "Active"

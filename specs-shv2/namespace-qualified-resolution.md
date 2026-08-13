@@ -227,7 +227,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3008: app/specs/fragments/namespace-qualified-resolution/error.qualified-call-to-non-exported-function.test:15:9: function 'hiddenHelper' is not exported
+error E3008: app/specs/fragments/namespace-qualified-resolution/error.qualified-call-to-non-exported-function.test:15:15: function 'hiddenHelper' is not exported
 ```
 
 
@@ -964,7 +964,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-default-is-not-inherited.test:18:30: 'beta.pick' expects 1 argument(s) but 0 were provided
+error E3036: app/specs/fragments/namespace-qualified-resolution/error.contested-free-function-default-is-not-inherited.test:18:35: 'beta.pick' expects 1 argument(s) but 0 were provided
 ```
 
 

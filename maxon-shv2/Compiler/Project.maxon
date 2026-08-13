@@ -4056,7 +4056,11 @@ export function appendUnionCasesCompanion(enums EnumLayoutArray, layout EnumLayo
 
 	for i in 0 upto layout.caseCount() 'eachVariant'
 		let tag = layout.tagOfIndex(i)
-		companion.addCase(layout.caseNameAt(i), tag: tag, rawValue: "{tag}", payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+		// ⭐ The companion DECLARES a raw value exactly where the union did and its tag carries it — which is
+		// `mirrorsTheUnionsBacking`'s own condition, so the two travel together for the reason that flag's
+		// paragraph gives. Where the tag is only a declaration index the companion states nothing the source
+		// wrote, and `Companion.<case>` interpolates as its case NAME, as the union's does.
+		companion.addCase(layout.caseNameAt(i), tag: tag, rawValue: "{tag}", declaresRawValue: mirrorsTheUnionsBacking and layout.declaresRawValues, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 	end 'eachVariant'
 
 	enums.push(companion)
@@ -4239,6 +4243,23 @@ export type EnumLayout
 	//
 	// It is a name and not a `StructLayout`, for `caseBackingFields`' reason: the case reader runs inside the
 	// sweep that is still building the index this name would be resolved through.
+	// ⭐⭐ **DID ANY CASE OF THIS DECLARATION *WRITE* A RAW VALUE? — the fact `backing` cannot carry, and the
+	// one string interpolation turns on (W81).** `enum Colour red green` and `enum Colour red = 0 green = 1`
+	// produce the IDENTICAL `backing` (`integer`, fixed by `Parser.appendAutoTaggedEnumCase`'s first
+	// statement), the identical `caseTags` and the identical `caseRawValues` (an auto-tagged case records
+	// `"{tag}"`) — and the language renders the first as `green` and the second as `1`
+	// (`/specs/string-interpolation.md:89`). So there is no projection of the columns above that tells them
+	// apart, and this is the missing bit rather than a convenience.
+	//
+	// ⭐ **PER DECLARATION, NOT PER CASE, AND THAT IS THE LANGUAGE'S RULE.** MEASURED against the bootstrap
+	// oracle on `enum Mixed  a = 5  b end`: `"{Mixed.b}"` renders **6** — the auto-CONTINUED raw value — and
+	// not the name `b`. One `=` anywhere makes every case of that enum render as a number, which is exactly
+	// what the reference's own single `HasExplicitBackingValues` flag says (`MlirType.cs:663`, read at
+	// `MaxonToStandardConversion.Strings.cs:900`).
+	//
+	// ⚠ It is OR-ed in by `addCase` rather than assigned, for `backing`'s reason one field up: the case
+	// reader fixes it from whichever case first states it and no later case may unstate it.
+	export var declaresRawValues as bool
 	export var backingStructName as ByteArray
 	// ⭐ **PER CASE, THE BACKING STRUCT'S FIELDS AS THE DECLARATION WROTE THEM** — in the order written, which
 	// for a positional factory argument IS the field's position (see `EnumBackingField.name`).
@@ -4249,7 +4270,7 @@ export type EnumLayout
 	export var caseBackingFields as EnumBackingFieldArrayArray
 
 	export static function create(name ByteArray, isUnion bool, conformsTo ByteArrayArray, visibility Visibility, declFilePath FilePath, backing EnumBacking) returns EnumLayout
-		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, backingStructName: EmptySourceText, caseBackingFields: EnumBackingFieldArrayArray.create()}
+		return Self{name: name, isUnion: isUnion, caseNames: ByteArrayArray.create(), caseTags: ParsedIntArray.create(), caseRawValues: StringArray.create(), casePayloads: PayloadFieldArrayArray.create(), conformsTo: conformsTo, visibility: visibility, declFilePath: declFilePath, backing: backing, declaresRawValues: false, backingStructName: EmptySourceText, caseBackingFields: EnumBackingFieldArrayArray.create()}
 	end 'create'
 
 	// The `EnumLayout` twin of `StructLayout.createCompilerOwned`, for the same reason and with the same
@@ -4270,12 +4291,17 @@ export type EnumLayout
 	//
 	// ⚠ Both empties are spelled at the call site rather than defaulted, so the sentence above stays
 	// literally true: there is no argument this writer can supply on a caller's behalf.
-	export function addCase(caseName ByteArray, tag ParsedInt, rawValue String, payloads PayloadFieldArray, backingFields EnumBackingFieldArray)
+	//
+	// ⭐ `declaresRawValue` — did THIS case write one? It is folded into the declaration-wide
+	// `declaresRawValues` here rather than set by the case readers, so the one writer of the columns is also
+	// the one writer of the fact derived from them and a reader that appends a case cannot forget it.
+	export function addCase(caseName ByteArray, tag ParsedInt, rawValue String, declaresRawValue bool, payloads PayloadFieldArray, backingFields EnumBackingFieldArray)
 		self.caseNames.push(caseName)
 		self.caseTags.push(tag)
 		self.caseRawValues.push(rawValue)
 		self.casePayloads.push(payloads)
 		self.caseBackingFields.push(backingFields)
+		self.declaresRawValues = self.declaresRawValues or declaresRawValue
 	end 'addCase'
 
 	// The constant struct backing case `index` declares, field by field in the order written — empty for
@@ -4629,9 +4655,13 @@ end 'builtinEnumLookupErrorEnum'
 // DERIVED from declaration order rather than written down — this type's header explains why a tag and a
 // declaration position must never be the same stored field, and writing `0`/`1`/`2` here would smuggle the
 // conflation back in through the builder.
+//
+// ⭐ `declaresRawValue: false` for the same reason the tag is derived: a builtin's cases are the AUTO-INCREMENT
+// shape, so a caught `__DivisionByZeroError` interpolates as `divisionByZero` exactly as a corpus-declared
+// error enum does — which is what a program printing `"{e}"` on one gets from the oracle.
 function addBuiltinEnumCase(layout EnumLayout, caseName ByteArray)
 	let tag = layout.caseCount()
-	layout.addCase(caseName, tag: tag, rawValue: "{tag}", payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+	layout.addCase(caseName, tag: tag, rawValue: "{tag}", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 end 'addBuiltinEnumCase'
 
 // ⭐⭐ **THE ORDINAL DRIFT GUARD FOR THE BUILTIN ERROR ENUMS — ONE MECHANISM, FIVE FAMILIES (7b, +A1, +A1s).**
@@ -5264,14 +5294,51 @@ end 'staticMemberRegistrationName'
 // which is also the index `ParamDefaultInfo.producerFor` is asked with.
 //
 // It joins through `overloadRegistrationName` rather than re-spelling `#` — the separator has one speller —
-// and it is unique by CONSTRUCTION: `funcName` is unique whole-program (a second declaration of one name is
-// E3006, and an OVERLOADED name is refused a default outright, `Parser.overloadRegistrationNameFor`), and
-// the `__` prefix puts the result in the reserved space no declaration may enter (E2051), so it can collide
-// with nothing the author writes. `#` is not in the identifier alphabet, so the two joins are injective by
+// and it is unique by CONSTRUCTION: `funcName` is the name the DECLARATION registered under, which is unique
+// whole-program (a second declaration of one name is E3006, and an overload member wears its own mangled
+// registration name — `Parser.declaredParamDefaultHelperName` is what calls this with it), and the `__`
+// prefix puts the result in the reserved space no declaration may enter (E2051), so it can collide with
+// nothing the author writes. `#` is not in the identifier alphabet, so the two joins are injective by
 // character class — the property ARCHITECTURE.md states for every symbol built by joining names.
+//
+// ⚠ This header said *"an OVERLOADED name is refused a default outright"* until W81, and W74 had already
+// made that false — an overload set defaults whatever it likes, each member under its own registration name.
+// The uniqueness argument survives the correction because it never rested on the refusal: it rests on the
+// key being a REGISTRATION name.
 export function paramDefaultHelperName(funcName ByteArray, paramIndex ParamCount) returns ByteArray
-	return overloadRegistrationName(overloadRegistrationName(ParamDefaultHelperPrefix.toByteArray(), suffix: funcName), suffix: "{paramIndex}".toByteArray())
+	return paramDefaultHelperNameAtSlotSpelling(funcName, slotSpelling: "{paramIndex}".toByteArray())
 end 'paramDefaultHelperName'
+
+// ⭐⭐ **THE SAME PARAMETER SLOT'S HELPER, ON ANOTHER MEMBER OF THE CALLEE'S OVERLOAD SET (W81)** — the
+// question the stdlib reachability walk asks, because the helper call it sees is as PROVISIONAL as the base
+// callee beside it. A short call is filled while it is parsed, from a registry keyed by the name the source
+// wrote, so the emitted helper call names the SWEPT helper; `SemanticCheck.repointDefaultedArgHelpers`
+// re-points it at the resolved member's own the moment the member is known. Between those two moments the
+// name stands for a SET, exactly as the base callee does — see `StdlibSource.markReachable`, the one caller.
+//
+// ⚠ **IT TAKES THE SLOT OFF THE NAME RATHER THAN BEING HANDED ONE, and that is what makes it a re-key rather
+// than a second mint.** The slot is already spelled in the helper it is given; re-deriving it from a
+// `ParamDefaultInfo` would be the second derivation of one name this mint's header records a backend
+// `call to unknown function` for.
+export function paramDefaultHelperNameOnMember(helperName ByteArray, member ByteArray) returns ByteArray
+	return paramDefaultHelperNameAtSlotSpelling(member, slotSpelling: splitMintedHelperName(helperName, prefix: ParamDefaultHelperPrefix, mint: "CalleeMint.paramDefaultHelper").tail)
+end 'paramDefaultHelperNameOnMember'
+
+// The join itself, with the slot already spelled — the one place `__paramDefault#<name>#<slot>` is built.
+// The two exported doors above differ only in where the slot's bytes come from (a `ParamCount` at a
+// declaration, an existing helper name at a re-key), and a second copy of the join is the thing this mint's
+// header forbids.
+function paramDefaultHelperNameAtSlotSpelling(funcName ByteArray, slotSpelling ByteArray) returns ByteArray
+	return overloadRegistrationName(overloadRegistrationName(ParamDefaultHelperPrefix.toByteArray(), suffix: funcName), suffix: slotSpelling)
+end 'paramDefaultHelperNameAtSlotSpelling'
+
+// ⭐ **IS `callee` ONE OF THE PARAMETER MINT ABOVE? (W81)** — the gate the reachability walk asks before it
+// decodes a name, since `splitMintedHelperName` panics on anything this mint did not produce. It reads the
+// prefix for `isFieldDefaultHelperName`'s reason one door down, and lives beside the join so the prefix keeps
+// its one speller.
+export function isParamDefaultHelperName(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: ParamDefaultHelperPrefix.toByteArray())
+end 'isParamDefaultHelperName'
 
 let ParamDefaultHelperPrefix = "__paramDefault"
 

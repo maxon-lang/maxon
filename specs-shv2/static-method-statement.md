@@ -123,7 +123,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:9:2: call to undefined function 'Helper.nope'
+error E3004: <fragment>:9:9: call to undefined function 'Helper.nope'
 ```
 
 <!-- test: static-method-statement.keyword-named-static-is-a-statement -->
@@ -182,7 +182,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:9:2: call to undefined function 'Helper.while'
+error E3004: <fragment>:9:9: call to undefined function 'Helper.while'
 ```
 
 <!-- test: static-method-statement.void-static-through-an-inner-generic-alias -->
@@ -262,5 +262,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:14:3: call to undefined function 'Pair.nope'
+error E3004: <fragment>:14:11: call to undefined function 'Pair.nope'
 ```

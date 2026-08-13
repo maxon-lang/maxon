@@ -1769,6 +1769,105 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// carries a `targets:` restriction and both were RUN on `wasm32-wasi`, not merely left unrestricted.
 	try listWhitelistedModule(stdlibDir, relative: "Json.maxon", into: listed)
 
+	// ⭐⭐ **W81 — `stdlib/Testing.maxon`, THE ASSERTION LIBRARY, AND THE FIRST MODULE WHOSE ADMISSION TOOK
+	// THREE RUNGS OF LANGUAGE WORK RATHER THAN ANY WORK OF ITS OWN.** 343 lines, no intrinsic, no backend
+	// work, no `#if`: one `enum TestFailure`, one `type __TestReport`, and `type Expect`'s twenty-two
+	// `static` matchers. What kept it off the list was not the module — it was that shv2 could not yet
+	// COMPILE what it is written in. `W72` opened the `__` declaration door it needs for `__TestReport`,
+	// `W74` gave each member of an overload set its own parameter defaults (`equal` has three arms and every
+	// one of them defaults `message`/`file`/`line`), and `W77` admitted an overload set whose members agree
+	// on `throws TestFailure`. None of those three rungs was allowed to list it; this one does.
+	//
+	// ⭐⭐ **THE READINESS IS REAL IN BOTH OF THE WAYS THIS FILE HAS LEARNED TO DOUBT IT.** Both MEASURED:
+	//   • the probe: `maxon-shv2 build stdlib/Testing.maxon` exits 1 with `E3001: No 'main' function found`
+	//     AND NOTHING ELSE;
+	//   • the INJECTION control FIRES — `let bogus = NoSuchType.definitelyUndefined(1)` in
+	//     `__TestReport.threw`'s body answers `E3001` **+ `E3004 call to undefined function
+	//     'NoSuchType.definitelyUndefined'` at `stdlib/Testing.maxon:53:15`**, so its bodies are analyzed;
+	//   • there is NO SYNTHESIZED TWIN, the hazard that made `Set`/`Vector`/`unicodeCategory` INERT when
+	//     listed: `grep b"Testing" b"Expect" b"TestFailure" b"__TestReport"` over `maxon-shv2/Compiler/` is
+	//     EMPTY, and none of the seven `*BuiltinBaseName` roots (`SignatureIndex.maxon:3943-4097`) names any
+	//     of them.
+	//
+	// ⚠⚠ **THE CONTROL HAD TO BE RUN IN PLACE, AND `STDLIB-BRINGUP.md`'s RECIPE ANSWERS THE WRONG QUESTION
+	// FOR THIS MODULE.** That recipe copies the module OUTSIDE `stdlib/` before injecting, which for this one
+	// dies at `E2051: identifier '__TestReport' is reserved` before reaching any body — `W72`'s door admits a
+	// `__` declaration only UNDER `stdlib/`. So the injection is made in place, against a backup, and the
+	// tree restored (`git status stdlib/` clean) after. A later reader re-running the control owes the same.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED at the source rather than asserted:
+	//   • ⚠⚠ FREE FUNCTIONS (E3006), the dangerous clause — **ZERO, and an empty clause checked is worth
+	//     writing down.** Every one of its 25 functions is a member of `__TestReport` or `Expect`; a
+	//     top-level `function`/`export function` count over the file is 0. So there is nothing to contest
+	//     `Parser.parseCallNamed`'s bare-name chain and nothing to intersect with the free functions the
+	//     already-listed modules declare, and neither surface needed enumerating.
+	//   • ⚠ It CONSUMES one, which is the sound direction: `__TestReport.threw` (`:53`) and `Expect.raise`
+	//     (`:150`) call `printError` by bare name, out of LISTED `stdlib/PrintError.maxon`, and `Expect.close`
+	//     (`:287`) calls the `abs` builtin. What a bare builtin reserves is a DECLARATION no call site can
+	//     reach, and this module declares neither.
+	//   • TYPE NAMES: `TestFailure`, `__TestReport`, `Expect` — three, all nominal, so a user program
+	//     spelling one wins and this module's moves into the reserved space (A1s wave 2). No other file
+	//     under `stdlib/` declares any of them, checked at the source across all 51.
+	//   • TYPEALIASES: `AssertedInt` (`int(i64.min to i64.max)`), `AssertedReal` (`float(f64.min to f64.max)`)
+	//     and `Tolerance` (`float(0.0 to f64.max)`) — declared nowhere else under `stdlib/`, so
+	//     `RangedAliasRegistry`'s whole-program fold has no range to contest. It USES a fourth,
+	//     `SourceLineNumber` (`stdlib/Builtins.maxon:208`, `int(1 to i32.max)`), from a LISTED module and at
+	//     that module's own form — the sound direction, and the one the `__line__` default depends on.
+	//   • TOP-LEVEL BINDINGS: **two `var`s with STRING initializers** (`:31 wireWrapper`, `:32 wireSeparator`),
+	//     which is the class that cost `Log.maxon` +87% code bytes on a program that never spells `Log` and
+	//     got that entry withdrawn. The A/B below is this clause's answer and it is CLEAN: `S2h`'s
+	//     `DeadGlobalElimination` reachability term plus `W69`'s `.rdata` gate DO reach a `var` holding a
+	//     String.
+	//   • The "type-parameterized by a USER declaration" clause is the one this file insists is a BUILD and
+	//     not a reading. Checked as a build: a program declaring its own `typealias Tolerance = int(0 to 10)`,
+	//     `typealias AssertedInt = int(0 to 5)`, `type Expect` and `enum TestFailure`, calling nothing in this
+	//     module, compiles and runs clean and gets its OWN declarations everywhere.
+	//   • E3112 fires only when a user program actually contests a spelling, so there is nothing to clear
+	//     ahead of time. The surface it exposes is `Expect`'s twenty-two matcher names, its fourteen `static
+	//     let` report-vocabulary constants, `__TestReport`'s two members, and the parameter names those
+	//     matchers take as labels (`expected`, `than`, `within`, `needle`, `message`, `file`, `line`).
+	//   • It has NO imports and calls into no listed module by name except `printError`.
+	//
+	// ⭐⭐ **ONE FACT THIS ENTRY RECORDS THAT NO EARLIER ONE HAD TO: HALF THE MODULE HAS NO CALLER IN shv2
+	// YET, AND THAT IS A STATE TO STATE RATHER THAN A GAP TO FILL HERE.** `Queries.TestReportDeclaringModule`
+	// (`Queries.maxon:1229`) already names this file — the compiler knows the module by name — but shv2 has
+	// **no `test` declaration syntax at all** (`grep b"test"` over `Compiler/` is empty). `__TestReport.threw`
+	// is documented in the corpus as *"the compiler emits this call; no program writes it"*, and in shv2
+	// nothing emits it. So `__TestReport` is listed, parsed, analyzed and then dropped by
+	// `DeadFunctionElimination` in every program. **`Expect` is the surface this listing actually delivers**,
+	// and the `test` declaration that gives `__TestReport` its caller is a later rung's.
+	//
+	// ⭐ **THE CAPABILITY IS REAL RATHER THAN MERELY LOADABLE.** `specs-shv2/testing-assertions.md` is the
+	// canonical spec ported BYTE-IDENTICAL, and all 11 of its cases pass with the entry live — every matcher
+	// on its holding path, every matcher on its failing path against a literal stderr golden, `__file__`/
+	// `__line__` reported at the CALLER's line and across files, `equal` resolving across its three overloads
+	// from a method call, and the two compile-error cases. None is disabled and none can pass against an
+	// inert entry.
+	//
+	// ⚠⚠ **AND IT COST FIVE COMPILER DEFECTS, FOUR OF WHICH ARE LIVE ON `main` AND HAVE NOTHING TO DO WITH
+	// THIS MODULE.** Each is argued where it was fixed: `StdlibSource.markReachable` (a minted
+	// parameter-default helper is as PROVISIONAL as the base callee beside it and only the base was widened,
+	// so every overload member's default helper but the FIRST tripped `requireUnreachableStdlibStayedDead`);
+	// `Parser.enumInterpRendering` (an enum rendered its raw i64 in every interpolation, so a plain enum
+	// printed its ORDINAL, a string-backed one printed `0`, a character-backed one its CODEPOINT and a
+	// payload-bearing union a HEAP ADDRESS — six rows measured against the oracle, five of them wrong);
+	// `Parser.parseCallNamed` (a QUALIFIED call anchored every diagnostic at the TYPE token where the
+	// instance spelling and both references use the MEMBER token); `SemanticCheck.checkArgTypes` (one call
+	// earned one diagnostic per bad argument where the reference emits the first); and
+	// `ProgramSignatures.diagnosticCalleeSpelling` (a resolved stdlib callee was named bare where canonical
+	// names its MODULE). The listing is what reached them; not one was reachable from a spec this suite
+	// already ran.
+	//
+	// ⚠ **THE LAST OF THE FIVE IS FIXED FOR ONE DIAGNOSTIC AND OWES FOUR MORE**, and that is stated at
+	// `diagnosticCalleeSpelling` rather than here: the same rule puts E3055, E3008, E3088 and E3036 on the
+	// qualified side, and moving them is a tree-wide naming policy with ~50 committed expectations behind it.
+	//
+	// ⭐ **THE `S2h` BYTE-NEUTRALITY A/B, RE-MEASURED ON THIS RUNG'S FINAL COMPILER** — same worktree, two
+	// binaries differing only by the line below, on `function main() returns ExitCode / return 7`:
+	// **1,592 bytes of code both ways**, and the two executables are **byte-for-byte identical at 5,567
+	// bytes**. The two String-initialized `var`s cost a program that never spells `Expect` nothing at all.
+	try listWhitelistedModule(stdlibDir, relative: "Testing.maxon", into: listed)
+
 	//     ⛔⛔ **`stdlib/Set.maxon` IS NOT LISTED, AND THE REASON IS A MEASUREMENT RATHER THAN A BLOCKER
 	//     (W63, BATCH36).** Its last DIAGNOSTIC blocker died with `W61` — it probes `E3001` and nothing
 	//     else, and the injection control fires (`NoSuchType.definitelyUndefined` in `Set.count()`'s body

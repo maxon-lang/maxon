@@ -1026,7 +1026,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:10: argument type mismatch for 'b': expected 'ByteArray', got 'Array_Byte$0_1000'
+error E3005: <fragment>:24:17: argument type mismatch for 'b': expected 'ByteArray', got 'Array_Byte$0_1000'
 ```
 
 ### The MINT is an internal spelling, and a diagnostic quotes it only when nothing else can tell two types apart

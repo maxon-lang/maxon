@@ -405,7 +405,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3004: <fragment>:12:10: call to undefined function 'Gate.nope'
+error E3004: <fragment>:12:15: call to undefined function 'Gate.nope'
 ```
 
 <!-- test: error.unknown-member-through-Self -->

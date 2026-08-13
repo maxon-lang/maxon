@@ -213,7 +213,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:10: argument type mismatch for 'bytes': expected 'ByteArray', got 'Array_int'
+error E3005: <fragment>:3:17: argument type mismatch for 'bytes': expected 'ByteArray', got 'Array_int'
 ```
 
 <!-- test: error.from-rejects-a-string -->
@@ -225,7 +225,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:10: argument type mismatch for 'bytes': expected 'ByteArray', got 'String'
+error E3005: <fragment>:3:17: argument type mismatch for 'bytes': expected 'ByteArray', got 'String'
 ```
 
 <!-- test: error.string-unknown-static-is-named-where-it-is-written -->
@@ -556,5 +556,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:8:10: argument type mismatch for 'bytes': expected 'ByteArray', got 'OctetArray'
+error E3005: <fragment>:8:17: argument type mismatch for 'bytes': expected 'ByteArray', got 'OctetArray'
 ```

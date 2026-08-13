@@ -53,7 +53,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:17:9: argument type mismatch for 'self': expected 'Adder', got 'int'
+error E3005: <fragment>:17:15: argument type mismatch for 'self': expected 'Adder', got 'int'
 ```
 
 <!-- test: error.a-builtin-receiver-is-checked -->
@@ -64,7 +64,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:9: argument type mismatch for 'self': expected 'String', got 'int'
+error E3005: <fragment>:3:16: argument type mismatch for 'self': expected 'String', got 'int'
 ```
 
 <!-- test: error.a-corpus-receiver-is-checked -->
@@ -75,7 +75,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:9: argument type mismatch for 'self': expected 'Character', got 'int'
+error E3005: <fragment>:3:19: argument type mismatch for 'self': expected 'Character', got 'int'
 ```
 
 <!-- test: a-correctly-typed-receiver-argument-still-runs -->

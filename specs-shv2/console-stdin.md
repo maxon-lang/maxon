@@ -253,7 +253,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: <fragment>:3:9: '__Builtins.readStdin' takes exactly 1 argument, but 0 were given
+error E3036: <fragment>:3:20: '__Builtins.readStdin' takes exactly 1 argument, but 0 were given
 ```
 
 <!-- test: console-stdin.builtin-operand-type -->
@@ -265,7 +265,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:3:9: '__Builtins.readStdin' requires a int, but its argument is String
+error E3005: <fragment>:3:20: '__Builtins.readStdin' requires a int, but its argument is String
 ```
 
 <!-- test: console-stdin.rejected-on-wasm -->

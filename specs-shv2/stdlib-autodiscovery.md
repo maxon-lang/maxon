@@ -122,6 +122,6 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/stdlib-autodiscovery/wrong-arg-count.test:3:15: 'Math.pow' expects 2 argument(s) but 1 were provided
+error E3036: specs/fragments/stdlib-autodiscovery/wrong-arg-count.test:3:20: 'Math.pow' expects 2 argument(s) but 1 were provided
 ```
 

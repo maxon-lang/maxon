@@ -1786,7 +1786,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-stored-by-callee-errors.test:17:10: cannot pass a closure that captures to 'Handler.create', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
+error E3099: specs/fragments/first-class-functions/first-class-function.capturing-closure-stored-by-callee-errors.test:17:18: cannot pass a closure that captures to 'Handler.create', which stores or returns it: captures are taken by reference to the enclosing function's frame, so a closure that captures cannot outlive that frame. Use a function reference, or a closure that captures nothing
 ```
 
 <!-- test: first-class-function.capturing-closure-returned-by-callee-errors -->

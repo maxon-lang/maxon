@@ -1736,6 +1736,65 @@ function firstSummedCaseIndex(column EnumCaseConstant) returns CaseIndex
 	end 'c'
 end 'firstSummedCaseIndex'
 
+// ⭐ **WHAT AN INTERPOLATED ENUM VALUE RENDERS AS.** Three answers rather than a bool, because the two that
+// produce TEXT select from different columns (`caseNames` vs `caseRawValues`) and the third produces no text
+// at all — it hands the tag to the ordinary decimal renderer. See `enumInterpRendering`.
+enum EnumInterpRendering
+	caseName
+	declaredText
+	rawNumber
+end 'EnumInterpRendering'
+
+// ⭐⭐ **THE LANGUAGE'S ENUM-RENDERING RULE, IN ONE EXHAUSTIVE PLACE (W81).**
+// `/specs/string-interpolation.md:89` states it and `/specs/test-uncaught-throw.md:52-55` restates it for the
+// caught-error spelling that is how most programs meet it: *"the live case name for a union and for a plain
+// enum, and the declared raw value for an enum that has one"*.
+//
+// The order of the questions is the reference's own ladder (`MaxonToStandardConversion.Strings.cs:873-904`)
+// and each step is a narrowing:
+//
+//   1. **A PAYLOAD-BEARING UNION renders case names throughout**, whatever its cases wrote. Its tag is a
+//      declaration index living in a box, so a raw value is not what the value carries — and the corpus
+//      relies on it: `union { a = 1001, b(s String) }` prints `a`, not `1001`
+//      (`/specs/string-interpolation.md:114-126`).
+//   2. **A CHARACTER- or STRING-backed case renders the TEXT IT WROTE.** Both keep that text in
+//      `caseRawValues` and both were measured against the oracle: `active = "Active"` prints `Active`, and
+//      `dot = '.'` prints `.` — the glyph, never the codepoint.
+//   3. **A STRUCT-backed case renders its case NAME**, because a whole struct is not one word of text and
+//      the reference answers the name here.
+//   4. **Otherwise the raw i64 renders iff the DECLARATION wrote a raw value** — `EnumLayout.declaresRawValues`,
+//      the per-declaration fact this rung had to add, since `backing` is `integer` either way.
+//
+// ⚠ `float` cannot arrive: `materializeInterpExpr` decodes a float-backed enum to a `float`-tagged value
+// before it asks whether the hole is an enum at all (A4o), so its tag is no longer `named`. The panic is the
+// reference's own deliberate throw at `Strings.cs:893`, kept for its reason — a silent fall to the number arm
+// would print the IEEE bit pattern as a decimal integer.
+//
+// ⚠ `functionRef` takes the NUMBER arm, and that is MEASURED rather than assumed: the oracle prints `1` for
+// the second case of a function-backed enum, i.e. the i64 the value carries.
+//
+// ⚠ `unresolved` is a declaration with NO cases (`Parser.requireEnumBacking` is its only door), so it has
+// written no raw value and no value of it can exist to interpolate. It reaches the same trailing line as
+// `integer` rather than getting an arm of its own, which is clause 4 applied rather than a special case.
+function enumInterpRendering(layout EnumLayout) returns EnumInterpRendering
+	if layout.isBoxed() 'aPayloadBearingUnion'
+		return EnumInterpRendering.caseName
+	end 'aPayloadBearingUnion'
+
+	// In `EnumBacking`'s declaration order, so an appended backing fails to compile here rather than being
+	// swallowed by a range arm — the band-append invariant, which bites hardest on a classifier whose wrong
+	// answer is a rendering nobody re-reads.
+	match layout.backing 'backing'
+		unresolved to integer then break 'backing'
+		float then panic("enumInterpRendering: a float-backed enum reached the interpolation dispatch — `materializeInterpExpr` decodes one to a `float`-tagged value through `floatBehindEnumValue` before asking whether the hole is an enum, so its tag cannot still be `named` here. Rendering it as a number would print the IEEE bit pattern as a decimal integer")
+		character to string then return EnumInterpRendering.declaredText
+		functionRef then break 'backing'
+		structRecord then return EnumInterpRendering.caseName
+	end 'backing'
+
+	return EnumInterpRendering.rawNumber if layout.declaresRawValues else EnumInterpRendering.caseName
+end 'enumInterpRendering'
+
 // Every type NAME one file writes in a type position (P1.9). See `Parser.usedTypeNames`.
 export typealias UsedTypeNameSet = Set with ByteArray
 
@@ -19160,7 +19219,7 @@ export type Parser
 			let bits = negatedFloatBits(magnitude) if floatNegated else magnitude
 			let rawDisplay = "-{String.from(floatTok.value)}" if floatNegated else String.from(floatTok.value)
 			try self.requireEnumBacking(layout, kind: EnumBacking.float, structName: EmptySourceText, caseTok: nameTok)
-			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawValue: rawDisplay, caseTok: nameTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+			try self.appendEnumCase(layout, caseName: caseName, tag: bits, rawValue: rawDisplay, declaresRawValue: true, caseTok: nameTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 			return
 		end 'floatValue'
 
@@ -19194,7 +19253,7 @@ export type Parser
 		let intValue = try self.readEnumIntRawValue()
 		try self.requireEnumBacking(layout, kind: EnumBacking.integer, structName: EmptySourceText, caseTok: nameTok)
 		counter.nextTag = intValue + 1
-		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawValue: "{intValue}", caseTok: nameTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: intValue, rawValue: "{intValue}", declaresRawValue: true, caseTok: nameTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 	end 'readEnumCaseInto'
 
 	// The payload list a case opens with (`circle(radius Real)`), or an empty one where it writes none.
@@ -19216,7 +19275,7 @@ export type Parser
 	function appendAutoTaggedEnumCase(layout EnumLayout, caseName ByteArray, counter EnumTagCounter, caseTok Token, payloads PayloadFieldArray) throws ParseError
 		try self.requireEnumBacking(layout, kind: EnumBacking.integer, structName: EmptySourceText, caseTok: caseTok)
 		let tag = self.nextAutoEnumTag(counter)
-		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: "{tag}", caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: "{tag}", declaresRawValue: false, caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 	end 'appendAutoTaggedEnumCase'
 
 	// Take the counter's next tag and step it — the tag every case gets that does not write a NUMBER of its
@@ -19250,14 +19309,14 @@ export type Parser
 		if literalTok.kind == TokenKind.charLiteral 'characterBacking'
 			let codepoint = try self.enumCharacterRawValue(literalTok)
 			try self.requireEnumBacking(layout, kind: EnumBacking.character, structName: EmptySourceText, caseTok: caseTok)
-			try self.appendEnumCase(layout, caseName: caseName, tag: codepoint, rawValue: String.from(try self.charLiteralBytes(literalTok)), caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+			try self.appendEnumCase(layout, caseName: caseName, tag: codepoint, rawValue: String.from(try self.charLiteralBytes(literalTok)), declaresRawValue: true, caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 			return
 		end 'characterBacking'
 
 		let bytes = try self.decodedStringLiteralBytes(literalTok)
 		try self.requireEnumBacking(layout, kind: EnumBacking.string, structName: EmptySourceText, caseTok: caseTok)
 		let tag = self.nextAutoEnumTag(counter)
-		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(bytes), caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(bytes), declaresRawValue: true, caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 	end 'appendLiteralBackedEnumCase'
 
 	// ⭐ **IS THE CURSOR ON A FUNCTION RAW VALUE — `= doubleFn` — RATHER THAN ON A STRUCT ONE?** Both are
@@ -19297,7 +19356,7 @@ export type Parser
 		let functionTok = try self.consume(TokenKind.identifier)
 		try self.requireEnumBacking(layout, kind: EnumBacking.functionRef, structName: EmptySourceText, caseTok: caseTok)
 		let tag = self.nextAutoEnumTag(counter)
-		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(functionTok.value), caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(functionTok.value), declaresRawValue: true, caseTok: caseTok, payloads: payloads, backingFields: sharedEmptyEnumBackingFields)
 	end 'appendFunctionBackedEnumCase'
 
 	// ⭐⭐ **THE NAME OF CASE `index`'S BACKING FUNCTION — the ONE reader of the convention that, for this
@@ -19730,7 +19789,7 @@ export type Parser
 		// The struct's own name is what `caseRawValues` can carry of a value that is not one — the column's
 		// "how the raw value was written" for a backing whose fields ride a column of their own. Nothing reads
 		// it back: E3031 and the decl hash both route through `rawValueIdentity`, which answers `incomparable`.
-		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(typeTok.value), caseTok: caseTok, payloads: payloads, backingFields: fields)
+		try self.appendEnumCase(layout, caseName: caseName, tag: tag, rawValue: String.from(typeTok.value), declaresRawValue: true, caseTok: caseTok, payloads: payloads, backingFields: fields)
 	end 'appendStructBackedEnumCase'
 
 	// ⭐⭐ **THE TWO SPELLINGS OF A CONSTANT STRUCT, AND THEY PRODUCE THE IDENTICAL FIELD LIST.** The cursor
@@ -20069,13 +20128,17 @@ export type Parser
 	// far, positioned at the offending case. `rawValue` is how the value is written (the int, the float's
 	// source text, the string's or character's decoded content), which is what the message prints and what
 	// the layout records for a string backing (see `EnumLayout.rawValueCollidesAt`, which owns the compare).
-	function appendEnumCase(layout EnumLayout, caseName ByteArray, tag ParsedInt, rawValue String, caseTok Token, payloads PayloadFieldArray, backingFields EnumBackingFieldArray) throws ParseError
+	// ⭐ `declaresRawValue` is spelled by every caller rather than derived here, and `appendAutoTaggedEnumCase`
+	// is the ONE that says `false` — it is the only reader that consumes no literal. Deriving it from
+	// `rawValue` is not open: an auto-tagged case records `"{tag}"`, which is byte-identical to what
+	// `red = 0` records. See `EnumLayout.declaresRawValues` for what the bit decides.
+	function appendEnumCase(layout EnumLayout, caseName ByteArray, tag ParsedInt, rawValue String, declaresRawValue bool, caseTok Token, payloads PayloadFieldArray, backingFields EnumBackingFieldArray) throws ParseError
 		for i in 0 upto layout.caseCount() 'eachExisting'
 			if layout.rawValueCollidesAt(i, tag: tag, rawValue: rawValue) 'duplicateRawValue'
 				throw ParseError.enumDuplicateRawValue(rawValue, line: caseTok.line, column: caseTok.column)
 			end 'duplicateRawValue'
 		end 'eachExisting'
-		layout.addCase(caseName, tag: tag, rawValue: rawValue, payloads: payloads, backingFields: backingFields)
+		layout.addCase(caseName, tag: tag, rawValue: rawValue, declaresRawValue: declaresRawValue, payloads: payloads, backingFields: backingFields)
 	end 'appendEnumCase'
 
 	// One member of a type body that is not a field: `[export] [static] function …`.
@@ -28586,7 +28649,9 @@ export type Parser
 		for m in 0 upto ctx.members.count() 'eachMember'
 			let member = try ctx.members.get(m) otherwise panic("synthesizeErrorUnion: members.get OOB at {m} on a list walked to its own count")
 			for i in 0 upto member.layout.caseCount() 'eachCase'
-				layout.addCase(member.layout.caseNameAt(i), tag: member.layout.tagOfIndex(i) + member.fusedTagOffset, rawValue: "", payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
+				// `declaresRawValue: false` is the literal truth and not a default: this layout exists only to
+				// dispatch the fused `match` and no value is ever TYPED by it, so nothing can interpolate one.
+				layout.addCase(member.layout.caseNameAt(i), tag: member.layout.tagOfIndex(i) + member.fusedTagOffset, rawValue: "", declaresRawValue: false, payloads: PayloadFieldArray.create(), backingFields: sharedEmptyEnumBackingFields)
 				caseMembers.push(member)
 			end 'eachCase'
 		end 'eachMember'
@@ -43216,6 +43281,37 @@ export type Parser
 		// int-backed enum passes through untouched and keeps the integral arm, which is what
 		// `constants/string-interpolation` and `string-interpolation/int-enum-interpolation` pin.
 		let value = self.floatBehindEnumValue(exprVal, anchor: exprTok)
+
+		// ⭐⭐ **AN ENUM RENDERS BY ITS BACKING, AND UNTIL W81 EVERY ONE OF THEM FELL THROUGH TO THE INTEGRAL
+		// ARM BELOW.** The rule is `/specs/string-interpolation.md:89`: *"For int-backed enums, the numeric
+		// value is shown. For simple enums, the case name is shown. For string-backed enums, the raw string
+		// value is displayed"*. shv2 rendered the raw i64 for all of them, which is the right answer for
+		// exactly one. MEASURED against the bootstrap oracle on one program, before this arm existed:
+		//
+		//   | declaration                         | oracle   | shv2      |
+		//   | `enum Plain  red  green`            | `green`  | `1`       |
+		//   | `enum IntB  low = 5  high = 9`      | `9`      | `9`  ✓    |
+		//   | `enum StrB  active = "Active"`      | `Active` | `0`       |
+		//   | `enum ChrB  comma = ','  dot = '.'` | `.`      | `46`      |
+		//   | `union Payloadless  alpha  beta`    | `beta`   | `1`       |
+		//   | `union Shape  circle(r Small)  blank` | `circle` | `5111832` |
+		//
+		// ⛔ **THE LAST ROW IS A HEAP ADDRESS**, and it MOVES between runs — the same defect
+		// `emitEnumInstanceAccessor`'s header records for `.ordinal` ("every boxed union's `.ordinal` was a
+		// box pointer"), reached again through the interpolation door because this site read `tagOf` where
+		// the accessor asks `emitEnumTagOf`. That is why the boxed question is asked FIRST here, exactly as
+		// the reference's ladder asks it first (`MaxonToStandardConversion.Strings.cs:873`).
+		// ⚠ The `named` pre-check is `valueIsUnion`'s measured allocation guard, for its reason: `enumMatchFor`
+		// returns a union VALUE, so asking it of the `int` and `String` holes that are almost every hole in
+		// the corpus would box a `DeclaredEnum.undeclared` per hole.
+		if self.tagOf(value) == ValueTypeTag.named 'possiblyAnEnum'
+			let decl = self.enumMatchFor(value)
+			if enumMatchIsDeclared(decl) 'anEnumPart'
+				try self.materializeEnumPart(requireEnumLayout(decl), value: value, exprTok: exprTok, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+				return
+			end 'anEnumPart'
+		end 'possiblyAnEnum'
+
 		let tag = self.tagOf(value)
 		// ⚠ `tagIsByteRecord`, NOT `tagIsText`: this asks whether `buffer@0`/`length@8` can be read off the
 		// value and blitted, which is a question about the RECORD. A Character carries the same record, so
@@ -43243,8 +43339,6 @@ export type Parser
 		// not (`valueRendersUnsigned`), which is X10's rule verbatim and what keeps the corpus movement to
 		// the values that actually carry a declared type.
 		if tagIsIntegral(tag) 'intPart'
-			let rendersUnsigned = valueRendersUnsigned(self.integerValueDomain(value))
-
 			// ⭐⭐ **ONLY THE FORMATTED SPELLING MOVES TO stdlib, AND THAT IS THE REFERENCES' TRADE TOO.**
 			// `"{n}"` keeps `__int_to_string` into a scratch buffer, whose budget is bounded BY
 			// CONSTRUCTION (an i64 has at most 20 digits and a sign) — it is the hot path the fused
@@ -43256,16 +43350,19 @@ export type Parser
 			// signedness — is decided HERE, once, off the value's declared type, and handed over as an
 			// argument rather than re-derived from bit 63 at the far end.
 			if format.present 'formattedIntPart'
-				try self.materializeFormattedIntPart(value, exprTok: exprTok, format: format, rendersUnsigned: rendersUnsigned, partBufs: partBufs, partLens: partLens, range: range)
+				try self.materializeFormattedIntPart(value, exprTok: exprTok, format: format, rendersUnsigned: valueRendersUnsigned(self.integerValueDomain(value)), partBufs: partBufs, partLens: partLens, range: range)
 				return
 			end 'formattedIntPart'
 
-			// ⚠ The NAME and the SCRATCH BUDGET both come off the one signedness, because they are two
-			// halves of one choice: the signed budget carries a sign byte the unsigned rendering never
-			// writes, and the signed renderer taken with the unsigned budget would write one byte past
-			// `i64.min`'s scratch.
-			let signedness = DivideSignedness.unsigned if rendersUnsigned else DivideSignedness.signed
-			self.materializeScratchPart(value, converter: integerToStringName(signedness), scratchBytes: integerToStringScratchBytes(signedness), partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+			// ⚠ **THE UNFORMATTED PATH GOES THROUGH `materializeDecimalPart`, WHICH IS ALSO THE ENUM ARM'S
+			// `rawNumber` ANSWER (W81).** The NAME and the SCRATCH BUDGET are two halves of one signedness
+			// choice — the signed budget carries a sign byte the unsigned rendering never writes, and the
+			// signed renderer taken with the unsigned budget would write one byte past `i64.min`'s scratch —
+			// so the pairing is spelled ONCE, in that helper. An int-backed enum renders exactly as the
+			// integer it is, and a second spelling here would be free to pick the other entry point for the
+			// same value. The FORMATTED path above cannot share it: it needs the signedness as a value to
+			// hand on, not an entry point to select.
+			self.materializeDecimalPart(value, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
 			return
 		end 'intPart'
 
@@ -43307,6 +43404,36 @@ export type Parser
 		// float and struct interpolation as future work while both arms sat directly above it.
 		throw ParseError.unsupported("interpolating a value of type '{typeTagName(tag)}' — no conversion to text exists for it", line: exprTok.line, column: exprTok.column)
 	end 'materializeInterpExpr'
+
+	// ⭐ **RENDER AN i64 AS DECIMAL — the integral arm's body, shared with the enum arm's `rawNumber`
+	// answer.** Split out because an int-backed enum renders EXACTLY as the integer it is, and a second
+	// spelling of the signedness choice would be free to pick the other entry point for the same value.
+	function materializeDecimalPart(value ValueId, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange)
+		let signedness = DivideSignedness.unsigned if valueRendersUnsigned(self.integerValueDomain(value)) else DivideSignedness.signed
+		self.materializeScratchPart(value, converter: integerToStringName(signedness), scratchBytes: integerToStringScratchBytes(signedness), partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+	end 'materializeDecimalPart'
+
+	// ⭐⭐ **INTERPOLATE AN ENUM / UNION VALUE (W81)** — see `materializeInterpExpr`'s arm for the measured
+	// table this dispatch was written from. The rendering is decided by `enumInterpRendering` below and the
+	// CONSTANT is selected by the machinery `.name` and `.rawValue` already use
+	// (`emitEnumCaseTypedSelect`), so the three spellings of "what does case `i` render as" stay one answer.
+	//
+	// ⭐ **THE TAG COMES FROM `emitEnumTagOf`, WHICH IS THE WHOLE FIX FOR THE BOXED ROW.** A payload-bearing
+	// union's VALUE is a heap box and its tag is the i64 at offset 0; reading the value as a number printed
+	// the address. That door is the same one `emitEnumInstanceAccessor` asks question 1 through, so the
+	// interpolation and the accessor now agree about where a union keeps its tag by construction.
+	//
+	// A selected case NAME or raw TEXT is an immortal `.rdata` String record, so its bytes are spliced by
+	// `materializeStringRecordPart` exactly as a `{s}` part's are and nothing is owned or dropped.
+	function materializeEnumPart(layout EnumLayout, value ValueId, exprTok Token, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange) throws ParseError
+		let tag = self.emitEnumTagOf(value, layout: layout, range: range)
+
+		match enumInterpRendering(layout) 'rendering'
+			caseName then self.materializeStringRecordPart(try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.caseName, valueType: MaxonType.string, anchor: exprTok, range: range), partBufs: partBufs, partLens: partLens, range: range)
+			declaredText then self.materializeStringRecordPart(try self.emitEnumCaseTypedSelect(layout, tag: tag, column: EnumCaseConstant.declaredRawValue, valueType: MaxonType.string, anchor: exprTok, range: range), partBufs: partBufs, partLens: partLens, range: range)
+			rawNumber then self.materializeDecimalPart(tag, partBufs: partBufs, partLens: partLens, scratchIds: scratchIds, range: range)
+		end 'rendering'
+	end 'materializeEnumPart'
 
 	// ⭐ **INTERPOLATE A FLOAT VIA `stdlib/Builtins.maxon`'s `__float_toString`** — see the arm in
 	// `materializeInterpExpr` for why this is a call rather than a scratch-buffer converter.
@@ -46486,7 +46613,7 @@ export type Parser
 		if namesAPrimitiveType(typeTok.value) and not self.signatures.declaresCallee(declaredCallee) 'primitiveStatic'
 			let minted = primitiveStaticCallee(typeTok.value, methodName: memberTok.value)
 			if self.signatures.declaresCallee(minted) 'declaredPrimitiveStatic'
-				return try self.parseCallNamed(func, callee: minted, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
+				return try self.parseCallNamed(func, callee: minted, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.primitiveStatic)
 			end 'declaredPrimitiveStatic'
 
 			try requirePrimitiveStaticIsResolvable(typeTok, memberTok: memberTok, declaredCallee: declaredCallee)
@@ -46504,7 +46631,7 @@ export type Parser
 		// which leaves the emitted code untouched and the visibility decision where it already was; the
 		// written chain when the bare name is contested and no longer names one function.
 		if self.signatures.resolvesAsNamespaceQualifiedFunction(declaredCallee) 'namespaceQualifiedFreeCall'
-			return try self.parseCallNamed(func, callee: self.namespaceQualifiedCallee(declaredCallee, bare: memberTok.value), anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
+			return try self.parseCallNamed(func, callee: self.namespaceQualifiedCallee(declaredCallee, bare: memberTok.value), anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.notMinted)
 		end 'namespaceQualifiedFreeCall'
 
 		// ⭐ `String.create(…)` — an unknown static on a type name the COMPILER owns (W55). LAST of the doors,
@@ -46538,7 +46665,7 @@ export type Parser
 		let staticCallee = self.signatures.memberRegistrationKey(declaredCallee, takesReceiver: false)
 
 		let constructed = self.constructorInstanceOf(aliasName)
-		let result = try self.parseCallNamed(func, callee: staticCallee, anchor: typeTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
+		let result = try self.parseCallNamed(func, callee: staticCallee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
 		match constructed 'constructed'
 			none then break 'constructed'
 			instance(gid) then self.retypeGenericAliasConstructorResult(result, gid: gid, aliasName: aliasName)
@@ -61255,9 +61382,18 @@ export type Parser
 	// check, the result typing, the emit — is identical, so it is written once.
 	//
 	// The CURSOR is on the callee's final name token (`greet`, `create`) with `(` behind it; the
-	// caller has already consumed any qualification. `anchor` is the token diagnostics point at,
-	// which for a qualified call is the TYPE name — the start of what the user wrote, and the same
-	// anchor the span runs from.
+	// caller has already consumed any qualification. `anchor` is the token diagnostics point at, and it is
+	// the callee's FINAL NAME token for every spelling: `greet` for a free call, `bump` for `bx.bump(…)`,
+	// and — since W81 — `create` for `Box.create(…)` rather than the `Box` that qualifies it.
+	//
+	// ⛔ **THE QUALIFIED DOOR POINTED AT THE TYPE NAME, AND EVERY DIAGNOSTIC ABOUT SUCH A CALL LANDED ONE
+	// QUALIFIER TOO FAR LEFT.** The instance door already anchored at the method (`parseMethodCall` hands
+	// over the method token), so the two spellings of one call disagreed about where the call IS. MEASURED
+	// against the bootstrap oracle on the identical source: `Box.take(1.5, b: 2.5)` is E3009 at the `t` of
+	// `take` there and was at the `B` of `Box` here; `bx.bump(1.5)` was already right in both. It is two
+	// canonical cases in one spec — `testing-assertions`' `error.float-has-no-equal` (E3009 at the `equal`
+	// of `Expect.equal`) and `error.forgotten-try` (E3057 at the same token) — and one fix, because both
+	// read the CALL OP's range and this is where that range starts.
 	//
 	// `spelling` is threaded straight through to `emitCall`'s reserved-space door and read nowhere else:
 	// every caller but ONE hands it the author's own bytes, and the exception is the primitive-static mint

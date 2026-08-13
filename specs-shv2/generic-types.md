@@ -661,7 +661,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:23:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'
+error E3005: <fragment>:23:23: argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'
 ```
 
 <!-- test: error.type-parameter-arg-wrong-instance-bound -->
@@ -693,7 +693,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:12: argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'
+error E3005: <fragment>:24:23: argument type mismatch for 'v': expected 'Box_Leaf', got 'OtherBox'
 ```
 
 <!-- test: error.method-arg-wrong-instance -->
@@ -895,7 +895,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:10: argument type mismatch for 'v': expected 'Pair_Box_Leaf_Box_Box_Leaf', got 'WrongPair'
+error E3005: <fragment>:25:15: argument type mismatch for 'v': expected 'Pair_Box_Leaf_Box_Box_Leaf', got 'WrongPair'
 ```
 
 <!-- test: two-aliases-one-instance-agree -->
@@ -1951,7 +1951,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3009: <fragment>:11:10: argument 'v': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
+error E3009: <fragment>:11:17: argument 'v': cannot implicitly convert 'float' to 'int': the conversion is lossy and must be explicit — use trunc(x) to truncate toward zero (or round/floor/ceil)
 ```
 
 <!-- test: error.float-actual-at-opaque-formal-string -->
@@ -1973,7 +1973,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:10:10: argument type mismatch for 'v': expected 'String', got 'float'
+error E3005: <fragment>:10:17: argument type mismatch for 'v': expected 'String', got 'float'
 ```
 
 <!-- test: int-actual-at-opaque-formal-still-works -->
@@ -2046,7 +2046,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:27:10: argument type mismatch for 'v': expected 'Leaf', got 'IntWrapper.Idx'
+error E3005: <fragment>:27:18: argument type mismatch for 'v': expected 'Leaf', got 'IntWrapper.Idx'
 ```
 
 <!-- test: opaque-field-read-of-a-struct-argument-is-that-struct -->
