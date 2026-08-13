@@ -391,3 +391,54 @@ Same result as the original `insertionSort` control at the top of this file, and
 | `helpers/sort/smallSort.maxon` | E3001 — ⛔ **VACUOUS**, extension-bodied |
 | `helpers/string/unicodeCategory.maxon` | E2053 `:55:44` second and later arguments must be named |
 | `helpers/string/views.maxon` | E3005 via `Interfaces.maxon:223` `Cannot return 'unknown'` (**`S2r`**) |
+
+---
+
+## Full probe table — 12 unlisted, 2026-08-12
+
+**MEASURED on `cb307d7f69`**, one `maxon-shv2 build stdlib/<m>.maxon` per module, logs in
+`temp/stdlibprobe/*.log`. **`StdlibLoader.whitelistedStdlibModules` now lists 37 of the 50 files.**
+`Internals.maxon` is the 13th unlisted file and is **EXCLUDED PERMANENTLY** (§H, user ruling
+2026-08-05), so **12 is the actionable remainder.**
+
+⚠ **A first error is a LOWER BOUND on a module's ladder, never its depth.** shv2 reports one error per
+file here — every row is *"at least this"*, and only the `E3001` rows have a known depth.
+
+| module | first diagnostic | class |
+|---|---|---|
+| `Set.maxon` | `E3001` only | ⚠ **READY BUT INERT** — `Set` is SYNTHESIZED (26 refs); `W63` listed-built-withdrew and measured it |
+| `Vector.maxon` | `E3001` only | ⚠ **READY BUT INERT** — `Vector` is SYNTHESIZED (45 refs) |
+| `helpers/string/unicodeCategory.maxon` | `E3001` only | ⚠ **READY BUT INERT?** — its one export `unicodeGeneralCategory` is synthesized as `__ucd_cat` (`Runtime/UnicodeCategoryRuntime.maxon:133`); its only stdlib consumer is `CharacterSet.maxon`, itself unlisted |
+| `Json.maxon` | `E2015 :281:3` field access through `doc`, a struct-typed field | **⇒ `W66`** — a legal program refused, oracle compiles it |
+| `List.maxon` | `E3086 :21:10` field `chain` not initialized, no default | field default / recursive field |
+| `CharacterSet.maxon` | `E2004 :31:33` Undefined constant `CharacterSet` | ⚠ **MOVED** from `E2010 :31:9` — `CharacterSet` is a compiler-owned builtin type name (it appears in `E2015`'s own member-carrying list) |
+| `PrimitiveExtensions.maxon` | `E2010 :2:11` Expected identifier but got `int` | `extension int implements …` — extending a PRIMITIVE does not parse |
+| `Subprocess.maxon` | `E2015 :357:25` overloading `Subprocess.run`, one declaration `throws` | ⚖ ruling-grade — the refusal states a design position |
+| `Testing.maxon` | `E2051 :34:13` `__TestReport` reserved | the `__`-prefix door; no collision with a compiler name |
+| `TcpClient.maxon` | `E3004 :23:18` no `__ManagedSocket.tcpConnect` intrinsic | ⚠ **MOVED** from `E2053 :23:70` (that ruling landed at `W64`) — now Workstream R, a runtime slice |
+| `HttpClient.maxon` | `E2015 :176:18` member access `send` on an `unknown` value | behind `TcpClient` |
+| `helpers/http/httpHelpers.maxon` | `E3011 :4:9` Unknown type `HttpMethod` | behind `HttpClient` |
+
+### ⭐⭐ THE HEADLINE IS THE THREE `E3001` ROWS, AND IT IS NOT GOOD NEWS
+
+The readiness criterion this file already calls VACUOUS for the sort family is vacuous **a second way**,
+and the two are different: §"THE READINESS CRITERION IS VACUOUS" is about a body nothing *analyzes*;
+this is about a name the compiler *synthesizes*. All three rows above pass the probe **and the injection
+control**, and all three would be **INERT** — the listed declaration is never consulted, because the
+synthesized type wins silently. `stdlib/Map.maxon` already shipped this way (`W43` listed it, `W52` says
+the actual job was never begun).
+
+⇒ **The listed count of 37 overstates the working cone**, and the check that separates the two is
+neither the probe nor the injection control but the **DIFFERING-DECLARATIONS control**: change what the
+module ANSWERS and see whether the program's answer or its emitted bytes move. If nothing moves, the
+entry is inert. *(Measured for `Set` at `BATCH36`: sabotaged `count()`, program byte-identical at 5,225
+bytes.)*
+
+### The honest remaining shape
+
+| kind | modules | note |
+|---|---|---|
+| **Reconciliation chains** (retirements, not listings) | `Set` (`W8`) · `Map` (`W52`) · `Vector` | each is an `ARR0…ARR4`-shaped chain, not a whitelist line |
+| **Runtime slice** | `TcpClient` → `HttpClient` → `httpHelpers` | Workstream R; needs socket intrinsics |
+| **Ruling** | `Subprocess` | throwing overload |
+| **Ordinary compiler gaps** | `Json` (`W66`) · `List` · `CharacterSet` · `PrimitiveExtensions` · `Testing` | the tractable five |
