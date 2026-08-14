@@ -3738,6 +3738,7 @@ let MixedArrayLiteralElementsMessage = "an array literal with mixed element type
 let ArrayLiteralSubject = "an array literal"
 let ContainerElementColumnNoun = "element"
 let MapLiteralSubject = "a map literal"
+
 // The `Set from […]` member list's subject (W90). It is a THIRD construct spelling a bracketed literal, and it
 // reaches `literalColumnTypeFor` for the same one question the other two put — which `MaxonType` does this
 // parsed value name? — so it takes a noun here rather than a sentence of its own.
@@ -3761,6 +3762,7 @@ let BindingPatternNeedsClause = "`let (x, y) = …` needs a right-hand side that
 let ForPatternSubject = "a destructuring `for` pattern"
 let ForPatternSourceNoun = "element"
 let ForPatternNeedsClause = "`for (k, v) in …` needs a source whose element is a tuple"
+
 // The third construct spelling the pattern — a statement-level tuple ASSIGNMENT. It has no binding and no
 // initializer either: what it has is a right-hand side, and targets rather than names. Only the non-tuple
 // sentence is assembled from these; its arity mismatch is E3005 and worded by the spec (see
@@ -15027,9 +15029,12 @@ export type Parser
 		// Tolerant like every other read on this walk: a malformed clause records no conformance and leaves
 		// the positioned diagnostic to the real parse. The cursor is left wherever the read stopped, which the
 		// body loop below steps over token by token exactly as it stepped over the whole clause before.
-		if self.at(TokenKind.implements) 'declaresConformances'
+		// ⚠ **ONLY A CLAUSE THAT WRITES A `with` DEFERS ANYTHING** (`implementsClauseBindsAnything`): the arity
+		// this reader cannot know is consulted inside the `with` arm and nowhere else, so a clause without one
+		// is read the same by both passes and the re-read would re-derive this answer.
+		if self.at(TokenKind.implements) and self.implementsClauseBindsAnything() 'deferredConformances'
 			conformanceSiteOut.push(ConformanceClauseDeclSite.create(self.filePath, tokenPos: declStart, declName: nameTok.value, declIsEnum: false))
-		end 'declaresConformances'
+		end 'deferredConformances'
 
 		self.openConformanceClauseAliasScope()
 		let scannedConformances = try self.readOptionalImplementsClause() otherwise ScannedConformanceClause.declaringNothing()
@@ -15932,9 +15937,10 @@ export type Parser
 		// It binds nothing an extension is evaluated against — an enum has no conditional extension — but a
 		// LOST NAME is the same loss on both kinds: `enum E implements Marker with Tag, Error` would drop the
 		// `Error` that `throws E` is narrowed against (`EnumLayout.conformsTo`).
-		if self.at(TokenKind.implements) 'declaresConformances'
+		// Deferred on the same one condition the `type` half defers on — see `implementsClauseBindsAnything`.
+		if self.at(TokenKind.implements) and self.implementsClauseBindsAnything() 'deferredConformances'
 			conformanceSiteOut.push(ConformanceClauseDeclSite.create(self.filePath, tokenPos: declStart, declName: nameTok.value, declIsEnum: true))
-		end 'declaresConformances'
+		end 'deferredConformances'
 
 		let scannedConformances = try self.readOptionalImplementsClause() otherwise return
 		let conformsTo = scannedConformances.names
@@ -17279,12 +17285,17 @@ export type Parser
 	// differently) and substituted at three tiers, so a resolver bolted onto any one of them would leave the
 	// others reading a name the first had already decided meant something else.
 	//
-	// ⚠ Gated on `implements`, so only a declaration that actually binds something walks — and a type with no
-	// conformance clause, which is nearly every type, pays one token test.
+	// ⚠ Gated on `implements` AND on the clause actually writing a `with`, so only a declaration that binds
+	// something walks — a type with no conformance clause, which is nearly every type, pays one token test,
+	// and one whose clause binds nothing pays a walk of the clause LINE instead of a walk of its BODY.
 	function openConformanceClauseAliasScope()
 		if not self.at(TokenKind.implements) 'declaresNoConformance'
 			return
 		end 'declaresNoConformance'
+
+		if not self.implementsClauseBindsAnything() 'bindsNothingToResolve'
+			return
+		end 'bindsNothingToResolve'
 
 		let resume = self.pos
 		var members = ByteArrayArray.create()
@@ -17355,6 +17366,31 @@ export type Parser
 
 		return self.kindAt((at + 3) as TokenIndex) == TokenKind.function
 	end 'nestedAliasAtIsFunctionForm'
+
+	// ⭐⭐ **DOES THE `implements` CLAUSE AT THE CURSOR WRITE A `with` ANYWHERE? — the one question that decides
+	// whether the clause is INDEX-DEPENDENT at all.** Two readers ask it and both take the same two things off
+	// a `false`: `openConformanceClauseAliasScope` skips the pre-scan of the declaration's whole BODY (nothing
+	// in it can be named by a clause that names no argument), and `recordScannedType`/`recordScannedEnum` skip
+	// the `ConformanceClauseDeclSite` (`readOptionalImplementsClause` consults the interface arity only inside
+	// its `with` arm, so a clause without one is read identically by the sweep and by the whole-program
+	// re-read, and `Queries.foldConformanceClauses` would re-derive the sweep's own answer).
+	//
+	// ⚠ **IT IS SOUND IN ONE DIRECTION ONLY, WHICH IS THE DIRECTION BOTH CALLERS NEED.** The walk stops at the
+	// header's `newline`, and `readOptionalImplementsClause` cannot consume past one — its interface loop
+	// continues only on a `comma` — so a `false` PROVES the clause holds no `with`. A `true` may come from a
+	// `with` in the `where` clause that follows on the same line, which costs the pre-W95 behaviour and
+	// nothing else.
+	function implementsClauseBindsAnything() returns bool
+		var at = self.pos
+		while self.kindAt(at) != TokenKind.newline and self.kindAt(at) != TokenKind.eof 'theHeaderLine'
+			if self.kindAt(at) == TokenKind.with 'bindsOne'
+				return true
+			end 'bindsOne'
+			at = (at + 1) as TokenIndex
+		end 'theHeaderLine'
+
+		return false
+	end 'implementsClauseBindsAnything'
 
 	// Put the shared empty set back after the clause — see the door above for why the pre-scanned names are
 	// deliberately NOT left in scope for the body.
@@ -29343,8 +29379,6 @@ export type Parser
 
 		throw ParseError.unsupported("binding the caught error of a DIVERGENT `otherwise` whose body routes TWO OR MORE error types — `(e)` would name the synthesized error union, which has no value form: it is a dispatch table over the `(member, case)` pairs, so the binding could carry only the raw error flag and neither a message nor a payload could say which error occurred (the reference bootstrap prints that flag verbatim). Bind it in a block handler, whose `match` arms recover each member's own type (`otherwise (e) 'h' … match e … end 'h'`), or drop the binding — `otherwise panic(…)` and `otherwise throws E.case` catch every member", line: binder.anchor.line, column: binder.anchor.column)
 	end 'rejectDivergentBindingOverErrorUnion'
-
-
 
 	// ⭐ **WHERE CONTROL GOES AFTER THE CONSTRUCT — FOUR SHAPES FROM TWO INDEPENDENT FACTS**: whether the
 	// BODY fell through, and whether the HANDLER did. Each is settled by its own block's terminator, so
