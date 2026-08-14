@@ -658,6 +658,41 @@ silent offset collision is precisely the defect that a passing read cannot dispr
 and `W52` is a full retirement rung. Both are true, and I briefly wrote that the second followed from
 the first.**
 
+### ⛔⛔ AND BOTH OF MY `Map` CLAIMS ABOVE ARE WRONG — RETRACTED 2026-08-13 BY `W52`, WHICH RAN THE CONTROLS
+
+**(1) THE DICTIONARY-LITERAL "BLOCKER" WAS MY OWN PROBE ARTIFACT.** I wrote that `NumMap from ["a": 1, "b": 2]`
+giving `E2004: Undefined variable 'NumMap'` shows *"the `BuiltinDictionaryLiteral` path does not reach"*.
+**There is no dictionary-literal `from` form in the language at all.** `from` is the ARRAY-literal door;
+a map is built with `[k: v]`, which **works** (`map/literal.basic` and 40+ siblings pass). Measured:
+`Point from [1, 2]` and `String from [1, 2]` give the **identical** `E2004: Undefined variable '<X>'`, so
+the noun is general to every type without a `from` door — nothing to do with `Map`. The oracle refuses
+the same program too (`E3005: Type 'NumMap' does not conform to BuiltinArrayLiteral or
+InitableFromArrayLiteral`). ⇒ **`BuiltinDictionaryLiteral` is fixed and has been**, exactly as `W52`'s row
+prescribed (`ConformanceCheck.maxon:2117-2138`, gating on the spelling carried from `parseInterfaceMethod`'s
+tokens). **I invented a blocker by mis-spelling a construct and then reasoned from the error I got.**
+
+**(2) "`W52` IS A FULL RETIREMENT RUNG" IS ALSO WRONG — THE RETIREMENT HAD ALREADY LANDED.**
+`SignatureIndex.isMapBaseName` routes through `structOf(name)` and answers **false** for a name the corpus
+declares, so with `stdlib/Map.maxon` listed the synthesized regime is **unreachable**: the fused
+`MapRecordBytes` record is never built, and the *silent field-offset disagreement* the row called "the real
+work" **cannot occur, because the second reader does not exist.** It landed in `4c9afeba92` + the `W41`
+slice, after `W43` closed ◑ PARTIAL — so the row never learned of it. ⭐ **Verified with a POSITIVE CONTROL,
+twice, by two agents**: a panic wired into that predicate's TRUE arm reads **0 hits across 5,812 compiles**,
+and the same probe with `Map.maxon` de-listed **fires instantly** at `parseMapLiteralBody`. Plus **0 of
+5,825** x64-windows fragments emit a `__map_*` op. ⭐ And the synthesized `Map` is **unusable BY
+CONSTRUCTION**, not merely unused: it takes its error ordinals from a *declared* `MapError`, and
+`grep -rn "enum MapError"` finds **exactly one** — `stdlib/Map.maxon:6`, the module whose absence would
+select it.
+
+⇒ **`Map` is DONE.** Listed, live, corpus-served, and its builtin twin is unreachable. What remains is
+**dead code** (172 lines across 15 files, 78 of them actual code), deliberately left for a combined
+`Map`+`Set` rung because ~16 `carriesValues` branch sites live in the `HashTableRuntime.maxon` that `Set`
+still executes — **volume was never the argument, and an earlier count of "385 lines / 22 files" was also
+wrong.**
+
+⚠⚠ **THAT IS FOUR CLASSIFICATION ERRORS ON THIS FILE IN ONE DAY, THREE OF THEM MINE, AND EVERY ONE CAME
+FROM REASONING WHERE A CONTROL WAS AVAILABLE.** The controls cost two builds. **Run them.**
+
 ### The remaining shape, corrected again
 
 | kind | modules | change |
