@@ -33,12 +33,25 @@ These cases are **scalar twins** of `specs/async-await.md`'s linearity tests, wh
 
 **Targets — the green-thread substrate gate; see `async-scheduler.md`'s *Targets* section for the one
 statement of it.** These cases spawn and await, so they reach the driver's `QueryPerformanceCounter`
-and `VirtualFree` entries, which exist only on x64-windows at this rung. The marker is not an opt-in:
-the linearity RULE itself is target-neutral, and its compile-time refusals carry no marker.
+and `VirtualFree` entries, which exist only on x64-windows at this rung. The marker is not an opt-in.
+
+⚠⚠ **THE `error.*` CASES CARRY THE MARKER TOO, AND THIS PARAGRAPH USED TO SAY THEY DID NOT.** It read
+*"the linearity RULE itself is target-neutral, and its compile-time refusals carry no marker"* — the RULE
+is target-neutral, but **a case that exercises it cannot be**, and the difference cost two red lanes.
+MEASURED 2026-08-14: a legal `async` spawn needs a callee that YIELDS (`E3073` otherwise), the only yield
+primitive is `Runtime.yield()`, and that lowers to `__gt_resched`, which is x64-windows-only. So the
+thunk reaches a gated construct no matter how it is written, `E3104` is raised at the thunk and — the
+compiler reporting the FIRST error — MASKS the `E3100` the case exists to pin. Six cases here, six in
+`async-await.md` (whose thunks gate on `File.exists`/`__mf_exists` instead) and one in
+`async-try-await.md` were green on the host and red on x64-linux and wasm32-wasi.
+⇒ **There is no way to write a target-neutral async case until a second substrate lands** — which is
+exactly what `async-scheduler.md`'s *Targets* section already says to watch for: **un-gate these the
+moment one does.** Removing the marker before then re-creates the masking, silently on the host.
 
 ## Tests
 
 <!-- test: async-linearity.error.double-await -->
+<!-- targets: x64-windows -->
 `await` is linear: awaiting one promise twice in straight-line code is refused at the second await.
 ```maxon
 function makeValue() returns int
@@ -58,6 +71,7 @@ error E3100: <fragment>:10:10: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-in-loop -->
+<!-- targets: x64-windows -->
 The check is flow-sensitive, and this is why it must be. There is exactly ONE `await` here lexically, so
 a "have I seen this promise awaited before?" check finds nothing — but it sits in a loop over a promise
 spawned OUTSIDE the loop, so it awaits the same green thread every iteration. Reachability catches it:
@@ -85,6 +99,7 @@ error E3100: <fragment>:12:11: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-through-alias -->
+<!-- targets: x64-windows -->
 Linearity is a property of the GREEN THREAD, not of the identifier text. `let q = p` gives one green
 thread a second name; awaiting through both names awaits it twice. In shv2 `q` and `p` are the SAME SSA
 value, so the second await is refused with no thread-id sidetable — the value IS the thread's identity.
@@ -107,6 +122,7 @@ error E3100: <fragment>:11:10: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-through-alias-in-branch -->
+<!-- targets: x64-windows -->
 The same alias, made in a DIFFERENT block from the `async` that spawned the thread. A cross-block read
 of the promise resolves to the same SSA value it was spawned as (there is no re-tag), so `p` and `q`
 inside the branch name one thread — and awaiting both is the second await it is.
@@ -136,6 +152,7 @@ error E3100: <fragment>:16:11: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-alias-outlives-rebind -->
+<!-- targets: x64-windows -->
 Re-arming `p` does NOT end the first thread's life while `q` still names it. The reachability walk stops
 a path only when the promise's DEFINITION is re-passed (a re-arm); reassigning `p` mints a NEW value, so
 `q` still names the first thread when it is awaited — and that await is the second one, refused.
@@ -160,6 +177,7 @@ error E3100: <fragment>:12:10: this promise has already been awaited: 'await' is
 ```
 
 <!-- test: async-linearity.error.double-await-after-ternary-arm -->
+<!-- targets: x64-windows -->
 An `await` in one ternary arm does NOT make the promise spent on the path where that arm was not taken —
 but the await AFTER the ternary is reachable from the arm that WAS taken, so on that path the thread is
 awaited twice. Exclusivity buys the arms nothing here: reachability decides, and the arm reaches the tail.

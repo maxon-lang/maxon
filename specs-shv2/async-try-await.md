@@ -327,6 +327,7 @@ error E3059: <fragment>:17:10: try propagates 'AError' but enclosing function th
 ```
 
 <!-- test: async-try-await.error.double-try-await -->
+<!-- targets: x64-windows -->
 `try await` is LINEAR exactly as plain `await` is — awaiting one throwing promise twice would release its
 green thread twice. The linearity pass counts `tryAwait` sites, not only plain `await`, so the second
 `try await` of the same promise is refused (E3100). This locks in the soundness that the exhaustive
