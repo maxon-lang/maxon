@@ -826,34 +826,51 @@ function checkStructInstantiationConstraints(project Project, signatures Program
 	let constraints = signatures.structWhereConstraints(baseName)
 	for i in 0 upto constraints.count() 'eachConstraint'
 		let constraint = try constraints.get(i) otherwise panic("checkStructInstantiationConstraints: whereConstraints.get OOB at {i}")
-		// The CANONICAL conformer name (`Integer` -> `int`) is what the conformance test compares by — the same
-		// name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling. This is
-		// `signatureMatches`/`canonicalTypeName`'s split, applied to a `where`-constraint argument.
-		// ⭐⭐ **AN OPAQUE TYPE ARGUMENT IS DISCHARGED BY ITS OWNER'S OWN `where` CLAUSE, NOT BY A CONFORMER
-		// NAME (W41).** A generic body instantiating another constrained generic binds that callee's
-		// constrained parameter to its OWN type parameter — `Map with (Key, Value)`'s body building a
-		// `MapIterator with (Key, Value)`. `Key` is opaque, so it reduces to a MANGLED token no `implements`
-		// claims, and the conformer test below refuses it: under dictionary-passing that refuses EVERY generic
-		// that drives another generic. The oracle accepts exactly these programs — measured on a stdlib-free
-		// 45-line reproducer where the bootstrap compiles and prints `thing` and shv2 answered
-		// `E3017: Type 'T4032a9ecb1272bfc' does not satisfy constraint 'Named'`.
-		//
-		// The verdict is SHARED with the lowering that must then supply the witness pointer; see
-		// `opaqueParamDischarge` for why acceptance and slot index are one answer and not two.
-		let typeArg = signatures.substitutedInstanceArg(site.gid, position: constraint.typeParamIndex)
-		if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
-			if not opaqueConstraintIsDischarged(opaqueParamDischarge(signatures, interfaces: project.interfaces, token: typeNameIdOf(typeArg), interfaceName: constraint.interfaceName)) 'ownerPromisesNothing'
-				reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
-			end 'ownerPromisesNothing'
+		if instantiationMeetsConstraint(signatures, interfaces: project.interfaces, declared: declared, gid: site.gid, constraint: constraint) 'satisfied'
 			continue
-		end 'opaqueArgument'
+		end 'satisfied'
 
-		let conformerType = signatures.conformerTypeArgName(site.gid, position: constraint.typeParamIndex).toByteArray()
-		if not typeConformsTo(declared, interfaces: project.interfaces, typeName: conformerType, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformerType)) 'violates'
-			reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
-		end 'violates'
+		reportUnsatisfiedConstraint(project, signatures: signatures, site: site, constraint: constraint, baseName: baseName)
 	end 'eachConstraint'
 end 'checkStructInstantiationConstraints'
+
+// ⭐⭐ **DOES ONE `where` CONSTRAINT HOLD AT ONE INSTANTIATION? — THE VERDICT, ONCE, FOR THE TWO READERS THAT
+// DISAGREE ABOUT WHAT TO DO WITH IT.** `checkStructInstantiationConstraints` above REPORTS an unmet one
+// (E3017); `ProgramSignatures.instantiationViolatesItsOwnWhereClause` SUPPRESSES a downstream refusal that
+// would otherwise speak over it (W90). One rule, because a suppression that disagreed with the report about
+// which instantiations are unsatisfiable would either silence a live refusal or let the masked one back in.
+//
+// ⚠ **THE CONFORMANCE INDEX IS THE CALLER'S, and the two callers deliberately pass different ones.** The
+// report reads the merged `project.conformances` (and refuses to run at all on a malformed project — see
+// `checkWhereConstraints`); the suppression reads `ProgramSignatures.sweptConformanceIndex`, the only one a
+// PURE parser can reach. The swept index is the weaker of the two, and that is safe in both directions HERE
+// and nowhere else: a false `unmet` withholds a refusal E3017 then raises anyway, and a false `satisfied`
+// leaves the pre-W90 behaviour standing.
+//
+// The CANONICAL conformer name (`Integer` -> `int`) is what the conformance test compares by — the same
+// name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling. This is
+// `signatureMatches`/`canonicalTypeName`'s split, applied to a `where`-constraint argument.
+//
+// ⭐⭐ **AN OPAQUE TYPE ARGUMENT IS DISCHARGED BY ITS OWNER'S OWN `where` CLAUSE, NOT BY A CONFORMER
+// NAME (W41).** A generic body instantiating another constrained generic binds that callee's
+// constrained parameter to its OWN type parameter — `Map with (Key, Value)`'s body building a
+// `MapIterator with (Key, Value)`. `Key` is opaque, so it reduces to a MANGLED token no `implements`
+// claims, and the conformer test below refuses it: under dictionary-passing that refuses EVERY generic
+// that drives another generic. The oracle accepts exactly these programs — measured on a stdlib-free
+// 45-line reproducer where the bootstrap compiles and prints `thing` and shv2 answered
+// `E3017: Type 'T4032a9ecb1272bfc' does not satisfy constraint 'Named'`.
+//
+// The verdict is SHARED with the lowering that must then supply the witness pointer; see
+// `opaqueParamDischarge` for why acceptance and slot index are one answer and not two.
+export function instantiationMeetsConstraint(signatures ProgramSignatures, interfaces IrInterfaceMap, declared DeclaredConformanceMap, gid GenericInstanceId, constraint WhereConstraint) returns bool
+	let typeArg = signatures.substitutedInstanceArg(gid, position: constraint.typeParamIndex)
+	if maxonTypeTag(typeArg) == ValueTypeTag.typeParameter 'opaqueArgument'
+		return opaqueConstraintIsDischarged(opaqueParamDischarge(signatures, interfaces: interfaces, token: typeNameIdOf(typeArg), interfaceName: constraint.interfaceName))
+	end 'opaqueArgument'
+
+	let conformerType = signatures.conformerTypeArgName(gid, position: constraint.typeParamIndex).toByteArray()
+	return typeConformsTo(declared, interfaces: interfaces, typeName: conformerType, interfaceName: constraint.interfaceName, discovered: signatures.discoveredConformerOf(conformerType))
+end 'instantiationMeetsConstraint'
 
 // The ONE E3017 sentence, for the two arms that reach it — a CONCRETE argument whose type declares no
 // conformance, and an OPAQUE one whose owner declaration promises nothing (W41). Split out when the second

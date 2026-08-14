@@ -1682,24 +1682,27 @@ export union TypeArgKindMatch
 	instance(id GenericInstanceId)
 end 'TypeArgKindMatch'
 
-// ⭐ **WHICH OF THE THREE GATES MAY NOT READ A SPECULATIVELY MINTED INSTANCE (A4q)** — the direction test
-// `instanceWithTypeArgKind` applies, stated here beside the kinds it splits so the reason travels with
-// them. A speculative row (`ProgramSignatures.internAggregateElementInstances`) records that a
-// `[<identifier>…]` literal's element COULD be this type, never that it IS.
+// ⭐ **WHICH OF THE FOUR KINDS REFUSE A PROGRAM RATHER THAN SHAPE AN EMISSION** — the direction test
+// `instanceWithTypeArgKind` applies, stated here beside the kinds it splits so the reason travels with them.
 //
-// The two emission kinds answer *"must this shared body carry a drop?"*, where a phantom buys a
-// descriptor-gated drop for a shape that never occurs — a no-op at run time — and ignoring one would omit a
-// drop that is owed. They therefore keep reading every row. The two REFUSING kinds answer *"must this
-// program be REFUSED?"*, where a phantom is not a conservative margin but a wrong answer about a program
-// that contains no such instantiation; they read only rows the source named.
-function kindIgnoresSpeculativeInstances(kind TypeArgInstantiationKind) returns bool
+// The two emission kinds answer *"must this shared body carry a drop?"*, where a row describing a shape that
+// never occurs buys a descriptor-gated drop nothing executes — a no-op at run time — and ignoring one would
+// omit a drop that is owed. They therefore keep reading every row. The two REFUSING kinds answer *"must this
+// program be REFUSED?"*, where such a row is not a conservative margin but a wrong answer about a program
+// that does not contain the instantiation being refused for.
+//
+// ⛔ **TWO CLASSES OF ROW ARE NOT FACTS ABOUT THE PROGRAM, AND ONLY A REFUSAL MAY NOT READ THEM** — a
+// SPECULATIVELY minted one (A4q) and one minted by substituting into an instantiation E3017 already owns
+// (W90). They are unrelated in origin and identical in consequence, which is why one predicate answers for
+// both; `instanceWithTypeArgKind` applies it twice and carries both measurements.
+function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 	match kind 'kind'
 		consumeMoved then return false
 		coOwnedTrivial then return false
 		uncopyableElement then return true
 		managedElement then return true
 	end 'kind'
-end 'kindIgnoresSpeculativeInstances'
+end 'kindIsARefusal'
 
 // The `StdType` a global whose `.data` bytes ARE ITS VALUE occupies its slot as — which is to say WHICH
 // TAGS MAY BE A FOLDED GLOBAL AT ALL, because the width itself is not this function's to know.
@@ -6149,7 +6152,7 @@ export type GenericInstanceRegistry
 	// `ProgramSignatures.internAggregateElementInstances` materialized for a `[<identifier>…]` literal whose
 	// element type the token sweep could not name — a candidate, not a fact. Read by
 	// `instanceWithTypeArgKind`, whose copy gate refuses on what it finds and so may not count a guess; see
-	// `kindIgnoresSpeculativeInstances` for why the other two gates still do.
+	// `kindIsARefusal` for why the other two gates still do.
 	var speculative as BoolArray
 
 	export static function create() returns GenericInstanceRegistry
@@ -6206,7 +6209,7 @@ export type GenericInstanceRegistry
 	end 'intern'
 
 	// Was `id` minted by the `[<identifier>…]` candidate walk and never named by the source since? See the
-	// `speculative` column, and `kindIgnoresSpeculativeInstances` for the one gate that asks.
+	// `speculative` column, and `kindIsARefusal` for which kinds ask.
 	export function instanceIsSpeculative(id GenericInstanceId) returns bool
 		return try self.speculative.get(id) otherwise panic("GenericInstanceRegistry.instanceIsSpeculative: speculative desync at GenericInstanceId {id}")
 	end 'instanceIsSpeculative'
@@ -19962,9 +19965,25 @@ export type ProgramSignatures
 	// rejected on programs mentioning no `Box`, no file and no `CharacterSet`.
 	//
 	// ⚠ **ONLY THE REFUSAL IGNORES THEM — the two EMISSION gates deliberately still read every row**
-	// (`kindIgnoresSpeculativeInstances`). Over-approximating there costs a descriptor-gated drop on a shape
+	// (`kindIsARefusal`). Over-approximating there costs a descriptor-gated drop on a shape
 	// that never occurs, which is a no-op at run time; under-approximating there would drop nothing where a
 	// drop is owed. A refusal is the one direction where a phantom's cost is a wrong ANSWER.
+	//
+	// ⛔⛔ **AND A SECOND CLASS OF ROW IS NOT A FACT EITHER — ONE MINTED BY AN INSTANTIATION E3017 ALREADY OWNS
+	// (W90).** A constraint-violating instantiation describes a program that will not exist, so the inner
+	// aliases it substitutes are a CONSEQUENCE of the author's mistake rather than the mistake.
+	//
+	// ⇒ MEASURED, and the cost is not a mis-worded answer but a SILENCED one: `Set with (Array with Opaque)`
+	// mints `Array with (Array with Opaque)` for its buckets, `Array.clone`'s `managed.slice` was refused on
+	// its behalf, and that refusal is a `ParseError` — so the file stopped, `checkWhereConstraints`
+	// short-circuited on `projectHasErrors`, and the two E3017s naming the constraint the author actually
+	// broke never spoke at all. The reader was told about `Box with String` and a per-instance cloner, on a
+	// program whose fault is that `Opaque` implements neither `Hashable` nor `Equatable`.
+	//
+	// ⚠ The two filters are applied at DIFFERENT points of the loop below and that is deliberate: the
+	// speculative one must run BEFORE the argument is classified (a phantom's argument must not be classified
+	// at all), while this one runs AFTER a row has matched, so its chain walk and that walk's allocation stay
+	// off every compile that refuses nothing.
 	//
 	// ⭐ **IT ANSWERS WITH THE INSTANCE, AND THE BOOL IS DERIVED FROM THAT (BLAME).** The walk used to
 	// return a bare `true`, which is everything the two EMISSION gates need and one fact short of what a
@@ -19978,14 +19997,20 @@ export type ProgramSignatures
 		if let baseId = try self.typeNames.idOf(owner.declaringTypeName) 'namedType'
 			if let siblings = try self.genericInstances.instancesOfBase(baseId) 'instantiated'
 				for id in siblings 'eachInstance'
-					if kindIgnoresSpeculativeInstances(kind) and self.genericInstances.instanceIsSpeculative(id) 'nothingNamedIt'
+					if kindIsARefusal(kind) and self.genericInstances.instanceIsSpeculative(id) 'nothingNamedIt'
 						continue
 					end 'nothingNamedIt'
 
 					let args = self.genericInstances.instanceArgs(id)
-					if position < args.count() and self.typeArgHasKind(try args.get(position) otherwise panic("ProgramSignatures.instanceWithTypeArgKind: instanceArgs.get OOB at {position} despite the range guard"), kind: kind) 'match'
-						return TypeArgKindMatch.instance(id)
-					end 'match'
+					if position >= args.count() or not self.typeArgHasKind(try args.get(position) otherwise panic("ProgramSignatures.instanceWithTypeArgKind: instanceArgs.get OOB at {position} despite the range guard"), kind: kind) 'notThisKind'
+						continue
+					end 'notThisKind'
+
+					if kindIsARefusal(kind) and self.instantiationChainViolatesItsWhereClause(id) 'aRowE3017AlreadyOwns'
+						continue
+					end 'aRowE3017AlreadyOwns'
+
+					return TypeArgKindMatch.instance(id)
 				end 'eachInstance'
 			end 'instantiated'
 		end 'namedType'
@@ -20214,24 +20239,81 @@ export type ProgramSignatures
 	//
 	// The scan is linear in the written instantiation sites per hop and runs only on the REFUSAL path, so it
 	// costs a clean compile nothing; an index would be a map built for every program to serve the failing
-	// ones. The hop count is bounded by the origin map's size and guarded below, because an origin chain is
-	// derived data and a cycle in it must cost a lost note rather than a hang.
+	// ones.
 	export function instantiationSiteOf(id GenericInstanceId) returns InstantiationSiteLookup
-		var current = id
-		var hops = 0 as ElementCount
-		while hops <= self.substitutedInstanceOrigins.count() 'followTheChain'
+		for gid in self.instantiationOriginChain(id) 'eachHop'
 			for site in self.genericAliasSites 'eachSite'
-				if site.gid == current 'written'
+				if site.gid == gid 'written'
 					return InstantiationSiteLookup.written(site)
 				end 'written'
 			end 'eachSite'
-
-			current = try self.substitutedInstanceOrigins.get(current) otherwise return InstantiationSiteLookup.unwritten
-			hops = hops + 1
-		end 'followTheChain'
+		end 'eachHop'
 
 		return InstantiationSiteLookup.unwritten
 	end 'instantiationSiteOf'
+
+	// ⭐ **`id`, THEN EVERY ENCLOSING INSTANTIATION THAT MINTED IT** — the one chase up
+	// `substitutedInstanceOrigins`, shared by the two questions that ask it: *where did the program WRITE
+	// this?* (`instantiationSiteOf`) and *is any hop of it already refused by its own `where` clause?*
+	// (`instantiationChainViolatesItsWhereClause`). Written once because the two must agree about which
+	// instantiations an unwritten instance stands for, and because a termination argument stated twice is
+	// one that comes to be true in only one of the two places.
+	//
+	// ⚠ The hop count is bounded by the origin map's size, because an origin chain is derived data and a
+	// cycle in it must cost a lost answer rather than a hang.
+	//
+	// It ALLOCATES, so it is reached only from the two REFUSAL paths — one after a diagnostic is already
+	// certain, one after a candidate instance has already matched an uncopyable/managed kind.
+	export function instantiationOriginChain(id GenericInstanceId) returns GenericInstanceIdArray
+		var chain = GenericInstanceIdArray.create()
+		var current = id
+		var hops = 0 as ElementCount
+		while hops <= self.substitutedInstanceOrigins.count() 'followTheChain'
+			chain.push(current)
+			current = try self.substitutedInstanceOrigins.get(current) otherwise return chain
+			hops = hops + 1
+		end 'followTheChain'
+
+		return chain
+	end 'instantiationOriginChain'
+
+	// ⭐⭐ **IS THIS INSTANCE'S OWN `where` CLAUSE UNMET — i.e. is E3017 already this instantiation's answer
+	// (W90)?** The one question a REFUSAL asks before reading a registry row: an instantiation the constraint
+	// check owns describes a program that will not exist, so a diagnostic derived from the rows it minted is a
+	// CONSEQUENCE reported in place of its CAUSE.
+	//
+	// The per-constraint verdict is `ConformanceCheck.instantiationMeetsConstraint`, the same one E3017 is
+	// reported off, so the suppression and the report cannot come to disagree about which instantiations are
+	// unsatisfiable — see that function for why the two pass different conformance indexes and why the weaker
+	// one is safe in this direction.
+	//
+	// A base with no `where` clause — the whole non-generic-witness corpus — reads the SHARED empty
+	// constraint list and iterates zero times.
+	function instantiationViolatesItsOwnWhereClause(id GenericInstanceId) returns bool
+		let constraints = self.structWhereConstraints(self.genericInstanceBaseName(id))
+		for i in 0 upto constraints.count() 'eachConstraint'
+			let constraint = try constraints.get(i) otherwise panic("ProgramSignatures.instantiationViolatesItsOwnWhereClause: whereConstraints.get OOB at {i} below count {constraints.count()}")
+			if not instantiationMeetsConstraint(self, interfaces: self.interfaces, declared: self.sweptConformanceIndex(), gid: id, constraint: constraint) 'unmet'
+				return true
+			end 'unmet'
+		end 'eachConstraint'
+
+		return false
+	end 'instantiationViolatesItsOwnWhereClause'
+
+	// The chain form of the question above: `id` itself, or any instantiation it was substituted out of.
+	// A `Set with (Array with Opaque)` mints `Array with (Array with Opaque)` for its buckets, and it is the
+	// SET's clause that the program violated — the array the substitution minted violates nothing and has no
+	// clause of its own to violate.
+	function instantiationChainViolatesItsWhereClause(id GenericInstanceId) returns bool
+		for gid in self.instantiationOriginChain(id) 'eachHop'
+			if self.instantiationViolatesItsOwnWhereClause(gid) 'refusedAtThisHop'
+				return true
+			end 'refusedAtThisHop'
+		end 'eachHop'
+
+		return false
+	end 'instantiationChainViolatesItsWhereClause'
 
 	// ⭐ **IS `fieldName` OF `structName` A BARE OPAQUE TYPE-PARAMETER field whose element is MANAGED for some
 	// instantiation (P1.7 Finding A)** — a `typeParameter`-tagged field (`export var saved as Element` on

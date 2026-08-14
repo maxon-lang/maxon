@@ -26,13 +26,22 @@ row), and three doors consume its verdict:
   conditional extension is withheld with, naming the unmet interface and the element that failed it;
 - the `==` / `!=` OPERATOR, which IS `Array.equals`, so it is refused with the same sentence at the
   operator's own span;
-- the hash-table KEY gate, which admits `Array` as a key type and must therefore not report a withheld
-  array as a key type it does not serve yet. Its refusal names the clause and the element instead.
+- a `Map` KEY or a `Set` ELEMENT, where the same verdict decides whether the array reduces to a conformer
+  name the `where` clause can discharge. Since `Map` (W41) and `Set` (W90) stopped being synthesized there
+  is no container-specific key gate left: the refusal is the ordinary **E3017**, at the instantiation, and it
+  names the constraint the argument failed rather than a roster it is missing from.
 
 A copy of the walk at any one of those doors is a silent wrong answer in either direction: `a == b` refused
 while the same array is still stamped with `__witness_Array.*` and admitted as a key, or the reverse.
 Neither is a compile error and neither shows up as a failing test, which is why the cases below hold all
 three doors to one clause.
+
+⛔ **AND THE CLAUSE IS NOT THE WHOLE STORY AT A MANAGED ELEMENT.** `Array with String` SATISFIES this clause
+and is still not a usable hash key on this compiler, because one shared `__witness_Array.*` table serves
+every element type and `Array.hash`/`Array.equals` therefore compare the buffer's RAW BYTES
+(`array-hashable.md`'s own Documentation says so; E3128's registry entry states the premise). The
+measurement, and what currently stands in that program's way instead, are in
+`error.a-map-key-array-is-refused-for-its-element` below.
 
 ## Tests
 
@@ -95,14 +104,31 @@ error E4006: <fragment>:19:7: Type 'Array' has no field named 'equals' ('equals'
 <!-- test: error.the-opaque-copy-gate-is-reached-through-the-cloneable-witness -->
 ### An existential `Cloneable` reaches `Array.clone`'s body with no concretely-typed call site
 
-⭐⭐ **THIS IS THE RUN THE NEXT CASE'S NOTE CITES, PINNED RATHER THAN QUOTED.** It stood in that note as a
-shell transcript for two rungs, and a transcript is the one form of evidence nothing re-runs. It says two
-things at once and both matter:
+⭐⭐ **THIS IS THE OPAQUE COPY GATE'S OWN ACCEPTANCE, PINNED RATHER THAN QUOTED.** It stood in the `Map`
+case's shelving note as a shell transcript for two rungs, and a transcript is the one form of evidence
+nothing re-runs; it is also the case that holds W90's narrowing honest, because it is the one program here
+whose offending instance the author WROTE and whose instantiation no constraint refuses. It says two things
+at once and both matter:
 
-- **`Array`'s own opaque copy gate cannot be dropped.** This program calls `.clone()` at NO concretely-typed
-  site, so `requireArrayElementCopyable` never fires; it reaches `Array.clone`'s shared body purely through
-  the `Cloneable` witness that `type Array … implements … Cloneable` promises unconditionally. Delete
-  `requireOpaqueArrayCopyable` and it compiles and byte-blits a managed pointer through `copyFunc@32`.
+- **`Array`'s own opaque copy gate cannot be dropped** — though NOT for the reason this bullet gave for two
+  rungs. This program calls `.clone()` at NO concretely-typed site, so `requireArrayElementCopyable` never
+  fires; it reaches `Array.clone`'s shared body purely through the `Cloneable` witness that
+  `type Array … implements … Cloneable` promises unconditionally.
+
+  ⛔ **THE OLD CLAIM — *"delete `requireOpaqueArrayCopyable` and IT compiles and byte-blits a managed pointer
+  through `copyFunc@32`"* — IS MEASURED FALSE OF *THIS* PROGRAM, and the correction matters because it was
+  the stated blocker on the standing cure.** MEASURED at W90 with the gate probe-disabled on this tree: this
+  program is still REFUSED, by **E3128** at `stdlib/Array.maxon:143:18` — *"'Array.clone' satisfies a
+  requirement of `Array` and reads the hidden dictionary parameter its generic declaration reserves"*. The
+  existential route is already closed, and closed more accurately than the copy gate closes it: a shared
+  witness table has no instantiation to take a layout descriptor from, so an `Array` cannot serve `Cloneable`
+  at ALL, at any element. ⇒ *"close the existential-dispatch hole first"* is a stale prerequisite.
+
+  ⛔ **WHAT THE GATE REALLY STILL HOLDS UP IS THE CONCRETE ROUTE, AND THAT ONE IS MEASURED TOO.** Same probe,
+  `typealias Nested = Array with (Array with String)` followed by a plain `n.clone()`: the program COMPILES
+  and then **SEGFAULTS (139)** on the double free. ARRH struck `clone` from the `Array` roster without giving
+  the corpus call a receiver-keyed gate of its own, so today the library body's whole-program refusal is the
+  only thing standing there — which is exactly why it is whole-program, and why it over-refuses.
 - **A stdlib-body refusal is BLAMED AT THE USER'S OWN CONSTRUCT, and the library line survives as a NOTE.**
   It is RAISED at `stdlib/Array.maxon:145:32` — `Array.clone`'s own `managed.slice(0, len)`, a line no user
   wrote — and REPORTED at `typealias Nested = Array with (Array with String)`, the instantiation this
@@ -152,41 +178,23 @@ error E2015: <fragment>:2:11: Unsupported: `slice` COPIES each element of an `Ar
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 
-<!-- disabled-test: error.a-map-key-array-is-refused-for-its-element -->
-<!-- ⚠ THE BLAME EDGE THIS NOTE USED TO NAME IS BUILT (rung BLAME) AND IT WAS NOT THE BLOCKER. MEASURED on the enabled case: the E2015 is now reported at `<fragment>:13:11` — the very line and column the two E3017s below expect, `typealias OpaqueArrMap = Map with (OpaqueArr, Val)` — so the refusal names the user's construct exactly right and the case still fails. What is left is ORDER, not blame: the copy gate raises a `ParseError`, which stops the file, and `checkWhereConstraints` short-circuits on `projectHasErrors`, so the two E3017s never speak. Enabling this needs the opaque copy gate not to refuse a key type that is merely UNSERVED (the spec below measures that it refuses valid programs too — `Map with (Array with String, V)`), or the constraint check to run anyway. Neither is a blame question. Not an `Array` gap — the deep-clone slice it names is a real documented one -->
+<!-- test: error.a-map-key-array-is-refused-for-its-element -->
 ### A `Map` key array is refused for its ELEMENT, not as an unserved key type
 
-⛔⛔ **SHELVED BY `land-the-listing`, AND THE REASON IS NOT THAT THE COMPILER GOT WORSE — READ THIS BEFORE
-RE-ENABLING IT.** With `stdlib/Array.maxon` listed, this program is refused by the OPAQUE COPY GATE
-(`Parser.requireOpaqueArrayCopyable`) before the constraint check ever runs. The two E3017s below are what
-the user's mistake actually IS and they never speak, because a `ParseError` stops the file before the
-pipeline and `checkWhereConstraints` short-circuits on `projectHasErrors`.
+⭐⭐ **UN-SHELVED BY W90, AND WHAT MOVED WAS *WHICH REGISTRY ROWS A REFUSAL MAY READ* — NOT THE COPY GATE'S
+SUBJECT.** This case spent two rungs disabled because `Parser.requireOpaqueArrayCopyable` spoke first and
+its refusal is a `ParseError`: the file stopped, `checkWhereConstraints` short-circuited on
+`projectHasErrors`, and the two E3017s below — the user's actual mistake — never spoke at all. A consequence
+did not merely out-word its cause here, it SILENCED it.
 
-⚠ **HALF OF THE ORIGINAL REASON IS GONE AND SAYING SO IS THE POINT.** This block used to add that the
-sentence *"names `stdlib/Array.maxon:145:32` … a line no user wrote"*. It does not any more: rung BLAME
-reports it at `<fragment>:13:11`, which is the E3017s' own line and column, and keeps the library line as a
-`note:`. So the WRONG-LOCATION half is cured and the WRONG-DIAGNOSTIC half is all that is left — the copy
-gate speaking at all on a program whose fault is a constraint.
-
-⭐⭐ **THE CANDIDATE CURE WAS EVALUATED AND MUST NOT BE TAKEN — THERE IS A RUN THAT REFUTES IT, AND IT IS NOW
-A CASE RATHER THAN A TRANSCRIPT.** The standing proposal was to drop `Array`'s own opaque gate, on the ground
-that *"`Array`'s body is the one opaque body whose every call site is already concretely gated
-(`requireArrayElementCopyable`)"*. That is false, and the counterexample needs no `Map` at all: it is
-`error.the-opaque-copy-gate-is-reached-through-the-cloneable-witness` directly above, which reaches
-`Array.clone`'s shared body through the `Cloneable` witness alone and takes this same refusal from this same
-library body. ⇒ **the existential-dispatch hole the previous rung could not close is real, and closing it is
-what a cure must do first — not something to route around.**
-
-⚠ **AND THE COST IS WIDER THAN THIS CASE, WHICH IS THE PART WORTH CARRYING FORWARD.** MEASURED: `typealias
-StrArrMap = Map with (Array with String, Val)` — a key type that satisfies `Hashable` and `Equatable`
-perfectly well, and which the bootstrap oracle compiles — takes the SAME refusal from the SAME body. So
-the gate is not merely misplaced on an already-invalid program; it refuses valid ones. The underlying gap
-(`Array with (Array with String)` has no single `copyFunc`) is a documented later slice, not something this
-rung invents.
-
-⚠ Its SUBJECT is not lost while it is shelved: `error.a-set-key-array-spelled-inline-is-refused-the-same-way`
-directly below refuses the identical mistake for a `Set`, at the USER's line, naming the element by name —
-which is also a fair statement of what a good answer here would look like.
+The gate's offender was `Array with (Array with Opaque)`, an instance no author wrote: `Map`'s own
+`typealias KeyArray = Array with Key` substituted with this key. And the instantiation that minted it —
+`Map with (OpaqueArr, Val)` — is the very one E3017 owns. An instantiation the constraint check refuses
+describes a program that will not exist, so the inner aliases it substitutes are not facts about the
+program, and a REFUSAL may not read them (`ProgramSignatures.kindIsARefusal`, whose other bullet is A4q's
+speculative rows — same consequence, unrelated origin). The copy gate itself is unchanged and still refuses
+everything it refused before, at the same lines: `error.the-opaque-copy-gate-is-reached-through-the-cloneable-witness`
+above and the four cases it lists are all byte-identical across that change.
 
 ⭐ **THE SENTENCE MOVED WHEN `Map` STOPPED BEING SYNTHESIZED (W41), AND THE RULE IT NOW QUOTES IS THE
 GENERAL ONE.** This used to be a bespoke `E2015` the builtin map's own key gate wrote. `Map` is
@@ -200,6 +208,21 @@ constrained twice; `OpaqueArr` discharges neither, so `checkOneInstantiation` re
 `Array`-element reasoning this case is named for has not gone anywhere — it is why `OpaqueArr`
 reduces to a conformer name nothing claims (`instanceConformerName`'s conditional `Array` arm), and
 the sibling `E4006` cases above still state it in full.
+
+⛔⛔ **AND THE SISTER PROGRAM THIS BLOCK USED TO OFFER AS THE CURE'S ACCEPTANCE IS STILL REFUSED, ON PURPOSE
+— ITS PREMISE WAS MEASURED FALSE.** The standing note read: *"`typealias StrArrMap = Map with (Array with
+String, Val)` — a key type that satisfies `Hashable` and `Equatable` perfectly well, and which the bootstrap
+oracle compiles — takes the SAME refusal … so the gate refuses valid ones."* Its instantiation IS
+constraint-satisfying, so W90's narrowing deliberately leaves it refused, and admitting it would be a WORSE
+answer than the one it replaces. MEASURED, with the copy gate probe-disabled on this tree: the program
+compiles, and then two arrays each holding `"a"` answer `equals` **false** where the oracle answers **true**,
+so `m.contains(probe)` misses a key the map holds. That is `array-hashable.md`'s documented design working as
+designed — one shared `__witness_Array.*` table serves every element type, so `Array.hash`/`Array.equals`
+compare the buffer's RAW BYTES, which for a managed element are heap pointers (E3128's own doc states the
+premise). ⇒ shv2's `Array` satisfies the `Hashable` CONSTRAINT and not the `Hashable` SEMANTICS at a managed
+element, and `Map with (Array with String, …)` is unserved until that is cured. The copy gate is standing in
+the right doorway for the wrong reason; removing it without curing the conformance would trade a compile
+error for a `Map` whose keys silently never match.
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -225,7 +248,29 @@ error E3017: <fragment>:13:11: Type 'OpaqueArr' does not satisfy constraint 'Equ
 ```
 
 <!-- test: error.a-set-key-array-spelled-inline-is-refused-the-same-way -->
-### The same refusal reaches a `Set` and an inline `Array with E` spelling
+### A `Set` key array is refused by the ORDINARY `where`-constraint rule, at the instantiation
+
+⭐ **THE SENTENCE MOVED WHEN `Set` STOPPED BEING SYNTHESIZED (W90), EXACTLY AS IT DID FOR `Map` AT W41, AND
+THE RULE IT NOW QUOTES IS THE GENERAL ONE.** This used to be a bespoke `E2015` the builtin set's own key gate
+wrote at the `create()`. `Set` is `stdlib/Set.maxon` now, declared `where Element is Hashable and Equatable`
+— so the refusal is the ordinary `where`-constraint refusal every generic gets, at the INSTANTIATION. That is
+a better answer twice over: it NAMES the constraint that failed, and it is one rule instead of a
+container-specific copy of one.
+
+⚠ **BOTH constraints are reported, and that is the clause count rather than a duplicate.** `Element` is
+constrained twice and this key discharges neither, so `checkOneInstantiation` reports each. The
+`Array`-element reasoning this case is named for has not gone anywhere — it is why an array of `Opaque`
+reduces to a conformer name nothing claims (`instanceConformerName`'s conditional `Array` arm), and the
+sibling `E4006` cases above still state it in full.
+
+⛔⛔ **`Array_Opaque` IS THE COMPILER'S MINT, NOT A SPELLING ANY AUTHOR WROTE, AND IT IS PINNED HERE ONLY
+BECAUSE IT IS WHAT THE COMPILER SAYS.** The key is spelled INLINE, so no `typealias` names the instance and
+`ProgramSignatures.instanceDisplayName` falls back to the canonical mint — where the `Map` twin above, whose
+key is aliased, correctly prints `OpaqueArr`. It is NOT an `Array` fault and not W90's: MEASURED on the same
+tree with no array anywhere, `typealias S = Set with (Box with Opaque)` over a user `type Box uses T` answers
+*"Type 'Box_Opaque' does not satisfy constraint 'Hashable'"*. The display map is filled from `typealias`
+declarations and an inline `Base with Args` is a spelling the author DID write, so the miss is a gap rather
+than the documented "compiler minted it, there is nothing to quote" answer.
 ```maxon
 typealias Val = int(i64.min to i64.max)
 
@@ -245,7 +290,8 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:15:10: Unsupported: `Set` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, and `Array` supplies those only as a conditional extension (where Element is Hashable and Equatable) — this key's element 'Opaque' does not implement 'Hashable'
+error E3017: <fragment>:12:11: Type 'Array_Opaque' does not satisfy constraint 'Hashable' required by type parameter 'Element' of 'Set'
+error E3017: <fragment>:12:11: Type 'Array_Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Element' of 'Set'
 ```
 
 <!-- test: error.a-key-type-nothing-conforms-for-still-reads-as-a-later-slice -->
