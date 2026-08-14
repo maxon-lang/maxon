@@ -752,3 +752,52 @@ BUILTIN-SURFACE rule and a declared type is exempt**, so a retirement DROPS the 
 refusal by design. `Set` cost 3 cases, rewritten as value-asserting `ok` cases. `Vector`, `List`,
 `PrimitiveExtensions` — and eventually `Array`/`String` — will each do the same. **That is not a
 regression to file; it is the ruling arriving.**
+
+## ✅ THE `Set`/`Map` RUNTIME IS DELETED, AND A SHARED HELPER IS LISTED — 2026-08-14, `W105` + `W93`
+
+**Written back BY the rung that did it**, on this file's standing rule.
+
+⭐ **THE DELETION HALF (`W105`) IS THE PAYBACK THE `Set` SECTION ABOVE PREDICTED, AND THE RESIDUE IT SAID
+TO RECOUNT AFTERWARDS IS 1,745 LINES, NOT 172.** `Runtime/SetRuntime.maxon` (218) +
+`Runtime/MapRuntime.maxon` (383) + `Runtime/HashTableRuntime.maxon` (1,144) are gone, together with the
+whole synthesized regime they served — the shared retirement switch
+(`isUnretiredBuiltinBaseName`/`isSetBaseName`/`isMapBaseName` and the three instance predicates over
+them), the parser's builtin `Set`/`Map` surfaces, the hash-table key roster and the `MapError` ordinal
+claim. Net **−2,569 lines**.
+
+⇒ **`Set` AND `Map` HAVE NO SYNTHESIZED TWIN AT ALL NOW, WHICH IS A STRONGER STATE THAN "RETIRED".** A
+retirement means the declaration WINS a contest; this means there is no contest. Un-listing either module
+no longer falls back to a builtin — it removes the type.
+
+⚠ **UNREACHABILITY WAS MEASURED WITH BOTH HALVES OF `W52`'s INSTRUMENT.** A `panic` in the switch's TRUE
+arm read **0 hits across 5,890 compiles**; the same probe with the module de-listed fires on the FIRST
+`typealias` naming the base. The acceptance was BYTE-IDENTITY, not a green suite: **0 of 5,890 committed
+x64-windows goldens moved.**
+
+⭐ **THE LISTING HALF (`W93`) IS A NEW SHARED MODULE, `helpers/hashtable/slotScan.maxon`.** `Map.maxon` and
+`Set.maxon` each declared a three-case slot-state enum and a byte-identical `findNextOccupied` scan over
+it. **The hazard was ASYMMETRIC**: a fourth state is a compile error at one file's `match`es and SILENCE at
+the other's. One enum now serves both.
+
+Its readiness was checked against this file's three questions, each by a control rather than a reading:
+*(1) does it compile?* yes; *(2) are its bodies ANALYZED?* — an undefined call injected into
+`findNextOccupied` answers **`E3004 … 'NoSuchType.definitelyUndefined'` at `slotScan.maxon:54`**, so it is
+not the `W63`/`BATCH36` inert-listing shape; *(3) does the compiler SYNTHESIZE what it declares?* no —
+`SlotState` has no builtin twin and the scan no runtime one.
+
+⚠ **AND THE CURE IS SABOTAGE-PROVEN IN BOTH DIRECTIONS.** With a fourth case added to the ONE enum, a
+`Set`-only program fails at `Set.maxon:101` and a `Map`-only program at `Map.maxon:214` — the asymmetry
+gone. With both containers' own `match`es widened to admit it, the remaining refusal is the ONE shared body
+(`slotScan.maxon:62`).
+
+⚠ **IT COST 10 GOLDEN FRAGMENTS, AND THE DIFF IS ENTIRELY POSITION AND NAME.** Eight are pure LINE
+PERMUTATIONS (`findNextOccupied` now sits at a different point in the module, because the loader walks
+`stdlib/` in enumeration order and the function changed file — the ordering property this file's loader
+header already records); the other two additionally rename `findNextOccupiedSet` → `findNextOccupied`. Not
+one instruction changed. `5890 passed, 0 failed` throughout.
+
+### The remaining shape — 9 actionable modules, unchanged
+
+`W105`/`W93` clear no bring-up row: `slotScan.maxon` is a NEW file rather than one of the 12, and the
+deletion removes compiler code rather than unlisting anything. The table under *The remaining shape — 9
+actionable modules* stands as written.

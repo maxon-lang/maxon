@@ -1,18 +1,16 @@
 /// Hash set with open addressing for storing unique elements.
 /// @category Collections
 typealias MemberCount = int(0 to u64.max)
-typealias BucketCapacity = int(0 to u64.max)
-typealias SlotIndex = int(0 to u64.max)
 
-enum SetSlotState
-	Empty
-	Occupied
-	Deleted
-end 'SetSlotState'
+// The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Map` (W93). This file used to
+// declare its own `SetSlotState`, byte-identical to that module's `SlotState`, and its own
+// `findNextOccupiedSet`, byte-identical to that module's `findNextOccupied` — two spellings of one
+// three-state space, whose failure mode was a state added to ONE of them: a compile error there and
+// SILENCE here, i.e. a wrong iteration answer from a container that still compiles.
 
 export type Set uses Element implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter) where Element is Hashable and Equatable
 	typealias ElementArray = Array with Element
-	typealias StateArray = Array with SetSlotState
+	typealias StateArray = Array with SlotState
 	typealias HashSlotArray = Array with HashValue
 	typealias SetIter = SetIterator with Element
 
@@ -94,7 +92,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		var probes = 0
 
 		while probes < capacity 'probe'
-			let state = try states.get(index) otherwise SetSlotState.Empty
+			let state = try states.get(index) otherwise SlotState.Empty
 
 			let isEmpty = match state 'se1'
 				Empty gives true
@@ -109,7 +107,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 				end 'use_deleted'
 
 				try elements.set(insertIndex, value: element) otherwise panic("Set.insert: elements.set OOB — insertIndex from probe is in-bounds")
-				try states.set(insertIndex, value: SetSlotState.Occupied) otherwise panic("Set.insert: states.set OOB — insertIndex from probe is in-bounds")
+				try states.set(insertIndex, value: SlotState.Occupied) otherwise panic("Set.insert: states.set OOB — insertIndex from probe is in-bounds")
 				try hashes.set(insertIndex, value: hash) otherwise panic("Set.insert: hashes.set OOB — insertIndex from probe is in-bounds")
 				count = count + 1
 				return
@@ -151,7 +149,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// But if we do, insert at first deleted slot
 		if firstDeleted >= 0 'fallback'
 			try elements.set(firstDeleted, value: element) otherwise panic("Set.insert: elements.set OOB — firstDeleted from probe is in-bounds")
-			try states.set(firstDeleted, value: SetSlotState.Occupied) otherwise panic("Set.insert: states.set OOB — firstDeleted from probe is in-bounds")
+			try states.set(firstDeleted, value: SlotState.Occupied) otherwise panic("Set.insert: states.set OOB — firstDeleted from probe is in-bounds")
 			try hashes.set(firstDeleted, value: hash) otherwise panic("Set.insert: hashes.set OOB — firstDeleted from probe is in-bounds")
 			count = count + 1
 		end 'fallback'
@@ -172,7 +170,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		var probes = 0
 		while probes < capacity 'probe'
-			let state = try states.get(index) otherwise SetSlotState.Empty
+			let state = try states.get(index) otherwise SlotState.Empty
 
 			let isEmpty = match state 'se1'
 				Empty gives true
@@ -222,7 +220,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 
 		var probes = 0
 		while probes < capacity 'probe'
-			let state = try states.get(index) otherwise SetSlotState.Empty
+			let state = try states.get(index) otherwise SlotState.Empty
 
 			let isEmpty = match state 'se1'
 				Empty gives true
@@ -247,7 +245,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 							// Only the Deleted state marks the slot as removed. The cached
 							// hash is left as-is: the hash-guard only runs inside the
 							// Occupied branch, so a tombstone can never cause a false match.
-							try states.set(index, value: SetSlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
+							try states.set(index, value: SlotState.Deleted) otherwise panic("Set.remove: states.set OOB — probe index is in-bounds")
 							count = count - 1
 							return true
 						end 'found'
@@ -274,7 +272,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
-	export function getCapacity() returns BucketCapacity
+	export function getCapacity() returns TableCapacity
 		return capacity
 	end 'getCapacity'
 
@@ -311,7 +309,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 		// Rehash all occupied entries from old arrays, reusing the cached hash
 		// instead of re-calling element.hash().
 		for i in 0 upto oldCapacity 'rehash'
-			let state = try oldStates.get(i) otherwise SetSlotState.Empty
+			let state = try oldStates.get(i) otherwise SlotState.Empty
 
 			let isOccupied = match state 'so1'
 				Occupied gives true
@@ -325,7 +323,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 					var index = spreadHash(hash) and mask
 
 					// Find empty slot (no deleted slots in fresh array)
-					var currentState = try states.get(index) otherwise SetSlotState.Empty
+					var currentState = try states.get(index) otherwise SlotState.Empty
 					var isNotEmpty = match currentState 'se1'
 						Empty gives false
 						Occupied gives true
@@ -333,7 +331,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 					end 'se1'
 					while isNotEmpty 'find_slot'
 						index = (index + 1) and mask
-						currentState = try states.get(index) otherwise SetSlotState.Empty
+						currentState = try states.get(index) otherwise SlotState.Empty
 						isNotEmpty = match currentState 'se2'
 							Empty gives false
 							Occupied gives true
@@ -342,7 +340,7 @@ export type Set uses Element implements InitableFromArrayLiteral with Element, I
 					end 'find_slot'
 
 					try elements.set(index, value: element) otherwise panic("Set.grow: elements.set OOB — rehash slot is in-bounds")
-					try states.set(index, value: SetSlotState.Occupied) otherwise panic("Set.grow: states.set OOB — rehash slot is in-bounds")
+					try states.set(index, value: SlotState.Occupied) otherwise panic("Set.grow: states.set OOB — rehash slot is in-bounds")
 					try hashes.set(index, value: hash) otherwise panic("Set.grow: hashes.set OOB — rehash slot is in-bounds")
 					count = count + 1
 				end 'get_elem'
@@ -355,14 +353,14 @@ end 'Set'
 /// Positioning invariant: iterIndex always points at an occupied slot.
 export type SetIterator uses Element implements Iterator with Element where Element is Hashable and Equatable
 	typealias IterElementArray = Array with Element
-	typealias IterStateArray = Array with SetSlotState
+	typealias IterStateArray = Array with SlotState
 	var elements as IterElementArray
 	var states as IterStateArray
-	var capacity as BucketCapacity
-	var iterIndex as SlotIndex
+	var capacity as TableCapacity
+	var iterIndex as TableSlotIndex
 
-	export static function create(elements IterElementArray, states IterStateArray, capacity BucketCapacity) returns Self throws IterationError
-		let first = try findNextOccupiedSet(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
+	export static function create(elements IterElementArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
+		let first = try findNextOccupied(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
 		return Self{elements: elements, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
 
@@ -371,26 +369,6 @@ export type SetIterator uses Element implements Iterator with Element where Elem
 	end 'current'
 
 	export function advance() throws IterationError
-		iterIndex = try findNextOccupiedSet(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
+		iterIndex = try findNextOccupied(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
 	end 'advance'
 end 'SetIterator'
-
-typealias SetSlotStateArray = Array with SetSlotState
-
-// Find the next slot index >= `from` whose state is Occupied.
-function findNextOccupiedSet(states SetSlotStateArray, capacity BucketCapacity, from SlotIndex) returns SlotIndex throws IterationError
-	var i = from
-	while i < capacity 'scan'
-		let state = try states.get(i) otherwise SetSlotState.Empty
-		let isOccupied = match state 'so'
-			Occupied gives true
-			Empty gives false
-			Deleted gives false
-		end 'so'
-		if isOccupied 'found'
-			return i
-		end 'found'
-		i = i + 1
-	end 'scan'
-	throw IterationError.exhausted
-end 'findNextOccupiedSet'

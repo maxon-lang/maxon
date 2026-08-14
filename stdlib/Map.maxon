@@ -9,8 +9,11 @@ export enum MapError implements Error
 end 'MapError'
 
 typealias EntryCount = int(0 to u64.max)
-typealias BucketCapacity = int(0 to u64.max)
-typealias SlotIndex = int(0 to u64.max)
+
+// The slot vocabulary is `helpers/hashtable/slotScan.maxon`'s, shared with `Set` (W93): `SlotState`,
+// `TableSlotIndex`, `TableCapacity` and the `findNextOccupied` scan both iterators advance through.
+// Two byte-identical copies of a three-state enum fail ASYMMETRICALLY — a fourth state is a compile
+// error at one file's `match`es and silence at the other's — so there is one.
 
 export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable with (Entry, MapIterator) where Key is Hashable and Equatable
 	typealias KeyArray = Array with Key
@@ -94,7 +97,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	// Internal: write a key-value pair into the given slot. `hash` is the key's
 	// precomputed hash (from findSlot), cached in the parallel `hashes` array so
 	// probes can skip the full key.equals() when hashes differ.
-	function insertAtSlot(slotIndex SlotIndex, key Key, value Value, hash HashValue)
+	function insertAtSlot(slotIndex TableSlotIndex, key Key, value Value, hash HashValue)
 		try keys.set(slotIndex, value: key) otherwise panic("Map.insertAtSlot: keys.set OOB — slot from findSlot is always in-bounds")
 		try values.set(slotIndex, value: value) otherwise panic("Map.insertAtSlot: values.set OOB — slot from findSlot is always in-bounds")
 		try states.set(slotIndex, value: SlotState.Occupied) otherwise panic("Map.insertAtSlot: states.set OOB — slot from findSlot is always in-bounds")
@@ -177,7 +180,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	end 'createIterator'
 
 	/// Get current capacity (total number of slots)
-	export function getCapacity() returns BucketCapacity
+	export function getCapacity() returns TableCapacity
 		return capacity
 	end 'getCapacity'
 
@@ -186,7 +189,7 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 	// Returns the index of the key if found (>= 0).
 	// Returns -(insertIndex + 1) if the key is not found, encoding the best
 	// slot for insertion as a negative value. Returns -1 if the map is empty.
-	function findSlot(key Key, hash HashValue) returns SlotIndex
+	function findSlot(key Key, hash HashValue) returns TableSlotIndex
 		if capacity == 0 'empty'
 			return -1
 		end 'empty'
@@ -348,10 +351,10 @@ export type MapIterator uses Key, Value implements Iterator with Entry where Key
 	var keys as IterKeyArray
 	var values as IterValueArray
 	var states as IterStateArray
-	var capacity as BucketCapacity
-	var iterIndex as SlotIndex
+	var capacity as TableCapacity
+	var iterIndex as TableSlotIndex
 
-	export static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity BucketCapacity) returns Self throws IterationError
+	export static function create(keys IterKeyArray, values IterValueArray, states IterStateArray, capacity TableCapacity) returns Self throws IterationError
 		let first = try findNextOccupied(states, capacity: capacity, from: 0) otherwise throw IterationError.exhausted
 		return Self{keys: keys, values: values, states: states, capacity: capacity, iterIndex: first}
 	end 'create'
@@ -366,30 +369,3 @@ export type MapIterator uses Key, Value implements Iterator with Entry where Key
 		iterIndex = try findNextOccupied(states, capacity: capacity, from: iterIndex + 1) otherwise throw IterationError.exhausted
 	end 'advance'
 end 'MapIterator'
-
-typealias SlotStateArray = Array with SlotState
-
-// Find the next slot index >= `from` whose state is Occupied. Throws IterationError.exhausted
-// if no occupied slot is found before `capacity`.
-function findNextOccupied(states SlotStateArray, capacity BucketCapacity, from SlotIndex) returns SlotIndex throws IterationError
-	var i = from
-	while i < capacity 'scan'
-		let state = try states.get(i) otherwise SlotState.Empty
-		let isOccupied = match state 'so'
-			Occupied gives true
-			Empty gives false
-			Deleted gives false
-		end 'so'
-		if isOccupied 'found'
-			return i
-		end 'found'
-		i = i + 1
-	end 'scan'
-	throw IterationError.exhausted
-end 'findNextOccupied'
-
-enum SlotState
-	Empty
-	Occupied
-	Deleted
-end 'SlotState'

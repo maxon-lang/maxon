@@ -1520,6 +1520,41 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// `Sleep.maxon`'s defect exactly, and this file's own rule names it. W41 added the shared retirement
 	// switch so a DECLARED base won every query; W105 then deleted the synthesized regime outright, so this
 	// line is no longer merely what makes the corpus type the real one — it is what makes `Map` EXIST.
+	// Its slot vocabulary is the shared module's above (W93).
+	// ⭐⭐ **`stdlib/helpers/hashtable/slotScan.maxon` — THE SLOT VOCABULARY `Map` AND `Set` BOTH DECLARED,
+	// NOW DECLARED ONCE (W93).** It is listed BEFORE its two consumers because it is their dependency, not
+	// because load order decides anything: name resolution is whole-program, and this list is a SET.
+	//
+	// ⭐ **WHAT IT CURES IS AN ASYMMETRIC FAILURE, WHICH IS WHY "they were both correct" WAS NOT ENOUGH.**
+	// `Map.maxon` held `enum SlotState { Empty, Occupied, Deleted }` and `Set.maxon` held `SetSlotState` with
+	// the same three cases; each had a `findNextOccupied` scan over its own. Add a state to ONE and you get a
+	// compile error at THAT file's `match`es and **SILENCE at the other's** — a wrong iteration answer from a
+	// container that still compiles. One enum makes every `match` over a slot state, in both files, refuse the
+	// new case at once; SABOTAGE-CHECKED by adding a fourth case and watching the one shared body fail.
+	//
+	// ⚠ **THE COLLISION RULE, CLEARED — each entry CHECKED against the tree rather than against this list:**
+	//   • its one FREE function is `findNextOccupied`, which `Parser.parseCallNamed`'s bare-name chain does
+	//     not claim (checked at the chain, never at a prose roster) and which no other listed module declares
+	//     — `Map.maxon`'s private copy of that very name is DELETED by this change, not shadowed by it;
+	//   • its TYPE names are `SlotState`, `SlotStateArray`, `TableSlotIndex` and `TableCapacity`, none
+	//     declared by any other listed module, none a builtin, and none spelled anywhere else in the tree;
+	//   • ⚠ **THE OLD BARE SPELLINGS COULD NOT BE KEPT, AND THAT IS THE CHECK THIS ENTRY ALMOST MISSED.**
+	//     `Map`/`Set` called them `SlotIndex` and `BucketCapacity` while both were FILE-PRIVATE. Exported they
+	//     are visible to every program the compiler builds — including the COMPILER's own sources, since the
+	//     bootstrap loads all of `stdlib/` — and `SlotIndex` is a local binding in
+	//     `maxon-shv2/Compiler/Targets/X64/X64Runtime.maxon`. Hence `Table…`;
+	//   • it CONSUMES `IterationError` (`stdlib/Interfaces.maxon:28`) and `Array`, both listed above, so it is
+	//     a second reader of two declarations and not a second declaration of either;
+	//   • it has no top-level binding, so the `S2h` reachability term has nothing of its to keep or drop, and
+	//     it is not type-parameterized by anything a user program can declare — its one generic is
+	//     `Array with SlotState`, over its own enum.
+	//
+	// ⚠ **AND IT IS NOT INERT, WHICH IS THE THIRD `STDLIB-BRINGUP` QUESTION AND THE ONE `W63`/`BATCH36` FAILED
+	// ON.** A listed module whose type the compiler SYNTHESIZES builds green and does nothing. Nothing here is
+	// synthesized — `SlotState` has no builtin twin and `findNextOccupied` no runtime one — and the injection
+	// control confirms it rather than the reading: an undefined call planted in this body is reported against
+	// THIS FILE, and both containers' iteration goes red without it.
+	try listWhitelistedModule(stdlibDir, relative: "helpers/hashtable/slotScan.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "Map.maxon", into: listed)
 	// ⭐⭐ **`stdlib/Set.maxon` — THE HASH TABLE'S OTHER HALF, AND THE SAME ONE CHANGE (W90).** Everything the
 	// entry above says applies here word for word, through the SHARED switch
@@ -1541,8 +1576,8 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// them wrong and there is no diagnostic — the backend panics in `resolveCallFixups`, or the callee's
 	// `param` ops read whatever the ABI registers held.
 	//
-	// ⚠ **THE COLLISION RULE, CLEARED:** its one FREE function is `findNextOccupiedSet`, which
-	// `Parser.parseCallNamed`'s bare-name chain does not claim and no other listed module declares. It CONSUMES
+	// ⚠ **THE COLLISION RULE, CLEARED:** it declares NO free function since W93 moved `findNextOccupiedSet`
+	// into `helpers/hashtable/slotScan.maxon` as the shared `findNextOccupied`. It CONSUMES
 	// `spreadHash`, which is `stdlib/Interfaces.maxon:105`'s — already listed above and already consumed the
 	// same way by `Map.maxon`, so this is a second reader of one declaration and not a second declaration. Its
 	// TYPE names are `Set` (compiler-owned, admitted from the CORPUS by `recordStruct`'s provenance bit exactly
