@@ -773,6 +773,56 @@ program below with a `for … in` read added: `count()` answered 4 while every `
 (`error.a-concrete-managed-element-is-refused`, just below) asked of the thing that is knowable inside a
 shared body — the instantiation set — rather than of an element type there is none of.
 
+<!-- test: a-vector-field-in-a-generic-body-round-trips-its-elements -->
+NOT FROM `/specs/vector.md` — the CAPABILITY this rung delivers, which the two canonical cases above do
+not reach. Both of them only call `count()`, and a vector's count folds to a literal off the instance's
+own size, so **they would both still pass if every slot read and wrote the wrong address.** This one
+drives `set` and `get` through the shared generic body: a written slot reads back, an UNWRITTEN slot
+reads back the published zero (which is the whole reason the managed instantiation is refused), and the
+count is unchanged by the writes. Oracle-agreed byte-for-byte on this source — `a=10 b=7 zero=0 count=4`,
+exit 17 — measured on the bootstrap, not assumed.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Holder uses Element
+	typealias Slot = Vector with 4 Element
+
+	var slot as Slot
+
+	export static function create() returns Self
+		return Self{slot: Slot.create()}
+	end 'create'
+
+	export function put(index Int, value Element)
+		try slot.set(index, value: value) otherwise panic("put")
+	end 'put'
+
+	export function at(index Int) returns Element
+		return try slot.get(index) otherwise panic("at")
+	end 'at'
+
+	export function size() returns Int
+		return slot.count()
+	end 'size'
+end 'Holder'
+
+typealias IntHolder = Holder with Int
+
+function main() returns ExitCode
+	var h = IntHolder.create()
+	h.put(0, value: 10)
+	h.put(3, value: 7)
+	print("a={h.at(0)} b={h.at(3)} zero={h.at(1)} count={h.size()}\n")
+	return h.at(0) + h.at(3)
+end 'main'
+```
+```exitcode
+17
+```
+```stdout
+a=10 b=7 zero=0 count=4
+```
+
 <!-- test: error.a-managed-instantiation-of-a-vector-field-is-refused -->
 A type parameter can be instantiated at a managed type, so a fixed-size vector over one is refused at
 the `create()` that would publish its slots — not at the instantiation, and not at run time.
@@ -803,7 +853,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer, bool or float elements only, or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
 <!-- test: error.one-managed-instantiation-refuses-the-shared-body -->
@@ -836,7 +886,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer, bool or float elements only, or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
+error E2015: <fragment>:10:21: Unsupported: `Vector with <N> <type parameter>` — a vector PUBLISHES all N of its slots at `create` by zeroing them, and this generic type is instantiated with a type whose slot is a heap POINTER: a zeroed slot is an element for a trivial instantiation and a NULL for a managed one, so `count()` would answer N while every `get` reports an empty slot and a `for … in` read dereferences the null. Instantiate this type at integer or bool elements only — a `float` TYPE ARGUMENT is refused separately today, for its own reason — or hold the elements in an `Array with <type parameter>`, which publishes nothing and grows by `push`
 ```
 
 <!-- test: a-vector-in-an-extension-body-over-an-associated-type -->
