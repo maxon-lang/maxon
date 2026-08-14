@@ -2450,6 +2450,34 @@ union ConformanceUsesArity
 	unresolvable
 end 'ConformanceUsesArity'
 
+// ⭐⭐ **HOW A CONFORMANCE `with` ARGUMENT IS SPELLED — TWO ANSWERS TO ONE READ, BECAUSE THE TWO COLUMNS THAT
+// STORE IT ARE CONSUMED IN OPPOSITE DIRECTIONS (W95).**
+//
+//   • `identity` — `renderDeclaredTypeName`'s answer, which CANONICALIZES a generic instance
+//     (`Array_Integer`, `SetIterator_T7fe…`). It is what the REAL parse records on a `ConformanceDecl`,
+//     because `ConformanceCheck.signatureMatches` DECIDES conformance by comparing two of these strings and
+//     two spellings of one type there is a false accept (R5).
+//   • `asWritten` — the identifier the author wrote. It is what the SWEPT column
+//     (`StructLayout.conformanceBindings`) must carry, because its consumer runs the substitution BACKWARDS:
+//     `Parser.extensionAssociatedTypeBinding` puts the binding back into a TYPE POSITION in the extension
+//     body, and `checkExtensionConstraints` asks what that name conforms to. A canonical mint is a name no
+//     type reference resolves.
+//
+// ⛔ **MEASURED when the deferred re-read used `identity`** (which the per-file sweep only avoided because
+// its index was too incomplete to canonicalize anything): the stdlib stopped compiling with three
+// `E3011 … Unknown type 'ArrayIterator_Te3315404e8d3fd14'` / `'MapIterator_…'` / `'SetIterator_…'` at
+// `stdlib/Interfaces.maxon`'s `typealias WithIterSelf = WithIterIterator with Iter, Element` — `Iter`
+// substituted to a canonical mint inside `extension Iterable`'s body.
+//
+// ⭐ **AND MAKING IT EXPLICIT IS WHAT MAKES THE SWEPT COLUMN ORDER-INDEPENDENT.** Left to
+// `renderDeclaredTypeName` alone, an argument naming a `typealias` declared in an EARLIER-swept file
+// canonicalized while the identical argument in the first file swept did not — the same "a fact derived from
+// how far the sweep has got" that `Parser.parseTypeReference`'s header refuses for a return type.
+enum ConformanceArgSpelling
+	identity
+	asWritten
+end 'ConformanceArgSpelling'
+
 // The receiver a call carries, if any. A union rather than a `ValueId` plus a bool, and rather
 // than a reserved id: `ValueId` has no empty value and a sentinel would be READ as a real argument
 // by everything downstream (`retVoid` exists in the Maxon dialect for precisely this reason).
@@ -11510,6 +11538,10 @@ export type Parser
 		// so `Queries.foldExtensionDeclarations` can publish each extension method's signature once the set of
 		// CONFORMERS is complete. A POSITION, not the declaration: see `ExtensionDeclSite`.
 		var extensionSites = ExtensionDeclSiteArray.create()
+		// ⭐ CONFORMANCE CLAUSE sites (W95) — one entry per `type`/`enum`/`union` whose `implements` clause this
+		// sweep could only read a PREFIX of, folded whole-program so a name written after a `with` still
+		// reaches `conformsTo`. A POSITION, not the declaration: see `ConformanceClauseDeclSite`.
+		var conformanceSites = ConformanceClauseDeclSiteArray.create()
 		// ⭐ Every FREE function's DIRECTORY-QUALIFIED spelling (N1b) — `utils.helper` for a `helper` declared
 		// in `utils/` — so a `utils.helper()` written in another file can be told from a `Type.method` call of
 		// the same token shape. Empty for a root-level file, which is every file in a single-directory program.
@@ -11685,7 +11717,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, bindingOut: bindings)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
 				continue
 			end 'isTypeDecl'
 
@@ -11695,7 +11727,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -11722,7 +11754,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED (ARRO).**
 		// Every one of these instances is one the COMPILER mints because the source names no type for it, so
@@ -14952,7 +14984,10 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, bindingOut TopLevelDeclArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
+		// The DECLARATION keyword, taken before anything moves the cursor — the position
+		// `Queries.foldConformanceClauses` puts a reader back down on. See `ConformanceClauseDeclSite`.
+		let declStart = self.pos
 		// ⚠ **THE SWEEP MUST READ THE MODIFIER ITSELF**, and BACKWARDS, exactly as `recordScannedBinding`
 		// does: the caller's loop meets `export`/`module` as an ordinary token and steps over it, so the
 		// cursor arrives here already on the `type` keyword. Read forwards it would answer `file` for every
@@ -14977,16 +15012,25 @@ export type Parser
 		// records the richer `ConformanceDecl` (bindings + POSITION) that `checkConformance` verifies from; see
 		// `StructLayout.conformsTo` for why the two records are deliberately not one.
 		//
-		// ⚠ **A `with` BINDING ENDS THE READ, so `implements Container with Score, Other` records `Container`
-		// alone.** Whether that comma opens a second ARGUMENT or a second INTERFACE is the interface's `uses`
-		// ARITY (R7), and the arity is a fact only the COMPLETE index holds — this walk is what builds it. The
-		// consequence is bounded and is a missing extension, never a wrong one: a type may not receive the
-		// extensions of an interface it names after a `with`. Reading it here as a second interface would be
-		// the R7 false reject in the other direction.
+		// ⚠ **AN UNPARENTHESIZED `with` STILL ENDS THE READ HERE, so `implements Container with Score, Other`
+		// records `Container` alone.** Whether that comma opens a second ARGUMENT or a second INTERFACE is the
+		// interface's `uses` ARITY (R7), and the arity is a fact only the COMPLETE index holds — this walk is
+		// what builds it. Reading it here as a second interface would be the R7 false reject in the other
+		// direction, so the reader stops and the answer is a SUBSET of the clause.
+		//
+		// ⭐ **AND THAT SUBSET IS NO LONGER THE FINAL ANSWER (W95): THE POSITION IS RECORDED AND THE CLAUSE IS
+		// RE-READ WHOLE-PROGRAM.** A type that names an interface after a `with` used to receive none of that
+		// interface's extensions, which made the ORDER of a conformance clause change what the program means.
+		// `Queries.foldConformanceClauses` puts this same reader back down on `declStart` once
+		// `foldInterfaceDeclarations` has made the arity knowable. See `ConformanceClauseDeclSite`.
 		//
 		// Tolerant like every other read on this walk: a malformed clause records no conformance and leaves
 		// the positioned diagnostic to the real parse. The cursor is left wherever the read stopped, which the
 		// body loop below steps over token by token exactly as it stepped over the whole clause before.
+		if self.at(TokenKind.implements) 'declaresConformances'
+			conformanceSiteOut.push(ConformanceClauseDeclSite.create(self.filePath, tokenPos: declStart, declName: nameTok.value, declIsEnum: false))
+		end 'declaresConformances'
+
 		self.openConformanceClauseAliasScope()
 		let scannedConformances = try self.readOptionalImplementsClause() otherwise ScannedConformanceClause.declaringNothing()
 		self.closeConformanceClauseAliasScope()
@@ -15234,6 +15278,46 @@ export type Parser
 		// it, which only the index can remap into its own (`recordInterfaceAliases`).
 		index.recordInterfaceAliases(self.interfaceAliasScratch, interfaceName: iface.name, fileTypeNames: self.artifact.typeNames)
 	end 'foldInterfaceDeclarationInto'
+
+	// ⭐⭐ **RE-READ THE `implements` CLAUSE OF THE DECLARATION AT `site.tokenPos`, NOW THAT THE ARITY THAT
+	// ENDS A `with` IS KNOWN (W95).** The second half of the note `recordScannedType` /`recordScannedEnum`
+	// leave behind, driven by `Queries.foldConformanceClauses` — `foldInterfaceDeclarationInto`'s shape, one
+	// declaration kind over, and for the sharper version of its reason: there the risk was two spellings of
+	// one type, here it is a conformance that is not recorded at all, so the extensions of the interface
+	// named after the `with` land on nobody.
+	//
+	// It runs the SAME `readOptionalImplementsClause` the sweep ran, so there is exactly one reader of this
+	// grammar and the two passes cannot drift on what a clause SAYS — only on how much of it they can prove.
+	// See that reader for the arity rule that makes one pass stop where the other continues.
+	//
+	// ⚠ **A CLAUSE THIS CANNOT READ LEAVES THE SWEEP'S RECORD STANDING**, which is the one shape of tolerance
+	// that fits here: the sweep's answer is a SUBSET of the clause, and `declaringNothing()` would be a WRONG
+	// one. Nothing is closed on that path either — `enterTypeScope` assigns every per-declaration scope
+	// unconditionally, so the next site cannot observe the failed one (`Queries.foldInterfaceDeclarations`
+	// states the argument for the reader this pass shares with it).
+	export function foldConformanceClauseInto(index ProgramSignatures, site ConformanceClauseDeclSite)
+		self.pos = site.tokenPos
+		// The declaration keyword the sweep stood on — `type`, `enum` or `union` — and the name after it.
+		// Stepped over rather than read through `readTypeHeader`, which asserts the `type` keyword: one reader
+		// serves both declaration kinds here, and WHICH keyword opened the declaration is a fact the re-read
+		// has no use for. `declIsEnum` already carries the only distinction that matters, which registry the
+		// answer is written to.
+		self.advance()
+		let nameTok = try self.consume(TokenKind.identifier) otherwise return
+		self.enterTypeScope(nameTok.value, isEnum: site.declIsEnum)
+
+		// ⚠ **THE `uses` CLAUSE IS RE-READ FOR ITS SCOPE ALONE, ONTO NO LAYOUT** — see `openTypeParamNames`,
+		// which exists for this caller. A `with` argument is rendered against the declaration's own parameter
+		// names (`type Box uses T implements Holder with T` binds `Element := T`), so the scope has to be
+		// re-entered; the layout it would otherwise be stamped onto may belong to another declaration of the
+		// same name, and that guard belongs in one place.
+		_ = self.openTypeParamNames()
+
+		self.openConformanceClauseAliasScope()
+		let clause = try self.readOptionalImplementsClause() otherwise return
+		self.closeConformanceClauseAliasScope()
+		index.refoldConformanceClause(site, clause: clause)
+	end 'foldConformanceClauseInto'
 
 	// ⭐ **CONSUME A WHOLE `extension <Interface>` DECLARATION IN THE TOLERANT SWEEP** — the twin of
 	// `recordScannedInterface`, recording a POSITION and nothing else for a reason that is stronger here than
@@ -15549,7 +15633,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -15835,12 +15919,23 @@ export type Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
-		// read this modifier forwards.
+		// read this modifier forwards. `declStart` is that same position kept for the whole-program clause
+		// re-read (`recordScannedType`'s twin, and `ConformanceClauseDeclSite`).
+		let declStart = self.pos
 		let visibility = self.visibilityBefore(self.pos)
 		try self.consume(TokenKind.union if isUnion else TokenKind.enum) otherwise return
 		let nameTok = try self.consume(TokenKind.identifier) otherwise return
+
+		// ⭐ **AN ENUM'S CLAUSE IS TRUNCATED BY THE SAME `with` RULE AND IS RE-READ BY THE SAME PASS (W95).**
+		// It binds nothing an extension is evaluated against — an enum has no conditional extension — but a
+		// LOST NAME is the same loss on both kinds: `enum E implements Marker with Tag, Error` would drop the
+		// `Error` that `throws E` is narrowed against (`EnumLayout.conformsTo`).
+		if self.at(TokenKind.implements) 'declaresConformances'
+			conformanceSiteOut.push(ConformanceClauseDeclSite.create(self.filePath, tokenPos: declStart, declName: nameTok.value, declIsEnum: true))
+		end 'declaresConformances'
+
 		let scannedConformances = try self.readOptionalImplementsClause() otherwise return
 		let conformsTo = scannedConformances.names
 		self.enterTypeScope(nameTok.value, isEnum: true)
@@ -15978,11 +16073,33 @@ export type Parser
 	// Commas separate the names (`uses A, B`), NO parentheses (the oracle's grammar). The loop stops at
 	// the first non-identifier (a newline opening the body), exactly as a top-level `uses` clause does.
 	function openTypeParamScope(layout StructLayout)
+		let names = self.openTypeParamNames()
 		// A NON-GENERIC type allocates nothing: it keeps the layout's create-time empty `typeParamNames`
 		// and keeps the shared empty list `enterTypeScope` has just pointed the parser at. Only a `uses`
 		// clause builds a real list — which is the rare case, and absent from the scale corpus entirely.
-		if not self.at(TokenKind.uses) 'noUses'
+		if names.isEmpty() 'noUses'
 			return
+		end 'noUses'
+
+		layout.recordTypeParams(names)
+	end 'openTypeParamScope'
+
+	// ⭐ **THE `uses` READ ITSELF — THE SCOPE HALF OF THE DOOR ABOVE, WITHOUT THE LAYOUT (W95).** The
+	// whole-program conformance-clause re-read (`foldConformanceClauseInto`) has to re-enter a declaration's
+	// parameter scope to render its `with` arguments, and it has NO layout to stamp: the registry's may belong
+	// to a DIFFERENT declaration of the same name, which is the guard
+	// `ProgramSignatures.refoldConformanceClause` carries and which must not be written twice.
+	//
+	// ⚠ Split rather than copied, so all three readers — the sweep, the real parse and the re-read — take the
+	// SAME reading of `uses A, B`. That is the property `openTypeParamScope`'s header claims for the first two,
+	// and a third walk of this grammar is exactly how a re-read would come to disagree about a parameter list
+	// every field's `typeParameter(token)` is resolved against.
+	//
+	// Commas separate the names (`uses A, B`), NO parentheses (the oracle's grammar). The loop stops at
+	// the first non-identifier (a newline opening the body), exactly as a top-level `uses` clause does.
+	function openTypeParamNames() returns ByteArrayArray
+		if not self.at(TokenKind.uses) 'noUses'
+			return self.emptyTypeParams
 		end 'noUses'
 
 		var names = ByteArrayArray.create()
@@ -15997,8 +16114,8 @@ export type Parser
 			self.advance()
 		end 'usesLoop'
 		self.enclosingTypeParams = names
-		layout.recordTypeParams(names)
-	end 'openTypeParamScope'
+		return names
+	end 'openTypeParamNames'
 
 	// Close the enclosing-type scope (P1.6-A) — clears `enclosingType`, its KIND and `enclosingTypeParams`
 	// in lockstep, so a sibling type at file scope starts fresh and a bare `T` outside a generic body
@@ -18923,7 +19040,7 @@ export type Parser
 		end 'bindsNothing'
 
 		try self.consume(TokenKind.with)
-		return InterfaceConformance.create(ifaceTok.value, withArgs: try self.parseConformanceWithArgs(ifaceTok.value))
+		return InterfaceConformance.create(ifaceTok.value, withArgs: try self.parseConformanceWithArgs(ifaceTok.value, spelling: ConformanceArgSpelling.identity))
 	end 'parseOneConformance'
 
 	// ⭐ **THE `with <TypeArg>` / `with (<TypeArgs>)` ASSOCIATED-TYPE BINDING, IN BOTH SPELLINGS (R5).**
@@ -18964,15 +19081,19 @@ export type Parser
 	// `ByteArrayArray` and nothing else, so the two spellings are already indistinguishable one line
 	// later — recording a flag on it purely so a later pass could re-derive what this function is
 	// looking straight at would be plumbing a parse fact through the whole tier for no gain.
-	function parseConformanceWithArgs(interfaceName ByteArray) returns ByteArrayArray throws ParseError
+	//
+	// ⚠⚠ **`spelling` IS WHAT THE TWO CALLERS DO NOT SHARE, AND IT IS NOT COSMETIC** — see
+	// `ConformanceArgSpelling`. It reaches the tuple arm as well as the argument reader, because collapsing
+	// `with (A, B)` into one interned tuple produces a name only the identity spelling can carry.
+	function parseConformanceWithArgs(interfaceName ByteArray, spelling ConformanceArgSpelling) returns ByteArrayArray throws ParseError
 		var args = ByteArrayArray.create()
-		if self.at(TokenKind.leftParen) and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
+		if self.at(TokenKind.leftParen) and spelling == ConformanceArgSpelling.identity and self.parenthesizedWithBindsOneTuple(interfaceName) 'oneTupleArgument'
 			// ONE argument, read by the ordinary reference reader — `parseTypeReference` meets the `(` and
 			// routes to `parseTupleTypeReference`, which is what mints and interns the tuple's layout. So the
 			// binding this records is character-for-character the name `WithIterIterator.current`'s declared
 			// `returns (Source, Element)` renders to, which is the whole point: `ConformanceCheck` compares
 			// the two as strings.
-			args.push(try self.readConformanceWithArg())
+			args.push(try self.readConformanceWithArg(spelling))
 			return args
 		end 'oneTupleArgument'
 
@@ -18982,7 +19103,7 @@ export type Parser
 			let openTok = self.current()
 			try self.consume(TokenKind.leftParen)
 			while true 'eachArg'
-				args.push(try self.readConformanceWithArg())
+				args.push(try self.readConformanceWithArg(spelling))
 				if not self.at(TokenKind.comma) 'lastArg'
 					break
 				end 'lastArg'
@@ -18993,7 +19114,7 @@ export type Parser
 			return args
 		end 'parenthesized'
 
-		args.push(try self.readConformanceWithArg())
+		args.push(try self.readConformanceWithArg(spelling))
 		if not self.at(TokenKind.comma) 'singleArg'
 			return args
 		end 'singleArg'
@@ -19001,7 +19122,7 @@ export type Parser
 		let arity = self.interfaceUsesArity(interfaceName)
 		while args.count() < arity and self.at(TokenKind.comma) 'moreArgs'
 			try self.consume(TokenKind.comma)
-			args.push(try self.readConformanceWithArg())
+			args.push(try self.readConformanceWithArg(spelling))
 		end 'moreArgs'
 		return args
 	end 'parseConformanceWithArgs'
@@ -19016,8 +19137,30 @@ export type Parser
 	// to the enclosing type's own `structRef` (`enclosingSelfType`), and the conforming type's NAME is
 	// precisely what the binding must carry. `enclosingTypeParams` is the CONFORMING type's own `uses` list,
 	// which is what makes `type Box uses T implements Holder with T` bind `Element := T`.
-	function readConformanceWithArg() returns ByteArray throws ParseError
-		return renderDeclaredTypeName(try self.parseTypeReference(), declarationName: self.enclosingType, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
+	//
+	// ⚠ **THE READ IS ONE READ IN BOTH SPELLINGS, AND THAT IS THE POINT.** `parseTypeReference` runs either
+	// way — it is what moves the cursor, records the alias USE (E3062) and interns a tuple — so the two
+	// spellings differ only in which of two facts about the SAME argument is handed back. See
+	// `ConformanceArgSpelling`.
+	function readConformanceWithArg(spelling ConformanceArgSpelling) returns ByteArray throws ParseError
+		// Taken before the reader moves, because that is the only moment the WRITTEN form is in hand.
+		let firstTok = self.current()
+		let start = self.pos
+		let identity = renderDeclaredTypeName(try self.parseTypeReference(), declarationName: self.enclosingType, typeParamNames: self.enclosingTypeParams, typeNames: self.artifact.typeNames, signatures: self.signatures)
+
+		if spelling == ConformanceArgSpelling.identity 'theComparableIdentity'
+			return identity
+		end 'theComparableIdentity'
+
+		// ⚠ **A SINGLE IDENTIFIER IS THE ONLY ARGUMENT THAT HAS AN AUTHOR'S NAME, so it is the only one this
+		// answers with.** `Self`, a dotted chain and a tuple are each more than the one token a substitution
+		// could put back — for those the identity is not merely the better answer, it is the only spelling
+		// that exists, and it is exactly what the per-file sweep produced for them before this split.
+		if self.pos != (start + 1) as TokenIndex or firstTok.kind != TokenKind.identifier 'theAuthorWroteNoSingleName'
+			return identity
+		end 'theAuthorWroteNoSingleName'
+
+		return firstTok.value
 	end 'readConformanceWithArg'
 
 	// ⭐⭐ **`with (A, B)` AGAINST A ONE-ASSOCIATED-TYPE INTERFACE IS ONE TUPLE ARGUMENT, NOT TWO BINDINGS
@@ -22607,18 +22750,37 @@ export type Parser
 	// A COMMA LIST, matching `parseTypeImplementsClause`'s: `enum E implements Error, Debuggable` names two.
 	// An enum that implements nothing returns the SHARED empty, so the common case allocates nothing.
 	//
-	// ⭐ **IT ALSO READS THE `with <TypeArgs>` OF THE NAME THAT CARRIES ONE, AND THEN STOPS** (conditional
-	// extensions). The bindings are what a conditional extension's `where` clause is evaluated against
+	// ⭐ **IT ALSO READS THE `with <TypeArgs>` OF EVERY NAME THAT CARRIES ONE** (conditional extensions). The
+	// bindings are what a conditional extension's `where` clause is evaluated against
 	// (`StructLayout.conformanceBindings`), and they are read through `parseConformanceWithArgs` — the SAME
 	// reader the real parse's `parseOneConformance` uses — rather than a second walk of the same grammar.
 	//
-	// ⚠ **STOPPING IS THE PRE-EXISTING RULE, NOT A NEW ONE, and reading the arguments does not relax it.**
-	// Whether the comma after `with Score` opens a second ARGUMENT or a second INTERFACE is the interface's
-	// `uses` ARITY (R7), and the arity is a fact only the COMPLETE index holds — this walk is what builds it.
-	// `parseConformanceWithArgs` asks `interfaceUsesArity`, which answers 0 while the index is still being
-	// built, so the sweep reads exactly ONE unparenthesized argument and the comma ends the clause: the same
-	// interface list this recorded before the arguments were read at all. The consequence is bounded and is a
-	// missing extension, never a wrong one.
+	// ⭐⭐ **WHERE ONE `with` ENDS IS THE INTERFACE'S `uses` ARITY, SO THE CLAUSE'S EXTENT IS A WHOLE-PROGRAM
+	// FACT — AND THAT IS WHY THIS READER STOPS EARLY IN THE SWEEP AND NOWHERE ELSE (W95).** Whether the comma
+	// after `with Score` opens a second ARGUMENT or a second INTERFACE is decided by `Score`'s interface's
+	// arity (R7), which only the complete index holds. Two of this function's three callers run with that
+	// index whole (the real enum parse, and `Queries.foldConformanceClauses`); the DECLARATION SWEEP is the
+	// one that does not, because the sweep is what builds it.
+	//
+	// So the loop asks the fact itself rather than being told which pass it is in: it continues past a `with`
+	// exactly when the boundary is UNAMBIGUOUS — the arguments were parenthesized (the `)` ends them whatever
+	// the arity is), or the arity RESOLVED. In the sweep no arity resolves, so an unparenthesized `with` ends
+	// the clause exactly as it always did; a misspelled interface ends it in every pass, which is the same
+	// bounded outcome and a program the whole-program `E3015 … implements unknown interface` already names.
+	//
+	// ⛔ **CONTINUING WITHOUT THE ARITY WOULD TRADE A MISSING CONFORMANCE FOR A WRONG ONE**, which is strictly
+	// worse: `implements Pair with A, B` against `interface Pair uses First, Second` would file `B` as an
+	// INTERFACE and produce a spurious `E3015 … implements unknown interface 'B'` on a legal program — R5's
+	// measured bug, in the other direction. The deferral (`ConformanceClauseDeclSite`) exists precisely so the
+	// sweep never has to guess.
+	//
+	// ⚠⚠ **STOPPING EARLY IS ABOUT MEANING, NEVER ABOUT THE CURSOR — the remainder is always CONSUMED
+	// (`skipRestOfImplementsClause`).** It used to be left standing, and on an `enum` that was a WRONG ANSWER
+	// rather than a missing one: `recordScannedEnum` resumes its CASE walk at whatever token this stops on, so
+	// `enum Slow implements Tagged with Code, Error` had its case list read out of the clause's own tail.
+	// ⛔ MEASURED: `error E3034: unknown enum case: 'tooSmall'` on a program whose only fault was the ORDER of
+	// its clause — `implements Error, Tagged with Code` compiled and ran. `recordScannedType` survived it only
+	// because a stray identifier at a type's top level is skipped rather than read as a member.
 	function readOptionalImplementsClause() returns ScannedConformanceClause throws ParseError
 		if not self.at(TokenKind.implements) 'noImplements'
 			return ScannedConformanceClause.declaringNothing()
@@ -22626,14 +22788,27 @@ export type Parser
 		try self.consume(TokenKind.implements)
 
 		var names = ByteArrayArray.create()
+		// One entry per NAME, so the two columns pair by index (`StructLayout.conformanceBindings`). Built
+		// eagerly rather than on the first `with`: the clause that binds nothing at all is the one that never
+		// reaches here, and it takes the shared empty from `declaringNothing` above.
+		var bindings = ConformanceBindingArray.create()
 		while true 'moreInterfaces'
 			let nameTok = try self.consume(TokenKind.identifier)
 			names.push(nameTok.value)
 
 			if self.at(TokenKind.with) 'bindsAssociatedTypes'
 				try self.consume(TokenKind.with)
-				return ScannedConformanceClause.create(names, bindings: try self.parseConformanceWithArgs(nameTok.value))
-			end 'bindsAssociatedTypes'
+				// Read BEFORE the arguments, because the reader consumes the `(` that is the answer.
+				let delimited = self.at(TokenKind.leftParen)
+				bindings.push(try self.parseConformanceWithArgs(nameTok.value, spelling: ConformanceArgSpelling.asWritten))
+
+				if not delimited and not self.conformanceArityResolves(nameTok.value) 'theArityIsNotKnownYet'
+					self.skipRestOfImplementsClause()
+					break
+				end 'theArityIsNotKnownYet'
+			end 'bindsAssociatedTypes' else 'bindsNothing'
+				bindings.push(sharedEmptyDeclaredConformances)
+			end 'bindsNothing'
 
 			if not self.at(TokenKind.comma) 'lastInterface'
 				break
@@ -22641,8 +22816,65 @@ export type Parser
 			try self.consume(TokenKind.comma)
 		end 'moreInterfaces'
 
-		return ScannedConformanceClause.create(names, bindings: sharedEmptyDeclaredConformances)
+		return ScannedConformanceClause.create(names, bindings: bindings)
 	end 'readOptionalImplementsClause'
+
+	// ⭐⭐ **CONSUME THE CLAUSE ITEMS THE READER ABOVE COULD NOT INTERPRET — the half of "stop here" that is
+	// about the CURSOR (W95).** Every caller resumes at whatever token the clause read leaves, and one of them
+	// (`recordScannedEnum`) reads the next token as a CASE, so a clause tail left standing becomes part of the
+	// declaration. See the header above for the measured `E3034`.
+	//
+	// ⭐ **IT IS EXACT WITHOUT THE ARITY, WHICH IS THE WHOLE REASON A SKIP CAN GO WHERE A READ CANNOT.** The
+	// two readings of `… with A, B` disagree about what `B` MEANS — a second argument or a second interface —
+	// and agree exactly on the TOKENS it occupies: a comma, then a name, then an optional `with` and its
+	// arguments. So this walks that shape and cannot be wrong either way.
+	//
+	// ⚠ **IT ADVANCES ONLY WHILE IT IS ON A COMMA**, which is what keeps it out of the declaration's body: a
+	// case written on the header's own line (`enum E implements A with X  red green end`) follows no comma, so
+	// the walk stops on `red` and the case walk reads it, exactly as it would after a fully interpreted clause.
+	function skipRestOfImplementsClause()
+		while self.at(TokenKind.comma) 'anotherClauseItem'
+			self.advance()
+			if not self.at(TokenKind.identifier) 'namesNothing'
+				return
+			end 'namesNothing'
+			self.advance()
+
+			if not self.at(TokenKind.with) 'bindsNothing'
+				continue
+			end 'bindsNothing'
+			self.advance()
+			self.skipOneConformanceArgument()
+		end 'anotherClauseItem'
+	end 'skipRestOfImplementsClause'
+
+	// The ONE argument that follows a `with` in the skip above — a parenthesized group, or a leaf type
+	// reference and its dotted chain. A FURTHER argument, if the interface takes one, arrives as the comma the
+	// caller's loop is already written around, so the two spellings of a multi-argument `with` need no
+	// distinction here either.
+	function skipOneConformanceArgument()
+		if self.skipBalancedParens() 'delimited'
+			return
+		end 'delimited'
+
+		self.advance()
+		while self.at(TokenKind.dot) and self.peekKind() == TokenKind.identifier 'dottedChain'
+			self.advance()
+			self.advance()
+		end 'dottedChain'
+	end 'skipOneConformanceArgument'
+
+	// Does the program state `interfaceName`'s `uses` arity YET? — the one question that decides whether an
+	// unparenthesized `with` has a knowable end (see `readOptionalImplementsClause`). It is the ARITY DOOR's
+	// own union read for its other half: `interfaceUsesArity` wants the number and substitutes a default when
+	// there is none, while this wants to know whether there IS one, and folding the two would hide the
+	// default's presence behind a count that looks like an answer.
+	function conformanceArityResolves(interfaceName ByteArray) returns bool
+		match self.conformanceUsesArity(interfaceName) 'arity'
+			declared then return true
+			unresolvable then return false
+		end 'arity'
+	end 'conformanceArityResolves'
 
 	// A type reference. M1: a bare identifier (a named type like `ExitCode`,
 	// interned into the artifact's local interner) or a bare primitive keyword.

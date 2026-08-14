@@ -1592,28 +1592,36 @@ end 'main'
 error E2015: <fragment>:13:2: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
 ```
 
-<!-- test: error.field-read-on-builtin-set-base-a-declaration-also-claims -->
-The `Set` twin, and the READ direction — the two builtins are one rule, so a fix that
+<!-- test: error.field-read-on-builtin-list-base-a-declaration-also-claims -->
+The `List` twin, and the READ direction — the two builtins are one rule, so a fix that
 reached only the one it was measured on would leave the other silently handing out its
-record. This one used to print the set record's live count as if it were the declared
+record. This one used to print the list record's live count as if it were the declared
 field.
+
+⚠ **THE SUBJECT USED TO BE SPELLED `Set`, AND W90 FALSIFIED THAT SPELLING.** `Set` is no
+longer single-regime: a corpus `stdlib/Set.maxon` is listed, so a user `type Set uses T`
+now CONTESTS a declared type rather than a synthesized record and takes A1s wave 2's
+"a declaration wins" road instead of this gate. `List` is still single-regime —
+`isListBaseName` is a bare name test and `stdlib/List.maxon` is unlisted — so it is the
+base that still asks the question this case exists to pin, which its `Array` write-direction
+twin directly above does not cover.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
-type Set uses T
+type List uses T
 	export var value as T
-end 'Set'
+end 'List'
 
-typealias IntSet = Set with Int
+typealias IntList = List with Int
 
 function main() returns ExitCode
-	var s = IntSet.create()
-	s.insert(7)
+	var s = IntList.create()
+	s.append(7)
 	return s.value
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:9: Unsupported: a field access on 's': `Set` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Set.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+error E2015: <fragment>:13:9: Unsupported: a field access on 's': `List` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/List.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
 ```
 
 <!-- test: error.sizeof-of-undeclared-generic-base -->

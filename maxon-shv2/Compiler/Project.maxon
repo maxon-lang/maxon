@@ -3123,17 +3123,24 @@ export type StructLayout
 	// is the SWEEP's answer to "which interfaces does this type name?", used only to expand extensions, and
 	// nothing verifies a conformance from it.
 	export var conformsTo as ByteArrayArray
-	// ⭐ **THE `with <TypeArgs>` BOUND BY THE FINAL NAME IN `conformsTo`** — the associated-type bindings a
+	// ⭐ **THE `with <TypeArgs>` EACH NAME IN `conformsTo` BINDS** — the associated-type bindings a
 	// CONDITIONAL extension's `where` clause is evaluated against: `extension Holder where Item is Comparable`
-	// asks what each conformer binds `Item` to, and that is the fact this column carries. Positional —
-	// `conformanceBindings[i]` binds the interface's associated type at position `i`, which is the position a
-	// `WhereConstraint.typeParamIndex` names. Empty when the clause wrote no `with`.
+	// asks what each conformer binds `Item` to, and that is the fact this column carries. Doubly positional —
+	// `conformanceBindings[i]` is the list `conformsTo[i]` wrote, and within it position `j` binds that
+	// interface's associated type `j`, which is the position a `WhereConstraint.typeParamIndex` names.
 	//
-	// ⚠ **THE FINAL NAME IS THE ONLY ONE THAT CAN CARRY BINDINGS, and that is structural rather than a
-	// convention this column hopes for.** `readOptionalImplementsClause` STOPS the interface list at the
-	// first `with` — see its header for why — so one clause contributes at most one bindings list, and it
-	// belongs to the last name recorded.
-	export var conformanceBindings as ByteArrayArray
+	// ⚠ **IT IS EITHER EMPTY OR EXACTLY AS LONG AS `conformsTo`**, and `recordConformances` is the one writer
+	// that can establish that. Empty means the clause wrote no `with` anywhere — the common case, which
+	// allocates nothing (`sharedEmptyConformanceBindings`); otherwise every name has an entry, the shared
+	// empty list standing at each position that bound nothing. A column that could be SHORT would make the
+	// pairing a search over two lengths, which is the shape that answers with a neighbour's binding.
+	//
+	// ⚠ **IT USED TO BE ONE LIST BELONGING TO THE LAST NAME, BECAUSE THE READER COULD RECORD ONLY ONE (W95).**
+	// `readOptionalImplementsClause` stopped the interface list at the first `with`, so one clause contributed
+	// at most one bindings list — and the interfaces after that `with` were lost along with their extensions.
+	// The reader now runs a second time, whole-program, where the arity that ends a `with` is known
+	// (`Queries.foldConformanceClauses`), and a clause can contribute a binding at every name.
+	export var conformanceBindings as ConformanceBindingArray
 	// ⭐ **THE DECLARATION'S OWN VISIBILITY (N1a)** — `type Point` vs `module type Point` vs
 	// `export type Point`. Read by `Parser.typeNameVisibleHere`, the door a source-written type NAME in a
 	// dotted primary goes through, and by `Parser.requireFieldAccessible`, which meets it at the first field
@@ -3151,7 +3158,7 @@ export type StructLayout
 	// take the columns, deliberately: handing pre-built parallel arrays across a call boundary is
 	// exactly the shape that lets one arrive short.
 	export static function create(name ByteArray, visibility Visibility, declFilePath FilePath) returns StructLayout
-		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyDeclaredConformances, visibility: visibility, declFilePath: declFilePath}
+		return Self{name: name, fieldNames: ByteArrayArray.create(), fieldTypes: MaxonTypeArray.create(), fieldMutable: BoolArray.create(), fieldVisibility: VisibilityArray.create(), fieldDefaults: FieldDefaultArray.create(), fieldDeclaredSurfaces: DeclaredSurfaceArray.create(), fieldOffsets: ByteOffsetArray.create(), slotBytes: 0, typeParamNames: ByteArrayArray.create(), whereConstraints: sharedEmptyWhereConstraints, conformsTo: sharedEmptyDeclaredConformances, conformanceBindings: sharedEmptyConformanceBindings, visibility: visibility, declFilePath: declFilePath}
 	end 'create'
 
 	// The layout every COMPILER-SYNTHESIZED type takes: nameable from any file, declared in none. Spelled
@@ -3174,29 +3181,42 @@ export type StructLayout
 		self.whereConstraints = constraints
 	end 'recordWhereConstraints'
 
-	// Record the interface names the type's `implements` clause writes, and the `with` arguments its final
-	// name binds. Replaces both columns wholesale for `recordTypeParams`' reason — the clause is read as a
-	// unit, by the one reader both passes share — and takes them TOGETHER because they are one read: a
-	// bindings list recorded without the name it belongs to indexes nothing.
-	export function recordConformances(names ByteArrayArray, bindings ByteArrayArray)
+	// Record the interface names the type's `implements` clause writes, and the `with` arguments each of them
+	// binds. Replaces both columns wholesale for `recordTypeParams`' reason — the clause is read as a unit, by
+	// the one reader every pass shares — and takes them TOGETHER because they are one read: a bindings list
+	// recorded without the names it is positional against indexes nothing.
+	//
+	// ⚠ **THE LENGTH INVARIANT IS ASSERTED HERE, WHICH IS THE ONLY PLACE IT CAN BE.** `bindingsForInterface`
+	// pairs the two columns by index and `mixConformanceBindings` walks them together; a column that arrived
+	// short would make the first read a neighbour's binding and the second hash one declaration's clause as
+	// another's. See `conformanceBindings` for the two admitted shapes.
+	export function recordConformances(names ByteArrayArray, bindings ConformanceBindingArray)
+		if bindings.count() != 0 and bindings.count() != names.count() 'columnsDisagree'
+			panic("StructLayout.recordConformances: `type {String.from(self.name)}` records {names.count()} interface name(s) against {bindings.count()} binding list(s) — the two columns are paired by INDEX, so a reader of the shorter one answers with the wrong conformance's `with` arguments")
+		end 'columnsDisagree'
+
 		self.conformsTo = names
 		self.conformanceBindings = bindings
 	end 'recordConformances'
 
-	// What this type binds `interfaceName`'s associated types to, or an empty list when it does not name that
-	// interface last (see `conformanceBindings`). The pairing is checked rather than assumed: a caller that
-	// asked about the wrong interface must get "no bindings", never the neighbour's.
+	// What this type binds `interfaceName`'s associated types to, or an empty list when its clause binds
+	// nothing at that interface (see `conformanceBindings`). The pairing is checked rather than assumed: a
+	// caller that asked about an interface this type does not name must get "no bindings", never a
+	// neighbour's.
 	export function bindingsForInterface(interfaceName ByteArray) returns ByteArrayArray
-		if self.conformsTo.count() == 0 'declaresNone'
-			return sharedEmptyDeclaredConformances
-		end 'declaresNone'
+		// Bounded by the BINDINGS column and not the names one, which is what makes the walk correct for both
+		// admitted shapes: a declaration with no `implements` clause at all carries the shared empty here and
+		// never enters the loop, while a declaration that has one carries an entry per name.
+		for i in 0 upto self.conformanceBindings.count() 'eachConformance'
+			let declared = try self.conformsTo.get(i) otherwise panic("StructLayout.bindingsForInterface: conformsTo.get OOB at {i} on a list of {self.conformsTo.count()}, which `recordConformances` pairs with {self.conformanceBindings.count()} binding list(s)")
+			if not declared.equals(interfaceName) 'boundToAnother'
+				continue
+			end 'boundToAnother'
 
-		let last = try self.conformsTo.get(self.conformsTo.count() - 1) otherwise panic("StructLayout.bindingsForInterface: conformsTo.get OOB at {self.conformsTo.count() - 1} on a list of {self.conformsTo.count()}")
-		if not last.equals(interfaceName) 'boundToAnother'
-			return sharedEmptyDeclaredConformances
-		end 'boundToAnother'
+			return try self.conformanceBindings.get(i) otherwise panic("StructLayout.bindingsForInterface: conformanceBindings.get OOB at {i} below count {self.conformanceBindings.count()}")
+		end 'eachConformance'
 
-		return self.conformanceBindings
+		return sharedEmptyDeclaredConformances
 	end 'bindingsForInterface'
 
 	// The number of `where` constraints (P1.7a slice 2a) — the number of hidden witness parameters an
@@ -3780,23 +3800,36 @@ let UnionTagBytes = 8 as ByteOffset
 // the other declaration kind, filled by the same reader, and its absence is the same fact.
 export let sharedEmptyDeclaredConformances = ByteArrayArray.create()
 
-// ⭐ **WHAT ONE `implements` CLAUSE CONTRIBUTES: the interface NAMES, and the `with` arguments the last of
+// ⭐ **ONE `with` ARGUMENT LIST PER INTERFACE NAMED, POSITIONAL AGAINST `conformsTo` (W95).** A clause may
+// bind at more than one of its names — `implements Tagged with Integer, Held with Integer` binds at both —
+// so the bindings are a column beside the names and not a single list belonging to the last of them. A name
+// that wrote no `with` carries `sharedEmptyDeclaredConformances` at its position, which is what keeps the
+// two columns the same length and makes the pairing index arithmetic rather than a search.
+export typealias ConformanceBindingArray = Array with ByteArrayArray
+
+// The bindings column of a declaration whose `implements` clause writes NO `with` anywhere — and of one
+// that writes no clause at all. Shared for `sharedEmptyDeclaredConformances`' reason, which is the same
+// reason one column over: nearly every declaration in the corpus binds nothing, and a fresh empty array per
+// declaration would be an allocation for the absence of a fact. Read-only.
+export let sharedEmptyConformanceBindings = ConformanceBindingArray.create()
+
+// ⭐ **WHAT ONE `implements` CLAUSE CONTRIBUTES: the interface NAMES, and the `with` arguments EACH of
 // them binds.** `Parser.readOptionalImplementsClause` returns the pair rather than the names alone because
-// they are one read — see `StructLayout.conformanceBindings` for why only the last name can carry bindings —
-// and a bindings list handed over without the names it is positional against indexes nothing. An
-// `enum`/`union` takes the names half and ignores the other: it has no conditional extension to evaluate.
+// they are one read — see `StructLayout.conformanceBindings` for how the two columns pair — and a bindings
+// list handed over without the names it is positional against indexes nothing. An `enum`/`union` takes the
+// names half and ignores the other: it has no conditional extension to evaluate.
 export type ScannedConformanceClause
 	export let names as ByteArrayArray
-	export let bindings as ByteArrayArray
+	export let bindings as ConformanceBindingArray
 
-	export static function create(names ByteArrayArray, bindings ByteArrayArray) returns ScannedConformanceClause
+	export static function create(names ByteArrayArray, bindings ConformanceBindingArray) returns ScannedConformanceClause
 		return Self{names: names, bindings: bindings}
 	end 'create'
 
 	// A declaration with no `implements` clause at all — both halves the shared empty, so the common case
 	// allocates nothing.
 	export static function declaringNothing() returns ScannedConformanceClause
-		return Self{names: sharedEmptyDeclaredConformances, bindings: sharedEmptyDeclaredConformances}
+		return Self{names: sharedEmptyDeclaredConformances, bindings: sharedEmptyConformanceBindings}
 	end 'declaringNothing'
 end 'ScannedConformanceClause'
 
@@ -4304,6 +4337,14 @@ export type EnumLayout
 	export static function createCompilerOwned(name ByteArray, conformsTo ByteArrayArray) returns EnumLayout
 		return EnumLayout.create(name, isUnion: false, conformsTo: conformsTo, visibility: Visibility.global, declFilePath: CompilerOwnedDeclFilePath, backing: EnumBacking.integer)
 	end 'createCompilerOwned'
+
+	// ⭐ **REPLACE THE `implements` LIST WITH THE WHOLE-PROGRAM RE-READ'S (W95)** — `StructLayout`'s twin, and
+	// it takes NO bindings for the reason `conformsTo` above already states: an enum has no conditional
+	// extension whose `where` clause a binding would be evaluated against, so the clause's arguments are read
+	// (a `with` still ends an interface name) and dropped. Wholesale, because the clause is read as a unit.
+	export function recordConformances(names ByteArrayArray)
+		self.conformsTo = names
+	end 'recordConformances'
 
 	// Append one declared case. THE one writer of all FIVE columns, so they cannot drift — a caller
 	// that pushed a name and forgot the payloads would shift every later case's payloads onto the

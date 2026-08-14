@@ -196,6 +196,22 @@ function mixDeclaredConformances(state ContentHash, conformsTo ByteArrayArray, s
 	return out
 end 'mixDeclaredConformances'
 
+// ⭐ **THE `with` BINDINGS' HALF OF THE STATEMENT ABOVE, NOW THAT A CLAUSE MAY BIND AT EVERY NAME (W95)** —
+// one list per interface, so the column is nested and a flat walk of it could not tell
+// `implements A with X, B` from `implements A, B with X`.
+//
+// ⚠ **EACH LIST'S LENGTH IS MIXED AHEAD OF ITS CONTENTS, AND THAT IS WHAT MAKES THE NESTING VISIBLE.**
+// Without it `[[X], [Y]]` and `[[X, Y], []]` hash identically — two different programs (one binds `Y` at the
+// second interface, the other binds it at the first), and a reader served the wrong memo would substitute
+// one conformer's associated type for another's.
+function mixConformanceBindings(state ContentHash, bindings ConformanceBindingArray) returns ContentHash
+	var out = state
+	for perInterface in bindings 'eachConformance'
+		out = mixDeclaredConformances(mix(out, value: perInterface.count()), conformsTo: perInterface, shape: DeclShapeConformanceBinding)
+	end 'eachConformance'
+	return out
+end 'mixConformanceBindings'
+
 // The `MaxonType.structRef` arm's discriminator. It is DISTINCT from `TypeShapeNamed`, and that is
 // load-bearing rather than tidy: `named(Point)` and `structRef(Point)` carry the same NAME and mean
 // different things in every reader — one is a ranged int, the other a pointer — so a hash that
@@ -538,6 +554,13 @@ let DeclShapeNamespaceQualifiedFunction = 66 as ContentHash
 // from one file to another can start or end a contest without changing what either declaration SAYS. The
 // bare name rides through `record`; only this can carry the contest.
 let DeclShapeContestedExtensionMethod = 78 as ContentHash
+
+// ⭐ **THE WHOLE-PROGRAM RE-READ OF ONE `implements` CLAUSE (W95)** — its own discriminator, and not
+// `DeclShapeDeclaredConformance`, because the two are mixed at DIFFERENT MOMENTS over the same declaration:
+// `recordStruct` mixes what the sweep could prove, and `refoldConformanceClause` mixes what the complete
+// index re-read. Sharing one shape would let a clause whose extent CHANGED between the two hash as a clause
+// that was read once and correctly — which is exactly the memo staleness this re-read exists to close.
+let DeclShapeRefoldedConformance = 91 as ContentHash
 
 // A `throws` clause's PRESENCE discriminators (R8) — the two arms of `ThrowsClause`, so `none` and
 // `throwing(E)` cannot hash alike in a position where both are possible. `mixThrowsClause` is the one place a
@@ -6588,6 +6611,43 @@ end 'ExtensionDeclSite'
 
 export typealias ExtensionDeclSiteArray = Array with ExtensionDeclSite
 
+// ⭐⭐ **WHERE ONE `type`/`enum`/`union` DECLARATION THAT WRITES AN `implements` CLAUSE SITS IN ITS FILE'S
+// TOKEN STREAM (W95)** — the THIRD "note the position, read the declaration once the program is whole" site,
+// after `InterfaceDeclSite` and `ExtensionDeclSite`, and the one whose deferral is forced by the FIRST of
+// them.
+//
+// A conformance clause's own EXTENT depends on the whole program: whether the comma in
+// `implements Marker with T, Holder with T` opens a second argument or a second interface is `Marker`'s
+// `uses` arity, and that arity is `foldInterfaceDeclarations`' answer — a pass that cannot run until every
+// file has folded. So the sweep reads what it can prove (`Parser.readOptionalImplementsClause` stops at the
+// first unparenthesized `with`) and `Queries.foldConformanceClauses` re-reads the SAME tokens with the same
+// reader once the arity is known.
+//
+// ⛔ **MEASURED before it existed: `implements Marker with T, Holder with T` gave `extension Holder`'s
+// methods to nobody, while `implements Holder with T, Marker with T` — the identical clause, reordered —
+// compiled and ran.** Clause ORDER decided semantics. The corpus's own `stdlib/Set.maxon` carried it:
+// `Set.map()` returned `unknown` because `Iterable` sat after a `with`.
+//
+// ⚠ **IT CARRIES THE DECLARED NAME AND THE DECLARATION KIND, AND BOTH ARE LOAD-BEARING.** The name is how
+// the re-read finds the layout to record onto — the registry's, not a fresh one — and the KIND chooses which
+// registry, exactly as `Parser.enterTypeScope` takes the two together for the reason its header states.
+export type ConformanceClauseDeclSite
+	export var path as FilePath
+	// The DECLARATION keyword (`type`/`enum`/`union`), not the `implements` one. The re-read has to re-enter
+	// the declaration's own scope before it can render a `with` argument — `Self` and a `uses T` parameter
+	// both resolve against it — and re-running `readTypeHeader` + `openTypeParamScope` from here is that
+	// scope, taken through the doors that already own it rather than reconstructed beside them.
+	export var tokenPos as TokenIndex
+	export var declName as ByteArray
+	export var declIsEnum as bool
+
+	export static function create(path FilePath, tokenPos TokenIndex, declName ByteArray, declIsEnum bool) returns ConformanceClauseDeclSite
+		return Self{path: path, tokenPos: tokenPos, declName: declName, declIsEnum: declIsEnum}
+	end 'create'
+end 'ConformanceClauseDeclSite'
+
+export typealias ConformanceClauseDeclSiteArray = Array with ConformanceClauseDeclSite
+
 // ⭐⭐ **WHERE ONE SET OF A GENERIC TYPE'S METHODS BEGINS — the site list the whole-program
 // LAYOUT-DESCRIPTOR-NEED fixpoint walks (`Queries.foldDescriptorNeeds`).** A generic `type`'s own body is
 // one site; every `extension` body over a generic target is another, one per conformer it publishes onto.
@@ -7700,6 +7760,10 @@ export type ProgramSignatures
 	// `ExtensionDeclSite`. Read once, by `foldExtensionDeclarations`, after the last file folds, because an
 	// extension's methods belong to conformers the per-file sweep has not necessarily met yet.
 	export var extensionDeclSites as ExtensionDeclSiteArray
+	// ⭐ Where each `type`/`enum`/`union` that writes an `implements` clause sits (W95) — see
+	// `ConformanceClauseDeclSite`. Read once, by `Queries.foldConformanceClauses`, after the INTERFACE fold,
+	// because the clause's own extent depends on an interface arity only that pass knows.
+	export var conformanceClauseSites as ConformanceClauseDeclSiteArray
 	// ⭐ Where each GENERIC type's method list begins — its own body, and every extension body over it. See
 	// `DescriptorScanSite`. Read once, by `Queries.foldDescriptorNeeds`, after the extension fold has put
 	// every extension method into the program.
@@ -8222,7 +8286,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -8715,7 +8779,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -8809,6 +8873,13 @@ export type ProgramSignatures
 		for site in extensionSites 'eachExtensionSite'
 			self.extensionDeclSites.push(site)
 		end 'eachExtensionSite'
+
+		// CONFORMANCE CLAUSE sites ride beside both, carry no ids for the same reason, and are ACCUMULATED
+		// for a reason that is the INTERFACE fold's own output: a clause's extent depends on an interface
+		// arity that pass computes. See `ConformanceClauseDeclSite`.
+		for site in conformanceSites 'eachConformanceClauseSite'
+			self.conformanceClauseSites.push(site)
+		end 'eachConformanceClauseSite'
 
 		// The generic-type method-list sites the descriptor-need fixpoint walks — see `DescriptorScanSite`.
 		// A program that declares no generic type contributes none, which is what leaves
@@ -10351,7 +10422,7 @@ export type ProgramSignatures
 		// CONDITIONAL extension's methods exist on this type at all (`ConformanceCheck.checkExtensionConstraints`), so
 		// editing `implements Holder with Score` to `with Tally` adds or removes functions from the program
 		// with neither the extension's file nor this type's field list moving.
-		state = mixDeclaredConformances(state, conformsTo: layout.conformanceBindings, shape: DeclShapeConformanceBinding)
+		state = mixConformanceBindings(state, bindings: layout.conformanceBindings)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			state = self.mixField(state, layout: layout, index: i)
 		end 'eachField'
@@ -13192,6 +13263,45 @@ export type ProgramSignatures
 		end 'eachDeclaredType'
 		return conformers
 	end 'conformersOf'
+
+	// ⭐⭐ **REPLACE WHAT THE SWEEP RECORDED FOR ONE `implements` CLAUSE WITH THE WHOLE-PROGRAM RE-READ'S
+	// ANSWER (W95)** — the write half of `Queries.foldConformanceClauses`. It writes THROUGH the registry's
+	// own layout (`normalizeSweptInterfaceTypes`' shape one column over), so every reader that already holds
+	// one sees the corrected list; nothing is re-keyed and no map is rewritten.
+	//
+	// ⚠ **THE DECLARING FILE IS CHECKED, AND IT IS THE ONLY THING STANDING BETWEEN THIS AND A DROPPED
+	// DECLARATION.** `recordStruct` DROPS a user declaration that contests a compiler-owned name, leaving the
+	// compiler's own layout under that key — and this re-read is driven by a SITE, which knows only that some
+	// file declared the name there. Writing without the check would give the builtin's layout the user
+	// declaration's conformances, which is `recordStruct`'s measured "user's struct captured the parameter
+	// type of a module they did not write" with the clause instead of the fields. The same test settles a
+	// name two files declare (E3006's business): the registry keeps one, and only that one's site writes.
+	//
+	// ⚠ **IT MIXES THE RE-READ INTO `self.hash`, AND THAT IS NOT BOOKKEEPING.** Before this pass the truncated
+	// list was BOTH what the compiler used and what it hashed, so the two agreed by accident; now the used
+	// list is this one. Editing `implements A with X, B` to `implements A with X, C` moves no byte
+	// `recordStruct` can see — it hashes the truncated `[A]` either way — while it adds and removes whole
+	// extension methods from the program. Only this mix carries that to the reader's parse memo.
+	export function refoldConformanceClause(site ConformanceClauseDeclSite, clause ScannedConformanceClause)
+		if site.declIsEnum 'anEnum'
+			let enumLayout = try self.enumTypes.get(site.declName) otherwise return
+			if not enumLayout.declFilePath.equals(site.path) 'theRegistryHoldsAnotherDeclaration'
+				return
+			end 'theRegistryHoldsAnotherDeclaration'
+
+			enumLayout.recordConformances(clause.names)
+		end 'anEnum' else 'aType'
+			let layout = try self.structTypes.get(site.declName) otherwise return
+			if not layout.declFilePath.equals(site.path) 'theRegistryHoldsAnotherDeclaration'
+				return
+			end 'theRegistryHoldsAnotherDeclaration'
+
+			layout.recordConformances(clause.names, bindings: clause.bindings)
+		end 'aType'
+
+		let named = mixBytes(mix(self.hash, value: DeclShapeRefoldedConformance), bytes: site.declName)
+		self.hash = mixConformanceBindings(mixDeclaredConformances(named, conformsTo: clause.names, shape: DeclShapeDeclaredConformance), bindings: clause.bindings)
+	end 'refoldConformanceClause'
 
 	// ⭐⭐ **THE DECLARED-CONFORMANCE INDEX AS THIS PHASE CAN SEE IT — the same map `ConformanceCheck` builds,
 	// from the only store that exists this early.** `declaredConformanceIndex(project)` reads

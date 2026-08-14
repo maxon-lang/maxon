@@ -312,9 +312,16 @@ export function queryProgramSignatures(project Project) returns ProgramSignature
 	// only `Array with Integer` is that formal), and an instance interned after the warming walk would have its
 	// two name memos derived LAZILY — by the parse, which must only ever read them.
 	try foldInterfaceDeclarations(project, signatures: signatures)
-	// ⭐ And every `extension <Interface>`'s methods, onto every conformer — STRICTLY AFTER the line above,
-	// which is what makes an extension's signatures render types exactly as the real parse will. See
-	// `foldExtensionDeclarations`.
+	// ⭐⭐ **AND ONLY NOW CAN AN `implements` CLAUSE BE READ TO ITS END (W95).** Whether the comma in
+	// `implements Marker with T, Holder with T` opens a second ARGUMENT or a second INTERFACE is `Marker`'s
+	// `uses` arity — which the line above is what establishes — so the per-file sweep stopped at the first
+	// unparenthesized `with` and every interface named after it was lost. STRICTLY BETWEEN these two lines:
+	// after the interface fold because that is the arity, and before the extension fold because `conformsTo`
+	// is exactly the relation that pass expands over. See `foldConformanceClauses`.
+	try foldConformanceClauses(project, signatures: signatures)
+	// ⭐ And every `extension <Interface>`'s methods, onto every conformer — STRICTLY AFTER the two lines
+	// above, which is what makes an extension's signatures render types exactly as the real parse will, and
+	// what puts every conformer into the relation it walks. See `foldExtensionDeclarations`.
 	try foldExtensionDeclarations(project, signatures: signatures)
 	// ⭐⭐ **AND ONLY NOW CAN A SWEPT `named` BE TOLD FROM AN INTERFACE (P1.7a-existentials slice 1).** The
 	// line above is what fills the interface registry, so every type the sweep recorded BEFORE it — a struct
@@ -711,8 +718,7 @@ function foldInterfaceDeclarations(project Project, signatures ProgramSignatures
 	var i = 0 as ElementCount
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
-		let tokens = try queryActiveTokens(project, path: path)
-		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: true)
+		var reader = try siteFileReader(project, signatures: signatures, path: path)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
@@ -763,8 +769,7 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 	var i = 0 as ElementCount
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")).path
-		let tokens = try queryActiveTokens(project, path: path)
-		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: true)
+		var reader = try siteFileReader(project, signatures: signatures, path: path)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")
@@ -781,6 +786,68 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 		end 'eachSiteInFile'
 	end 'eachFile'
 end 'walkExtensionSitesPerFile'
+
+// ⭐ **THE READER A WHOLE-PROGRAM SITE WALK PUTS DOWN ON ONE FILE — built ONCE PER FILE, not once per site.**
+// The three site-driven folds above and below share it, so "what kind of reader reads a DEFERRED declaration"
+// has one answer: the same tokens, the same stdlib tier and the same `buildsBodies` the real parse will use,
+// which is what lets a deferred read render a type exactly as that parse does.
+//
+// ⚠ **PER FILE IS A MEASURED CHOICE.** A `Parser` per SITE cost **222 allocations per interface** where the
+// per-file reader costs 130 (measured on the scale ladder at the interface fold), the difference being pure
+// construction of a `Parser` and a `FileParseArtifact` the file's first site had already built. Sharing one
+// across a file's sites is safe because every entry point opens with `enterTypeScope`, which assigns the
+// per-declaration scopes rather than merging into them — so a site that throws part-way cannot be observed
+// by the next.
+function siteFileReader(project Project, signatures ProgramSignatures, path FilePath) returns Parser throws CompileError
+	return fileReader(project, signatures: signatures, path: path, tokens: try queryActiveTokens(project, path: path), isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: true)
+end 'siteFileReader'
+
+// ⭐⭐ **RE-READ EVERY `implements` CLAUSE THE PER-FILE SWEEP COULD ONLY READ A PREFIX OF (W95)** — the
+// whole-program half of `Parser.recordScannedType` / `recordScannedEnum`'s note, and the reason those two
+// record a position at all.
+//
+// A conformance clause's own EXTENT is a whole-program fact. `implements Marker with T, Holder with T` and
+// `implements Pair with A, B` are the same tokens up to the second comma, and only `Marker`'s / `Pair`'s
+// `uses` ARITY separates them — an answer `foldInterfaceDeclarations` produces and the sweep, which is what
+// builds the index that pass reads, cannot have. So the sweep stops at the first unparenthesized `with` and
+// this pass finishes the read.
+//
+// ⛔ **MEASURED before it existed, on the corpus itself:** `stdlib/Set.maxon`'s
+// `implements InitableFromArrayLiteral with Element, Iterable with (Element, SetIter)` recorded
+// `InitableFromArrayLiteral` alone, so `extension Iterable`'s methods landed on nobody and `s.map(…)`
+// reported `E2015 … a member access 'count' on a 'unknown' value`. Reordering the clause cured it — which is
+// the defect stated exactly: clause ORDER changed what the program means.
+//
+// ⚠ **IT RUNS BETWEEN THE INTERFACE FOLD AND THE EXTENSION FOLD, AND BOTH BOUNDS ARE TIGHT.** After the
+// first, because that is the arity. Before the second, because `StructLayout.conformsTo` is the relation the
+// extension fold expands over (`ProgramSignatures.conformersOf`) and `sweptConformanceIndex` MEMOIZES it on
+// first ask — a re-record after that ask would be a correction nothing reads.
+//
+// ⚠ **THE SAME LOOP SHAPE AS THE TWO WALKS ABOVE, AND IT IS NOT FACTORED WITH THEM — deliberately, unlike
+// `walkExtensionSitesPerFile`, which WAS.** That one folded two passes over ONE site type, where the shared
+// part is expressible. These three walk three different site types, and the only thing a shared driver would
+// need — "give me this element's `path`" — is not something a bare type parameter can offer. Reaching it
+// would mean an interface, a witness and a per-site closure across the compiler's hottest fold, plus the
+// projected path and run arrays that driver would allocate where these three allocate nothing. What CAN be
+// shared is shared: one reader constructor (`siteFileReader`) and one reader per file.
+function foldConformanceClauses(project Project, signatures ProgramSignatures) throws CompileError
+	let sites = signatures.conformanceClauseSites
+	var i = 0 as ElementCount
+	while i < sites.count() 'eachFile'
+		let path = (try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")).path
+		var reader = try siteFileReader(project, signatures: signatures, path: path)
+
+		while i < sites.count() 'eachSiteInFile'
+			let site = try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")
+			if not site.path.equals(path) 'nextFile'
+				break
+			end 'nextFile'
+
+			reader.foldConformanceClauseInto(signatures, site: site)
+			i = i + 1
+		end 'eachSiteInFile'
+	end 'eachFile'
+end 'foldConformanceClauses'
 
 // ⭐⭐ **WHICH METHODS CARRY THE HIDDEN LAYOUT-DESCRIPTOR PARAMETER — solved ONCE, over the whole program
 // (P1.6-B1, W23c).** A generic type's methods are declared in two places that need not share a file: its own

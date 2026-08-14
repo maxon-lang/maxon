@@ -579,3 +579,146 @@ end 'main'
 ```maxoncstderr
 error E3011: Unknown type 'Element'
 ```
+
+### The ORDER of an `implements` clause does not decide which extensions arrive
+
+<!-- test: conformance-clause-order-does-not-change-extensions -->
+⭐⭐ **`implements Tagged with Integer, Held with Integer` AND `implements Held with Integer, Tagged
+with Integer` ARE THE SAME CLAUSE, so they must publish the same extension methods (W95).** The
+declaration sweep is what decides which types an `extension <Interface>` lands on, and it used to STOP
+its interface list at the first `with` — it could not tell `A with X, B with X` (two interfaces) from
+`Pair with X, Y` (one interface, two arguments) without an arity only the complete index holds. So the
+interface named after a `with` silently received no extensions, and moving it ahead of the `with` cured
+it: clause ORDER changed semantics.
+
+⛔ **MEASURED before the fix:** `MarkerFirst` below reported
+*"error E3004: call to undefined function 'MarkerFirst.heldPlusOne'"*, while `HeldFirst` — the identical
+clause, reordered — compiled and ran. The whole-program re-read (`Queries.foldConformanceClauses`) is
+what makes the two spellings one program; the golden beside this case is where both
+`MarkerFirst.heldPlusOne` and `HeldFirst.heldPlusOne` are shown emitted.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged uses Tag
+	function tag() returns Tag
+end 'Tagged'
+
+interface Held uses Item
+	function held() returns Item
+end 'Held'
+
+extension Held
+	export function heldPlusOne() returns Item
+		return self.held() + 1
+	end 'heldPlusOne'
+end 'Held'
+
+type MarkerFirst implements Tagged with Integer, Held with Integer
+	export var n as Integer
+
+	export static function of(n Integer) returns Self
+		return MarkerFirst{n: n}
+	end 'of'
+
+	export function tag() returns Integer
+		return self.n
+	end 'tag'
+
+	export function held() returns Integer
+		return self.n
+	end 'held'
+end 'MarkerFirst'
+
+type HeldFirst implements Held with Integer, Tagged with Integer
+	export var n as Integer
+
+	export static function of(n Integer) returns Self
+		return HeldFirst{n: n}
+	end 'of'
+
+	export function tag() returns Integer
+		return self.n
+	end 'tag'
+
+	export function held() returns Integer
+		return self.n
+	end 'held'
+end 'HeldFirst'
+
+function main() returns ExitCode
+	let a = MarkerFirst.of(20)
+	let b = HeldFirst.of(21)
+	return a.heldPlusOne() + b.heldPlusOne()
+end 'main'
+```
+```exitcode
+43
+```
+
+<!-- test: conformance-clause-order-reaches-an-enum-too -->
+⭐ **THE SAME CLAUSE, ON THE OTHER DECLARATION KIND.** An `enum` records no `with` bindings — it has no
+conditional extension to evaluate — but a LOST NAME is the same loss, and on an error enum the name that
+gets lost is the one `throws Error` is narrowed against (`EnumLayout.conformsTo`). `Slow` writes
+`implements Tagged with Code, Error`, so before the whole-program re-read the sweep recorded `Tagged`
+alone, the abstract-requirement narrowing could not see an `Error` conformance, and `Point.digest`
+throwing `Slow` was refused — while `implements Error, Tagged with Code`, the same clause reordered,
+compiled. Both edges ride one exit code, as `interface-conformance.md`'s
+`throws-narrower-than-abstract-requirement` does: the success edge carries 20 through the witness, the
+error edge takes the handler's 55.
+```maxon
+typealias Code = int(0 to u32.max)
+
+interface Tagged uses Tag
+	function tag() returns Tag
+end 'Tagged'
+
+enum Slow implements Tagged with Code, Error
+	tooSmall
+
+	export function tag() returns Code
+		return 1
+	end 'tag'
+end 'Slow'
+
+interface Digest
+	function digest() returns Code throws Error
+end 'Digest'
+
+type Point implements Digest
+	export var x as Code
+
+	export static function create(x Code) returns Self
+		return Self{x: x}
+	end 'create'
+
+	export function digest() returns Code throws Slow
+		if self.x < 10 'small'
+			throw Slow.tooSmall
+		end 'small'
+		return self.x
+	end 'digest'
+end 'Point'
+
+type Box uses T where T is Digest
+	export var item as T
+
+	export static function create(item T) returns Self
+		return Self{item: item}
+	end 'create'
+
+	export function itemDigest() returns Code
+		return try self.item.digest() otherwise 55
+	end 'itemDigest'
+end 'Box'
+
+typealias PointBox = Box with Point
+
+function main() returns ExitCode
+	let good = PointBox.create(Point.create(20))
+	let bad = PointBox.create(Point.create(3))
+	return (good.itemDigest() + bad.itemDigest()) as ExitCode
+end 'main'
+```
+```exitcode
+75
+```
