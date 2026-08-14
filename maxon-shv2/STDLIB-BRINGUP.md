@@ -614,3 +614,49 @@ compile?* (the probe) — *(2) are its bodies ANALYZED?* (the injection control,
 differing-declarations control, which `Set`, `Vector`, `Map`, `unicodeCategory` and now
 `PrimitiveExtensions` fail). **A row that answers only (1) is a guess wearing a measurement's clothes**,
 and four of my own rows this morning were exactly that.
+
+---
+
+## ⛔ `Map` IS NOT INERT — IT IS LIVE, AND THIS FILE HAS SAID OTHERWISE TWICE
+
+**MEASURED 2026-08-13 on `8e9bf119ff`**, after `S2u`, with the differing-declarations control this file
+demands — both halves, in place, restored after (`git status stdlib/` clean):
+
+| control | result |
+|---|---|
+| undefined call injected into `stdlib/Map.maxon`'s `count()` | **`E3004` at `stdlib/Map.maxon:170:26`** — the corpus body IS analyzed |
+| `Map.insert` called without `try` | **`E3057 … 'stdlib.Map.insert'`** — the corpus module's own throwing signature is what the call is checked against |
+| `count()` rewritten to `return count + 100` | program prints **`count=102`** — the corpus body's arithmetic reaches the ANSWER |
+
+⇒ **`stdlib/Map.maxon` is listed AND live.** It is not the `Set` case and it never was: `W63`/`BATCH36`
+measured `Set` inert (byte-identical, sabotage-proof) and measured `Map` **live** in the same review, and
+that review said so plainly — *"Map's module is LIVE; Set's is not. Whatever still calls `Map`
+synthesized, it is not the same relationship."*
+
+**This file then wrote the opposite, twice**: *"`Map` is already LISTED and inert"* in the 2026-08-13
+shape table, and *"(`Map`, already listed and inert)"* in the correction below it. **Both are wrong, and
+the correction repeated the error it was written to fix** — which is the exact failure mode this file
+exists to catch, committed by the file itself.
+
+### What IS missing on `Map`, measured rather than inferred
+
+`W52`'s row is still real, but it is **one conformance, not a retirement**: `NumMap from ["a": 1, "b": 2]`
+gives **`E2004: Undefined variable 'NumMap'`** — the `BuiltinDictionaryLiteral` path does not reach. Its
+row's framing — *"the ACTUAL job, retiring the synthesized `Map`, is not begun"* — **overstates what is
+left**, because the ordinary surface (`create`, `insert`, `count`, and the throwing signatures) is
+already served by the corpus module.
+
+### The remaining shape, corrected again
+
+| kind | modules | change |
+|---|---|---|
+| **Synthesized-twin chains** | `Set` · `Vector` · `List` · `PrimitiveExtensions` | **`Map` REMOVED** — it is live |
+| **Listed but incomplete** | `Map` (dictionary literals only, `W52`) | **new class** — a module can be neither unlisted nor finished |
+| **Inert-if-listed** | `unicodeCategory` | unchanged |
+| **Convergence** | `CharacterSet` | unchanged |
+| **Runtime slices** | `Subprocess` · `TcpClient` → `HttpClient` → `httpHelpers` | unchanged |
+
+⚠ **THE LESSON, AND IT IS THE THIRD TIME TODAY:** every one of this file's classification errors has come
+from **inheriting a class rather than re-running the control**. The controls are cheap — an injection and
+a `+ 100` are two builds — and each time one was actually run it moved a module between classes.
+**A module's class is a MEASUREMENT with a date, never a property.**
