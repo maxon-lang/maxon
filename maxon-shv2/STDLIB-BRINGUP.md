@@ -640,11 +640,23 @@ exists to catch, committed by the file itself.
 
 ### What IS missing on `Map`, measured rather than inferred
 
-`W52`'s row is still real, but it is **one conformance, not a retirement**: `NumMap from ["a": 1, "b": 2]`
-gives **`E2004: Undefined variable 'NumMap'`** — the `BuiltinDictionaryLiteral` path does not reach. Its
-row's framing — *"the ACTUAL job, retiring the synthesized `Map`, is not begun"* — **overstates what is
-left**, because the ordinary surface (`create`, `insert`, `count`, and the throwing signatures) is
-already served by the corpus module.
+`NumMap from ["a": 1, "b": 2]` gives **`E2004: Undefined variable 'NumMap'`** — the
+`BuiltinDictionaryLiteral` path does not reach. That much is measured.
+
+⛔ **AND I FIRST WROTE THAT THIS MAKES `W52` "one conformance, not a retirement". THAT WAS WRONG, IN THE
+EXACT WAY THIS SECTION IS ABOUT, AND IT IS RETRACTED HERE.** I inferred the size of what is left from a
+surface that works, without reading the rest of `W52`'s own row — which names the real work behind the
+conformance: `SignatureIndex.genericInstanceBoxSize` answers `MapRecordBytes` (64) from its
+`isMapInstance` arm **before any declared layout is consulted**, so a corpus `Map` and the fused record
+can disagree about FIELD OFFSETS **with no diagnostic** — `StdlibLoader.maxon` calls this the one
+collision shape that is SILENT. Plus **133 references across 12 files**, a `HashTableRuntime` **shared
+with `Set`**, and map literals and `for k, v in map` both needing to re-point at the corpus type.
+
+⚠ **MY `count=102` DOES NOT RULE THAT OUT.** It proves the corpus body runs and its arithmetic reaches
+the answer; it says nothing about whether every field sits where the other reader thinks it does. A
+silent offset collision is precisely the defect that a passing read cannot disprove. ⇒ **`Map` is LIVE
+and `W52` is a full retirement rung. Both are true, and I briefly wrote that the second followed from
+the first.**
 
 ### The remaining shape, corrected again
 
