@@ -12591,7 +12591,7 @@ export type Parser
 	// ⚠ **IT RUNS AFTER `allFilesFolded` AND IT HAS TO**, which is the other half of why the walk cannot be
 	// the sweep's own. Three of its seeds are whole-program answers the sweep is still building while it walks
 	// a body: `functionFeedsCalleeStorage` (the consume/feed record), an inner alias naming an OPAQUE `Array`
-	// (`opaqueArrayConstructionAt` → `isGenericAlias`), and a managed opaque field (`opaqueFieldReassignAt`).
+	// (`opaqueManagedRecordConstructionAt` → `isGenericAlias`), and a managed opaque field (`opaqueFieldReassignAt`).
 	// Read mid-sweep they answer "no" for a declaration folded later, and a reservation is ABI — so the sweep
 	// records a POSITION and this walks it once the index is whole. That is also what makes the answer
 	// independent of declaration order, which a descriptor parameter must be.
@@ -12601,7 +12601,7 @@ export type Parser
 	// cursor is positioned from the site and the `Parser` this runs on parses nothing.
 	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap)
 		// The type scope the seeds are read against: `sizeofOperandIsTypeParamAt` needs the `uses` list, and
-		// `opaqueArrayConstructionAt` / `opaqueFieldReassignAt` key on `enclosingType`. Taken from the
+		// `opaqueManagedRecordConstructionAt` / `opaqueFieldReassignAt` key on `enclosingType`. Taken from the
 		// whole-program layout rather than re-read from a header, so an EXTENSION body — which has no `uses`
 		// clause of its own — is scanned in exactly its target's scope.
 		self.enterTypeScope(site.typeName, isEnum: false)
@@ -12964,12 +12964,13 @@ export type Parser
 			if kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.break or kind == TokenKind.continue 'earlyExit'
 				hasControlFlow = true
 			end 'earlyExit'
-			// Constructing an opaque-`T` array (`ElementArray.create()`, or the literal `ElementArray{}` it shares
-			// a producer with) stamps its `element_destroy@40` from the enclosing instance's threaded descriptor,
-			// so — like `sizeof(T)` — it needs the descriptor param (P1.7 slice 3b-i, S2i).
-			if kind == TokenKind.identifier and self.opaqueArrayConstructionAt(q) 'opaqueArrayConstruction'
+			// Constructing an opaque-`T` fused managed record (`ElementArray.create()`, or the literal
+			// `ElementArray{}` it shares a producer with — and since S2u a `Vector with <N> <type parameter>` too)
+			// stamps its `element_destroy@40` from the enclosing instance's threaded descriptor, so — like
+			// `sizeof(T)` — it needs the descriptor param (P1.7 slice 3b-i, S2i).
+			if kind == TokenKind.identifier and self.opaqueManagedRecordConstructionAt(q) 'opaqueManagedRecordConstruction'
 				direct = true
-			end 'opaqueArrayConstruction'
+			end 'opaqueManagedRecordConstruction'
 			// ⭐⭐ **`Self{}` IS A THIRD SPELLING OF THAT SAME CONSTRUCTION (W57)**, and it is here for the
 			// reason the header above records the literal form being added for: the parser grew a producer and
 			// this scan did not, so `appendOpaqueArrayCreate` met a function with no descriptor reserved and
@@ -13318,7 +13319,7 @@ export type Parser
 		return not self.enclosingType.isEmpty() and not hasStaticModifier
 	end 'declarationTakesReceiver'
 
-	// Is the identifier at `aliasPos` a member-level opaque-`T` array alias being CONSTRUCTED — the
+	// Is the identifier at `aliasPos` a member-level opaque-`T` MANAGED-RECORD alias being CONSTRUCTED — the
 	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` qualifies (`Container.X`) to a
 	// whole-program generic alias naming an OPAQUE instance of a container whose `create` builds the fused
 	// managed record — `Array with <type parameter>`, and since S2u the fixed-size `Vector with <N> <type
@@ -13338,7 +13339,7 @@ export type Parser
 	// reserved — *"the parser's descriptor-need seed and this lowering disagree"*, which is exactly what
 	// happened. The two spellings are one construction (`parseInnerAliasLiteral` routes them to one producer),
 	// so they are one shape test here.
-	function opaqueArrayConstructionAt(aliasPos TokenIndex) returns bool
+	function opaqueManagedRecordConstructionAt(aliasPos TokenIndex) returns bool
 		if not self.aliasConstructionFollows(aliasPos) 'notAConstruction'
 			return false
 		end 'notAConstruction'
@@ -13348,7 +13349,7 @@ export type Parser
 		end 'notAlias'
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
 		return self.signatures.instanceCreateBuildsTheManagedRecord(giid) and self.signatures.containerElementIsOpaque(giid)
-	end 'opaqueArrayConstructionAt'
+	end 'opaqueManagedRecordConstructionAt'
 
 	// ⭐ **THE `Self{…}` SPELLING OF THE CONSTRUCTION ABOVE (W57)** — a separate shape test because `Self` is a
 	// KEYWORD and names no alias, so there is no qualified name to look an instance up by; the instance is the

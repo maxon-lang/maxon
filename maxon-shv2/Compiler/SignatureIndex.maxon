@@ -15637,11 +15637,11 @@ export type ProgramSignatures
 	// descriptor-need SEED and the descriptor-reading EMIT both read (S2u).** `Parser.emitVectorCreateOp` IS
 	// `emitArrayCreateOp` plus the `__managed_resize` that publishes the N slots, so a `Vector` reaches the
 	// opaque, descriptor-reading create by exactly the route an `Array` does. Asked separately, the seed
-	// (`Parser.opaqueArrayConstructionAt`) and the emit would be free to disagree about which containers take
+	// (`Parser.opaqueManagedRecordConstructionAt`) and the emit would be free to disagree about which containers take
 	// that route — and that disagreement is a compiler PANIC rather than a wrong answer: **MEASURED**, the
 	// opaque refusal relaxed with this family still spelled `isArrayInstance`, `Holder.create()` writing
 	// `Slot.create()` reached *"appendOpaqueArrayCreate: opaque `Array.create()` in 'Holder.create' but the
-	// function carries no layout descriptor parameter"*. It is `opaqueArrayConstructionAt`'s own stated
+	// function carries no layout descriptor parameter"*. It is `opaqueManagedRecordConstructionAt`'s own stated
 	// discipline, one axis over: that door already reads the SAME `containerElementIsOpaque` the emit branches
 	// on, and this is the other half of the same pairing.
 	export function instanceCreateBuildsTheManagedRecord(id GenericInstanceId) returns bool
@@ -16670,7 +16670,7 @@ export type ProgramSignatures
 			return ContainerCreateCall.create(ListCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
 		end 'chain'
 
-		if not (self.isArrayInstance(id) or self.isVectorInstance(id)) 'notACreatableContainer'
+		if not self.instanceCreateBuildsTheManagedRecord(id) 'notACreatableContainer'
 			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — a DECLARED generic returned one arm above, and every builtin reaching here was admitted through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
 		end 'notACreatableContainer'
 
