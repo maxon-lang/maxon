@@ -1,0 +1,83 @@
+// Test: enum-equals-direct
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	let a = Color.green
+	let b = Color.green
+	let c = Color.red
+	if a.equals(b) 'eq'
+		if a.equals(c) 'neq'
+			return 0
+		end 'neq'
+		return 1
+	end 'eq'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 1
+    x64.movRegImm32 rdx, 1
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect int.equals
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, eq
+    x64.jmp ifcont#4
+  eq:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect int.equals
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, neq
+    x64.jmp ifcont#3
+  neq:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#3:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @int.equals {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegReg rcx, rdx
+    x64.jcc equal, equal
+    x64.jmp notEqual
+  equal:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  notEqual:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
