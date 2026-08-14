@@ -7806,6 +7806,19 @@ export type ProgramSignatures
 	// Whether the field above has been built. A FLAG rather than an emptiness test, because a program in which
 	// no type declares a conformance builds a genuinely empty index and must not rebuild it per question.
 	var sweptConformancesBuilt as bool
+	// ⭐⭐ **THE CONFORMANCES AN `extension <T> implements <I>` DECLARES — the half `sweptConformances` above
+	// STRUCTURALLY CANNOT HOLD, and without which a SUPPRESSION reads a weaker index than the report it defers
+	// to (review of W90).** `StructLayout.conformsTo` is the `type`/`enum` declaration's own clause; an
+	// extension's conformance is recorded per CONFORMER by the REAL PARSE (`Parser.recordExtensionConformance`
+	// into `project.conformances`), so the swept index misses every one of them —
+	// `extension Array implements Hashable, Equatable where Element is Hashable and Equatable` most of all.
+	//
+	// ⚠ **IT IS DELIBERATELY UNCONDITIONAL — the `where` clause is NOT applied.** The one reader
+	// (`instantiationViolatesItsOwnWhereClause`) needs a SUPERSET of what E3017's merged index holds, because
+	// its suppression is only sound when `unmet here` implies `unmet there`. Granting a conditional
+	// conformance the conformer may not have earned can therefore only WITHHOLD a suppression, which restores
+	// the pre-W90 over-refusal — loud, and never a silent accept. See `instantiationMeetsConstraint`.
+	var extensionDeclaredConformances as DeclaredConformanceMap
 	// ⭐ The witness constraints of each TYPE-extension method — see `ExtensionMethodConstraintMap`. Written by
 	// the same fold, in the same act that publishes the method's signature, so a method cannot be published
 	// with one witness count and called with another.
@@ -8289,7 +8302,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -13338,6 +13351,36 @@ export type ProgramSignatures
 		self.sweptConformancesBuilt = true
 		return declared
 	end 'sweptConformanceIndex'
+
+	// ⭐⭐ **FILE ONE `extension <T> implements <I…>` AGAINST ONE CONFORMER (review of W90).** Written by
+	// `Parser.foldExtensionDeclarationInto` for every conformer of every extension that declares a
+	// conformance — the same (conformer, interfaces) pairs `Parser.recordExtensionConformance` will later put
+	// into `project.conformances`, minus the per-conformer `where` verdict, which is what makes this a
+	// SUPERSET rather than a copy. See `extensionDeclaredConformances` for why the superset is the direction
+	// its one reader needs.
+	//
+	// ⚠ **THE SET IS COPIED RATHER THAN ADDED TO, for `ConformanceCheck.copyDeclaredInterfaces`' reason** — a
+	// value fetched out of a `Map` BORROWS the map, so an `insert` on it is E3019 and an `upsert` while that
+	// borrow is live is E3070. Paid once per (extension, conformer) pair, which is three declarations in the
+	// whole corpus.
+	export function recordExtensionDeclaredConformances(conformer ByteArray, declares InterfaceConformanceArray)
+		if declares.isEmpty() 'declaresNoConformance'
+			return
+		end 'declaresNoConformance'
+
+		var declaredInterfaces = InterfaceNameSet.create()
+		if let already = try self.extensionDeclaredConformances.get(conformer) 'anotherExtensionReachedItToo'
+			for interfaceName in already 'eachEarlier'
+				declaredInterfaces.insert(interfaceName)
+			end 'eachEarlier'
+		end 'anotherExtensionReachedItToo'
+
+		for i in 0 upto declares.count() 'eachInterface'
+			declaredInterfaces.insert((try declares.get(i) otherwise panic("ProgramSignatures.recordExtensionDeclaredConformances: declares.get OOB at {i} below count {declares.count()}")).interfaceName)
+		end 'eachInterface'
+
+		self.extensionDeclaredConformances.upsert(conformer, value: declaredInterfaces)
+	end 'recordExtensionDeclaredConformances'
 
 	// ⭐⭐ **WHAT AN `extension <Name>` IS AN EXTENSION *OF* — the one place the two doors part company**
 	// (conditional extensions). Both halves of the mechanism ask it and neither may decide for itself: the
@@ -20284,8 +20327,25 @@ export type ProgramSignatures
 	//
 	// The per-constraint verdict is `ConformanceCheck.instantiationMeetsConstraint`, the same one E3017 is
 	// reported off, so the suppression and the report cannot come to disagree about which instantiations are
-	// unsatisfiable — see that function for why the two pass different conformance indexes and why the weaker
-	// one is safe in this direction.
+	// unsatisfiable.
+	//
+	// ⛔⛔ **IT ASKS THAT VERDICT TWICE, AND THE SECOND ASK IS WHAT MAKES THE SUPPRESSION SOUND (review of
+	// W90).** A suppression is only allowed to withhold a refusal because E3017 is going to speak instead, so
+	// its index must be a SUPERSET of the one E3017 reads — a conformance the report can see and this cannot
+	// means the refusal is withheld and nothing replaces it. `sweptConformanceIndex` alone is a strict SUBSET:
+	// it is `StructLayout.conformsTo`, which holds the `type` declaration's own clause and never an
+	// `extension <T> implements <I>` (`extensionDeclaredConformances` holds those). The header this replaces
+	// argued the weaker index was safe because *"a false `unmet` withholds a refusal E3017 raises anyway"* —
+	// backwards, because a weaker index yields MORE `unmet` verdicts, not fewer.
+	//
+	// ⇒ MEASURED at review, on this rung's own tip: `extension Array implements Sizer` for a user `interface
+	// Sizer`, a `type Container uses Element where Element is Sizer` holding `Array with Element`, and
+	// `typealias NestedContainer = Container with (Array with String)`. The swept index cannot see `Array`'s
+	// `Sizer`, so the clause read UNMET and the opaque copy gate was suppressed; the merged index CAN see it,
+	// so E3017 read SATISFIED and never spoke. The program compiled with **no diagnostic at all** and
+	// **ACCESS-VIOLATED (0xC0000005)** on the byte-blitted managed pointer. With `where Element is Cloneable`
+	// — the same shape at an interface `type Array … implements … Cloneable` declares on the TYPE — the same
+	// program is refused, which is the control that names the extension clause as the cause.
 	//
 	// A base with no `where` clause — the whole non-generic-witness corpus — reads the SHARED empty
 	// constraint list and iterates zero times.
@@ -20293,9 +20353,19 @@ export type ProgramSignatures
 		let constraints = self.structWhereConstraints(self.genericInstanceBaseName(id))
 		for i in 0 upto constraints.count() 'eachConstraint'
 			let constraint = try constraints.get(i) otherwise panic("ProgramSignatures.instantiationViolatesItsOwnWhereClause: whereConstraints.get OOB at {i} below count {constraints.count()}")
-			if not instantiationMeetsConstraint(self, interfaces: self.interfaces, declared: self.sweptConformanceIndex(), gid: id, constraint: constraint) 'unmet'
-				return true
-			end 'unmet'
+			if instantiationMeetsConstraint(self, interfaces: self.interfaces, declared: self.sweptConformanceIndex(), gid: id, constraint: constraint) 'metByADeclarationClause'
+				continue
+			end 'metByADeclarationClause'
+
+			// The two indexes are asked separately rather than unioned into one map because
+			// `typeDeclaresInterface` is a per-declared-name existential (a direct hit, else an `extends`
+			// walk), so the OR of the two answers IS the answer over the union — and a union map would be an
+			// allocation on a path every clean compile also walks.
+			if instantiationMeetsConstraint(self, interfaces: self.interfaces, declared: self.extensionDeclaredConformances, gid: id, constraint: constraint) 'metByAnExtensionClause'
+				continue
+			end 'metByAnExtensionClause'
+
+			return true
 		end 'eachConstraint'
 
 		return false

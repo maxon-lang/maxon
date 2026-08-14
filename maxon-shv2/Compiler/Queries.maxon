@@ -718,7 +718,7 @@ function foldInterfaceDeclarations(project Project, signatures ProgramSignatures
 	var i = 0 as ElementCount
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")).path
-		var reader = try siteFileReader(project, signatures: signatures, path: path)
+		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldInterfaceDeclarations: sites.get OOB at {i} below count {sites.count()}")
@@ -769,7 +769,7 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 	var i = 0 as ElementCount
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")).path
-		var reader = try siteFileReader(project, signatures: signatures, path: path)
+		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("walkExtensionSitesPerFile: sites.get OOB at {i} below count {sites.count()}")
@@ -788,9 +788,14 @@ function walkExtensionSitesPerFile(project Project, signatures ProgramSignatures
 end 'walkExtensionSitesPerFile'
 
 // ⭐ **THE READER A WHOLE-PROGRAM SITE WALK PUTS DOWN ON ONE FILE — built ONCE PER FILE, not once per site.**
-// The three site-driven folds above and below share it, so "what kind of reader reads a DEFERRED declaration"
-// has one answer: the same tokens, the same stdlib tier and the same `buildsBodies` the real parse will use,
-// which is what lets a deferred read render a type exactly as that parse does.
+// All FOUR site-driven folds in this file share it, so "what kind of reader reads a DEFERRED declaration" has
+// one answer: the same tokens and the same stdlib tier the real parse will use, which is what lets a deferred
+// read render a type exactly as that parse does.
+//
+// ⚠ **`buildsBodies` IS THE ONE THING THAT VARIES, SO IT IS A PARAMETER RATHER THAN A SECOND CONSTRUCTOR.**
+// The three folds that publish signatures pass `true`; `foldDescriptorNeeds` scans for a calling convention
+// and emits nothing, so it passes `false`. It had its own inline copy of this construction, which is how the
+// header below came to say "three" — see it.
 //
 // ⚠ **PER FILE IS A MEASURED CHOICE.** A `Parser` per SITE cost **222 allocations per interface** where the
 // per-file reader costs 130 (measured on the scale ladder at the interface fold), the difference being pure
@@ -798,8 +803,8 @@ end 'walkExtensionSitesPerFile'
 // across a file's sites is safe because every entry point opens with `enterTypeScope`, which assigns the
 // per-declaration scopes rather than merging into them — so a site that throws part-way cannot be observed
 // by the next.
-function siteFileReader(project Project, signatures ProgramSignatures, path FilePath) returns Parser throws CompileError
-	return fileReader(project, signatures: signatures, path: path, tokens: try queryActiveTokens(project, path: path), isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: true)
+function siteFileReader(project Project, signatures ProgramSignatures, path FilePath, buildsBodies bool) returns Parser throws CompileError
+	return fileReader(project, signatures: signatures, path: path, tokens: try queryActiveTokens(project, path: path), isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: buildsBodies)
 end 'siteFileReader'
 
 // ⭐⭐ **RE-READ EVERY `implements` CLAUSE THE PER-FILE SWEEP COULD ONLY READ A PREFIX OF (W95)** — the
@@ -823,19 +828,26 @@ end 'siteFileReader'
 // extension fold expands over (`ProgramSignatures.conformersOf`) and `sweptConformanceIndex` MEMOIZES it on
 // first ask — a re-record after that ask would be a correction nothing reads.
 //
-// ⚠ **THE SAME LOOP SHAPE AS THE TWO WALKS ABOVE, AND IT IS NOT FACTORED WITH THEM — deliberately, unlike
-// `walkExtensionSitesPerFile`, which WAS.** That one folded two passes over ONE site type, where the shared
-// part is expressible. These three walk three different site types, and the only thing a shared driver would
-// need — "give me this element's `path`" — is not something a bare type parameter can offer. Reaching it
-// would mean an interface, a witness and a per-site closure across the compiler's hottest fold, plus the
-// projected path and run arrays that driver would allocate where these three allocate nothing. What CAN be
+// ⚠ **THE SAME LOOP SHAPE AS THE OTHER SITE WALKS IN THIS FILE, AND IT IS NOT FACTORED WITH THEM —
+// deliberately, unlike `walkExtensionSitesPerFile`, which WAS.** That one folded two passes over ONE site
+// type, where the shared part is expressible. These walk different site types, and the only thing a shared
+// driver would need — "give me this element's `path`" — is not something a bare type parameter can offer.
+// Reaching it would mean an interface, a witness and a per-site closure across the compiler's hottest fold,
+// plus the projected path and run arrays that driver would allocate where these allocate nothing. What CAN be
 // shared is shared: one reader constructor (`siteFileReader`) and one reader per file.
+//
+// ⛔ **THIS HEADER SAID "THESE THREE" AND THERE ARE FOUR — `foldDescriptorNeeds` BELOW IS THE FOURTH, AND IT
+// WAS THE ONE STILL CARRYING ITS OWN COPY OF THE READER CONSTRUCTION (found at review).** A count written into
+// a header is a fact written twice, and this one was already wrong at the commit that wrote it. The
+// enumeration is deliberately gone rather than corrected to four: the next site walk would make it wrong
+// again. `foldDescriptorNeeds` now takes its reader from `siteFileReader` like the rest, so the argument
+// above — factor the READER, not the DRIVER — is true of every walk here rather than of three of them.
 function foldConformanceClauses(project Project, signatures ProgramSignatures) throws CompileError
 	let sites = signatures.conformanceClauseSites
 	var i = 0 as ElementCount
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")).path
-		var reader = try siteFileReader(project, signatures: signatures, path: path)
+		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: true)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldConformanceClauses: sites.get OOB at {i} below count {sites.count()}")
@@ -897,8 +909,9 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	var i = 0 as ElementCount
 	while i < sites.count() 'eachFile'
 		let path = (try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")).path
-		let tokens = try queryActiveTokens(project, path: path)
-		var reader = fileReader(project, signatures: signatures, path: path, tokens: tokens, isStdlibSource: isStdlibSourceFile(project, path: path), buildsBodies: false)
+		// `buildsBodies: false` — this scan settles a CALLING CONVENTION and emits nothing, which is the one
+		// axis on which it differs from the three folds above. See `siteFileReader`.
+		var reader = try siteFileReader(project, signatures: signatures, path: path, buildsBodies: false)
 
 		while i < sites.count() 'eachSiteInFile'
 			let site = try sites.get(i) otherwise panic("foldDescriptorNeeds: sites.get OOB at {i} below count {sites.count()}")

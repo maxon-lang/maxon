@@ -55,11 +55,29 @@ export let CharSetMakeName = b"__cs_make"
 export let CharSetDecrefName = b"__cs_decref"
 export let CharSetContainsName = b"__cs_contains"
 
-// `__cs_contains`'s arity, stated once because the BODY declares it and the SUPPLY side of the threading
-// must fill it: `[csRec, charRec, memberSetLayout, hashWitness, eqWitness]`. It is FIXED — the descriptor
-// rides whether or not the probe forwards it (W90) — so the one thing that can be wrong is which of the five
-// the probe passes on, and that is `characterMemberSetProbeArgs`' single read of the fixpoint.
-let CharSetContainsParamCount = 5
+// The two arguments `__cs_contains` takes because the REFERENCE takes them — `contains(self, character)`
+// (`stdlib/CharacterSet.maxon:124`). Everything after them is threading, not signature.
+let CharSetContainsExplicitParamCount = 2
+
+// The member set's LAYOUT DESCRIPTOR, which rides whether or not the probe forwards it (W90) — see
+// `LowerMaxonToStd.withMemberSetLayoutArg` for why it is passed unconditionally.
+let MemberSetLayoutParamCount = 1
+
+// ⭐⭐ **`__cs_contains`'s ARITY, DERIVED FROM THE THREADING THAT FILLS IT — `[csRec, charRec,
+// memberSetLayout, hashWitness, eqWitness]` (found at review).**
+//
+// ⛔ **IT WAS THE LITERAL `5`, BESIDE A `fiveI64Params()` THAT SAID THE SAME NUMBER A SECOND TIME, AND
+// NEITHER WAS TIED TO THE SUPPLY SIDE THAT COMPUTES IT.** `LowerMaxonToStd.withKeyWitnessArgs` builds the
+// call as two explicit arguments, then `withMemberSetLayoutArg`'s descriptor, then ONE WITNESS TABLE PER
+// ENTRY of `hashTableKeyWitnessInterfaces()` — so the five is a SUM, and a third key constraint would make
+// the lowering supply six against a body declaring five. That is not a panic: `resolveCallFixups` sees a
+// name it knows, and the callee's `param` ops read whatever the ABI registers held — the measured `__map_get`
+// failure mode this file's own `characterMemberSetProbeArgs` header names. Derived here, the two cannot
+// disagree, and the ONE thing left that can be wrong is which of them the probe forwards — which is that
+// function's single read of the fixpoint.
+function charSetContainsParamCount() returns ParamCount
+	return CharSetContainsExplicitParamCount + MemberSetLayoutParamCount + hashTableKeyWitnessInterfaces().count()
+end 'charSetContainsParamCount'
 
 // The mask value that means "this set has NO category members" — `CharacterSet.from(…)`'s mask
 // (`stdlib/CharacterSet.maxon:120`). It is what lets a purely explicit set skip the codepoint decode and
@@ -276,12 +294,27 @@ function characterMemberSetDropCallee(signatures ProgramSignatures) returns Byte
 	return signatures.genericInstanceBoxDropCallee(signatures.setInstanceForCharacter())
 end 'characterMemberSetDropCallee'
 
-// ⭐ **WHO PROBES THE MEMBER SET — `__set_contains`, or the corpus `Set.contains` (W90).** The corpus name is
-// asked of the index rather than spelled as a constant: a member declaration is re-keyed by two contests — a
-// `static` member wearing an instance member's name (`memberRegistrationKey`) and, in the parser, an overload
-// contest that appends `#<paramTypeSpelling>`. `Set` contests neither TODAY, which is exactly what would make
-// a literal `b"Set.contains"` rot in silence: the wrong name is not a diagnostic, it is
-// `resolveCallFixups: call to unknown function`.
+// ⭐ **WHO PROBES THE MEMBER SET — `__set_contains`, or the corpus `Set.contains` (W90).**
+//
+// ⚠⚠ **THIS HEADER CLAIMED THE NAME WAS "ASKED OF THE INDEX RATHER THAN SPELLED AS A CONSTANT", AND IT IS
+// ONLY HALF ASKED (found at review).** The two contests it named are a `static` member wearing an instance
+// member's name (`memberRegistrationKey`) and, in the parser, an overload contest appending
+// `#<paramTypeSpelling>`. Measured against the code:
+//
+//   • the STATIC contest is not consulted — `memberRegistrationKey` opens
+//     `if takesReceiver or not isStaticInstanceContest(…)` and this call passes `takesReceiver: true`, so it
+//     is the IDENTITY function here. That is CORRECT (an instance member always keeps its source name, which
+//     is that function's own stated rule) but it means the call buys nothing;
+//   • the OVERLOAD contest is not consulted AT ALL, by this door or any other reachable from a bare
+//     qualified name.
+//
+// ⇒ What this actually answers is `qualifiedMethodName(Set, contains)` composed from two constants — the
+// literal the header warns against, spelled with `+`. It is RIGHT today because `stdlib/Set.maxon` declares
+// one `contains`, and the day it declares two the wrong name is not a diagnostic, it is
+// `resolveCallFixups: call to unknown function`. The `memberRegistrationKey` call is kept because it is the
+// door that WOULD carry a re-keying rule; the overload half needs a door that does not exist yet, and
+// inventing one is a mechanism rather than a review edit. Stated here so the next reader inherits the gap
+// rather than the reassurance.
 export function characterMemberSetContainsCallee(signatures ProgramSignatures) returns ByteArray
 	if signatures.isSetBaseName(SetBuiltinBaseName) 'synthesizedRecord'
 		return SetContainsName
@@ -383,8 +416,8 @@ end 'buildCharSetDecref'
 // materialized at the MAXON tier, which is what makes their `.rdata` blobs exist: a Std-only builder can
 // spell a label but cannot register one (`LowerMaxonToStd.withMemberSetLayoutArg`).
 function buildCharSetContains(module StdModule, signatures ProgramSignatures)
-	var func = IrFunction.createFromStd(CharSetContainsName, returnType: StdReturnType.value(StdType.i1), paramCount: CharSetContainsParamCount, paramTypes: fiveI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(CharSetContainsParamCount)
+	var func = IrFunction.createFromStd(CharSetContainsName, returnType: StdReturnType.value(StdType.i1), paramCount: charSetContainsParamCount(), paramTypes: i64Params(charSetContainsParamCount()), returnLine: 0)
+	var ids = ValueMinter.create(charSetContainsParamCount())
 
 	var entry = module.addBlock(func, label: b"entry")
 	var checkMask = module.addBlock(func, label: b"checkMask")
@@ -392,7 +425,7 @@ function buildCharSetContains(module StdModule, signatures ProgramSignatures)
 	var present = module.addBlock(func, label: b"present")
 	var absent = module.addBlock(func, label: b"absent")
 
-	emitParams(module, block: entry, count: CharSetContainsParamCount)
+	emitParams(module, block: entry, count: charSetContainsParamCount())
 	let box = 0 as ValueId
 	let character = 1 as ValueId
 	let memberSetLayout = 2 as ValueId

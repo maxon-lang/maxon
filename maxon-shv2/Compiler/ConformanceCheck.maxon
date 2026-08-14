@@ -840,12 +840,17 @@ end 'checkStructInstantiationConstraints'
 // would otherwise speak over it (W90). One rule, because a suppression that disagreed with the report about
 // which instantiations are unsatisfiable would either silence a live refusal or let the masked one back in.
 //
-// ⚠ **THE CONFORMANCE INDEX IS THE CALLER'S, and the two callers deliberately pass different ones.** The
-// report reads the merged `project.conformances` (and refuses to run at all on a malformed project — see
-// `checkWhereConstraints`); the suppression reads `ProgramSignatures.sweptConformanceIndex`, the only one a
-// PURE parser can reach. The swept index is the weaker of the two, and that is safe in both directions HERE
-// and nowhere else: a false `unmet` withholds a refusal E3017 then raises anyway, and a false `satisfied`
-// leaves the pre-W90 behaviour standing.
+// ⚠⚠ **THE CONFORMANCE INDEX IS THE CALLER'S, and a SUPPRESSION MAY ONLY EVER PASS A SUPERSET OF WHAT THE
+// REPORT READS.** The report reads the merged `project.conformances` (and refuses to run at all on a
+// malformed project — see `checkWhereConstraints`); the suppression reads what a PURE parser can reach,
+// which is `ProgramSignatures.sweptConformanceIndex` ORed with
+// `ProgramSignatures.extensionDeclaredConformances`. The asymmetry is the whole rule and it is NOT
+// symmetric: a false `satisfied` at the suppression merely leaves the pre-W90 over-refusal standing, which
+// is loud; a false `unmet` withholds a refusal the report then does NOT raise, which is a program that
+// should be refused compiling in silence. The swept index ALONE is strictly weaker than the merged one — it
+// never holds an `extension <T> implements <I>` — and this header once argued the opposite direction was the
+// safe one. See `ProgramSignatures.instantiationViolatesItsOwnWhereClause` for the access violation that
+// measured it.
 //
 // The CANONICAL conformer name (`Integer` -> `int`) is what the conformance test compares by — the same
 // name the witness table is keyed by — while the E3017 MESSAGE still prints the source spelling. This is

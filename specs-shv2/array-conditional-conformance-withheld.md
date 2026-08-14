@@ -178,6 +178,87 @@ error E2015: <fragment>:2:11: Unsupported: `slice` COPIES each element of an `Ar
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 
+<!-- test: error.the-suppression-may-not-read-a-weaker-index-than-the-report -->
+### A `where` clause satisfied by an EXTENSION still refuses the copy gate
+
+⛔⛔ **W90's SUPPRESSION AND E3017's REPORT READ TWO DIFFERENT CONFORMANCE INDEXES, AND THE WEAKER ONE
+BELONGS TO THE SUPPRESSION — WHICH IS THE DIRECTION THAT FAILS SILENTLY.** The case above is the copy gate
+speaking when it should; this is the copy gate STAYING SILENT when it should not, and it is the same
+narrowing seen from the side its header got backwards.
+
+`instantiationViolatesItsOwnWhereClause` withholds the refusal whenever the instantiation's own `where`
+clause is unmet, on the ground that E3017 will speak instead. That is sound only while the suppression's
+index is a SUPERSET of the report's. It was a strict SUBSET: the suppression reads
+`ProgramSignatures.sweptConformanceIndex`, which is `StructLayout.conformsTo` — the `type` declaration's own
+`implements` clause and nothing else — while E3017 reads `project.conformances`, which ALSO holds every
+`extension <T> implements <I>` the real parse records (`Parser.recordExtensionConformance`). A weaker index
+yields MORE `unmet` verdicts, not fewer, so a conformance only an extension declares made the suppression
+fire on an instantiation E3017 then found perfectly satisfied — and nothing spoke at all.
+
+⇒ MEASURED at review, on the program below: it compiled with **no diagnostic** and **ACCESS-VIOLATED
+(0xC0000005)** on the byte-blitted managed pointer. `Array`'s `Hashable`/`Equatable` are declared exactly
+this way (`stdlib/Array.maxon:668`), so the shape is the corpus's own and not a contrivance; `Sizer` is used
+here only because `Hashable` is ALSO granted intrinsically (`isIntrinsicBuiltinConformance`'s array row),
+which would have hidden the divergence behind an answer both indexes agree on.
+
+⚠ **THE CONTROL IS ONE WORD.** The same program with `where Element is Cloneable` — an interface
+`type Array … implements … Cloneable` declares on the TYPE, so the swept index HAS it — is refused on the
+merge base and on this tree alike. Only the extension-declared clause moved, so only the extension clause
+can be the cause.
+
+⭐ The cure is `ProgramSignatures.extensionDeclaredConformances`, filed by the extension fold BEFORE the
+per-conformer `where` verdict: an over-grant there can only withhold a suppression and restore a loud
+over-refusal, where an under-grant is this silent accept.
+```maxon
+typealias ExitCode = int(0 to 125)
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+interface Sizer
+	function size() returns Integer
+end 'Sizer'
+
+extension Array implements Sizer
+	function size() returns Integer
+		return 3
+	end 'size'
+end 'Array'
+
+type Container uses Element where Element is Sizer
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+typealias NestedContainer = Container with StringArray
+
+function main() returns ExitCode
+	var sa = StringArray.create()
+	sa.push("a string long enough to force a heap allocation")
+	var nc = NestedContainer.create()
+	nc.push(sa)
+	let dup = nc.duplicate()
+	let n = dup.items.count()
+	return n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:34:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
+```
+
 <!-- test: error.a-map-key-array-is-refused-for-its-element -->
 ### A `Map` key array is refused for its ELEMENT, not as an unserved key type
 

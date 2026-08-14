@@ -15484,6 +15484,17 @@ export type Parser
 			self.enterTypeScope(conformer, isEnum: false)
 			self.openExtensionBodyScope(header, conformer: conformer, index: index)
 
+			// ⭐⭐ **THE CONFORMANCE THIS EXTENSION DECLARES IS FILED WHOLE-PROGRAM HERE, *BEFORE* THE VERDICT,
+			// AND THE POSITION IS THE OPPOSITE OF `parseExtensionDeclaration`'s ON PURPOSE (review of W90).**
+			// There the record is the program's own answer to *"does this conformer implement this?"*, so it
+			// must sit past the clause. This one exists for a SUPPRESSION
+			// (`ProgramSignatures.instantiationViolatesItsOwnWhereClause`), which is sound only while its index
+			// is a SUPERSET of the merged one the E3017 report reads — so an over-grant here can only withhold
+			// a suppression and restore a loud over-refusal, where an under-grant is a silent accept. Filing
+			// unconditionally is the direction that cannot fail quietly; see
+			// `ProgramSignatures.extensionDeclaredConformances`.
+			index.recordExtensionDeclaredConformances(conformer, declares: header.interfaces)
+
 			// ⭐ **THE CONDITIONAL FILTER, TAKEN ONCE PER CONFORMER.** An INTERFACE extension's `where` clause
 			// is checked against what this conformer binds the interface's associated types to; a TYPE
 			// extension's is not checkable here at all (the parameters are bound per INSTANTIATION) and becomes
@@ -52579,11 +52590,18 @@ export type Parser
 	// ⚠ **TWO SIBLING DOORS HAVE THIS SHAPE AND ARE NOT YET THIS DEFECT — `List from […]`
 	// (`requireListElementType`) and `Vector from […]` (`requireVectorElementType`) call their column gate
 	// directly too.** They are CORRECT today for a reason that is one measurement and not an assumption:
-	// `isMapBaseName` is the ONLY container predicate carrying the `structOf` retirement switch — `isArray`/
-	// `isSet`/`isList`/`isVector`/`isManagedList` are all bare `name.equals(…)` — so those containers have no
-	// second regime to route to, and their construction still emits the runtime ops their gate describes. The
-	// day one of them is listed the way `stdlib/Map.maxon` was, its `from` door needs exactly this arm and its
-	// literal-born values need `moveMapLiteralColumnValue`'s, or it inherits both halves of W41-lit.
+	// `isListBaseName`/`isVectorBaseName`/`isManagedListBaseName` carry no retirement switch — they are bare
+	// `name.equals(…)` — so those containers have no second regime to route to, and their construction still
+	// emits the runtime ops their gate describes. The day one of them is listed the way `stdlib/Map.maxon`
+	// was, its `from` door needs exactly this arm and its literal-born values need
+	// `moveMapLiteralColumnValue`'s, or it inherits both halves of W41-lit.
+	//
+	// ⛔ **THIS PARAGRAPH NAMED `isMapBaseName` AS "THE ONLY CONTAINER PREDICATE CARRYING THE SWITCH" AND
+	// LISTED `isSet` AMONG THE BARE ONES — W90 FALSIFIED BOTH HALVES IN THE COMMIT THAT SHIPPED THIS FILE
+	// (found at review).** `isSetBaseName` and `isMapBaseName` are now one shared switch
+	// (`ProgramSignatures.isUnretiredBuiltinBaseName`), and `Set`'s own `from` door DID take this arm
+	// (`parseSetMemberList`'s corpus branch). A count of which siblings are safe is a fact written twice, so
+	// it is stated as a PREDICATE list here rather than as an exclusive claim about one name.
 	//
 	// ⛔⛔ **DROPPING THE ROSTER IS ONLY HALF, BECAUSE A LITERAL IS THE ONE DOOR A MAP IS BORN THROUGH WITH NO
 	// `with (K, V)` TO ANCHOR AN E3017 ON.** `ProgramSignatures.instantiationSites` is built by the token
