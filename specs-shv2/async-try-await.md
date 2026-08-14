@@ -48,6 +48,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function mayFail(succeed bool) returns int throws WorkError
+	Runtime.yield()
 	if succeed 'ok'
 		return 42
 	end 'ok'
@@ -76,6 +77,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function mayFail(succeed bool) returns int throws WorkError
+	Runtime.yield()
 	if succeed 'ok'
 		return 10
 	end 'ok'
@@ -106,6 +108,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function succeeds() returns int throws WorkError
+	Runtime.yield()
 	return 7
 end 'succeeds'
 
@@ -131,6 +134,7 @@ end 'WorkError'
 var flag = 0
 
 function maySetFlag(succeed bool) throws WorkError
+	Runtime.yield()
 	if succeed 'ok'
 		flag = 1
 		return
@@ -159,6 +163,7 @@ enum TaskError implements Error
 end 'TaskError'
 
 function mayFail(mode int) returns int throws TaskError
+	Runtime.yield()
 	if mode == 0 'ok'
 		return 1
 	end 'ok'
@@ -227,6 +232,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function work(shouldFail bool) returns int throws WorkError
+	Runtime.yield()
 	if shouldFail 'fail'
 		throw WorkError.failed
 	end 'fail'
@@ -264,6 +270,7 @@ end 'TaskError'
 var flag = 0
 
 function maySetFlag(succeed bool) throws TaskError
+	Runtime.yield()
 	if succeed 'ok'
 		flag = 1
 		return
@@ -330,6 +337,7 @@ enum WorkError implements Error
 end 'WorkError'
 
 function compute() returns int throws WorkError
+	Runtime.yield()
 	return 42
 end 'compute'
 
@@ -341,5 +349,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: <fragment>:13:14: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3100: <fragment>:14:14: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```

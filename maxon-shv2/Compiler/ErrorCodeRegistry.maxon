@@ -512,6 +512,12 @@ export enum ErrorCode
 	// Emitted by the parser at the struct-literal site. Mirrors the C#
 	// bootstrap's `SemanticBuiltinTypeConstruction`.
 	semanticBuiltinTypeConstruction = "E3072"
+	// an `async f()` call targets a function that never yields (contains
+	// no await / I/O stub call, transitively). `async` is only for I/O-concurrent
+	// work -- a non-yielding callee would run to completion synchronously on the
+	// spawning thread, so the spawn is pointless. Emitted by `checkAsyncYielding`.
+	// Mirrors the C# bootstrap's `AsyncNonYielding`.
+	asyncNonYielding = "E3073"
 	// A match arm names a case in qualified form (`Color.red`). The scrutinee's enum
 	// is already known at the arm, so the bare case name suffices.
 	matchQualifiedCaseName = "E3075"
@@ -600,6 +606,22 @@ export enum ErrorCode
 	// the cross-file fallback in `qualifyCalleeForContextWithType` when
 	// `methodNameIndex` returns multiple distinct visible candidates.
 	semanticAmbiguousCrossFileCall = "E3095"
+	// A promise is stored in a Promise type that does not name the error its thunk throws.
+	// `Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:
+	// `Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.
+	// Storing a promise in the wrong one is refused here -- including, in particular, storing
+	// a THROWING promise in a `Promise with T`, which is what used to erase the error type.
+	// That erasure was the root of a family of bugs, all of which this refusal (plus the
+	// two-parameter form that makes it avoidable) turns into impossibilities:
+	// - `otherwise (e)` had no type to give `e`, and silently handed back the raw i64
+	// promise handle typed `int`;
+	// - an associated-value error's payload had no static type to mm_decref, so it LEAKED
+	// (only a runtime `errorIsHeapPtr` bit in the box approximated the answer);
+	// - propagation (a bare `try await p` inside a `throws` function) had no error type to
+	// check the enclosing function's `throws` against, so a thunk throwing A could be
+	// awaited inside a function throwing B and A's ordinals reinterpreted as B's tags.
+	// The fix a diagnostic can name is the point: it says which two-parameter type to write.
+	promiseErrorTypeMismatch = "E3098"
 	// A closure that CAPTURES, ESCAPING the frame its captures point into.
 	// THE RULE: a closure that captures may not escape its defining frame.
 	// A closure captures BY REFERENCE: LowerClosureCreate allocates an environment and

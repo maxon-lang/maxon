@@ -181,6 +181,16 @@ let RefusalIndent = "    "
 // runtime writes this exact spelling and the runner recognizes exactly it.
 let FaultRipSuffixMarker = " at rip=0x"
 
+// The async-trace worker vocabulary the normalizer drops, and the ` [M=` tag it truncates at. These are the
+// REFERENCE's spellings — shv2 emits none of them (it is single-M) — but the canonical spec text does, so the
+// normalizer has to know them to reduce the EXPECTED side. See `normalizeAsyncTraceStderr`.
+let AsyncTraceWorkerMarker = " [M="
+let WorkerStartTag = "worker_start"
+let WorkerParkTag = "worker_park"
+let WorkerWakeTag = "worker_wake"
+let WorkerExitTag = "worker_exit"
+let TokenSeparator = " "
+
 // The offset for a file whose line numbers ARE the fragment's — every single-file test, where the
 // compiled file IS the fragment. Named because it is a real value in the mapping, not an absence.
 let NoLineOffset = 0 as LineIndex
@@ -1590,6 +1600,12 @@ function compileStagedTest(test SpecTest, specName String, staged StagedTest, ex
 		end 'namesRuntime'
 	end 'emitGolden'
 
+	// An `<!-- AsyncTrace -->` case is built with the trace on. Per-CASE, exactly like the golden flags above,
+	// so no other case pays for it and an untraced program stays byte-for-byte what it was.
+	if test.asyncTrace 'asyncTraceFlag'
+		compileArgv.push(AsyncTraceFlag)
+	end 'asyncTraceFlag'
+
 	// ⭐ DELETED BEFORE THE COMPILE, NOT ONLY AFTER IT. A run killed part-way through leaves this
 	// test's metrics file on disk, and the next run's compile writes one only if it SUCCEEDS — so a
 	// failing compile would be credited with the ticks of whichever earlier run last passed here.
@@ -1690,7 +1706,9 @@ end 'recordFragmentAndCleanup'
 // 0, and a target refusal is read off a compile that exited 1 having printed nothing but E3104s. See
 // `compileStagedTest`'s `settled` arm, which is the only door onto that conversion.
 function finishPendingRun(pending PendingRun, observation RunObservation, fragmentDir FilePath, updateRequired bool, effectiveTarget Target) returns TestRun
-	let outcome = checkObservedRun(pending.expected, stderr: pending.stderr, stdout: pending.stdout, observation: observation, effectiveTarget: effectiveTarget)
+	// `asyncTrace` is read off the case itself rather than threaded through `PendingRun` — `CompiledTest`
+	// already carries the whole `SpecTest`, so a fifth field would be the same fact stored twice.
+	let outcome = checkObservedRun(pending.expected, stderr: pending.stderr, stdout: pending.stdout, observation: observation, effectiveTarget: effectiveTarget, asyncTrace: pending.compiled.test.asyncTrace)
 	return recordFragmentAndCleanup(pending.compiled, outcome: outcome, fragmentDir: fragmentDir, updateRequired: updateRequired, effectiveTarget: effectiveTarget)
 end 'finishPendingRun'
 
@@ -3032,17 +3050,17 @@ end 'runPreconditions'
 //
 // `notRequired` is unreachable and says so: the executors mint it for exactly the tests that FINISHED
 // in the compile pass, and nothing but a `PendingRun` reaches here.
-export function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, effectiveTarget Target) returns TestOutcome
+export function checkObservedRun(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, observation RunObservation, effectiveTarget Target, asyncTrace bool) returns TestOutcome
 	return match observation 'observed'
 		notRequired panic("checkObservedRun: a pending run was handed the 'no execution needed' observation — `executeRuns` answers one observation per PREPARED test and mints that arm only for a test that finished at its compile")
 		failed(reason) gives TestOutcome.fail(reason)
 		notRunnableHere gives TestOutcome.notRunHere
-		completed(capture) gives runAssertions(expected, stderr: stderr, stdout: stdout, spawned: capture, effectiveTarget: effectiveTarget)
+		completed(capture) gives runAssertions(expected, stderr: stderr, stdout: stdout, spawned: capture, effectiveTarget: effectiveTarget, asyncTrace: asyncTrace)
 	end 'observed'
 end 'checkObservedRun'
 
 // EVERY half the spec pinned, checked against that ONE execution.
-function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, spawned ProcessCapture, effectiveTarget Target) returns TestOutcome
+function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdout, spawned ProcessCapture, effectiveTarget Target, asyncTrace bool) returns TestOutcome
 	// What the PROGRAM said and how it ended, which under an external runner is not always what the
 	// PROCESS said and how the process ended — see `observedRun`. Every check below reads this one
 	// observation, so the three halves of a case's expectation cannot be compared against two
@@ -3067,7 +3085,7 @@ function runAssertions(expected SpecExitCode, stderr SpecStderr, stdout SpecStdo
 		return stdoutOutcome
 	end 'stdoutDisagreed'
 
-	return checkRunStderr(stderr, actual: run.stderr)
+	return checkRunStderr(stderr, actual: run.stderr, asyncTrace: asyncTrace)
 end 'runAssertions'
 
 // ⭐ **THE SECTION GATES — a linked binary's own bytes, for every section the case pinned.**
@@ -3194,13 +3212,61 @@ end 'locateSectionPayloads'
 // non-blank), and the alternative is worse than lax: a panic regression in any of the specs
 // that pin only an exit code would print its diagnostic into a stream nothing reads, and the
 // suite would stay green while the compiler started faulting.
-function checkRunStderr(stderr SpecStderr, actual String) returns TestOutcome
-	let cleaned = stripFaultRipSuffix(actual).trim()
+function checkRunStderr(stderr SpecStderr, actual String, asyncTrace bool) returns TestOutcome
+	let cleaned = normalizeAsyncTraceStderr(stripFaultRipSuffix(actual), asyncTrace: asyncTrace).trim()
 	return match stderr 'pin'
 		unpinned gives checkStreamSilent(cleaned, streamName: StderrStreamName)
-		pinned(text) gives checkStreamMatches(text.trim(), actual: cleaned, streamName: StderrStreamName)
+		pinned(text) gives checkStreamMatches(normalizeAsyncTraceStderr(text, asyncTrace: asyncTrace).trim(), actual: cleaned, streamName: StderrStreamName)
 	end 'pin'
 end 'checkRunStderr'
+
+// ⭐⭐ **THE ASYNC-TRACE NORMALIZER — APPLIED TO BOTH SIDES, WHICH IS THE WHOLE POINT.** A green-thread trace
+// carries two kinds of line: the DETERMINISTIC ones a single-threaded scheduler always produces in the same
+// order (`spawn #`, `io_yield #`, `io_resume #`, `await #`), and the WORKER-LIFECYCLE ones
+// (`worker_start`/`worker_park`/`worker_wake`/`worker_exit`) whose count and position depend on how many OS
+// threads the scheduler happened to run and when they woke. Comparing the second kind byte-for-byte would pin
+// a timing accident. So both the expected text and the actual output are reduced to their deterministic subset
+// before comparison — the EXPECTED side too, because canonical `.md` files carry the worker lines (the
+// reference emits them) and a spec is not rewritten to match whichever compiler reads it.
+//
+// The ` [M=N]` suffix names the OS thread a line came from and is dropped for the same reason.
+//
+// ⚠ shv2 emits neither today: it is single-M, so it has no worker lifecycle to report and never tags a line
+// with an M. The normalizer still has to run, because the SPEC text it is compared against has both.
+function normalizeAsyncTraceStderr(text String, asyncTrace bool) returns String
+	if not asyncTrace 'notATraceCase'
+		return text
+	end 'notATraceCase'
+
+	var out = LineJoiner.create()
+	for line in text.split(LineSeparator) 'eachLine'
+		let stripped = stripWorkerMarkerFromLine(line)
+		if isAsyncWorkerLine(stripped) 'timingDependent'
+			continue
+		end 'timingDependent'
+		out.push(stripped)
+	end 'eachLine'
+	return out.build()
+end 'normalizeAsyncTraceStderr'
+
+// One line, cut at the ` [M=` worker tag. Unchanged when it carries none.
+function stripWorkerMarkerFromLine(line String) returns String
+	let cut = try line.findFirst(AsyncTraceWorkerMarker) otherwise return line
+	return line.slice(line.startIndex(), endIndex: cut)
+end 'stripWorkerMarkerFromLine'
+
+// Is this one of the worker-lifecycle lines? Tested on the line's FIRST TOKEN rather than by `startsWith`, so
+// a line whose payload merely contains one of these words is never mistaken for one.
+function isAsyncWorkerLine(line String) returns bool
+	let token = firstToken(line)
+	return token == WorkerStartTag or token == WorkerParkTag or token == WorkerWakeTag or token == WorkerExitTag
+end 'isAsyncWorkerLine'
+
+// The first whitespace-delimited token of a line — the whole line when it has no space.
+function firstToken(line String) returns String
+	let space = try line.findFirst(TokenSeparator) otherwise return line
+	return line.slice(line.startIndex(), endIndex: space)
+end 'firstToken'
 
 // The stdout half of a run expectation (P1.2 wave A — `print`) — `checkRunStderr`'s exact twin, minus
 // the fault-rip stripping (that tail is a stderr panic artifact; stdout carries none), so it shares

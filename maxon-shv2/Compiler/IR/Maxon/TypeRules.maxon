@@ -900,18 +900,76 @@ export function tagIsBareNumericKeyword(tag ValueTypeTag) returns bool
 	return tagIsInteger(tag) or tagIsFloat(tag)
 end 'tagIsBareNumericKeyword'
 
-// ⭐ **IS THIS TAG A GPR SCALAR AN `async`/`await` CAN CARRY?** (P1.5-B1a). The green-thread trampoline
-// passes arguments through the integer arg registers and captures the result from R8, so an async call's
-// arguments, the callee's parameters, and its result must all be integer/bool — a `float` travels in XMM,
-// and a `String`/struct/boxed-union is a managed heap pointer the B1a runtime has no channel for. ONE
-// predicate for the SAME question the parser asks of the callee's RETURN (pre-resolution `MaxonType`) and
-// SemanticCheck asks of its declared PARAMETERS (post-resolution `MaxonType`), so the two tiers cannot
-// drift on what "a scalar an async call can carry" means. (A ranged-int alias — a `named` before
-// resolution, `integer` after — is deliberately NOT accepted at the pre-resolution return site: a
-// ranged-int async result is a B1a follow-up, and over-rejecting it is safe where miscompiling is not.)
-export function tagIsAsyncScalar(tag ValueTypeTag) returns bool
-	return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean
-end 'tagIsAsyncScalar'
+// ⭐ **DOES A BINDING OF THIS TAG OWN NO HEAP?** — asked by `Parser.requireBindingLive` of a MOVE bit, and
+// the whole of what it means there: `movedFrom`/`partiallyMoved` forbid a read because a moved HEAP value
+// now belongs to another owner, so on a value that owns no heap the bit must mean something else and the
+// read is safe. Two such cases exist, both P1.5-B2 #88 — a consumed promise handle (integer-tagged) and a
+// promise binding reassigned to a bare scalar.
+//
+// ⚠ **IT WAS `tagIsAsyncScalar`, AND THE RENAME IS THE POINT.** Under that name it was the async CHANNEL
+// predicate, shared by the argument, parameter and result doors — and its header said so. A2 replaced all
+// three with `tagRidesAsyncGprChannel` (a managed pointer rides the integer channel; a `float` does not),
+// leaving one caller that had only ever spelled its own question in the async predicate's words because the
+// two sets happened to coincide. Left named for the callers it no longer has, it was a header asserting a
+// property nothing tested — and the next reader to "reunify" the two would have handed the async doors a
+// rule about move bits.
+export function tagOwnsNoHeapValue(tag ValueTypeTag) returns bool
+	return tag == ValueTypeTag.integer or tag == ValueTypeTag.boolean or tag == ValueTypeTag.float
+end 'tagOwnsNoHeapValue'
+
+// ⭐⭐ **DOES THIS TAG RIDE THE GREEN THREAD'S GPR CHANNEL? — the A2 widening of the question above, and the
+// question the three async doors actually ask.** A spawn's arguments travel in the GT struct's inline
+// argument region (`GtOffArgInline`, i64 words the hand-assembled trampoline loads into the ABI's INTEGER
+// argument registers) and its result comes back in R8. **A managed value is a heap POINTER and is therefore
+// one i64 in a GPR exactly as an `int` is** — the register file was never the obstacle for it; its ownership
+// was, and `Runtime/AsyncReleaser.maxon` is where that is discharged.
+//
+// ⛔ **A `float` IS STILL REFUSED, AND THAT IS A REGISTER-FILE FACT RATHER THAN AN OWNERSHIP ONE.** A float
+// argument is passed in an XMM register (`argFpRegisterAt`) and a float result is returned in **XMM0**
+// (`indirectResultRegister`), and the trampoline touches neither: it loads every slot into
+// `argRegisterAt(k)` and stores R8 alone into `gt.result` (`X64GtRuntime.buildGtTrampolineChunk`). Admitting
+// a float here would hand the callee an XMM register nobody filled and read a result nobody captured — a
+// silent wrong answer, not a leak. Building the second channel is a change to the hand-assembled trampoline
+// and to `__gt_await`'s single i64 exit, which is a different slice; no spec case in the tree spawns or
+// awaits a float.
+//
+// ⛔ **AN EXISTENTIAL AND AN OPAQUE TYPE PARAMETER ARE REFUSED FOR A THIRD REASON: THEY ARE ONE WORD TOO
+// NARROW.** Each is released through a TWO-argument entry whose first argument is a companion the GT struct
+// does not carry — `__drop_existential(witness, value)` off the fat pointer's witness half,
+// `__drop_type_param(descriptor, value)` off the enclosing instance's layout descriptor. The inline argument
+// region holds the value half only, so a releaser could name no drop for them (`managedFieldDropCallee`
+// PANICS on `interfaceRef` for exactly this reason). Carrying the companion is a second word per slot and a
+// later slice.
+//
+// ⚠ Written as an exhaustive `match` and not as `tag != float`: the negative form FAILS OPEN — a tag
+// appended to `ValueTypeTag` (four have been, each "APPENDED AT THE END") would be admitted to a channel
+// nobody had asked whether it fits. Here it is a compile error until someone decides.
+export function tagRidesAsyncGprChannel(tag ValueTypeTag) returns bool
+	return match tag 'k'
+		boolean gives true
+		integer gives true
+		float gives false
+		// `named` covers a ranged-int alias (a GPR scalar), a declared struct read from a field and a boxed
+		// union — a heap pointer in each of the last two. All three are one GPR word.
+		named gives true
+		exitCode gives true
+		// `unresolved` is the placeholder an undeclared callee's return type gets; its doomed program is
+		// rejected by SemanticCheck's E3004 before lowering, so admitting it here defers to the diagnostic
+		// that names the real fault instead of blaming the channel.
+		unresolved gives true
+		// `void` is not a value and never reaches an argument slot; the RESULT door tests it separately
+		// (a void async's R8 garbage is discarded by the awaiter) rather than through this predicate.
+		void gives false
+		structRef gives true
+		string gives true
+		// A function value is a bare `.text` address — one word, and it owns nothing.
+		function gives true
+		typeParameter gives false
+		genericInstance gives true
+		character gives true
+		interfaceRef gives false
+	end 'k'
+end 'tagRidesAsyncGprChannel'
 
 // The three operators whose MEANING follows their operands' type. `shl`/`shr` are absent: a
 // shift is integral by definition, on both sides.

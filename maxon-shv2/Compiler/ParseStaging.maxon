@@ -202,6 +202,11 @@ export type FileParseArtifact
 	// themselves — see SourceRangeTable. `mergeArtifact` folds this into
 	// `project.opRanges` in lockstep with the module merge.
 	export var opRanges as SourceRangeTable
+	// This file's `async <call>` spawn texts, keyed by op index, for E3073's quoted subject. SPARSE — only
+	// spawn sites appear. `mergeArtifact` folds it into `project.asyncSpawnSites` with the merge's op offset,
+	// exactly as `opRanges` and `valueOrigins` are folded. See `Project.asyncSpawnSites` for why the text has
+	// to be captured here rather than recovered downstream.
+	export var asyncSpawnSites as AsyncSpawnSiteMap
 	// (funcIndex, ValueId) -> Maxon OpIndex for every value an op DEFINES in this file
 	// (see ValueOrigin). Recorded inside the emit choke points below in the same
 	// op/value lockstep `opRanges` uses, and folded into `project.valueOrigins` by
@@ -338,6 +343,7 @@ export type FileParseArtifact
 			typeIdsAreProjectGlobal: false,
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
+			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
@@ -394,6 +400,13 @@ export type FileParseArtifact
 		self.opRanges.record(opIndex, range: range)
 		self.recordValueOrigin(op, opIndex: opIndex)
 	end 'emitOp'
+
+	// Record an `async <call>` spawn's SOURCE TEXT against the op `emitOp` is about to append. The caller reads
+	// `self.module.opCount()` through this rather than being handed an index, so the text lands on the same op
+	// the very next `emitOp` creates and the two cannot be wired to different ops by a later edit.
+	export function recordAsyncSpawnSite(site AsyncSpawnSite)
+		self.asyncSpawnSites.upsert(self.module.opCount(), value: site)
+	end 'recordAsyncSpawnSite'
 
 	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
 	// `emitOp`; separate only because a terminator is stored on the block rather
@@ -630,6 +643,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 
 	target.merge(artifact.module)
 	project.opRanges.appendFrom(artifact.opRanges)
+	commitAsyncSpawnTexts(project, artifact: artifact, opOffset: opOffset)
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
@@ -1379,8 +1393,17 @@ function commitPendingTransformArities(project Project, artifact FileParseArtifa
 	end 'each'
 end 'commitPendingTransformArities'
 
-// Append this file's recorded discarded-result sites to the whole-program list — the twin of the two
-// commits above, and dedup-free for their reason: each entry is a distinct SITE with its own position.
+// Fold this file's spawn texts onto the whole-program table, RE-KEYED by the merge's op offset — the same
+// relocation `opRanges` gets by appending in order, spelled out here because a map cannot express it by
+// position. Without the offset every file after the first would quote the wrong spawn's text.
+function commitAsyncSpawnTexts(project Project, artifact FileParseArtifact, opOffset OpIndex)
+	for (opIndex, site) in artifact.asyncSpawnSites 'each'
+		project.asyncSpawnSites.upsert(opIndex + opOffset, value: site)
+	end 'each'
+end 'commitAsyncSpawnTexts'
+
+// Append this file's recorded discarded-result sites to the whole-program list — the twin of the door and
+// transform commits above, and dedup-free for their reason: each entry is a distinct SITE with its own position.
 function commitPendingDiscardedResults(project Project, artifact FileParseArtifact)
 	for site in artifact.pendingDiscardedResults 'each'
 		project.pendingDiscardedResults.push(site)

@@ -720,6 +720,10 @@ public partial class ARM64CodeEmitter {
         _e.EmitMovRegReg(destReg, ARM64Register.X0);
     }
 
+    public void DriveSchedulerAndIo() => _e.EmitDriveSchedulerAndIo();
+
+    public void SwitchToMainThread() => _e.EmitSwitchToMainThread();
+
     public void WakeWorker(VReg p) {
       // Go semawakeup on p->wakeSemaphore's lock block (mutex+cond+count).
       // POffWakeSemaphore = 0x38. Loads the block pointer into X9, then signals.

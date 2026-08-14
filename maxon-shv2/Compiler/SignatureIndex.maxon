@@ -2003,7 +2003,12 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		// `__destruct_<instance>` / `__mm_decref` (`managedFieldDropCallee` routes the `genericInstance`
 		// tag). Its storage is the `genericInstance` type itself, which `maxonTypeToStdType` gives an i64
 		// (a pointer), so `payloadStorageOf`/`payloadValueTypeOf` lower it like any managed pointer.
-		genericInstance then return PayloadClass.managed(fieldType, isString: false)
+		//
+		// ⚠ **EXCEPT A `Promise` INSTANCE, WHICH IS A SCALAR** (P1.5-B2c) — a green-thread handle owning no
+		// heap record. It MUST agree with `typeIsManaged`'s instance arm: these are the two SEPARATE
+		// implementations of "does this own heap?" that `Parser.requireContainerElementType`'s header warns
+		// about, and a slot they classify differently is moved in by one protocol and dropped by the other.
+		genericInstance then return promiseOrManagedInstanceClass(signatures, typeNames: typeNames, fieldType: fieldType)
 		// ⭐ A CHARACTER payload is an OWNED byte record — the same record a `string` payload is, so it is
 		// managed and `isString: true`: `isString` selects the fused-record COPY/DROP protocol
 		// (`promoteToOwnedString` in, `__str_decref` out), which is a question about the REPRESENTATION and
@@ -2066,6 +2071,18 @@ export function classifyUnionPayload(signatures ProgramSignatures, typeNames Typ
 		undeclared then return PayloadClass.undeclaredName
 	end 'asEnum'
 end 'classifyUnionPayload'
+
+// The class of a generic-INSTANCE slot: an owned base-struct box, or the one instance that is a bare
+// green-thread handle (P1.5-B2c). Split out because the arm above sits in a `match` and the question needs
+// a labelled `if`; it reads `typeIsManaged` rather than re-asking `instanceIsPromiseHandle`, so the two
+// classifiers this file exports cannot come to disagree about which instances own heap.
+function promiseOrManagedInstanceClass(signatures ProgramSignatures, typeNames TypeNameInterner, fieldType MaxonType) returns PayloadClass
+	if signatures.typeIsManaged(fieldType, from: typeNames) 'aBox'
+		return PayloadClass.managed(fieldType, isString: false)
+	end 'aBox'
+
+	return PayloadClass.scalar(fieldType)
+end 'promiseOrManagedInstanceClass'
 
 // A payload whose type is another enum/union: a payload-FREE enum is a scalar (its value is its i64
 // tag, stored inline); a BOXED union is a MANAGED heap pointer carrying the field's own `named(<union>)`
@@ -14776,6 +14793,15 @@ export type ProgramSignatures
 		return self.nameOfId(self.genericInstances.instanceBaseId(id))
 	end 'genericInstanceBaseName'
 
+	// ⭐ **IS INSTANCE `id` A GREEN-THREAD HANDLE RATHER THAN A BOX (P1.5-B2c)?** The one base whose values
+	// own no `__mm_alloc` record — see `PromiseType.maxon`, which carries the whole argument. It lives HERE,
+	// beside the base-name read, because `typeIsManaged` and `classifyUnionPayload` are both in this file and
+	// both must answer it identically; the free function `typeIsPromiseStorage` is the same question asked of
+	// a `MaxonType` rather than of an id, and it routes through this.
+	export function instanceIsPromiseHandle(id GenericInstanceId) returns bool
+		return self.genericInstanceBaseName(id).equals(PromiseTypeName)
+	end 'instanceIsPromiseHandle'
+
 	// ⭐⭐ **WHAT AN INSTANCE DENOTES IN A TYPE POSITION — AND OVER AN `interface` BASE THAT IS AN
 	// EXISTENTIAL, NOT A BOX.** `Seq with Integer` names the fat pointer `Seq`, held with `Element` bound;
 	// `Box with Integer` names `Box`'s box. Both are written `Base with Args`, and only the base's FORM tells
@@ -21208,9 +21234,17 @@ export type ProgramSignatures
 		// `tagIsByteRecord`: "does this own heap?" is a question about the REPRESENTATION, and a Character
 		// owns exactly the record a String does. This is the root every other managed classifier delegates
 		// to, so answering "no" here would leak a Character field, element and payload at once.
-		if tagIsByteRecord(tag) or tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance 'byteRecordStructOrInstance'
+		if tagIsByteRecord(tag) or tagIsStructRef(tag) 'byteRecordOrStruct'
 			return true
-		end 'byteRecordStructOrInstance'
+		end 'byteRecordOrStruct'
+		// ⭐ **EVERY GENERIC INSTANCE IS A BASE-STRUCT BOX — EXCEPT THE ONE THAT IS A GREEN-THREAD HANDLE**
+		// (P1.5-B2c). `Promise with T` / `Promise with (T, E)` names a pointer into the scheduler's own slab,
+		// reclaimed by `__gt_promise_drop` at the sites the parser tracks and never by a refcount, so a slot
+		// holding one owes no drop, no clone and no retain. The whole argument — including why shv2 stores
+		// the handle where the bootstrap boxes it — is on `PromiseType.maxon`.
+		if tag == ValueTypeTag.genericInstance 'instance'
+			return not self.instanceIsPromiseHandle(typeNameIdOf(fieldType))
+		end 'instance'
 		// ⭐ **AN EXISTENTIAL IS MANAGED, AND IT IS THE ONE MANAGED SLOT WHOSE DESTRUCTOR IS A RUN-TIME FACT**
 		// (P1.7a-existentials slice 2). Its VALUE half is whatever the conformer's record is — a heap box for
 		// every user conformer — so the slot owes exactly one drop, taken through `__drop_existential` off the
@@ -21354,7 +21388,7 @@ export type ProgramSignatures
 		// see, and answered `true` for the same reason the `genericAlias` arm below is: an instance is a heap
 		// box — an `Array`'s record and buffer, a `Box`'s box.
 		if self.isCanonicalInstanceName(name) 'aRenderedInstance'
-			return true
+			return not self.renderedNameIsPromiseHandle(name)
 		end 'aRenderedInstance'
 
 		let form = try self.declaredFormOf(name) otherwise return false
@@ -21376,14 +21410,25 @@ export type ProgramSignatures
 			// by the closure VALUE, not by the alias that names its signature.)
 			functionAlias then return false
 			// A generic instance is a heap box — an `Array`'s record + buffer, a `Box`'s box — so it is
-			// managed and dropped by the owning struct's cascade.
-			genericAlias then return true
+			// managed and dropped by the owning struct's cascade. ⚠ EXCEPT a `Promise` instance, whose value
+			// is a green-thread handle owning no record (P1.5-B2c) — the same exemption the `genericInstance`
+			// TAG arm above makes, and it is needed at BOTH because a `typealias StrPromise = Promise with
+			// String` reaches this door by NAME. `bareGenericAliasInstance` is total under this arm's own
+			// precondition (`declaredFormOf` answered `genericAlias`, which is `genericAliases.contains`).
+			genericAlias then return not self.instanceIsPromiseHandle(self.bareGenericAliasInstance(name))
 			// A tuple IS a struct box. `denotedAggregateName` above resolves a tuple alias to the tuple's own
 			// canonical name before this is asked, so this arm is reached only if that resolution is ever
 			// narrowed — and it must then still answer `true`, for A3e's measured exit-101 reason.
 			tupleAlias then return true
 		end 'form'
 	end 'declaredNameIsManaged'
+
+	// Is the CANONICAL mint `name` (`Promise_String`) the rendering of a promise-handle instance (P1.5-B2c)?
+	// The canonical-name arm of `declaredNameIsManaged` needs the id its own probe already found; a name the
+	// index cannot resolve is not an instance at all, so it is a box by that arm's own default.
+	function renderedNameIsPromiseHandle(name ByteArray) returns bool
+		return self.instanceIsPromiseHandle(try self.renderedInstanceOfUnclaimedName(name) otherwise return false)
+	end 'renderedNameIsPromiseHandle'
 
 	// Is the declared enum/union `name` BOXED (some case carries a payload)? The layout lookup split out so
 	// the two `declaredFormOf` arms that need it share one spelling, and answered over `enumTypes` directly

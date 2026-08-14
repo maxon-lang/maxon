@@ -65,6 +65,12 @@ let WorkersFlagPrefix = "--workers="
 // carry no golden at all (see `TargetPrinter.printTargetModule`). Naming them is per-BUILD and
 // opt-in, so every fragment that does not ask is byte-for-byte what it was before the flag existed.
 export let EmitIrFlag = "--emit-ir"
+
+// `--async-trace` — emit the green-thread trace (`spawn #`, `io_yield #`, `io_resume #`, `await #`) to stderr.
+// EXPORTED because the spec harness passes it per case, for an `<!-- AsyncTrace -->` fragment. Opt-in and
+// per-BUILD, so a program that does not ask is byte-for-byte what it was before the flag existed — the trace
+// CALLS are not emitted at all rather than being branched over at run time (see `GtRuntime.GtTraceEmitName`).
+export let AsyncTraceFlag = "--async-trace"
 export let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
 // `--metrics=<path>`, exported for the same reason and now with TWO harnesses emitting it: the scale
@@ -257,7 +263,7 @@ end 'acquireBuildTreeLock'
 // forgets — the lock would then survive its holder and be broken 60 s later as abandoned, which is
 // correct behaviour covering for a bug.
 function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs) returns ExitCode
-	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -831,6 +837,8 @@ export type MaxonArgs
 	export let paths as SourcePathSpellingArray
 	export let outputOverride as String
 	export let emitIr as bool
+	// Whether this build emits the green-thread async trace (`--async-trace`). See `AsyncTraceFlag`.
+	export let asyncTrace as bool
 	// `--emit-ir-runtime=<name>,<name>` (build only): the compiler-EMITTED functions the IR sidecar
 	// must ALSO render. EMPTY is the ordinary build and is the literal count of names given, not a
 	// sentinel. It IMPLIES `--emit-ir` (see `parse`), because a list of functions to print is a
@@ -932,6 +940,7 @@ export type MaxonArgs
 		var paths = SourcePathSpellingArray.create()
 		var outputOverride = ""
 		var emitIr = false
+		var asyncTrace = false
 		var runtimeIrNames = RuntimeFunctionNameArray.create()
 		var filter = ""
 		var updateRequired = false
@@ -967,7 +976,9 @@ export type MaxonArgs
 				outputOverride = try CommandLine.optionValue(arg) otherwise ""
 			end 'longOutput' else if arg == EmitIrFlag 'emitIrFlag'
 				emitIr = true
-			end 'emitIrFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
+			end 'emitIrFlag' else if arg == AsyncTraceFlag 'asyncTraceFlag'
+				asyncTrace = true
+			end 'asyncTraceFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
 				// ⚠ It cannot be swallowed by the arm above even though it shares its prefix: that one
 				// tests `==`, and this one is the only arm that tests this prefix.
 				// ⚠ **THE CHECK IS ON THE PARSED NAMES, NOT ON THE RAW VALUE, and that is the whole
@@ -1072,7 +1083,7 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, paths: paths, outputOverride: outputOverride, emitIr: emitIr, runtimeIrNames: runtimeIrNames, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
+		return Self{command: command, paths: paths, outputOverride: outputOverride, emitIr: emitIr, asyncTrace: asyncTrace, runtimeIrNames: runtimeIrNames, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'
 

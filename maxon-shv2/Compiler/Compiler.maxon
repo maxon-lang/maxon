@@ -33,7 +33,7 @@
 // Every phase timed below and in the passes/backend is a disjoint sub-interval of the
 // wall time measured here, so they sum to at most the total, and whatever they leave
 // over is printed as `unattributed` rather than absorbed — see CompileTimings.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray) returns FilePath throws CompileError
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false) returns FilePath throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
@@ -56,7 +56,7 @@ export function compile(inputPaths MaxonSourcePathArray, target Target, outputOv
 	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It needs
 	// no drain of its own for the reason this function's header already gives for the TOTAL: it is the only
 	// other whole-build entry, and a throw out of it ends the process with nothing left to mis-nest.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, unit: unit) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
@@ -65,12 +65,13 @@ end 'compile'
 // The build itself, from the whole-compile probe to the timing report — everything `compile` measures. It
 // is a separate function for the single reason its caller states: one failure path to hang the trace-span
 // drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, unit TraceUnit) returns FilePath throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, unit TraceUnit) returns FilePath throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
 	var project = try loadProject(inputPaths, target: target)
+	project.asyncTrace = asyncTrace
 	recordPhase(project, phase: CompilePhase.load, probe: whole)
 
 	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
@@ -518,12 +519,33 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// is final here: `mergeArtifact` filled it during the module build and `TypeResolution` only `upsert`s keys
 	// it already holds, so no pass can change the answer this walk reads.
 	var usage = scanRuntimeUsage(module, unreachableStdlib: project.stdlibFacts.unreachable, funcSignatures: project.funcSignatures)
+	// ⭐ A TRACED build carries what `__gt_trace_emit` calls, and the scan cannot see any of it: the trace is
+	// emitted BELOW the Maxon tier (into the synthesized `__gt_*` runtime), so no Maxon call site exists for
+	// `scanRuntimeUsage` to walk. Declared here for the same reason the streaming-subprocess family declares
+	// its transitive bits by hand. It is EXACTLY TWO bits, and the third one this used to declare was read
+	// off a design that no longer exists:
+	//   • `__int_to_string` — the id's digits. `__gt_trace_emit` calls it directly.
+	//   • the heap — `__gt_init`'s `__slab_alloc` of the shared 24-byte digit scratch (`GtTraceDigitsLabel`),
+	//     which only a traced build makes.
+	// NOT `__str_decref`: `__int_to_string` fills that caller-owned scratch and returns a LENGTH, so no String
+	// is created and none is released — see `buildGtTraceEmit`, whose header once claimed the opposite.
+	if project.asyncTrace 'traceRuntimeNeeds'
+		usage.usesIntToString = true
+		usage.usesHeap = true
+	end 'traceRuntimeNeeds'
 	usage.usesManagedGlobals = usesManagedGlobals
 	// A managed-payload union's `__destruct_<U>` (P1.3 slice 2) and a managed-field struct's
 	// `__destruct_<Struct>` (P1.4a wave 2) call `__str_decref`/`__mm_free`/nested `__destruct_<T>` inside
 	// SYNTHESIZED Std bodies the Maxon-module scan above cannot see. Close the needed-destructor set over that
 	// nesting and declare its transitive needs now — before `.data` layout reads `usesHeap` and before
 	// `installStringRuntime` reads `usesStrDecref`.
+	// ⭐ **A2: an `async` spawn's per-callee releaser is synthesized after the pipeline too**, so the scan
+	// above cannot see the `__str_decref` / `__destruct_<T>` calls its body will make. Collect the spawned
+	// callees from the MAXON module (which the pipeline leaves intact) and declare each plan's drop callees
+	// BEFORE `noteDestructorUsage` runs, so the destructors a releaser names are rooted in time for the
+	// cascade fixpoint to close over them — the same obligation, and the same ordering, the cascades have.
+	let asyncSpawnTargets = collectAsyncSpawnTargets(module)
+	declareAsyncReleaserNeeds(usage, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
 	noteDestructorUsage(usage, project: project, signatures: signatures)
 	// A managed-element array/struct/union DEEP-CLONE (P1.7 slice 3b-vi-b) synthesizes `__clone_<T>` cascades
 	// that call `__str_clone`/`__managed_clone`/nested `__clone_<T>` inside bodies this scan cannot see. Close the
@@ -628,7 +650,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// Its two hand-assembled chunks (`__gt_context_switch`/`__gt_trampoline`) are appended separately at the
 	// Target tier (BackendDispatch), because they are bytes rather than Std ops.
 	if usage.usesGt 'installGt'
-		installGtRuntime(pipeline.stdModule, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming)
+		installGtRuntime(pipeline.stdModule, globalData: project.globalData, asyncTrace: project.asyncTrace, usesIocp: usage.usesIocp, usesStreaming: usage.usesStreaming)
 	end 'installGt'
 	// The String runtime (`__print_string`/`__str_eq`) is installed the SAME way and for the same
 	// reason — already-lowered Std, appended after the pipeline so it is never re-optimized — but it is
@@ -792,6 +814,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// (see `fnRefThunkTargets`), installed here already-lowered so they flow through the whole backend and (on
 	// wasm) receive a funcref-table slot at their funcIdx (P1.5-A2b-2).
 	installFnRefThunks(pipeline.stdModule, project: project, targets: fnRefThunkTargets)
+	// The `__gt_release_<callee>` helpers that give back the reference an `async` spawn took to each managed
+	// argument, and release the result-or-error of a promise nobody awaited (A2). Collected before the
+	// pipeline (see `asyncSpawnTargets`), installed here already-lowered like the cascades above; a callee
+	// with nothing managed to release gets none, which is why a scalar async program is unchanged.
+	installAsyncReleasers(pipeline.stdModule, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
 	// The per-enum `<Enum>.fromRawValue` lookups — the same already-lowered append, and only the helpers the
 	// module CALLS. See `Runtime/EnumLookupRuntime.maxon` for why this one member of the enum reflection
 	// surface is a function while its four siblings expand in the parser.

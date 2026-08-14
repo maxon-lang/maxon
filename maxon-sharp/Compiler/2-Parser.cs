@@ -12022,6 +12022,19 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
       "maxon_sleep", ["i64"], false),
+    // === Cooperative yield (backs stdlib's Runtime.yield()) ===
+    ["yield"] = RuntimeCallIntrinsic(
+      "Cooperatively reschedules the calling green thread: drives the scheduler and every I/O "
+      + "engine one turn, puts the caller at the BACK of the run queue, then lets the next runnable "
+      + "green thread have this OS thread. Returns promptly when nothing else is runnable.\n\n"
+      + "Calling it from `main` before any green thread exists is well defined and inert. Not "
+      + "because `main` lacks a processor — it owns P[0] — but because `main` runs as that "
+      + "processor's inline scheduler thread: it is never queued, so it dequeues, finds nothing, "
+      + "and returns.\n\n"
+      + "Unlike `sleep(0)` it consumes no timer-heap slot and carries no deadline — it is the "
+      + "primitive a `while not done { … }` spin uses to wait on outstanding I/O without starving "
+      + "the poller that completes it.\n\n`__Builtins.yield()`",
+      "maxon_yield", [], false),
     // === Non-blocking promise readiness check ===
     ["gtIsComplete"] = RuntimeCallIntrinsic(
       "Returns 1 if the green thread (raw promise inner pointer) has reached completed status, 0 otherwise. Non-blocking peek used by dispatchers that need to find the first-ready promise out of N concurrent ones without head-of-line blocking. Pass `promise.inner` from a `Promise with X`.\n\n`__Builtins.gtIsComplete(gt_ptr) returns int`",

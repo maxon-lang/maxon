@@ -519,6 +519,7 @@ function buildManagedFileOpen(module StdModule, name ByteArray, mode ManagedFile
 	// them. The error is captured BEFORE the free (rather than re-read on the failure branch) so nothing
 	// between the call and the classification can be allowed to disturb it.
 	let handle = ids.mint()
+	emitFilesystemYield(module, block: afterCopy, ids: ids)
 	match mode 'op'
 		read then module.appendOp(afterCopy, op: StdOp.osFileOpenRead(handle, pathPtrId: scratch))
 		write then module.appendOp(afterCopy, op: StdOp.osFileOpenWrite(handle, pathPtrId: scratch))
@@ -568,6 +569,7 @@ function buildManagedFileClose(module StdModule)
 	let alreadyClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
 
+	emitFilesystemYield(module, block: doClose, ids: ids)
 	module.appendOp(doClose, op: StdOp.osFileClose(handle))
 	let zero = emitConst(module, block: doClose, value: ManagedFileClosedHandle, ids: ids)
 	module.appendOp(doClose, op: StdOp.storeIndirect(box, offset: ManagedFileHandleOffset, valueId: zero, valueType: StdType.i64))
@@ -636,6 +638,7 @@ function buildManagedFileSize(module StdModule)
 
 	let out = emitWin32OutWord(module, block: doSize, ids: ids)
 	let verdict = ids.mint()
+	emitFilesystemYield(module, block: doSize, ids: ids)
 	module.appendOp(doSize, op: StdOp.osFileSize(verdict, handleId: handle, sizeOutPtrId: out))
 	emitWin32BoolOutcome(module, func: func, block: doSize, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileSizeFailedFlag, ids: ids)
 
@@ -686,6 +689,7 @@ function buildManagedFileRead(module StdModule)
 	let buffer = emitLoadField(module, block: doRead, record: arrRec, offset: ManagedRecordBufferOffset, ids: ids)
 	let out = emitWin32OutWord(module, block: doRead, ids: ids)
 	let verdict = ids.mint()
+	emitFilesystemYield(module, block: doRead, ids: ids)
 	module.appendOp(doRead, op: StdOp.osReadFile(verdict, handleId: handle, bufId: buffer, lenId: size, bytesOutPtrId: out))
 	emitWin32BoolOutcome(module, func: func, block: doRead, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileReadFailedFlag, ids: ids)
 
@@ -716,6 +720,7 @@ function buildManagedFileWrite(module StdModule)
 	let byteLength = emitArrayByteExtent(module, block: doWrite, arrRec: arrRec, offset: ManagedRecordLengthOffset, ids: ids)
 	let out = emitWin32OutWord(module, block: doWrite, ids: ids)
 	let verdict = ids.mint()
+	emitFilesystemYield(module, block: doWrite, ids: ids)
 	module.appendOp(doWrite, op: StdOp.osWriteFile(verdict, handleId: handle, bufId: buffer, lenId: byteLength, bytesOutPtrId: out))
 	emitWin32BoolOutcome(module, func: func, block: doWrite, verdict: verdict, out: out, failed: failed, ok: ok, fallbackFlag: ManagedFileWriteFailedFlag, ids: ids)
 
@@ -747,6 +752,7 @@ function buildManagedFileExists(module StdModule)
 	let dataSize = emitConst(module, block: afterCopy, value: FindDataBytes, ids: ids)
 	let findData = emitRawAlloc(module, block: afterCopy, byteCount: dataSize, ids: ids)
 	let search = ids.mint()
+	emitFilesystemYield(module, block: afterCopy, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileFindFirst(search, pathPtrId: scratch, findDataPtrId: findData))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
 	let invalidConst = emitConst(module, block: afterCopy, value: InvalidHandleValue, ids: ids)
@@ -803,6 +809,7 @@ function buildManagedFilePathOperation(module StdModule, name ByteArray, mode Ma
 	let secondPath = emitOptionalSecondPath(module, func: func, cur: afterFirst, join: afterSecond, mode: mode, ids: ids)
 
 	let verdict = ids.mint()
+	emitFilesystemYield(module, block: afterSecond, ids: ids)
 	match mode 'op'
 		delete then module.appendOp(afterSecond, op: StdOp.osFileDelete(verdict, pathPtrId: firstPath))
 		rename then module.appendOp(afterSecond, op: StdOp.osFileRename(verdict, oldPathPtrId: firstPath, newPathPtrId: secondPath))
@@ -872,6 +879,7 @@ function buildManagedFileStat(module StdModule)
 	let dataSize = emitConst(module, block: afterCopy, value: FindDataBytes, ids: ids)
 	let findData = emitRawAlloc(module, block: afterCopy, byteCount: dataSize, ids: ids)
 	let search = ids.mint()
+	emitFilesystemYield(module, block: afterCopy, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileFindFirst(search, pathPtrId: scratch, findDataPtrId: findData))
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))

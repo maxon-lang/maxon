@@ -716,6 +716,27 @@ end 'VarInfo'
 
 export typealias VarInfoMap = Map with (ByteArray, VarInfo)
 
+// What E3073 needs about one `async <call>` spawn and cannot get anywhere else: the text to quote and the
+// place to point at. See `Project.asyncSpawnSites`.
+//
+// ⚠ **THE POSITION IS THE `async` KEYWORD'S, NOT THE `asyncCall` OP'S.** The op's own range anchors at the
+// CALLEE token (`SourceRange.between(anchor, last: rparenTok)`, where the anchor is the callee), which is
+// where the other async diagnostics correctly point. E3073 quotes the whole spawn INCLUDING the keyword, so it
+// must point at the keyword too, or the caret sits six columns right of the text the message shows. Carrying
+// the position here rather than moving the op's range keeps that difference local to this one diagnostic.
+export type AsyncSpawnSite
+	export let text as ByteArray
+	export let line as LineNumber
+	export let column as ColumnNumber
+
+	export static function create(text ByteArray, line LineNumber, column ColumnNumber) returns AsyncSpawnSite
+		return Self{text: text, line: line, column: column}
+	end 'create'
+end 'AsyncSpawnSite'
+
+// `asyncCall` op index ⇒ that spawn's quotable text and position. See `Project.asyncSpawnSites`.
+export typealias AsyncSpawnSiteMap = Map with (OpIndex, AsyncSpawnSite)
+
 // A list of BINDINGS, held by reference (VarInfo is a heap `type`). Scope keeps the
 // bindings a frame displaced in one; the parser keeps its mutable bindings in one.
 // Both need the binding OBJECT rather than its name — see Scope's header for why a
@@ -6080,6 +6101,23 @@ export type Project
 	// and Target modules carry no spans (see SourceRangeTable). Read on the cold
 	// path only — diagnostics and, later, LSP queries.
 	export var opRanges as SourceRangeTable
+	// Whether this build emits the green-thread async trace (`--async-trace`). Set by the driver right after the
+	// project is loaded and read once, by `installGtRuntime`. A per-BUILD switch rather than a per-file one, so
+	// it lives here beside `target` rather than on any artifact.
+	export var asyncTrace as bool
+	// ⭐ The SOURCE TEXT of every `async <call>` spawn, keyed by its `asyncCall` op index — what E3073 quotes
+	// back at the author (`'async heavyCompute(5)'`). SPARSE, unlike `opRanges`: only spawn sites have an
+	// entry, so it is a map rather than a parallel array.
+	//
+	// ⚠ **IT IS A SIDE TABLE BECAUSE THE TEXT CANNOT BE RECOVERED LATER, AND BOTH OTHER ROUTES WERE MEASURED
+	// DEAD.** Slicing the file at the op's own span does not work: `asyncCall`'s range is
+	// `SourceRange.between(anchor, last: rparenTok)` and a PUNCTUATOR carries no byte offsets (`Token.startByte`
+	// is 0 for every one), so the span's end byte is 0. Rebuilding the text from the op's own fields does not
+	// work either — the arguments are `ValueId`s, so a literal `5` has no spelling left by then. The parser is
+	// the last place the text exists, so it is captured there (`Parser.tokenTextFrom`, which lays each token at
+	// the column its author wrote it) and carried here. Folded from the per-file artifact by `mergeArtifact`
+	// with the same op offset `opRanges` uses. Cold path only.
+	export var asyncSpawnSites as AsyncSpawnSiteMap
 	// (funcIndex, ValueId) -> Maxon OpIndex for every op-defined value in the
 	// whole-program Maxon module (see ValueOrigin). Folded from the per-file artifact
 	// tables by `mergeArtifact`, in the same source-path order the module merges. A
@@ -6164,6 +6202,8 @@ export type Project
 			inferredInstantiationSites: GenericInstantiationSiteArray.create(),
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
+			asyncTrace: false,
+			asyncSpawnSites: AsyncSpawnSiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			rootPath: rootPath,
 			target: target,

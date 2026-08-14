@@ -42,6 +42,7 @@ the linearity RULE itself is target-neutral, and its compile-time refusals carry
 `await` is linear: awaiting one promise twice in straight-line code is refused at the second await.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 42
 end 'makeValue'
 
@@ -53,7 +54,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: <fragment>:9:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3100: <fragment>:10:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```
 
 <!-- test: async-linearity.error.double-await-in-loop -->
@@ -63,6 +64,7 @@ spawned OUTSIDE the loop, so it awaits the same green thread every iteration. Re
 the await is reachable from itself across the back-edge, without re-passing the `async` that would re-arm it.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 42
 end 'makeValue'
 
@@ -79,7 +81,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: <fragment>:11:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3100: <fragment>:12:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```
 
 <!-- test: async-linearity.error.double-await-through-alias -->
@@ -88,6 +90,7 @@ thread a second name; awaiting through both names awaits it twice. In shv2 `q` a
 value, so the second await is refused with no thread-id sidetable — the value IS the thread's identity.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 42
 end 'makeValue'
 
@@ -100,7 +103,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: <fragment>:10:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3100: <fragment>:11:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```
 
 <!-- test: async-linearity.error.double-await-through-alias-in-branch -->
@@ -109,6 +112,7 @@ of the promise resolves to the same SSA value it was spawned as (there is no re-
 inside the branch name one thread — and awaiting both is the second await it is.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 42
 end 'makeValue'
 
@@ -128,7 +132,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: <fragment>:15:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3100: <fragment>:16:11: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```
 
 <!-- test: async-linearity.error.double-await-alias-outlives-rebind -->
@@ -137,6 +141,7 @@ a path only when the promise's DEFINITION is re-passed (a re-arm); reassigning `
 `q` still names the first thread when it is awaited — and that await is the second one, refused.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 21
 end 'makeValue'
 
@@ -151,7 +156,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: <fragment>:11:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3100: <fragment>:12:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```
 
 <!-- test: async-linearity.error.double-await-after-ternary-arm -->
@@ -160,6 +165,7 @@ but the await AFTER the ternary is reachable from the arm that WAS taken, so on 
 awaited twice. Exclusivity buys the arms nothing here: reachability decides, and the arm reaches the tail.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 21
 end 'makeValue'
 
@@ -175,7 +181,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3100: <fragment>:13:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
+error E3100: <fragment>:14:10: this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice
 ```
 
 <!-- test: async-linearity.await-in-exclusive-branches -->
@@ -185,6 +191,7 @@ are allowed. A lexical "already awaited" check would reject this valid program; 
 because neither await can reach the other.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 21
 end 'makeValue'
 
@@ -213,6 +220,7 @@ first await of that thread, not a second await of the old one. The linear check 
 of one thread, not a second `await p` in the text.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 21
 end 'makeValue'
 
@@ -236,6 +244,7 @@ not N awaits of one. This is the case an over-eager check breaks: the alias unif
 re-arm — re-passing the promise's definition on the back-edge — is what keeps the single await legal.
 ```maxon
 function makeValue(i int) returns int
+	Runtime.yield()
 	return i
 end 'makeValue'
 
@@ -263,6 +272,7 @@ each is the only await on its own path, exactly as in an `if`/`else`. The reacha
 arms as the separate branches they lower to, not as one straight-line block.
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 21
 end 'makeValue'
 
@@ -289,6 +299,7 @@ hold: the alias must UNIFY (or `await p; await q` in sequence would double-free)
 EXCLUSIVE (or unifying them would reject this).
 ```maxon
 function makeValue() returns int
+	Runtime.yield()
 	return 21
 end 'makeValue'
 

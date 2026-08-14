@@ -379,6 +379,7 @@ function buildManagedDirectoryOpenSearch(module StdModule)
 	let findBlock = emitRawAlloc(module, block: afterCopy, byteCount: blockSize, ids: ids)
 	let findData = emitFindDataAddr(module, block: afterCopy, findBlock: findBlock, ids: ids)
 	let search = ids.mint()
+	emitFilesystemYield(module, block: afterCopy, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileFindFirst(search, pathPtrId: scratch, findDataPtrId: findData))
 	// The last error is captured IMMEDIATELY after the call — a `__mm_free` in between runs Win32 code of its
 	// own and could overwrite the thread's last-error. The same ordering `ManagedFileRuntime` states once.
@@ -467,6 +468,7 @@ function buildManagedDirectoryNext(module StdModule)
 
 	let findData = emitFindDataAddr(module, block: fetch, findBlock: findBlock, ids: ids)
 	let verdict = ids.mint()
+	emitFilesystemYield(module, block: fetch, ids: ids)
 	module.appendOp(fetch, op: StdOp.osFileFindNext(verdict, handleId: handle, findDataPtrId: findData))
 	let err = ids.mint()
 	module.appendOp(fetch, op: StdOp.osLastError(err))
@@ -574,6 +576,7 @@ function buildManagedDirectoryClose(module StdModule)
 	let alreadyClosed = emitCmp(module, block: entry, a: handle, b: closedConst, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(alreadyClosed, thenBlockId: done.id, elseBlockId: doClose.id))
 
+	emitFilesystemYield(module, block: doClose, ids: ids)
 	module.appendOp(doClose, op: StdOp.osFileFindClose(handle))
 	let zero = emitConst(module, block: doClose, value: ManagedDirectoryClosedHandle, ids: ids)
 	emitStoreField(module, block: doClose, record: findBlock, offset: FindBlockHandleOffset, value: zero)
@@ -652,6 +655,7 @@ function buildManagedDirectoryExists(module StdModule)
 
 	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
 	let rawAttrs = ids.mint()
+	emitFilesystemYield(module, block: afterCopy, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osFileAttributes(rawAttrs, pathPtrId: scratch))
 	emitRawFree(module, block: afterCopy, ptr: scratch, ids: ids)
 	// `GetFileAttributesA` answers a DWORD, so the comparison is against the MASKED value: a raw i64 register
@@ -701,6 +705,7 @@ function buildManagedDirectoryCreate(module StdModule)
 
 	let scratch = emitPathToCString(module, func: func, cur: entry, join: afterCopy, pathRec: pathRec, ids: ids)
 	let verdict = ids.mint()
+	emitFilesystemYield(module, block: afterCopy, ids: ids)
 	module.appendOp(afterCopy, op: StdOp.osDirCreate(verdict, pathPtrId: scratch))
 	let err = ids.mint()
 	module.appendOp(afterCopy, op: StdOp.osLastError(err))
@@ -755,6 +760,7 @@ function buildManagedDirectoryCurrentPath(module StdModule)
 	let firstSize = emitConst(module, block: entry, value: MaxPathBytes, ids: ids)
 	let firstBuf = emitRawAlloc(module, block: entry, byteCount: firstSize, ids: ids)
 	let firstLen = ids.mint()
+	emitFilesystemYield(module, block: entry, ids: ids)
 	module.appendOp(entry, op: StdOp.osDirCurrentPath(firstLen, bufLenId: firstSize, bufPtrId: firstBuf))
 	// This attempt's buffer rides every exit as a block arg — the shared verdict classifies, the caller says
 	// what crosses each merge (see `emitFilledBufferVerdict`'s seam paragraph).

@@ -1792,7 +1792,9 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// P1.5-B2b: a plain `await` of a throwing promise (E3057), and a `try …` propagate whose error type
 		// differs from the enclosing function's (E3059). E3057 shares SemanticCheck's throwing-call-needs-try
 		// code; E3059 shares the `errorTypeMismatch` code with its own full-sentence message.
-		awaitThrowingPromiseNeedsTry(callee, line, column) then reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: 'await' on a promise from throwing '{callee}' drops the error — use 'try await'", line: line, column: column, filePath: path)
+		awaitThrowingPromiseNeedsTry(errorType, line, column) then reportPositioned(project, code: ErrorCode.throwingFunctionRequiresTry, message: "throwing function requires try: 'await' on a promise from a function that throws '{errorType}' drops the error and leaks its payload — use 'try await'", line: line, column: column, filePath: path)
+		awaitNonPromise(got, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'await' requires a promise value from 'async', got {got}", line: line, column: column, filePath: path)
+		promiseStorageMismatch(detail, line, column) then reportPositioned(project, code: ErrorCode.promiseErrorTypeMismatch, message: detail, line: line, column: column, filePath: path)
 		byteStringCodepointRange(message) then reportPositioned(project, code: ErrorCode.lexerInvalidEscape, message: message, line: 0, column: 0, filePath: path)
 		propagateTypeMismatch(propagated, enclosing, line, column) then reportPositioned(project, code: ErrorCode.errorTypeMismatch, message: "try propagates '{propagated}' but enclosing function throws '{enclosing}' — add 'otherwise' to convert", line: line, column: column, filePath: path)
 		// The oracle's own sentence, verbatim — see `ParseError.thrownValueNotAnErrorEnum`.

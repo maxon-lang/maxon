@@ -3352,6 +3352,7 @@ public partial class X86CodeEmitter {
     EmitGtTryAwait();
     EmitGtYield();
     EmitGtProcessPendingWaiter();
+    schedRt.EmitMaxonYield();
     schedRt.EmitGtStackHigh();
     schedRt.EmitGtStackHighCurrent();
     schedRt.EmitGtEnqueue();
@@ -4637,7 +4638,15 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
     EmitJcc("z", "__gt_ppw_mainthread");
 
-    // Regular GT: enqueue into global run queue
+    // Regular GT: enqueue at the FRONT — P->runnext if free, displacing its occupant to the local
+    // queue otherwise, and only overflowing to the global queue from there (RuntimeEmitter's
+    // __gt_enqueue). Front is right for a WAKE: this waiter is the thread this processor was blocked
+    // on, so it is the one to run next.
+    //
+    // ⚠ IT IS NOT "the global run queue", WHICH IS WHAT THIS COMMENT SAID, and the wrong sentence
+    // propagated: it was cited as evidence that a cooperative yield could reuse this channel, which
+    // made the yield hand the M straight back to itself. A yield wants the BACK and goes through
+    // P->pendingYielder / __gt_enqueue_back instead — see RuntimeEmitter.EmitDrainPendingYielder.
     // RCX already = waiter
     EmitCallRuntimeLabel("__gt_enqueue");
     EmitJmp("__gt_ppw_done");
@@ -7017,6 +7026,12 @@ public partial class X86CodeEmitter {
   /// <c>maxon_sleep</c>, <c>__gt_await</c>, <c>__gt_try_await</c>, and completion itself — ends
   /// here: the nine fall-through arms of <see cref="EmitJumpIfMainThread"/>.
   ///
+  /// A TENTH caller arrives from outside this file and NOT through that helper:
+  /// <c>RuntimeEmitter.EmitMaxonYield</c> reaches it as
+  /// <see cref="Runtime.IEmitterBackend.SwitchToMainThread"/>, and asks the same question in the
+  /// other spelling both this runtime's predicates use — <c>gt-&gt;stackBase == 0</c> — because it
+  /// is shared code and must ask it the way arm64's park arms do too.
+  ///
   /// ⚠⚠ IT DOES NOT WRITE <c>mainThread.status</c>, AND THAT OMISSION IS THE WHOLE POINT.
   /// <b>A GT's own park loop is the sole owner of its status field.</b> Every other GT this runtime
   /// switches to was just dequeued from a run queue, and the switcher marks it <c>running</c>
@@ -7049,9 +7064,12 @@ public partial class X86CodeEmitter {
   /// <summary>
   /// Drive one turn of the scheduler and the I/O engine inline on the CALLER'S OWN STACK.
   /// EVERY cooperative idle-spin in this runtime — the worker loop, <c>__gt_await</c>,
-  /// <c>__gt_try_await</c>, <c>__gt_cleanup</c>'s drain, <c>maxon_sleep</c>'s main-thread park and
-  /// each of the five submit families' main-thread arms — must drive exactly these four, in this
-  /// order, or the GTs parked on whichever engine it omits never wake.
+  /// <c>__gt_try_await</c>, <c>__gt_cleanup</c>'s drain, <c>maxon_sleep</c>'s main-thread park,
+  /// each of the five submit families' main-thread arms, and <c>maxon_yield</c> (which reaches it
+  /// from the shared emitter as <see cref="Runtime.IEmitterBackend.DriveSchedulerAndIo"/>) — must
+  /// drive exactly these four, in this order, or the GTs parked on whichever engine it omits never
+  /// wake. <c>maxon_yield</c> is the first of them a USER program can spin on directly, which is
+  /// what made the operation need a portable name at all.
   ///
   /// ⚠ IT IS ONE SEQUENCE BECAUSE THE TEN SITES MUST AGREE AND NOTHING ELSE MAKES THEM.
   /// It was ten verbatim-ish copies in FOUR different orderings, and the divergence was not
@@ -7065,7 +7083,9 @@ public partial class X86CodeEmitter {
   /// ⚠ THE ELEVENTH <c>__gt_process_pending_waiter</c> IN THIS FILE IS NOT A CALLER AND MUST NOT
   /// BECOME ONE. It is a lone unconditional call at GT-trampoline entry, not an idle spin: it has
   /// nothing to poll for, it runs once, and driving the timer heap or the recovery net from there
-  /// would be work on the critical path of every single spawn.
+  /// would be work on the critical path of every single spawn. <c>maxon_yield</c>'s main-thread arm
+  /// makes the same lone call for the same kind of reason — it resumes exactly once from exactly
+  /// one switch, so it drains that switch's hand-off rather than re-driving every engine.
   ///
   /// The order matches ARM64's <c>EmitDriveSchedulerAndIo</c> minus <c>__io_poll_kqueue</c>, which
   /// has no x86 counterpart: on Windows the completion port is drained by the dedicated IOCP thread
@@ -8036,7 +8056,7 @@ public partial class X86CodeEmitter {
   /// runtime function — a bare prologue/epilogue — rather than expanding to zero
   /// IR, because a call to it must leave an op in the caller's body for the E3073
   /// async-yielding analysis to recognize as a legitimate yield point (see
-  /// SemanticCheckPass.IoStubs / maxon_parallel_boundary). Does nothing today; a
+  /// SemanticCheckPass.YieldingRuntimeEntries / maxon_parallel_boundary). Does nothing today; a
   /// future scheduler could hang a cooperative-yield check here.
   /// </summary>
   private void EmitMaxonParallelBoundary() {

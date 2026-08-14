@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "9e09720e6fbcc899",
+  "sourceHash": "c605708ca0122176",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -955,8 +955,8 @@
       "name": "AsyncNonYielding",
       "stage": "semantic",
       "doc": "an `async f()` call targets a function that never yields (contains\nno await / I/O stub call, transitively). `async` is only for I/O-concurrent\nwork -- a non-yielding callee would run to completion synchronously on the\nspawning thread, so the spawn is pointless. Emitted by `checkAsyncYielding`.\nMirrors the C# bootstrap's `AsyncNonYielding`.",
-      "emittedBy": {"csharp": "AsyncNonYielding", "selfhosted": "asyncNonYielding"},
-      "notEmittedBy": ["shv2"]
+      "emittedBy": {"csharp": "AsyncNonYielding", "selfhosted": "asyncNonYielding", "shv2": "asyncNonYielding"},
+      "notEmittedBy": []
     },
     {
       "code": 3074,
@@ -1181,8 +1181,8 @@
       "name": "SemanticPromiseErrorTypeMismatch",
       "stage": "semantic",
       "doc": "A promise is stored in a Promise type that does not name the error its thunk throws.\n`Promise` is parameterised by BOTH what its thunk returns and what its thunk throws:\n`Promise with T` is a NON-throwing promise, `Promise with (T, E)` one that throws E.\nStoring a promise in the wrong one is refused here -- including, in particular, storing\na THROWING promise in a `Promise with T`, which is what used to erase the error type.\nThat erasure was the root of a family of bugs, all of which this refusal (plus the\ntwo-parameter form that makes it avoidable) turns into impossibilities:\n- `otherwise (e)` had no type to give `e`, and silently handed back the raw i64\npromise handle typed `int`;\n- an associated-value error's payload had no static type to mm_decref, so it LEAKED\n(only a runtime `errorIsHeapPtr` bit in the box approximated the answer);\n- propagation (a bare `try await p` inside a `throws` function) had no error type to\ncheck the enclosing function's `throws` against, so a thunk throwing A could be\nawaited inside a function throwing B and A's ordinals reinterpreted as B's tags.\nThe fix a diagnostic can name is the point: it says which two-parameter type to write.",
-      "emittedBy": {"csharp": "SemanticPromiseErrorTypeMismatch"},
-      "notEmittedBy": ["selfhosted", "shv2"]
+      "emittedBy": {"csharp": "SemanticPromiseErrorTypeMismatch", "shv2": "promiseErrorTypeMismatch"},
+      "notEmittedBy": ["selfhosted"]
     },
     {
       "code": 3099,

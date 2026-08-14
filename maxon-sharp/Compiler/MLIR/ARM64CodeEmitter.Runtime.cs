@@ -96,7 +96,7 @@ public partial class ARM64CodeEmitter {
   /// runtime function — a bare prologue/epilogue — rather than expanding to zero
   /// IR, because a call to it must leave an op in the caller's body for the E3073
   /// async-yielding analysis to recognize as a legitimate yield point (see
-  /// SemanticCheckPass.IoStubs / maxon_parallel_boundary). Does nothing today; a
+  /// SemanticCheckPass.YieldingRuntimeEntries / maxon_parallel_boundary). Does nothing today; a
   /// future scheduler could hang a cooperative-yield check here.
   /// </summary>
   private void EmitMaxonParallelBoundary() {
@@ -382,9 +382,10 @@ public partial class ARM64CodeEmitter {
   /// <summary>
   /// Drive one turn of the scheduler and the I/O engine inline on the CALLER'S OWN STACK.
   /// Every cooperative idle-spin in this runtime — __gt_await, __gt_try_await, __gt_yield,
-  /// __gt_cleanup, __io_submit_sync's main-thread arm, maxon_sleep's main-thread park, and the
-  /// kqueue park handshake — must drive exactly these four, in this order, or the GTs parked on
-  /// whichever engine it omits never wake.
+  /// __gt_cleanup, __io_submit_sync's main-thread arm, maxon_sleep's main-thread park, the
+  /// kqueue park handshake, and maxon_yield (which reaches it from the shared emitter as
+  /// IEmitterBackend.DriveSchedulerAndIo) — must drive exactly these four, in this order, or the
+  /// GTs parked on whichever engine it omits never wake.
   ///
   /// ⚠ IT IS ONE SEQUENCE BECAUSE THE SEVEN SITES MUST AGREE AND NOTHING ELSE MAKES THEM.
   /// It was seven verbatim copies; the agreement was carried only by a comment on one of them
@@ -408,6 +409,33 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("__io_poll_kqueue");
     EmitBranchLink("__gt_timer_check");
     EmitBranchLink("__netpoll_recover");
+  }
+
+  /// <summary>
+  /// Hand this M back to its scheduler: <c>__gt_context_switch(from = current GT, to =
+  /// &amp;P.mainThread, p = P)</c>. Callers must have established that the current GT is not the
+  /// inline mainThread itself (<c>stackBase != 0</c>) — switching to yourself changes nothing and
+  /// returns immediately — and must have arranged their own wakeup, because this queues nobody.
+  ///
+  /// It deliberately does NOT stamp <c>mainThread.status</c>: a GT's own park loop owns that field,
+  /// and the mainThread is never dequeued, so there is no arriving state to restore. See the x86
+  /// twin's summary for the measured cost of getting that wrong.
+  ///
+  /// ⚠ THE FIVE OTHER SITES IN THIS FILE THAT SWITCH *TO* <c>&amp;P.mainThread</c> STILL SPELL IT
+  /// INLINE (grep <c>POffMainThread</c> for the ones passing it as <c>to</c> in X1) and were
+  /// deliberately left alone:
+  /// converging them means editing park code no host in this loop can execute, and one of them sits
+  /// inside <c>__gt_trampoline</c>, whose frame offsets DebugSamples pins. This exists because
+  /// <c>maxon_yield</c> is emitted from the SHARED emitter and needs the operation under a portable
+  /// name (<see cref="Runtime.IEmitterBackend.SwitchToMainThread"/>); it is the same four
+  /// instructions those sites emit, read off <c>__gt_await_idle</c>'s worker-GT arm.
+  /// </summary>
+  private void EmitSwitchToMainThread() {
+    EmitLoadCurrentGt(ARM64Register.X0);                                              // from = self
+    EmitLoadP(ARM64Register.X9);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, POffMainThread, isAdd: true);   // to = &P.mainThread
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9);                                // p = P
+    EmitBranchLink("__gt_context_switch");
   }
 
   // --- os_unfair_lock helpers ---
@@ -2746,6 +2774,7 @@ public partial class ARM64CodeEmitter {
     EmitGtCleanup();
     EmitGtProcessPendingSyncReq();
     EmitGtProcessPendingWaiter();
+    schedRt.EmitMaxonYield();
     schedRt.EmitGtTimerAdd();
     schedRt.EmitGtTimerCheck();
     EmitGtMorestack();

@@ -188,6 +188,24 @@ let TargetSeparator = ","
 // marker of any kind; see `SpecTestRunner.targetRefusalIn`.
 let ArgsMarker = "<!-- Args:"
 
+// ⭐ **THE ONE VALUELESS MARKER — `<!-- AsyncTrace -->`.** It says a case asserts the green-thread TRACE, which
+// changes two things and neither is a value: the program is compiled with `--async-trace`, and both sides of
+// the stderr comparison are put through `normalizeAsyncTraceStderr` first.
+//
+// ⚠ **IT CARRIES NO PAYLOAD, SO IT MUST NOT GO THROUGH `markerValue`.** That helper splits on
+// `TestMarkerNameSep` (": ") and answers "" for a bare marker — an empty answer being indistinguishable from a
+// missing one is exactly how a silently-ignored marker happens. Its arm is a pure `contains` flag set.
+//
+// ⛔ **AND ONE WAS ALREADY BEING IGNORED.** `specs-shv2/async-await.md` has carried `<!-- AsyncTrace -->` since
+// the port, with no arm to claim it: an unrecognized comment line falls through this scanner's `i = i + 1` and
+// is DISCARDED without complaint, so the case ran as an ordinary stderr assertion and simply failed. A marker
+// nothing reads is not inert — it is a claim the file makes and the harness silently declines.
+//
+// It is not a superstring or substring of any other marker ("<!-- AsyncTrace" first differs from "<!-- test:",
+// "<!-- disabled-test:", "<!-- targets:" and "<!-- Args:" at the character after "<!-- "), so the marker checks
+// stay independent and none can swallow another.
+let AsyncTraceMarker = "<!-- AsyncTrace"
+
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
 let ArgSeparator = " "
@@ -559,11 +577,18 @@ export type SpecTest
 	// produce.
 	export let programArgs as ProgramArgArray
 
+	// Whether this case asserts the green-thread async TRACE (an `<!-- AsyncTrace -->` marker). It sits HERE
+	// rather than on `SpecExpectation` because it is not part of what the run must PRODUCE — it changes how the
+	// program is BUILT (`--async-trace`) and how its stderr is COMPARED, which is the same reason `targets`,
+	// `runtimeNames` and `programArgs` live here. v1 carries it on both the expectation and the test, which is
+	// one fact in two places.
+	export let asyncTrace as bool
+
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -869,6 +894,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var targets = TargetKeyArray.create()
 	var runtimeNames = RuntimeFunctionNameArray.create()
 	var programArgs = ProgramArgArray.create()
+	var asyncTrace = false
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -909,6 +935,14 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'argsMarker'
+
+		// The valueless flag marker. Consumed identically to the four above — including on a DISABLED case, so
+		// shelving a trace case does not leave its marker to fall through as unread prose.
+		if line.contains(AsyncTraceMarker) 'asyncTraceMarker'
+			asyncTrace = true
+			i = i + 1
+			continue
+		end 'asyncTraceMarker'
 
 		// ⛔⛔ **A PROSE SENTENCE THAT HAPPENS TO BEGIN WITH A FENCE PREFIX IS NOT A FENCE, AND EVERY ARM
 		// BELOW MATCHES BY PREFIX.** `` ```RequiredRuntime block, one name per line: `` — a real line in
@@ -1060,7 +1094,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 		end 'pinsOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace))
 		return i
 	end 'rejected'
 
@@ -1074,7 +1108,7 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace))
 
 	return i
 end 'scanTestFromMarker'

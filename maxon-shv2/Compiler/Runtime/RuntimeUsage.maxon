@@ -480,9 +480,15 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	end 'wallClock'
 	// R4.1: a `__mf_*` call. It carries `usesHeap` with it, unlike the clock above — the open allocates a
 	// NUL-terminated scratch copy of the path and the handle box, and frees the scratch.
+	//
+	// ⭐ **AND IT CARRIES THE WHOLE SCHEDULER**, because filesystem I/O YIELDS: every `__mf_*` that makes a
+	// kernel call opens with `__gt_io_park` (see `GtIoParkName`), a `__gt_` call one tier down that this
+	// Maxon-module scan cannot see — the same reason the streaming family declares its bits by hand rather
+	// than relying on the prefix test above. Declared here, once, for both filesystem families.
 	if isManagedFileRuntimeCallee(callee) 'managedFile'
 		usage.usesManagedFile = true
 		usage.usesHeap = true
+		recordGtUsage(usage)
 	end 'managedFile'
 	// R4.3: a `__md_*` call. It carries `usesHeap` (the find block, the box and the path scratch) AND
 	// `usesManagedMemory`, which the file family does not need: `__md_filename`/`__md_current_path` answer with an
@@ -492,6 +498,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesManagedDirectory = true
 		usage.usesHeap = true
 		usage.usesManagedMemory = true
+		recordGtUsage(usage)
 	end 'managedDirectory'
 	// A `__cl_*` call. Same two transitive bits as the directory family and for the same reasons: the scratch
 	// buffer is a raw alloc, and `__cl_arg` answers with an `Array` record it builds one tier down.

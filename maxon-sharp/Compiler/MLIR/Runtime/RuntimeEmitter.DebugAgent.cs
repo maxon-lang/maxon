@@ -2390,9 +2390,11 @@ public partial class RuntimeEmitter {
   //     `__gt_context_switch` whose `to` is a green thread takes it from a `__gt_dequeue` call a few
   //     instructions above, and every other switch targets `P->mainThread` — a processor's own inline
   //     scheduler thread, which is not a thread anyone can hold (see __dbg_gt_should_hold). Reviewed
-  //     against all eleven dequeue callers (the worker loop, `__gt_await`, `__gt_try_await`,
-  //     `__gt_yield`, `maxon_sleep`, `__gt_cleanup`, and the net/pipe/io submit paths); a LIST here
-  //     would be a twelfth place to keep in step, and the list this comment first carried named five.
+  //     against all twelve dequeue callers (the worker loop, `__gt_await`, `__gt_try_await`,
+  //     `__gt_yield`, `maxon_sleep`, `maxon_yield`'s main-thread arm, `__gt_cleanup`, and the
+  //     net/pipe/io submit paths); a LIST here would be one more place to keep in step, and the list
+  //     this comment first carried named five while there were eleven, then eleven while there were
+  //     twelve. The DERIVATION above is what holds; the count is only ever a dated reading of it.
   //   * A thread caught there has NOT RUN YET, which is what makes a hold safe rather than racy: its
   //     saved rsp/rbp are the ones its last context switch wrote, so the debugger can walk it and read
   //     its locals; and it cannot complete out from under a hold, because completing requires running.

@@ -166,9 +166,23 @@ public static class SemanticCheckPass {
     return dot >= 0 ? callee[(dot + 1)..] : callee;
   }
 
-  /// Known I/O runtime stubs that cause the calling green thread to yield.
-  /// These are runtime functions (not user-defined) that call __io_submit_*.
-  private static readonly HashSet<string> IoStubs = [
+  /// ⭐ THE SEEDS OF THE E3073 YIELD CLOSURE: runtime entries (never user-defined functions) a call to
+  /// which can HAND THIS OS THREAD TO ANOTHER GREEN THREAD. Every yielding stdlib entry point —
+  /// `File.exists`, `Subprocess.run`, `Runtime.yield` — is DERIVED from these by the fixed point in
+  /// CheckAsyncYielding walking the call graph down to one of them.
+  ///
+  /// ⚠ IT IS NOT AN I/O ROSTER, THOUGH IT WAS CALLED `IoStubs` AND ITS HEADER CLAIMED THESE "call
+  /// __io_submit_*" — false of `maxon_sleep` (a timer park), false of `maxon_yield` (a run-queue
+  /// rotation), and false of `maxon_parallel_boundary` (not a suspension at all, and listed anyway).
+  /// The membership question is the one above, and each entry below states its own answer to it.
+  /// Reading the old name as the rule is what makes a yield look like an odd guest here rather than
+  /// the most obvious member there is.
+  ///
+  /// Entries are the LOWERED runtime symbols and the synthetic `__managed_*` callee names, because
+  /// CheckAsyncYielding matches MaxonCallRuntimeOp.FunctionName and MaxonCallOp.Callee — not the
+  /// `__Builtins.foo` spelling (the self-hosted mirror, SemanticCheck.ioYieldBuiltinSet, keys off the
+  /// qualified name instead and is therefore spelled differently on purpose).
+  private static readonly HashSet<string> YieldingRuntimeEntries = [
     "maxon_file_read",
     "maxon_managed_file_write",
     "maxon_file_exists",
@@ -226,6 +240,11 @@ public static class SemanticCheckPass {
     "__managed_directory_current_path", "__managed_directory_next",
     "__managed_directory_filename", "__managed_directory_close",
     "__managed_directory_exists",
+    // Cooperative yield. `Runtime.yield()` lowers through `__Builtins.yield()` to this runtime
+    // symbol, which puts the caller on the BACK of the run queue and hands the M to the next
+    // runnable green thread (RuntimeEmitter.EmitMaxonYield). The plainest possible yes to the
+    // header's question.
+    "maxon_yield",
     // CPU-parallel marker (parallel-codegen). `__Builtins.parallelBoundary()`
     // lowers to this empty-bodied runtime stub (see EmitMaxonParallelBoundary).
     // It is not I/O, but hand-written CPU-bound `async` task functions must still
@@ -273,13 +292,13 @@ public static class SemanticCheckPass {
               break;
             case MaxonCallOp call:
               // MaxonTryCallOp inherits from MaxonCallOp, so both are handled here.
-              if (IoStubs.Contains(call.Callee))
+              if (YieldingRuntimeEntries.Contains(call.Callee))
                 yields.Add(func.Name);
               else
                 callees.Add(call.Callee);
               break;
             case MaxonCallRuntimeOp rtCall:
-              if (IoStubs.Contains(rtCall.FunctionName))
+              if (YieldingRuntimeEntries.Contains(rtCall.FunctionName))
                 yields.Add(func.Name);
               break;
           }
@@ -305,7 +324,7 @@ public static class SemanticCheckPass {
 
     // Check each async call: callee must be in the yields set or be a known I/O stub
     foreach (var (asyncOp, containingFunc) in asyncCalls) {
-      if (!yields.Contains(asyncOp.Callee) && !IoStubs.Contains(asyncOp.Callee)) {
+      if (!yields.Contains(asyncOp.Callee) && !YieldingRuntimeEntries.Contains(asyncOp.Callee)) {
         var sourceText = asyncOp.CallSourceText ?? $"async {asyncOp.Callee}(...)";
         throw new CompileError(
           ErrorCode.AsyncNonYielding,

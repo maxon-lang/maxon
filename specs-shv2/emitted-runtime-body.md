@@ -169,6 +169,7 @@ the program has to actually run a green thread. Gated to x64-windows for
 
 ```maxon
 function deepRecurse(n int) returns int
+	Runtime.yield()
 	if n == 0 'base'
 		return 0
 	end 'base'

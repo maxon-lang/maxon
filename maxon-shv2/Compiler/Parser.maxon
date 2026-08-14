@@ -1196,8 +1196,27 @@ export union ParseError implements Error
 	// error flag (P1.5-B2b). Renders as **E3057** (the throwing-call-needs-`try` code SemanticCheck reports
 	// for an ordinary throwing call), positioned at the `await` token. It is a PARSE error because only the
 	// parser holds the promise → awaited-callee mapping (the promise mark and the defining `asyncCall` are
-	// per-function parse state). `callee` names the awaited throwing function.
-	awaitThrowingPromiseNeedsTry(callee String, line LineNumber, column ColumnNumber)
+	// per-function parse state).
+	//
+	// ⚠ **`errorType` NAMES THE ERROR, NOT THE CALLEE, AND THE DIFFERENCE IS THE POINT.** What the author has
+	// to act on is the type they must now catch — an `otherwise (e)` binds an `e` of exactly this type — and
+	// the callee's name is already visible on the line the diagnostic points at. `specs/async-await.md`'s
+	// `error.await-without-try` states it: the error is OWNED and an associated-value payload is released by
+	// nobody, so the message says which type leaks rather than which function produced it.
+	awaitThrowingPromiseNeedsTry(errorType String, line LineNumber, column ColumnNumber)
+	// `await x` where `x` is not a promise from an `async` spawn. Renders as **E3005** (the type-mismatch
+	// code), positioned at the `await` token: this is an operand of the wrong TYPE at a position that states
+	// exactly which type it requires, which is what E3005 is for. It was E2015 ("a construct this compiler
+	// does not implement yet"), and that was the wrong sentence — awaiting a non-promise is not a feature
+	// awaiting a rung, it is permanently meaningless. `got` is the operand's display type name.
+	awaitNonPromise(got String, line LineNumber, column ColumnNumber)
+	// ⭐ A SPAWN STORED IN A `Promise` TYPE THAT DESCRIBES A DIFFERENT PROMISE (P1.5-B2c). Renders as
+	// **E3098**, positioned at the storing method's token. It carries a FULL SENTENCE rather than the three
+	// facts, because the family's four members share only their code: the erased-error one has to name the
+	// two-parameter type that fixes it, the wrong-error and non-throwing ones compare two error types, and
+	// the wrong-result one compares two result types. Composed by `promiseStorageMismatch`, which is the one
+	// place that holds all four wordings and so the one place they can be read against each other.
+	promiseStorageMismatch(detail String, line LineNumber, column ColumnNumber)
 	// A bare `try f()` / `try await p` (PROPAGATE form) whose propagated error type differs from the
 	// enclosing function's `throws` type (P1.4b completion, exercised by P1.5-B2b). Renders as **E3059**,
 	// positioned at the `try` token. Without `otherwise`, the caught flag is re-published verbatim into the
@@ -4494,6 +4513,12 @@ let BuiltinsCurrentTimeMsName = b"__Builtins.currentTimeMs"
 let BuiltinsCurrentUnixTimeSecondsName = b"__Builtins.currentUnixTimeSeconds"
 let BuiltinsSleepName = b"__Builtins.sleep"
 
+// `stdlib/Runtime.maxon`'s floor — the intrinsic `Runtime.yield()`'s one-line body calls. It routes to
+// `__gt_resched`, the cooperative reschedule, exactly as `__Builtins.sleep` routes to `__gt_sleep`. Same
+// discipline as `sleep`: the SURFACE is the stdlib declaration and this is the only spelling the parser
+// knows, so a yield can never reach the scheduler by two routes that could come to disagree.
+let BuiltinsYieldName = b"__Builtins.yield"
+
 // ⭐ **THE TWO COMMAND-LINE INTRINSICS**, `stdlib/CommandLine.maxon`'s only floor. The bootstrap declares
 // exactly these two names with exactly these shapes (`2-Parser.cs:10952-10957`): a count that takes nothing
 // and answers an `int`, and an accessor that takes one index and answers an OWNED `__ManagedMemory` the
@@ -4619,6 +4644,11 @@ let ClockIntrinsicArity = 0 as ParamCount
 // that check to read — no file declares it — which is the whole reason this constant exists, and why it
 // belongs here beside the intrinsic table rather than up with the bare-name builtins.
 let SleepIntrinsicArity = 1 as ParamCount
+
+// `__Builtins.yield` takes NOTHING and returns void — `Runtime.yield()` has no knob to turn. Stated here for
+// `SleepIntrinsicArity`'s reason: an intrinsic has no signature for SemanticCheck's ordinary arity check to
+// read, because no file declares it.
+let YieldIntrinsicArity = 0 as ParamCount
 
 // The scale between the two MONOTONIC readings — `currentTimeMs()` IS `currentTimeNanos() / 1e6`. Named
 // here because this is the only place it is applied; the wall clock's own two scale constants live with
@@ -7530,13 +7560,45 @@ end 'ifConditionCatches'
 // display name is DERIVABLE from the key (`tryTargetNamedNoun`) and a second field would be that derivation
 // stored — one fact in two places, filled in at every emission site, wrong at whichever one forgot.
 union TryTarget
-	// A DIRECT call or an `await`ed promise: the callee NAME, which the signature index answers for. ⚠ The
+	// A DIRECT call or an `await`ed SPAWN: the callee NAME, which the signature index answers for. ⚠ The
 	// EMITTED symbol for a builtin — `tryTargetNamedNoun` turns it back into the author's spelling.
 	named(callee ByteArray)
 	// A witness-dispatched interface method (P1.7a slice 2b-v): the method NAME for diagnostics, and the
 	// interface's own declared `throws` clause — the only carrier of that fact.
 	witness(methodName ByteArray, throwsClause ThrowsClause)
+	// ⭐ An `await` of a promise out of STORAGE (P1.5-B2c): the storage TYPE's name for diagnostics, and the
+	// `throws` clause its `ErrorType` argument spells — the only carrier of that fact, exactly as the
+	// interface's own clause is for a witness. There is no `asyncCall` to recover a callee from: the promise
+	// came out of a container, whose element type is the whole of what is known about it.
+	//
+	// ⚠ **A SPAWN AWAITED DIRECTLY STAYS ON THE `named` ARM, AND THAT IS NOT AN INCONSISTENCY.** It has a
+	// callee name, and a name can be UNDECLARED — `requireThrowingNamedTryTarget` waves that case through so
+	// SemanticCheck's E3004 reports the real mistake rather than an E3055 about a function that does not
+	// exist. A storage type has no such case: its clause is read off the type, which is always there.
+	promise(storageName ByteArray, throwsClause ThrowsClause)
 end 'TryTarget'
+
+// ⭐⭐ **WHAT AN `await` NEEDS TO KNOW ABOUT ITS PROMISE, FROM WHICHEVER SOURCE HAS IT (P1.5-B2c).** A
+// promise reaches an `await` by one of two roads and the two carry the facts in different places — a SPAWN
+// in this frame carries them on the callee its defining `asyncCall` names, a promise out of STORAGE carries
+// them in its own type's arguments — so the three await doors (`emitAwait`'s E3057 reject, `emitAwaitOp`'s
+// result mint, `commitTryAwaitRewrite`'s desugar target) ask ONE function and none of them contains a
+// second copy of the road split.
+//
+// ⚠ **THE `throws` CLAUSE IS NOT A FIELD HERE, AND DELIBERATELY SO.** It is `tryTargetThrows(tryTarget)` —
+// the accessor the `try` desugar already reads it through — so a promise's throws-ness cannot be one thing
+// to the plain-`await` reject and another to the `otherwise (e)` binding it produces.
+type AwaitedPromise
+	// What `await p` yields. `MaxonReturnType` and not a bare type because a VOID `async` is awaitable and
+	// has no result type at all (`await p` as a statement) — a stored promise is never void, but the spawn
+	// road is, and one record serves both.
+	export let result as MaxonReturnType
+	export let tryTarget as TryTarget
+
+	export static function create(result MaxonReturnType, tryTarget TryTarget) returns AwaitedPromise
+		return Self{result: result, tryTarget: tryTarget}
+	end 'create'
+end 'AwaitedPromise'
 
 // The NAME a diagnostic blames for a `try` target — the first of the two questions the desugar asks it. A
 // witness dispatch blames the interface method the author actually wrote (the witness table is a compiler
@@ -7545,6 +7607,7 @@ function tryTargetNoun(target TryTarget, signatures ProgramSignatures) returns B
 	return match target 'kind'
 		named(callee) gives tryTargetNamedNoun(callee, signatures: signatures)
 		witness(methodName, _) gives methodName
+		promise(storageName, _) gives storageName
 	end 'kind'
 end 'tryTargetNoun'
 
@@ -7598,15 +7661,17 @@ function tryTargetNamedNoun(callee ByteArray, signatures ProgramSignatures) retu
 	end 'sourceMethod'
 end 'tryTargetNamedNoun'
 
-// **E3055 for a WITNESS `try` target** — a `try` on an interface method whose declaration carries no
-// `throws`. Unconditional, unlike its named twin: an interface method is in no signature registry, so there
-// is no "undeclared, leave it to E3004" case to exempt, and the clause is a fact the constraint resolution
-// already established.
-function requireThrowingWitnessTryTarget(methodName ByteArray, throwsClause ThrowsClause, tryTok Token) throws ParseError
+// **E3055 for a `try` target THAT CARRIES ITS OWN CLAUSE** — a witness-dispatched interface method
+// (P1.7a slice 2b-v) or a promise out of storage (P1.5-B2c). Unconditional, unlike the `named` twin: neither
+// an interface method nor a storage type is in the signature registry, so there is no "undeclared, leave it
+// to E3004" case to exempt, and in both the clause is a fact the parser has already established — from the
+// constraint resolution for one, from the `Promise with (T, E)` argument for the other. One function
+// because it is one rule; the two shapes differ only in which noun they hand it.
+function requireThrowingClauseTryTarget(noun ByteArray, throwsClause ThrowsClause, tryTok Token) throws ParseError
 	if not throwsClauseIsThrowing(throwsClause) 'nonThrowing'
-		throw ParseError.tryOnNonThrowing(String.from(methodName), line: tryTok.line, column: tryTok.column)
+		throw ParseError.tryOnNonThrowing(String.from(noun), line: tryTok.line, column: tryTok.column)
 	end 'nonThrowing'
-end 'requireThrowingWitnessTryTarget'
+end 'requireThrowingClauseTryTarget'
 
 // The result of `captureEnclosing` (P1.5-A2b): a name that resolved into an enclosing frame yields
 // `captured` with the value read out of the env block; any other name is `notCaptured` and resolves
@@ -10149,7 +10214,7 @@ export type Parser
 	var valueOwnsHeapAlone as BoolArray
 	// ⭐ **THE PROMISE MARK (P1.5-B1a)** — true iff value `v` is an `async` spawn's handle. A per-value bool
 	// column in the SAME lockstep as `valueOwnsHeap` (pushed `false` in `mintValue`/`recordValueType`, set by
-	// `markValuePromise` on the one value `emitAsyncCall` mints, read by `valueIsPromise`). The handle's TAG
+	// `markValuePromise` on the one value `emitAsyncCall` mints, read by `valueOwnsGreenThread`). The handle's TAG
 	// already carries its awaited scalar type (int/bool — a managed/float result is rejected before the handle
 	// is minted), so `await` reads the result type off `tagOf` and this bit only distinguishes an awaitable
 	// handle from a bare int of the same tag. Reset per function and SWAPPED across a closure body's context.
@@ -17787,17 +17852,32 @@ export type Parser
 
 	// The declared-base half of `checkGenericInstance` — base-is-generic, then arity. The P1.6-A per-argument
 	// managed rejection is GONE (B2 owns and drops managed type arguments).
+	// ⭐ **A TRAILING TYPE ARGUMENT MAY BE OMITTED, AND FOR ONE BASE ITS OMISSION IS THE SPELLING OF A FACT**
+	// (P1.5-B2c). `type Promise uses Element, ErrorType` is written with two parameters and
+	// `Promise with String` supplies one — that is not an under-application to be diagnosed, it is how the
+	// language says *"this thunk does not throw"*. The language has no syntax for an optional type
+	// parameter, so neither compiler can read the rule off the declaration: `maxon-sharp` stamps
+	// `OptionalTrailingTypeParamCount` on the completed struct, and shv2 derives it from the base NAME in
+	// `PromiseType.maxon`, which is the one place that has to learn a second such base if one ever appears.
 	function checkGenericInstanceAgainst(layout StructLayout, baseTok Token, argCount FieldIndex)
 		if layout.typeParamCount() == 0 'notGeneric'
 			self.recordBaseNotGeneric(baseTok)
 			return
 		end 'notGeneric'
 
-		if argCount != layout.typeParamCount() 'wrongArity'
-			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {layout.typeParamCount()} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
+		let least = layout.typeParamCount() - promiseOptionalTrailingTypeParams(layout.name)
+		if argCount < least or argCount > layout.typeParamCount() 'wrongArity'
+			self.recordArtifactDiagnostic(ErrorCode.genericArityMismatch, message: "generic type '{String.from(baseTok.value)}' expects {genericArityPhrase(least, most: layout.typeParamCount())} type argument(s), but {argCount} were supplied", range: SourceRange.ofToken(baseTok))
 			return
 		end 'wrongArity'
 	end 'checkGenericInstanceAgainst'
+
+	// How E2056 spells the arity it wanted. A base with no optional parameters says one number, exactly as
+	// it always did — every existing pin on this message is over such a base — and only a base that admits a
+	// range says so.
+	function genericArityPhrase(least FieldIndex, most FieldIndex) returns String
+		return "{most}" if least == most else "{least} or {most}"
+	end 'genericArityPhrase'
 
 	// Parse `function(paramTypes) [returns T]` on a typealias RHS (P1.5-A1), the cursor sitting on
 	// `function`. The whole declared SIGNATURE is stored INTERNER-FREE (a tag + a name per parameter and for
@@ -23466,7 +23546,19 @@ export type Parser
 			_ = try self.parseTry(func, resultUsed: false)
 		end 'tryStmt' else if self.at(TokenKind.panic) 'panicStmt'
 			try self.parsePanicStatement(func, block: block)
-		end 'panicStmt' else if self.at(TokenKind.otherwise) 'strayOtherwise'
+		end 'panicStmt' else if self.at(TokenKind.await) 'awaitStmt'
+			// ⭐ **`await p` ON A LINE OF ITS OWN** — a VOID async awaited for its EFFECT. The await IS the
+			// synchronization point and there is nothing to bind: a void async's await yields a void-tagged
+			// value, so no binding and no expression position can host it. That is the same "this is the
+			// position that wants no value" argument every bare-call arm above makes, and it is the reason a
+			// void `async` was spawnable but not awaitable — `async-await.void` and `async-await.nested-void`
+			// died here as `E2001: unexpected token: 'await'` while the spawn one line above them compiled.
+			//
+			// A NON-void result written here is discarded like any other bare call's, and the statement's
+			// `drainPendingTemps` tail releases it if it owns heap. `try await p otherwise …` is NOT this arm:
+			// it opens with `try` and `tryStmt` above claims it.
+			_ = try self.parseAwait(func)
+		end 'awaitStmt' else if self.at(TokenKind.otherwise) 'strayOtherwise'
 			// An `otherwise` with no `try` to attach to (`let v = f() otherwise 0`). Reaches here as a
 			// statement starter after the preceding expression completed. Renders as E3058.
 			let otherwiseTok = self.current()
@@ -23963,7 +24055,7 @@ export type Parser
 		// so `q` binds `p`'s value verbatim and is NOT enrolled: exactly the spawn binding drops the one thread
 		// once. This is why promises are enrolled separately from `valueIsOwnedHeap` (which move-poisons a bare-
 		// local RHS) rather than folded into it. A promise is never `valueIsOwnedHeap`, so the two are disjoint.
-		if self.valueIsPromise(boundValue) and not boundBareLocal 'trackPromise'
+		if self.valueOwnsGreenThread(boundValue) and not boundBareLocal 'trackPromise'
 			self.ownedBindings.push(binding)
 			self.removeFromPendingTemps(boundValue)
 		end 'trackPromise'
@@ -25093,10 +25185,10 @@ export type Parser
 		// bespoke drop (`__gt_promise_drop`), never COW-promoted — so a binding that owns (or receives) a
 		// thread MUST be handled here, before the heap move/promotion path below (which would `promoteBorrowed`
 		// a scalar and panic).
-		let oldIsPromise = self.valueIsPromise(oldValue)
-		let newIsPromise = self.valueIsPromise(value)
+		let oldIsPromise = self.valueOwnsGreenThread(oldValue)
+		let newIsPromise = self.valueOwnsGreenThread(value)
 		if oldIsPromise or newIsPromise 'promiseReassign'
-			// ⚠ **"STILL OWNS A LIVE THREAD" IS READ FROM MEMBERSHIP, NOT `valueIsPromise(oldValue)`.** A
+			// ⚠ **"STILL OWNS A LIVE THREAD" IS READ FROM MEMBERSHIP, NOT `valueOwnsGreenThread(oldValue)`.** A
 			// loop-header / if-merge phi carries no promise mark, so the value bit is phi-BLIND — a re-armed
 			// `var p` across a merge holds that unmarked phi as `oldValue`. Membership is the SAME source the
 			// heap path reads for exactly this reason (`wasOwned` below), which single-sources the drop
@@ -27507,7 +27599,7 @@ export type Parser
 			// P1.5-B2b: `try await p` — rewrite the `await` op into a `tryAwait` defining the error flag,
 			// exactly as `call` → `tryCall`. The awaited callee (recovered from the promise) is returned for
 			// the desugar's E3055/E3059 checks and its `otherwise` error-type binding.
-			await (result, promise) gives TryTarget.named(self.commitTryAwaitRewrite(func, opIdx: opIdx, result: result, flag: flag, promise: promise))
+			await (result, promise) gives self.commitTryAwaitRewrite(func, opIdx: opIdx, result: result, flag: flag, promise: promise)
 			// Only a DIRECT `call` or an `await` can be `try`ed. An `indirectCall`/`functionRef` (P1.5-A1) is
 			// never throwing — a throwing function cannot be a function value (E3101) — an `asyncCall` (a spawn)
 			// is not the throwing operation (the AWAIT is), and a `tryAwait` cannot be a fresh try target. All
@@ -27567,15 +27659,12 @@ export type Parser
 	end 'commitTryCallRewrite'
 
 	// Replace the `await` op at `opIdx` with a `tryAwait` defining the `flag` second result (P1.5-B2b), and
-	// return the AWAITED callee name for the desugar's diagnostics + `otherwise` error-type binding. The
-	// callee is recovered from the promise's defining `asyncCall`; `emitAwaitOp` only accepts a promise-marked
-	// value, which is minted by an `asyncCall`, so the lookup cannot miss (a miss is a parser invariant break).
-	function commitTryAwaitRewrite(func IrFunction, opIdx OpIndex, result ValueId, flag ValueId, promise ValueId) returns ByteArray
+	// return the TARGET the desugar asks its two questions of — the awaited callee for a spawn, the storage
+	// TYPE for a promise out of a container (P1.5-B2c). Both come from `awaitedPromiseFacts`, so the target a
+	// `try await` is desugared against and the result type its `await` was minted at are one derivation.
+	function commitTryAwaitRewrite(func IrFunction, opIdx OpIndex, result ValueId, flag ValueId, promise ValueId) returns TryTarget
 		try self.artifact.module.ops.set(opIdx, value: MaxonOp.tryAwait(result, errorFlag: flag, promise: promise)) otherwise panic("commitTryAwaitRewrite: module.ops.set OOB at {opIdx}")
-		match self.asyncCallCalleeOf(func, promise: promise) 'callee'
-			found(callee) then return callee
-			none then panic("commitTryAwaitRewrite: `try await` target v{promise} has no defining asyncCall — emitAwaitOp only accepts a promise-marked value, which is minted by an asyncCall")
-		end 'callee'
+		return self.awaitedPromiseFacts(func, promise: promise).tryTarget
 	end 'commitTryAwaitRewrite'
 
 	// The AWAITED callee name a promise handle carries — recovered from the `asyncCall` op that minted it, by
@@ -27686,7 +27775,8 @@ export type Parser
 	function requireThrowingTryTarget(target TryTarget, tryTok Token) throws ParseError
 		match target 'kind'
 			named(callee) then try self.requireThrowingNamedTryTarget(callee, tryTok: tryTok)
-			witness(methodName, throwsClause) then try requireThrowingWitnessTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
+			witness(methodName, throwsClause) then try requireThrowingClauseTryTarget(methodName, throwsClause: throwsClause, tryTok: tryTok)
+			promise(storageName, throwsClause) then try requireThrowingClauseTryTarget(storageName, throwsClause: throwsClause, tryTok: tryTok)
 		end 'kind'
 	end 'requireThrowingTryTarget'
 
@@ -29478,6 +29568,7 @@ export type Parser
 		return match target 'kind'
 			named(callee) gives self.signatures.throwsOf(callee)
 			witness(_, throwsClause) gives throwsClause
+			promise(_, throwsClause) gives throwsClause
 		end 'kind'
 	end 'tryTargetThrows'
 
@@ -29787,7 +29878,7 @@ export type Parser
 		// cancels the thread — NOT `__mm_decref` (a promise owns no `__mm_alloc` box; the handle is the GT
 		// struct pointer). Checked FIRST, off the promise mark column, because a promise's TAG is `integer`
 		// (its awaited scalar type), so the tag-based routing below cannot tell it from a bare int.
-		if self.valueIsPromise(value) 'promise'
+		if self.valueOwnsGreenThread(value) 'promise'
 			return GtPromiseDropName
 		end 'promise'
 		let tag = self.tagOf(value)
@@ -30032,15 +30123,46 @@ export type Parser
 		try self.valueOwnsHeapAlone.set(value, value: false) otherwise panic("markValueCoOwnsHeap: v{value}{SoleOwnershipSlotPanicTail}")
 	end 'markValueCoOwnsHeap'
 
-	// Mark `value` as an `async` spawn's promise handle (P1.5-B1a), and read that mark back. `await` uses the
-	// read to reject a non-promise operand and to know it may unwrap the handle to its awaited scalar.
+	// Mark `value` as an `async` spawn's promise handle (P1.5-B1a).
 	function markValuePromise(value ValueId)
 		try self.valuePromiseMarks.set(value, value: true) otherwise panic("markValuePromise: v{value} has no promise slot — every SSA value must be minted through mintValue, which seeds the column")
 	end 'markValuePromise'
 
+	// ⭐⭐ **"IS THIS A PROMISE?" AND "DOES THIS FRAME OWN A GREEN THREAD?" ARE TWO QUESTIONS SINCE B2c, AND
+	// COLLAPSING THEM BACK IS A DOUBLE FREE.** Both were `valueIsPromise` while a promise could only ever be
+	// a spawn's own handle; storage split them, and the split is exactly what `specs/async-await.md`'s
+	// *"Known boundary"* paragraph describes:
+	//
+	//   • `valueIsPromise` — **may this be `await`ed?** True for a spawn's handle AND for a value whose TYPE
+	//     is a `Promise with (T[, E])`, because the storage type carries everything the await needs.
+	//   • `valueOwnsGreenThread` — **does THIS frame owe a `__gt_promise_drop`?** The MARK alone. A promise
+	//     read back out of a container is untracked by construction: the container holds the handle, this
+	//     frame merely read it, and enrolling it here would drop a thread the container still names.
+	//
+	// ⇒ every OWNERSHIP door (the binding enrolment, the re-arm, `decrefCalleeFor`, the merge phi) asks the
+	// second; the two AWAIT doors — `emitAwait`'s throwing-promise gate and `emitAwaitOp`'s E2015 refusal —
+	// ask the first.
+	//
+	// ⚠ **AND SO DOES A THIRD, WHICH IS A RECLAIM: `methodCallCancelsAPromise`, the `p.cancel()` gate.** It
+	// asks `valueIsPromise` DESPITE reclaiming, and that is the right question rather than an oversight — the
+	// ownership question would answer "no" for a promise read back out of a container, and `p.cancel()` on a
+	// stored promise is precisely a thing the language allows. What `cancel` needs to know is "is this a
+	// promise at all", exactly as `await` does; what it does about the ownership half it does through
+	// `consumePromiseThread`, at the site (see `emitPromiseCancel`).
+	function valueOwnsGreenThread(value ValueId) returns bool
+		return try self.valuePromiseMarks.get(value) otherwise panic("valueOwnsGreenThread: v{value} has no promise slot — every SSA value must be minted through mintValue, which seeds the column")
+	end 'valueOwnsGreenThread'
+
 	function valueIsPromise(value ValueId) returns bool
-		return try self.valuePromiseMarks.get(value) otherwise panic("valueIsPromise: v{value} has no promise slot — every SSA value must be minted through mintValue, which seeds the column")
+		return self.valueOwnsGreenThread(value) or typeIsPromiseStorage(self.signatures, t: self.valueMaxonType(value))
 	end 'valueIsPromise'
+
+	// The value's own `(tag, nameId)` pair as a `MaxonType` — the two dense columns read back as the one
+	// thing they encode. `maxonTypeOfTag` is the shared decoder, so a value's type is reconstructed the same
+	// way here as everywhere else it is asked for.
+	function valueMaxonType(value ValueId) returns MaxonType
+		return maxonTypeOfTag(self.tagOf(value), nameId: self.valueNameId(value))
+	end 'valueMaxonType'
 
 	// ⭐ **THE ONE DEFINITION OF "OWNED": does `value` own a droppable heap allocation it must transfer or
 	// drop?** The single predicate the DECLARATION (`parseBinding`), the REASSIGNMENT
@@ -38949,7 +39071,7 @@ export type Parser
 	// The phi a MERGED BINDING carries: its type is the binding's declared one, which the
 	// binding already holds as a `MaxonType`, so decomposing it constructs nothing.
 	//
-	// ⭐ **PROPAGATE THE PROMISE MARK ACROSS THE MERGE (P1.5-B2 #88, Finding 1).** `valueIsPromise` is a
+	// ⭐ **PROPAGATE THE PROMISE MARK ACROSS THE MERGE (P1.5-B2 #88, Finding 1).** `valueOwnsGreenThread` is a
 	// per-SSA-value mark that a merge phi does not otherwise carry, so a re-armed `var p` (whose value after a
 	// loop / branch IS this phi) would lose its promise identity — its scope-exit drop would misroute to
 	// `__mm_decref` on a GT pointer, and `await p` on the phi would be rejected as "not a promise". A promise
@@ -38958,7 +39080,7 @@ export type Parser
 	// for loop-header, loop-exit, if-continuation and match phis, so all four inherit it at once.
 	function mintPhiForBinding(block IrBlock, binding VarInfo) returns ValueId
 		let phiId = self.mintPhi(block, tag: maxonTypeTag(binding.varType), nameId: typeNameIdOf(binding.varType))
-		if self.valueIsPromise(binding.boundValue) 'promisePhi'
+		if self.valueOwnsGreenThread(binding.boundValue) 'promisePhi'
 			self.markValuePromise(phiId)
 		end 'promisePhi'
 
@@ -40260,13 +40382,24 @@ export type Parser
 		end 'async'
 
 		if self.at(TokenKind.await) 'await'
-			let awaitTok = try self.consume(TokenKind.await)
-			let promise = try self.parseUnary(func)
-			return try self.emitAwait(func, promise: promise, awaitTok: awaitTok)
+			return try self.parseAwait(func)
 		end 'await'
 
 		return try self.parsePostfix(func, value: try self.parsePrimary(func), resultUsed: true)
 	end 'parseUnary'
+
+	// `await <unary>` — the operand grammar and the emit, written ONCE for the TWO positions that admit it:
+	// the prefix operator above, and the bare `await p` STATEMENT (`parseStatement`'s `awaitStmt` arm). The
+	// cursor sits on `await`.
+	//
+	// Single-homing it is the point. A statement-position copy is exactly the shape that drifts — it would
+	// be spelled `await <primary>` by whoever wrote it next and then `await async f()` would parse in one
+	// position and not the other, for no reason anyone could state.
+	function parseAwait(func IrFunction) returns ValueId throws ParseError
+		let awaitTok = try self.consume(TokenKind.await)
+		let promise = try self.parseUnary(func)
+		return try self.emitAwait(func, promise: promise, awaitTok: awaitTok)
+	end 'parseAwait'
 
 	// A primary followed by any trailing INDIRECT CALL `(args)` through a function VALUE (P1.5-A1). This
 	// is the ONE place a trailing `(` on a function value becomes an indirect call, which is what makes
@@ -47180,6 +47313,19 @@ export type Parser
 			return try self.dispatchMethodOnBase(func, base: try self.structBaseOfReceiver(recv), baseTok: recv.anchor, resultUsed: resultUsed)
 		end 'corpusMethod'
 
+		// ⭐⭐ **`p.cancel()` — CANCEL A GREEN THREAD (P1.5-B2c).** A promise has exactly one member, so this is
+		// gated on the NAME as well as on the receiver: every other spelling keeps whatever the arms below
+		// already gave it, which matters because an UNBOXED promise's tag is `integer` (`p.toString()` is a
+		// perfectly good `int` conformance call) and a STORED one's is `genericInstance`.
+		//
+		// ⚠ **IT IS ASKED HERE, AHEAD OF EVERY TAG ARM, BECAUSE A PROMISE WEARS TWO TAGS AND NEITHER IS ITS
+		// OWN.** Placed after them, the unboxed spelling would reach the builtin-conformer roster (which is
+		// the *"'int' has no method named 'cancel'"* this closes) and the stored one would reach the struct
+		// fallthrough looking for a `Promise.cancel` no file declares.
+		if self.methodCallCancelsAPromise(recv) 'promiseCancel'
+			return try self.emitPromiseCancel(recv, resultUsed: resultUsed)
+		end 'promiseCancel'
+
 		// A STRING RECEIVER takes the builtin String methods rather than the struct path, which would reject
 		// it as not a struct. String is the one non-struct type carrying a method table of its own.
 		if recv.tag == ValueTypeTag.string 'stringMethod'
@@ -47323,6 +47469,34 @@ export type Parser
 
 		return try self.dispatchMethodOnBase(func, base: try self.structBaseOfReceiver(recv), baseTok: recv.anchor, resultUsed: resultUsed)
 	end 'dispatchMethodOnReceiver'
+
+	// Is the member about to be dispatched `cancel` on a promise? The cursor sits on the method NAME (the
+	// `.` is consumed), so this peeks rather than consuming — `emitPromiseCancel` takes the token.
+	function methodCallCancelsAPromise(recv MethodReceiver) returns bool
+		return self.current().value.equals(PromiseCancelMethodName) and self.valueIsPromise(recv.value)
+	end 'methodCallCancelsAPromise'
+
+	// ⭐⭐ **`p.cancel()` — RECLAIM AND CANCEL THE GREEN THREAD, THROUGH THE DROP ENTRY THAT ALREADY DOES BOTH.**
+	// `__gt_promise_drop` is not a reclaim with a cancel bolted on: its header calls it *"RECLAIM + CANCEL AN
+	// UN-AWAITED GREEN THREAD"*, and since A2 it also runs `__gt_release_<callee>` as `ownedByThisDrop`
+	// so the thread's managed arguments and its unread result-or-error are released. `cancel` wants exactly
+	// that and wants it exactly once, so it CALLS that entry rather than growing a second one — which is what
+	// `Runtime/AsyncReleaser.maxon`'s header already anticipated: *"Cancel routes through `promise_drop`, so
+	// it inherits this rather than growing a third copy of the decision."*
+	//
+	// ⭐ **AND `consumePromiseThread` IS WHAT MAKES IT RUN ONCE.** It is the same door `await` uses: the
+	// promise leaves this frame's `pendingTempDrops` and its owning binding is marked moved, so the
+	// scope-exit gate (`not binding.movedFrom and bindingIsOwned(binding)`) emits NO second
+	// `__gt_promise_drop` — which would be a double reclaim of a struct already back on the free list, and a
+	// second releaser run over slots the first one freed. The runtime's `gt.releaser = 0` store is the
+	// backstop behind that, in that order and for that reason.
+	function emitPromiseCancel(recv MethodReceiver, resultUsed bool) returns ValueId throws ParseError
+		let methodTok = try self.consume(TokenKind.identifier)
+		try self.consumeEmptyArgList()
+		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+		self.consumePromiseThread(recv.value)
+		return self.emitRuntimeCall(GtPromiseDropName, args: singletonArgs(recv.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.between(recv.anchor, last: methodTok))
+	end 'emitPromiseCancel'
 
 	// The `StructBase` a receiver that reached the struct fallthrough denotes — the value form of
 	// `requireStructBase`, sharing its layout resolution and differing only in that a VALUE has no binding
@@ -55815,12 +55989,21 @@ export type Parser
 	// an array of a ranged integer alias reaches the same codepoint conversion every other declared slot makes
 	// (`integerizedOperand`). It needs the value's TOKEN SPAN, which is why the callers hand over `valueStart`
 	// (the same position `moveElementIntoContainer` reads).
-	function requireContainerElementType(giid GenericInstanceId, value ValueId, valueStart TokenIndex, methodTok Token) returns ValueId throws ParseError
+	function requireContainerElementType(func IrFunction, giid GenericInstanceId, value ValueId, valueStart TokenIndex, methodTok Token) returns ValueId throws ParseError
 		if self.signatures.containerElementIsOpaque(giid) 'opaqueInSharedBody'
 			return value
 		end 'opaqueInSharedBody'
 
 		let declared = self.resolvedSlotType(self.signatures.containerElementType(giid))
+		// ⭐ **A `Promise` ELEMENT IS THE ONE SLOT WHOSE VALUE CHANGES TYPE ON THE WAY IN (P1.5-B2c)** — a
+		// spawn's handle is minted `integer` and the storage names `Promise with (T[, E])`, so the door that
+		// checks the element is also the door that retypes it. It is `assignableValue`'s "verdict and
+		// coercion in ONE call" shape, which is why it is asked HERE and not by the two arms below: they both
+		// compare a tag the promise deliberately does not carry.
+		if typeIsPromiseStorage(self.signatures, t: declared) 'promiseElement'
+			return try self.storedPromiseValue(func, value: value, storage: typeNameIdOf(declared), anchor: methodTok)
+		end 'promiseElement'
+
 		let element = try self.integerizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath)
 		if payloadClassIsManaged(class) 'managed'
@@ -55857,6 +56040,150 @@ export type Parser
 		self.recordRangeCheckSite(stored, targetAlias: self.declaredAliasOfType(declared), line: methodTok.line, column: methodTok.column)
 		return stored
 	end 'requireContainerElementType'
+
+	// ⭐⭐ **STORE A SPAWN'S HANDLE IN A `Promise with (T[, E])` SLOT (P1.5-B2c).** The value that comes back
+	// is the SAME machine word — shv2 stores the green-thread handle rather than boxing it (see
+	// `PromiseType.maxon`) — retyped at the storage instance, which is what carries the result type and the
+	// error type past this frame.
+	//
+	// ⭐ **THE THREE COMPARISONS ARE THE WHOLE FEATURE.** A `Promise` type is a CLAIM about the thunk, and
+	// every downstream answer — what `await` yields, what `(e)` binds, what `try` propagates — is read off
+	// the claim rather than off the callee, because the callee is unreachable from a container. So the claim
+	// is checked once, HERE, at the only door a promise can enter storage through, and after that no
+	// consumer needs to re-derive anything:
+	//
+	//   • the RESULT type, or `await` types its value at a type the thunk never returned — a `String`-typed
+	//     read of an `Integer` handle is a wild pointer;
+	//   • THROWS-NESS, both ways: a throwing thunk in a `Promise with T` erases the error (the erasure this
+	//     whole slice exists to make unrepresentable), and a non-throwing thunk in a `Promise with (T, E)`
+	//     hands `try await` a `gt.threw` word the trampoline never wrote — `AsyncReleaser.maxon`'s header
+	//     records that it is GARBAGE for a non-throwing callee;
+	//   • the ERROR type itself, or one enum's ordinals are decoded under another's name.
+	//
+	// ⭐ **AND THE CONTAINER ADOPTS THE THREAD.** `consumePromiseThread` is the same door `await` uses: the
+	// spawn's handle leaves this frame's ownership, so the statement-end drain does not `__gt_promise_drop` a
+	// thread the array now holds. What the container does NOT gain is a drop — `specs/async-await.md`'s
+	// *"Known boundary"* paragraph says a promise that escapes into storage is untracked.
+	//
+	// ⛔⛔ **AND "UNTRACKED" MEANS NOTHING RECLAIMS IT. THERE IS NO EXIT DRAIN.** This door does not hand the
+	// thread to a later reclaimer — `consumePromiseThread`'s FIRST statement is `removeFromPendingTemps`, so
+	// it REMOVES the thread from the only reclaimer this frame had (the statement-end `drainPendingTemps`) —
+	// and no program-exit walk of live GTs exists to take over: `__gt_live_count` is a leak COUNTER read once
+	// by `__mm_leak_check`, never a worklist anything drains. So a promise stored in a container and never
+	// awaited LEAKS its GT struct, and since A2 it leaks with it the references the spawn took to the
+	// callee's managed arguments (`Runtime/AsyncReleaser.maxon` — the releaser runs at the await or at the
+	// drop, and this promise reaches neither).
+	//
+	// ⚠ **THE EXIT GATES DO SEE IT, WHICH IS THE ONE MERCY — IT IS A REPORTED LEAK, NOT A SILENT ONE.**
+	// MEASURED: a stored, never-awaited promise over a SCALAR-argument callee exits **75**
+	// (`RuntimeAbort.greenThreadLeak`, the `__gt_live_count != 0` gate); over a `String`-argument callee it
+	// exits **101** (`leakDetected` — the heap gate is tested first and the argument's outstanding reference
+	// trips it). Closing this needs a drop the CONTAINER owes for its promise elements, which is the
+	// documented boundary's own rung and not this door's to invent.
+	function storedPromiseValue(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns ValueId throws ParseError
+		// A promise read back OUT of storage and put into another slot of the same type carries its claim
+		// already — it was checked when it was first stored, and there is no `asyncCall` left to re-check it
+		// against. Same instance means same claim, so this is an identity rather than a second verdict.
+		if self.tagOf(value) == ValueTypeTag.genericInstance and self.valueNameId(value) == storage 'alreadyStored'
+			return value
+		end 'alreadyStored'
+
+		let callee = try self.spawnCalleeStoredHere(func, value: value, storage: storage, anchor: anchor)
+		try self.requirePromiseStorageDescribesCallee(callee, storage: storage, anchor: anchor)
+		self.consumePromiseThread(value)
+		self.retypeValue(value, valueType: MaxonType.genericInstance(storage))
+		return value
+	end 'storedPromiseValue'
+
+	// The callee whose spawn `value` is — the one thing a storage claim can be checked against. Anything that
+	// is not an `async` spawn's handle is refused here rather than by the tag doors below, whose sentence
+	// would compare a `Promise with …` against an `int` and tell the author nothing about why.
+	function spawnCalleeStoredHere(func IrFunction, value ValueId, storage GenericInstanceId, anchor Token) returns ByteArray throws ParseError
+		if self.valueOwnsGreenThread(value) 'aSpawn'
+			match self.asyncCallCalleeOf(func, promise: value) 'callee'
+				found(callee) then return callee
+				none then break 'callee'
+			end 'callee'
+		end 'aSpawn'
+
+		throw ParseError.promiseStorageMismatch("only an `async` spawn can be stored in '{String.from(self.signatures.instanceDisplayName(storage))}' — the value here is {self.valueDisplayTypeName(value)}", line: anchor.line, column: anchor.column)
+	end 'spawnCalleeStoredHere'
+
+	// The three comparisons `storedPromiseValue`'s header sets out, in the order an author most wants to hear
+	// them: what it returns, then whether it throws at all, then what it throws.
+	function requirePromiseStorageDescribesCallee(callee ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+		try self.requirePromiseStorageResult(callee, storage: storage, anchor: anchor)
+		try self.requirePromiseStorageError(callee, storage: storage, anchor: anchor)
+	end 'requirePromiseStorageDescribesCallee'
+
+	// The RESULT half. Both sides are adopted into THIS file's interner before they are compared — the
+	// storage's argument through `resolvedSlotType` (which is what `requireContainerElementType` resolves the
+	// element itself through) and the callee's return type through `calleeReturnType` (`returnTypeOf(…, into:
+	// self.artifact.typeNames)`) — so the `(tag, nameId)` pair is a comparison of two types and not of two
+	// tables' numbering. A VOID callee cannot arrive: `Promise with <nothing>` is unspellable, so a void
+	// spawn has no storage type to be stored in and reaches the sentence below naming its own absence.
+	function requirePromiseStorageResult(callee ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+		let claimed = self.resolvedSlotType(self.signatures.substitutedInstanceArg(storage, position: PromiseResultArgPosition))
+		match self.calleeReturnType(callee) 'r'
+			void then throw ParseError.promiseStorageMismatch(self.promiseStorageResultDetail(storage, claimed: claimed, actual: "nothing (it returns no value)"), line: anchor.line, column: anchor.column)
+			value(returned) then try self.requirePromiseStorageResultAgrees(returned, claimed: claimed, storage: storage, anchor: anchor)
+		end 'r'
+	end 'requirePromiseStorageResult'
+
+	// The comparison itself, split out because the arm above is a `match` arm and this needs a labelled `if`.
+	function requirePromiseStorageResultAgrees(returned MaxonType, claimed MaxonType, storage GenericInstanceId, anchor Token) throws ParseError
+		if maxonTypeTag(returned) == maxonTypeTag(claimed) and typeNameIdOf(returned) == typeNameIdOf(claimed) 'agrees'
+			return
+		end 'agrees'
+
+		throw ParseError.promiseStorageMismatch(self.promiseStorageResultDetail(storage, claimed: claimed, actual: "'{self.displayTypeNameOf(maxonTypeTag(returned), nameId: typeNameIdOf(returned))}'"), line: anchor.line, column: anchor.column)
+	end 'requirePromiseStorageResultAgrees'
+
+	function promiseStorageResultDetail(storage GenericInstanceId, claimed MaxonType, actual String) returns String
+		return "'{String.from(self.signatures.instanceDisplayName(storage))}' names the result type '{self.displayTypeNameOf(maxonTypeTag(claimed), nameId: typeNameIdOf(claimed))}', but this promise's function returns {actual}"
+	end 'promiseStorageResultDetail'
+
+	// The THROWS half — three outcomes, and the two mismatched ones are different mistakes with different
+	// cures, which is why they are two sentences on one code.
+	function requirePromiseStorageError(callee ByteArray, storage GenericInstanceId, anchor Token) throws ParseError
+		let storageName = String.from(self.signatures.instanceDisplayName(storage))
+		match promiseStorageThrows(self.signatures, gid: storage) 'claimed'
+			// `Promise with T` — the storage names no error, so the thunk must throw none. A throwing one
+			// stored here is THE erasure: `try await` would have no type to bind `e` at, no static payload
+			// type to release, and nothing to check the enclosing `throws` against.
+			none then try self.requirePromiseStorageErrorless(callee, storageName: storageName, anchor: anchor)
+			throwing(claimedError) then try self.requirePromiseStorageErrorMatches(callee, claimedError: claimedError, storageName: storageName, anchor: anchor)
+		end 'claimed'
+	end 'requirePromiseStorageError'
+
+	function requirePromiseStorageErrorless(callee ByteArray, storageName String, anchor Token) throws ParseError
+		let clause = self.signatures.throwsOf(callee)
+		if not throwsClauseIsThrowing(clause) 'agrees'
+			return
+		end 'agrees'
+
+		let thrown = try throwsClauseName(clause) otherwise panic("requirePromiseStorageErrorless: a clause `throwsClauseIsThrowing` accepted has a name")
+		throw ParseError.promiseStorageMismatch("cannot store a promise from a function that throws '{thrown}' in '{storageName}': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, {thrown})' so 'try await' can bind and release the error", line: anchor.line, column: anchor.column)
+	end 'requirePromiseStorageErrorless'
+
+	// The storage names an error type, so the thunk must throw exactly it.
+	//
+	// ⚠ **THE NON-THROWING ARM IS NOT A COURTESY.** `gt.threw` is written unconditionally by the trampoline
+	// and is GARBAGE for a non-throwing callee (`Runtime/AsyncReleaser.maxon`'s header), so a `try await`
+	// admitted on this claim would branch on that garbage and hand its `otherwise (e)` a fabricated error.
+	function requirePromiseStorageErrorMatches(callee ByteArray, claimedError String, storageName String, anchor Token) throws ParseError
+		let clause = self.signatures.throwsOf(callee)
+		if not throwsClauseIsThrowing(clause) 'calleeThrowsNothing'
+			throw ParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but this promise's function does not throw — store it in a 'Promise with T' instead", line: anchor.line, column: anchor.column)
+		end 'calleeThrowsNothing'
+
+		let thrown = try throwsClauseName(clause) otherwise panic("requirePromiseStorageErrorMatches: a clause `throwsClauseIsThrowing` accepted has a name")
+		if thrown.equals(claimedError) 'agrees'
+			return
+		end 'agrees'
+
+		throw ParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but this promise's function throws '{thrown}'", line: anchor.line, column: anchor.column)
+	end 'requirePromiseStorageErrorMatches'
 
 	// ⭐⭐ **THE CALLEE AN ELEMENT ACCESS TAKES — the ELIDED entry when the compiler can decide the bounds test
 	// itself (S2m-b), the checked one otherwise.** ⚖ USER RULING, 2026-08-06: *"we should be able to add an
@@ -55979,7 +56306,7 @@ export type Parser
 		// slot), so no leak. The TYPE check precedes the move-in for the reason `requireContainerElementType` states.
 		let valueStart = self.pos
 		let raw = try self.parseExpression(func, block: self.currentBlock)
-		let checked = try self.requireContainerElementType(giid, value: raw, valueStart: valueStart, methodTok: methodTok)
+		let checked = try self.requireContainerElementType(func, giid: giid, value: raw, valueStart: valueStart, methodTok: methodTok)
 		let value = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 
@@ -56015,7 +56342,7 @@ export type Parser
 		// would hold a slot it does not own, released a second time when the binding drops at scope exit (a
 		// double-free / over-release, exit 101). The ordering requirement is unchanged by the 2026-08-12
 		// ruling; only the op that goes missing is — an `__mm_incref` where it used to be a move poison.
-		let checked = try self.requireContainerElementType(giid, value: value, valueStart: valueStart, methodTok: methodTok)
+		let checked = try self.requireContainerElementType(func, giid: giid, value: value, valueStart: valueStart, methodTok: methodTok)
 		let moved = try self.moveElementIntoContainer(checked, giid: giid, valueStart: valueStart)
 		try self.consume(TokenKind.rightParen)
 		return moved
@@ -57539,8 +57866,7 @@ export type Parser
 		// use is caught by the more specific linear-await E3100 at SemanticCheck, which needs the read to PARSE
 		// first, and a re-arm revives it), and a promise binding reassigned to a bare scalar (`movedFrom` =
 		// "owns nothing droppable"). A promise handle is integer-tagged, so this one predicate admits both.
-		let boundTag = self.tagOf(binding.boundValue)
-		if tagIsAsyncScalar(boundTag) or boundTag == ValueTypeTag.float 'scalarBinding'
+		if tagOwnsNoHeapValue(self.tagOf(binding.boundValue)) 'scalarBinding'
 			return
 		end 'scalarBinding'
 
@@ -61974,6 +62300,12 @@ export type Parser
 				return try self.emitSleep(args, calleeTok: anchor, resultUsed: resultUsed)
 			end 'sleep'
 
+			// `Runtime.yield()`'s floor, on the same terms as `sleep` above: the surface is
+			// `stdlib/Runtime.maxon`'s declaration and this is the only spelling the parser knows.
+			if callee.equals(BuiltinsYieldName) 'yield'
+				return try self.emitYield(args, calleeTok: anchor, resultUsed: resultUsed)
+			end 'yield'
+
 			if callee.equals(BuiltinsCommandLineCountName) 'commandLineCount'
 				if args.count() != CommandLineCountArity 'countArity'
 					throw ParseError.builtinArity(String.from(callee), expected: CommandLineCountArity, got: args.count(), line: anchor.line, column: anchor.column)
@@ -62563,6 +62895,26 @@ export type Parser
 		callArgs.push(arg)
 		return self.emitRuntimeCall(GtSleepName, args: callArgs, resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
 	end 'emitSleep'
+
+	// `__Builtins.yield()` — **COOPERATIVELY RESCHEDULE THE CALLING GREEN THREAD** (`specs/runtime-yield.md`).
+	// It routes to the `__gt_resched` scheduler entry, which hands the CPU to the next runnable green thread
+	// (or, with nothing to hand off to, polls what is already due and returns). It takes no arguments and
+	// returns VOID, so a call in value position is rejected exactly as a void user-call is.
+	//
+	// There is no operand-type check to make — `emitSleep`'s integer gate exists because `sleep` HAS an
+	// argument, and this one does not; the arity check alone is the whole rule for an intrinsic no file
+	// declares.
+	function emitYield(args ValueIdArray, calleeTok Token, resultUsed bool) returns ValueId throws ParseError
+		if args.count() != YieldIntrinsicArity 'arity'
+			throw ParseError.builtinArity(String.from(BuiltinsYieldName), expected: YieldIntrinsicArity, got: args.count(), line: calleeTok.line, column: calleeTok.column)
+		end 'arity'
+
+		if resultUsed 'noValueToUse'
+			throw ParseError.voidCallResultUsed(String.from(BuiltinsYieldName), line: calleeTok.line, column: calleeTok.column)
+		end 'noValueToUse'
+
+		return self.emitRuntimeCall(GtReschedName, args: ValueIdArray.create(), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(calleeTok))
+	end 'emitYield'
 
 	// `runProcess(cmd)` — **SPAWN A WINDOWS CHILD AND AWAIT ITS EXIT CODE**, yielding the current green thread
 	// while it runs (P1.5 subprocess seed). A compiler BUILTIN like `print`: ordinary call syntax, but it emits no
@@ -63698,6 +64050,12 @@ export type Parser
 			let tok = self.current()
 			throw ParseError.unsupported("`async` must be applied to a call — `async f(…)` (got '{tok.kind.rawValue}')", line: tok.line, column: tok.column)
 		end 'notCall'
+		// ⭐ The first token of the spawn — the `async` KEYWORD, which the sole caller consumed immediately
+		// before dispatching here (`parsePrefix`'s `async` arm). E3073 quotes the whole spawn, keyword included
+		// (`'async heavyCompute(5)'`), and this is the only point at which its text still exists — see
+		// `Project.asyncSpawnTexts` for why nothing downstream can reconstruct it.
+		let spawnStart = self.pos - 1
+
 		let calleeTok = self.current()
 		try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.leftParen)
@@ -63713,7 +64071,12 @@ export type Parser
 		try self.parseCallArgs(func, callee: calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rule: ArgLabelRule.ordinary)
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
-		return try self.emitAsyncCall(calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok)
+		// `self.pos` now sits one PAST the `)`, which is exactly `tokenTextFrom`'s exclusive end. The POSITION is
+		// the `async` keyword's, so E3073's caret lands on the first character of the text it quotes.
+		let asyncTok = self.tokenAt(spawnStart)
+		let spawnSite = AsyncSpawnSite.create(self.tokenTextFrom(spawnStart, endIndex: self.pos).toByteArray(), line: asyncTok.line, column: asyncTok.column)
+
+		return try self.emitAsyncCall(calleeTok.value, anchor: calleeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: rparenTok, spawnSite: spawnSite)
 	end 'parseAsyncCall'
 
 	// Mint the Promise handle an `async` spawn defines and emit the `asyncCall` op. B1a is SCALAR ONLY: the
@@ -63728,7 +64091,7 @@ export type Parser
 	// would then be void-tagged and `let p = async voidFn()` could not bind it (a void tag names no value).
 	// So the handle carries `integer`, and `await`/`try await` recover the awaited result type from the
 	// callee (`awaitedResultTag`) — the same defining-`asyncCall` lookup the `try await` desugar already uses.
-	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token) returns ValueId throws ParseError
+	function emitAsyncCall(callee ByteArray, anchor Token, args ValueIdArray, argLabels ByteArrayArray, argRanges SourceRangeArray, argImmutableNames ByteArrayArray, rparenTok Token, spawnSite AsyncSpawnSite) returns ValueId throws ParseError
 		// `written` is not a default here, it is the shape of the door: `parseAsyncCall` is the sole caller and
 		// it consumes a bare `identifier` callee, so an `async` spawn's name is always the author's own bytes.
 		// `async int.fromString(s)` does not parse at all — the `async` target grammar admits a free call only.
@@ -63741,9 +64104,15 @@ export type Parser
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
 		for i in 0 upto args.count() 'eachArg'
 			let argValue = try args.get(i) otherwise panic("emitAsyncCall: args.get OOB at {i} — args are pushed in lockstep by parseCallArgs")
-			if not tagIsAsyncScalar(self.tagOf(argValue)) 'managedArg'
-				throw ParseError.unsupported("an `async` call argument must be a scalar (int/bool) — a managed (String/struct) or float argument travels in a register file the green-thread trampoline cannot fill at this rung (managed async is P1.5-B1c)", line: anchor.line, column: anchor.column)
-			end 'managedArg'
+			// Through `rangedAliasResolvedTag`, for `requireAsyncResult`'s reason mirrored onto the argument
+			// side: a value of a ranged-int alias type carries tag `named` with its alias name in the parallel
+			// name column, so the bare tag cannot tell `Integer` from a `String`. `let r1 = await p1` produces
+			// exactly such a value (`awaitedResultTag` types it at the callee's declared `Integer`), so
+			// `async step(r1)` — the whole shape of `specs/async-await.md`'s `sequence` — was refused for an
+			// argument that is an ordinary i64.
+			if not tagRidesAsyncGprChannel(self.rangedAliasResolvedTag(self.tagOf(argValue), nameId: self.valueNameId(argValue))) 'unfittableArg'
+				throw ParseError.unsupported("an `async` call argument must ride the green thread's integer channel — a `float` argument travels in an XMM register the hand-assembled trampoline never fills, and a value held at an interface type or an opaque type parameter is released through a companion (a witness table, a layout descriptor) the green-thread struct does not carry. A managed String/struct/array argument is accepted: it is one heap pointer, and the spawn hands the thread its own reference", line: anchor.line, column: anchor.column)
+			end 'unfittableArg'
 		end 'eachArg'
 
 		// ⛔ **AN `async` CALL HAS ITS OWN, LOWER ARGUMENT CEILING, AND IT IS A DIFFERENT MECHANISM'S LIMIT.**
@@ -63764,6 +64133,10 @@ export type Parser
 		end 'tooManyAsyncArgs'
 
 		try self.requireAsyncResult(callee, anchor: anchor)
+		// ⭐⭐ **THE GREEN THREAD IS A DURABLE SINK, SO THE SPAWN HANDS IT ITS OWN REFERENCE (A2).** Runs AFTER
+		// both gates, so only arguments that fit the channel are ever transferred — and after
+		// `fillOmittedArgDefaults`, so a MANAGED default is transferred exactly as a written argument is.
+		try self.transferAsyncSpawnArgs(args, anchor: anchor)
 		let result = self.mintValue(ValueTypeTag.integer, nameId: UnnamedTypeId)
 		self.markValuePromise(result)
 		// ⭐ P1.5-B2 #88: the spawn OWNS a green thread. Enrol it as a statement-scoped pending temporary,
@@ -63772,40 +64145,151 @@ export type Parser
 		// and an UNBOUND, UNAWAITED spawn (`async f()` as a bare statement) is dropped at statement end
 		// through `drainPendingTemps` — so no spawn path can leak its thread.
 		self.pendingTempDrops.push(result)
+		// Immediately before the emit, so the site keys the op that emit is about to append.
+		self.artifact.recordAsyncSpawnSite(spawnSite)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.asyncCall(result, callee: callee, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: settledImmutableArgNames(argImmutableNames), argDefaultSlots: argDefaultSlots), range: SourceRange.between(anchor, last: rparenTok))
 		return result
 	end 'emitAsyncCall'
 
 	// Refuse a `async callee(…)` whose awaited RESULT is not scalar-or-void (a managed/float result has no
-	// GPR channel). `returnTypeOf` answers PRE-resolution, so a union/alias/struct return is `named`/`structRef`
-	// here and correctly refused; an UNDECLARED callee defers to SemanticCheck's E3004 (its `integer`
-	// placeholder passes). Void passes (P1.5-B2b — the awaiter discards a void async's R8 garbage).
+	// GPR channel). It asks `asyncCarriedResultTag`, NOT the raw pre-resolution tag: `returnTypeOf` answers
+	// before resolution, so `returns Integer` over a ranged int alias arrives as a bare `named` — the same
+	// tag a `String` and a struct arrive with — and asking the tag directly refused a result that fits the
+	// R8 channel exactly. A union/struct return is still `named`/`structRef` after the alias resolution and
+	// is still refused; an UNDECLARED callee defers to SemanticCheck's E3004 (its `integer` placeholder
+	// passes). Void passes (P1.5-B2b — the awaiter discards a void async's R8 garbage).
 	function requireAsyncResult(callee ByteArray, anchor Token) throws ParseError
-		let resultTag = self.calleeReturnTag(callee)
-		if resultTag != ValueTypeTag.void and not tagIsAsyncScalar(resultTag) 'nonScalarResult'
-			throw ParseError.unsupported("`async {String.from(callee)}(…)` must return a scalar (int/bool) or void — the green-thread runtime captures the result through R8, so a managed (String/struct) or float result has no channel to await at this rung (managed async is P1.5-B1c)", line: anchor.line, column: anchor.column)
-		end 'nonScalarResult'
+		let resultTag = self.asyncCarriedResultTag(callee)
+		if resultTag != ValueTypeTag.void and not tagRidesAsyncGprChannel(resultTag) 'unfittableResult'
+			throw ParseError.unsupported("`async {String.from(callee)}(…)` must return a value the green thread can carry in R8, or void — a `float` result is returned in XMM0, which the hand-assembled trampoline never captures, and a result held at an interface type or an opaque type parameter is released through a companion the green-thread struct does not carry. A managed String/struct/array result is accepted: it is one heap pointer, and the await takes the thread's reference", line: anchor.line, column: anchor.column)
+		end 'unfittableResult'
 	end 'requireAsyncResult'
 
-	// The awaited-result tag a promise carries — its callee's declared return type — recovered from the
-	// defining `asyncCall` (the same lookup `commitTryAwaitRewrite` uses). A promise-marked value always has
-	// one (invariant). Read by both `await` and `try await` so a void async's result is void and a scalar's
-	// is its scalar, without the handle needing to carry the (possibly-void) tag.
-	function awaitedResultTag(func IrFunction, promise ValueId) returns ValueTypeTag
-		match self.asyncCallCalleeOf(func, promise: promise) 'callee'
-			found(callee) then return self.calleeReturnTag(callee)
-			none then panic("awaitedResultTag: promise v{promise} has no defining asyncCall — every promise-marked value is minted by an asyncCall")
-		end 'callee'
-	end 'awaitedResultTag'
+	// ⭐⭐ **HAND THE GREEN THREAD ITS OWN REFERENCE TO EVERY MANAGED ARGUMENT (A2)** — the spawn-site half of
+	// the ownership pair whose other half is `__gt_release_<callee>` (`Runtime/AsyncReleaser.maxon`).
+	//
+	// ⚠ **WITHOUT IT THE ARGUMENT IS FREED BEFORE THE THREAD RUNS.** A spawn does not call its callee; it
+	// ENQUEUES one. The spawning statement then ends, this frame's scope-exit drop releases the argument, and
+	// the trampoline later loads a dangling pointer out of the inline argument region — a use-after-free
+	// whose symptom is a SIGSEGV inside `__gt_trampoline` once allocator churn puts the freed slot back in
+	// play, which is exactly what `specs-shv2/async-await.md`'s `managed-args-many` is a regression guard for.
+	//
+	// ⭐ **IT IS `transferConsumedArg`, THE DOOR AN ORDINARY CONSUMING CALL COMES THROUGH, AND THAT IS THE
+	// WHOLE MECHANISM RATHER THAN A CONVENIENCE.** "Hand a managed value to something that will use it after
+	// this statement and must release it" is one question, and the tree already answers it: an owned BINDING
+	// co-owns (it keeps its own scope drop, the thread takes a second reference), an owned TEMPORARY is
+	// adopted (drained from the statement's pending drops), and a BORROWED String — an `.rdata` literal, a
+	// borrowed parameter — is PROMOTED to a fresh owned record, because increfing an immortal literal writes
+	// into read-only memory. Each of those three is a measured trap paid for elsewhere; a spawn-local
+	// `__mm_incref` would have re-derived the easy third of it and reproduced the other two.
+	//
+	// ⚠ **IT TRANSFERS EVERY MANAGED ARGUMENT, NOT ONLY THE DECLARED-CONSUMED ONES**, which is where it
+	// departs from `transferConsumedArgs`: an ordinary call's BORROWED argument needs no transfer because the
+	// caller's frame provably outlives the call, and a spawn's provably does not. The declared-consume bits
+	// therefore say nothing here — and a callee that genuinely consumes a managed parameter is refused one
+	// tier up (`SemanticCheck.requireAsyncScalarParams`), because it would drop the parameter itself when it
+	// ran and the releaser would drop it again.
+	//
+	// The RESULT replaces the argument, for `transferConsumedArgs`' reason: a promoted borrowed String is a
+	// DIFFERENT record, and it is the one the inline argument region must carry.
+	function transferAsyncSpawnArgs(args ValueIdArray, anchor Token) throws ParseError
+		for i in 0 upto args.count() 'eachArg'
+			let argValue = try args.get(i) otherwise panic("transferAsyncSpawnArgs: args.get OOB at {i}")
+			if not self.valueIsManagedHeap(argValue) 'scalar'
+				continue
+			end 'scalar'
+			try args.set(i, value: try self.transferConsumedArg(argValue, anchor: anchor)) otherwise panic("transferAsyncSpawnArgs: args.set OOB at {i}")
+		end 'eachArg'
+	end 'transferAsyncSpawnArgs'
 
-	// The declared return type of `callee` as a value tag, VOID included (an undeclared callee → `integer`
-	// placeholder, its doomed program rejected before lowering). The shared async result-type reader.
-	function calleeReturnTag(callee ByteArray) returns ValueTypeTag
+	// ⭐⭐ **THE TWO FACTS AN `await` NEEDS, FROM WHICHEVER ROAD ITS PROMISE CAME BY (P1.5-B2c)** — see
+	// `AwaitedPromise`, which carries the argument. A SPAWN in this frame is described by the callee its
+	// defining `asyncCall` names; a promise out of STORAGE is described by its own type's arguments, because
+	// no `asyncCall` is reachable from a container.
+	//
+	// ⚠⚠ **IT ANSWERS THE TYPE AND NOT THE TAG, AND THAT IS A MISCOMPILE FIX, NOT A REFACTOR.** It used to
+	// answer a bare `ValueTypeTag`, and `emitAwaitOp` minted the await's result with that tag beside
+	// `nameId: UnnamedTypeId` — a `named` tag carrying the FILLER id. `declaredAliasOfNameId`'s header
+	// states the consequence exactly: `UnnamedTypeId` is 0 and a `TypeNameInterner` starts empty, so id 0 is
+	// **the first name the file mentions**. An `async` returning a ranged alias therefore produced an await
+	// result typed after whatever name that happened to be — measured as
+	// `Cannot return 'FilePath' from function declared to return 'int'` on `specs/async-await.md`'s
+	// `nested-void`, where `File.exists(FilePath from …)` interns `FilePath` first.
+	//
+	// It was unreachable only by accident: `requireAsyncResult` refused every `named` return before this
+	// line could run, so no `named`-tagged await result was ever minted. The moment that refusal learned to
+	// resolve a ranged alias, the filler became reachable — a latent wrong answer sprung by a change in a
+	// different function. The name has to come from the callee's return type, the only place it exists.
+	function awaitedPromiseFacts(func IrFunction, promise ValueId) returns AwaitedPromise
+		// ⭐ **THE STORAGE ROAD IS ASKED FIRST, AND IT HAS TO BE.** A spawn stored into a container keeps its
+		// promise MARK (nothing clears it — the mark is what said this frame once owned the thread), so a
+		// value can answer to both roads; the one that is TRUE of it is the type it now carries, because the
+		// storage door checked that claim against the callee and the callee is no longer what describes it.
+		let promiseType = self.valueMaxonType(promise)
+		if typeIsPromiseStorage(self.signatures, t: promiseType) 'fromStorage'
+			let storage = typeNameIdOf(promiseType)
+			return AwaitedPromise.create(MaxonReturnType.value(self.resolvedSlotType(self.signatures.substitutedInstanceArg(storage, position: PromiseResultArgPosition))), tryTarget: TryTarget.promise(self.signatures.instanceDisplayName(storage), throwsClause: promiseStorageThrows(self.signatures, gid: storage)))
+		end 'fromStorage'
+
+		match self.asyncCallCalleeOf(func, promise: promise) 'callee'
+			found(callee) then return AwaitedPromise.create(self.calleeReturnType(callee), tryTarget: TryTarget.named(callee))
+			none then panic("awaitedPromiseFacts: promise v{promise} is neither a stored promise nor defined by an `asyncCall` — `valueIsPromise` admits exactly those two, and every caller gates on it")
+		end 'callee'
+	end 'awaitedPromiseFacts'
+
+	// **THE OPERAND'S TYPE AS THE `await` DIAGNOSTIC NAMES IT** — the value-KIND vocabulary (`integer`,
+	// `boolean`, `float`, `string`), which is NOT `typeTagName`'s ABI vocabulary (`int`, `bool`). The two
+	// registers are deliberate and both are pinned across the suite: `typeTagName` says `int` because it
+	// answers "what does this compile to", and every conversion and return diagnostic quotes it that way.
+	// This message answers "what did you write", which is what an author who typed `await x` over an integer
+	// is asking.
+	//
+	// It is `ValueTypeTag`'s own case name — exactly how the bootstrap derives the same word for the same
+	// sentence (`DetermineValueKind(v).ToString().ToLowerInvariant()`, `maxon-sharp/Compiler/2-Parser.cs`),
+	// so the two agree because both spell the enum rather than because a word list was copied. A ranged
+	// alias is REDUCED first, so `await someInteger` says `integer` and never the tag `named`, which names
+	// no type any author wrote.
+	function awaitOperandKindName(value ValueId) returns String
+		return self.rangedAliasResolvedTag(self.tagOf(value), nameId: self.valueNameId(value)).name
+	end 'awaitOperandKindName'
+
+	// The declared return type of `callee`, VOID included (an undeclared callee → an `integer` placeholder,
+	// its doomed program rejected before lowering by SemanticCheck's E3004). **THE ONE REGISTRY READ both
+	// async result questions are answered from** — what TAGS the await's result value (`calleeReturnTag`)
+	// and what the spawn's result channel must CARRY (`asyncCarriedResultTag`) — so the two cannot come to
+	// disagree about which callee they are describing.
+	function calleeReturnType(callee ByteArray) returns MaxonReturnType
 		return match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'r'
-			declared(returnType) gives asyncReturnTypeTag(returnType)
-			undeclared gives ValueTypeTag.integer
+			declared(returnType) gives returnType
+			undeclared gives MaxonReturnType.value(MaxonType.integer)
 		end 'r'
+	end 'calleeReturnType'
+
+	// The declared return type of `callee` as a value tag, VOID included. The tag that TYPES the awaited
+	// value, so a ranged alias deliberately stays `named` here — see `asyncCarriedResultTag`.
+	function calleeReturnTag(callee ByteArray) returns ValueTypeTag
+		return asyncReturnTypeTag(self.calleeReturnType(callee))
 	end 'calleeReturnTag'
+
+	// ⭐ **WHAT THE SPAWN'S RESULT CHANNEL ACTUALLY CARRIES** — `calleeReturnTag`'s answer with a ranged
+	// alias REDUCED to the primitive it underlies (`Integer` → `integer`, `Percent` → `float`). Void
+	// answers `void`, which the gate admits.
+	//
+	// ⚠ **IT IS DELIBERATELY NOT `calleeReturnTag`, AND COLLAPSING THE TWO WOULD LOSE THE ALIAS.**
+	// `calleeReturnTag` TYPES the await's result value, and a ranged-int result must keep its `named` tag
+	// there or the alias name is gone and every downstream reader of it — `declaredAliasOfValue`, the
+	// range-check sites — sees a plain unaliased int. The REFUSAL below asks the opposite question, which
+	// register file the result travels in, and `named` is far too coarse to answer that: it covers a
+	// `String`, a struct AND `typealias Integer = int(i64.min to i64.max)` alike. Refusing all three
+	// together is why nearly every case in `specs/async-await.md` was rejected for a channel its `Integer`
+	// result fits exactly — the alias resolver this now asks through (`rangedAliasResolvedTag`) had existed
+	// the whole time and was simply never wired to this door.
+	function asyncCarriedResultTag(callee ByteArray) returns ValueTypeTag
+		return match self.calleeReturnType(callee) 'r'
+			void gives ValueTypeTag.void
+			value(inner) gives self.rangedAliasResolvedTag(maxonTypeTag(inner), nameId: typeNameIdOf(inner))
+		end 'r'
+	end 'asyncCarriedResultTag'
 
 	// ⭐ **`await p` — BLOCK ON A PROMISE** (P1.5-B1a/B2b). PLAIN (non-`try`) await. Refuses a THROWING promise
 	// (E3057): a plain `await` lowers to `__gt_await`, which yields only the result and DROPS the R10 error
@@ -63813,19 +64297,26 @@ export type Parser
 	// must be `try await`ed, which the `try` target path (`parseTryCallTarget`) reaches via the SAME
 	// `emitAwaitOp` WITHOUT this reject, because catching the error is exactly what `try await` does.
 	function emitAwait(func IrFunction, promise ValueId, awaitTok Token) returns ValueId throws ParseError
-		match self.asyncCallCalleeOf(func, promise: promise) 'throwing'
-			found(callee) then try self.rejectPlainAwaitOfThrowing(callee, awaitTok: awaitTok)
-			none then break 'throwing'
-		end 'throwing'
+		// Gated rather than unconditional so a NON-promise operand keeps falling through to `emitAwaitOp`'s
+		// E3005 (`await x` over an integer), which is the diagnostic that program owes — the facts lookup
+		// would panic on it, and its precondition is exactly this test.
+		if self.valueIsPromise(promise) 'aPromise'
+			try self.rejectPlainAwaitOfThrowing(self.awaitedPromiseFacts(func, promise: promise), awaitTok: awaitTok)
+		end 'aPromise'
 		return try self.emitAwaitOp(func, promise: promise, awaitTok: awaitTok)
 	end 'emitAwait'
 
-	// Refuse a plain `await` of a THROWING awaited callee (E3057) — the await twin of `try` on a throwing
-	// call. A non-throwing callee is accepted (no-op). A non-promise operand reaches `none` in `emitAwait` and
-	// is refused by `emitAwaitOp` instead.
-	function rejectPlainAwaitOfThrowing(callee ByteArray, awaitTok Token) throws ParseError
-		if throwsClauseIsThrowing(self.signatures.throwsOf(callee)) 'throwing'
-			throw ParseError.awaitThrowingPromiseNeedsTry(String.from(callee), line: awaitTok.line, column: awaitTok.column)
+	// Refuse a plain `await` of a THROWING promise (E3057) — the await twin of `try` on a throwing call. A
+	// non-throwing promise is accepted (no-op). It reads the clause through `tryTargetThrows`, the SAME
+	// accessor the `try await` desugar binds its `otherwise (e)` at, so the form that is refused here and the
+	// form that is accepted there cannot come to disagree about whether a promise throws.
+	function rejectPlainAwaitOfThrowing(facts AwaitedPromise, awaitTok Token) throws ParseError
+		let clause = self.tryTargetThrows(facts.tryTarget)
+		if throwsClauseIsThrowing(clause) 'throwing'
+			// `otherwise panic` and not a `match`: `throwsClauseIsThrowing` has just answered that this clause
+			// carries a name, so the `none` arm is unreachable by the line above it.
+			let errorType = try throwsClauseName(clause) otherwise panic("rejectPlainAwaitOfThrowing: a clause throwsClauseIsThrowing accepted has a name")
+			throw ParseError.awaitThrowingPromiseNeedsTry(errorType, line: awaitTok.line, column: awaitTok.column)
 		end 'throwing'
 	end 'rejectPlainAwaitOfThrowing'
 
@@ -63835,9 +64326,22 @@ export type Parser
 	// yields a void await result the desugar handles and a scalar async yields its scalar.
 	function emitAwaitOp(func IrFunction, promise ValueId, awaitTok Token) returns ValueId throws ParseError
 		if not self.valueIsPromise(promise) 'notPromise'
-			throw ParseError.unsupported("`await` applies to a Promise produced by an `async` call — the operand here is not an async spawn's result", line: awaitTok.line, column: awaitTok.column)
+			throw ParseError.awaitNonPromise(self.awaitOperandKindName(promise), line: awaitTok.line, column: awaitTok.column)
 		end 'notPromise'
-		let result = self.mintValue(self.awaitedResultTag(func, promise: promise), nameId: UnnamedTypeId)
+		// ⭐ MINTED FROM THE CALLEE'S RETURN **TYPE**, its interner name included — see `awaitedResultType`
+		// for the filler-name-id wrong answer that minting from the bare tag produced.
+		let result = match self.awaitedPromiseFacts(func, promise: promise).result 'r'
+			void gives self.mintValue(ValueTypeTag.void, nameId: UnnamedTypeId)
+			value(inner) gives self.mintValueOfType(inner)
+		end 'r'
+		// ⭐⭐ **THE AWAIT ADOPTS THE THREAD'S REFERENCE TO A MANAGED RESULT (A2)** — the same enrolment an
+		// ordinary call's owned managed result gets, and in the same place (between the mint and the op).
+		// `__gt_await` hands back the `+1` the green thread's own `return` produced and does NOT release it
+		// (`__gt_release_<callee>` is called with the result CONSUMED there), so this frame owes exactly one
+		// drop; without the enrolment nobody owes it and the record leaks (exit 101). The DUAL is
+		// `__gt_promise_drop`, which calls the releaser with the result NOT consumed precisely because no
+		// await ever reached this line.
+		self.enrolOwnedCallTemp(result)
 		self.artifact.emitOp(self.currentBlock, op: MaxonOp.await(result, promise: promise), range: SourceRange.ofToken(awaitTok))
 		// The await consumes the thread — the runtime reclaims its struct here — so its owning binding must not
 		// also drop it at scope exit (P1.5-B2 #88). Covers `try await` too: `parseTryCallTarget` emits its target

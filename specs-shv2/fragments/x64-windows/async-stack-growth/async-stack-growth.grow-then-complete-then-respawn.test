@@ -1,6 +1,7 @@
 // Test: async-stack-growth.grow-then-complete-then-respawn
 
 function deepRecurse(n int) returns int
+	Runtime.yield()
 	if n == 0 'base'
 		return 0
 	end 'base'
@@ -28,38 +29,46 @@ data {
   __gt_system_stack_top@56 = i64 0
   __gt_timer_count@64 = i64 0
   __gt_timer_heap_base@72 = i64 0
-  __gt_clock_ticks@80 = i64 0
-  __gt_clock_freq@88 = i64 0
-  __gt_proc_count@96 = i64 0
-  __gt_proc_handles_base@104 = i64 0
-  __gt_proc_gts_base@112 = i64 0
-  __gt_free_list_head@120 = i64 0
-  __gt_live_count@128 = i64 0
-  __gt_startup_base@136 = i64 0
-  __gt_procinfo_base@144 = i64 0
-  __gt_exitcode_base@152 = i64 0
-  __gt_cmdline_buf_base@160 = i64 0
-  __gt_cmdline_buf_cap@168 = i64 0
+  __gt_timer_capacity@80 = i64 0
+  __gt_trace_counter@88 = i64 0
+  __gt_trace_digits@96 = i64 0
+  __gt_clock_ticks@104 = i64 0
+  __gt_clock_freq@112 = i64 0
+  __gt_proc_count@120 = i64 0
+  __gt_proc_handles_base@128 = i64 0
+  __gt_proc_gts_base@136 = i64 0
+  __gt_free_list_head@144 = i64 0
+  __gt_live_count@152 = i64 0
+  __gt_startup_base@160 = i64 0
+  __gt_procinfo_base@168 = i64 0
+  __gt_exitcode_base@176 = i64 0
+  __gt_cmdline_buf_base@184 = i64 0
+  __gt_cmdline_buf_cap@192 = i64 0
 }
 
 func @deepRecurse {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.prologue 32
-    x64.cmpRegImm32 rcx, 0
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.callDirect Runtime.yield
+    x64.cmpRegImm32 rbx, 0
     x64.jcc equal, base
     x64.jmp ifcont
   base:
     x64.movRegImm32 r8, 0
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont:
-    x64.leaRegRegImm32 rcx, rcx, -1
+    x64.leaRegRegImm32 rcx, rbx, -1
     x64.callDirect deepRecurse
     x64.leaRegRegImm32 r8, r8, 1
-    x64.epilogue 32
+    x64.epilogue 40
+    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }
@@ -74,14 +83,14 @@ func @main {
     x64.movRegImm32 rbx, 60
     x64.leaRegFunc rcx, [rip + deepRecurse]
     x64.callDirect __gt_spawn
-    x64.storeBaseDispReg.word64 [r8 + 176], rbx
+    x64.storeBaseDispReg.word64 [r8 + 192], rbx
     x64.movRegReg rcx, r8
     x64.callDirect __gt_await
     x64.movRegReg rbx, r8
     x64.movRegImm32 r12, 90
     x64.leaRegFunc rcx, [rip + deepRecurse]
     x64.callDirect __gt_spawn
-    x64.storeBaseDispReg.word64 [r8 + 176], r12
+    x64.storeBaseDispReg.word64 [r8 + 192], r12
     x64.movRegReg rcx, r8
     x64.callDirect __gt_await
     x64.leaRegRegReg r8, rbx, r8
@@ -106,6 +115,17 @@ func @main {
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Runtime.yield {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __gt_resched
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

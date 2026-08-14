@@ -385,7 +385,21 @@ public static class GtLayout {
   // the request while its waiter still runs — the double-schedule is structurally
   // impossible. Appended after the inline mainThread GT so no existing offset shifts.
   public const int POffPendingSyncReq = POffMainThread + GtStructSize;   // 0x168
-  public const int PStructSize = POffPendingSyncReq + 8;                  // 0x170 = 368 bytes
+  // Deferred BACK-of-queue re-enqueue for a green thread that yielded cooperatively
+  // (maxon_yield's worker arm). Same "register-after-park" shape as POffPendingSyncReq
+  // above and for the same reason — the GT may not become discoverable until
+  // __gt_context_switch has saved it — but a SEPARATE slot from POffPendingWaiter,
+  // because the two want opposite ends of the queue. A woken awaiter goes through
+  // __gt_enqueue and lands in P->runnext, which is right: it is the thread this
+  // processor was waiting on. A YIELDER routed the same way lands in the slot it just
+  // vacated and __gt_dequeue hands it straight back — a yield to nobody. This one is
+  // drained by __gt_dequeue into __gt_enqueue_back.
+  //
+  // ⚠ Written ONLY by the GT currently running on this P, and drained ONLY by that same
+  // P's own __gt_dequeue (which reads P from TLS / X28). No other M can see it, which is
+  // a stronger property than POffPendingWaiter has and is what makes a single slot enough.
+  public const int POffPendingYielder = POffPendingSyncReq + 8;           // 0x170
+  public const int PStructSize = POffPendingYielder + 8;                  // 0x178 = 376 bytes
 
   // ---- macOS wake lock block (Go semasleep/semawakeup primitive) ----
   // On macOS the worker park/wake (and the I/O sync worker's wake) use a Go-style

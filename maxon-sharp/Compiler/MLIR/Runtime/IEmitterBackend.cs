@@ -375,6 +375,39 @@ public interface IEmitterBackend {
   void SpawnWorker(VReg p);
 
   /// <summary>
+  /// Drive one turn of EVERY engine a parked green thread can be waiting on — the pending-waiter
+  /// hand-off, the I/O completion queue, the timer heap, the netpoll recovery net, and on backends
+  /// that poll rather than being pushed to, the kernel event queue — inline on the CALLER'S OWN
+  /// STACK. The exact set differs by backend (x86's completion port is drained by a dedicated IOCP
+  /// thread; arm64 must poll kqueue itself), which is why this is one named OPERATION here and one
+  /// sequence inside each backend rather than a list any caller assembles.
+  ///
+  /// ⚠ A COOPERATIVE SPIN THAT DOES NOT CALL THIS IS A HANG, NOT A SLOWDOWN. Under
+  /// <c>MAXON_MAX_PROCS=1</c> the spinning M is the only one there is, so an engine it declines to
+  /// poll is one whose parked GTs never wake. Every idle loop in the runtime already drives it;
+  /// <c>maxon_yield</c> is the one that a USER program can spin on, which is why the operation had
+  /// to become reachable from shared code at all.
+  ///
+  /// Clobbers the call-clobbered set — it is a run of calls.
+  /// </summary>
+  void DriveSchedulerAndIo();
+
+  /// <summary>
+  /// Hand this M back to its scheduler: <c>__gt_context_switch(from = current GT, to =
+  /// &amp;P-&gt;mainThread)</c>. The caller must already have established that the current GT is NOT
+  /// the P's inline mainThread — a self-switch is a no-op that silently keeps running — and must
+  /// have arranged its own wakeup, because nothing here queues it.
+  ///
+  /// ⚠ IT MUST NOT WRITE <c>mainThread.status</c>, and x86's implementation carries the measured
+  /// history of why (a GT's own park loop is the sole owner of its status field; seven sites
+  /// stamped it anyway and cut a main-thread <c>sleep(300)</c> to 0 ms). Naming the operation is
+  /// what keeps that rule in ONE place per backend now that a shared emitter needs it too.
+  ///
+  /// Clobbers the call-clobbered set.
+  /// </summary>
+  void SwitchToMainThread();
+
+  /// <summary>
   /// Unsigned divide remainder: dest = dividend % divisor (divisor is immediate).
   /// Clobbers Scratch0..Scratch2 as needed.
   /// </summary>

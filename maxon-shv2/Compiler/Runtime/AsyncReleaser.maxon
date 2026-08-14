@@ -1,0 +1,477 @@
+// Runtime/AsyncReleaser.maxon — the `__gt_release_<callee>` helpers that discharge a green thread's
+// ownership of its managed ARGUMENTS and of its managed RESULT-or-ERROR (P1.5-B1c A2).
+//
+// ⭐⭐ **WHY A PER-CALLEE FUNCTION AND NOT A BITMASK IN THE GT STRUCT.** A mask that said "slot 0 and slot 2
+// are managed" would have to be released by ONE runtime entry, and there is no such entry: a release in shv2
+// is TYPE-DIRECTED, and `Parser.decrefCalleeFor` routes to seven of them (`__str_decref`,
+// `__destruct_<Struct>`, `__destruct_<mangled>`, `__drop_type_param`, `__drop_existential`, `__mm_decref`,
+// `__gt_promise_drop`). The generic `__mm_decref` is not a safe default for the rest: `decrefCalleeFor`'s own
+// `tagIsByteRecord` arm states what happens when a String reaches it — it *"frees the box without releasing
+// the external buffer a detached record owns"*, a leak on exactly the arguments this file exists to release.
+// A mask can name one callee; a spawn's slots can want three.
+//
+// ⭐ **AND WHY THE RELEASE CANNOT SIMPLY BE EMITTED AT THE AWAIT.** The parser does know the types — but
+// `__gt_await` RECYCLES the GT struct onto the free list before returning (`emitGtStructReclaim`), and
+// `buildGtSpawn`'s header records what a recycled struct still carries: *"its previous tenant's
+// status/result/waiter/io_*/threw/tib"*. Reading argument slots after the awaiter has returned reads a
+// struct that may already have been re-let. So the release happens INSIDE the runtime, while the GT is still
+// this promise's, and the only thing the spawn has to leave behind is the address of the code that knows how.
+//
+// ⭐ **DEDUP IS BY CALLEE, AND THE ARGUMENT TYPES ARE THE CALLEE'S SIGNATURE.** Two spawns of `joinArgs` pass
+// the same parameter types by definition, so there is exactly one release plan per async callee and the whole
+// plan is DERIVED from `funcSignatures` + `ProgramSignatures` at synthesis time — nothing is recorded at the
+// spawn site and nothing can drift between the site and the body. This mirrors `Runtime/FnRefThunk.maxon`,
+// the tree's other per-callee synthesis, down to the collect-early / install-post-pipeline shape.
+//
+// ⛔⛔ **THE TWO CALL SITES ARE ASYMMETRIC ABOUT THE RESULT, AND COLLAPSING THEM INTO ONE IS THE OBVIOUS NEXT
+// BUG.** The choice travels as the two-case `AsyncResultDisposition` rather than as a bare 1 or 0 for exactly
+// that reason — see that union, which is where the runtime's word for it is chosen:
+//
+//   • `__gt_await` / `__gt_try_await` pass **`consumedByAwaiter`** — arguments only. The awaited value's `+1`
+//     has just been handed to the awaiting frame, which enrols it and drops it once
+//     (`Parser.emitAwaitOp`'s `enrolOwnedCallTemp`). **Releasing it here as well is a DOUBLE FREE.**
+//   • `__gt_promise_drop` passes **`ownedByThisDrop`** — arguments *and* the result-or-error. No await ever
+//     ran, so nobody else will ever release them. **Skipping it here is a LEAK** (exit 101), and it is the
+//     only place the leak can be closed. Cancel routes through `promise_drop`, so it inherits this rather
+//     than growing a third copy of the decision.
+//
+// ⚠ **A DOUBLE CALL IS PREVENTED AT COMPILE TIME, AND THAT IS THE PRIMARY MECHANISM.** `Parser.emitAwaitOp`
+// calls `consumePromiseThread`, which clears the promise from `pendingTempDrops` and sets `movedFrom` through
+// the shared `VarInfo`; the scope-exit / re-arm gate reads `not binding.movedFrom and bindingIsOwned(binding)`,
+// so an awaited promise emits no `__gt_promise_drop` at all. **The `gt.releaser = 0` store both call sites
+// make is a RUNTIME BACKSTOP, second in line** — one store, an honest state transition ("this GT no longer
+// owes a release"), and it composes with cancel, which reaches the same drop entry by another road.
+//
+// ⚠ **THE THROW PATH HAS TWO TRAPS AND THEY ARE DIFFERENT TRAPS.** On a throw `gt.result` holds whatever R8
+// happened to carry out of the throwing exit — the UNDEFINED success slot — so releasing it there is a wild
+// free; the success release is therefore gated on `threw == 0`. And `gt.threw` is GARBAGE for a NON-throwing
+// callee (`buildGtTrampolineChunk` captures R10 unconditionally and says so), so it must not be read at all
+// unless the callee throws. **"the callee throws" and "the error is managed" are two facts here, carried
+// separately**, because a throwing callee with a scalar error type has a `threw` worth branching on and
+// nothing to release.
+//
+// ⚠ **CAPACITY IS NOT THIS FILE'S TO BOUND.** `Parser.emitAsyncCall` already refuses `args.count() >
+// MaxAsyncArgs` with a positioned diagnostic and `LowerMaxonToStd.emitAsyncSpawn` keeps a structural panic
+// behind it, so a plan can never name a slot past the inline region. (`async-await.managed-args-many` passes
+// two arguments and so does not approach that gate — it is a guard against the spawn-site reference being
+// missing, not against arity.)
+//
+// ⛔ **MULTI-M IS NOT THIS SLICE, AND NOTHING HERE IS ATOMIC — DELIBERATELY.** Under single-M the awaiter and
+// the dropper are the same thread as every other Maxon frame, so the refcount decrements the releaser emits
+// need no more synchronization than any other decref in the program. Three steps become racy once a worker
+// pool exists: (1) the `gt.releaser` load / clear pair is a read-modify-write that two Ms could both win,
+// running the release twice; (2) the drop path's `threw`/`result` reads race a completion that lands on
+// another M between the status check and the load; (3) the refcounts the emitted drop callees touch are
+// plain loads and stores throughout the runtime, so they are the scheduler's problem and not this file's.
+// Making any of them atomic now would buy an unmeasured cost on the single-M path that ships.
+
+// The symbol prefix. Its `__gt_` head puts a releaser inside the syscall-shim family exactly as the rest of
+// the green-thread runtime is, which matters because a drop callee it calls may reach a kernel call.
+let AsyncReleaserPrefix = b"__gt_release_"
+
+// The name of the releaser for async callee `callee`. ONE builder, shared by the spawn lowering
+// (`LowerMaxonToStd.emitAsyncSpawn`, which emits `funcAddr(__gt_release_<callee>)`) and the synthesis below,
+// so the two spellings cannot drift — `fnRefThunkName`'s arrangement, for its reason.
+export function asyncReleaserName(callee ByteArray) returns ByteArray
+	return "{String.from(AsyncReleaserPrefix)}{String.from(callee)}".toByteArray()
+end 'asyncReleaserName'
+
+// A set of callee names, for O(1) dedup while collecting releaser targets in source order.
+export typealias AsyncReleaserSet = Set with ByteArray
+
+// ⛔⛔ **WHO OWNS THE FINISHED THREAD'S RESULT — the releaser's second argument, as a NAME rather than a 1 or
+// a 0.** This file's header states what each of the two mistakes costs (a double free one way, a leak the
+// other) and that collapsing the two sites is the obvious next bug; a bare `1` and a bare `0` at the two call
+// sites is exactly the spelling that invites it, because neither one says which it is and the two are one
+// keystroke apart. Each site now names its own answer, and `asyncResultConsumedFlag` is the ONE place the
+// runtime's word for it is chosen.
+//   • `consumedByAwaiter` — `__gt_await` / `__gt_try_await` have just handed the result's `+1` to the
+//     awaiting frame, which drops it once. The releaser must release the ARGUMENTS ONLY.
+//   • `ownedByThisDrop` — `__gt_promise_drop` (and `p.cancel()`, which routes through it) is the last reader
+//     the result will ever have. The releaser must release the arguments AND the result-or-error.
+export union AsyncResultDisposition
+	consumedByAwaiter
+	ownedByThisDrop
+end 'AsyncResultDisposition'
+
+// The word the synthesized releaser tests (`resultConsumed != 0` ⇒ stop after the arguments). Read HERE and
+// nowhere else, so the encoding is one fact and the call sites carry only the meaning.
+export function asyncResultConsumedFlag(disposition AsyncResultDisposition) returns ParsedInt
+	return match disposition 'disposition'
+		consumedByAwaiter gives 1
+		ownedByThisDrop gives 0
+	end 'disposition'
+end 'asyncResultConsumedFlag'
+
+// One slot of a spawn that owes a release: the byte offset it occupies inside the GT struct, and the runtime
+// entry that drops it. The offset is carried rather than the slot INDEX because the result and the error
+// live at fixed struct offsets while the arguments live in the inline region — three sources, one shape, so
+// the emitter below has one loop instead of three.
+export type AsyncManagedSlot
+	export let offset as ByteOffset
+	export let dropCallee as ByteArray
+
+	export static function create(offset ByteOffset, dropCallee ByteArray) returns AsyncManagedSlot
+		return Self{offset: offset, dropCallee: dropCallee}
+	end 'create'
+end 'AsyncManagedSlot'
+
+export typealias AsyncManagedSlotArray = Array with AsyncManagedSlot
+
+// ⭐ **THE WHOLE RELEASE PLAN FOR ONE ASYNC CALLEE**, derived from its signature. Four independent facts,
+// and the reason they are four rather than a flag or two is the throw path: `throws` is what decides whether
+// `gt.threw` may be READ at all, and `errorSlots` is what decides whether there is anything to release once
+// it has been. A throwing callee with a scalar error type has the first and not the second.
+//
+// `resultSlots`/`errorSlots` are arrays holding at most one entry each, so that all three lists feed the
+// SAME `emitSlotReleases` loop; a `union { none; one(slot) }` would say the same thing and need its own arm
+// at every use.
+export type AsyncReleasePlan
+	export let argSlots as AsyncManagedSlotArray
+	export let resultSlots as AsyncManagedSlotArray
+	export let errorSlots as AsyncManagedSlotArray
+	export let calleeThrows as bool
+
+	export static function create(argSlots AsyncManagedSlotArray, resultSlots AsyncManagedSlotArray, errorSlots AsyncManagedSlotArray, calleeThrows bool) returns AsyncReleasePlan
+		return Self{argSlots: argSlots, resultSlots: resultSlots, errorSlots: errorSlots, calleeThrows: calleeThrows}
+	end 'create'
+
+	// Is there nothing at all to release? Then the spawn writes NOTHING into `gt.releaser`
+	// (`LowerMaxonToStd.emitAsyncReleaserStore` returns early — the 0 is already there, from the slab zero on
+	// a fresh struct and from `__gt_spawn`'s whole-struct memzero on a recycled one), and both release sites
+	// read that 0 and SKIP rather than indirect-calling through it.
+	//
+	// ⚠ **THAT IS "PAYS ALMOST NOTHING", NOT "EMITS NOTHING".** `emitGtReleaserCall` is emitted
+	// UNCONDITIONALLY into `__gt_await`, `__gt_try_await` and `__gt_promise_drop` — the compiler cannot know
+	// at runtime-build time which callees a program spawns — so every async program gained its load, compare
+	// and branch plus the two blocks each of those three carries. A scalar-only async program's emitted code
+	// therefore DIFFERS from a pre-A2 build; what it does not do is call anything. See `emitGtReleaserCall`'s
+	// own header, which states the same cost from the other end.
+	export function isInert() returns bool
+		return self.argSlots.count() == 0 and self.resultSlots.count() == 0 and self.errorSlots.count() == 0
+	end 'isInert'
+end 'AsyncReleasePlan'
+
+// ⭐⭐ **DOES THIS SPAWN NEED A RELEASER? — ONE fact, read by the two sites that must not disagree about it.**
+// `LowerMaxonToStd.emitAsyncSpawn` NAMES the address it stores into `gt.releaser`, and `installAsyncReleasers`
+// decides whether anything is there to name.
+//
+// ⚠ **A DISAGREEMENT IS A COMPILE ERROR AT NEITHER SITE** — `functionValueNeedsEnvThunk`'s trap, one runtime
+// over, and worse here. Say-yes at the spawn and no at the synthesis and the program holds a `funcAddr` of a
+// releaser nobody built (a link failure, which at least reports). Say-no at the spawn and yes at the
+// synthesis and the GT carries 0, every release is skipped and the program LEAKS every managed argument it
+// ever spawned with — silently, until the leak gate at exit says 101 with nothing to point at.
+export function asyncCalleeNeedsReleaser(callee ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns bool
+	return not asyncReleasePlanFor(callee, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames).isInert()
+end 'asyncCalleeNeedsReleaser'
+
+// Build the release plan for `callee` off its declared signature.
+//
+// ⚠ **AN UNDECLARED CALLEE ANSWERS THE INERT PLAN RATHER THAN PANICKING.** Its program is already rejected
+// by SemanticCheck's E3004, but the collect walk below runs over the module regardless of whether the
+// program is doomed, and a panic here would replace a positioned diagnostic with a compiler crash.
+export function asyncReleasePlanFor(callee ByteArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncReleasePlan
+	var argSlots = AsyncManagedSlotArray.create()
+	let sig = try funcSignatures.get(callee) otherwise return AsyncReleasePlan.create(argSlots, resultSlots: AsyncManagedSlotArray.create(), errorSlots: AsyncManagedSlotArray.create(), calleeThrows: false)
+
+	// The ARGUMENTS, in PARAMETER order — which is the order the inline region holds them in, because
+	// `lowerAsyncCall` slots them (`slotCallArgs`) before `emitAsyncSpawn` stores them. A labelled spawn
+	// therefore needs no adjustment here: the label was resolved one tier up.
+	for i in 0 upto sig.paramCount() 'eachParam'
+		let paramType = try sig.paramTypes.get(i) otherwise panic("asyncReleasePlanFor: paramTypes.get OOB at {i}")
+		let aggregateName = try sig.paramAggregateNames.get(i) otherwise panic("asyncReleasePlanFor: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
+		if asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName) 'managedArg'
+			argSlots.push(AsyncManagedSlot.create((GtOffArgInline + i * GtArgSlotBytes) as ByteOffset, dropCallee: asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: paramType, aggregateName: aggregateName)))
+		end 'managedArg'
+	end 'eachParam'
+
+	return AsyncReleasePlan.create(argSlots, resultSlots: asyncResultSlotsOf(callee, sig: sig, signatures: signatures, typeNames: typeNames), errorSlots: asyncErrorSlotsOf(callee, signatures: signatures), calleeThrows: throwsClauseIsThrowing(signatures.throwsOf(callee)))
+end 'asyncReleasePlanFor'
+
+// The RESULT slot, if the callee returns a managed value. It reads the return type off the whole-program
+// registry (`returnTypeOf`, remapped `into` the interner the rest of this plan is resolved against) and its
+// pre-erasure identity off `FuncSignature.returnAggregateName` — the return twin of `paramAggregateNames`,
+// and needed for the same reason: a boxed union RETURN resolves to bare `integer` too.
+function asyncResultSlotsOf(callee ByteArray, sig FuncSignature, signatures ProgramSignatures, typeNames TypeNameInterner) returns AsyncManagedSlotArray
+	let returnType = match signatures.returnTypeOf(callee, into: typeNames) 'r'
+		declared(declaredReturn) gives declaredReturn
+		undeclared gives MaxonReturnType.void
+	end 'r'
+	return match returnType 'rt'
+		void gives AsyncManagedSlotArray.create()
+		value(inner) gives asyncSlotsAt(GtOffResult as ByteOffset, signatures: signatures, typeNames: typeNames, slotType: inner, aggregateName: sig.returnAggregateName)
+	end 'rt'
+end 'asyncResultSlotsOf'
+
+// The 0-or-1 slot list for ONE candidate word of the GT struct — the shape every arm of a plan is built
+// from, so "a managed slot is a (offset, drop callee) pair decided by `asyncSlotOwnsHeap`" is written once
+// and the three arms differ only in which word they are asking about.
+function asyncSlotsAt(offset ByteOffset, signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns AsyncManagedSlotArray
+	var slots = AsyncManagedSlotArray.create()
+	if asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName) 'ownsHeap'
+		slots.push(AsyncManagedSlot.create(offset, dropCallee: asyncSlotDropCallee(signatures, typeNames: typeNames, slotType: slotType, aggregateName: aggregateName)))
+	end 'ownsHeap'
+	return slots
+end 'asyncSlotsAt'
+
+// The ERROR slot, if a throwing callee's error flag is a heap BOX this release must free.
+//
+// ⭐ **ONLY A BOXED ERROR UNION IS A POINTER**, and that is the whole of the test. A SCALAR error clause
+// travels as `ordinal + ErrorFlagOrdinalBias` — a small integer that owns nothing and must never be handed
+// to a drop callee — while a boxed union's flag is written to `gt.threw` VERBATIM, with no bias added
+// (`LowerMaxonToStd.lowerThrowError`'s boxed arm), so a non-zero flag there IS the box pointer. `enumOf(…)
+// .isBoxed()` is the same question `Parser.throwsTypeIsBoxedUnion` asks at the catch site, asked of the same
+// registry, so the encode, the catch and this release cannot come to three different answers.
+//
+// A boxed union with no managed payload still owes a `__mm_decref` — the box itself is heap — which is
+// exactly what `unionBoxDropCallee` hands back for it.
+function asyncErrorSlotsOf(callee ByteArray, signatures ProgramSignatures) returns AsyncManagedSlotArray
+	let errorName = try throwsClauseName(signatures.throwsOf(callee)) otherwise return AsyncManagedSlotArray.create()
+	return match signatures.enumOf(errorName.toByteArray()) 'e'
+		declared(layout) gives asyncBoxedErrorSlots(layout, signatures: signatures, errorName: errorName.toByteArray())
+		undeclared gives AsyncManagedSlotArray.create()
+	end 'e'
+end 'asyncErrorSlotsOf'
+
+// The error slot for a declared error union — one entry iff the union is BOXED. A non-boxed clause's flag is
+// `ordinal + ErrorFlagOrdinalBias`, a small integer that owns nothing, and handing it to a drop callee is a
+// wild free.
+function asyncBoxedErrorSlots(layout EnumLayout, signatures ProgramSignatures, errorName ByteArray) returns AsyncManagedSlotArray
+	var slots = AsyncManagedSlotArray.create()
+	if layout.isBoxed() 'boxedError'
+		slots.push(AsyncManagedSlot.create(GtOffThrew as ByteOffset, dropCallee: signatures.unionBoxDropCallee(errorName)))
+	end 'boxedError'
+	return slots
+end 'asyncBoxedErrorSlots'
+
+// ⭐ **DOES A GT SLOT OF THIS DECLARED TYPE HOLD A HEAP RECORD THE THREAD MUST RELEASE?** The pair below is
+// the one classification the whole feature reads: the plan above decides WHICH SLOTS IT DROPS from it, and
+// `SemanticCheck.requireAsyncScalarParams` decides WHICH CONSUMED PARAMETERS IT REFUSES from it. A
+// disagreement between those two is a double free on one side and a leak on the other, and a compile error
+// on neither — so they ask one function.
+//
+// ⚠ **`aggregateName` IS NOT REDUNDANT WITH `slotType`, AND DROPPING IT LEAKS A BOXED UNION.** Type
+// resolution collapses a boxed union to bare `integer` (`TypeResolution.resolveNamedType`, the same erasure
+// a ranged alias gets), so a signature's `paramTypes` carries no name for one; the pre-erasure identity
+// survives only on `paramAggregateNames`/`returnAggregateName`. Asked of `slotType` alone, a
+// `union { ok(String) … }` parameter reads as a scalar and its box is never freed.
+//
+// ⚠ The boxedness is re-asked of the registry rather than inferred from "the name is non-empty": the
+// aggregate column is filled from whatever still tags `named` after resolution, and a slot that owns no box
+// must not be handed to a drop callee. One question, one registry.
+export function asyncSlotOwnsHeap(signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns bool
+	if asyncErasedUnionIsBoxed(signatures, aggregateName: aggregateName) 'erasedBoxedUnion'
+		return true
+	end 'erasedBoxedUnion'
+
+	return signatures.typeIsManaged(slotType, from: typeNames)
+end 'asyncSlotOwnsHeap'
+
+// Which runtime entry drops such a slot. Precondition: `asyncSlotOwnsHeap`. The non-erased arm is the SHARED
+// `managedFieldDropCallee` — the same router a managed FIELD of the same type is dropped through and the same
+// one `Parser.decrefCalleeFor` routes a top-level owned value through — so a value the spawn took a reference
+// to is released by the callee that reference was taken for.
+//
+// ⚠ **THE INTERNER IS `project.typeNames` AND NOT THE SIGNATURES' OWN.** A `FuncSignature`'s `paramTypes`
+// ids are folded into the PROJECT interner by `mergeArtifact` (which is why every SemanticCheck site renders
+// them `typeNames: project.typeNames`), while `ProgramSignatures` keeps a separate interner for the layouts
+// it owns — which is why the convenience wrappers `slotTypeIsManaged`/`slotTypeDropCallee` cannot serve here.
+// Resolving a signature's ids against the wrong interner is OPEN #52's exact shape: it misreads a managed
+// payload whenever a ranged alias shifts the interning order, and the symptom is a leak or a wild free.
+export function asyncSlotDropCallee(signatures ProgramSignatures, typeNames TypeNameInterner, slotType MaxonType, aggregateName ByteArray) returns ByteArray
+	if asyncErasedUnionIsBoxed(signatures, aggregateName: aggregateName) 'erasedBoxedUnion'
+		return signatures.unionBoxDropCallee(aggregateName)
+	end 'erasedBoxedUnion'
+
+	return managedFieldDropCallee(signatures, typeNames: typeNames, fieldType: slotType)
+end 'asyncSlotDropCallee'
+
+// Is `aggregateName` the pre-erasure name of a BOXED union? Empty (the overwhelming majority — every
+// parameter whose identity survived resolution) answers false without a registry probe, which keeps the
+// `DeclaredEnum` this would otherwise box off the scalar path. Split out because the two functions above
+// must ask it identically.
+function asyncErasedUnionIsBoxed(signatures ProgramSignatures, aggregateName ByteArray) returns bool
+	if aggregateName.isEmpty() 'identitySurvived'
+		return false
+	end 'identitySurvived'
+
+	return match signatures.enumOf(aggregateName) 'e'
+		declared(layout) gives layout.isBoxed()
+		undeclared gives false
+	end 'e'
+end 'asyncErasedUnionIsBoxed'
+
+// Collect every async callee spawned anywhere in the module, in first-seen source order, deduped. The walk
+// mirrors `collectFnRefThunkTargets`' — one linear pass over the Maxon ops — and runs on the MAXON module,
+// which the pipeline leaves intact.
+//
+// ⚠ It collects every spawned callee and NOT only the ones needing a releaser, because its caller runs
+// BEFORE `noteDestructorUsage` and the admission test is cheap while a second walk would not be. The
+// installer applies `asyncCalleeNeedsReleaser`.
+export function collectAsyncSpawnTargets(module MaxonModule) returns ByteArrayArray
+	var seen = AsyncReleaserSet.create()
+	var targets = ByteArrayArray.create()
+	for func in module.functions 'eachFunc'
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("collectAsyncSpawnTargets: blockRef from func.blockRefs not in module.blocks")
+			for opIdx in block.opRefs 'eachOp'
+				noteIfAsyncSpawn(try module.ops.get(opIdx) otherwise panic("collectAsyncSpawnTargets: opIdx {opIdx} not in module.ops"), seen: seen, targets: targets)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+	return targets
+end 'collectAsyncSpawnTargets'
+
+function noteIfAsyncSpawn(op MaxonOp, seen AsyncReleaserSet, targets ByteArrayArray)
+	match op 'op'
+		asyncCall(_, callee, _, _, _, _, _) then noteAsyncCallee(callee, seen: seen, targets: targets)
+		// Every other op names no SPAWNED callee, `await`/`tryAwait` included: the await side reaches its
+		// releaser through the GT struct at run time, which is the whole point of storing the address there.
+		// Two ranges rather than one because `asyncCall` sits mid-union, between `indirectCall` and `await`.
+		call to indirectCall then break 'op'
+		await to errorFlagEncode then break 'op'
+	end 'op'
+end 'noteIfAsyncSpawn'
+
+function noteAsyncCallee(callee ByteArray, seen AsyncReleaserSet, targets ByteArrayArray)
+	if seen.contains(callee) 'alreadySeen'
+		return
+	end 'alreadySeen'
+
+	seen.insert(callee)
+	targets.push(callee)
+end 'noteAsyncCallee'
+
+// ⭐⭐ **DECLARE WHAT THE SYNTHESIZED RELEASER BODIES WILL CALL — the obligation `noteDestructorUsage` states
+// for the destructor cascades, owed here for the same reason and settled the same way.** A releaser's body
+// is built AFTER the pipeline, so the Maxon-module scan that decides which runtime to install cannot see
+// inside it: a releaser that calls `__str_decref` needs `usesStrDecref` turned on, and one that calls
+// `__destruct_<T>` needs that destructor in `neededDestructors` BEFORE `closeDestructorNeeds` runs its
+// fixpoint — otherwise the cascade the releaser names is never synthesized and the program dies at
+// `resolveCallFixups: call to unknown function '__destruct_T'`, with no diagnostic and no line.
+//
+// ⚠ **EVERY BIT IS DERIVED FROM THE DROP CALLEE THE PLAN WILL ACTUALLY EMIT** — `declareDestructorCascadeNeeds`'
+// own rule, and its header records what a hand-written roster of "the field kinds someone remembered" cost
+// when it was wrong in all three arms at once. So this asks the plan, not the types.
+//
+// ⚠ Called BEFORE `noteDestructorUsage` so the destructors it roots are closed over transitively; a nested
+// cascade is then the fixpoint's business and not this file's.
+export function declareAsyncReleaserNeeds(usage RuntimeUsage, targets ByteArrayArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
+	for callee in targets 'eachCallee'
+		let plan = asyncReleasePlanFor(callee, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
+		declareSlotDropNeeds(usage, slots: plan.argSlots)
+		declareSlotDropNeeds(usage, slots: plan.resultSlots)
+		declareSlotDropNeeds(usage, slots: plan.errorSlots)
+	end 'eachCallee'
+end 'declareAsyncReleaserNeeds'
+
+// Each slot's drop callee declared through `RuntimeUsage.recordCallUsage` — the same routine the module scan
+// runs over every call op — so a releaser's emitted call declares exactly what a hand-written call to the
+// same entry would, and a new drop family needs no arm here.
+function declareSlotDropNeeds(usage RuntimeUsage, slots AsyncManagedSlotArray)
+	for slot in slots 'eachSlot'
+		recordCallUsage(slot.dropCallee, usage: usage)
+	end 'eachSlot'
+end 'declareSlotDropNeeds'
+
+// Install the releasers for every spawned callee that needs one. Appended already-lowered after the
+// pipeline, exactly as the destructor cascades and the `__fnref_` thunks are, so they are never re-optimized.
+export function installAsyncReleasers(module StdModule, targets ByteArrayArray, funcSignatures FuncSignatureMap, signatures ProgramSignatures, typeNames TypeNameInterner)
+	for callee in targets 'eachCallee'
+		let plan = asyncReleasePlanFor(callee, funcSignatures: funcSignatures, signatures: signatures, typeNames: typeNames)
+		if plan.isInert() 'nothingToRelease'
+			continue
+		end 'nothingToRelease'
+		synthesizeAsyncReleaser(module, callee: callee, plan: plan)
+	end 'eachCallee'
+end 'installAsyncReleasers'
+
+// `__gt_release_<callee>(gt, resultConsumed)` — release this GT's managed arguments always, and its managed
+// result-or-error only when `resultConsumed` is 0. See this file's header for which caller passes which and
+// what each of the two mistakes costs.
+function synthesizeAsyncReleaser(module StdModule, callee ByteArray, plan AsyncReleasePlan)
+	var func = IrFunction.createFromStd(asyncReleaserName(callee), returnType: StdReturnType.void, paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 2)
+	let gt = 0 as ValueId
+	let resultConsumed = 1 as ValueId
+
+	// The ARGUMENTS, unconditionally: the thread borrowed them whether it ran, parked or never started, and
+	// the reference the spawn took is owed back on every one of those paths.
+	var cur = emitSlotReleases(module, func: func, ids: ids, cur: entry, gt: gt, slots: plan.argSlots)
+
+	if plan.resultSlots.count() == 0 and plan.errorSlots.count() == 0 'argsOnly'
+		module.setTerminator(cur, op: StdOp.branch(done.id))
+		module.setTerminator(done, op: StdOp.retVoid)
+		module.functions.push(func)
+		return
+	end 'argsOnly'
+
+	// `resultConsumed != 0` ⇒ an await already took the result's reference; stop here.
+	var releaseResult = module.addBlock(func, label: b"releaseresult")
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let notConsumed = emitCmp(module, block: cur, a: resultConsumed, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(notConsumed, thenBlockId: releaseResult.id, elseBlockId: done.id))
+
+	emitResultOrErrorRelease(module, func: func, ids: ids, start: releaseResult, done: done, gt: gt, plan: plan)
+
+	module.setTerminator(done, op: StdOp.retVoid)
+	module.functions.push(func)
+end 'synthesizeAsyncReleaser'
+
+// The RESULT-or-ERROR arm, reached only on the drop path.
+//
+// ⛔ **A NON-THROWING CALLEE'S `gt.threw` IS GARBAGE AND IS NEVER READ.** `buildGtTrampolineChunk` stores R10
+// into it unconditionally and states that it is harmless *because only `__gt_try_await` reads it*. Branching
+// on it for a non-throwing callee would turn that garbage into a control decision, and one of its two arms
+// hands a garbage word to a drop callee.
+//
+// ⛔ **AND ON A THROW, `gt.result` IS THE UNDEFINED SUCCESS SLOT.** The trampoline captured R8 whatever the
+// exit was, so on a throw it holds whatever the throwing path left there — releasing it would be a wild free.
+// That is why the success release sits under `threw == 0` rather than beside the error release.
+//
+// A GT that never RAN has both words zero (the fresh slab zeroes, and `__gt_spawn`'s whole-struct memzero
+// zeroes a recycled one), so every guard below falls through to `done` for it — which is the correct answer
+// and the reason no `status` test is needed here.
+function emitResultOrErrorRelease(module StdModule, func IrFunction, ids ValueMinter, start IrBlock, done IrBlock, gt ValueId, plan AsyncReleasePlan)
+	if not plan.calleeThrows 'nonThrowing'
+		module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: start, gt: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
+		return
+	end 'nonThrowing'
+
+	var releaseSuccess = module.addBlock(func, label: b"releasesuccess")
+	var releaseError = module.addBlock(func, label: b"releaseerror")
+	let threw = ids.mint()
+	module.appendOp(start, op: StdOp.loadIndirect(threw, addrId: gt, offset: GtOffThrew, valueType: StdType.i64))
+	let noError = emitCmp(module, block: start, a: threw, b: emitConst(module, block: start, value: 0, ids: ids), pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(start, op: StdOp.condBranch(noError, thenBlockId: releaseSuccess.id, elseBlockId: releaseError.id))
+
+	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: releaseSuccess, gt: gt, slots: plan.resultSlots), op: StdOp.branch(done.id))
+	// `errorSlots` is empty for a throwing callee whose error type is a SCALAR clause — there is a `threw`
+	// worth branching on and nothing in it to free — so this arm emits no drop at all and falls straight
+	// through. That is the "callee throws" / "error is managed" split, and it is why they are two facts.
+	module.setTerminator(emitSlotReleases(module, func: func, ids: ids, cur: releaseError, gt: gt, slots: plan.errorSlots), op: StdOp.branch(done.id))
+end 'emitResultOrErrorRelease'
+
+// Drop each slot in turn, threading the continuation block — one `MmRuntime.emitNullGuardedDrop` per slot.
+// Returns the block execution continues in.
+//
+// ⭐ **IT IS THAT HELPER AND NOT A SECOND COPY OF IT.** A GT struct is a base address and a slot is a byte
+// offset into it, which is exactly what `emitNullGuardedDrop` already takes; `FieldDropKind.direct` is
+// exactly the release a slot's `dropCallee` wants. This loop therefore owns only the ITERATION.
+//
+// ⚠ The null guard is what makes a PARTIALLY INITIALIZED GT safe: `emitAsyncSpawn` fills the argument slots
+// only after `__gt_spawn` returns, and the result/error words are written only by a thread that actually
+// completed. A zero word means "nothing was ever put here", which is the one reading a release must not act
+// on, and it is the reading a memzeroed recycled struct guarantees.
+function emitSlotReleases(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, gt ValueId, slots AsyncManagedSlotArray) returns IrBlock
+	var block = cur
+	for slot in slots 'eachSlot'
+		block = emitNullGuardedDrop(module, cur: block, box: gt, offset: slot.offset, kind: FieldDropKind.direct(slot.dropCallee), ids: ids, func: func)
+	end 'eachSlot'
+	return block
+end 'emitSlotReleases'

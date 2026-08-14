@@ -340,6 +340,15 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	var listed = MaxonSourcePathSet.create()
 	try listWhitelistedModule(stdlibDir, relative: "Clock.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "Sleep.maxon", into: listed)
+	// `Runtime.yield()` — the cooperative reschedule (`specs/runtime-yield.md`). Listed on the same terms as
+	// `Sleep.maxon`: a one-line declaration over a `__Builtins` intrinsic (`__Builtins.yield` → `__gt_resched`).
+	//
+	// It clears every entry in this file's collision rule. Its ONE member is a STATIC on the type, so it
+	// claims no bare-name free function and cannot shadow one — the failure mode that cost `Sleep.maxon` its
+	// bare-name builtin does not arise here, because there was never a bare `yield` door to shadow. Its one
+	// type name `Runtime` is declared by no other listed module and redeclares no builtin type (MEASURED —
+	// nothing in the compiler reserves it). It has no imports.
+	try listWhitelistedModule(stdlibDir, relative: "Runtime.maxon", into: listed)
 	// ⭐ **P1.8 Slice E — the nine `utf16*` free functions**, which the corpus calls by BARE NAME
 	// (`utf16IsLeadSurrogate(55357)`). shv2 has no bare-name free-function BUILTIN door at all — every
 	// builtin is reached through a receiver-dot or a `Type.` qualifier — so a synthesized version of these

@@ -42,6 +42,7 @@ seed stack freed and its struct reclaimed, and `__gt_live_count` balances to zer
 ```maxon
 
 function trivial() returns int
+	Runtime.yield()
 	return 0
 end 'trivial'
 
@@ -63,10 +64,12 @@ completed-but-un-awaited `a`. The awaited sibling's result (20) is intact, and t
 ```maxon
 
 function ten() returns int
+	Runtime.yield()
 	return 10
 end 'ten'
 
 function twenty() returns int
+	Runtime.yield()
 	return 20
 end 'twenty'
 
@@ -89,6 +92,7 @@ scheduled and the global stays 0. The drop cancels the never-run thread; it does
 var flag = 0
 
 function incFlag() returns int
+	Runtime.yield()
 	flag = 1
 	return 1
 end 'incFlag'
@@ -112,6 +116,7 @@ and seed stack, invisible to `__mm_alloc_count`.
 ```maxon
 
 function trivial() returns int
+	Runtime.yield()
 	return 0
 end 'trivial'
 
@@ -144,6 +149,7 @@ function sleeper() returns int
 end 'sleeper'
 
 function fast() returns int
+	Runtime.yield()
 	return 42
 end 'fast'
 
@@ -169,6 +175,7 @@ sum is 7, and the live count balances to zero across both calls (no GT-leak abor
 ```maxon
 
 function compute() returns int
+	Runtime.yield()
 	return 7
 end 'compute'
 
@@ -204,6 +211,7 @@ function slowProc() returns int
 end 'slowProc'
 
 function fast() returns int
+	Runtime.yield()
 	return 42
 end 'fast'
 
@@ -227,6 +235,7 @@ unmarked, so the re-arm saw no live thread to drop) and the scope-exit drop misr
 pointer, corrupting the heap count (exit 101).
 ```maxon
 function trivial() returns int
+	Runtime.yield()
 	return 0
 end 'trivial'
 
@@ -251,6 +260,7 @@ merges the re-armed thread and the untouched one, both marked promises, so the s
 the taken path holds — balanced on every path (exit 0). Before the fix this exited 101.
 ```maxon
 function trivial() returns int
+	Runtime.yield()
 	return 0
 end 'trivial'
 
@@ -279,6 +289,7 @@ accounted for (the original dropped at the re-arm, the re-armed one awaited). Be
 phi was rejected E2015 ("not a promise").
 ```maxon
 function seven() returns int
+	Runtime.yield()
 	return 7
 end 'seven'
 
@@ -309,6 +320,7 @@ result (5), every intermediate thread dropped and the live count balanced. Befor
 was rejected E2015 ("not a promise") at the `await`.
 ```maxon
 function five() returns int
+	Runtime.yield()
 	return 5
 end 'five'
 
@@ -357,6 +369,7 @@ binding owes nothing) nor use-after-move (a scalar binding is always readable), 
 fix this was wrongly rejected E2015.
 ```maxon
 function nine() returns int
+	Runtime.yield()
 	return 9
 end 'nine'
 

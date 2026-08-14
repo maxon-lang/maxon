@@ -1,0 +1,22 @@
+// Test: async-await.error.storage-erases-error-type
+typealias Integer = int(i64.min to i64.max)
+typealias BadPromise = Promise with Integer
+typealias BadPromiseArray = Array with BadPromise
+
+enum TaskError implements Error
+		crashed
+end 'TaskError'
+
+function mayFail() returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw TaskError.crashed
+end 'mayFail'
+
+function main() returns ExitCode
+		var arr = BadPromiseArray.create()
+		arr.push(async mayFail())
+		return 0
+end 'main'
+---
+CompilerError:
+error E3098: <fragment>:17:7: cannot store a promise from a function that throws 'TaskError' in 'BadPromise': it names the result type only, which would erase the error type — declare the storage as 'Promise with (T, TaskError)' so 'try await' can bind and release the error

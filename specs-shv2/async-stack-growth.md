@@ -51,6 +51,7 @@ partial result correctly.
 ```maxon
 
 function deepRecurse(n int) returns int
+	Runtime.yield()
 	if n == 0 'base'
 		return 0
 	end 'base'
@@ -75,6 +76,7 @@ exact; `main` returns it less 250 to fit the exit code.
 ```maxon
 
 function deepRecurse(n int) returns int
+	Runtime.yield()
 	if n == 0 'base'
 		return 0
 	end 'base'
@@ -127,6 +129,7 @@ grows in turn — proving free-on-complete leaves no corruption for the next spa
 ```maxon
 
 function deepRecurse(n int) returns int
+	Runtime.yield()
 	if n == 0 'base'
 		return 0
 	end 'base'

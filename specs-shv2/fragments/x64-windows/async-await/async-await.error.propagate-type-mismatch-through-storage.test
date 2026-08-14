@@ -1,0 +1,34 @@
+// Test: async-await.error.propagate-type-mismatch-through-storage
+typealias Integer = int(i64.min to i64.max)
+typealias TaskPromise = Promise with (Integer, TaskError)
+typealias TaskPromiseArray = Array with TaskPromise
+
+enum TaskError implements Error
+		timedOut
+		crashed
+end 'TaskError'
+
+union WrapError implements Error
+		wrapped(reason String)
+end 'WrapError'
+
+function mayFail() returns Integer throws TaskError
+		_ = File.exists(FilePath from "noyield.txt")
+		throw TaskError.crashed
+end 'mayFail'
+
+function viaStorage() returns Integer throws WrapError
+		var arr = TaskPromiseArray.create()
+		arr.push(async mayFail())
+		let p = try arr.get(0) otherwise panic("index 0 is in bounds by construction")
+		let r = try await p
+		return r
+end 'viaStorage'
+
+function main() returns ExitCode
+		let v = try viaStorage() otherwise 55
+		return v
+end 'main'
+---
+CompilerError:
+error E3059: <fragment>:24:11: try propagates 'TaskError' but enclosing function throws 'WrapError' — add 'otherwise' to convert

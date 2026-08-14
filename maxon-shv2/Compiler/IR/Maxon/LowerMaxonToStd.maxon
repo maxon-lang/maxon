@@ -3060,7 +3060,33 @@ type MaxonToStdLowering
 			let argId = try argIds.get(k) otherwise panic("emitAsyncSpawn: argIds.get OOB at {k}")
 			self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(result, offset: (GtOffArgInline + k * GtArgSlotBytes) as ByteOffset, valueId: argId, valueType: StdType.i64))
 		end 'eachArg'
+
+		self.emitAsyncReleaserStore(result, callee: callee, dstBlock: dstBlock)
 	end 'emitAsyncSpawn'
+
+	// ⭐⭐ **LEAVE THE THREAD THE ADDRESS OF THE CODE THAT KNOWS HOW TO RELEASE IT (A2).** `gt.releaser` is
+	// read by `__gt_await` (result CONSUMED) and by `__gt_promise_drop` (result NOT consumed), which is where
+	// the reference `Parser.transferAsyncSpawnArgs` took for each managed argument is given back.
+	//
+	// **A CALLEE WITH NOTHING TO RELEASE STORES NOTHING AT ALL**, rather than storing 0: `__gt_spawn`'s slab
+	// zeroes (fresh) and whole-struct memzero (recycled) have already put 0 there, so the store would be
+	// redundant — and leaving it out is what keeps every existing scalar async golden byte-identical. That
+	// makes the memzero load-bearing for a THIRD reason, which `GtOffReleaser`'s header records: without it a
+	// recycled struct would inherit the previous tenant's releaser and free that tenant's arguments out of
+	// stale slots.
+	//
+	// ⚠ Whether a releaser EXISTS is `asyncCalleeNeedsReleaser`'s answer and is not restated here — see there
+	// for why a disagreement between this site and the synthesis is a compile error at neither, and for which
+	// of the two directions leaks silently.
+	function emitAsyncReleaserStore(gt ValueId, callee ByteArray, dstBlock IrBlock)
+		if not asyncCalleeNeedsReleaser(callee, funcSignatures: self.funcSignatures, signatures: self.signatures, typeNames: self.typeNames) 'nothingToRelease'
+			return
+		end 'nothingToRelease'
+
+		let releaserPtr = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.funcAddr(releaserPtr, funcName: asyncReleaserName(callee)))
+		self.stdModule.appendOp(dstBlock, op: StdOp.storeIndirect(gt, offset: GtOffReleaser as ByteOffset, valueId: releaserPtr, valueType: StdType.i64))
+	end 'emitAsyncReleaserStore'
 
 	// `await p` → `__gt_await(p)`. The scheduler drive is entirely in the runtime; here it is a plain call
 	// yielding the awaited scalar in R8.

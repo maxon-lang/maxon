@@ -84,6 +84,9 @@ export function semanticCheck(project Project, module MaxonModule, signatures Pr
 	// `resolveOverloadedCalls`, whose rewrite is what makes a call op's `callee` the name the summary is
 	// keyed by.
 	checkDiscardedResults(project, module: module, funcNames: funcNames)
+	// E3073 — a spawn whose callee can never suspend. Whole-program like the summary above it, and for the same
+	// reason: whether `f` yields depends on what `f` calls, which is only knowable once every file has merged.
+	checkAsyncYielding(project, module: module, funcNames: funcNames)
 	// E3070: a collection mutated while an element borrowed out of it is still live. The facts are the
 	// PARSER's (a binding exists nowhere else in shv2), and this is the first point that holds the
 	// whole-program `mutationSummary` its call-argument half asks — which is why it runs here rather than in
@@ -1831,15 +1834,15 @@ function checkLinearAwait(project Project, module MaxonModule)
 	end 'eachFunc'
 end 'checkLinearAwait'
 
-// Per-function driver. `functionHasAwait` is the cheap, NON-ALLOCATING gate — mirroring `buildEscapeSummary`'s
+// Per-function driver. `functionConsumesAPromise` is the cheap, NON-ALLOCATING gate — mirroring `buildEscapeSummary`'s
 // `functionHasFunctionParam` — that keeps the reachability machinery (its per-function block index, site list, and
 // walk state) off every await-free function, which is the entire scale corpus. Reports the FIRST violation in op
 // order and stops: a function with a double-await needs one diagnostic, and the deterministic op-order scan makes
 // the choice worker-invariant.
 function checkLinearAwaitInFunction(project Project, module MaxonModule, func IrFunction)
-	if not functionHasAwait(func, module: module) 'noAwait'
+	if not functionConsumesAPromise(func, module: module) 'noConsume'
 		return
-	end 'noAwait'
+	end 'noConsume'
 
 	let sites = collectAwaitSites(func, module: module)
 	let blockIndex = module.blockIndexById(func)
@@ -1850,29 +1853,48 @@ function checkLinearAwaitInFunction(project Project, module MaxonModule, func Ir
 	end 'eachSite'
 end 'checkLinearAwaitInFunction'
 
-// Does `func`'s body contain an `await` op at all? The gate that keeps the reachability walk off every
-// await-free function — a bounded tag check per op, no allocation, so it costs the scale corpus a scan and
-// nothing more (`scale-test` measures memory; this allocates none).
-function functionHasAwait(func IrFunction, module MaxonModule) returns bool
+// Does `func`'s body CONSUME a green thread at all — an `await`, a `try await`, or a `__gt_promise_drop`?
+// The gate that keeps the reachability walk off every promise-free function — a bounded tag check per op, no
+// allocation, so it costs the scale corpus a scan and nothing more (`scale-test` measures memory; this
+// allocates none).
+//
+// ⛔ **IT WAS "HAS AN `await`", AND THAT SKIPPED THE WHOLE CHECK FOR A FUNCTION WHOSE ONLY CONSUMES ARE
+// CANCELS.** MEASURED the moment `p.cancel()` could compile: `p.cancel(); p.cancel()` linked and ran to a
+// corrupted scheduler (exit 75) with the reachability walk never entered, while its `cancel`-then-`await`
+// sibling — which does contain an `await` — was refused correctly. The gate has to admit exactly the sites
+// `collectAwaitSites` collects, which is why both now read `PromiseConsume`'s definition of a consume.
+function functionConsumesAPromise(func IrFunction, module MaxonModule) returns bool
 	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("functionHasAwait: blockRef from func.blockRefs not in module.blocks")
+		let block = try module.blocks.get(blockRef) otherwise panic("functionConsumesAPromise: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
-			match try module.ops.get(opIdx) otherwise panic("functionHasAwait: opIdx {opIdx} not in module.ops") 'op'
-				call to indirectCall then break 'op'
-				asyncCall then break 'op'
-				await to tryAwait then return true
-				sizeofType then break 'op'
-				constArrayLiteral then break 'op'
-				switch then break 'op'
-				witnessDispatch to witnessTryDispatch then break 'op'
-				panicAbortValue then break 'op'
-				// The error-flag encode neither spawns nor awaits — it is arithmetic.
-				errorFlagEncode then break 'op'
-			end 'op'
+			if opConsumesAPromise(try module.ops.get(opIdx) otherwise panic("functionConsumesAPromise: opIdx {opIdx} not in module.ops")) 'aConsume'
+				return true
+			end 'aConsume'
 		end 'eachOp'
 	end 'eachBlock'
 	return false
-end 'functionHasAwait'
+end 'functionConsumesAPromise'
+
+// Is THIS op a consume? An expression, not a `then`-arm scan, and that is the fix rather than a style
+// choice: written as arms, the `call` arm's verdict has to be a `return` — and a `return false` for an
+// ORDINARY call abandons the whole walk at the first `File.exists(…)` in the function. MEASURED: it turned
+// `error.double-await-through-alias-in-branch` and `error.double-await-after-ternary-arm` green-by-silence,
+// two programs whose entire subject is that E3100 fires on them.
+function opConsumesAPromise(op MaxonOp) returns bool
+	return match op 'op'
+		call(_, callee, _, _, _, _, _, _) gives calleeReclaimsAPromise(callee)
+		literal to indirectCall gives false
+		asyncCall gives false
+		await to tryAwait gives true
+		sizeofType gives false
+		constArrayLiteral gives false
+		switch gives false
+		witnessDispatch to witnessTryDispatch gives false
+		panicAbortValue gives false
+		// The error-flag encode neither spawns nor consumes — it is arithmetic.
+		errorFlagEncode gives false
+	end 'op'
+end 'opConsumesAPromise'
 
 // One first-await to check: the block and body position of the `await`, and the promise `ValueId` it awaits —
 // which IS the green-thread identity (see the header). Collected in op order so the FIRST violation reported is
@@ -1881,11 +1903,26 @@ type AwaitSite
 	export let block as IrBlock
 	export let pos as BlockOpPos
 	export let promise as ValueId
+	// WHICH consume this site is. It decides the SENTENCE and nothing else — the rule is one rule — because
+	// "already been ..." is a claim about the FIRST consume, and a diagnostic that said "awaited" of a
+	// `p.cancel()` would be describing a line the author did not write.
+	export let kind as PromiseConsume
 
-	export static function create(block IrBlock, pos BlockOpPos, promise ValueId) returns AwaitSite
-		return Self{block: block, pos: pos, promise: promise}
+	export static function create(block IrBlock, pos BlockOpPos, promise ValueId, kind PromiseConsume) returns AwaitSite
+		return Self{block: block, pos: pos, promise: promise, kind: kind}
 	end 'create'
 end 'AwaitSite'
+
+// ⭐⭐ **THE TWO WAYS A FRAME CONSUMES A GREEN THREAD, AND THE REASON LINEARITY HAS TO COVER BOTH (P1.5-B2c).**
+// `await p` takes the thread's result and `__gt_await` reclaims its struct; `p.cancel()` takes nothing and
+// `__gt_promise_drop` reclaims its struct — so the two differ in what they yield and agree exactly where it
+// matters, which is that the GT is on the scheduler's free list afterwards. MEASURED, all three orderings, on
+// a program `cancel` had only just become able to compile at all: `cancel` then `await` **SEGFAULTED (139)**,
+// `cancel` twice and `await` then `cancel` both **exited 75** with a corrupted scheduler.
+enum PromiseConsume
+	awaited
+	cancelled
+end 'PromiseConsume'
 
 typealias AwaitSiteArray = Array with AwaitSite
 
@@ -1896,12 +1933,19 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 		for pos in 0 upto block.opRefs.count() 'eachOp'
 			let opIdx = try block.opRefs.get(pos) otherwise panic("collectAwaitSites: opRefs.get OOB at {pos}")
 			match try module.ops.get(opIdx) otherwise panic("collectAwaitSites: opIdx {opIdx} not in module.ops") 'op'
-				call to indirectCall then break 'op'
+				// ⭐ A `p.cancel()` is a consume site (P1.5-B2c) — see `PromiseConsume`. It is recognized by
+				// CALLEE and not by a source flag, which also takes in the SCOPE-EXIT drop the parser emits for
+				// an un-consumed promise; that is correct rather than incidental, because a scope drop
+				// reachable from an await would reclaim the same struct twice. It cannot fire spuriously: the
+				// parser emits one only when `consumePromiseThread` has NOT run, i.e. exactly when this walk
+				// finds no other consume to pair it with.
+				call(_, callee, args, _, _, _, _, _) then pushIfPromiseDrop(sites, block: block, pos: pos, callee: callee, args: args)
+				literal to indirectCall then break 'op'
 				asyncCall then break 'op'
-				await (_, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
+				await (_, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise, kind: PromiseConsume.awaited))
 				// A `try await` awaits (and consumes) its promise exactly as a plain `await` does — linearity
 				// is a property of the green thread, not of whether the error is caught — so it is an await site.
-				tryAwait(_, _, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise))
+				tryAwait(_, _, promise) then sites.push(AwaitSite.create(block, pos: pos, promise: promise, kind: PromiseConsume.awaited))
 				sizeofType then break 'op'
 				constArrayLiteral then break 'op'
 				switch then break 'op'
@@ -1915,10 +1959,30 @@ function collectAwaitSites(func IrFunction, module MaxonModule) returns AwaitSit
 	return sites
 end 'collectAwaitSites'
 
+// ⭐ **WHICH CALLEE RECLAIMS A GREEN THREAD — the ONE test the three walk doors share.** The gate
+// (`functionConsumesAPromise`), the site collector (`pushIfPromiseDrop`) and the re-consume classifier
+// (`reconsumeRoleIfPromiseDrop`) must admit exactly the same calls: a gate narrower than the collector skips
+// the check on a program that has one (measured — see `functionConsumesAPromise`), and a classifier narrower
+// than the collector starts a walk that can never find its pair.
+function calleeReclaimsAPromise(callee ByteArray) returns bool
+	return callee.equals(GtPromiseDropName)
+end 'calleeReclaimsAPromise'
+
+// Record a `__gt_promise_drop(p)` call as a CANCEL site. Split out so the `call` arm above stays one
+// statement, and so the "which callee reclaims a green thread" test has one home shared with
+// `classifyOpForPromise`'s matching arm.
+function pushIfPromiseDrop(sites AwaitSiteArray, block IrBlock, pos BlockOpPos, callee ByteArray, args ValueIdArray)
+	if not calleeReclaimsAPromise(callee) 'notAReclaim'
+		return
+	end 'notAReclaim'
+
+	sites.push(AwaitSite.create(block, pos: pos, promise: try args.get(0) otherwise panic("pushIfPromiseDrop: `{String.from(GtPromiseDropName)}` was emitted with no argument — every emitter passes the promise handle"), kind: PromiseConsume.cancelled))
+end 'pushIfPromiseDrop'
+
 // Check one await site; report E3100 and return `true` iff a second await of its thread is reachable from it.
 function checkAwaitSite(project Project, module MaxonModule, blockIndex BlockIndexById, func IrFunction, site AwaitSite) returns bool
 	match reachableReawait(module, blockIndex: blockIndex, func: func, startBlock: site.block, startPos: site.pos, promise: site.promise) 'reach'
-		found(secondOpIdx) then return reportedViolation(project, func: func, secondOpIdx: secondOpIdx)
+		found(secondOpIdx) then return reportedViolation(project, func: func, secondOpIdx: secondOpIdx, first: site.kind)
 		none then break 'reach'
 	end 'reach'
 	return false
@@ -1927,11 +1991,23 @@ end 'checkAwaitSite'
 // Report E3100 at the SECOND await's own `await`-keyword span — the await that is "already" spent, matching the
 // reference compiler's anchor — and return `true` so the caller stops at the first violation. Never spells the
 // number: `ErrorCode.promiseAlreadyAwaited` is the registry member.
-function reportedViolation(project Project, func IrFunction, secondOpIdx OpIndex) returns bool
+function reportedViolation(project Project, func IrFunction, secondOpIdx OpIndex, first PromiseConsume) returns bool
 	let range = project.opRanges.get(secondOpIdx)
-	reportPositioned(project, code: ErrorCode.promiseAlreadyAwaited, message: "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice", line: range.line, column: range.column, filePath: func.sourceFilePath)
+	reportPositioned(project, code: ErrorCode.promiseAlreadyAwaited, message: alreadyConsumedMessage(first), line: range.line, column: range.column, filePath: func.sourceFilePath)
 	return true
 end 'reportedViolation'
+
+// ⚠ **THE SENTENCE IS CHOSEN BY THE *FIRST* CONSUME, NOT THE SECOND, because "already been ..." is a claim
+// about the first.** So the awaited arm carries the wording the corpus pins byte-for-byte across five cases
+// and covers `await` then `cancel` as well as `await` then `await` — it HAS already been awaited in both.
+// The cancelled arm is the one sentence this rung adds, and it exists because telling an author their
+// `p.cancel()` had "already been awaited" would describe a line their program does not contain.
+function alreadyConsumedMessage(first PromiseConsume) returns String
+	return match first 'first'
+		awaited gives "this promise has already been awaited: 'await' is linear — a promise is awaited exactly once, because the awaited thunk hands its result over and a second await would release it twice"
+		cancelled gives "this promise has already been cancelled: 'cancel' reclaims the green thread's struct, so awaiting or cancelling it again reads a struct the scheduler may already have handed to another spawn"
+	end 'first'
+end 'alreadyConsumedMessage'
 
 // The outcome of scanning one block's body ops for a re-await of the tracked promise.
 union AwaitScan
@@ -1990,6 +2066,23 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 		let position = try blockIndex.get(blockId) otherwise panic("reachableReawait: successor BlockId {blockId} is not a block of this function")
 		let blockRef = try func.blockRefs.get(position) otherwise panic("reachableReawait: blockIndexById placed block {blockId} at position {position}, which is past func.blockRefs")
 		let block = try module.blocks.get(blockRef) otherwise panic("reachableReawait: blockRef from func.blockRefs not in module.blocks")
+		// ⭐⭐ **A BLOCK ARG IS RE-DEFINED ON EVERY ENTRY TO ITS BLOCK, AND THAT IS A RE-ARM THE OP SCAN
+		// STRUCTURALLY CANNOT SEE.** `maxonOpResultValue` answers for ops, and a phi is defined by NO op
+		// (`ValueOrigin`'s header says so in as many words), so a loop whose promise `var` is re-armed in its
+		// body reaches its own header carrying a FRESH thread in the same ValueId — which is exactly the
+		// "re-passes the definition" this walk's header describes, spelled at a block entry instead of at an op.
+		//
+		// ⛔ **MEASURED AS A FALSE REFUSAL the moment reclaim sites joined the walk**: `while … p = async f() …`
+		// emits the re-arm's `__gt_promise_drop` of the phi in the body, and the back edge carried the walk
+		// straight back onto it — `async-promise-drop.rearm-var-across-loop` and `.await-rearmed-loop-var`, two
+		// programs whose whole subject is that this is legal, both went red.
+		//
+		// ⚠ It is only sound because a phi genuinely IS a new instance per entry: two consumes on ONE trip
+		// through the loop both precede the back edge and are still found by the scan below.
+		if blockRedefinesPromise(block, promise: promise) 'reArmedAtEntry'
+			continue
+		end 'reArmedAtEntry'
+
 		match scanBlockForReawait(module, block: block, from: 0, promise: promise) 'scan'
 			foundSecond(idx) then return ReachableReawait.found(idx)
 			// Re-armed here — do NOT follow this block's successors; the promise past this point is a new thread.
@@ -2000,6 +2093,17 @@ function reachableReawait(module MaxonModule, blockIndex BlockIndexById, func Ir
 
 	return ReachableReawait.none
 end 'reachableReawait'
+
+// Does entering `block` re-define the tracked promise — i.e. does it carry it as a BLOCK ARG? See the call
+// site for why a phi entry is a re-arm.
+function blockRedefinesPromise(block IrBlock, promise ValueId) returns bool
+	for arg in block.blockArgs 'eachArg'
+		if arg.valueId == promise 'isThePromise'
+			return true
+		end 'isThePromise'
+	end 'eachArg'
+	return false
+end 'blockRedefinesPromise'
 
 // Scan `block`'s body ops from position `from` for the tracked promise: a re-await (`foundSecond`), the
 // re-arming definition (`rearmed`), or neither (`ranOff`). Only BODY ops (`opRefs`) can be an `await`/`asyncCall`
@@ -2016,17 +2120,43 @@ function scanBlockForReawait(module MaxonModule, block IrBlock, from BlockOpPos,
 	return AwaitScan.ranOff
 end 'scanBlockForReawait'
 
-// Classify `op` against the tracked promise. `await(_, awaited)` with `awaited == promise` is a re-await;
-// `asyncCall(result, …)` with `result == promise` is the re-arm; everything else is unrelated. The `call to
-// indirectCall` band range covers every non-async body op, so a newly appended op FAILS TO COMPILE here rather
-// than being silently misclassified (the band-append invariant).
+// Classify `op` against the tracked promise: an `await`/`tryAwait` OF it is a re-await, and an op that
+// DEFINES it is the re-arm.
+//
+// ⭐⭐ **THE RE-ARM IS "THE OP THAT DEFINES Vp", NOT "AN `asyncCall` THAT DEFINES Vp" (P1.5-B2c).** The rule
+// this walk's header states has always been the general one — *"a path is KILLED when it re-passes the SSA
+// DEFINITION of Vp"* — and the implementation read only the `asyncCall` arm, which was the same thing for
+// exactly as long as a promise could only come from a spawn in this frame. Storage ended that: a promise
+// pulled out of a container is defined by the element accessor's `call`/`tryCall`, so
+//
+//     for p in promises 'await' … await p … end 'await'
+//
+// re-passed no `asyncCall` and the single `await p` was reported as a second await of itself — E3100 on the
+// central idiom `specs/async-await.md` names in its own prose (*"which is exactly what makes `for p in
+// promises … await p … end` one await per promise"*). Reading the DEFINITION through the exhaustive
+// `maxonOpResultValue` restores the stated rule and takes the op enumeration with it: a new op variant is a
+// compile error THERE rather than a silently-unrecognized definition here.
+//
+// ⚠ **THE RE-AWAIT TEST COMES FIRST, BECAUSE AN `await` OP IS BOTH.** It defines its result and reads its
+// promise, and the walk starts AT an await — asking "does it define Vp?" first would classify the tracked
+// await's own successors by the wrong role the moment an await's result ever became a promise.
+//
+// ⛔ **AND THAT IS ONLY TRUE IF THE await ARMS FALL THROUGH WHEN THE AWAITED VALUE IS NOT Vp, WHICH THEY DO —
+// THEY USED TO RETURN UNCONDITIONALLY.** A `roleIfEqual(...)` returned straight out answers `unrelated` for an
+// await of a DIFFERENT promise and so never reaches the definition test, which is the exact opposite of the
+// robustness the paragraph above claims: the day an await's result could itself be a promise, an `await q`
+// DEFINING the tracked `p` would be filed `unrelated` and the re-arm would be lost. Nothing can produce that
+// shape today (an async body cannot return a `Promise`), so this changes no current answer — it makes the
+// stated rule the one the code actually follows, which is cheaper than a comment explaining why it does not.
 function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 	match op 'op'
-		call to indirectCall then break 'op'
-		asyncCall(result, _, _, _, _, _, _) then return roleIfEqual(result, promise: promise, role: OpAwaitRole.rearmOf)
-		await (_, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
+		// A `call` is the ONE op that can be either role, so its arm asks both — see `callRoleForPromise`.
+		call(result, callee, args, _, _, _, _, _) then return callRoleForPromise(result, callee: callee, args: args, promise: promise)
+		literal to indirectCall then break 'op'
+		asyncCall then break 'op'
+		await (_, awaited) then return awaitRoleForPromise(op, awaited: awaited, promise: promise)
 		// A `try await` of the tracked promise is a re-await exactly as a plain `await` is.
-		tryAwait(_, _, awaited) then return roleIfEqual(awaited, promise: promise, role: OpAwaitRole.reawaitOf)
+		tryAwait(_, _, awaited) then return awaitRoleForPromise(op, awaited: awaited, promise: promise)
 		sizeofType then break 'op'
 		constArrayLiteral then break 'op'
 		// The jump table reads an integer index, never a promise handle — unrelated to any await.
@@ -2037,8 +2167,47 @@ function classifyOpForPromise(op MaxonOp, promise ValueId) returns OpAwaitRole
 		// The error-flag encode reads an enum tag or a box pointer, never a promise handle.
 		errorFlagEncode then break 'op'
 	end 'op'
-	return OpAwaitRole.unrelated
+	return rearmRoleIfDefines(op, promise: promise)
 end 'classifyOpForPromise'
+
+// An `await` / `try await` op asked BOTH questions in the order its header states: is it a re-await of the
+// tracked promise, and — if it awaited some OTHER promise — is it the DEFINITION of the tracked one? The
+// second can only fire once an await's result can itself be a promise; asking it costs one comparison and is
+// what makes "the re-await test comes first" a statement about ORDER rather than about the only test there is.
+function awaitRoleForPromise(op MaxonOp, awaited ValueId, promise ValueId) returns OpAwaitRole
+	if awaited == promise 'aReawait'
+		return OpAwaitRole.reawaitOf
+	end 'aReawait'
+
+	return rearmRoleIfDefines(op, promise: promise)
+end 'awaitRoleForPromise'
+
+// `rearmOf` when `op` is the definition of the tracked promise — see `classifyOpForPromise`'s header. Ops
+// that define no value (`ret`, the branches, a store, a throw) can define nothing and answer `unrelated`.
+// ⭐⭐ **A `call` IS THE ONE OP THAT CAN PLAY EITHER ROLE, AND IT MUST BE ASKED BOTH QUESTIONS.**
+//   • `__gt_promise_drop(p)` RECLAIMS the tracked thread — a re-consume, exactly as an `await` is.
+//   • any other call that DEFINES the tracked value RE-ARMS it — which is how `for p in promises` works,
+//     the element accessor being the definition re-passed on every iteration.
+//
+// ⛔ **AND ANSWERING ONLY THE FIRST IS A FALSE REFUSAL.** An arm that returned the reclaim verdict and
+// stopped never reached the definition test, so the four container-loop cases went red again with the
+// single `await p` in their loop reported as a second await of itself. The two questions are disjoint by
+// construction — a reclaim call's result is a void the source cannot name — so the order is free and the
+// omission is silent, which is exactly why both are asked here in one place.
+function callRoleForPromise(result ValueId, callee ByteArray, args ValueIdArray, promise ValueId) returns OpAwaitRole
+	if calleeReclaimsAPromise(callee) 'aReclaim'
+		return roleIfEqual(try args.get(0) otherwise panic("callRoleForPromise: `{String.from(GtPromiseDropName)}` was emitted with no argument — every emitter passes the promise handle"), promise: promise, role: OpAwaitRole.reawaitOf)
+	end 'aReclaim'
+
+	return roleIfEqual(result, promise: promise, role: OpAwaitRole.rearmOf)
+end 'callRoleForPromise'
+
+function rearmRoleIfDefines(op MaxonOp, promise ValueId) returns OpAwaitRole
+	return match maxonOpResultValue(op) 'defined'
+		none gives OpAwaitRole.unrelated
+		value(id) gives roleIfEqual(id, promise: promise, role: OpAwaitRole.rearmOf)
+	end 'defined'
+end 'rearmRoleIfDefines'
 
 // `role` when `value` is the tracked promise, else `unrelated` — the equality test the two async arms share.
 function roleIfEqual(value ValueId, promise ValueId, role OpAwaitRole) returns OpAwaitRole
@@ -2212,30 +2381,60 @@ function validateAsyncCall(project Project, func IrFunction, signatures ProgramS
 	// `notMinted`: `parseAsyncCall` consumes a bare `identifier` callee, so an `async` spawn's name is always
 	// the author's own bytes (`async int.fromString(s)` does not parse at all).
 	validateCall(project, func: func, signatures: signatures, funcNames: funcNames, opIndex: opIndex, result: result, callee: callee, mint: CalleeMint.notMinted, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, argDefaultSlots: argDefaultSlots, escapeSummary: escapeSummary, mutationSummary: mutationSummary, blameTargetErrorsHere: blameTargetErrorsHere)
-	requireAsyncScalarParams(project, func: func, opIndex: opIndex, callee: callee)
+	requireAsyncScalarParams(project, func: func, signatures: signatures, opIndex: opIndex, callee: callee)
 end 'validateAsyncCall'
 
-// Refuse `async f(…)` when any parameter of `f` is not a GPR scalar (int/bool). The trampoline passes every
-// argument through the integer arg registers, so a `float` (XMM) or a managed (String / struct / BOXED
-// union) parameter would read the wrong register file — a silent miscompile the parser's argument check
-// cannot catch, because an int argument LEGALLY coerces to a float parameter (`checkArgTypes`). Reads the
-// RESOLVED signature: a ranged-int alias has already collapsed to `integer` (accepted), while a boxed union
-// — which resolution erases to `integer` too — is recovered by its `paramAggregateNames` entry (refused).
-// A payload-free enum is a genuine i64 scalar and carries no aggregate name, so it is accepted. An
-// undeclared callee is E3004 (reported by `validateCall`); its absent signature simply skips this check.
-function requireAsyncScalarParams(project Project, func IrFunction, opIndex OpIndex, callee ByteArray)
+// Refuse `async f(…)` when any parameter of `f` cannot ride the green thread's integer channel. The
+// trampoline passes every argument through the INTEGER arg registers, so a `float` (XMM) parameter would
+// read the wrong register file — a silent miscompile the parser's argument check cannot catch, because an
+// int argument LEGALLY coerces to a float parameter (`checkArgTypes`). Reads the RESOLVED signature: a
+// ranged-int alias has already collapsed to `integer`, while a boxed union — which resolution erases to
+// `integer` too — is recovered by its `paramAggregateNames` entry. A payload-free enum is a genuine i64
+// scalar and carries no aggregate name. An undeclared callee is E3004 (reported by `validateCall`); its
+// absent signature simply skips this check.
+//
+// ⭐ **A MANAGED PARAMETER IS ACCEPTED SINCE A2** — a heap pointer is one GPR word, and the spawn hands the
+// thread its own reference (`Parser.transferAsyncSpawnArgs`) which `__gt_release_<callee>` gives back. That
+// is why a boxed union parameter is no longer refused merely for carrying an aggregate name: `aggName` now
+// decides WHICH DROP the releaser needs, not whether the spawn is legal.
+//
+// ⛔ **A CONSUMED MANAGED PARAMETER IS STILL REFUSED, AND IT IS AN OWNERSHIP BOUNDARY RATHER THAN A CHANNEL
+// ONE.** A consumed parameter is enrolled OWNED in the callee's own frame (`Parser.bindParameters`), so the
+// callee drops it when it runs — while the releaser drops it too, because the releaser is what discharges
+// the reference the spawn took. Pairing them correctly needs the release to be conditional on whether the
+// thread ever RAN, which is a per-arm decision `__gt_promise_drop` could make and `__gt_await` could not
+// state without knowing it. Nothing in the tree spawns such a callee and every one of them is refused today
+// (the whole managed family was), so this narrows an existing refusal rather than opening a hole: a double
+// free is the alternative, and a diagnostic is the honest boundary. **The transitive-consume fixpoint is
+// what would decide it properly; that is the slice this waits on.**
+function requireAsyncScalarParams(project Project, func IrFunction, signatures ProgramSignatures, opIndex OpIndex, callee ByteArray)
 	let sig = try project.funcSignatures.get(callee) otherwise return
 	for i in 0 upto sig.paramCount() 'eachParam'
 		let paramType = try sig.paramTypes.get(i) otherwise panic("requireAsyncScalarParams: paramTypes.get OOB at {i}")
-		let aggName = try sig.paramAggregateNames.get(i) otherwise panic("requireAsyncScalarParams: paramAggregateNames.get OOB at {i} — a signature's param columns are built in lockstep")
-		if not tagIsAsyncScalar(maxonTypeTag(paramType)) or not aggName.isEmpty() 'nonScalarParam'
-			let paramName = try sig.paramNames.get(i) otherwise panic("requireAsyncScalarParams: paramNames.get OOB at {i}")
-			let callRange = project.opRanges.get(opIndex)
-			reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "`async {String.from(callee)}(…)` — an async function's parameters must be scalars (int/bool); parameter '{String.from(paramName)}' is a managed or float type the green-thread trampoline passes through the wrong register file at this rung (managed async is P1.5-B1c)", line: callRange.line, column: callRange.column, filePath: func.sourceFilePath)
+		if not tagRidesAsyncGprChannel(maxonTypeTag(paramType)) 'unfittableParam'
+			reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "`async {String.from(callee)}(…)` — parameter '{String.from(asyncParamNameAt(sig, index: i))}' cannot ride the green thread's integer channel: a `float` parameter is passed in an XMM register the hand-assembled trampoline never fills, and one held at an interface type or an opaque type parameter is released through a companion (a witness table, a layout descriptor) the green-thread struct does not carry", line: project.opRanges.get(opIndex).line, column: project.opRanges.get(opIndex).column, filePath: func.sourceFilePath)
 			return
-		end 'nonScalarParam'
+		end 'unfittableParam'
+		if signatures.paramIsConsumed(callee, index: i) and asyncParamOwnsHeap(signatures, typeNames: project.typeNames, sig: sig, index: i) 'consumedManagedParam'
+			reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: "`async {String.from(callee)}(…)` — parameter '{String.from(asyncParamNameAt(sig, index: i))}' is a managed value the function KEEPS (it moves it into durable storage), and a spawn cannot yet hand over a managed argument the callee itself releases: the spawn takes a reference on the green thread's behalf and `__gt_release_{String.from(callee)}` gives it back whether or not the thread ever ran, so the callee's own release would be a second one. Call it directly, or pass a value the function only borrows", line: project.opRanges.get(opIndex).line, column: project.opRanges.get(opIndex).column, filePath: func.sourceFilePath)
+			return
+		end 'consumedManagedParam'
 	end 'eachParam'
 end 'requireAsyncScalarParams'
+
+// Parameter `index`'s declared name, for the two async refusals above. Split out so the panic message is
+// written once rather than once per report site.
+function asyncParamNameAt(sig FuncSignature, index ParamCount) returns ByteArray
+	return try sig.paramNames.get(index) otherwise panic("asyncParamNameAt: paramNames.get OOB at {index} — a signature's param columns are built in lockstep")
+end 'asyncParamNameAt'
+
+// Does parameter `index` hold a heap record the callee would have to release? The SAME classification the
+// releaser plan reads (`asyncSlotOwnsHeap`), so "which slots the releaser drops" and "which consumed slots
+// are refused" cannot come to disagree — a disagreement between them is a double free on one side and a leak
+// on the other, and a compile error on neither.
+function asyncParamOwnsHeap(signatures ProgramSignatures, typeNames TypeNameInterner, sig FuncSignature, index ParamCount) returns bool
+	return asyncSlotOwnsHeap(signatures, typeNames: typeNames, slotType: try sig.paramTypes.get(index) otherwise panic("asyncParamOwnsHeap: paramTypes.get OOB at {index}"), aggregateName: try sig.paramAggregateNames.get(index) otherwise panic("asyncParamOwnsHeap: paramAggregateNames.get OOB at {index} — a signature's param columns are built in lockstep"))
+end 'asyncParamOwnsHeap'
 
 // **E3057 for a witness dispatch of a THROWING interface method written without `try`** (P1.7a slice 2b-v) —
 // the witness twin of `validatePlainCall`'s user-function arm, and the same rule: a bare throwing call
@@ -3047,6 +3246,56 @@ end 'checkTransformParamType'
 // ⚠ **THE SUMMARY IS ASKED ONLY WHEN A SITE EXISTS**, and that is not an optimization: it is a whole-program
 // walk over every function's every op, and almost no program writes an all-discard tuple assignment. A
 // compile that records no site pays nothing at all.
+// ⭐ **E3073 — a spawn of a function that can never suspend.** `async` exists to overlap waiting with other
+// work; a callee that only computes runs straight through on the spawning thread, so the spawn buys nothing
+// and the author has almost certainly meant something else. Reported at every `asyncCall` whose callee the
+// whole-program yield closure could not mark.
+//
+// ⚠ The subject is the spawn's SOURCE TEXT (`'async heavyCompute(5)'`), carried from the parser in
+// `project.asyncSpawnSites` — see there for why it cannot be recovered at this tier. A spawn with no recorded
+// text is skipped rather than reported with an empty subject: the only way to reach that state is a synthetic
+// `asyncCall` no author wrote, which is not something to blame anybody for.
+function checkAsyncYielding(project Project, module MaxonModule, funcNames FunctionNameIndex)
+	if project.asyncSpawnSites.count() == 0 'noSpawnsInThisProgram'
+		return
+	end 'noSpawnsInThisProgram'
+
+	let yields = buildYieldingSummary(module, funcNames: funcNames)
+	for funcIndex in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(funcIndex) otherwise panic("checkAsyncYielding: functions.get OOB at {funcIndex}")
+		for blockRef in func.blockRefs 'eachBlock'
+			let block = try module.blocks.get(blockRef) otherwise panic("checkAsyncYielding: blockRef from func.blockRefs not in module.blocks")
+			for opIndex in block.opRefs 'eachOp'
+				reportIfNonYielding(project, op: try module.ops.get(opIndex) otherwise panic("checkAsyncYielding: opIndex {opIndex} not in module.ops"), opIndex: opIndex, func: func, funcNames: funcNames, yields: yields)
+			end 'eachOp'
+		end 'eachBlock'
+	end 'eachFunc'
+end 'checkAsyncYielding'
+
+// One op. Only an `asyncCall` has anything to answer for; the band ranges cover every other op so a newly
+// appended one fails to compile here rather than silently escaping the check.
+function reportIfNonYielding(project Project, op MaxonOp, opIndex OpIndex, func IrFunction, funcNames FunctionNameIndex, yields BoolArray)
+	match op 'op'
+		call to indirectCall then return
+		asyncCall(_, callee, _, _, _, _, _) then reportSpawnOfNonYielding(project, callee: callee, opIndex: opIndex, func: func, funcNames: funcNames, yields: yields)
+		await to errorFlagEncode then return
+	end 'op'
+end 'reportIfNonYielding'
+
+// The spawn site itself. Keyed by the SAME name `calleeYields` built its edges from, so a spawn can never look
+// up a different function than the one whose yields were computed. A callee the index does not know is one
+// this pass cannot see through, and by the closure's asymmetry that resolves toward accepting.
+function reportSpawnOfNonYielding(project Project, callee ByteArray, opIndex OpIndex, func IrFunction, funcNames FunctionNameIndex, yields BoolArray)
+	let calleeIndex = try funcNames.byName.get(callee) otherwise return
+	let calleeYieldsSomewhere = try yields.get(calleeIndex) otherwise panic("reportSpawnOfNonYielding: yields.get({calleeIndex}) OOB below count {yields.count()} — the column is built over `funcNames.functions`, which is the index space `byName` resolves into")
+	if calleeYieldsSomewhere 'itCanSuspend'
+		return
+	end 'itCanSuspend'
+
+	let site = try project.asyncSpawnSites.get(opIndex) otherwise return
+	reportPositioned(project, code: ErrorCode.asyncNonYielding, message: "'{String.from(site.text)}' — function never yields; 'async' is for I/O-concurrent work only", line: site.line, column: site.column, filePath: func.sourceFilePath)
+end 'reportSpawnOfNonYielding'
+
 function checkDiscardedResults(project Project, module MaxonModule, funcNames FunctionNameIndex)
 	if project.pendingDiscardedResults.count() == 0 'nothingDiscardedAWholeResult'
 		return
@@ -3114,19 +3363,153 @@ end 'checkDiscardedResults'
 // complexity and not a different spelling.
 function buildEffectFreeSummary(module MaxonModule, funcNames FunctionNameIndex) returns BoolArray
 	var seeds = BoolArray.create()
-	var edges = EffectCallEdges.create()
+	var edges = CallGraphEdges.create()
 	for i in 0 upto funcNames.functions.count() 'eachFunc'
 		let func = try funcNames.functions.get(i) otherwise panic("buildEffectFreeSummary: functions.get OOB at {i}")
 		seeds.push(functionShowsAnEffect(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges))
 	end 'eachFunc'
 
 	var effectFree = BoolArray.create()
-	let effectful = reverseReachabilityMark(buildCsr(edges.calleeIndices, to: edges.callerIndices, nodeCount: funcNames.functions.count()), seeds: seeds)
+	let effectful = markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count())
 	for i in 0 upto effectful.count() 'invert'
 		effectFree.push(not (try effectful.get(i) otherwise panic("buildEffectFreeSummary: effectful.get({i}) OOB below count {effectful.count()}")))
 	end 'invert'
 	return effectFree
 end 'buildEffectFreeSummary'
+
+// ⭐⭐ **THE WHOLE-PROGRAM YIELD CLOSURE — E3073.** Which functions can give up the green thread, closed over
+// the call graph exactly as `buildEffectFreeSummary` closes "shows an effect": seed each function from its own
+// body, then let `reverseReachabilityMark` push every yielding callee's mark up into everyone who calls it.
+// The result indexes by `FuncIndex` and answers "a spawn of THIS function is a spawn of something that can
+// actually suspend".
+//
+// ⭐ **THE SEEDS ARE THE RUNTIME'S PARK POINTS, NOT A TRANSCRIBED LIST OF STDLIB ENTRY POINTS.** v1 seeds its
+// closure from a hand-written roster of ~30 names (`__ManagedFile.exists`, `__ManagedSocket.recv`, …) mapped
+// onto its Maxon-tier callees. shv2 needs none of that, and the difference is structural rather than a
+// preference: shv2's parser lowers those builtins to their RUNTIME symbols directly, so by the time this walk
+// runs there is no `__ManagedFile.exists` left to name — there is `__mf_exists`, which is precisely the
+// function that calls `__gt_io_park`. So the seed set is the runtime band itself
+// (`ioYieldingRuntimeCallee`), and `File.exists` is derived: stdlib's body calls `__mf_exists`, this walk
+// crosses that edge, and `File.exists` comes out yielding without anybody having written its name down.
+//
+// ⚠ **IT ERRS TOWARD ACCEPTING, DELIBERATELY, AND THE ASYMMETRY IS THE WHOLE SAFETY ARGUMENT.** A function
+// this walk cannot see through — an `indirectCall` through a closure, a `witnessDispatch`, a callee no module
+// declares — is treated as YIELDING. Over-accepting costs a pointless spawn the compiler failed to complain
+// about; under-accepting REFUSES A CORRECT PROGRAM, and a false rejection is not something the author can work
+// around. Every unknown therefore resolves toward "yields".
+function buildYieldingSummary(module MaxonModule, funcNames FunctionNameIndex) returns BoolArray
+	var seeds = BoolArray.create()
+	var edges = CallGraphEdges.create()
+	for i in 0 upto funcNames.functions.count() 'eachFunc'
+		let func = try funcNames.functions.get(i) otherwise panic("buildYieldingSummary: functions.get OOB at {i}")
+		seeds.push(functionYieldsDirectly(module, func: func, funcIndexByName: funcNames.byName, callerIndex: i, edges: edges))
+	end 'eachFunc'
+
+	return markSeededCallers(edges, seeds: seeds, nodeCount: funcNames.functions.count())
+end 'buildYieldingSummary'
+
+// ⛔⛔ **THE CLOSURE STEP OF EVERY WHOLE-PROGRAM SUMMARY IN THIS FILE, AND THE ORIENTATION IS THE WHOLE FACT.**
+// `buildCsr(calleeIndices, to: callerIndices)` is the REVERSED relation: each CALLEE's row lists the functions
+// that CALL it, which is what lets `reverseReachabilityMark` push a seed's mark UP into its callers. Swap the
+// two columns and the walk marks callees of seeds instead — a silent wrong answer in the accepting direction,
+// which is the one no test can be relied on to catch (see `CallGraphEdges`' header for the near-identical
+// mistake that shipped green because nothing propagated at all).
+//
+// ⇒ it is written ONCE. The two summaries above differ in their SEED PREDICATE and in nothing else; that
+// difference stays where it is, because carrying it in here would mean either a function-value parameter (a
+// mechanism no other call site in this compiler uses) or a mode flag selecting between two predicates, which
+// is the enumerated door this file spends its length arguing against.
+function markSeededCallers(edges CallGraphEdges, seeds BoolArray, nodeCount CsrIndex) returns BoolArray
+	return reverseReachabilityMark(buildCsr(edges.calleeIndices, to: edges.callerIndices, nodeCount: nodeCount), seeds: seeds)
+end 'markSeededCallers'
+
+// The SEED: does this function's OWN body reach a park point, before the call graph is closed? The same walk
+// records the caller-callee edges, so the graph and the seeds come out of ONE pass — `functionShowsAnEffect`'s
+// shape, and its early-return is sound for the same reason: a function already marked needs no incoming edge.
+//
+// A function with NO body is a declaration this module cannot read (a restored intrinsic, an extern). Nothing
+// about it is provable, so by the erring-toward-accepting rule above it counts as yielding.
+function functionYieldsDirectly(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+	if func.blockRefs.count() == 0 'noBodyToProveAnythingAbout'
+		return true
+	end 'noBodyToProveAnythingAbout'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("functionYieldsDirectly: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			if opYields(try module.ops.get(opIdx) otherwise panic("functionYieldsDirectly: opIdx {opIdx} not in module.ops"), funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges) 'yields'
+				return true
+			end 'yields'
+		end 'eachOp'
+	end 'eachBlock'
+	return false
+end 'functionYieldsDirectly'
+
+// The per-op arm, band-for-band with `opShowsAnEffect` so a newly appended op fails to compile here too. The
+// bands that differ from that function are the ones where "suspends the green thread" and "is observable"
+// genuinely part company: a `globalAddr` is an effect and no yield at all, while an `await` is both.
+function opYields(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+	return match op 'op'
+		call(_, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		literal to branch gives false
+		globalAddr gives false
+		loadIndirect to stringLiteral gives false
+		tryCall(_, _, callee, _, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		throwError to propagateError gives false
+		panicAbort gives false
+		functionRef gives false
+		// ⭐ The target is chosen at run time or out of a witness table, so there is no callee to close over —
+		// and an unknown resolves toward "yields" (see `buildYieldingSummary`'s asymmetry note).
+		indirectCall gives true
+		// ⭐ A SPAWN IS AN EDGE, NOT A YIELD. `async f()` suspends this frame exactly when `f` can suspend, so it
+		// contributes the same edge an ordinary call does — which is what makes a function that spawns a
+		// yielding function itself yielding, and is also exactly the case E3073 rejects when `f` cannot.
+		asyncCall(_, callee, _, _, _, _, _) gives calleeYields(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
+		// An `await` suspends this frame until another green thread completes. That IS the yield.
+		await to tryAwait gives true
+		sizeofType to switch gives false
+		witnessDispatch to witnessTryDispatch gives true
+		panicAbortValue gives false
+		errorFlagEncode gives false
+	end 'op'
+end 'opYields'
+
+// One call, judged by its callee: a runtime park point yields outright, a callee this module declares
+// contributes an EDGE and lets the closure decide, and anything else is an unknown that resolves toward
+// "yields".
+function calleeYields(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
+	if ioYieldingRuntimeCallee(callee) 'parksTheGreenThread'
+		return true
+	end 'parksTheGreenThread'
+
+	let calleeIndex = try funcIndexByName.get(callee) otherwise return true
+	edges.record(calleeIndex, callerIndex: callerIndex)
+	return false
+end 'calleeYields'
+
+// ⭐⭐ **THE PARK POINTS — THE ONLY SEEDS OF THE YIELD CLOSURE, AND EACH ONE REALLY SUSPENDS.** Every name here
+// is a runtime entry whose body switches the green thread off the CPU, so this predicate describes measured
+// behaviour rather than a model of it:
+//
+//   • `__gt_sleep` — parks on the timer store until its deadline passes (`emitGtParkOnDeadline`).
+//   • `__gt_resched` — the cooperative yield behind `Runtime.yield()`: hands the CPU to the next runnable
+//     green thread, or drives one from GT0.
+//   • `__gt_process_run` — parks on a child process until it exits.
+//   • the `__mf_*` / `__md_*` FILESYSTEM bands — every one that makes a kernel call opens with `__gt_io_park`
+//     (see `GtIoParkName`), which is what makes `async` over `File.exists` mean something.
+//
+// ⚠ **THE FILESYSTEM BANDS ARE A PREFIX TEST AND SO OVER-APPROXIMATE — IN THE SAFE DIRECTION, ON PURPOSE.**
+// Three members park nothing because they touch no kernel: `__mf_stat_field`, `__mf_stat_free` and
+// `__md_filename` read memory a previous call already fetched. Naming them as exceptions would put the roster
+// in TWO places — here, and at the call sites of `emitFilesystemYield` (which is where the roster's own count
+// is stated, sites and emitted entry points being two different numbers) — and the two would rot apart the
+// first time a `__mf_*` was added. The prefix cannot rot: a new filesystem entry point is covered
+// the day it exists. What it costs is that `async` over a function whose only I/O is `__mf_stat_field` is
+// accepted though it never suspends — the over-accepting direction, which by this walk's asymmetry is the one
+// that is safe to be wrong in.
+function ioYieldingRuntimeCallee(callee ByteArray) returns bool
+	return callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee)
+end 'ioYieldingRuntimeCallee'
 
 // The plain caller-calls-callee relation, stored so that a CSR over it lists, for each CALLEE, the functions
 // that CALL it — the reversed adjacency `reverseReachabilityMark` walks to push a mark from a callee up to
@@ -3139,11 +3522,11 @@ end 'buildEffectFreeSummary'
 // written that way first, and it read GREEN on its own acceptance case for the only reason a wrong answer
 // ever reads green: nothing propagated at all, because the single callee in that program was not a seed.
 // These neighbours ARE the callers.
-type EffectCallEdges
+type CallGraphEdges
 	export var calleeIndices as CsrColumn
 	export var callerIndices as CsrColumn
 
-	export static function create() returns EffectCallEdges
+	export static function create() returns CallGraphEdges
 		return Self{calleeIndices: CsrColumn.create(), callerIndices: CsrColumn.create()}
 	end 'create'
 
@@ -3155,7 +3538,7 @@ type EffectCallEdges
 		self.calleeIndices.push(calleeIndex)
 		self.callerIndices.push(callerIndex)
 	end 'record'
-end 'EffectCallEdges'
+end 'CallGraphEdges'
 
 // The SEED: does this function's OWN body show an effect, before the call graph is closed? The same walk
 // records the caller-callee edges, so the graph and the seeds come out of ONE pass over the ops.
@@ -3164,7 +3547,7 @@ end 'EffectCallEdges'
 // (callee, this) exists only to carry a CALLEE's mark up into this function, and this function is already
 // marked. Its own mark reaches its callers through the edges THEY record. The op loop returns early for the
 // same reason.
-function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges EffectCallEdges) returns bool
+function functionShowsAnEffect(module MaxonModule, func IrFunction, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
 	// A function with NO body is a declaration this module cannot read — a restored intrinsic, an extern.
 	// Nothing about it is provable.
 	if func.blockRefs.count() == 0 'noBodyToProveAnythingAbout'
@@ -3217,7 +3600,7 @@ end 'functionReturnsNothing'
 // the closure will carry the callee's answer back along. The non-call bands range to `break`, so a newly
 // appended op fails to compile here rather than silently reading as effect-free — the band-append invariant,
 // and here it is load-bearing in the refusing direction (see `buildEffectFreeSummary`'s safety argument).
-function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges EffectCallEdges) returns bool
+function opShowsAnEffect(op MaxonOp, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
 	return match op 'op'
 		call(_, callee, _, _, _, _, _, _) gives calleeShowsAnEffect(callee, funcIndexByName: funcIndexByName, callerIndex: callerIndex, edges: edges)
 		literal to branch gives false
@@ -3260,7 +3643,7 @@ end 'opShowsAnEffect'
 // One call, judged by its callee. A `__mm_*` heap entry point says nothing (see `buildEffectFreeSummary`);
 // any other callee this module does not declare is an effect; a declared one contributes an EDGE and lets
 // the closure decide.
-function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges EffectCallEdges) returns bool
+function calleeShowsAnEffect(callee ByteArray, funcIndexByName FuncIndexByName, callerIndex FuncIndex, edges CallGraphEdges) returns bool
 	if isRuntimeCallee(callee) 'heapBookkeeping'
 		return false
 	end 'heapBookkeeping'
@@ -3303,6 +3686,14 @@ end 'functionTypeDoorSite'
 //   • `__clock_*` — `osReadWallClock`'s GetSystemTimeAsFileTime (`__Builtins.currentUnixTimeSeconds`);
 //   • `__gt_sleep` — the green-thread timer park, whose deadline is computed from that same `osReadClock`
 //     reading (`__Builtins.sleep(ms)`, and so every `sleep(ms)` through `stdlib/Sleep.maxon`'s body).
+//   • `__gt_resched` — the cooperative reschedule (`__Builtins.yield()`, and so every `Runtime.yield()`
+//     through `stdlib/Runtime.maxon`'s body). It is the same scheduler: a run-queue handoff through
+//     `__gt_context_switch`, falling back to `__gt_timer_check`/`__gt_proc_check`, none of which the other
+//     three backends provide.
+//
+// ⚠ `__gt_io_park` — the filesystem yield — is deliberately ABSENT, and by this set's own rule: SOURCE never
+// names it. It is reachable only from the `__mf_*`/`__md_*` bodies, and those are already refused below by
+// their prefix tests, so gating it here would only let it be blamed for a call the user did write.
 //
 // It spans two runtime BANDS — the monotonic clock and the sleep park are `__gt_`-named because the
 // SCHEDULER owns that counter and that timer heap (see `ClockRuntime.maxon`'s header) — which is why it is
@@ -3342,7 +3733,7 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// The EXECUTABLE PATH is read by three different OS APIs with three different retry protocols
 	// (`stdlib/Process.maxon:26-27`), and WASI has no analogue at all. Both are rungs rather than lowerings;
 	// `ConsoleRuntime`'s and `ProcessRuntime`'s headers carry each in full.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee)
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

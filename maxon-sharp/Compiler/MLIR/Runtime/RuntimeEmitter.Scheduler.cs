@@ -128,11 +128,27 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
-  // __gt_enqueue(gt): Add a GreenThread to the scheduling system.
+  // __gt_enqueue(gt) / __gt_enqueue_back(gt): Add a GreenThread to the scheduling system.
   // =========================================================================
   //
-  // Priority: runnext slot -> local queue -> global queue (overflow).
-  // After enqueueing, tries to wake an idle worker or spawn a new one.
+  // TWO ENTRY POINTS, TWO ENDS OF THE QUEUE, ONE SOURCE.
+  //
+  //   __gt_enqueue      — runnext slot -> local queue -> global queue (overflow). The FRONT.
+  //                       Right for a spawn and for a wake: the thread this processor was
+  //                       just waiting on is the one it should run next.
+  //   __gt_enqueue_back  — straight to the global queue tail. The BACK, and the only thing a
+  //                       cooperative YIELD can mean. Go draws exactly this line: goready
+  //                       reaches runnext, while Gosched routes through globrunqput.
+  //
+  // ⛔ THE FRONT ENTRY CANNOT SERVE A YIELD, MEASURED. A worker GT's yield defers its own
+  // re-enqueue until it is off its stack, so the enqueue happens from the scheduler side —
+  // and `__gt_enqueue` puts it in P->runnext, the slot that GT just vacated (or DISPLACES
+  // whoever holds it, which is worse). The next statement on every scheduler path is
+  // `__gt_dequeue`, which checks runnext FIRST and unconditionally. Round trip; nobody else
+  // ran. A thousand yields from one green thread left a sibling that had never run still
+  // unrun, on the bootstrap, against shv2 answering correctly for the same program.
+  //
+  // After enqueueing, both tries to wake an idle worker or spawn a new one.
   //
   // Stack slots:
   //   0 = gt (arg, later reused for displaced GT)
@@ -145,7 +161,22 @@ public partial class RuntimeEmitter {
   // =========================================================================
 
   public void EmitGtEnqueue() {
-    _b.FunctionStart("__gt_enqueue", 1, 0x60);
+    EmitGtEnqueueEntry("__gt_enqueue", backOfQueue: false);
+    EmitGtEnqueueEntry("__gt_enqueue_back", backOfQueue: true);
+  }
+
+  /// <summary>
+  /// One spelling of the enqueue, emitted twice under different names. <paramref name="name"/> is both
+  /// the runtime symbol and the prefix every internal label is minted from, so the two copies cannot
+  /// collide; the front entry keeps the exact label names it has always had.
+  ///
+  /// <paramref name="backOfQueue"/> ELIDES the runnext and local-queue sections rather than branching
+  /// past them — a back enqueue has no use for either, and emitting unreachable code so the two
+  /// functions "look the same" would be the wrong kind of sameness. What both share, and what actually
+  /// had to stay one text, is the global-tail append and the whole wake/spawn phase below it.
+  /// </summary>
+  private void EmitGtEnqueueEntry(string name, bool backOfQueue) {
+    _b.FunctionStart(name, 1, 0x60);
 
     // gt.next = 0
     _b.LoadLocal(VReg.Scratch0, 0);
@@ -156,12 +187,55 @@ public partial class RuntimeEmitter {
     _b.LoadCurrentP(VReg.Scratch1);
     _b.StoreLocal(1, VReg.Scratch1);
 
+    if (backOfQueue) {
+      // The global queue is the back, and it is where this entry always goes — P or no P.
+      _b.Jump($"{name}_global");
+    } else {
+      EmitGtEnqueueFrontOfQueue(name);
+    }
+
+    // --- Global queue ---
+    _b.DefineLabel($"{name}_global");
+    _b.LockAcquire(_b.SchedLockLabel);
+
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadGlobal(VReg.Scratch1, "__gt_run_queue_tail");
+    _b.JumpIfNonZero(VReg.Scratch1, $"{name}_global_append");
+
+    _b.StoreGlobal("__gt_run_queue_head", VReg.Scratch0);
+    _b.StoreGlobal("__gt_run_queue_tail", VReg.Scratch0);
+    _b.Jump($"{name}_global_unlock");
+
+    _b.DefineLabel($"{name}_global_append");
+    _b.StoreIndirect(VReg.Scratch1, GtOffNext, VReg.Scratch0);
+    _b.StoreGlobal("__gt_run_queue_tail", VReg.Scratch0);
+
+    _b.DefineLabel($"{name}_global_unlock");
+    _b.LockRelease(_b.SchedLockLabel);
+
+    // dbg: enqueue (gt, kind=global) — emitted after unlock so we don't extend
+    // the critical section. The store to the global queue is already complete,
+    // so the only window is "store visible but event not yet logged" which is
+    // benign for diagnostics.
+    _b.LoadLocal(VReg.Scratch0, 0);
+    EmitDbgEnqueue(VReg.Scratch0, DsDbgQueueGlobal, 0);
+
+    EmitGtEnqueueWake(name);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// The FRONT half: runnext, then this P's local queue, falling through to the caller's global path
+  /// when the local queue is full. Reached only from <c>__gt_enqueue</c>; a P is guaranteed non-NULL
+  /// on entry only after the check this emits first.
+  /// </summary>
+  private void EmitGtEnqueueFrontOfQueue(string name) {
     // If P* == NULL: go straight to global queue
-    _b.JumpIfZero(VReg.Scratch1, "__gt_enqueue_global");
+    _b.JumpIfZero(VReg.Scratch1, $"{name}_global");
 
     // --- Try runnext slot ---
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffRunnext);
-    _b.JumpIfNonZero(VReg.Scratch2, "__gt_enqueue_displace_runnext");
+    _b.JumpIfNonZero(VReg.Scratch2, $"{name}_displace_runnext");
 
     // Runnext empty: P->runnext = gt
     _b.LoadLocal(VReg.Scratch0, 0);
@@ -169,10 +243,10 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch1, POffRunnext, VReg.Scratch0);
     // dbg: runnext_set (gt, P) — Scratch0=gt already; pass zero for arg2..arg4
     EmitDbgRunnextSet(VReg.Scratch0);
-    _b.Jump("__gt_enqueue_wake");
+    _b.Jump($"{name}_wake");
 
     // --- Runnext occupied: displace old to local queue ---
-    _b.DefineLabel("__gt_enqueue_displace_runnext");
+    _b.DefineLabel($"{name}_displace_runnext");
     // Scratch2 = old runnext, Scratch1 = P*
     _b.ZeroReg(VReg.Scratch3);
     _b.StoreIndirect(VReg.Scratch2, GtOffNext, VReg.Scratch3);
@@ -194,24 +268,24 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch1, 1);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffLocalQueueLen);
     _b.CmpRegImm(VReg.Scratch2, MaxLocalQueueLen);
-    _b.JumpIf(Condition.AboveEqual, "__gt_enqueue_local_full_unlock");
+    _b.JumpIf(Condition.AboveEqual, $"{name}_local_full_unlock");
 
     // Append to local queue tail
     _b.LoadLocal(VReg.Scratch0, 0);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffLocalQueueTail);
-    _b.JumpIfNonZero(VReg.Scratch2, "__gt_enqueue_local_append");
+    _b.JumpIfNonZero(VReg.Scratch2, $"{name}_local_append");
 
     // Local queue empty: head = tail = gt
     _b.StoreIndirect(VReg.Scratch1, POffLocalQueueHead, VReg.Scratch0);
     _b.StoreIndirect(VReg.Scratch1, POffLocalQueueTail, VReg.Scratch0);
-    _b.Jump("__gt_enqueue_local_inc");
+    _b.Jump($"{name}_local_inc");
 
-    _b.DefineLabel("__gt_enqueue_local_append");
+    _b.DefineLabel($"{name}_local_append");
     _b.StoreIndirect(VReg.Scratch2, GtOffNext, VReg.Scratch0);
     _b.LoadLocal(VReg.Scratch1, 1);
     _b.StoreIndirect(VReg.Scratch1, POffLocalQueueTail, VReg.Scratch0);
 
-    _b.DefineLabel("__gt_enqueue_local_inc");
+    _b.DefineLabel($"{name}_local_inc");
     _b.LoadLocal(VReg.Scratch1, 1);
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffLocalQueueLen);
     _b.AddRegImm(VReg.Scratch2, 1);
@@ -220,41 +294,20 @@ public partial class RuntimeEmitter {
     // dbg: enqueue (gt, kind=local). Reload gt — P->id will be loaded by helper.
     _b.LoadLocal(VReg.Scratch0, 0);
     EmitDbgEnqueue(VReg.Scratch0, DsDbgQueueLocal, /*ownerPid=self*/0);
-    _b.Jump("__gt_enqueue_wake");
+    _b.Jump($"{name}_wake");
 
-    // Local queue full: release lock then fall through to global path.
-    _b.DefineLabel("__gt_enqueue_local_full_unlock");
+    // Local queue full: release lock then fall through to the caller's global path.
+    _b.DefineLabel($"{name}_local_full_unlock");
     _b.LockRelease(_b.SchedLockLabel);
-    _b.Jump("__gt_enqueue_global");
+  }
 
-    // --- Global queue ---
-    _b.DefineLabel("__gt_enqueue_global");
-    _b.LockAcquire(_b.SchedLockLabel);
-
-    _b.LoadLocal(VReg.Scratch0, 0);
-    _b.LoadGlobal(VReg.Scratch1, "__gt_run_queue_tail");
-    _b.JumpIfNonZero(VReg.Scratch1, "__gt_enqueue_global_append");
-
-    _b.StoreGlobal("__gt_run_queue_head", VReg.Scratch0);
-    _b.StoreGlobal("__gt_run_queue_tail", VReg.Scratch0);
-    _b.Jump("__gt_enqueue_global_unlock");
-
-    _b.DefineLabel("__gt_enqueue_global_append");
-    _b.StoreIndirect(VReg.Scratch1, GtOffNext, VReg.Scratch0);
-    _b.StoreGlobal("__gt_run_queue_tail", VReg.Scratch0);
-
-    _b.DefineLabel("__gt_enqueue_global_unlock");
-    _b.LockRelease(_b.SchedLockLabel);
-
-    // dbg: enqueue (gt, kind=global) — emitted after unlock so we don't extend
-    // the critical section. The store to the global queue is already complete,
-    // so the only window is "store visible but event not yet logged" which is
-    // benign for diagnostics.
-    _b.LoadLocal(VReg.Scratch0, 0);
-    EmitDbgEnqueue(VReg.Scratch0, DsDbgQueueGlobal, 0);
-
-    // --- Wake phase ---
-    _b.DefineLabel("__gt_enqueue_wake");
+  /// <summary>
+  /// The wake/spawn phase both entry points end in: hand the newly-runnable GT to an idle worker, or
+  /// start one. Identical for either end of the queue — what changed is where the thread went, not
+  /// who should be told about it.
+  /// </summary>
+  private void EmitGtEnqueueWake(string name) {
+    _b.DefineLabel($"{name}_wake");
     // Full memory barrier between our queue-publish above and the idleFlag reads below.
     // Closes the Dekker-style missed-wakeup race against __sched_wloop_park's
     // "store idleFlag=1; re-dequeue" sequence: without this barrier, a StoreLoad
@@ -263,7 +316,7 @@ public partial class RuntimeEmitter {
     // empty and parks with work queued.
     _b.FullBarrier();
     _b.LoadGlobal(VReg.Scratch0, "__sched_shutdown_flag");
-    _b.JumpIfNonZero(VReg.Scratch0, "__gt_enqueue_wake_done");
+    _b.JumpIfNonZero(VReg.Scratch0, $"{name}_wake_done");
 
     // Scan P[1..num_procs-1] for idle workers
     _b.LoadGlobal(VReg.Scratch0, "__sched_num_procs");
@@ -271,11 +324,11 @@ public partial class RuntimeEmitter {
     _b.MovRegImm(VReg.Scratch1, 1);
     _b.StoreLocal(3, VReg.Scratch1);
 
-    _b.DefineLabel("__gt_enqueue_wake_loop");
+    _b.DefineLabel($"{name}_wake_loop");
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.LoadLocal(VReg.Scratch1, 2);
     _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
-    _b.JumpIf(Condition.AboveEqual, "__gt_enqueue_wake_spawn");
+    _b.JumpIf(Condition.AboveEqual, $"{name}_wake_spawn");
 
     // Load P[i]
     _b.LoadGlobal(VReg.Scratch1, "__sched_procs");
@@ -286,35 +339,35 @@ public partial class RuntimeEmitter {
 
     // Check idleFlag
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffIdleFlag);
-    _b.JumpIfZero(VReg.Scratch2, "__gt_enqueue_wake_next");
+    _b.JumpIfZero(VReg.Scratch2, $"{name}_wake_next");
 
     // Found idle worker: clear flag, wake it
     _b.ZeroReg(VReg.Scratch2);
     _b.StoreIndirect(VReg.Scratch1, POffIdleFlag, VReg.Scratch2);
     _b.WakeWorker(VReg.Scratch1);
-    _b.Jump("__gt_enqueue_wake_done");
+    _b.Jump($"{name}_wake_done");
 
-    _b.DefineLabel("__gt_enqueue_wake_next");
+    _b.DefineLabel($"{name}_wake_next");
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.AddRegImm(VReg.Scratch0, 1);
     _b.StoreLocal(3, VReg.Scratch0);
-    _b.Jump("__gt_enqueue_wake_loop");
+    _b.Jump($"{name}_wake_loop");
 
     // --- No idle worker: try to spawn ---
-    _b.DefineLabel("__gt_enqueue_wake_spawn");
+    _b.DefineLabel($"{name}_wake_spawn");
     _b.LoadGlobal(VReg.Scratch0, "__sched_active_workers");
     _b.LoadGlobal(VReg.Scratch1, "__sched_max_procs");
     _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
-    _b.JumpIf(Condition.AboveEqual, "__gt_enqueue_wake_done");
+    _b.JumpIf(Condition.AboveEqual, $"{name}_wake_done");
 
     _b.MovRegImm(VReg.Scratch0, 1);
     _b.StoreLocal(3, VReg.Scratch0);
 
-    _b.DefineLabel("__gt_enqueue_spawn_scan");
+    _b.DefineLabel($"{name}_spawn_scan");
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.LoadLocal(VReg.Scratch1, 2);
     _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
-    _b.JumpIf(Condition.AboveEqual, "__gt_enqueue_wake_done");
+    _b.JumpIf(Condition.AboveEqual, $"{name}_wake_done");
 
     // Load P[i]
     _b.LoadGlobal(VReg.Scratch1, "__sched_procs");
@@ -325,7 +378,7 @@ public partial class RuntimeEmitter {
 
     // Check P[i]->status == PStatusUnused
     _b.LoadIndirect(VReg.Scratch2, VReg.Scratch1, POffStatus);
-    _b.JumpIfNonZero(VReg.Scratch2, "__gt_enqueue_spawn_next");
+    _b.JumpIfNonZero(VReg.Scratch2, $"{name}_spawn_next");
 
     // Claim it: status = PStatusActive
     _b.MovRegImm(VReg.Scratch2, PStatusActive);
@@ -335,16 +388,15 @@ public partial class RuntimeEmitter {
     // Spawn worker thread
     _b.LoadLocal(VReg.Scratch1, 4);
     _b.SpawnWorker(VReg.Scratch1);
-    _b.Jump("__gt_enqueue_wake_done");
+    _b.Jump($"{name}_wake_done");
 
-    _b.DefineLabel("__gt_enqueue_spawn_next");
+    _b.DefineLabel($"{name}_spawn_next");
     _b.LoadLocal(VReg.Scratch0, 3);
     _b.AddRegImm(VReg.Scratch0, 1);
     _b.StoreLocal(3, VReg.Scratch0);
-    _b.Jump("__gt_enqueue_spawn_scan");
+    _b.Jump($"{name}_spawn_scan");
 
-    _b.DefineLabel("__gt_enqueue_wake_done");
-    _b.FunctionEnd();
+    _b.DefineLabel($"{name}_wake_done");
   }
 
   // =========================================================================
@@ -376,11 +428,60 @@ public partial class RuntimeEmitter {
   // It is deliberately NOT a frameless tail jump (`jmp __gt_dequeue_ready`, 4 instructions instead of
   // 17, and what would make the sentence above unnecessary): the gain is unmeasurable, and shrinking
   // this function shifts every runtime code offset after it — including the spawn-trampoline frames that
-  // DebugSamples/threads.expected.txt (0xf818) and gtcontrol.expected.txt (0xf831) pin.
+  // DebugSamples/threads.expected.txt (0xf8e3) and gtcontrol.expected.txt (0xf8fc) pin. (Those two
+  // numbers read 0xf818 / 0xf831 here until 2026-08-13; the goldens had moved and the citation had not,
+  // which is the failure mode of quoting a value that lives in another file.)
   //
   // See RuntimeEmitter.DebugAgent.cs's green-thread control section for what the filter does with the
   // thread it takes.
   // =========================================================================
+
+  /// <summary>
+  /// Put a green thread that yielded cooperatively onto the BACK of the run queue, if one is waiting.
+  /// Emitted at the top of <c>__gt_dequeue</c>'s body — i.e. immediately before the scheduler decides
+  /// what runs next, which is the one moment at which "behind everyone currently runnable" is a
+  /// well-defined place to be.
+  ///
+  /// ⭐ THE DEFERRAL AND THE END OF THE QUEUE ARE TWO SEPARATE REQUIREMENTS, AND ONLY MEETING BOTH IS A
+  /// YIELD. The deferral is a memory-safety rule: a GT may not become discoverable to another M until
+  /// <c>__gt_context_switch</c> has saved its registers, or that M resumes it onto a stale SP. The end
+  /// of the queue is the SEMANTIC rule. <c>maxon_yield</c> originally met the first through
+  /// <c>P-&gt;pendingWaiter</c> and silently failed the second, because that channel drains into
+  /// <c>__gt_enqueue</c> — which lands the thread in <c>P-&gt;runnext</c>, the slot it had just
+  /// vacated, and <c>__gt_dequeue</c> takes runnext first. The yielder was handed straight back to
+  /// itself: a thousand yields, and a sibling green thread that had never run still had not run.
+  ///
+  /// ⚠ THE DRAIN BELONGS HERE RATHER THAN IN A PARK LOOP, and the reason is coverage, not taste.
+  /// <c>__gt_dequeue</c> is the ONE place this runtime decides what runs next — the worker loop, all
+  /// five main-thread park loops, <c>__gt_cleanup</c>'s exit drain and <c>maxon_yield</c>'s own
+  /// main-thread arm all reach it — so a yielder cannot be stranded by a scheduler path that forgot to
+  /// look. Draining anywhere else would be a roster to keep in step, which is this codebase's most
+  /// expensive recurring shape.
+  ///
+  /// ⚠ IT IS SAFE TO READ THE SLOT UNSYNCHRONISED because it is per-P and single-writer: only the GT
+  /// currently running on this P writes it, only this P's own <c>__gt_dequeue</c> reads it, and the
+  /// context switch between those two events orders them. No other M can see the slot at all — unlike
+  /// <c>P-&gt;pendingWaiter</c>, which a completer on another M can also target.
+  ///
+  /// Costs a load and a not-taken branch on the hot dequeue path. That is strictly less than the
+  /// debug-agent dispatcher already sitting in front of this function, whose 17 instructions measured
+  /// +0.055 ns/dequeue — below the noise floor of the sharpest in-situ instrument available.
+  /// Clobbers the call-clobbered set on the taken path only; it is emitted before anything is live.
+  /// </summary>
+  private void EmitDrainPendingYielder() {
+    var noYielderLabel = UniqueLabel("no_pending_yielder");
+
+    _b.LoadCurrentP(VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, POffPendingYielder);
+    _b.JumpIfZero(VReg.Scratch0, noYielderLabel);
+
+    _b.ZeroReg(VReg.Scratch2);
+    _b.StoreIndirect(VReg.Scratch1, POffPendingYielder, VReg.Scratch2);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.Call("__gt_enqueue_back");
+
+    _b.DefineLabel(noYielderLabel);
+  }
 
   public void EmitGtDequeue() {
     if (!Compiler.NoDebugAgent) {
@@ -404,6 +505,8 @@ public partial class RuntimeEmitter {
     // With the agent omitted (--no-debug-agent) there is nothing to filter, so the body IS the whole
     // function and keeps the name every caller uses.
     _b.FunctionStart(Compiler.NoDebugAgent ? "__gt_dequeue" : "__gt_dequeue_ready", 0, 0x40);
+
+    EmitDrainPendingYielder();
 
     // Load P*
     _b.LoadCurrentP(VReg.Scratch1);
@@ -702,6 +805,120 @@ public partial class RuntimeEmitter {
     _b.DefineLabel("__gt_steal_fail");
     _b.ZeroReg(VReg.Scratch0);
     _b.ReturnValue(VReg.Scratch0);
+  }
+
+  /// <summary>
+  /// <c>maxon_yield()</c> — the runtime behind <c>Runtime.yield()</c>: give up the M cooperatively,
+  /// let something else run, come back. Takes nothing, returns nothing, cannot throw.
+  ///
+  /// ⭐ IT IS NOT <c>sleep(0)</c>, AND THE DIFFERENCE IS THE TIMER HEAP. <c>maxon_sleep</c> publishes
+  /// a (deadline, gt) entry into a 256-slot global min-heap and waits for <c>__gt_timer_check</c> to
+  /// fire it; a spin that yields thousands of times a second through that door would churn a shared,
+  /// locked, FIXED-CAPACITY structure to express "I have nothing to wait for". This consumes no
+  /// timer slot, takes the timer lock only through the poll it drives, and has no deadline to miss.
+  ///
+  /// ⭐⭐ THE FIRST THING IT DOES IS <see cref="IEmitterBackend.DriveSchedulerAndIo"/>, AND THAT IS
+  /// THE WHOLE POINT OF THE FUNCTION. The canonical caller is <c>while not done { Runtime.yield() }</c>
+  /// standing over outstanding I/O, and under <c>MAXON_MAX_PROCS=1</c> the spinning M is the only one
+  /// in the process: an engine nobody polls is one whose parked GTs never wake, so a yield that
+  /// merely rescheduled would turn that loop into a hang rather than a wait.
+  ///
+  /// Two arms, split on the question every park site in this runtime asks — does this GT have a
+  /// schedulable stack of its own? <c>stackBase == 0</c> is how <c>__gt_process_pending_waiter</c>
+  /// and <c>__netpoll_commit</c> already spell it, and it is the same predicate x86's
+  /// <c>EmitJumpIfMainThread</c> spells as <c>gt == &amp;P-&gt;mainThread</c>:
+  ///
+  ///   * a P's inline <b>mainThread</b> is never on a run queue and cannot switch to itself, so it
+  ///     BECOMES the scheduler for one turn: run one ready GT inline and resume when that GT parks
+  ///     or completes. With nothing runnable it simply returns, which is the specified "if nothing
+  ///     else is runnable, the caller continues" — and is also the whole of what a `main` with no
+  ///     green threads at all ever does here.
+  ///   * a <b>worker GT</b> hands its M back to that M's scheduler loop.
+  ///
+  /// ⚠⚠ THE WORKER ARM MAY NOT ENQUEUE ITSELF AND THEN SWITCH, WHICH IS THE OBVIOUS SPELLING OF
+  /// "back of the run queue, then switch" AND IS A USE-AFTER-FREE. Between the enqueue and
+  /// <c>__gt_context_switch</c>'s register save, the GT is visible to every other M's
+  /// <c>__gt_dequeue</c> — and dequeue has no <c>ioYielded</c> gate, because by contract nothing
+  /// reaches a run queue while still running. A second M resumes it onto the SP saved at its
+  /// PREVIOUS suspension: two Ms on one stack, the <c>--workers&gt;=5</c> crash
+  /// <c>__gt_timer_check</c>'s park gate documents. So the re-enqueue is DEFERRED: the arm publishes
+  /// itself into <c>P-&gt;pendingYielder</c> and switches to <c>&amp;P-&gt;mainThread</c>, and
+  /// <see cref="EmitDrainPendingYielder"/> — at the top of <c>__gt_dequeue</c>, on the other side of
+  /// that switch — performs the enqueue.
+  ///
+  /// ⛔ IT DELIBERATELY DOES NOT USE <c>P-&gt;pendingWaiter</c>, WHICH IS THE OTHER DEFERRED-ENQUEUE
+  /// CHANNEL AND WAS THIS FUNCTION'S FIRST, WRONG ANSWER. That channel drains into
+  /// <c>__gt_enqueue</c>, whose whole job is the FRONT of the queue: the yielder landed in
+  /// <c>P-&gt;runnext</c> — the slot it had just vacated — and the next statement on every scheduler
+  /// path is <c>__gt_dequeue</c>, which takes runnext first. The yield handed the M back to itself.
+  /// The deferral was right; the end of the queue was not. See <see cref="EmitDrainPendingYielder"/>
+  /// for why the two are separate requirements.
+  ///
+  /// ⚠ <c>pendingWaiter</c> STILL HAS TO BE DRAINED BY THE MAIN ARM ON RESUME, for the reason it
+  /// always did: the GT that arm switches to may COMPLETE, and its trampoline stores its own awaiter
+  /// in that one-entry slot before switching back to us. Returning to user code without draining
+  /// would strand that awaiter until the next park — a wakeup deferred by an unbounded amount of user
+  /// computation. Every other main-thread park loop drains at its loop top; this one has no loop, so
+  /// it drains at the one place it resumes.
+  ///
+  /// ⚠ THE ONE "RUN A DEQUEUED GT" SPELLING THIS FILE ADDS OMITS <c>next.ioYielded = 1</c>, WHICH
+  /// SEVEN ARM64 COPIES SET AND SIX X86 COPIES DO NOT — a live divergence between the backends that
+  /// nobody had written down. It is safe to omit because <c>__gt_context_switch</c> is itself the
+  /// only writer of that word and already publishes <c>from.ioYielded = 1</c> after saving the
+  /// outgoing GT: when <c>next</c> later switches away, the flag is set by the switch, not by
+  /// whoever ran it. arm64's copies set it on RESUME, where it is a redundant re-assertion of what
+  /// the switch already did. Stated here because it is the newest site and had no other home; the
+  /// thirteen spellings are noted, not converged.
+  /// </summary>
+  public void EmitMaxonYield() {
+    _b.FunctionStart("maxon_yield", 0, 0x40);
+
+    const int slotGt = 0;
+    const int slotNext = 1;
+    var doneLabel = UniqueLabel("maxon_yield_done");
+    var handBackLabel = UniqueLabel("maxon_yield_hand_back");
+
+    // No processor, no green thread to reschedule — return rather than dereference. Every Maxon
+    // frame runs after __gt_init, so what this actually covers is a call from an OS thread that
+    // owns no P (the IOCP drain thread, the sync-I/O workers).
+    EmitLoadCurrentGtOrZero(VReg.Scratch0);
+    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+    _b.StoreLocal(slotGt, VReg.Scratch0);
+
+    _b.DriveSchedulerAndIo();
+
+    _b.LoadLocal(VReg.Scratch0, slotGt);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, GtOffStackBase);
+    _b.JumpIfNonZero(VReg.Scratch1, handBackLabel);
+
+    // --- mainThread arm: be the scheduler for one turn ---
+    _b.Call("__gt_dequeue");
+    _b.JumpIfZero(VReg.Ret, doneLabel);
+    _b.StoreLocal(slotNext, VReg.Ret);
+
+    // It came off a run queue, so we are the one who marks it running — the convention that does
+    // NOT apply to &P->mainThread (see IEmitterBackend.SwitchToMainThread).
+    _b.MovRegImm(VReg.Scratch1, GtStatusRunning);
+    _b.StoreIndirect(VReg.Ret, GtOffStatus, VReg.Scratch1);
+
+    _b.LoadCurrentP(VReg.Arg2);
+    _b.LoadLocal(VReg.Arg0, slotGt);
+    _b.LoadLocal(VReg.Arg1, slotNext);
+    _b.Call("__gt_context_switch");
+
+    // Resumed: that GT parked or completed. Drain whatever its completion left behind.
+    _b.Call("__gt_process_pending_waiter");
+    _b.Jump(doneLabel);
+
+    // --- worker-GT arm: deferred BACK-of-queue self re-enqueue, then hand the M back ---
+    _b.DefineLabel(handBackLabel);
+    _b.LoadCurrentP(VReg.Scratch1);
+    _b.LoadLocal(VReg.Scratch0, slotGt);
+    _b.StoreIndirect(VReg.Scratch1, POffPendingYielder, VReg.Scratch0);
+    _b.SwitchToMainThread();
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
   }
 
   // =========================================================================

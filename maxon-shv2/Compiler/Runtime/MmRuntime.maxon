@@ -1776,8 +1776,9 @@ end 'installGenericInstanceDestructors'
 
 // ⭐ **HOW ONE MANAGED SLOT IS RELEASED — the two shapes a field drop comes in.** Carried on
 // `ManagedFieldDrop` so the offset and the release travel together and `emitNullGuardedDrop` decides between
-// them ONCE, rather than each cascade builder deciding and then agreeing.
-union FieldDropKind
+// them ONCE, rather than each cascade builder deciding and then agreeing. Exported with that emitter, whose
+// callers now include the async releaser's GT-struct slots.
+export union FieldDropKind
 	// The ordinary field: one machine word holding a managed pointer, released by a STATICALLY chosen
 	// `(box) -> void` callee — `__str_decref`, `__mm_decref`, `__managed_decref`, a nested `__destruct_<T>`.
 	direct(callee ByteArray)
@@ -1870,7 +1871,13 @@ end 'emitManagedFieldDrops'
 // moved-out existential slot is null exactly as a moved-out pointer slot is, and its witness half is then
 // stale rather than merely unread. The witness load therefore sits INSIDE the drop block, where the value
 // is already known live.
-function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, kind FieldDropKind, ids ValueMinter, func IrFunction) returns IrBlock
+//
+// ⭐ **`box` IS ANY BASE ADDRESS, NOT ONLY A MANAGED BOX**, which is why `Runtime/AsyncReleaser.maxon`'s
+// per-callee releaser emits its argument / result / error drops through here over a GT STRUCT: the shape it
+// needs — load at `base + offset`, drop it if non-null, continue — is this one exactly, and the second
+// emitter it used to keep was a copy nothing forced to agree with this one (a wild free or a leak, and a
+// compile error at neither site).
+export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, offset ByteOffset, kind FieldDropKind, ids ValueMinter, func IrFunction) returns IrBlock
 	let ptr = ids.mint()
 	module.appendOp(cur, op: StdOp.loadIndirect(ptr, addrId: box, offset: offset, valueType: StdType.i64))
 	let zero = ids.mint()

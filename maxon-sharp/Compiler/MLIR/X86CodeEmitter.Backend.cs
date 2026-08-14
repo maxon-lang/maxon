@@ -611,6 +611,10 @@ public partial class X86CodeEmitter {
         _e.EmitMovRegReg(destReg, X86Register.Rax);
     }
 
+    public void DriveSchedulerAndIo() => _e.EmitDriveSchedulerAndIo();
+
+    public void SwitchToMainThread() => _e.EmitSwitchToMainThread();
+
     public void WakeWorker(VReg p) {
       // SetEvent(p->wakeEvent); POffWakeEvent = 0x38
       _e.EmitMovRegIndirectMem(X86Register.Rcx, R(p), 0x38); // rcx = p->wakeEvent

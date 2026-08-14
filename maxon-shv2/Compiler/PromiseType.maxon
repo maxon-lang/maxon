@@ -1,0 +1,109 @@
+// PromiseType.maxon — everything the compiler knows about the STORAGE TYPE `Promise with T` /
+// `Promise with (T, E)` (P1.5-B2c). One home, because the same three facts are read by the type index
+// (is this slot managed?), the parser's storage door (may this spawn be stored here?) and the await
+// (what does this promise return, and what does it throw?), and a disagreement between any two of them
+// is a wrong answer rather than a diagnostic.
+//
+// ⭐⭐ **`Promise` IS A DECLARED STDLIB TYPE, NOT A COMPILER-SYNTHESIZED BASE.** `stdlib/Builtins.maxon`
+// writes `type Promise uses Element, ErrorType` with a single field, so the `with` grammar, the alias
+// registry, the instance interner and the arity check all serve it already. Nothing here re-derives any of
+// that; what it adds is the three facts a DECLARATION cannot state.
+//
+// ⭐⭐ **THE FIRST FACT: A PROMISE HANDLE IS NOT A REFCOUNTED HEAP RECORD, SO A `Promise` INSTANCE IS A
+// TRIVIAL ONE-WORD SLOT.** `Parser.decrefCalleeFor` has said this about the VALUE since B2 — *"a promise
+// owns no `__mm_alloc` box; the handle is the GT struct pointer"* — and B2c is where the TYPE learns to say
+// it too. `ProgramSignatures.typeIsManaged` answers `true` for every other generic instance because every
+// other one IS a base-struct box; this one's runtime value is a pointer into the scheduler's own slab,
+// whose lifetime is the green thread's and is discharged by `__gt_promise_drop` at the parse-tracked sites,
+// never by a refcount.
+//
+// ⛔ **AND THAT IS A DEPARTURE FROM THE BOOTSTRAP, WHICH BOXES.** `maxon-sharp`'s `BoxPromiseIntoStruct`
+// allocates a real `Promise` record at the storage site and `ReconstructPromiseFromStruct` loads `inner`
+// back out at the await. shv2 stores the HANDLE ITSELF, typed at the instance, and the reasons are two and
+// both measured:
+//
+//   • **A BOX WOULD BE UNREACHABLE HERE.** A boxed `Promise` element makes `Array with IntPromise` a
+//     MANAGED-element array, and shv2's managed-element array requires its element to be deep-cloneable as
+//     a single `(box) -> newBox` function (`ProgramSignatures.typeSupportsDeepClone`), which a non-Array
+//     generic instance is not — `Parser.requireOpaqueArrayCopyable` refuses it with E2015 and names the
+//     per-instance cloner as a later slice. MEASURED on a stand-in (`type Cell uses Slot` with one `int`
+//     field): `push` and `get` compile, and `for c in arr` is **E2015 raised inside `stdlib/Array.maxon`'s
+//     `slice`**. Five of this spec's storage cases iterate.
+//   • **AND CLONING A PROMISE IS WRONG ANYWAY.** Two boxes naming one green thread is the double free
+//     `await`'s linearity (E3100) exists to make unrepresentable, so a cloner for this type would be a
+//     mechanism whose every use is a bug.
+//
+// ⚠ **NOTHING OBSERVABLE DEPENDS ON THE BOX.** `Promise.inner` is documented in `stdlib/Builtins.maxon` as
+// *"a raw GT pointer"* — which is exactly what the unboxed value IS — so a reader of it gets the same
+// number either way; and a box would be an allocation the leak gate has to see freed, which storing the
+// handle simply never makes.
+//
+// ⭐ **THE SECOND FACT: THE ERROR TYPE IS AN ARGUMENT, AND ITS ABSENCE IS THE NON-THROWING CASE.** The
+// declaration names two parameters and `Promise with T` supplies one. That is not an arity error — the
+// omission is the SPELLING of "this thunk does not throw", which is why the trailing parameter is optional
+// (`promiseOptionalTrailingTypeParams`) rather than defaulted to something. `maxon-sharp` spells the same
+// rule as `OptionalTrailingTypeParamCount`, and neither compiler can read it off the declaration because
+// the language has no syntax for an optional type parameter.
+//
+// ⭐ **THE THIRD FACT: A STORED PROMISE IS UNOWNED BY THE FRAME THAT READS IT.** `specs/async-await.md`'s
+// *"Known boundary"* paragraph states it: a promise that escapes into storage is not tracked, and awaiting
+// it twice still double-frees at run time. So a value read back out of a container is a promise for the
+// purposes of `await` (it answers `Parser.valueIsPromise`) and is NOT one for the purposes of ownership
+// (it never answers `Parser.valueOwnsGreenThread`). The two questions are separate doors in the parser for
+// exactly this reason.
+
+// The declared base name. The ONE spelling of it — every predicate below and
+// `ProgramSignatures.instanceIsPromiseHandle` compare against this rather than against their own literal.
+export let PromiseTypeName = b"Promise"
+
+// The one member a promise carries — `p.cancel()`. `stdlib/Builtins.maxon` declares no methods on `Promise`
+// (its `inner` field is the whole of its written surface), so this name is the compiler's and lives with the
+// rest of what the compiler knows about the type rather than in a roster it is not on.
+export let PromiseCancelMethodName = b"cancel"
+
+// `Element` — the type the thunk RETURNS, and what an `await` of this promise yields.
+export let PromiseResultArgPosition = 0 as TypeParamPosition
+
+// `ErrorType` — the type the thunk THROWS. Present iff the storage was written `Promise with (T, E)`.
+export let PromiseErrorArgPosition = 1 as TypeParamPosition
+
+// The argument count of a THROWING promise storage type. `Promise with (T, E)` ⇒ 2, `Promise with T` ⇒ 1,
+// and there is no third shape — the arity check below admits exactly these two.
+export let PromiseThrowingArgCount = 2 as FieldIndex
+
+// ⭐ **HOW MANY TRAILING TYPE ARGUMENTS THIS BASE MAY OMIT.** Zero for every declared generic in the tree
+// but one. It is a function of the base NAME and not a field on `StructLayout` because there is exactly one
+// such base and a field would be a column every layout carries to answer for one of them; if a second ever
+// wants it, this is the one place that has to learn the name.
+export function promiseOptionalTrailingTypeParams(baseName ByteArray) returns FieldIndex
+	return 1 as FieldIndex if baseName.equals(PromiseTypeName) else 0 as FieldIndex
+end 'promiseOptionalTrailingTypeParams'
+
+// Is `t` the type of a stored promise — a `genericInstance` over the `Promise` base?
+//
+// ⚠ Asked of the TYPE and never of a name: `typealias StrPromise = Promise with String` means the spelling
+// at a use site is `StrPromise`, and only the instance it resolves to carries the base.
+export function typeIsPromiseStorage(signatures ProgramSignatures, t MaxonType) returns bool
+	if maxonTypeTag(t) != ValueTypeTag.genericInstance 'notAnInstance'
+		return false
+	end 'notAnInstance'
+
+	return signatures.instanceIsPromiseHandle(typeNameIdOf(t))
+end 'typeIsPromiseStorage'
+
+// ⭐ **WHAT A PROMISE STORED IN INSTANCE `gid` THROWS — read off the TYPE, which is the whole point of
+// naming the error type in it.** A one-argument instance throws nothing; a two-argument one throws the
+// enum its second argument names.
+//
+// ⚠ **THE NAME COMES FROM `instanceArgDisplayName`, THE SOURCE SPELLING**, because that is the currency a
+// `ThrowsClause` holds everywhere else: `FuncSignature`'s clause carries the name the author wrote after
+// `throws`, and E3059 compares two such names with `.equals`. A compiled or mangled spelling here would
+// report a difference in RENDERING as a difference in type — the defect `instanceArgDisplayName`'s own
+// header records for E3125.
+export function promiseStorageThrows(signatures ProgramSignatures, gid GenericInstanceId) returns ThrowsClause
+	if signatures.genericInstanceArgCount(gid) < PromiseThrowingArgCount 'resultOnly'
+		return ThrowsClause.none
+	end 'resultOnly'
+
+	return ThrowsClause.throwing(String.from(signatures.instanceArgDisplayName(gid, position: PromiseErrorArgPosition)))
+end 'promiseStorageThrows'

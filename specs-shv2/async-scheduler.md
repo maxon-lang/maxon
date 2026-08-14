@@ -61,6 +61,7 @@ A spawned green thread runs its function and `await` collects the result.
 ```maxon
 
 function compute() returns int
+	Runtime.yield()
 	return 42
 end 'compute'
 
@@ -80,10 +81,12 @@ Two green threads are spawned before either is awaited; both run and their resul
 ```maxon
 
 function ten() returns int
+	Runtime.yield()
 	return 10
 end 'ten'
 
 function twenty() returns int
+	Runtime.yield()
 	return 20
 end 'twenty'
 
@@ -105,6 +108,7 @@ A spawn/await chain threads a value through two green threads.
 ```maxon
 
 function inc(x int) returns int
+	Runtime.yield()
 	return x + 1
 end 'inc'
 
@@ -126,6 +130,7 @@ A scalar argument is spilled into the green thread's argument buffer and read ba
 ```maxon
 
 function sixtimes(x int) returns int
+	Runtime.yield()
 	return x * 6
 end 'sixtimes'
 
@@ -145,6 +150,7 @@ Several scalar arguments (positional first, then labelled) fill the argument buf
 ```maxon
 
 function combine(a int, b int, c int) returns int
+	Runtime.yield()
 	return a + b * c
 end 'combine'
 
@@ -164,6 +170,7 @@ A green thread can itself spawn and await another green thread — the current-G
 ```maxon
 
 function leaf() returns int
+	Runtime.yield()
 	return 20
 end 'leaf'
 
@@ -189,6 +196,7 @@ end 'main'
 ```maxon
 
 function answer() returns int
+	Runtime.yield()
 	return 42
 end 'answer'
 
@@ -209,6 +217,7 @@ rather than 101.
 ```maxon
 
 function compute() returns int
+	Runtime.yield()
 	return 42
 end 'compute'
 
@@ -237,6 +246,7 @@ free-list did not — this same program exited 101.
 ```maxon
 
 function noop() returns int
+	Runtime.yield()
 	return 0
 end 'noop'
 
@@ -267,6 +277,7 @@ short-circuit to the PRIOR result without ever running the new thread — a wron
 ```maxon
 
 function dbl(x int) returns int
+	Runtime.yield()
 	return x * 2
 end 'dbl'
 
@@ -296,6 +307,7 @@ own `await` may. `p4` therefore gets a distinct struct, and `await p1` reads `p1
 ```maxon
 
 function w(x int) returns int
+	Runtime.yield()
 	return x * 10
 end 'w'
 
@@ -415,6 +427,7 @@ function scale(x float, depth int) returns int
 end 'scale'
 
 function sweep() returns int
+	Runtime.yield()
 	let d0 = scale(20.0, depth: 0)
 	if d0 != 20 'bad0'
 		return 1
@@ -468,6 +481,7 @@ function six(a float, b float, c float, d float, e float, f float) returns int
 end 'six'
 
 function fpArgs() returns int
+	Runtime.yield()
 	return six(6.0, b: 1.5, c: 2.5, d: 3.5, e: 4.5, f: 5.5)
 end 'fpArgs'
 
