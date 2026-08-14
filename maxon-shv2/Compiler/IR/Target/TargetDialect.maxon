@@ -1385,6 +1385,29 @@ export union TargetOp
 	//
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `arm64FmovGprFp`, per the band-append invariant.
 	arm64FmovFpGpr(dest TargetVReg, src TargetVReg) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
+	// --- STACK PROMOTION: the ADDRESS of a frame slot ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `arm64FmovFpGpr`, per the band-append invariant.
+	//
+	// `x64: lea destReg, [rsp + slotDisp]` / `arm64: add destReg, x29, #slotDisp` — the ADDRESS of frame
+	// slot `slot`, where `storeSlotReg`/`loadRegSlot` read and write its CONTENTS. One plain def, no use.
+	//
+	// ⭐ **IT CARRIES A SLOT AND NO DISPLACEMENT, FOR THE REASON ITS TWO NEIGHBOURS DO.** On x64 the slot
+	// area sits above the shadow space and the outgoing-argument region, so its base is
+	// `spillSlotBaseDisp` — a number only the encoder has (it depends on `outgoingArgSize`, which the ISel
+	// finishes computing after this op is emitted). On arm64 it is `[x29 + 16 + slot*8]`. Both are exactly
+	// what `arm64SlotDisplacement`/`slotDisplacement` already answer for a spill, so this op reuses those
+	// answers rather than minting a second frame layout.
+	//
+	// ⭐⭐ **THE SLOT IT NAMES IS NOT THE SPILLER'S, AND THAT SEPARATION IS THE WHOLE SAFETY ARGUMENT.**
+	// `promoteStackRecords` reserves slots `[0, k)` for promoted records by seeding the splitter's
+	// `nextSlot` past them (`SplitDriver.create`), so no spill can ever be given a slot a promoted record
+	// occupies. That is why `deriveSlotRole` classifies this op as touching NO slot: the residency model
+	// tracks which values memory holds, and a promoted record is not a spilled value — it is storage the
+	// frame owns for the whole call, which is exactly what a reserved slot means.
+	//
+	// `isMemory: false` — it computes an address; it does not touch memory (the mirror of `leaRegGlobal`).
+	leaRegSlot(destReg TargetVReg, slot SpillSlot) = TargetOpMeta{isMemory: false, isStore: false, isCall: false, implicitUses: 0, implicitDefs: 0}
 end 'TargetOp'
 
 // The memory-access widths the `.data` load/store encoders have. TWO, because two are what the

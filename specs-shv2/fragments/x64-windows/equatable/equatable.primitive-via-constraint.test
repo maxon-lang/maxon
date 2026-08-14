@@ -34,27 +34,6 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
-func @Pair.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.storeBaseDispReg.word64 [r8 + 8], r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Pair.bothEqual {
   entry:
     x64.pushReg rbp
@@ -77,69 +56,49 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 72
+    x64.movRegImm32 rax, 5
     x64.movRegImm32 rcx, 5
-    x64.movRegImm32 rdx, 5
-    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
-    x64.callDirect Pair.create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 5
-    x64.movRegImm32 rdx, 9
-    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
-    x64.callDirect Pair.create
-    x64.movRegReg r12, r8
     x64.leaRegRdata rdx, [rip + __witness_int.Equatable]
-    x64.movRegReg rcx, rbx
+    x64.leaRegSlot rdx, slot0
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.storeBaseDispReg.word64 [rdx + 8], rcx
+    x64.movRegImm32 rax, 5
+    x64.movRegImm32 rcx, 9
+    x64.leaRegRdata rsi, [rip + __witness_int.Equatable]
+    x64.leaRegSlot rbx, slot2
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.storeBaseDispReg.word64 [rbx + 8], rcx
+    x64.leaRegRdata rax, [rip + __witness_int.Equatable]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
     x64.callDirect Pair.bothEqual
     x64.xorRegImm32 r8, r8, 1
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, shouldEq
     x64.jmp ifcont#2
   shouldEq:
-    x64.movRegImm32 r13, 1
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
+    x64.movRegImm32 r8, 1
+    x64.epilogue 72
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#2:
     x64.leaRegRdata rdx, [rip + __witness_int.Equatable]
-    x64.movRegReg rcx, r12
+    x64.movRegReg rcx, rbx
     x64.callDirect Pair.bothEqual
     x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, shouldNe
     x64.jmp ifcont#4
   shouldNe:
-    x64.movRegImm32 r13, 2
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
+    x64.movRegImm32 r8, 2
+    x64.epilogue 72
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   ifcont#4:
-    x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __mm_decref
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

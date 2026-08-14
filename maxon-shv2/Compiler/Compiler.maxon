@@ -603,6 +603,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	project.globalData.layOut(declaredGlobals)
 	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
+	// ⭐ Hand the pipeline the ONE runtime fact a Std pass cannot derive from the Std module: whether this
+	// program runs green threads, and so whether any frame can be RELOCATED underneath a pointer into it.
+	// See `PassPipeline.usesGreenThreads`. It is set here because this is the seam where `scanRuntimeUsage`
+	// has answered and no Std pass has yet run.
+	pipeline.usesGreenThreads = usage.usesGt
+
 	try pipeline.run(buildLoweringPasses()) otherwise 'loweringFailed'
 		try refuseCompile(project)
 	end 'loweringFailed'

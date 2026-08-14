@@ -824,6 +824,8 @@ type StdToX64Lowering
 			// Both stream writes marshal the SAME `WriteFile` call, so both reserve the same two slots.
 			osWriteStdout gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
 			osWriteStderr gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
+			// A frame address is a `lea`; it calls nothing and so passes no outgoing argument.
+			stackRecordAddr gives 0
 			// The ONLY subprocess op with outgoing stack args: CreateProcessA passes its last six of ten arguments
 			// on the stack (see `win64OutgoingArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
 			osProcessSpawn gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
@@ -1062,6 +1064,8 @@ type StdToX64Lowering
 				osExecutablePath then break 'term'
 				// W35: a stream write is a value-producing body op, never a terminator.
 				osWriteStderr then break 'term'
+				// A frame address is a value-producing body op, never a terminator.
+				stackRecordAddr then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1139,6 +1143,8 @@ type StdToX64Lowering
 				osExecutablePath then break 'isTheCompare'
 				// W35: an import call or a syscall, not the compare — the scan stops.
 				osWriteStderr then break 'isTheCompare'
+				// A frame address, not the compare — the scan stops.
+				stackRecordAddr then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1301,6 +1307,9 @@ type StdToX64Lowering
 			osExecutablePath(resultId, bufLenId, bufPtrId) then self.lowerOsExecutablePath(resultId, bufLenId: bufLenId, bufPtrId: bufPtrId, dstBlock: dstBlock)
 			// W35: the same graph as the stdout write, one selector/descriptor over.
 			osWriteStderr(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError, dstBlock: dstBlock)
+			// A promoted record's address: `lea dest, [rsp + slotDisp]`, the frame-slot mirror of `globalAddr`'s
+			// `lea [rip + disp]`. The slot's displacement is not known until the encoder (see `TargetOp.leaRegSlot`).
+			stackRecordAddr(resultId, slot) then self.targetModule.appendOp(dstBlock, op: TargetOp.leaRegSlot(TargetVReg.virtual(resultId), slot: slot))
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -1353,6 +1362,7 @@ type StdToX64Lowering
 			osStdinHandle then panic("lowerStdToX64: an `osStdinHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op)")
 			osExecutablePath then panic("lowerStdToX64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
 			osWriteStderr then panic("lowerStdToX64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
+			stackRecordAddr then panic("lowerStdToX64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -3125,6 +3135,8 @@ type StdToX64Lowering
 			osExecutablePath gives false
 			// W35: nor is a stream write.
 			osWriteStderr gives false
+			// Nor is a frame address.
+			stackRecordAddr gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3272,6 +3284,7 @@ type StdToX64Lowering
 			osStdinHandle panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osStdinHandle`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osExecutablePath panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osExecutablePath`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osWriteStderr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osWriteStderr`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			stackRecordAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `stackRecordAddr`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

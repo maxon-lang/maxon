@@ -688,6 +688,8 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		osExecutablePath then break 'k'
 		// W35: a stream write makes no INDIRECT call — it calls two IMPORTS by index.
 		osWriteStderr then break 'k'
+		// A frame address makes no call of any kind.
+		stackRecordAddr then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1250,6 +1252,12 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osExecutablePath then break 'def'
 		// W35: the stderr write defines the byte count at the Std tier width, exactly as its stdout twin does.
 		osWriteStderr(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		// Unreachable on this lane — stack promotion is gated OFF for wasm32-wasi
+		// (`promoteStackRecords`): a wasm local has no address and the module emits no shadow-stack
+		// global, so there is no frame for a slot to index. The valtype scan still runs over the whole
+		// module ahead of emission, so it must classify the variant regardless; an i64 is what a pointer
+		// would be.
+		stackRecordAddr(resultId, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 	end 'def'
 end 'recordDefValtype'
 
@@ -1465,6 +1473,7 @@ type WasmFuncEmitter
 			osStdinHandle then panic("emitStraightLineTerminator: an `osStdinHandle` is a body op, never a terminator")
 			osExecutablePath then panic("emitStraightLineTerminator: an `osExecutablePath` is a body op, never a terminator")
 			osWriteStderr then panic("emitStraightLineTerminator: an `osWriteStderr` is a body op, never a terminator")
+			stackRecordAddr then panic("emitStraightLineTerminator: a `stackRecordAddr` is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1544,6 +1553,7 @@ type WasmFuncEmitter
 			osStdinHandle then panic("emitDispatcherTerminator: an `osStdinHandle` is a body op, never a terminator")
 			osExecutablePath then panic("emitDispatcherTerminator: an `osExecutablePath` is a body op, never a terminator")
 			osWriteStderr then panic("emitDispatcherTerminator: an `osWriteStderr` is a body op, never a terminator")
+			stackRecordAddr then panic("emitDispatcherTerminator: a `stackRecordAddr` is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1638,6 +1648,12 @@ type WasmFuncEmitter
 			// neighbours above this is NOT x64-windows-gated — Preview2 exports `get-stderr` beside
 			// `get-stdout` and the writer is the same method, so `printError` runs on this lane.
 			osWriteStderr(resultId, bufId, lenId) then self.emitOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError)
+			// ⛔ It cannot reach here, and a GUESS would be a wrong ANSWER rather than a missed
+			// optimization: `promoteStackRecords` is gated off for this target because a wasm local has no
+			// address and the module emits no shadow-stack global, so there is no frame for a slot to
+			// index. If this panic ever fires, that gate was removed without giving wasm a shadow stack
+			// first.
+			stackRecordAddr then panic("emitBodyOp: a `stackRecordAddr` reached the wasm backend, which has no addressable frame for its slot to index — `promoteStackRecords` is gated off for wasm32-wasi precisely so this cannot happen")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2865,6 +2881,7 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osStdinHandle then panic("decideDispatcher: an `osStdinHandle` is a body op, never a terminator")
 		osExecutablePath then panic("decideDispatcher: an `osExecutablePath` is a body op, never a terminator")
 		osWriteStderr then panic("decideDispatcher: an `osWriteStderr` is a body op, never a terminator")
+		stackRecordAddr then panic("decideDispatcher: a `stackRecordAddr` is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

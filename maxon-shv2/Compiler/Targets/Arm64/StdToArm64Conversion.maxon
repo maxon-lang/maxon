@@ -476,6 +476,8 @@ type StdToArm64Lowering
 			osExecutablePath gives 0
 			// W35: an all-register `write` — no stack argument on either stream.
 			osWriteStderr gives 0
+			// A frame address computes an address; it calls nothing and so passes no outgoing argument.
+			stackRecordAddr gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -625,6 +627,10 @@ type StdToArm64Lowering
 			// W35: the same graph as the stdout write, one descriptor over. Unlike its W5 neighbours above this
 			// is NOT x64-windows-gated — a POSIX `write` serves both streams, so `printError` runs here.
 			osWriteStderr(resultId, bufId, lenId) then self.lowerOsWriteStream(resultId, bufId: bufId, lenId: lenId, stream: OsOutputStream.standardError, dstRef: dstRef)
+			// A promoted record's address — `add dest, x29, #(16 + slot*8)`, the frame-slot mirror of
+			// `arm64LeaGlobal`. arm64 has no per-function slot base (`Arm64Backend.arm64SlotDisplacement`), so
+			// the encoder resolves it from the slot alone, exactly as it does a spill.
+			stackRecordAddr(resultId, slot) then self.emit(dstRef, op: TargetOp.leaRegSlot(TargetVReg.virtual(resultId), slot: slot))
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -672,6 +678,7 @@ type StdToArm64Lowering
 			osStdinHandle then panic("lowerStdToArm64: an `osStdinHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op; also x64-windows only)")
 			osExecutablePath then panic("lowerStdToArm64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op; also x64-windows only)")
 			osWriteStderr then panic("lowerStdToArm64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
+			stackRecordAddr then panic("lowerStdToArm64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

@@ -69,6 +69,19 @@ export union PassKind
 	pruneDeadBlockArgs
 	elimTrivialBlockArgs
 	foldConstOperands
+	// Phase 3.6: Std → Std ESCAPE ANALYSIS + STACK PROMOTION (`PromoteStackRecords`).
+	//
+	// ⭐ **IT RUNS LAST OF THE Std PASSES, AND EVERY ONE OF THEM IS A PRECONDITION IT READS.** The
+	// promotion decides on the SHAPE of the code, so it must see the final shape:
+	// `pruneDeadBlockArgs`/`elimTrivialBlockArgs` remove the phis the parser over-approximated into
+	// existence, and a record reaching a phi is refused — so running before them would refuse
+	// promotions on merges that do not survive. `insertRangeChecks` may SPLIT a constructor's block to
+	// hang a guard off it, and a multi-block body is not a record constructor — so running before it
+	// would recognize a constructor the guard is about to invalidate.
+	//
+	// It is the only WHOLE-MODULE pass in this list (see `classifyPass`): a call site cannot be judged
+	// without the callee's summary.
+	promoteStackRecords
 end 'PassKind'
 
 export typealias PassKindArray = Array with PassKind
@@ -97,6 +110,9 @@ export function classifyPass(pass PassKind) returns PassClassification
 		pruneDeadBlockArgs gives PassClassification.perFunction
 		elimTrivialBlockArgs gives PassClassification.perFunction
 		foldConstOperands gives PassClassification.perFunction
+		// The one whole-module Std pass: the constructor table and the parameter-escape summary are facts
+		// about the CALL GRAPH, and a call site cannot be judged without the callee's row.
+		promoteStackRecords gives PassClassification.wholeModule
 	end 'classify'
 end 'classifyPass'
 
@@ -114,6 +130,7 @@ export function compilePhaseOfPass(pass PassKind) returns CompilePhase
 		pruneDeadBlockArgs gives CompilePhase.pruneDeadBlockArgs
 		elimTrivialBlockArgs gives CompilePhase.elimTrivialBlockArgs
 		foldConstOperands gives CompilePhase.foldConstOperands
+		promoteStackRecords gives CompilePhase.promoteStackRecords
 	end 'phase'
 end 'compilePhaseOfPass'
 
@@ -127,6 +144,7 @@ export function passKindToString(pass PassKind) returns String
 		pruneDeadBlockArgs gives "pruneDeadBlockArgs"
 		elimTrivialBlockArgs gives "elimTrivialBlockArgs"
 		foldConstOperands gives "foldConstOperands"
+		promoteStackRecords gives "promoteStackRecords"
 	end 'name'
 end 'passKindToString'
 
@@ -167,6 +185,7 @@ export function buildLoweringPasses() returns PassKindArray
 	passes.push(PassKind.pruneDeadBlockArgs)
 	passes.push(PassKind.elimTrivialBlockArgs)
 	passes.push(PassKind.foldConstOperands)
+	passes.push(PassKind.promoteStackRecords)
 	return passes
 end 'buildLoweringPasses'
 
@@ -206,6 +225,23 @@ export type PassPipeline
 	// header claims: the Maxon function array is frozen across the whole pipeline, so a second build would
 	// re-derive an identical answer and re-run its duplicate refusal at a point nothing can have changed.
 	export var funcNames as FunctionNameIndex
+	// ⭐⭐ **DOES THIS PROGRAM RUN GREEN THREADS?** — the one fact `promoteStackRecords` cannot derive from
+	// the Std module, and the one that decides whether STACK PROMOTION is legal at all in this compile.
+	//
+	// A green thread's stack GROWS BY RELOCATION: `__gt_morestack` allocates a larger region, COPIES the
+	// old stack onto it, rebases rsp and walks the saved-rbp chain adding the offset — and then FREES the
+	// old pages (X64GtRuntime, "copy the stack + rebase the live rbp + WALK the saved-rbp chain"). Every
+	// frame-relative access survives that, because rsp and rbp are exactly what it fixes. A frame ADDRESS
+	// materialized into a REGISTER does not: nothing enumerates the registers, so a promoted record's
+	// pointer held across a call whose prologue guard fires morestack would afterwards point into freed
+	// pages. `TargetOp.leaRegSlot` is the FIRST op in shv2 that materializes one, so this hazard is
+	// exactly as old as stack promotion.
+	//
+	// The bit is `RuntimeUsage.usesGt` — the SAME authority that decides whether the scheduler is installed
+	// at all, rather than a second guess at "does this program use async" derived from the op stream.
+	// Written in the seam between the two pipeline stages (`Compiler.compileToCodeResult`), which is where
+	// `scanRuntimeUsage` has just answered it and before any Std pass runs.
+	export var usesGreenThreads as bool
 
 	// ⚠ **IT THROWS, BECAUSE BUILDING THE NAME INDEX IS THE COMPILE'S DUPLICATE-FUNCTION-NAME REFUSAL**
 	// (E4015 / `refuseDuplicateFunctionName`). The gate used to be `run`'s; with two runs it belongs to the
@@ -258,7 +294,8 @@ export type PassPipeline
 			maxonModule: maxonModule,
 			stdModule: StdModule.create(),
 			signatures: signatures,
-			funcNames: funcNames
+			funcNames: funcNames,
+			usesGreenThreads: false
 		}
 	end 'create'
 
@@ -303,6 +340,7 @@ export type PassPipeline
 			pruneDeadBlockArgs then pruneDeadBlockArgs(self.stdModule)
 			elimTrivialBlockArgs then elimTrivialBlockArgs(self.stdModule)
 			foldConstOperands then foldConstOperands(self.stdModule)
+			promoteStackRecords then promoteStackRecords(self.project, module: self.stdModule, usesGreenThreads: self.usesGreenThreads)
 		end 'dispatch'
 
 		recordPhase(self.project, phase: compilePhaseOfPass(pass), probe: probe)

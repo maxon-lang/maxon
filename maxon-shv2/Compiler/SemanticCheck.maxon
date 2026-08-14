@@ -1047,6 +1047,25 @@ end 'buildThrowsMap'
 // under the call graph" is exactly what `buildParamMutationSummary`'s header forbids. Termination is the same
 // argument: a mask only ever GAINS bits and a function has at most `MaxAbiArgs` of them.
 //
+// ⚠⚠ **THERE IS NOW A SECOND ESCAPE ANALYSIS IN THE COMPILER, AND IT IS DELIBERATE — SEE
+// `IR/Std/PromoteStackRecords.buildParamEscapeMasks`.** It asks the same-shaped question of the same call
+// graph and it is NOT this idiom a third time. Two things separate them, and both are load-bearing:
+//
+//   * THE TIER. That one runs on the STD module and is keyed on `__mm_alloc` / `__mm_decref`, ops that do
+//     not exist until the lowering has run. It cannot be answered here, and this cannot be answered there
+//     (a `function`-typed parameter's closure environment is a Maxon-tier fact).
+//   * THE DIRECTION OF CONSERVATISM. This one's wrong answer is a false REFUSAL — a legal program rejected.
+//     That one's is a false ADMISSION — an allocation deleted out from under a live pointer, with no
+//     diagnostic anywhere. So their ADMITTED USES differ on purpose (a `loadIndirect` through the pointer is
+//     the whole point of a record and is meaningless for a closure), and one predicate serving both would
+//     have to be the union of their refusals, which is neither answer.
+//
+// What they DO share is the vocabulary — `ParamPositionMask` with `maskWithParam`/`maskHasParam`, and a CSR
+// from `buildCsr`. The PROPAGATION ENGINES differ and that is not a duplication either: this one carries a
+// MASK per function and so needs `propagateParamMasks`' mask-valued worklist over per-FUNCTION nodes; that
+// one's seeds are per-PARAMETER facts with no mask arithmetic, so it uses one node per (function, parameter)
+// and the shared `reverseReachabilityMark`.
+//
 // ⚠ **THE ESCAPING SET IS A LEAST FIXPOINT, so seeding every parameter SAFE and growing the escaping set is
 // SOUND rather than optimistic.** "Escapes" is reachability from a real escape SITE, so a parameter that
 // never reaches one does not escape however the recursion is shaped — which matters, because the sort cone is

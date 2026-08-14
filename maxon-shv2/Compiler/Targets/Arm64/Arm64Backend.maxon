@@ -1267,6 +1267,9 @@ function emitArm64TargetOp(op TargetOp, code ByteArray, callFixups CallFixupArra
 		// so which door each end goes through IS the direction. `scvtf` above is its converting neighbour
 		// (same files, same order) and shares nothing else with it.
 		arm64FmovFpGpr(dest, src) then emitArm64Rr(code, opcode: Arm64OpFmovFpFromGpr, rd: arm64FpField(dest), rn: arm64GprField(src))
+		// `add destReg, x29, #slotDisp` — the ADDRESS of a frame slot, through the SAME
+		// `arm64SlotDisplacement` the spill/reload pair resolve their slots with.
+		leaRegSlot(destReg, slot) then arm64EmitSlotAddress(code, destReg: destReg, slot: slot)
 	end 'emit'
 end 'emitArm64TargetOp'
 
@@ -1300,6 +1303,20 @@ function arm64EmitStoreSlot(code ByteArray, slot SpillSlot, srcReg TargetVReg)
 		arm64EmitFrameSlot(code, rt: arm64FpField(srcReg), byteOffset: disp, unscaledOp: Arm64OpSturD, scaledOp: Arm64OpStrD)
 	end 'fp'
 end 'arm64EmitStoreSlot'
+
+// `add destReg, x29, #slotDisp` — the ADDRESS of frame slot `slot`, the address twin of
+// `arm64EmitStoreSlot`/`arm64EmitLoadSlot` above. It reads the SAME `arm64SlotDisplacement`, so the
+// address a promoted record is given and the address a spill of the same slot would use are one number.
+//
+// It goes through `arm64EmitAddSubImmWide` rather than the 12-bit `arm64EmitAddSubImm12`, for the reason
+// that helper exists: a slot displacement is `16 + slot*8` and a function with more than 511 slots takes
+// it past 4095, which the single-instruction form cannot reach. The wide form emits the hi/lo pair.
+//
+// The dest is always a GPR — an address is a pointer, and `recordOpResultClass` classifies
+// `stackRecordAddr`'s result `gpr` — so there is no FP arm to mirror the two slot helpers' class split.
+function arm64EmitSlotAddress(code ByteArray, destReg TargetVReg, slot SpillSlot)
+	arm64EmitAddSubImmWide(code, opcode: Arm64OpAddImm, rd: arm64GprField(destReg), rn: Arm64Fp, imm: arm64SlotDisplacement(slot))
+end 'arm64EmitSlotAddress'
 
 function arm64EmitLoadSlot(code ByteArray, destReg TargetVReg, slot SpillSlot)
 	let disp = arm64SlotDisplacement(slot)

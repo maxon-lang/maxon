@@ -431,6 +431,10 @@ function opPhysicalRegs(op TargetOp) returns RegMask
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives 0
 		// The arm64 bit reinterpretations — arm64-only, so 0 for the reason the arm above gives.
 		arm64FmovGprFp to arm64FmovFpGpr gives 0
+		// ⚠ Its GPR dest can be coloured into a callee-saved register (rbx/r12-r15), so a miss here is the
+		// real-miscompile trap `leaRegGlobal`/`leaRegRdata` document: the prologue would never save that
+		// register and the function would silently clobber its CALLER's.
+		leaRegSlot(d, _) gives physRegBit(d)
 	end 'p'
 end 'opPhysicalRegs'
 
@@ -577,5 +581,7 @@ function blockEndsWithReturn(module TargetModule, block IrBlock) returns bool
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 		// Both arm64 bit reinterpretations are body ops, never a `ret`.
 		arm64FmovGprFp to arm64FmovFpGpr gives false
+		// A frame address is a body op, never a `ret`.
+		leaRegSlot gives false
 	end 'check'
 end 'blockEndsWithReturn'

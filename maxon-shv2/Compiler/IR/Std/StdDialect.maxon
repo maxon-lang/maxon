@@ -1561,6 +1561,41 @@ export union StdOp
 	// `X64Runtime.emitPrintString` against `StringRuntime.buildPrintString`: two unrelated mechanisms one
 	// letter apart.)
 	osWriteStderr(resultId ValueId, bufId ValueId, lenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	// --- STACK PROMOTION: the address of a record this frame owns outright ---
+	//
+	// ⚠ APPENDED AT THE VERY END OF THE UNION, past `osWriteStderr`, per the band-append invariant.
+	// Its `category` is `memory` (it computes an address, exactly as `globalAddr` does) and that
+	// placement is independent of this tail position — the invariant is about compile-time
+	// exhaustiveness, and the END is the only position at which EVERY range arm in the compiler
+	// fails to compile rather than silently swallowing a new variant.
+	//
+	// ⭐⭐ **THE RESULT IS `[frame slot region] + slot*8`, AND THE FRAME IS THE POINT.** `promoteStackRecords`
+	// emits this in place of the `call __mm_alloc(size, 0)` a record constructor would have made, once it has
+	// PROVEN the record cannot outlive the frame (see that pass's header for the proof obligation). The record
+	// then has no MM header, no refcount, no `__mm_alloc_count` entry and no drop — which is why the pass must
+	// delete the matching `__mm_decref` in the same edit, and why a wrong promotion is a dangling pointer
+	// rather than a slow program.
+	//
+	// It names a SLOT, not a displacement, for the reason `TargetOp.storeSlotReg`/`arm64StoreOutgoingArg`
+	// name one: the address is `spillSlotBaseDisp + slot*8` on x64 and `x29 + 16 + slot*8` on arm64, and
+	// neither base is known until the register allocator has settled the frame. The slot indices `[0, k)` are
+	// RESERVED out of the spiller's range (`SplitDriver.create` seeds `nextSlot` from `func.stackSize`), so a
+	// promoted record and a spilled value can never be given the same slot.
+	//
+	// `isPure: true` — it recomputes an address that cannot change, so it is freely rematerializable, exactly
+	// like `globalAddr`. `isMemory: false` — it computes an address; it does not touch memory.
+	//
+	// ⚠ `isUnsupportedInInlineBody: true` is the RIGHT value and it is enforced by NOTHING: the slot it names
+	// belongs to THIS function's frame, so splicing it into another body would silently address a different
+	// one — but that field has no reader anywhere in the compiler (see `StdOpMeta.isPure`'s note and OPEN.md
+	// #27), so it is a declaration for whoever writes the first splice, not a guard that exists today.
+	//
+	// ⛔ **wasm32-wasi CANNOT RECEIVE THIS OP, and the gate is in the pass, not here.** A wasm local has no
+	// address and the module emits no `__stack_pointer` global, so there is no frame for a slot to index
+	// (`StdToWasm`'s header: *"the call stack is the ENGINE's, not addressable memory"*).
+	// `promoteStackRecords` therefore does nothing on that target, and `StdToWasm`'s arms panic rather than
+	// guess.
+	stackRecordAddr(resultId ValueId, slot SpillSlot) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: true, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1742,8 +1777,174 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osExecutablePath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
 		// W35: `osWriteStdout`'s arm one stream over, and it reads exactly what that one reads.
 		osWriteStderr(_, bufId, lenId) then insertUsePair(referenced, a: bufId, b: lenId)
+		// A promoted record's address reads NOTHING — its `slot` is a frame index, not a value, exactly as
+		// `globalAddr`'s `label` is a name. Its `resultId` is a def.
+		stackRecordAddr then break 'u'
 	end 'u'
 end 'collectStdOpUses'
+
+// ⭐ **WHAT AN OP DEFINES — the exact dual of `collectStdOpUses` above, and it lives beside it for that
+// reason.** `nextFreeValueId` is the SHARED one: it began as `InsertRangeChecks`' private helper and
+// `promoteStackRecords` needs the same answer, and a second "one past the highest id in this function"
+// would be a second chance to hand out an id something already defines. `stdOpDefinedValue` below is
+// still read only by `nextFreeValueId` — it is not exported, and it is here because the answer it gives
+// belongs beside `collectStdOpUses`' rather than inside one pass that happens to have needed it first.
+// The next unused ValueId in the function: one past the highest id any op DEFINES or any block-arg
+// carries. Scanning defs (and phi results) suffices — dense SSA numbers every value once, so the
+// maximum def id is the maximum id, and a use can only name an id that some def already introduced.
+export function nextFreeValueId(module StdModule, func IrFunction) returns ValueId
+	var maxId = 0 as ValueId
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("nextFreeValueId: blockRef from func.blockRefs not in module.blocks")
+		for arg in block.blockArgs 'eachArg'
+			maxId = maxValueId(maxId, other: arg.valueId)
+		end 'eachArg'
+	end 'eachBlock'
+	for opIdx in module.liveOpIndices(func) 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("nextFreeValueId: live op index {opIdx} not in module.ops")
+		match stdOpDefinedValue(op) 'defines'
+			none then break 'defines'
+			defines(definedId) then maxId = maxValueId(maxId, other: definedId)
+			definesPair(first, second) then maxId = maxValueId(maxId, other: maxValueId(first, other: second))
+		end 'defines'
+	end 'eachOp'
+	return maxId + 1
+end 'nextFreeValueId'
+
+function maxValueId(a ValueId, other ValueId) returns ValueId
+	return a if a >= other else other
+end 'maxValueId'
+
+// Whether `op` DEFINES a value, and WHICH — ONE exhaustive `StdOp` match answering both halves.
+//
+// ⚠⚠ **IT WAS TWO, AND WHAT KEPT THEM AGREEING WAS NOTHING** (P1.9 review). `stdOpDefinesValue`
+// answered "does it define?" over a range-arm partition of the union and `stdOpDefinedIdOrZero`
+// answered "which id?" over a destructured one — ~105 lines of parallel arms a reader had to diff by
+// eye. A new `StdOp` variant is a compile error in BOTH, which is what the exhaustive match buys; but
+// adding it as `true` in the first and `0` in the second COMPILES, and the consequence is not a
+// diagnostic: `nextFreeValueId` under-counts, this pass mints a ValueId some op already defines, and
+// two values collide in a function nothing about the guard being emitted names. A wrong answer one
+// arm's worth of inattention away — the shape the duplication rule exists for.
+//
+// It also retires a SENTINEL: the id half returned `0` for a non-defining op and was safe only
+// because every caller asked the boolean first — and ValueId 0 is a REAL id in this compiler (a
+// zero-user-parameter generic method's layout-descriptor slot legitimately holds it, which is why
+// `MaxonToStdLowering` carries a separate `hasImplicitLayout` bit rather than testing for 0). The
+// union says "no value" in a way no ValueId can spell.
+union DefinedValueLookup
+	none
+	defines(valueId ValueId)
+	// ⭐⭐ **TWO DEFS, AND THE SECOND ONE IS WHY THIS ARM EXISTS — IT CLOSED A LATENT MISCOMPILE.**
+	// `tryCall`/`witnessTryCall` write a PRIMARY result AND an ERROR FLAG. Reported by the primary alone —
+	// which is what this reader used to do, in as many words — `nextFreeValueId` can return an id that a
+	// two-result op already defines, and the next pass to mint from it then defines a value some `tryCall`
+	// also defines. Two live values share one id, in a function nothing about the minting site names, with
+	// no diagnostic anywhere. `InsertRangeChecks` mints from exactly that number.
+	//
+	// ⚠ **WHICH OF THE TWO IS HIGHER IS NOT WRITTEN DOWN HERE, AND MUST NOT BE.** One emission site spells
+	// `errorFlagId = resultId + 1` (LowerMaxonToStd's builtin-conformance call); the others take both ids
+	// from the parser's own mint, from a reserved pairing, or from a `try await` desugar, and nothing holds
+	// them in an order. So this reports BOTH and the walk takes the maximum — which is right whichever way
+	// round they came, where a rule about their order would be right only until the next producer.
+	definesPair(first ValueId, second ValueId)
+end 'DefinedValueLookup'
+
+// The `none` set is the terminators / stores / effect ops that define nothing. Exhaustive over StdOp,
+// matching `collectStdOpUses`'s discipline — a new variant is a compile error here rather than a
+// silently-missed def.
+function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
+	return match op 'r'
+		const(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		binOp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		unaryOp(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		cmp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		binOpImm(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		cmpImm(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		div(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		mod(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		condBranch to branch gives DefinedValueLookup.none
+		ret gives DefinedValueLookup.none
+		param(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		call(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		retVoid gives DefinedValueLookup.none
+		globalAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+		loadIndirect(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		storeIndirect gives DefinedValueLookup.none
+		rdataAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+		tryCall(resultId, errorFlagId, _, _) gives DefinedValueLookup.definesPair(resultId, second: errorFlagId)
+		errorReturn to osExit gives DefinedValueLookup.none
+		osAllocPages(resultId, _) gives DefinedValueLookup.defines(resultId)
+		// W35: a stream write DEFINES the byte count the OS reports — it used to define nothing, back when
+		// its one consumer was a void `print`.
+		osWriteStdout(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		funcAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+		callIndirect(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		// P1.5 subprocess: only `osWaitHandle` (the `WaitForSingleObject` poll) defines a value; the other four
+		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
+		osWaitHandle(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osPanic to osCloseHandle gives DefinedValueLookup.none
+		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
+		osFreePages gives DefinedValueLookup.none
+		// The jump table defines no value — a terminator branches, it does not produce a result.
+		switch gives DefinedValueLookup.none
+		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`. The
+		// throwing form defines that result AND an error flag, and reports BOTH — see `definesPair`.
+		witnessCall(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		witnessTryCall(resultId, errorFlagId, _, _, _, _, _) gives DefinedValueLookup.definesPair(resultId, second: errorFlagId)
+		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
+		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
+		osPipeCreate gives DefinedValueLookup.none
+		osIocpCreate(resultId) gives DefinedValueLookup.defines(resultId)
+		osEventCreate(resultId) gives DefinedValueLookup.defines(resultId)
+		osThreadCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osLockInit to osLockLeave gives DefinedValueLookup.none
+		osReadOverlapped(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		osLastError(resultId) gives DefinedValueLookup.defines(resultId)
+		osProcessSpawnInherit gives DefinedValueLookup.none
+		osCancelIo gives DefinedValueLookup.none
+		osGetPid(resultId) gives DefinedValueLookup.defines(resultId)
+		// P1.5 dogfood slice 1b: osWriteFile captures WriteFile's BOOL (a value); osPipeCreateOutbound defines nothing.
+		osPipeCreateOutbound gives DefinedValueLookup.none
+		osWriteFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		// The wall-clock read defines nothing — its answer lands in the caller's out-param word.
+		osReadWallClock gives DefinedValueLookup.none
+		// R4.1: the file OPEN captures `CreateFileA`'s HANDLE out of RAX, so unlike the two reads above it
+		// DOES define a value — the direct-return shape, not the out-param one.
+		osFileOpenRead(resultId, _) gives DefinedValueLookup.defines(resultId)
+		// The close defines NOTHING — `CloseHandle`'s BOOL is ignored, so there is no result to capture.
+		osFileClose gives DefinedValueLookup.none
+		// R4.2. Split exactly as R4.1's pair is: the five ops whose Win32 entry point answers in RAX — a
+		// BOOL verdict or a search HANDLE — capture it; `osFileFindClose` discards `FindClose`'s BOOL for
+		// the reason `osFileClose` discards `CloseHandle`'s. The 64-bit answers of `osReadFile`/`osFileSize`
+		// land in the caller's out-param word, not in a result.
+		osReadFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
+		osFileOpenWrite(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osFileSize(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osFileDelete(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osFileFindFirst(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osFileFindClose gives DefinedValueLookup.none
+		// R4.3. All four directory primitives answer in RAX and capture it: `FindNextFileA`/
+		// `CreateDirectoryA` a BOOL, `GetCurrentDirectoryA` a character count, `GetFileAttributesA` an
+		// attribute mask. None has a void twin, so none takes `none`.
+		osFileFindNext(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osDirCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
+		osDirCurrentPath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osFileAttributes(resultId, _) gives DefinedValueLookup.defines(resultId)
+		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
+		osPanicValue gives DefinedValueLookup.none
+		osCommandLine(resultId) gives DefinedValueLookup.defines(resultId)
+		// W5. BOTH DEFINE — `GetStdHandle` a HANDLE, `GetModuleFileNameA` a character count. Neither has a
+		// void twin, so neither takes `none`, and answering `none` here would not fail to compile: it would
+		// under-count `nextFreeValueId` and let this pass mint a live id (see this function's header).
+		osStdinHandle(resultId) gives DefinedValueLookup.defines(resultId)
+		osExecutablePath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		// W35: the stderr write defines the OS's byte count, exactly as its stdout twin above does.
+		osWriteStderr(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		// A promoted record's address is a def like `globalAddr`'s.
+		stackRecordAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+	end 'r'
+end 'stdOpDefinedValue'
 
 // Mark every call argument value as used, so a `const` fed ONLY to a call (`f(5)`) is not
 // pruned as dead. A `param` has no uses (its result is a def), so it contributes nothing.
@@ -1918,6 +2119,9 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osExecutablePath(resultId, bufLen, bufPtr) gives StdOp.osExecutablePath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
 		// W35: `osWriteStdout`'s arm one stream over.
 		osWriteStderr(resultId, bufId, lenId) gives StdOp.osWriteStderr(resultId, bufId: remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
+		// Reports no use (its `slot` is a frame index), so it rewrites nothing and is handed back unchanged —
+		// the mirror of `globalAddr`/`rdataAddr`/`funcAddr`.
+		stackRecordAddr gives op
 	end 'r'
 end 'remapStdOpUses'
 

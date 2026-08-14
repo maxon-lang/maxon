@@ -1,0 +1,1135 @@
+// PromoteStackRecords — ESCAPE ANALYSIS AND STACK PROMOTION FOR STRUCT RECORDS.
+//
+// Every struct value in Maxon is a heap record: `__mm_alloc(sizeBytes, destructor)` hands back a payload
+// pointer behind a 24-byte MM header, the caller owns it, and a scope-exit `__mm_decref` releases it. This
+// pass finds the records a frame provably cannot let escape and gives them FRAME STORAGE instead — a
+// reserved slot region addressed by `StdOp.stackRecordAddr` — deleting the allocation, the header, the
+// `__mm_alloc_count` entry and the drop together.
+//
+// ⭐⭐⭐ **THE CRUX: THE ALLOCATION IS NEVER IN THE FRAME THAT OWNS THE RECORD, AND THE LANGUAGE IS WHY.**
+// `struct-construction-restriction` (E3076) forbids `Point{x: 1, y: 2}` anywhere but inside `Point`'s own
+// methods, so **every** user construction goes through a static factory:
+//
+//     static function create(x Integer, y Integer) returns Self
+//         return Self{x: x, y: y}                        <- the `__mm_alloc` lives HERE
+//     end 'create'
+//     ...
+//     let p = Point.create(10, y: 20)                    <- the frame that owns the record is HERE
+//
+// An intraprocedural escape analysis therefore promotes NOTHING in real Maxon: inside `create` the record
+// escapes by being RETURNED, every time, and there is no other construction site to look at. That is not a
+// hypothesis about this compiler — the C# bootstrap's `StackPromotionAnalysisPass` IS such an analysis,
+// keyed on a struct literal bound to a declaration in the same function, and MEASURED on 2026-08-13 it
+// emits `mm_alloc` for every case of `specs/stack-promotion.md`. Its struct half cannot fire for a user
+// type at all. (v1 does not implement the optimization; the spec sits on its DEFERRED list.)
+//
+// ⇒ **THE FACTORY IS A LANGUAGE-MANDATED INDIRECTION, NOT A USER'S DESIGN CHOICE, AND SEEING THROUGH IT IS
+// THIS PASS'S FIRST JOB.** It recognizes a RECORD CONSTRUCTOR — a function whose entire body allocates one
+// record and fills it from its own parameters and constants — and REBUILDS that construction at the call
+// site out of the caller's own argument values. Nothing is copied: the rebuild names the caller's existing
+// argument values and the call's OWN result id, so no op of the caller is rewritten and the only ValueIds
+// minted are the `const`s a constant-valued field needs.
+//
+// ⚠ **THAT IS DELIBERATELY NARROWER THAN A GENERAL INLINER, AND THE NARROWNESS IS THE SAFETY ARGUMENT.**
+// A factory that COMPUTES a field (`Self{x: x * 2}`), validates its arguments, or has any control flow is
+// not a constructor by this rule and is left entirely alone — its records stay on the heap. A missed
+// promotion is a slow program; a wrong one is a dangling pointer, and this pass has no diagnostic to fall
+// back on. Everything it cannot PROVE, it refuses.
+//
+// ⭐ **SEEING THROUGH THE FACTORY IS ONE HOP AND STOPS THERE, WHICH IS ALSO THE SPECIFIED BOUNDARY.** A
+// function that merely FORWARDS a factory's result (`function makePoint(..) returns Point` whose body is
+// `return Point.create(..)`) allocates nothing itself, so it is not a constructor and its callers promote
+// nothing — which is exactly what `specs-shv2/stack-promotion.md`'s `heap-when-returned` requires.
+//
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// THE ESCAPE ROUTES, AND HOW EACH IS DETECTED
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// The record's address is a ValueId in the promoting frame. It escapes if ANY op can put that address
+// somewhere that outlives the frame. The rule is an ADMIT-LIST THAT FAILS CLOSED (`scanOneOp`): three op
+// shapes are allowed and **every other op that READS the value disqualifies it** — and "reads the value" is
+// `collectStdOpUses`'s answer, the dialect's one oracle for that question, rather than a second enumeration
+// here that a new op variant could be appended past. The routes, and where each is caught:
+//
+//   • RETURNED (`ret v` / `errorReturn v`)            — not an admitted shape; `collectStdOpUses` reports it.
+//   • STORED INTO A CONTAINER OR ANOTHER RECORD       — `storeIndirect` with the record as the VALUE is
+//                                                       disqualified explicitly (as the ADDRESS it is a
+//                                                       field write, which is fine).
+//   • PASSED TO A FUNCTION THAT RETAINS IT            — the interprocedural parameter-escape summary below.
+//                                                       An UNKNOWN callee (every compiler runtime entry —
+//                                                       `__managed_mem_set`, `__str_*`, `__list_*` — whose
+//                                                       body is installed AFTER this pass) has no summary
+//                                                       and so always escapes.
+//   • CAPTURED BY A CLOSURE                           — a closure's environment is built with
+//                                                       `storeIndirect` into an `__mm_alloc`'d record and
+//                                                       is reached through `callIndirect`/`funcAddr`; none
+//                                                       of those is an admitted shape.
+//   • ASSIGNED TO A MODULE-LEVEL `var`                — a global's slot is written through `globalAddr` +
+//                                                       `storeIndirect`, i.e. the record is the stored
+//                                                       VALUE. Disqualified explicitly.
+//   • SENT THROUGH A WITNESS / INTERFACE DISPATCH     — `witnessCall`/`witnessTryCall` are not admitted, and
+//                                                       could not be: the concrete method is chosen at run
+//                                                       time, so no summary can answer for it.
+//   • SPAWNED INTO A GREEN THREAD (`async`)           — an `asyncCall` lowers to a `__gt_spawn` with a HEAP
+//                                                       argument buffer; the spawn is a call to a runtime
+//                                                       entry with no summary, so its arguments escape.
+//                                                       (shv2 also refuses a managed `async` argument
+//                                                       outright — `requireAsyncScalarParams` — so there is
+//                                                       nothing behind that door either way.)
+//   • THROWN AS AN ERROR PAYLOAD                      — a boxed error is `__mm_alloc`'d and the payload
+//                                                       written with `storeIndirect`; the record would be
+//                                                       the stored VALUE. Disqualified.
+//   • CARRIED ACROSS A BRANCH MERGE (a phi)           — branch-edge args live on the predecessor BLOCK, not
+//                                                       on any op, so `collectStdOpUses` structurally
+//                                                       cannot see them and says so. They are walked
+//                                                       SEPARATELY, and a record reaching one is refused.
+//                                                       ⭐ That refusal is also what makes SLOT REUSE safe:
+//                                                       a promotion site inside a loop writes the same slot
+//                                                       every iteration where the heap would hand out fresh
+//                                                       memory, and the only way a value from iteration i
+//                                                       can still be live at iteration i+1 is across a back
+//                                                       edge — which is a phi.
+//   • COMPARED BY REFERENCE IDENTITY (`is`)           — an `is` lowers to a `cmp` of the two pointers, which
+//                                                       is not an admitted shape, so **a record compared
+//                                                       with `is` is never promoted.** Two stack slots and
+//                                                       two heap boxes therefore cannot answer differently
+//                                                       for the same program: the promoted shape does not
+//                                                       exist wherever the question can be asked.
+//
+// ⚠ **A RECORD WITH A DESTRUCTOR IS NEVER PROMOTED**, and that one structural test carries the whole of the
+// bootstrap's "all-primitive fields" type-eligibility rule without asking a single question about types: a
+// struct holding a `String` or a nested record is allocated with `__mm_alloc(size, __destruct_<T>)` and
+// dropped through that cascade, so its `destructor` argument is not the constant 0 this pass requires.
+// Deleting such a drop would leak every managed field it owns.
+//
+// ⚠ **THE DROP MUST BE THERE TO DELETE.** A promotable record must have at least one `call __mm_decref(v)`
+// naming it. A record the caller never drops is one whose ownership this pass does not model, and refusing
+// it costs a promotion rather than risking a shape other than the one described here. The alloc's `+1` and
+// the free's `-1` on `__mm_alloc_count` then disappear together, so the leak gate (exit 101) still balances.
+//
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// ⛔ TWO WHOLE-COMPILE GATES, AND EACH IS A MEASUREMENT RATHER THAN AN OVERSIGHT
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+//
+// ⛔⛔ **A PROGRAM THAT RUNS GREEN THREADS PROMOTES NOTHING, BECAUSE ITS FRAMES MOVE.** shv2's green-thread
+// stacks GROW BY RELOCATION: `__gt_morestack` allocates a larger region, COPIES the old stack onto it,
+// rebases rsp, walks the saved-rbp chain adding the relocation offset — and FREES the old pages
+// (`X64GtRuntime`: *"copy the stack + rebase the live rbp + WALK the saved-rbp chain"*). Everything
+// addressed OFF rsp or rbp survives that, which is why spill slots and stack arguments have never cared.
+// A frame ADDRESS materialized into a REGISTER does not, and nothing enumerates registers to fix: a
+// promoted record's pointer held across a call whose prologue guard fires morestack would afterwards name
+// freed pages. `TargetOp.leaRegSlot` is the FIRST op in shv2 that materializes a frame address at all, so
+// this hazard is exactly as old as this pass and could not have been latent before it.
+//
+// The gate is the whole COMPILE, not the individual function, and that is deliberately coarse: the precise
+// question is "can this function run on a relocatable stack", i.e. reachability from every `__gt_spawn` —
+// through direct calls, through `funcAddr`-taken closures, and through witness dispatch, whose concrete
+// target is chosen at run time and so cannot be answered at all. A promotion is worth a few instructions;
+// paying for it with a reachability analysis that has an unanswerable arm is not the trade. If a finer gate
+// is ever wanted, the sound form is "promote only where the address never crosses a call", which is
+// `passedTo` deleted from the admit-list — and that costs `stack-when-passed-to-readonly-function`.
+//
+// ⛔ **wasm32-wasi PROMOTES NOTHING EITHER, FOR AN UNRELATED REASON.**
+//
+// A wasm local HAS NO ADDRESS, and shv2's wasm module emits no globals section at all — so there is no
+// `__stack_pointer`, no shadow stack, and no frame for a slot to index (`StdToWasm`'s header: *"the call
+// stack is the ENGINE's, not addressable memory"*). x64 and arm64 both already own the mechanism this pass
+// needs — a reserved region on the spiller's own slot grid, addressed by `TargetOp.leaRegSlot` — and wasm
+// owns none of it. Giving wasm one is a shadow-stack rung (a mutable global plus a bump on entry and a
+// restore at every return, which interacts with asyncify), not an extension of anything here. Until then
+// this pass does nothing on that lane and `StdToWasm`'s arms panic rather than guess.
+
+// One field of a recognized record constructor: WHERE it goes and WHAT goes there.
+type RecordField
+	export var offset as ByteOffset
+	// The width the constructor's own `storeIndirect` used. Carried rather than re-derived, so the store
+	// rebuilt at the call site is the store the factory would have made.
+	export var storeType as StdType
+	export var source as RecordFieldSource
+
+	export static function create(offset ByteOffset, storeType StdType, source RecordFieldSource) returns RecordField
+		return Self{offset: offset, storeType: storeType, source: source}
+	end 'create'
+end 'RecordField'
+
+typealias RecordFieldArray = Array with RecordField
+
+// Where a constructed field's value comes from. Exactly two answers, and that is the whole of what makes
+// the call-site REBUILD possible without copying the factory's body: a parameter is the caller's own
+// argument value, and a constant is re-materialized from the literal the factory carried.
+union RecordFieldSource
+	fromParameter(index ParamCount)
+	fromConstant(value ParsedInt, constType StdType)
+end 'RecordFieldSource'
+
+// A function's verdict: is it a RECORD CONSTRUCTOR, and if so what does it build?
+union RecordConstructor
+	notAConstructor
+	// `sizeBytes` is the payload size `__mm_alloc` was asked for; `fields` tile it exactly.
+	constructor(sizeBytes ByteOffset, fields RecordFieldArray)
+end 'RecordConstructor'
+
+typealias RecordConstructorArray = Array with RecordConstructor
+
+// What one function's walk found about the pointers it was asked to track. The first two are dense columns
+// over the tracked value space; `forwarded*` are three parallel columns of one call-argument edge each.
+//
+// ⭐ **ONE WALK, TWO INTERPRETATIONS.** The parameter-escape fixpoint and the call-site promotion ask the
+// SAME question — "can this pointer outlive the frame?" — of two different seeds, so they share this scan
+// rather than each carrying a copy of the escape rule. Neither DECIDES here: the walk records what it saw
+// (escaped on its own, dropped n times, forwarded to these callee parameters) and each caller applies its
+// own extra rule — a PARAMETER that is dropped has been retained and released by the callee and so escapes,
+// while a RECORD that is not dropped is one whose ownership this pass does not model.
+type PointerScan
+	var escapedLocally as BoolArray
+	var dropSites as ValueIdArray
+	export var forwardedPointers as ValueIdArray
+	export var forwardedCallees as FuncIndexArray
+	export var forwardedPositions as ParamCountArray
+
+	export static function create(valueBound ValueId) returns PointerScan
+		var escapedLocally = BoolArray.create()
+		escapedLocally.growFilled(valueBound, value: false)
+		var dropSites = ValueIdArray.create()
+		dropSites.growFilled(valueBound, value: 0)
+		return Self{escapedLocally: escapedLocally, dropSites: dropSites, forwardedPointers: ValueIdArray.create(), forwardedCallees: FuncIndexArray.create(), forwardedPositions: ParamCountArray.create()}
+	end 'create'
+
+	export function markEscaped(v ValueId)
+		try self.escapedLocally.set(v, value: true) otherwise panic("PointerScan.markEscaped: value {v} is outside the scanned value space")
+	end 'markEscaped'
+
+	export function noteDrop(v ValueId)
+		let seen = try self.dropSites.get(v) otherwise panic("PointerScan.noteDrop: value {v} is outside the scanned value space")
+		try self.dropSites.set(v, value: seen + 1) otherwise panic("PointerScan.noteDrop: dropSites.set OOB at {v}")
+	end 'noteDrop'
+
+	export function noteForward(v ValueId, calleeFuncIndex FuncIndex, position ParamCount)
+		self.forwardedPointers.push(v)
+		self.forwardedCallees.push(calleeFuncIndex)
+		self.forwardedPositions.push(position)
+	end 'noteForward'
+
+	export function escapedLocallyAt(v ValueId) returns bool
+		return try self.escapedLocally.get(v) otherwise panic("PointerScan.escapedLocallyAt: value {v} is outside the scanned value space")
+	end 'escapedLocallyAt'
+
+	export function dropSitesAt(v ValueId) returns ValueId
+		return try self.dropSites.get(v) otherwise panic("PointerScan.dropSitesAt: value {v} is outside the scanned value space")
+	end 'dropSitesAt'
+end 'PointerScan'
+
+// One promotion the transform will apply: the constructor call at `callOpIndex` becomes a `stackRecordAddr`
+// naming `slot`, followed by one store per field. `callArgs` is the call's OWN argument list, kept because
+// a field sourced from the constructor's parameter `k` is built from `callArgs[k]` — and the call op itself
+// is about to be replaced.
+type RecordPromotion
+	export var callOpIndex as OpIndex
+	export var recordValue as ValueId
+	export var sizeBytes as ByteOffset
+	// Filled by `assignFrameSlots` once the whole function's promotions are known — see it for why the
+	// slots are laid out in a pass of their own rather than as each promotion is decided.
+	export var slot as SpillSlot
+	export var fields as RecordFieldArray
+	export var callArgs as ValueIdArray
+
+	export static function create(callOpIndex OpIndex, recordValue ValueId, sizeBytes ByteOffset, fields RecordFieldArray, callArgs ValueIdArray) returns RecordPromotion
+		return Self{callOpIndex: callOpIndex, recordValue: recordValue, sizeBytes: sizeBytes, slot: 0, fields: fields, callArgs: callArgs}
+	end 'create'
+end 'RecordPromotion'
+
+typealias RecordPromotionArray = Array with RecordPromotion
+
+// One position in a function's plan list, and the map from the op a promotion replaces to that position —
+// so the rewrite is a lookup per op rather than a scan of the plan list per op.
+typealias PlanIndex = int(0 to u64.max)
+typealias PlanIndexByOpIndex = Map with (OpIndex, PlanIndex)
+
+// A callee this module defines, or one it does not — every compiler runtime entry, whose body is installed
+// after this pass. A union rather than an out-of-range index, because an index is what every caller then
+// uses to subscript the constructor table and the escape summary.
+union FuncIndexLookup
+	unknownCallee
+	resolves(funcIndex FuncIndex)
+end 'FuncIndexLookup'
+
+// Resolve a call's callee against the module. An unresolvable name is not an error here: every compiler
+// runtime entry (`__mm_alloc`, `__managed_mem_set`, `__str_*`, `__gt_*`) is installed AFTER this pass, so
+// "this module does not define it" is the ordinary answer for exactly the callees that must escape.
+function resolveCallee(byName FunctionNameIndex, callee ByteArray) returns FuncIndexLookup
+	let funcIndex = try byName.byName.get(callee) otherwise return FuncIndexLookup.unknownCallee
+	return FuncIndexLookup.resolves(funcIndex)
+end 'resolveCallee'
+
+// `__mm_alloc(size, destructor)` takes exactly two arguments — see MmRuntime.
+let MmAllocArgCount = 2 as ParamCount
+
+// `__mm_decref(ptr)` takes exactly one.
+let MmDecrefArgCount = 1 as ParamCount
+
+// The `destructor` argument of a record whose drop is nothing but the free: no managed field to release, so
+// no `__destruct_<T>` cascade. THE one value this pass will promote (see the header).
+let TrivialDestructor = 0 as ParsedInt
+
+// ⭐ **THE PASS.** Whole-module: the constructor table and the parameter-escape summary are both facts about
+// the call graph, and a call site cannot be judged without them.
+export function promoteStackRecords(project Project, module StdModule, usesGreenThreads bool)
+	if project.target.cpu == CpuArch.wasm32 'noFrameToPromoteInto'
+		// See this file's header. Not a refusal of the program — the records simply stay on the heap, which
+		// is where every target had them before this pass existed.
+		return
+	end 'noFrameToPromoteInto'
+
+	if usesGreenThreads 'theFrameCanMOVE'
+		// See this file's header. A green thread's stack GROWS BY RELOCATION and the old pages are FREED, so
+		// a promoted record's address held in a register across a call would point into freed memory.
+		return
+	end 'theFrameCanMOVE'
+
+	logDebug(LogCategory.ir, message: function() gives "promoteStackRecords: {module.funcCount()} function(s)")
+
+	// ⚠ **A DUPLICATE FUNCTION NAME DECLINES THE WHOLE PASS, AND THAT IS FAIL-CLOSED RATHER THAN PEDANTIC.**
+	// Every judgement here resolves a callee by NAME — which body is a record constructor, which of its
+	// parameters escape — so two functions sharing one name would let this pass reason about a call using
+	// the WRONG body's summary and rebuild a record out of a signature that is not the one being called.
+	// It uses `build` rather than `create` because raising E4015 is NOT this pass's to do: the site that
+	// owns it at this tier is `DeadFunctionElimination`, which runs later and can see strictly more
+	// collisions (see `FunctionNameIndex`'s header). So this declines to reason and lets that site speak.
+	match FunctionNameIndex.build(module.functions) 'names'
+		duplicateAt then return
+		built(byName) then promoteWithNameIndex(module, byName: byName)
+	end 'names'
+end 'promoteStackRecords'
+
+function promoteWithNameIndex(module StdModule, byName FunctionNameIndex)
+
+	// ⭐ **PHASE 1 IS THE GATE FOR PHASES 2 AND 3, and it is an allocation-free walk.** A module that
+	// declares no record constructor can promote nothing whatever its call sites look like, and the
+	// parameter-escape summary — one scan and five columns per function that HAS parameters — is then pure
+	// dead work. Most programs in the corpus are exactly that module.
+	let constructors = buildRecordConstructors(module)
+	if not anyConstructor(constructors) 'nothingIsEverBuilt'
+		return
+	end 'nothingIsEverBuilt'
+
+	let escapingParams = buildParamEscapeMasks(module, byName: byName)
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		promoteInFunction(module, func: module.getFunc(funcIndex), byName: byName, constructors: constructors, escapingParams: escapingParams)
+	end 'eachFunc'
+end 'promoteWithNameIndex'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Phase 1 — which functions are RECORD CONSTRUCTORS
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// Does the module declare any record constructor at all? See `promoteStackRecords` for what it gates.
+function anyConstructor(constructors RecordConstructorArray) returns bool
+	for funcIndex in 0 upto constructors.count() 'eachFunc'
+		let verdict = try constructors.get(funcIndex) otherwise panic("anyConstructor: constructors.get OOB at {funcIndex}")
+		match verdict 'verdict'
+			notAConstructor then break 'verdict'
+			constructor then return true
+		end 'verdict'
+	end 'eachFunc'
+	return false
+end 'anyConstructor'
+
+function buildRecordConstructors(module StdModule) returns RecordConstructorArray
+	var table = RecordConstructorArray.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		table.push(recognizeRecordConstructor(module, func: module.getFunc(funcIndex)))
+	end 'eachFunc'
+	return table
+end 'buildRecordConstructors'
+
+// ⭐⭐ **THE RECOGNITION, AND EVERY CLAUSE OF IT IS LOAD-BEARING.** `func` is a record constructor iff:
+//
+//   1. it has exactly ONE block, with no block arguments, terminated by `ret box`;
+//   2. that block's ops are only `param`, `const`, ONE `call __mm_alloc(size, destructor)`, and
+//      `storeIndirect`s whose ADDRESS is the allocated box;
+//   3. `size` and `destructor` are both constants, `destructor` is **0** (see the header: a record with a
+//      destructor cascade may not be promoted), and `size` is a positive whole number of slots;
+//   4. `box` appears NOWHERE except as those stores' address and as the `ret` operand — in particular it is
+//      never a store's VALUE and never an argument, so the constructor itself lets nothing escape;
+//   5. every store is exactly one slot wide and the stores TILE `[0, size)` — each slot written exactly
+//      once, none twice, none missed. That is what proves the frame slot is FULLY INITIALIZED: a heap
+//      record comes zeroed from `__mm_alloc` and a frame slot comes with whatever the last call left there,
+//      so a field the constructor relied on the allocator to zero would read garbage off the stack;
+//   6. every stored value is one of the function's own `param` results or one of its own `const` results,
+//      which is what lets the call site REBUILD the construction from its own arguments instead of copying
+//      the body.
+//
+// Anything else — a computed field, a guard, a second allocation, another call, a narrower store — is
+// `notAConstructor`, and its records stay on the heap.
+function recognizeRecordConstructor(module StdModule, func IrFunction) returns RecordConstructor
+	if func.blockRefs.count() != 1 'notStraightLine'
+		return RecordConstructor.notAConstructor
+	end 'notStraightLine'
+
+	let blockRef = try func.blockRefs.get(0) otherwise panic("recognizeRecordConstructor: blockRefs.get(0) OOB on a one-block function")
+	let block = try module.blocks.get(blockRef) otherwise panic("recognizeRecordConstructor: blockRef from func.blockRefs not in module.blocks")
+
+	if block.blockArgs.count() != 0 'carriesPhis'
+		return RecordConstructor.notAConstructor
+	end 'carriesPhis'
+	if not block.hasTerminatorOp() 'unterminated'
+		return RecordConstructor.notAConstructor
+	end 'unterminated'
+
+	match returnedValueOf(module, block: block) 'exit'
+		notAValueReturn then return RecordConstructor.notAConstructor
+		returns(box) then return scanConstructorBody(module, func: func, block: block, box: box)
+	end 'exit'
+end 'recognizeRecordConstructor'
+
+function scanConstructorBody(module StdModule, func IrFunction, block IrBlock, box ValueId) returns RecordConstructor
+	var scan = ConstructorScan.create(func.paramCount)
+	for opIdx in block.opRefs 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("scanConstructorBody: opIdx {opIdx} not in module.ops")
+		if not scan.admit(op, box: box) 'refused'
+			return RecordConstructor.notAConstructor
+		end 'refused'
+	end 'eachOp'
+	return scan.verdict()
+end 'scanConstructorBody'
+
+// How a block leaves. `errorReturn` is DELIBERATELY not a value return here: a throwing constructor hands
+// its record back on one edge and not the other, and this pass models only the total, single-exit shape.
+union BlockExit
+	notAValueReturn
+	returns(value ValueId)
+end 'BlockExit'
+
+function returnedValueOf(module StdModule, block IrBlock) returns BlockExit
+	let term = try module.ops.get(block.terminatorIndex()) otherwise panic("returnedValueOf: terminator not in module.ops")
+	return match term 'term'
+		const to branch gives BlockExit.notAValueReturn
+		ret(retValId) gives BlockExit.returns(retValId)
+		param to stackRecordAddr gives BlockExit.notAValueReturn
+	end 'term'
+end 'returnedValueOf'
+
+// The three columns `ConstructorScan` builds as it walks a candidate body: which values are its parameters,
+// and the literal (and its type) behind each of its constants.
+typealias ValueToParamMap = Map with (ValueId, ParamCount)
+typealias ValueToConstMap = Map with (ValueId, ParsedInt)
+typealias ValueToStdTypeMap = Map with (ValueId, StdType)
+
+// The running state of clauses 2–6 above. A type rather than a pile of locals because `admit` answers for
+// one op at a time while the clauses are cross-cutting: which values are parameters, which are constants,
+// which slots have been written, and whether the one allocation has been seen yet.
+type ConstructorScan
+	var paramOfValue as ValueToParamMap
+	var constOfValue as ValueToConstMap
+	var constTypeOfValue as ValueToStdTypeMap
+	var allocSize as ByteOffset
+	var allocSeen as bool
+	var fields as RecordFieldArray
+	// Slot index -> written, so clause 5's tiling is checked without sorting the fields.
+	var slotWritten as BoolArray
+	var paramCount as ParamCount
+
+	export static function create(paramCount ParamCount) returns ConstructorScan
+		return Self{paramOfValue: ValueToParamMap.create(), constOfValue: ValueToConstMap.create(), constTypeOfValue: ValueToStdTypeMap.create(), allocSize: 0, allocSeen: false, fields: RecordFieldArray.create(), slotWritten: BoolArray.create(), paramCount: paramCount}
+	end 'create'
+
+	// Accept one body op, or refuse the whole function. Exhaustive over StdOp through named ranges, so an
+	// op variant appended tomorrow lands outside every range and fails to compile HERE rather than being
+	// waved into a constructor body this pass has never reasoned about.
+	export function admit(op StdOp, box ValueId) returns bool
+		return match op 'op'
+			const(resultId, value, valueType) gives self.admitConst(resultId, value: value, valueType: valueType)
+			binOp to ret gives false
+			param(resultId, index, _) gives self.admitParam(resultId, index: index)
+			call(resultId, callee, args) gives self.admitAlloc(resultId, callee: callee, args: args, box: box)
+			retVoid to loadIndirect gives false
+			storeIndirect(addrId, offset, valueId, valueType) gives self.admitStore(addrId, offset: offset, valueId: valueId, valueType: valueType, box: box)
+			osAllocPages to stackRecordAddr gives false
+		end 'op'
+	end 'admit'
+
+	function admitConst(resultId ValueId, value ParsedInt, valueType StdType) returns bool
+		self.constOfValue.upsert(resultId, value: value)
+		self.constTypeOfValue.upsert(resultId, value: valueType)
+		return true
+	end 'admitConst'
+
+	// ⚠ A PARAMETER IS IDENTIFIED BY ITS `param` OP, not by the `id == index` contract the Std tier states
+	// elsewhere. The contract holds, and this refuses the function outright when it does not — the rebuild
+	// reads the call's argument at `index`, so a `param` op whose result is some other id would silently
+	// build the record out of the wrong argument.
+	function admitParam(resultId ValueId, index ParamCount) returns bool
+		if resultId != index or index >= self.paramCount 'notTheContractsIdentity'
+			return false
+		end 'notTheContractsIdentity'
+		self.paramOfValue.upsert(resultId, value: index)
+		return true
+	end 'admitParam'
+
+	// The ONE call a constructor may make is the allocation of the record it returns, and only with a
+	// constant size and a ZERO destructor. A second allocation, or any other callee, refuses the function.
+	function admitAlloc(resultId ValueId, callee ByteArray, args ValueIdArray, box ValueId) returns bool
+		if not callee.equals(MmAllocName) 'notTheAllocation'
+			return false
+		end 'notTheAllocation'
+		if self.allocSeen or resultId != box or args.count() != MmAllocArgCount 'notTheOneReturnedBox'
+			return false
+		end 'notTheOneReturnedBox'
+
+		let sizeId = try args.get(0) otherwise panic("ConstructorScan.admitAlloc: args.get(0) OOB on a two-argument `__mm_alloc`")
+		let destructorId = try args.get(1) otherwise panic("ConstructorScan.admitAlloc: args.get(1) OOB on a two-argument `__mm_alloc`")
+		let size = try self.constOfValue.get(sizeId) otherwise return false
+		let destructor = try self.constOfValue.get(destructorId) otherwise return false
+		if destructor != TrivialDestructor 'hasADestructorCascade'
+			return false
+		end 'hasADestructorCascade'
+		if size <= 0 or (size mod SpillSlotBytes) != 0 'notAWholeNumberOfSlots'
+			return false
+		end 'notAWholeNumberOfSlots'
+
+		self.allocSize = size as ByteOffset
+		self.allocSeen = true
+		self.slotWritten.growFilled(self.allocSize / SpillSlotBytes, value: false)
+		return true
+	end 'admitAlloc'
+
+	// A store is admitted only THROUGH the box, one whole slot wide, at a slot no earlier store claimed,
+	// and only of a parameter or a constant.
+	function admitStore(addrId ValueId, offset ByteOffset, valueId ValueId, valueType StdType, box ValueId) returns bool
+		if addrId != box or valueId == box or not self.allocSeen 'notAFieldOfTheBox'
+			return false
+		end 'notAFieldOfTheBox'
+		if valueType.rawValue.storageBytes != SpillSlotBytes or (offset mod SpillSlotBytes) != 0 or offset >= self.allocSize 'notAWholeSlotOfTheRecord'
+			return false
+		end 'notAWholeSlotOfTheRecord'
+
+		let slot = offset / SpillSlotBytes
+		let already = try self.slotWritten.get(slot) otherwise panic("ConstructorScan.admitStore: slotWritten.get OOB at {slot} — the column is sized to the record's slot count")
+		if already 'writtenTwice'
+			return false
+		end 'writtenTwice'
+
+		match self.sourceOf(valueId) 'source'
+			notRebuildable then return false
+			found(source) then self.recordField(slot, offset: offset, storeType: valueType, source: source)
+		end 'source'
+		return true
+	end 'admitStore'
+
+	function recordField(slot ByteOffset, offset ByteOffset, storeType StdType, source RecordFieldSource)
+		try self.slotWritten.set(slot, value: true) otherwise panic("ConstructorScan.recordField: slotWritten.set OOB at {slot}")
+		self.fields.push(RecordField.create(offset, storeType: storeType, source: source))
+	end 'recordField'
+
+	// Where a stored value comes from — a parameter of this function, or one of its constants. A value that
+	// is neither cannot be rebuilt at a call site.
+	function sourceOf(valueId ValueId) returns FieldSourceLookup
+		let param = try self.paramOfValue.get(valueId) otherwise 'notAParameter'
+			let value = try self.constOfValue.get(valueId) otherwise return FieldSourceLookup.notRebuildable
+			let constType = try self.constTypeOfValue.get(valueId) otherwise panic("ConstructorScan.sourceOf: value {valueId} has a recorded constant but no recorded type — `admitConst` writes both columns together")
+			return FieldSourceLookup.found(RecordFieldSource.fromConstant(value, constType: constType))
+		end 'notAParameter'
+		return FieldSourceLookup.found(RecordFieldSource.fromParameter(param))
+	end 'sourceOf'
+
+	// The verdict, once every op has been admitted: the allocation must have happened and every slot of the
+	// record must have been written.
+	export function verdict() returns RecordConstructor
+		if not self.allocSeen 'allocatedNothing'
+			return RecordConstructor.notAConstructor
+		end 'allocatedNothing'
+		for slot in 0 upto self.slotWritten.count() 'eachSlot'
+			let written = try self.slotWritten.get(slot) otherwise panic("ConstructorScan.verdict: slotWritten.get OOB at {slot}")
+			if not written 'left'
+				return RecordConstructor.notAConstructor
+			end 'left'
+		end 'eachSlot'
+		return RecordConstructor.constructor(self.allocSize, fields: self.fields)
+	end 'verdict'
+end 'ConstructorScan'
+
+// A source, or the refusal. A union rather than a sentinel `RecordFieldSource`, because every value of that
+// type is one the rebuild would happily emit.
+union FieldSourceLookup
+	notRebuildable
+	found(source RecordFieldSource)
+end 'FieldSourceLookup'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Phase 2 — which PARAMETERS escape, whole-program
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// One dense node per (function, parameter) pair, so the transitive closure below runs over the shared
+// `reverseReachabilityMark` engine rather than a round-based re-scan — see `CsrGraph`'s header for the
+// MEASURED difference between the two (a round-based fixpoint costs O(depth × (nodes + edges)), and the
+// depth is the source program's own).
+type ParamNodeSpace
+	var base as CsrColumn
+	export var nodeCount as CsrIndex
+
+	export static function create(module StdModule) returns ParamNodeSpace
+		var base = CsrColumn.create()
+		var next = 0 as CsrIndex
+		for funcIndex in 0 upto module.funcCount() 'eachFunc'
+			base.push(next)
+			next = next + module.getFunc(funcIndex).paramCount
+		end 'eachFunc'
+		return Self{base: base, nodeCount: next}
+	end 'create'
+
+	export function nodeOf(funcIndex FuncIndex, param ParamCount) returns CsrIndex
+		let first = try self.base.get(funcIndex) otherwise panic("ParamNodeSpace.nodeOf: function index {funcIndex} is outside the module")
+		return first + param
+	end 'nodeOf'
+end 'ParamNodeSpace'
+
+// The mask of ESCAPING parameter positions, one per function index.
+//
+// ⚠⚠ **THIS IS NOT `SemanticCheck.buildEscapeSummary`, AND MERGING THE TWO WOULD MAKE ONE OF THEM WRONG.**
+// They share this project's whole escape VOCABULARY — `ParamPositionMask` with `maskWithParam`/
+// `maskHasParam`, a CSR built by `buildCsr`, the closure walked by `reverseReachabilityMark` — because that
+// is where the shared substance is. What they do not share is the QUESTION:
+//
+//   • SemanticCheck asks, at the MAXON tier, whether a `function`-TYPED parameter is PERSISTED, to refuse a
+//     capturing closure at a call site (E3099). Its conservatism must not produce a false REFUSAL, because
+//     the consequence of being wrong is a legal program rejected.
+//   • This asks, at the STD tier, whether a RECORD POINTER can outlive the frame, to decide whether an
+//     allocation may be deleted. Its conservatism must not produce a false ADMISSION, because the
+//     consequence of being wrong is a dangling pointer with no diagnostic anywhere.
+//
+// The admitted uses differ accordingly — a `loadIndirect` THROUGH the pointer is the whole point of a
+// record and is meaningless for a closure — and one predicate serving both would have to be the union of
+// their refusals, which is neither answer. The tiers differ too: this one is keyed on `__mm_alloc` /
+// `__mm_decref`, ops that do not exist until the lowering has run.
+//
+// ⭐ **SOUND RATHER THAN OPTIMISTIC, and that is what makes recursion safe.** "Escapes" is REACHABILITY
+// FROM A REAL ESCAPE SITE: a parameter forwarded round a recursive cycle and never actually persisted is
+// never marked, because no seed is reachable from it. That is the same least-fixpoint argument
+// `SemanticCheck.buildEscapeSummary` makes, and for the same reason — the stdlib sort cone is mutually
+// recursive, so a depth-first "ask the callee" walk would not terminate on it.
+//
+// ⚠ **BUT IT IS NOT THE SAME ENGINE, AND SAYING SO WOULD BE A CLAIM THE CODE DOES NOT MAKE.** SemanticCheck
+// carries a whole MASK per function and closes it with `propagateParamMasks`, a mask-valued worklist over
+// per-FUNCTION nodes. This one's seeds are per-PARAMETER facts with no mask arithmetic at all, so its node
+// is a (function, parameter) PAIR and the closure is the shared `reverseReachabilityMark` — plain
+// reachability, nothing to merge. What the two genuinely share is `buildCsr` and the `ParamPositionMask`
+// vocabulary. See `SemanticCheck.buildEscapeSummary`'s header for why a second escape analysis exists at
+// all, which is the other half of this note.
+function buildParamEscapeMasks(module StdModule, byName FunctionNameIndex) returns ParamPositionMaskArray
+	let nodes = ParamNodeSpace.create(module)
+
+	var seeds = BoolArray.create()
+	seeds.growFilled(nodes.nodeCount, value: false)
+	// Edges point from the CALLEE's parameter to the CALLER's, so the mark propagates BACKWARD from a real
+	// escape site to every parameter that can reach one — the direction `reverseReachabilityMark` walks.
+	var edgeFrom = CsrColumn.create()
+	var edgeTo = CsrColumn.create()
+
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIndex)
+		if func.paramCount == 0 'nothingToTrack'
+			continue
+		end 'nothingToTrack'
+
+		// ONE derivation of the op walk, shared by the two phases that need it — see `scanPointerUses`.
+		let liveOps = module.liveOpIndices(func)
+		let tracked = parameterValues(module, liveOps: liveOps, func: func)
+		let scan = scanPointerUses(module, func: func, liveOps: liveOps, tracked: tracked, byName: byName)
+		seedEscapingParams(seeds, nodes: nodes, funcIndex: funcIndex, func: func, tracked: tracked, scan: scan)
+		collectParamForwardEdges(edgeFrom, edgeTo: edgeTo, nodes: nodes, funcIndex: funcIndex, func: func, scan: scan)
+	end 'eachFunc'
+
+	let marked = reverseReachabilityMark(buildCsr(edgeFrom, to: edgeTo, nodeCount: nodes.nodeCount), seeds: seeds)
+	return publishParamMasks(module, nodes: nodes, marked: marked)
+end 'buildParamEscapeMasks'
+
+function seedEscapingParams(seeds BoolArray, nodes ParamNodeSpace, funcIndex FuncIndex, func IrFunction, tracked BoolArray, scan PointerScan)
+	for param in 0 upto func.paramCount 'eachParam'
+		// ⚠ A parameter the CALLEE DROPS has escaped: `__mm_decref` releases an ownership stake, and
+		// releasing a frame address would run `__mm_free`'s poison fill across live stack memory. That is
+		// the one place this reading of the shared scan differs from the call site's, where a drop is
+		// exactly what promotion deletes.
+		//
+		// ⚠ **A PARAMETER WITH NO `param` OP IS SEEDED ESCAPING**, not left alone. Untracked, nothing in the
+		// walk can mark it, and an unseeded node reads as "does not escape" — the unsafe direction.
+		let untracked = not (try tracked.get(param) otherwise panic("seedEscapingParams: tracked.get OOB at {param} — the column is sized to the function's parameter count"))
+		if untracked or scan.escapedLocallyAt(param) or scan.dropSitesAt(param) > 0 'realEscapeSite'
+			try seeds.set(nodes.nodeOf(funcIndex, param: param), value: true) otherwise panic("seedEscapingParams: seeds.set OOB for parameter {param} of function {funcIndex}")
+		end 'realEscapeSite'
+	end 'eachParam'
+end 'seedEscapingParams'
+
+function collectParamForwardEdges(edgeFrom CsrColumn, edgeTo CsrColumn, nodes ParamNodeSpace, funcIndex FuncIndex, func IrFunction, scan PointerScan)
+	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
+		let pointer = try scan.forwardedPointers.get(edge) otherwise panic("collectParamForwardEdges: forwardedPointers.get OOB at {edge}")
+		if pointer >= func.paramCount 'notAParameterOfThisFunction'
+			continue
+		end 'notAParameterOfThisFunction'
+		let callee = try scan.forwardedCallees.get(edge) otherwise panic("collectParamForwardEdges: forwardedCallees.get OOB at {edge}")
+		let position = try scan.forwardedPositions.get(edge) otherwise panic("collectParamForwardEdges: forwardedPositions.get OOB at {edge}")
+		edgeFrom.push(nodes.nodeOf(callee, param: position))
+		edgeTo.push(nodes.nodeOf(funcIndex, param: pointer))
+	end 'eachForward'
+end 'collectParamForwardEdges'
+
+function publishParamMasks(module StdModule, nodes ParamNodeSpace, marked BoolArray) returns ParamPositionMaskArray
+	var masks = ParamPositionMaskArray.create()
+	for funcIndex in 0 upto module.funcCount() 'eachFunc'
+		let func = module.getFunc(funcIndex)
+		var mask = NoParamPositions
+		for param in 0 upto func.paramCount 'eachParam'
+			let escapes = try marked.get(nodes.nodeOf(funcIndex, param: param)) otherwise panic("publishParamMasks: marked.get OOB for parameter {param} of function {funcIndex}")
+			if escapes 'escaping'
+				mask = maskWithParam(mask, param: param)
+			end 'escaping'
+		end 'eachParam'
+		masks.push(mask)
+	end 'eachFunc'
+	return masks
+end 'publishParamMasks'
+
+// The tracked column for a parameter scan: which of `func`'s parameter values were found, through the
+// `param` ops that define them.
+function parameterValues(module StdModule, liveOps OpIndexArray, func IrFunction) returns BoolArray
+	var tracked = BoolArray.create()
+	tracked.growFilled(func.paramCount, value: false)
+	for opIdx in liveOps 'eachOp'
+		let op = try module.ops.get(opIdx) otherwise panic("parameterValues: live op index {opIdx} not in module.ops")
+		match op 'op'
+			const to ret then break 'op'
+			param(resultId, index, _) then markParameterValue(tracked, resultId: resultId, index: index)
+			call to stackRecordAddr then break 'op'
+		end 'op'
+	end 'eachOp'
+	return tracked
+end 'parameterValues'
+
+// A `param` op whose result id is not its index breaks the Std tier's parameter contract (parameters occupy
+// `0..paramCount-1`), and every column here is indexed by that identity. Not marking it leaves the position
+// seeded escaping, which is the safe direction.
+function markParameterValue(tracked BoolArray, resultId ValueId, index ParamCount)
+	if resultId != index or resultId >= tracked.count() 'notTheContractsIdentity'
+		return
+	end 'notTheContractsIdentity'
+	try tracked.set(resultId, value: true) otherwise panic("markParameterValue: tracked.set OOB at {resultId}")
+end 'markParameterValue'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// The shared escape walk
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ⭐⭐ **ONE LINEAR WALK, AND ITS FAIL-CLOSED SHAPE IS THE WHOLE SAFETY ARGUMENT.** `tracked` is a dense
+// column over the value ids this scan is asked about. Three op shapes are ADMITTED explicitly; every other
+// op is handed to `collectStdOpUses` — the dialect's single "what does this op read?" oracle — and every
+// tracked value it reports is marked escaped. So an op variant added tomorrow escapes BY DEFAULT, and it
+// does so through the function that already has to know what it reads rather than through a list here that
+// could be forgotten.
+//
+// The accumulating `StdValueUseSet` is not a shortcut: "some non-admitted op read this value" is exactly
+// what one set accumulated across the whole walk means, which is why the walk allocates nothing per op.
+function scanPointerUses(module StdModule, func IrFunction, liveOps OpIndexArray, tracked BoolArray, byName FunctionNameIndex) returns PointerScan
+	var scan = PointerScan.create(tracked.count())
+	var readByOtherOps = StdValueUseSet.create()
+
+	// ⚠⚠ **THE OPS COME FROM `liveOpIndices`, THE SAME WALK EVERY OTHER PHASE OF THIS PASS USES, AND THAT
+	// IS A CORRECTNESS REQUIREMENT RATHER THAN TIDINESS.** The CANDIDATE set is derived from that walk and
+	// the ESCAPE VERDICT from this one. A hand-rolled copy of the block→ops→terminator sweep here would be
+	// two walks that happen to agree today; the day one of them saw an op the other did not, a record whose
+	// only escape sits in that op would be promoted — with no compile error at either site, because both
+	// walks are individually well-formed. One walk, derived once per function and handed to both.
+	for opIdx in liveOps 'eachOp'
+		scanOneOp(module, opIdx: opIdx, tracked: tracked, byName: byName, scan: scan, readByOtherOps: readByOtherOps)
+	end 'eachOp'
+
+	// ⚠ BRANCH-EDGE ARGS LIVE ON THE BLOCK, NOT ON AN OP, so neither `liveOpIndices` nor `collectStdOpUses`
+	// can reach them and both say so in as many words. They are the one thing this walks blocks for. A
+	// tracked pointer reaching a merge escapes — see the header on why that is also what makes slot reuse
+	// safe.
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("scanPointerUses: blockRef from func.blockRefs not in module.blocks")
+		for edge in block.branchEdges 'eachEdge'
+			for argId in edge.argIds 'eachArg'
+				markIfTracked(tracked, v: argId, scan: scan)
+			end 'eachArg'
+		end 'eachEdge'
+	end 'eachBlock'
+
+	for v in 0 upto tracked.count() 'settleOtherReads'
+		if isTracked(tracked, v: v) and readByOtherOps.contains(v) 'readByAnUnadmittedOp'
+			scan.markEscaped(v)
+		end 'readByAnUnadmittedOp'
+	end 'settleOtherReads'
+
+	return scan
+end 'scanPointerUses'
+
+function isTracked(tracked BoolArray, v ValueId) returns bool
+	if v >= tracked.count() 'outsideTheTrackedSpace'
+		return false
+	end 'outsideTheTrackedSpace'
+	return try tracked.get(v) otherwise panic("isTracked: tracked.get OOB at {v} after a bounds test")
+end 'isTracked'
+
+function markIfTracked(tracked BoolArray, v ValueId, scan PointerScan)
+	if isTracked(tracked, v: v) 'ours'
+		scan.markEscaped(v)
+	end 'ours'
+end 'markIfTracked'
+
+function scanOneOp(module StdModule, opIdx OpIndex, tracked BoolArray, byName FunctionNameIndex, scan PointerScan, readByOtherOps StdValueUseSet)
+	let op = try module.ops.get(opIdx) otherwise panic("scanOneOp: opIdx {opIdx} not in module.ops")
+
+	match op 'shape'
+		// EVERY OP THAT IS NOT ONE OF THE THREE ADMITTED SHAPES: whether it names a tracked pointer is
+		// `collectStdOpUses`'s answer, and if it does, the pointer escapes. Named ranges, so a variant
+		// appended past `stackRecordAddr` fails to compile here.
+		const to param then collectStdOpUses(op, referenced: readByOtherOps)
+		call(_, callee, args) then scanCallOperands(module, callee: callee, args: args, tracked: tracked, byName: byName, scan: scan)
+		retVoid to globalAddr then collectStdOpUses(op, referenced: readByOtherOps)
+		// A field read THROUGH the pointer. Its only operand IS the address, so an admitted `loadIndirect`
+		// needs nothing recorded at all.
+		loadIndirect then break 'shape'
+		// A field write through the pointer is admitted; the pointer as the STORED VALUE is the
+		// container / global / error-payload escape route, and is not.
+		storeIndirect(_, _, valueId, _) then markIfTracked(tracked, v: valueId, scan: scan)
+		osAllocPages to stackRecordAddr then collectStdOpUses(op, referenced: readByOtherOps)
+	end 'shape'
+end 'scanOneOp'
+
+// A direct call's arguments. The DROP is recognized here rather than left to escape, because it is the one
+// call that names the pointer and does not retain it — recognized by the callee's NAME and its single
+// argument together, which is the whole of the shape `Parser.emitDecref` emits for a trivial record.
+//
+// ⚠ **THE OTHER DROP CALLEES ARE DELIBERATELY NOT ADMITTED.** `Parser.decrefCalleeFor` also routes to
+// `__str_decref`, `__destruct_<T>`, `__drop_type_param`, `__drop_existential`, `__list_decref` and the rest;
+// every one of those releases something a promoted record cannot have (a destructor cascade, a witness, a
+// buffer), and a record whose drop is any of them fails phase 1's `destructor == 0` test anyway. They fall
+// through to the unknown-callee escape below, which is where they belong.
+function scanCallOperands(module StdModule, callee ByteArray, args ValueIdArray, tracked BoolArray, byName FunctionNameIndex, scan PointerScan)
+	if callee.equals(MmDecrefName) and args.count() == MmDecrefArgCount 'theDrop'
+		let dropped = try args.get(0) otherwise panic("scanCallOperands: args.get(0) OOB on a one-argument `__mm_decref`")
+		if isTracked(tracked, v: dropped) 'ours'
+			scan.noteDrop(dropped)
+			return
+		end 'ours'
+	end 'theDrop'
+
+	// An UNKNOWN callee — every compiler runtime entry, whose body is installed after this pass — has no
+	// parameter summary, so anything it is handed escapes.
+	match resolveCallee(byName, callee: callee) 'callee'
+		unknownCallee then markEveryTrackedArg(args, tracked: tracked, scan: scan)
+		resolves(calleeFuncIndex) then forwardCallArguments(args, tracked: tracked, calleeFuncIndex: calleeFuncIndex, calleeParamCount: module.getFunc(calleeFuncIndex).paramCount, scan: scan)
+	end 'callee'
+end 'scanCallOperands'
+
+function markEveryTrackedArg(args ValueIdArray, tracked BoolArray, scan PointerScan)
+	for argId in args 'eachArg'
+		markIfTracked(tracked, v: argId, scan: scan)
+	end 'eachArg'
+end 'markEveryTrackedArg'
+
+function forwardCallArguments(args ValueIdArray, tracked BoolArray, calleeFuncIndex FuncIndex, calleeParamCount ParamCount, scan PointerScan)
+	for position in 0 upto args.count() 'eachArg'
+		let argId = try args.get(position) otherwise panic("forwardCallArguments: args.get OOB at {position}")
+		if not isTracked(tracked, v: argId) 'notOurs'
+			continue
+		end 'notOurs'
+		// An argument past the callee's declared parameters is a call this pass cannot reason about, so it
+		// escapes rather than being forwarded to a position that does not exist.
+		if position >= calleeParamCount 'beyondTheSignature'
+			scan.markEscaped(argId)
+			continue
+		end 'beyondTheSignature'
+		scan.noteForward(argId, calleeFuncIndex: calleeFuncIndex, position: position)
+	end 'eachArg'
+end 'forwardCallArguments'
+
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+// Phase 3 — the call sites, and the transform
+// ══════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// ⚠ **NOTHING IS ALLOCATED FOR A FUNCTION THAT BUILDS NO RECORD**, which is nearly all of them. The
+// allocation-free `functionBuildsARecord` scan runs first; only past it does this pay for the value bound
+// (a whole-function walk) and the four dense columns the analysis needs.
+//
+// ⚠ **AND THE VALUE BOUND IS TAKEN ONCE AND THREADED.** This pass needs the number three times — to size
+// the candidate column, to size the retention column, and to seed the minter. Asked per CANDIDATE, which is
+// what a `growFilled` inside the collect loop would be, it becomes a whole-function walk per constructor
+// call: Θ(ops × constructions) in a function that builds many records.
+function promoteInFunction(module StdModule, func IrFunction, byName FunctionNameIndex, constructors RecordConstructorArray, escapingParams ParamPositionMaskArray)
+	let liveOps = module.liveOpIndices(func)
+	if not functionBuildsARecord(module, liveOps: liveOps, byName: byName, constructors: constructors) 'noConstructorCall'
+		return
+	end 'noConstructorCall'
+
+	let valueBound = nextFreeValueId(module, func: func)
+	let candidates = collectConstructorResults(module, liveOps: liveOps, valueBound: valueBound, byName: byName, constructors: constructors)
+
+	let scan = scanPointerUses(module, func: func, liveOps: liveOps, tracked: candidates, byName: byName)
+	let plans = planPromotions(module, func: func, valueBound: valueBound, scan: scan, byName: byName, constructors: constructors, escapingParams: escapingParams)
+	if plans.count() == 0 'nothingProvable'
+		return
+	end 'nothingProvable'
+
+	assignFrameSlots(func, plans: plans)
+	applyPromotions(module, func: func, valueBound: valueBound, plans: plans)
+end 'promoteInFunction'
+
+// The tracked column for a call-site scan: every value defined by a call to a record constructor.
+function collectConstructorResults(module StdModule, liveOps OpIndexArray, valueBound ValueId, byName FunctionNameIndex, constructors RecordConstructorArray) returns BoolArray
+	var candidates = BoolArray.create()
+	candidates.growFilled(valueBound, value: false)
+	for opIdx in liveOps 'eachOp'
+		match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
+			notAConstructorCall then break 'site'
+			builds(resultId, _, _, _) then try candidates.set(resultId, value: true) otherwise panic("collectConstructorResults: candidates.set OOB at {resultId} — the column is sized to the function's value space")
+		end 'site'
+	end 'eachOp'
+	return candidates
+end 'collectConstructorResults'
+
+// Does this function call a record constructor at all? The allocation-free gate that keeps the whole of
+// phase 3 off the overwhelming majority of functions, which build none.
+function functionBuildsARecord(module StdModule, liveOps OpIndexArray, byName FunctionNameIndex, constructors RecordConstructorArray) returns bool
+	for opIdx in liveOps 'eachOp'
+		match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
+			notAConstructorCall then break 'site'
+			builds then return true
+		end 'site'
+	end 'eachOp'
+	return false
+end 'functionBuildsARecord'
+
+// Is the op at `opIdx` a call to a recognized record constructor, and what does it build?
+union ConstructorCallSite
+	notAConstructorCall
+	builds(resultId ValueId, sizeBytes ByteOffset, fields RecordFieldArray, args ValueIdArray)
+end 'ConstructorCallSite'
+
+function constructorCallAt(module StdModule, opIdx OpIndex, byName FunctionNameIndex, constructors RecordConstructorArray) returns ConstructorCallSite
+	let op = try module.ops.get(opIdx) otherwise panic("constructorCallAt: opIdx {opIdx} not in module.ops")
+	return match op 'op'
+		const to param gives ConstructorCallSite.notAConstructorCall
+		call(resultId, callee, args) gives constructorCallOf(module, resultId: resultId, callee: callee, args: args, byName: byName, constructors: constructors)
+		retVoid to stackRecordAddr gives ConstructorCallSite.notAConstructorCall
+	end 'op'
+end 'constructorCallAt'
+
+function constructorCallOf(module StdModule, resultId ValueId, callee ByteArray, args ValueIdArray, byName FunctionNameIndex, constructors RecordConstructorArray) returns ConstructorCallSite
+	match resolveCallee(byName, callee: callee) 'callee'
+		unknownCallee then return ConstructorCallSite.notAConstructorCall
+		resolves(calleeFuncIndex) then return constructorCallIn(module, resultId: resultId, calleeFuncIndex: calleeFuncIndex, args: args, constructors: constructors)
+	end 'callee'
+end 'constructorCallOf'
+
+function constructorCallIn(module StdModule, resultId ValueId, calleeFuncIndex FuncIndex, args ValueIdArray, constructors RecordConstructorArray) returns ConstructorCallSite
+	// ⚠ THE ARGUMENT LIST MUST MATCH THE SIGNATURE POSITION FOR POSITION, because the rebuild reads
+	// `args[k]` for the constructor's parameter `k`. A call whose arity disagrees with the callee's is one
+	// this pass does not model.
+	if args.count() != module.getFunc(calleeFuncIndex).paramCount 'arityDisagrees'
+		return ConstructorCallSite.notAConstructorCall
+	end 'arityDisagrees'
+	let verdict = try constructors.get(calleeFuncIndex) otherwise panic("constructorCallOf: the constructor table has no row for function index {calleeFuncIndex} — it is built with one row per module function")
+	return match verdict 'verdict'
+		notAConstructor gives ConstructorCallSite.notAConstructorCall
+		constructor(sizeBytes, fields) gives ConstructorCallSite.builds(resultId, sizeBytes: sizeBytes, fields: fields, args: args)
+	end 'verdict'
+end 'constructorCallIn'
+
+// Decide which of this function's constructed records may be promoted. Laying out the frame region they
+// occupy is `assignFrameSlots`', below.
+function planPromotions(module StdModule, func IrFunction, valueBound ValueId, scan PointerScan, byName FunctionNameIndex, constructors RecordConstructorArray, escapingParams ParamPositionMaskArray) returns RecordPromotionArray
+	// ⚠ ONE PASS OVER THE FORWARDING EDGES, NOT ONE PER CANDIDATE. Asked per record — a scan of the edge
+	// list inside the decision — this is Θ(constructions × call arguments) in a function that both builds
+	// many records and makes many calls. Resolved into a column first, the decision below is a subscript.
+	let retained = retainedByACallee(valueBound, scan: scan, escapingParams: escapingParams)
+
+	// ⚠ **BODY OPS ONLY, AND THAT IS THE SAME SET `applyPromotions` REWRITES.** The rewrite rebuilds each
+	// block's `opRefs`; a block's TERMINATOR lives in its own field and is never visited. A `call` cannot be
+	// a terminator today — every backend's terminator match panics on one — but a plan the rewrite could not
+	// reach would be the one shape that FAILS OPEN here: the constructor call would survive while its
+	// `__mm_decref` was deleted, which is a leak or a double free rather than a missed optimization. Walking
+	// the very set that will be rewritten makes that unreachable by construction rather than by that panic.
+	var plans = RecordPromotionArray.create()
+	for blockRef in func.blockRefs 'eachBlock'
+		let block = try module.blocks.get(blockRef) otherwise panic("planPromotions: blockRef from func.blockRefs not in module.blocks")
+		for opIdx in block.opRefs 'eachOp'
+			match constructorCallAt(module, opIdx: opIdx, byName: byName, constructors: constructors) 'site'
+				notAConstructorCall then break 'site'
+				builds(resultId, sizeBytes, fields, args) then planOnePromotion(opIdx, resultId: resultId, sizeBytes: sizeBytes, fields: fields, args: args, scan: scan, retained: retained, plans: plans)
+			end 'site'
+		end 'eachOp'
+	end 'eachBlock'
+	return plans
+end 'planPromotions'
+
+// Which tracked pointers were handed to a callee that RETAINS the position they filled.
+function retainedByACallee(valueBound ValueId, scan PointerScan, escapingParams ParamPositionMaskArray) returns BoolArray
+	var retained = BoolArray.create()
+	retained.growFilled(valueBound, value: false)
+	for edge in 0 upto scan.forwardedPointers.count() 'eachForward'
+		let callee = try scan.forwardedCallees.get(edge) otherwise panic("retainedByACallee: forwardedCallees.get OOB at {edge}")
+		let position = try scan.forwardedPositions.get(edge) otherwise panic("retainedByACallee: forwardedPositions.get OOB at {edge}")
+		let mask = try escapingParams.get(callee) otherwise panic("retainedByACallee: the escape summary has no row for function index {callee} — it is built with one row per module function")
+		if not maskHasParam(mask, param: position) 'calleeLeavesItAlone'
+			continue
+		end 'calleeLeavesItAlone'
+		let pointer = try scan.forwardedPointers.get(edge) otherwise panic("retainedByACallee: forwardedPointers.get OOB at {edge}")
+		try retained.set(pointer, value: true) otherwise panic("retainedByACallee: retained.set OOB at {pointer} — the column is sized to the function's value space")
+	end 'eachForward'
+	return retained
+end 'retainedByACallee'
+
+function planOnePromotion(opIdx OpIndex, resultId ValueId, sizeBytes ByteOffset, fields RecordFieldArray, args ValueIdArray, scan PointerScan, retained BoolArray, plans RecordPromotionArray)
+	if not recordIsFrameLocal(resultId, scan: scan, retained: retained) 'escapes'
+		return
+	end 'escapes'
+	plans.push(RecordPromotion.create(opIdx, recordValue: resultId, sizeBytes: sizeBytes, fields: fields, callArgs: args))
+end 'planOnePromotion'
+
+// ⭐⭐ **LAY THE PROMOTED REGION OUT FROM ZERO, AND WRITE `stackSize` ONCE.** Each promoted record takes the
+// next slots of a region that begins at slot 0; the register allocator's spills then begin above the whole
+// region (`SplitDriver.create` seeds `nextSlot` from this number).
+//
+// ⚠ **IT ASSIGNS, IT DOES NOT ACCUMULATE, AND THAT IS DELIBERATE.** Reading `func.stackSize` as a running
+// cursor — which is what deciding each record's slot at the moment it is proven would do — makes this pass
+// depend on the field being ZERO on entry. It is, for a function this compile lowered; but an `IrFunction`
+// is a heap record, the Maxon and Std modules hold THE SAME objects (`transferFuncs`), and the register
+// allocator writes this very field at the end of every compile. A reused function would then start each
+// compile with the last one's frame and reserve it again, growing without bound and silently. Laying the
+// region out from 0 and assigning the total makes the pass IDEMPOTENT, so the question does not have to be
+// answered before the code is safe.
+function assignFrameSlots(func IrFunction, plans RecordPromotionArray)
+	var reserved = 0 as StackSize
+	for planIndex in 0 upto plans.count() 'eachPlan'
+		var plan = try plans.get(planIndex) otherwise panic("assignFrameSlots: plans.get OOB at {planIndex}")
+		plan.slot = reserved / SpillSlotBytes
+		reserved = reserved + plan.sizeBytes
+	end 'eachPlan'
+	func.stackSize = reserved
+end 'assignFrameSlots'
+
+// ⭐ **THE DECISION, IN ONE PLACE.** A record may be promoted iff nothing in its frame let it escape, every
+// callee it was handed to leaves it alone, and the frame drops it at least once (see the header on why a
+// record with no drop is refused).
+function recordIsFrameLocal(record ValueId, scan PointerScan, retained BoolArray) returns bool
+	if scan.escapedLocallyAt(record) 'escapedHere'
+		return false
+	end 'escapedHere'
+	if scan.dropSitesAt(record) == 0 'neverDropped'
+		return false
+	end 'neverDropped'
+	let calleeRetainsIt = try retained.get(record) otherwise panic("recordIsFrameLocal: retained.get OOB at {record} — the column is sized to the function's value space")
+	return not calleeRetainsIt
+end 'recordIsFrameLocal'
+
+// ⭐⭐ **THE TRANSFORM, AND IT REWRITES NOT ONE OP OF THE CALLER.** The constructor call is replaced, at its
+// own position, by the frame address — reusing THE CALL'S OWN RESULT ID — and the field stores are spliced
+// in after it. So every downstream op keeps naming the same value. The only fresh values are the `const`s a
+// constant-valued field needs, minted above the function's whole value space.
+//
+// The drops are deleted in the same rebuild: a promoted record has no MM header to decrement and no
+// allocation to free, and `__mm_decref` on a frame address would run `__mm_free`'s poison fill across live
+// stack memory.
+function applyPromotions(module StdModule, func IrFunction, valueBound ValueId, plans RecordPromotionArray)
+	// `ValueMinter.create` is seeded with the first FREE id, which for a synthesized function is its
+	// parameter count and here is the whole value space — the same meaning, a different way of knowing it.
+	var mint = ValueMinter.create(valueBound)
+	// ⚠ THE PLANS ARE KEYED BY OP INDEX, not scanned per op. Walked as a list inside the rebuild, the
+	// rewrite is Θ(ops × promotions) — and a function that builds many records is exactly the one with many
+	// promotions, so the two factors grow together.
+	var planAtOp = PlanIndexByOpIndex.create()
+	// A dense column over the function's value space, NOT a `StdValueUseSet`: that type's whole contract is
+	// "the ids a function's ops READ" (it is `collectStdOpUses`' output), and this is a different question —
+	// which records this pass is promoting. Same representation, and `valueBound` is already in hand.
+	var promoted = BoolArray.create()
+	promoted.growFilled(valueBound, value: false)
+	for planIndex in 0 upto plans.count() 'eachPlan'
+		let plan = try plans.get(planIndex) otherwise panic("applyPromotions: plans.get OOB at {planIndex}")
+		try promoted.set(plan.recordValue, value: true) otherwise panic("applyPromotions: promoted.set OOB at {plan.recordValue} — the column is sized to the function's value space")
+		planAtOp.upsert(plan.callOpIndex, value: planIndex)
+	end 'eachPlan'
+
+	for blockRef in func.blockRefs 'eachBlock'
+		var block = try module.blocks.get(blockRef) otherwise panic("applyPromotions: blockRef from func.blockRefs not in module.blocks")
+		var rebuilt = OpIndexArray.create()
+		for opIdx in block.opRefs 'eachRef'
+			appendRewrittenOp(module, opIdx: opIdx, plans: plans, planAtOp: planAtOp, promoted: promoted, mint: mint, rebuilt: rebuilt)
+		end 'eachRef'
+		block.opRefs = rebuilt
+	end 'eachBlock'
+end 'applyPromotions'
+
+// One op of the promoting function: the constructor call becomes the frame address plus its stores, a drop
+// of a promoted record disappears, and everything else is carried across untouched.
+//
+// ⚠ A TERMINATOR IS NEVER EITHER OF THOSE — both are `call` ops, which are body ops — so rebuilding
+// `opRefs` alone reaches every site.
+function appendRewrittenOp(module StdModule, opIdx OpIndex, plans RecordPromotionArray, planAtOp PlanIndexByOpIndex, promoted BoolArray, mint ValueMinter, rebuilt OpIndexArray)
+	let planIndex = try planAtOp.get(opIdx) otherwise 'notAConstruction'
+		if opDropsAPromotedRecord(module, opIdx: opIdx, promoted: promoted) 'theDrop'
+			return
+		end 'theDrop'
+		rebuilt.push(opIdx)
+		return
+	end 'notAConstruction'
+
+	let plan = try plans.get(planIndex) otherwise panic("appendRewrittenOp: plans.get OOB at {planIndex} — the index came from the plan-by-op map, which is built from this very array")
+	emitPromotedRecord(module, plan: plan, mint: mint, rebuilt: rebuilt)
+end 'appendRewrittenOp'
+
+function emitPromotedRecord(module StdModule, plan RecordPromotion, mint ValueMinter, rebuilt OpIndexArray)
+	rebuilt.push(appendModuleOp(module, op: StdOp.stackRecordAddr(plan.recordValue, slot: plan.slot)))
+	for fieldIndex in 0 upto plan.fields.count() 'eachField'
+		let field = try plan.fields.get(fieldIndex) otherwise panic("emitPromotedRecord: fields.get OOB at {fieldIndex}")
+		let stored = fieldValueId(module, source: field.source, callArgs: plan.callArgs, mint: mint, rebuilt: rebuilt)
+		rebuilt.push(appendModuleOp(module, op: StdOp.storeIndirect(plan.recordValue, offset: field.offset, valueId: stored, valueType: field.storeType)))
+	end 'eachField'
+end 'emitPromotedRecord'
+
+// The caller-side value a field is built from. The constructor's parameter `k` IS the call's argument `k`:
+// a Std `call` carries its arguments in the callee's declared parameter order, which is what `lowerCall`
+// reordered the source's labelled arguments into, and `constructorCallOf` has already refused a call whose
+// arity disagrees with that signature.
+function fieldValueId(module StdModule, source RecordFieldSource, callArgs ValueIdArray, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
+	return match source 'source'
+		fromParameter(index) gives try callArgs.get(index) otherwise panic("fieldValueId: callArgs.get OOB at {index} — `constructorCallOf` proved the call's arity equals the constructor's parameter count")
+		fromConstant(value, constType) gives emitFieldConstant(module, value: value, constType: constType, mint: mint, rebuilt: rebuilt)
+	end 'source'
+end 'fieldValueId'
+
+function emitFieldConstant(module StdModule, value ParsedInt, constType StdType, mint ValueMinter, rebuilt OpIndexArray) returns ValueId
+	let id = mint.mint()
+	rebuilt.push(appendModuleOp(module, op: StdOp.const(id, value: value, valueType: constType)))
+	return id
+end 'emitFieldConstant'
+
+// Append `op` to the module's flat op array and answer its index. Blocks reference ops by index, so a new
+// op is created here and referenced from the rebuilt `opRefs` rather than appended to a block — which would
+// place it at the block's END rather than at the construction's position.
+function appendModuleOp(module StdModule, op StdOp) returns OpIndex
+	let opIdx = module.ops.count()
+	module.ops.push(op)
+	return opIdx
+end 'appendModuleOp'
+
+function opDropsAPromotedRecord(module StdModule, opIdx OpIndex, promoted BoolArray) returns bool
+	let op = try module.ops.get(opIdx) otherwise panic("opDropsAPromotedRecord: opIdx {opIdx} not in module.ops")
+	return match op 'op'
+		const to param gives false
+		call(_, callee, args) gives callDropsAPromotedRecord(callee, args: args, promoted: promoted)
+		retVoid to stackRecordAddr gives false
+	end 'op'
+end 'opDropsAPromotedRecord'
+
+function callDropsAPromotedRecord(callee ByteArray, args ValueIdArray, promoted BoolArray) returns bool
+	if not callee.equals(MmDecrefName) or args.count() != MmDecrefArgCount 'notTheDrop'
+		return false
+	end 'notTheDrop'
+	let dropped = try args.get(0) otherwise panic("callDropsAPromotedRecord: args.get(0) OOB on a one-argument `__mm_decref`")
+	if dropped >= promoted.count() 'outsideTheValueSpace'
+		return false
+	end 'outsideTheValueSpace'
+	return try promoted.get(dropped) otherwise panic("callDropsAPromotedRecord: promoted.get OOB at {dropped} after a bounds test")
+end 'callDropsAPromotedRecord'

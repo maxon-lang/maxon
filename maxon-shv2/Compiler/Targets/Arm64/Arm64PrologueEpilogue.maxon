@@ -129,6 +129,10 @@ function resolveArm64IncomingArgs(module TargetModule, func IrFunction, frameSiz
 				arm64StoreOutgoingArg then break 'o'
 				// Both bit reinterpretations are already concrete — each names two registers and no frame fact.
 				arm64FmovGprFp to arm64FmovFpGpr then break 'o'
+				// A frame address is already concrete: it names a SLOT, which the ENCODER resolves off x29 with
+				// no frame-size term (`arm64SlotDisplacement`) — unlike an incoming stack argument, whose
+				// displacement depends on the frame this pass has just sized.
+				leaRegSlot then break 'o'
 			end 'o'
 		end 'eachOp'
 
@@ -272,6 +276,9 @@ function arm64OpPhysicalRegs(op TargetOp, buf OperandList) returns RegMask
 		// either can be coloured into a callee-saved register, so both MUST be counted. Read through the
 		// shared operand model like every other op.
 		arm64FmovGprFp to arm64FmovFpGpr gives arm64MaskFromOperands(op, buf: buf)
+		// Its dest can be coloured into a callee-saved register, so it MUST be counted — the same
+		// real-miscompile trap every other register-naming arm here documents.
+		leaRegSlot gives arm64MaskFromOperands(op, buf: buf)
 	end 'p'
 end 'arm64OpPhysicalRegs'
 
@@ -336,5 +343,7 @@ function blockEndsWithArm64Return(module TargetModule, block IrBlock) returns bo
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 		// Both bit reinterpretations are body ops, never an `arm64Ret`.
 		arm64FmovGprFp to arm64FmovFpGpr gives false
+		// A frame address is a body op, never an `arm64Ret`.
+		leaRegSlot gives false
 	end 'check'
 end 'blockEndsWithArm64Return'

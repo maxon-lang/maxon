@@ -1314,6 +1314,8 @@ function collectOpHints(op TargetOp, hints ColorHints)
 		// Neither arm64 bit reinterpretation is a move — each one's two operands live in DIFFERENT
 		// register files, so they could not want the same register even in principle. No copy hint.
 		arm64FmovGprFp to arm64FmovFpGpr then break 'hint'
+		// A frame address is not a copy — it has no source register to want the same colour as.
+		leaRegSlot then break 'hint'
 	end 'hint'
 end 'collectOpHints'
 
@@ -2274,6 +2276,7 @@ export function colorTargetOp(op TargetOp, alloc Allocation) returns TargetOp
 		// and `scvtf`, the converting neighbours each shares its pair of register files with.
 		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
 		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(colorVRegWith(dest, alloc: alloc), src: colorVRegWith(src, alloc: alloc))
+		leaRegSlot(destReg, slot) then return TargetOp.leaRegSlot(colorVRegWith(destReg, alloc: alloc), slot: slot)
 	end 'rewrite'
 end 'colorTargetOp'
 

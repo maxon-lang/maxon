@@ -50,27 +50,6 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
-func @Pair.create {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegReg rbx, rcx
-    x64.movRegReg r12, rdx
-    x64.movRegImm32 rcx, 16
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.storeBaseDispReg.word64 [r8 + 8], r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
-}
-
 func @Pair.isLess {
   entry:
     x64.pushReg rbp
@@ -136,7 +115,7 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 56
     x64.movRegImm32 rbx, 0
     x64.movRegImm32 r12, 0
     x64.jmp whilehdr
@@ -145,11 +124,12 @@ func @main {
     x64.jcc less, loop
     x64.jmp whileexit
   loop:
-    x64.movRegImm32 rcx, 3
-    x64.movRegImm32 rdx, 9
-    x64.leaRegRdata rax, [rip + __witness_int.Comparable]
-    x64.callDirect Pair.create
-    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 3
+    x64.movRegImm32 rcx, 9
+    x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
+    x64.leaRegSlot r13, slot0
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.storeBaseDispReg.word64 [r13 + 8], rcx
     x64.leaRegRdata rdx, [rip + __witness_int.Comparable]
     x64.movRegReg rcx, r13
     x64.callDirect Pair.isLess
@@ -169,14 +149,14 @@ func @main {
     x64.jcc notEqual, ok2
     x64.jmp critsplit#11
   ok2:
-    x64.leaRegRegImm32 r12, r12, 1
+    x64.leaRegRegImm32 rax, r12, 1
     x64.jmp ifcont#7
   critsplit#11:
+    x64.movRegReg rax, r12
     x64.jmp ifcont#7
   ifcont#7:
     x64.leaRegRegImm32 rbx, rbx, 1
-    x64.movRegReg rcx, r13
-    x64.callDirect __mm_decref
+    x64.movRegReg r12, rax
     x64.jmp whilehdr
   whileexit:
     x64.cmpRegImm32 r12, 200
@@ -184,7 +164,7 @@ func @main {
     x64.jmp ifcont#9
   all:
     x64.movRegImm32 r8, 0
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
@@ -192,7 +172,7 @@ func @main {
     x64.ret
   ifcont#9:
     x64.movRegImm32 r8, 1
-    x64.epilogue 40
+    x64.epilogue 56
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx

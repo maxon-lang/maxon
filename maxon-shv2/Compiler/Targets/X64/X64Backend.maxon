@@ -1802,6 +1802,10 @@ function emitTargetOp(op TargetOp, code ByteArray, callFixups CallFixupArray, ia
 		// `fmov` general↔vector form ever reaches this encoder (`buildBackend` dispatches on
 		// `target.cpu`). ONE arm for the pair — the reason is the ISA, not the direction.
 		arm64FmovGprFp to arm64FmovFpGpr then panic("emitX64TargetOp: an arm64-only general↔vector `fmov` reached the x64 encoder — x64's bit reinterpretations are `movqGprXmm`/`movqXmmGpr`")
+		// `lea destReg, [rsp + slotDisp]` — the ADDRESS of a frame slot, through the SAME
+		// `slotDisplacement` the spill/reload pair above resolve their slots with, so a promoted record and
+		// a spill can never disagree about where slot `k` is.
+		leaRegSlot(destReg, slot) then encodeLeaRegRegImm32(code, dest: resolveGpr(destReg), base: X64Register.rsp, disp: slotDisplacement(spillBaseDisp, slot: slot))
 	end 'emit'
 end 'emitTargetOp'
 

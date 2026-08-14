@@ -85,6 +85,13 @@
 // duplicate rather than resolving one.
 export typealias FuncIndexByName = Map with (ByteArray, FuncIndex)
 
+// The index, or the position of the function whose name collided with an earlier one. A union rather than
+// a throw, so `build`'s caller decides whether a duplicate is ITS refusal to raise — see `build`.
+export union FunctionNameIndexBuild
+	duplicateAt(laterIndex FuncIndex)
+	built(index FunctionNameIndex)
+end 'FunctionNameIndexBuild'
+
 export type FunctionNameIndex
 	// The array the indices index, carried WITH the map for the reason the header's last paragraph gives.
 	// EXPORTED so a derived per-callee map is built by walking the very array the duplicate check ran over —
@@ -92,17 +99,45 @@ export type FunctionNameIndex
 	export let functions as IrFunctionArray
 	export let byName as FuncIndexByName
 
+	// ⭐ **THE REFUSING CONSTRUCTOR — the one every compile pass uses.** Building the index IS the
+	// duplicate-name refusal (E4015); see the header for which site can see which collision.
 	export static function create(functions IrFunctionArray, project Project) returns FunctionNameIndex throws CompileError
+		match FunctionNameIndex.build(functions) 'build'
+			duplicateAt(laterIndex) then try refuseDuplicateFunctionName(functions, project: project, laterIndex: laterIndex)
+			built(index) then return index
+		end 'build'
+		panic("FunctionNameIndex.create: `refuseDuplicateFunctionName` returned instead of throwing — every arm of it either reports and throws or panics, and this constructor has no answer for a duplicate it was told about and asked to ignore")
+	end 'create'
+
+	// ⭐⭐ **THE SAME WALK, WITHOUT THE REFUSAL — for the one reader that must NOT raise it.** It ANSWERS
+	// with the duplicate instead of reporting it, so a caller that is not the compile's authority on E4015
+	// can decline to act rather than race the site that is.
+	//
+	// `IR/Std/PromoteStackRecords` is that caller. It resolves callees by NAME to decide which body is a
+	// record constructor and which of its parameters escape, so under a duplicate it would reason about a
+	// call using the WRONG body's summary — and a wrong answer there is a dangling pointer. But it runs at
+	// the Std tier BEFORE `DeadFunctionElimination`, which is the site the header lists as the one that can
+	// see a runtime-symbol collision; raising E4015 from here would move that refusal earlier and change
+	// which of the two diagnostics a program gets. So it declines to reason and lets the owning site speak.
+	//
+	// ⚠ **THIS IS NOT A SECOND TIE-BREAK POLICY, WHICH IS THE WHOLE POINT OF THE HEADER'S FIRST PARAGRAPH.**
+	// There is still exactly one walk, one collision test and NO resolution of a tie — the two constructors
+	// differ only in who is told. A caller that hand-rolled its own `Map with (ByteArray, FuncIndex)` to get
+	// a non-throwing build would have been the eleventh such map and the third tie-break, which is what this
+	// exists to prevent.
+	export static function build(functions IrFunctionArray) returns FunctionNameIndexBuild
 		var byName = FuncIndexByName.create()
 		for i in 0 upto functions.count() 'eachFunc'
-			let func = try functions.get(i) otherwise panic("FunctionNameIndex.create: functions.get OOB at {i}, inside a loop bounded by its own count")
+			let func = try functions.get(i) otherwise panic("FunctionNameIndex.build: functions.get OOB at {i}, inside a loop bounded by its own count")
 			byName.upsert(func.name, value: i)
+			// The height IS `i + 1` after every insert unless one insert collapsed two names into one entry
+			// — one integer compare per function, no second probe. See the header.
 			if byName.count() != i + 1 'duplicateName'
-				try refuseDuplicateFunctionName(functions, project: project, laterIndex: i)
+				return FunctionNameIndexBuild.duplicateAt(i)
 			end 'duplicateName'
 		end 'eachFunc'
-		return Self{functions: functions, byName: byName}
-	end 'create'
+		return FunctionNameIndexBuild.built(Self{functions: functions, byName: byName})
+	end 'build'
 
 	// The function a name denotes. Two lookups rather than a name -> function map, so the ONE checked index
 	// above serves a caller that wants the function as well as one that wants its position.

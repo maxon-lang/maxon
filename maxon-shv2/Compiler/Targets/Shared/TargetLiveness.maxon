@@ -1376,6 +1376,8 @@ function opIsCondBranch(op TargetOp) returns bool
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 		// Both arm64 bit reinterpretations are body ops, not branches.
 		arm64FmovGprFp to arm64FmovFpGpr gives false
+		// A frame address is a body op, not a branch.
+		leaRegSlot gives false
 	end 'check'
 end 'opIsCondBranch'
 
@@ -1410,6 +1412,8 @@ function terminatorIsUnconditionalBranch(module TargetModule, block IrBlock) ret
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 		// Both arm64 bit reinterpretations are body ops, not branches.
 		arm64FmovGprFp to arm64FmovFpGpr gives false
+		// A frame address is a body op, not a branch.
+		leaRegSlot gives false
 	end 'check'
 end 'terminatorIsUnconditionalBranch'
 
@@ -1459,6 +1463,7 @@ function collectBlockSuccessorIds(module TargetModule, block IrBlock, out BlockI
 			callMem then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a `callMem` (witness call) body op as its terminator")
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a stack-argument body op as its terminator")
 			arm64FmovGprFp to arm64FmovFpGpr then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has an arm64 general↔vector `fmov` (a bit reinterpretation) body op as its terminator")
+			leaRegSlot then panic("collectBlockSuccessorIds: block '{String.from(block.label)}' has a `leaRegSlot` (a frame address) body op as its terminator")
 			// A jump table's successors are every DISTINCT case target plus the default — see `pushJumpTableSuccessors`.
 			x64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
 			arm64JumpTable(_, defaultTarget, caseTargets, _) then pushJumpTableSuccessors(out, defaultTarget: defaultTarget, caseTargets: caseTargets)
@@ -3212,6 +3217,8 @@ export function collectEntryParamCaptures(module TargetModule, topo FuncTopology
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then break 'capture'
 			// Neither arm64 bit reinterpretation is a `movRegReg`, so neither is ever an entry param capture.
 			arm64FmovGprFp to arm64FmovFpGpr then break 'capture'
+			// Not a `movRegReg`, so never an entry param capture.
+			leaRegSlot then break 'capture'
 		end 'capture'
 	end 'eachOp'
 	return captures
@@ -3918,6 +3925,13 @@ function deriveSlotRole(op TargetOp) returns OpSlotRole
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives OpSlotRole.touchesNoSlot
 		// Neither arm64 bit reinterpretation touches a stack slot — each is a register-to-register transfer.
 		arm64FmovGprFp to arm64FmovFpGpr gives OpSlotRole.touchesNoSlot
+		// ⭐⭐ **`touchesNoSlot`, AND THAT IS THE POINT RATHER THAN AN OMISSION.** This role column answers
+		// "which value does memory hold, and where?" for the SPILLER's residency model. A promoted record is
+		// not a spilled value: it is storage the frame owns outright, in a slot RESERVED out of the
+		// spiller's range (`SplitDriver.create` seeds `nextSlot` past the promoted region), so no split can
+		// ever be handed the slot this op names. Calling it a `spillStore` would tell the residency model
+		// that a value lives there and let a later reload read a record as if it were that value.
+		leaRegSlot gives OpSlotRole.touchesNoSlot
 	end 'k'
 end 'deriveSlotRole'
 

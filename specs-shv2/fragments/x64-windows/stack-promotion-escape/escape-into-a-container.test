@@ -1,0 +1,213 @@
+// Test: escape-into-a-container
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function churn(seed Integer) returns Integer
+	let v0 = seed + 1
+	let v1 = seed + 2
+	let v2 = seed + 3
+	let v3 = seed + 4
+	let v4 = seed + 5
+	let v5 = seed + 6
+	let v6 = seed + 7
+	let v7 = seed + 8
+	let v8 = seed + 9
+	let v9 = seed + 10
+	let v10 = seed + 11
+	let v11 = seed + 12
+	let v12 = seed + 13
+	let v13 = seed + 14
+	let v14 = seed + 15
+	let v15 = seed + 16
+	return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15
+end 'churn'
+
+function fill(arr ItemArray)
+	let item = Item.create(42)
+	arr.push(item)
+end 'fill'
+
+function main() returns ExitCode
+	var arr = ItemArray.create()
+	fill(arr)
+	_ = churn(1000)
+	let got = try arr.get(0) otherwise Item.create(0)
+	return got.value
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Item.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 16
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegImm32 rdx, rcx, 2
+    x64.leaRegRegImm32 rsi, rcx, 3
+    x64.leaRegRegImm32 rdi, rcx, 4
+    x64.leaRegRegImm32 r8, rcx, 5
+    x64.leaRegRegImm32 r9, rcx, 6
+    x64.leaRegRegImm32 r10, rcx, 7
+    x64.leaRegRegImm32 r11, rcx, 8
+    x64.leaRegRegImm32 rbx, rcx, 9
+    x64.leaRegRegImm32 r12, rcx, 10
+    x64.leaRegRegImm32 r13, rcx, 11
+    x64.leaRegRegImm32 r14, rcx, 12
+    x64.leaRegRegImm32 r15, rcx, 13
+    x64.storeSlotReg slot0, r15
+    x64.leaRegRegImm32 r15, rcx, 14
+    x64.storeSlotReg slot1, r15
+    x64.leaRegRegImm32 r15, rcx, 15
+    x64.leaRegRegImm32 rcx, rcx, 16
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegSlot rdx, slot0
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegSlot rdx, slot1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, r15
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 16
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @fill {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 42
+    x64.callDirect Item.create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect fill
+    x64.movRegImm32 rcx, 1000
+    x64.callDirect churn
+    x64.movRegImm32 rdx, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_get
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect Item.create
+    x64.movRegReg rcx, r8
+    x64.jmp trycont
+  tryok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.jmp trycont
+  trycont:
+    x64.loadRegBaseDisp.word64 r12, [rcx + 0]
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

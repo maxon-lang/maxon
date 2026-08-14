@@ -1,0 +1,140 @@
+// Test: promoted-record-survives-register-pressure
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function spread(seed Integer) returns Integer
+	let p = Point.create(1000, y: 2000)
+	let v0 = seed + 1
+	let v1 = seed + 2
+	let v2 = seed + 3
+	let v3 = seed + 4
+	let v4 = seed + 5
+	let v5 = seed + 6
+	let v6 = seed + 7
+	let v7 = seed + 8
+	let v8 = seed + 9
+	let v9 = seed + 10
+	let v10 = seed + 11
+	let v11 = seed + 12
+	let v12 = seed + 13
+	let v13 = seed + 14
+	let v14 = seed + 15
+	let v15 = seed + 16
+	let total = v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15
+	return total + p.x + p.y
+end 'spread'
+
+function main() returns ExitCode
+	return spread(0) - 3094
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @spread {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 48
+    x64.movRegImm32 rax, 1000
+    x64.movRegImm32 rdx, 2000
+    x64.leaRegSlot rsi, slot0
+    x64.storeSlotReg slot2, rsi
+    x64.storeBaseDispReg.word64 [rsi + 0], rax
+    x64.storeBaseDispReg.word64 [rsi + 8], rdx
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegImm32 rdx, rcx, 2
+    x64.leaRegRegImm32 rsi, rcx, 3
+    x64.leaRegRegImm32 rdi, rcx, 4
+    x64.leaRegRegImm32 r8, rcx, 5
+    x64.leaRegRegImm32 r9, rcx, 6
+    x64.leaRegRegImm32 r10, rcx, 7
+    x64.leaRegRegImm32 r11, rcx, 8
+    x64.leaRegRegImm32 rbx, rcx, 9
+    x64.leaRegRegImm32 r12, rcx, 10
+    x64.leaRegRegImm32 r13, rcx, 11
+    x64.leaRegRegImm32 r14, rcx, 12
+    x64.leaRegRegImm32 r15, rcx, 13
+    x64.storeSlotReg slot3, r15
+    x64.leaRegRegImm32 r15, rcx, 14
+    x64.storeSlotReg slot4, r15
+    x64.leaRegRegImm32 r15, rcx, 15
+    x64.leaRegRegImm32 rcx, rcx, 16
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegSlot rdx, slot3
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegSlot rdx, slot4
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, r15
+    x64.leaRegRegReg rax, rax, rcx
+    x64.loadRegSlot rcx, slot2
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 0]
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 8]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 48
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect spread
+    x64.leaRegRegImm32 r8, r8, -3094
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

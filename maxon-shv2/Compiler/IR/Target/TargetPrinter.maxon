@@ -593,6 +593,8 @@ function opIsArm64Band(op TargetOp) returns bool
 		// MOVED when `movqXmmGpr` was appended to it.
 		arm64FmovGprFp gives true
 		arm64FmovFpGpr gives true
+		// SHARED by both CPUs, like `storeSlotReg`/`loadRegSlot` — not an arm64-band op.
+		leaRegSlot gives false
 	end 'p'
 end 'opIsArm64Band'
 
@@ -792,6 +794,9 @@ function formatTargetOp(op TargetOp, names BlockPrintNames, cpu CpuArch) returns
 		// `d<n>` — `fmov x0, d1` against `fmov d0, x1`. That is the real assembly and it is unambiguous;
 		// an invented mnemonic would be neither.
 		arm64FmovFpGpr(dest, src) gives "fmov {arm64VregName(dest)}, {arm64VregName(src)}"
+		// Printed like its two slot neighbours: the SLOT, not the displacement, because the displacement is
+		// the encoder's and a golden that spelled it would move whenever an unrelated frame grew.
+		leaRegSlot(destReg, slot) gives "leaRegSlot {sharedVregName(destReg, cpu: cpu)}, slot{slot}"
 	end 'op'
 end 'formatTargetOp'
 

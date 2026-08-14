@@ -348,6 +348,8 @@ function isCaptureMove(op TargetOp) returns bool
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 		// Neither arm64 bit reinterpretation is a `movRegReg`, so neither is a call-result capture move.
 		arm64FmovGprFp to arm64FmovFpGpr gives false
+		// A frame address is not a `movRegReg`, so it is not a call-result capture move.
+		leaRegSlot gives false
 	end 'm'
 end 'isCaptureMove'
 
@@ -477,6 +479,8 @@ function isPhysicalSelfMove(op TargetOp) returns bool
 		// The arm is not optional: `arm64FmovFpGpr` is the LAST union member, so no range covers it and
 		// the match would not be exhaustive without it.
 		arm64FmovGprFp to arm64FmovFpGpr then return false
+		// Not a move at all, so never a physical self-move.
+		leaRegSlot then return false
 	end 'sm'
 end 'isPhysicalSelfMove'
 
@@ -722,6 +726,7 @@ function retargetControlOp(module TargetModule, predRef BlockRef, oldTarget Bloc
 			callMem then panic("retargetControlOp: a `callMem` (witness call) is a body op, not a terminator")
 			arm64StoreOutgoingArg to arm64LoadIncomingArg then panic("retargetControlOp: a stack-argument op is a body op, not a terminator")
 			arm64FmovGprFp to arm64FmovFpGpr then panic("retargetControlOp: an arm64 general↔vector `fmov` (a bit reinterpretation) is a body op, not a terminator")
+			leaRegSlot then panic("retargetControlOp: a `leaRegSlot` (a frame address) is a body op, not a terminator")
 			// A jump table is a multiway terminator: redirect EVERY case slot (and the default) that names
 			// `oldTarget` — a range/`or` arm fills several slots with one block, so the split of that single
 			// CFG edge redirects all of them through the one split block.

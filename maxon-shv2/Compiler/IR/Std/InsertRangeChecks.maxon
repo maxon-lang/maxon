@@ -1219,6 +1219,8 @@ type RangeCheckEmitter
 				osExecutablePath then break 'c'
 				// W35: the byte count the OS reports for a stream write is not a ranged-typealias value.
 				osWriteStderr then break 'c'
+				// A frame address is not a ranged-typealias value.
+				stackRecordAddr then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1356,150 +1358,10 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		osExecutablePath gives false
 		// W35: a stream write is a body op, never a `ret`.
 		osWriteStderr gives false
+		// A promoted record's address is a body op, never a `ret`.
+		stackRecordAddr gives false
 	end 'term'
 end 'retMatchesValue'
-
-// The next unused ValueId in the function: one past the highest id any op DEFINES or any block-arg
-// carries. Scanning defs (and phi results) suffices — dense SSA numbers every value once, so the
-// maximum def id is the maximum id, and a use can only name an id that some def already introduced.
-function nextFreeValueId(module StdModule, func IrFunction) returns ValueId
-	var maxId = 0 as ValueId
-	for blockRef in func.blockRefs 'eachBlock'
-		let block = try module.blocks.get(blockRef) otherwise panic("nextFreeValueId: blockRef from func.blockRefs not in module.blocks")
-		for arg in block.blockArgs 'eachArg'
-			maxId = maxValueId(maxId, other: arg.valueId)
-		end 'eachArg'
-	end 'eachBlock'
-	for opIdx in module.liveOpIndices(func) 'eachOp'
-		let op = try module.ops.get(opIdx) otherwise panic("nextFreeValueId: live op index {opIdx} not in module.ops")
-		match stdOpDefinedValue(op) 'defines'
-			none then break 'defines'
-			defines(definedId) then maxId = maxValueId(maxId, other: definedId)
-		end 'defines'
-	end 'eachOp'
-	return maxId + 1
-end 'nextFreeValueId'
-
-function maxValueId(a ValueId, other ValueId) returns ValueId
-	return a if a >= other else other
-end 'maxValueId'
-
-// Whether `op` DEFINES a value, and WHICH — ONE exhaustive `StdOp` match answering both halves.
-//
-// ⚠⚠ **IT WAS TWO, AND WHAT KEPT THEM AGREEING WAS NOTHING** (P1.9 review). `stdOpDefinesValue`
-// answered "does it define?" over a range-arm partition of the union and `stdOpDefinedIdOrZero`
-// answered "which id?" over a destructured one — ~105 lines of parallel arms a reader had to diff by
-// eye. A new `StdOp` variant is a compile error in BOTH, which is what the exhaustive match buys; but
-// adding it as `true` in the first and `0` in the second COMPILES, and the consequence is not a
-// diagnostic: `nextFreeValueId` under-counts, this pass mints a ValueId some op already defines, and
-// two values collide in a function nothing about the guard being emitted names. A wrong answer one
-// arm's worth of inattention away — the shape the duplication rule exists for.
-//
-// It also retires a SENTINEL: the id half returned `0` for a non-defining op and was safe only
-// because every caller asked the boolean first — and ValueId 0 is a REAL id in this compiler (a
-// zero-user-parameter generic method's layout-descriptor slot legitimately holds it, which is why
-// `MaxonToStdLowering` carries a separate `hasImplicitLayout` bit rather than testing for 0). The
-// union says "no value" in a way no ValueId can spell.
-union DefinedValueLookup
-	none
-	defines(valueId ValueId)
-end 'DefinedValueLookup'
-
-// The `none` set is the terminators / stores / effect ops that define nothing. Exhaustive over StdOp,
-// matching `collectStdOpUses`'s discipline — a new variant is a compile error here rather than a
-// silently-missed def.
-function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
-	return match op 'r'
-		const(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		binOp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		unaryOp(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		cmp(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		binOpImm(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		cmpImm(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		div(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		mod(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		condBranch to branch gives DefinedValueLookup.none
-		ret gives DefinedValueLookup.none
-		param(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		call(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		retVoid gives DefinedValueLookup.none
-		globalAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
-		loadIndirect(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		storeIndirect gives DefinedValueLookup.none
-		rdataAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
-		tryCall(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
-		errorReturn to osExit gives DefinedValueLookup.none
-		osAllocPages(resultId, _) gives DefinedValueLookup.defines(resultId)
-		// W35: a stream write DEFINES the byte count the OS reports — it used to define nothing, back when
-		// its one consumer was a void `print`.
-		osWriteStdout(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		funcAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
-		callIndirect(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		// P1.5 subprocess: only `osWaitHandle` (the `WaitForSingleObject` poll) defines a value; the other four
-		// consume their `BOOL` via memory or ignore it (see StdDialect's ⭐ note).
-		osWaitHandle(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osPanic to osCloseHandle gives DefinedValueLookup.none
-		// `osFreePages` (P1.5-B1a′) defines nothing; it sits past `osWaitHandle` in the union, so its own arm.
-		osFreePages gives DefinedValueLookup.none
-		// The jump table defines no value — a terminator branches, it does not produce a result.
-		switch gives DefinedValueLookup.none
-		// A witness call DEFINES its result (the dispatched method's return value), like `callIndirect`. The
-		// throwing form defines that result AND an error flag — reported here by its PRIMARY alone, exactly as
-		// `tryCall` reports its own, since this reader models one def per op.
-		witnessCall(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		witnessTryCall(resultId, _, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		// P1.5 dogfood slice 1a: the FIVE value-defining IOCP ops (iocp/event/thread handles, the read BOOL, the
-		// last-error code) capture RAX; osPipeCreate/osLock*/osProcessSpawnInherit define nothing (see StdDialect).
-		osPipeCreate gives DefinedValueLookup.none
-		osIocpCreate(resultId) gives DefinedValueLookup.defines(resultId)
-		osEventCreate(resultId) gives DefinedValueLookup.defines(resultId)
-		osThreadCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osLockInit to osLockLeave gives DefinedValueLookup.none
-		osReadOverlapped(resultId, _, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osLastError(resultId) gives DefinedValueLookup.defines(resultId)
-		osProcessSpawnInherit gives DefinedValueLookup.none
-		osCancelIo gives DefinedValueLookup.none
-		osGetPid(resultId) gives DefinedValueLookup.defines(resultId)
-		// P1.5 dogfood slice 1b: osWriteFile captures WriteFile's BOOL (a value); osPipeCreateOutbound defines nothing.
-		osPipeCreateOutbound gives DefinedValueLookup.none
-		osWriteFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		// The wall-clock read defines nothing — its answer lands in the caller's out-param word.
-		osReadWallClock gives DefinedValueLookup.none
-		// R4.1: the file OPEN captures `CreateFileA`'s HANDLE out of RAX, so unlike the two reads above it
-		// DOES define a value — the direct-return shape, not the out-param one.
-		osFileOpenRead(resultId, _) gives DefinedValueLookup.defines(resultId)
-		// The close defines NOTHING — `CloseHandle`'s BOOL is ignored, so there is no result to capture.
-		osFileClose gives DefinedValueLookup.none
-		// R4.2. Split exactly as R4.1's pair is: the five ops whose Win32 entry point answers in RAX — a
-		// BOOL verdict or a search HANDLE — capture it; `osFileFindClose` discards `FindClose`'s BOOL for
-		// the reason `osFileClose` discards `CloseHandle`'s. The 64-bit answers of `osReadFile`/`osFileSize`
-		// land in the caller's out-param word, not in a result.
-		osReadFile(resultId, _, _, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileOpenWrite(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osFileSize(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileDelete(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osFileRename(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileFindFirst(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileFindClose gives DefinedValueLookup.none
-		// R4.3. All four directory primitives answer in RAX and capture it: `FindNextFileA`/
-		// `CreateDirectoryA` a BOOL, `GetCurrentDirectoryA` a character count, `GetFileAttributesA` an
-		// attribute mask. None has a void twin, so none takes `none`.
-		osFileFindNext(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osDirCreate(resultId, _) gives DefinedValueLookup.defines(resultId)
-		osDirCurrentPath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		osFileAttributes(resultId, _) gives DefinedValueLookup.defines(resultId)
-		// A3n: the RENDERED panic reads a message pointer; in every other respect it is `osPanic`.
-		osPanicValue gives DefinedValueLookup.none
-		osCommandLine(resultId) gives DefinedValueLookup.defines(resultId)
-		// W5. BOTH DEFINE — `GetStdHandle` a HANDLE, `GetModuleFileNameA` a character count. Neither has a
-		// void twin, so neither takes `none`, and answering `none` here would not fail to compile: it would
-		// under-count `nextFreeValueId` and let this pass mint a live id (see this function's header).
-		osStdinHandle(resultId) gives DefinedValueLookup.defines(resultId)
-		osExecutablePath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-		// W35: the stderr write defines the OS's byte count, exactly as its stdout twin above does.
-		osWriteStderr(resultId, _, _) gives DefinedValueLookup.defines(resultId)
-	end 'r'
-end 'stdOpDefinedValue'
 
 // The literal-const map this pass reads is `ConstValueMap` (FoldConstOperands) — each `const` result id
 // to the literal it materializes, so a cast/return of a literal is a compile-time decision (E3005 or

@@ -2639,7 +2639,20 @@ export type SplitDriver
 		// per split (see `SplitScratch`). Sized off the CFG, which splitting cannot change.
 		// `lineage` is the fresh-id -> source-value map the E5001 diagnostic chases a blocking reload id
 		// back through (see `SplitLineage`).
-		return Self{cfg: cfg, liveness: liveness, scratch: SplitScratch.create(cfg.topo.numBlocks), lineage: SplitLineage.create(), paramCross: paramCross, pool: pool, file: file, nextValueId: cfg.valueCount, nextSlot: 0, indexBuilt: false}
+		// ⭐⭐ **THE SPILL SLOTS START ABOVE THE PROMOTED-RECORD REGION, AND THAT IS THE WHOLE OF WHAT KEEPS
+		// STACK PROMOTION SAFE.** `promoteStackRecords` (Std tier) reserves `func.stackSize` bytes at the
+		// bottom of the slot grid for records it has proven cannot outlive the frame, and each such record's
+		// address is a `leaRegSlot` naming a slot in `[0, stackSize/8)`. Seeded at 0, the very first spill
+		// this function makes would be handed slot 0 — the same eight bytes a live record occupies — and the
+		// spill would overwrite the record's first field with an unrelated value. Not a diagnostic: a wrong
+		// ANSWER, in a function nothing about either the record or the spill names.
+		//
+		// It is `stackSize` and not a field of its own because `stackSize` already MEANS "bytes of slot area
+		// reserved so far" (see IrFunction), and `fixFrameSize` writes the final total back through the same
+		// counter — so the promoted region is reserved, the spills are placed above it, and the frame is
+		// sized for both, from ONE number. Zero for every function the promotion pass did not touch, which is
+		// the seed this line used to hard-code.
+		return Self{cfg: cfg, liveness: liveness, scratch: SplitScratch.create(cfg.topo.numBlocks), lineage: SplitLineage.create(), paramCross: paramCross, pool: pool, file: file, nextValueId: cfg.valueCount, nextSlot: func.stackSize / SpillSlotBytes, indexBuilt: false}
 	end 'create'
 
 	// Build the incremental machinery — the positional pressure index and the per-block peak tournament
@@ -4869,6 +4882,9 @@ function opIsConstMaterialization(module TargetModule, opIdx OpIndex) returns bo
 		arm64StoreOutgoingArg to arm64LoadIncomingArg gives false
 		// Both arm64 bit reinterpretations READ A REGISTER, so neither def can be rebuilt from a constant.
 		arm64FmovGprFp to arm64FmovFpGpr gives false
+		// A frame address is not a CONSTANT materialization: `constDefInfo` reconstructs a def from an
+		// immediate it carries, and this op carries a slot index, not the value it produces.
+		leaRegSlot gives false
 	end 'k'
 end 'opIsConstMaterialization'
 
@@ -5671,6 +5687,7 @@ function constDefInfo(module TargetModule, opIdx OpIndex) returns (MachineWord, 
 		arm64StoreOutgoingArg to arm64LoadIncomingArg panic("constDefInfo: def is not a constant materialization")
 		// `opIsConstMaterialization` answers false for both, so neither reaches here; named rather than swallowed.
 		arm64FmovGprFp to arm64FmovFpGpr panic("constDefInfo: def is not a constant materialization")
+		leaRegSlot panic("constDefInfo: def is not a constant materialization")
 	end 'k'
 end 'constDefInfo'
 
@@ -5902,6 +5919,7 @@ function substituteValueInOp(op TargetOp, from ValueId, to ValueId) returns Targ
 		// The arm64 BIT REINTERPRETATIONS — one def, one use each, both substitutable, like `fcvtzs`/`scvtf`.
 		arm64FmovGprFp(dest, src) then return TargetOp.arm64FmovGprFp(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
 		arm64FmovFpGpr(dest, src) then return TargetOp.arm64FmovFpGpr(substituteVReg(dest, from: from, to: to), src: substituteVReg(src, from: from, to: to))
+		leaRegSlot(destReg, slot) then return TargetOp.leaRegSlot(substituteVReg(destReg, from: from, to: to), slot: slot)
 	end 'rewrite'
 end 'substituteValueInOp'
 

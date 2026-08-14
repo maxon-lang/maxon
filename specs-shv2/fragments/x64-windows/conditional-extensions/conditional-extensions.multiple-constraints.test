@@ -278,8 +278,7 @@ func @main {
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
     x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 48
     x64.movRegImm32 rcx, 1
     x64.callDirect HashItem.create
     x64.movRegReg rbx, r8
@@ -308,23 +307,18 @@ func @main {
     x64.jmp tryok
   tryerr:
     x64.movRegImm32 r8, 2
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
   tryok:
-    x64.movRegImm32 rcx, 2
-    x64.callDirect HashItem.create
-    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 2
+    x64.leaRegSlot rdx, slot0
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
     x64.callDirect HashBucket.lookup
-    x64.movRegReg r13, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_decref
-    x64.cmpRegImm32 r13, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc notEqual, found
     x64.jmp ifcont
   found:
@@ -332,8 +326,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_HashBucket
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
@@ -343,8 +336,7 @@ func @main {
     x64.movRegReg rcx, rbx
     x64.callDirect __destruct_HashBucket
     x64.movRegReg r8, r12
-    x64.epilogue 40
-    x64.popReg r13
+    x64.epilogue 48
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

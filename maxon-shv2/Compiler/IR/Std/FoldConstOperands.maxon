@@ -137,6 +137,9 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// W35: the byte count the OS reports for a stderr write is an OS answer, exactly as its stdout
 		// twin's is.
 		osWriteStderr gives StdConstInfo.notConst
+		// A frame address is a constant of the FRAME, not of the program: its value is not known until the
+		// allocator has sized the slot area, so it is no more foldable than a global's address.
+		stackRecordAddr gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -236,6 +239,8 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// W35: a buffer ADDRESS and a byte length reach the OS in registers on every lane — no immediate
 		// form to fold into, exactly as `osWriteStdout` has none.
 		osWriteStderr gives FoldResult.unchanged
+		// It reads no value operand at all, so there is nothing to fold into an immediate.
+		stackRecordAddr gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 
