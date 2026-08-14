@@ -351,8 +351,15 @@ end 'main'
 4
 ```
 
-<!-- test: let-set-to-mutating-param-error -->
-A `Set` parameter obeys the same rule as an `Array` and a `String` one.
+<!-- test: let-set-to-mutating-param-ok -->
+⭐⭐ **A `Set` PARAMETER NO LONGER OBEYS THIS RULE (W90), AND IT IS THE SAME RULING ITS RECEIVER TWIN
+CARRIES** — see `immutable-method-call.md`'s Documentation, which owns it. The refusal here was never a
+parameter rule of its own: `add`'s `s` counts as mutated only because `s.insert(1)` mutates the RECEIVER,
+which the parser decides through the builtin `setMethodMutatesReceiver` roster. A declared type never
+reaches that roster, so both shapes drop together and neither is left half-enforced.
+
+⚠ The `Array` and `String` cases around this one are unaffected and stay green: both are still
+builtin-dispatched.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -368,8 +375,8 @@ function main() returns ExitCode
 	return s.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/fragments/parameter-mutation/let-set-to-mutating-param-error.test:11:2: cannot pass 's' to function that mutates parameter 's' (in main)
+```exitcode
+1
 ```
 
 <!-- test: let-global-string-to-appending-param-error -->

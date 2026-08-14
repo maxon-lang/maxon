@@ -11881,10 +11881,12 @@ export type ProgramSignatures
 			pending to arrayValue then return TopLevelInitializerCall.none
 			containerValue(giid, _) then return self.containerInitializerCall(giid)
 			factoryValue(calls, _, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(calls))
-			// ⭐ A `CharacterSet` PRESET REACHES NO DECLARED CODE. Its member set is a builtin `Set` and its box
-			// is `__cs_make` — compiler-synthesized allocation throughout, with no source body to root and no
-			// user-visible effect, which is exactly the argument the builtin-container arm makes one line up.
-			characterSetValue then return TopLevelInitializerCall.none
+			// ⭐⭐ **A `CharacterSet` PRESET REACHES WHATEVER ITS MEMBER SET IS BUILT BY (W90).** Its box is
+			// `__cs_make` — compiler-synthesized allocation with no source body to root, which is the whole of
+			// what this arm used to be — but the MEMBER SET inside it goes through `builtContainerRecord` like
+			// any other container, so once `stdlib/Set.maxon` is listed the preset calls declared
+			// `Set.create`/`Set.insert` and they are roots exactly as a `StrMap.create()` global's are.
+			characterSetValue(chars, _, _) then return self.containerInitializerCall(chars)
 		end 'state'
 	end 'declInitializerCall'
 
@@ -11921,8 +11923,8 @@ export type ProgramSignatures
 		match folded 'value'
 			scalar to arrayLiteral then return
 			containerCreate(giid, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
-			// Compiler-synthesized throughout — see `declInitializerCall`'s arm for the same value.
-			characterSet then return
+			// Its member set is a container like any other — see `declInitializerCall`'s arm for the same value.
+			characterSet(chars, _, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: chars)
 		end 'value'
 	end 'appendFoldedArgumentCallee'
 
@@ -11943,15 +11945,29 @@ export type ProgramSignatures
 		return TopLevelInitializerCall.calls(callees)
 	end 'containerInitializerCall'
 
-	// The `create()` an empty-container value contributes to the root set, or nothing when the runtime builds
-	// it. It asks `instanceCreateIsDeclared` rather than re-reading the base roster, so which callee this
-	// reports and which callee `containerCreateCall` emits are one derivation.
+	// The DECLARED code a container value contributes to the root set, or nothing when the runtime builds it.
+	// It asks `instanceCreateIsDeclared` rather than re-reading the base roster, so which callee this reports
+	// and which callee `containerCreateCall` emits are one derivation.
+	//
+	// ⭐⭐ **IT IS THE `create` AND THE ELEMENT-ADD, BECAUSE `ModuleInit.builtContainerRecord` EMITS BOTH
+	// (W90).** Rooting only the create is what a `Set from […]` global measured as
+	// `requireUnreachableStdlibStayedDead: 'Set.insert' is in StdlibFacts.unreachable` — the walk never saw
+	// the edge, no body was lowered, and dead-function elimination reached the empty function `__module_init`
+	// calls. Both come off `containerCreateCall`'s own routers, so what is rooted here and what is emitted
+	// there stay two readings of one answer.
+	//
+	// ⚠ The add is rooted whether or not this global HAS elements — an over-rooted leaf is lowered and then
+	// dropped by dead-function elimination, while a missing root is the panic above.
 	function appendDeclaredInstanceCreateCallee(callees ByteArrayArray, giid GenericInstanceId)
 		if not self.instanceCreateIsDeclared(giid) 'runtimeCreate'
 			return
 		end 'runtimeCreate'
 
 		callees.push(self.declaredInstanceCreateCallee(giid))
+		match self.declaredContainerElementAdd(giid) 'add'
+			push(callee) then callees.push(callee)
+			unsupported then break 'add'
+		end 'add'
 	end 'appendDeclaredInstanceCreateCallee'
 
 	// ⭐ **EVERY FUNCTION A TOP-LEVEL INITIALIZER CALLS**, in ARENA order — the roots
@@ -15310,16 +15326,71 @@ export type ProgramSignatures
 
 	// --- The `Set` builtin generic (P1.7b slice A) ---
 	//
-	// The hash-table twin of the `Array` section above: `Set` is a BUILTIN generic with one type parameter
+	// The hash-table twin of the `Array` section above: `Set` WAS a BUILTIN generic with one type parameter
 	// `Element`, synthesized rather than declared, so its instances (`Set with Int`) intern like any other but
 	// have no base `StructLayout`. The same three query doors an `Array` instance special-cases — box size,
-	// per-instance drop, the managed-field gate — special-case a `Set` instance here (its box is the fixed
-	// `SetRecordBytes` fused record, and it drops through `__set_decref`).
+	// per-instance drop, the managed-field gate — special-case such a `Set` instance here (its box is the
+	// fixed `SetRecordBytes` fused record, and it drops through `__set_decref`).
+	//
+	// ⭐⭐ **AND `stdlib/Set.maxon` IS LISTED, SO IN THIS CHECKOUT NONE OF THAT IS REACHED (W90).** Every one
+	// of those doors is gated on `isSetBaseName`, which answers FALSE the moment a file declares `type Set` —
+	// so a `Set with T` is an ordinary declared generic instance with a real `StructLayout`, a
+	// `__destruct_Set_<T>` cascade and corpus `create`/`insert`/`contains`/`remove`/`count` bodies. The arms
+	// below are what a program declaring no `Set` would get, and they are kept for exactly the reason the
+	// `Map` section's are: the switch is a property of the PROGRAM, not of this checkout.
 
-	// Is `name` the builtin `Set` type — the base of every set instance.
+	// ⭐⭐ **THE RETIREMENT SWITCH, WRITTEN ONCE FOR BOTH HASH TABLES (W41 for `Map`, W90 for `Set`).** Is
+	// `name` still the SYNTHESIZED `builtin` — i.e. does no file declare a type of that name?
+	//
+	// Every `Map`-instance and every `Set`-instance query in the compiler routes through the two one-line
+	// predicates that ask this, so a DECLARED base answering false here is the whole retirement: the
+	// synthesized record, its box size, its builtin member roster and its `__map_*` / `__set_*` runtime all
+	// fall away together, and `Map with (K, V)` / `Set with T` resolve as the ordinary declared generic
+	// instances they now are. One switch rather than ten, because the ten already asked one question.
+	//
+	// ⚠ **IT KEYS ON THE DECLARATION, NOT ON THE WHITELIST**, which is what makes it correct for a USER
+	// program too: a program declaring its own `type Map uses Key, Value` gets its own, exactly as A1s wave 2
+	// says a user spelling wins. `stdlib/Map.maxon` / `stdlib/Set.maxon` being listed is just the corpus
+	// taking that same door.
+	//
+	// ⛔⛔ **ONLY A BASE WITH *BOTH* REGIMES MAY BE ASKED THIS.** `Array`, `List`, `Vector`, `__ManagedList`,
+	// `__ManagedListNode` and `__ManagedMemoryCursor` have no corpus declaration that reaches this door —
+	// `stdlib/Array.maxon` IS listed, but the `Array` it declares is the compiler-owned base itself
+	// (`recordStruct`'s provenance bit, W16) rather than a SECOND implementation of it — so widening this
+	// predicate to one of them would answer FALSE for a container that has exactly one regime, and every
+	// query routing through it (the box size, the drop callee, the receiver dispatch) would silently stop
+	// recognizing the only `Array` there is.
+	function isUnretiredBuiltinBaseName(name ByteArray, builtin ByteArray) returns bool
+		if not name.equals(builtin) 'notTheName'
+			return false
+		end 'notTheName'
+
+		return match self.structOf(name) 'declaredByTheCorpus'
+			declared gives false
+			undeclared gives true
+		end 'declaredByTheCorpus'
+	end 'isUnretiredBuiltinBaseName'
+
+	// Is `name` the builtin `Set` type — the base of every set instance SERVED BY THE SYNTHESIZED RECORD.
 	export function isSetBaseName(name ByteArray) returns bool
-		return name.equals(SetBuiltinBaseName)
+		return self.isUnretiredBuiltinBaseName(name, builtin: SetBuiltinBaseName)
 	end 'isSetBaseName'
+
+	// ⭐⭐ **DOES INSTANCE `id` DENOTE THE `Set` CONTAINER — WHOEVER SERVES IT (W90)?** The SHAPE question,
+	// `isMapShapedInstanceAt`'s twin, and genuinely different from `isSetInstance` above, which since the
+	// retirement asks *"is this set served by the SYNTHESIZED record"*. See that function's header for the
+	// measured programs the split cost the `Map` family; the `Set` half was measured too and is the reason
+	// this exists: read through the RUNTIME question, `Parser.namesSetInstanceAlias` answered false for every
+	// alias head the moment `stdlib/Set.maxon` was listed, and `CharSet from ['x']` became
+	// **`E2004: Undefined variable 'CharSet'`** on four `character-set` cases plus `unicode-category` and
+	// `lazy-static`.
+	//
+	// ⚠ It takes a bare `GenericInstanceId` where the `Map` twin takes a (tag, id) pair, because its caller
+	// holds an instance the ALIAS REGISTRY handed back (`genericAliasInstanceFrom`) rather than a value's
+	// (tag, nameId) columns — so the numeric-space hazard `isArrayInstanceAt` exists for cannot arise here.
+	export function isSetShapedInstance(id GenericInstanceId) returns bool
+		return self.genericInstanceBaseName(id).equals(SetBuiltinBaseName)
+	end 'isSetShapedInstance'
 
 	// Is generic instance `id` a `Set with T`? (Reads the base NAME, which needs no base struct.)
 	export function isSetInstance(id GenericInstanceId) returns bool
@@ -15473,25 +15544,10 @@ export type ProgramSignatures
 		return false
 	end 'typeMentionsTypeParameter'
 
-	// Is `name` the builtin `Map` type — the base of every map instance.
-	// ⭐⭐ **AND A CORPUS `type Map` RETIRES IT (W41).** Every `Map`-instance query in the compiler routes
-	// through this one predicate, so a DECLARED `Map` answering false here is the whole retirement: the
-	// synthesized record, the `MapRecordBytes` box size, the seven-member builtin roster and the `__map_*`
-	// runtime all fall away together, and `Map with (K, V)` resolves as the ordinary declared generic instance
-	// it now is. One switch rather than ten, because the ten already asked one question.
-	//
-	// ⚠ **IT KEYS ON THE DECLARATION, NOT ON THE WHITELIST**, which is what makes it correct for a USER
-	// program too: a program declaring its own `type Map uses Key, Value` gets its own, exactly as A1s wave 2
-	// says a user spelling wins. `stdlib/Map.maxon` being listed is just the corpus taking that same door.
+	// Is `name` the builtin `Map` type — the base of every map instance SERVED BY THE SYNTHESIZED RECORD.
+	// The switch is the shared `isUnretiredBuiltinBaseName`; see its header for what a declared base retires.
 	export function isMapBaseName(name ByteArray) returns bool
-		if not name.equals(MapBuiltinBaseName) 'notTheName'
-			return false
-		end 'notTheName'
-
-		return match self.structOf(name) 'declaredByTheCorpus'
-			declared gives false
-			undeclared gives true
-		end 'declaredByTheCorpus'
+		return self.isUnretiredBuiltinBaseName(name, builtin: MapBuiltinBaseName)
 	end 'isMapBaseName'
 
 	// Is generic instance `id` a `Map with (K, V)`? (Reads the base NAME, which needs no base struct.)
@@ -16667,10 +16723,11 @@ export type ProgramSignatures
 	function containerCreateCall(id GenericInstanceId) returns ContainerCreateCall
 		var stamps = ContainerCreateStampArray.create()
 
-		// A DECLARED generic's `create()` takes no arguments (`Parser.requireDeclaredGenericGlobalCreate`), so a
-		// global of one is always EMPTY and there is no add callee to name — see `ContainerElementAdd`.
+		// A DECLARED generic's `create()` takes no arguments (`Parser.requireDeclaredGenericGlobalCreate`), so it
+		// is born EMPTY and carries no stamps; whether anything then FILLS it is `declaredContainerElementAdd`'s
+		// question, and it has an answer only for the one declared shape a top-level form hands elements to.
 		if self.instanceCreateIsDeclared(id) 'declaredGeneric'
-			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
+			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, sizing: ContainerSizing.grown, elementAdd: self.declaredContainerElementAdd(id))
 		end 'declaredGeneric'
 
 		if self.isSetInstance(id) 'set'
@@ -16706,6 +16763,28 @@ export type ProgramSignatures
 		stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
 		return ContainerCreateCall.create(ManagedCreateName, stamps: stamps, sizing: ContainerSizing.fixed(self.genericInstanceFixedSize(id)) if self.isVectorInstance(id) else ContainerSizing.grown, elementAdd: ContainerElementAdd.push(ManagedPushName))
 	end 'containerCreateCall'
+
+	// ⭐⭐ **WHICH DECLARED GENERIC A TOP-LEVEL FORM CAN HAND ELEMENTS TO, AND WHAT THEY JOIN IT THROUGH
+	// (W90).** Exactly one does: a `Set`-SHAPED instance, because `Set from […]` is a construction the constant
+	// evaluator folds to a member list (`Parser.evalConstSetFrom`) and every other declared generic reaches a
+	// global's slot only as a bare `<Alias>.create()`, which produces nothing to add.
+	//
+	// ⚠ **IT IS THE SHAPE QUESTION AND NOT THE RUNTIME ONE — `isSetShapedInstance`, deliberately.** This arm is
+	// reached only when the base IS declared, so `isSetInstance` is false here by construction and asking it
+	// would make the test unreachable; what decides the callee is that the CONSTRUCTION which produced these
+	// members is a set's, which is a fact about the base NAME.
+	//
+	// ⛔ **A DECLARED CONTAINER THAT IS NOT `Set`-SHAPED KEEPS `unsupported`, AND THE PANIC BEHIND IT IS THE
+	// POINT** (`ModuleInit.elementAddCallee`): a description arriving with elements and naming no callee means
+	// a top-level form was opened without teaching this router what its container adds through, and dropping
+	// the elements silently is the wrong answer to that.
+	function declaredContainerElementAdd(id GenericInstanceId) returns ContainerElementAdd
+		if not self.isSetShapedInstance(id) 'noTopLevelFormProducesElements'
+			return ContainerElementAdd.unsupported
+		end 'noTopLevelFormProducesElements'
+
+		return ContainerElementAdd.push(qualifiedMethodName(self.genericInstanceBaseName(id), methodName: InsertMethod))
+	end 'declaredContainerElementAdd'
 
 	// The element CLONE strategy for a managed-element `Array with T` (P1.7 slice 3b-vi-b) — the DUAL of
 	// `arrayElementDropCallee`. The front end stamps `funcAddr(<the direct callee>)` into the `_managed`

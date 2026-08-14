@@ -2422,8 +2422,38 @@ type MaxonToStdLowering
 	// differently. The building itself is `withWitnessTableArgs`, whose header carries the measured reason a
 	// throwing path must come through a door like this one at all.
 	function withKeyWitnessArgs(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
-		return self.withWitnessTableArgs(args, conformerType: self.setWitnessKeyTypeName(result, callee: callee, args: args), interfaceNames: hashTableKeyWitnessInterfaces(), dstBlock: dstBlock)
+		return self.withWitnessTableArgs(self.withMemberSetLayoutArg(callee, args: args, dstBlock: dstBlock), conformerType: self.setWitnessKeyTypeName(result, callee: callee, args: args), interfaceNames: hashTableKeyWitnessInterfaces(), dstBlock: dstBlock)
 	end 'withKeyWitnessArgs'
+
+	// ⭐⭐ **`__cs_contains` CARRIES ITS MEMBER SET'S LAYOUT DESCRIPTOR, BECAUSE UNDER A RETIRED `Set` ITS BODY
+	// CALLS A CORPUS GENERIC METHOD (W90).** `Set.contains` is dictionary-passing — its ABI is
+	// `[user][layout][witness_0..k]` (`finalizeCallArgsWithLayout`) — and a `CharacterSet`'s probe is a
+	// SYNTHESIZED Std body, which can spell an `.rdata` label but cannot cause the blob to EXIST. Threading it
+	// from HERE is what does: `ensureLayoutDescriptor` registers the blob and its relocations at the one tier
+	// that owns them, exactly as `materializeWitnessTableAddr` already registers the two tables beside it.
+	//
+	// ⭐ **IT IS PASSED UNCONDITIONALLY AND FORWARDED CONDITIONALLY, WHICH IS DELIBERATE.** Whether the corpus
+	// method takes a descriptor is a per-METHOD verdict of the whole-program fixpoint
+	// (`ProgramSignatures.functionNeedsLayoutDescriptor`), so if `__cs_contains`'s OWN arity tracked it too,
+	// two files would have to agree about one fixpoint answer or the callee's `param` ops would read whatever
+	// the ABI registers held — a wrong ANSWER with no panic (`lowerRuntimeCall`'s measured `__map_get` case).
+	// One fixed arity here, one read inside `CharacterSetRuntime.buildCharSetContains`, and only that read can
+	// be wrong.
+	//
+	// ⚠ It sits BEFORE the witnesses because that is the order the ABI states, and the member set's instance
+	// is `Set with Character` by construction — the same fact `setWitnessKeyTypeName` names `Character` from.
+	function withMemberSetLayoutArg(callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
+		if not isCharacterKeyedWitnessCallee(callee) 'readsItsSetOffAnArgument'
+			return args
+		end 'readsItsSetOffAnArgument'
+
+		var out = ValueIdArray.create()
+		out.append(args)
+		let descId = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(self.signatures.setInstanceForCharacter()).toByteArray()))
+		out.push(descId)
+		return out
+	end 'withMemberSetLayoutArg'
 
 	// ⭐ **`args` PLUS ONE `__witness_<conformerType>.<interface>` ADDRESS PER CONSTRAINT, IN ORDER — the whole
 	// of dictionary-passing into a compiler-owned runtime entry, written once.** The constraint list lives

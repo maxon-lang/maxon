@@ -546,6 +546,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// cascade fixpoint to close over them — the same obligation, and the same ordering, the cascades have.
 	let asyncSpawnTargets = collectAsyncSpawnTargets(module)
 	declareAsyncReleaserNeeds(usage, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
+	// ⭐ **W90: `__cs_decref`'s body drops its member set, and once `stdlib/Set.maxon` is listed that drop is
+	// a per-instance `__destruct_Set_Character` cascade.** Same seam, same ordering and the same reason as the
+	// releaser line above: a synthesized body's callee is invisible to the module scan, and a cascade nobody
+	// rooted before the fixpoint is never synthesized.
+	declareCharacterSetRuntimeNeeds(usage, signatures: signatures)
 	noteDestructorUsage(usage, project: project, signatures: signatures)
 	// A managed-element array/struct/union DEEP-CLONE (P1.7 slice 3b-vi-b) synthesizes `__clone_<T>` cascades
 	// that call `__str_clone`/`__managed_clone`/nested `__clone_<T>` inside bodies this scan cannot see. Close the
@@ -687,7 +692,7 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// way, keyed on its own per-entry-point bits. It sits after the category install because `__cs_contains`
 	// classifies a codepoint through `__ucd_cat`; as with every install above, the bit was settled by
 	// `scanRuntimeUsage` before any install ran, so the order is readability rather than a dependency.
-	installCharacterSetRuntime(pipeline.stdModule, usage: usage)
+	installCharacterSetRuntime(pipeline.stdModule, usage: usage, signatures: signatures)
 
 	// The file-IO runtime (`__mf_open_read`, R4.1) — installed the same already-lowered way, on its own
 	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency

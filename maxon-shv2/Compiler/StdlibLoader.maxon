@@ -1520,6 +1520,33 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// `Sleep.maxon`'s defect exactly, and this file's own rule names it. `ProgramSignatures.isMapBaseName`
 	// now answers FALSE once a `Map` is declared, so this line is what makes the corpus type the real one.
 	try listWhitelistedModule(stdlibDir, relative: "Map.maxon", into: listed)
+	// ⭐⭐ **`stdlib/Set.maxon` — THE HASH TABLE'S OTHER HALF, AND THE SAME ONE CHANGE (W90).** Everything the
+	// entry above says applies here word for word, through the SHARED switch
+	// (`ProgramSignatures.isUnretiredBuiltinBaseName`): listing the module while the builtin still shadowed
+	// buys NOTHING — MEASURED, with `count()` rewritten to `return count + 100` the program still answered
+	// **2** and the executable was byte-identical — because every `Set` query routes through `isSetBaseName`.
+	// The listing plus the switch is the retirement, and the same sabotage then answers **102**.
+	//
+	// ⚠ **IT CARRIES ONE OBLIGATION `Map` DID NOT, AND IT IS WHY THIS ENTRY WAS NOT TAKEN WITH `Map`'s.**
+	// `CharacterSet` OWNS a `Set with Character` and its three synthesized `__cs_*` bodies BUILD, DROP and
+	// PROBE it. Those callees are not the Maxon call graph's — the caller does not exist when the reachability
+	// walk runs — so all three had to be re-pointed at the corpus type by hand and rooted by hand:
+	// `Parser.emitSetCreate`/`emitSetInsert` (the build), `CharacterSetRuntime.characterMemberSetDropCallee`
+	// (the drop, a per-instance `__destruct_Set_Character`), `characterMemberSetContainsCallee` (the probe,
+	// which also takes a threaded LAYOUT DESCRIPTOR now), plus
+	// `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` and
+	// `CharacterSetRuntime.declareCharacterSetRuntimeNeeds` for the two edges nothing could see. Get any of
+	// them wrong and there is no diagnostic — the backend panics in `resolveCallFixups`, or the callee's
+	// `param` ops read whatever the ABI registers held.
+	//
+	// ⚠ **THE COLLISION RULE, CLEARED:** its one FREE function is `findNextOccupiedSet`, which
+	// `Parser.parseCallNamed`'s bare-name chain does not claim and no other listed module declares. It CONSUMES
+	// `spreadHash`, which is `stdlib/Interfaces.maxon:105`'s — already listed above and already consumed the
+	// same way by `Map.maxon`, so this is a second reader of one declaration and not a second declaration. Its
+	// TYPE names are `Set` (compiler-owned, admitted from the CORPUS by `recordStruct`'s provenance bit exactly
+	// as `Map`/`Array`/`String` are) and `SetIterator`, which no other module declares; and it has no
+	// top-level binding, so the `S2h` reachability term has nothing of its to keep or drop.
+	try listWhitelistedModule(stdlibDir, relative: "Set.maxon", into: listed)
 	// ⭐⭐⭐ **`stdlib/Array.maxon` AND ITS SIX SORT HELPERS — THE ENTRY THIS WHOLE LIST WAS BUILT TOWARD, AND
 	// THE LARGEST ONE IT WILL EVER TAKE.** Every entry above adds a capability or replaces an authority for
 	// something peripheral. This one replaces the authority for the container the COMPILER ITSELF is built

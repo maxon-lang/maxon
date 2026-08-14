@@ -8,7 +8,11 @@ category: semantics
 
 ## Documentation
 
-Calling a receiver-writing method on an immutable (`let`) binding is a compile-time error. The receiver-writing methods are, exactly: `append` on a `String`; `push`, `set`, `insert`, `append`, `reserve`, `resize`, `clear`, `pop` and `remove` on an `Array`; and `insert` and `remove` on a `Set`. Every other method only reads its receiver and is legal on a `let`.
+Calling a receiver-writing method on an immutable (`let`) binding is a compile-time error. The receiver-writing methods are, exactly: `append` on a `String`, and `push`, `set`, `insert`, `append`, `reserve`, `resize`, `clear`, `pop` and `remove` on an `Array`. Every other method only reads its receiver and is legal on a `let`.
+
+⚠⚠ **THE RULE IS A BUILTIN-SURFACE ONE, AND A DECLARED TYPE IS EXEMPT (USER RULING 2026-08-14).** It lives in the parser's hand-written `arrayMethodMutatesReceiver` / `setMethodMutatesReceiver` rosters and is read only through the BUILTIN dispatchers, so a type the compiler compiles rather than synthesizes never reaches it — `let c = Counter.create(); c.bump()` compiles today for any user `type Counter`. `Set` used to be on this list and left it when `stdlib/Set.maxon` was listed (W90): the three cases below that once pinned E3019 on a `Set` are value-asserting `ok` cases now, so the drop is RECORDED rather than silently inherited. It was RULED, not drifted.
+
+⚠ The `Array` and `String` cases are unaffected and stay green: both are still builtin-dispatched.
 
 A **parameter** is exempt, and that is not a loophole: `mutable` asks whether the NAME may be rebound (a parameter's answer is no), while this rule asks whether the CONTAINER the name denotes may be written — and a parameter is a borrowed reference to the caller's record, so `dest.append(src)` inside a helper is ordinary Maxon. A `let` that merely *aliases* a parameter is still a `let`, and is still refused.
 
@@ -150,8 +154,13 @@ end 'main'
 error E3019: specs/fragments/immutable-method-call/push-on-let-alias-of-parameter-error.test:7:4: cannot pass 'a' to function that mutates parameter 'self' (in grow)
 ```
 
-<!-- test: insert-on-let-set-error -->
-A `Set` receiver obeys the same rule as a `String` and an `Array` one.
+<!-- test: insert-on-let-set-ok -->
+⭐⭐ **A `Set` RECEIVER NO LONGER OBEYS THIS RULE, AND THAT IS THE RULING RATHER THAN A REGRESSION (W90).**
+This case pinned E3019 for as long as `Set` was a synthesized builtin. With `stdlib/Set.maxon` listed, `Set`
+is a type the compiler COMPILES, `insert` is an ordinary declared method, and the parser's builtin
+`setMethodMutatesReceiver` roster is never reached — exactly as it is never reached for any user type. It is
+kept as a VALUE-asserting case rather than deleted, so the surface it used to refuse is still executed and
+the day something re-refuses it, this goes red.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -163,11 +172,13 @@ function main() returns ExitCode
 	return s.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/insert-on-let-set-error.test:7:4: cannot pass 's' to function that mutates parameter 'self' (in main)
+```exitcode
+1
 ```
 
-<!-- test: remove-on-let-set-error -->
+<!-- test: remove-on-let-set-ok -->
+The `remove` half of the same ruling. The set is empty, so `remove` answers false and the count is zero.
+
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntSet = Set with Integer
@@ -181,16 +192,19 @@ function main() returns ExitCode
 	return s.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E3019: specs/fragments/immutable-method-call/remove-on-let-set-error.test:7:15: cannot pass 's' to function that mutates parameter 'self' (in main)
+```exitcode
+0
 ```
 
 <!-- test: contains-on-let-set-ok -->
-A read-only `Set` method on a `let` receiver is fine. Restricted like every other Set case that actually
-COMPILES a set: a `Set` instance's descriptor needs `destroyFunc@40` patched with `funcAbs64InRdata`,
-which the x64 writers bake as a `.text` VA and the wasm backend as a funcref-table index — arm64 still
-refuses it. (The `let`-receiver ERROR cases above are refused before any of that, so they carry no
-restriction.)
+A read-only `Set` method on a `let` receiver is fine.
+
+⚠ **THE PARENTHETICAL THAT STOOD HERE WENT STALE AT W90 AND IS DELETED RATHER THAN REWORDED.** It read
+*"the `let`-receiver ERROR cases above are refused before any of that, so they carry no restriction"* — and
+those two cases COMPILE a set now (the ruling above), so all three of this file's `Set` cases stand or fall
+together on whatever a `Set` instance's descriptor costs a target. None of them carries a `targets:` marker
+and none ever did, so nothing in this file was ever encoding that restriction; saying so once here is more
+honest than a sentence about a distinction that no longer exists.
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)

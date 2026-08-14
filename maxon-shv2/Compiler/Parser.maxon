@@ -3710,6 +3710,10 @@ let MixedArrayLiteralElementsMessage = "an array literal with mixed element type
 let ArrayLiteralSubject = "an array literal"
 let ContainerElementColumnNoun = "element"
 let MapLiteralSubject = "a map literal"
+// The `Set from […]` member list's subject (W90). It is a THIRD construct spelling a bracketed literal, and it
+// reaches `literalColumnTypeFor` for the same one question the other two put — which `MaxonType` does this
+// parsed value name? — so it takes a noun here rather than a sentence of its own.
+let SetLiteralSubject = "a set literal"
 let HashTableKeyColumnNoun = "key"
 let HashTableValueColumnNoun = "value"
 
@@ -5077,7 +5081,7 @@ end 'corpusFindGraphemeEndLabels'
 // ⚠ **`ContainsMethod` SURVIVED `contains`' RETIREMENT AND IS NOT A LEFTOVER**: `Set`, `Map` and
 // `CharacterSet` all dispatch a `contains` of their own through it, and those surfaces are shv2's. What
 // wave 4 retired is the `String` ARM, not the spelling.
-let ContainsMethod = b"contains"
+export let ContainsMethod = b"contains"
 
 // ⭐ **WHAT IS LEFT OF THE P1.8 SLICE B2 `StringIndex` FAMILY: THE INDEX'S OWN TWO ACCESSORS.**
 // `charIndex`/`bytePos` are the reference's own names (`stdlib/String.maxon:925-931`), and they are
@@ -49427,7 +49431,7 @@ export type Parser
 		for preset in characterSetPresets() 'eachPreset'
 			if methodTok.value.equals(preset.method) 'match'
 				try self.consumeEmptyArgList()
-				return try self.emitPredefinedCharacterSet(preset, range: range)
+				return try self.emitPredefinedCharacterSet(preset, anchor: methodTok, range: range)
 			end 'match'
 		end 'eachPreset'
 
@@ -49878,19 +49882,21 @@ export type Parser
 	// Each member is a `Character` LITERAL the parser mints from the preset's bytes — the same immortal
 	// `.rdata` record a source `'é'` mints — and `moveManagedValueInto` promotes it to an owned copy on the
 	// way in, exactly as a source `insert` does. So a predefined set's members are owned by the set and
-	// released by `__cs_decref` → `__set_decref`, with nothing aliased to `.rdata`.
-	function emitPredefinedCharacterSet(preset CharacterSetPreset, range SourceRange) returns ValueId throws ParseError
-		let chars = self.emitCharacterMemberSet(preset.members, range: range)
+	// released by `__cs_decref` → whatever drops that set (`CharacterSetRuntime.characterMemberSetDropCallee`),
+	// with nothing aliased to `.rdata`.
+	function emitPredefinedCharacterSet(preset CharacterSetPreset, anchor Token, range SourceRange) returns ValueId throws ParseError
+		let chars = try self.emitCharacterMemberSet(preset.members, anchor: anchor, range: range)
 		return self.emitCharacterSetBox(chars, categoryMask: preset.categoryMask, argBareLocal: false, range: range)
 	end 'emitPredefinedCharacterSet'
 
 	// A fresh `Set with Character` seeded from a preset's byte sequences. Each member is a `Character`
-	// LITERAL the parser mints, promoted to an owned copy on the way in exactly as a source `insert` is.
-	function emitCharacterMemberSet(members ByteArrayArray, range SourceRange) returns ValueId
-		let chars = self.emitEmptyCharacterMemberSet(range)
+	// LITERAL the parser mints, promoted to an owned copy on the way in exactly as a source `insert` is —
+	// while the set is the synthesized record; see `movedCharacterSetMember` for who owns it otherwise.
+	function emitCharacterMemberSet(members ByteArrayArray, anchor Token, range SourceRange) returns ValueId throws ParseError
+		let chars = try self.emitEmptyCharacterMemberSet(anchor, range: range)
 		for bytes in members 'eachMember'
-			let owned = self.moveManagedValueInto(self.emitCharacterLiteral(bytes, range: range), argBareLocal: false, isString: true, range: range)
-			self.emitCharacterMemberInsert(chars, member: owned, range: range)
+			let owned = self.movedCharacterSetMember(self.emitCharacterLiteral(bytes, range: range), argBareLocal: false, range: range)
+			try self.emitCharacterMemberInsert(chars, member: owned, anchor: anchor, range: range)
 		end 'eachMember'
 		return chars
 	end 'emitCharacterMemberSet'
@@ -49899,9 +49905,9 @@ export type Parser
 	// element is a `Character` by being written as a character literal (A5m-ab; it used to have to ADOPT the
 	// type here, because a one-byte literal was an int) and is MOVED in, exactly as a preset's minted literal
 	// is, so the two producers cannot disagree about who owns a member.
-	function parseCharacterMemberSetLiteral(func IrFunction, range SourceRange) returns ValueId throws ParseError
+	function parseCharacterMemberSetLiteral(func IrFunction, anchor Token, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftBracket)
-		let chars = self.emitEmptyCharacterMemberSet(range)
+		let chars = try self.emitEmptyCharacterMemberSet(anchor, range: range)
 		while not self.at(TokenKind.rightBracket) 'eachMember'
 			let memberTok = self.current()
 			let memberStart = self.pos
@@ -49909,7 +49915,7 @@ export type Parser
 			if self.tagOf(member) != ValueTypeTag.character 'notACharacter'
 				throw ParseError.builtinOperandType(String.from(CharacterMemberSetAliasName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(member)), line: memberTok.line, column: memberTok.column)
 			end 'notACharacter'
-			self.emitCharacterMemberInsert(chars, member: self.moveManagedValueInto(member, argBareLocal: self.rhsWasBareLocalReference(memberStart), isString: true, range: range), range: range)
+			try self.emitCharacterMemberInsert(chars, member: self.movedCharacterSetMember(member, argBareLocal: self.rhsWasBareLocalReference(memberStart), range: range), anchor: anchor, range: range)
 			if not self.at(TokenKind.rightBracket) 'moreMembers'
 				try self.consume(TokenKind.comma)
 			end 'moreMembers'
@@ -49923,16 +49929,17 @@ export type Parser
 	//
 	// It IS enrolled as a pending temporary, exactly as `IntSet.create()`'s result is: a `let s = CharSet from
 	// ['x']` that never reaches a box must still be dropped at scope exit. The box's `moveManagedValueInto`
-	// de-lists it again when one does take ownership, so it is dropped exactly once either way.
-	function emitEmptyCharacterMemberSet(range SourceRange) returns ValueId
-		let chars = self.emitSetCreateOp(self.signatures.setInstanceForCharacter(), range: range)
-		self.trackOwnedTemp(chars, exclusivity: OwnedHeapExclusivity.sole)
-		return chars
+	// de-lists it again when one does take ownership, so it is dropped exactly once either way. The enrolment
+	// is `emitSetCreate`'s, because the two representations reach it by different routes.
+	function emitEmptyCharacterMemberSet(anchor Token, range SourceRange) returns ValueId throws ParseError
+		return try self.emitSetCreate(self.signatures.setInstanceForCharacter(), anchor: anchor, range: range)
 	end 'emitEmptyCharacterMemberSet'
 
-	// One member into a member set. The insert is a VOID mutator; the set OWNS the member from here.
-	function emitCharacterMemberInsert(chars ValueId, member ValueId, range SourceRange)
-		_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(chars, second: member), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+	// One member into a member set. The insert is a VOID mutator; the set OWNS the member from here. Its pair
+	// with the door above is what keeps the member set's INSTANCE — the fact both the create and the insert
+	// are keyed on — spelled in one place per act rather than at each of the two producers.
+	function emitCharacterMemberInsert(chars ValueId, member ValueId, anchor Token, range SourceRange) throws ParseError
+		try self.emitSetInsert(chars, giid: self.signatures.setInstanceForCharacter(), member: member, anchor: anchor, range: range)
 	end 'emitCharacterMemberInsert'
 
 	// ⭐ **THE ONE DOOR A `CharacterSet` BOX IS BORN THROUGH** — `__cs_make(chars, categoryMask)`, whose
@@ -51537,6 +51544,68 @@ export type Parser
 		panic("Parser.requireContainerColumnTypes: generic instance {giid} is a builtin container with a `{String.from(CreateMethod)}` and no column rule — `requireContainerIsCreatable` admitted it, and a container admitted there owes an arm here even if that arm is `Array`'s bare return")
 	end 'requireContainerColumnTypes'
 
+	// ⭐⭐ **THE EMPTY SET EVERY MEMBER-BY-MEMBER DOOR STARTS FROM — the builtin op, or the corpus type's own
+	// `create()` (W90).** `emitMapLiteralCreate`'s twin exactly, and it is the one place the two
+	// representations part company, so the retirement question is asked ONCE per step rather than once per
+	// producer. Its callers are the `CharacterSet` member set (a preset's seed and a `CharSet from […]`) and
+	// the corpus arm of `Set from […]`.
+	//
+	// ⭐ **THE RESULT IS ENROLLED AS AN OWNED TEMPORARY IN BOTH ARMS, BY DIFFERENT MEANS, WHICH IS WHY THE
+	// ENROLMENT IS HERE AND NOT AT THE CALLERS.** A runtime op owns nothing until `trackOwnedTemp` says so;
+	// an `emitCall` result is classified +1 owned by the call machinery itself (`enrolOwnedCallTemp`). A
+	// caller that tracked unconditionally would enrol the corpus result TWICE and drop it twice.
+	function emitSetCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		if self.signatures.isSetInstance(giid) 'synthesizedRecord'
+			let set = self.emitSetCreateOp(giid, range: range)
+			self.trackOwnedTemp(set, exclusivity: OwnedHeapExclusivity.sole)
+			return set
+		end 'synthesizedRecord'
+
+		var args = ValueIdArray.create()
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: range)
+		let set = try self.emitCall(qualifiedMethodName(SetBuiltinBaseName, methodName: CreateMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
+		// ⭐ **THE RESULT IS THE INSTANCE, AND SAYING SO IS THE CALLER'S JOB** — `emitCall` reads
+		// `constructorInstance` on the CONSUME side alone. See `emitMapLiteralCreate` for the
+		// `materializeStaticConstructorLayout` panic that omitting this step measures.
+		self.retypeGenericAliasConstructorResult(set, gid: giid, aliasName: EmptySourceText)
+		return set
+	end 'emitSetCreate'
+
+	// ⭐ **ONE MEMBER INTO THE SET — `emitSetCreate`'s twin.** The insert is a VOID mutator either way; the set
+	// OWNS the member from here. `Set.insert(element Element)` declares its one parameter POSITIONALLY, so the
+	// synthesized call spells no label — the half `emitMapLiteralUpsert` had to spell and this one must not.
+	function emitSetInsert(set ValueId, giid GenericInstanceId, member ValueId, anchor Token, range SourceRange) throws ParseError
+		if self.signatures.isSetInstance(giid) 'synthesizedRecord'
+			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(set, second: member), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+			return
+		end 'synthesizedRecord'
+
+		var args = pairArgs(set, second: member)
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: range)
+		_ = try self.emitCall(qualifiedMethodName(SetBuiltinBaseName, methodName: InsertMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(set), mint: CalleeMint.notMinted)
+	end 'emitSetInsert'
+
+	// ⭐⭐ **A MEMBER MOVES INTO THE SET AT THE PARSE ONLY WHILE THE SET *IS* THE SYNTHESIZED RECORD (W90) — the
+	// OWNERSHIP half of the switch `emitSetInsert` above is the CALLEE half of.** `moveMapLiteralColumnValue`'s
+	// twin, and its header carries the measurement: a synthesized table takes ownership at the parse because
+	// `__set_insert` is a runtime call with no signature for `applyCallerConsume` to read, while the corpus
+	// `Set.insert` has one and the ORDINARY call machinery decides. Doing BOTH is not belt-and-braces, it is a
+	// leak — the parse-time move DRAINS the value from the statement's pending drops, so the call then takes
+	// its own reference and the statement releases nothing.
+	//
+	// ⚠ **ASKED OF THE BASE NAME AND NOT OF A giid**, for `moveMapLiteralColumnValue`'s reason: a preset's
+	// member is minted before any instance is in hand, and a member set's base is `Set` by construction.
+	function movedCharacterSetMember(member ValueId, argBareLocal bool, range SourceRange) returns ValueId
+		if not self.signatures.isSetBaseName(SetBuiltinBaseName) 'theInsertCallTakesOwnership'
+			return member
+		end 'theInsertCallTakesOwnership'
+
+		// `isString: true` — `tagIsByteRecord`'s protocol, since a `Character` IS a String record.
+		return self.moveManagedValueInto(member, argBareLocal: argBareLocal, isString: true, range: range)
+	end 'movedCharacterSetMember'
+
 	// Emit `__set_create(elemDrop)` for instance `giid`, yielding the empty set record (P1.7b). The record is
 	// zeroed by `__mm_alloc`, so the first insert lazily allocates the buffers; `elemDrop@40` carries the key
 	// destructor (`__str_decref` for a String key, 0 for a trivial int key) so the set drops its owned keys at
@@ -51767,8 +51836,16 @@ export type Parser
 	// Is `name` a typealias for a `Set` instance — the alias form of a `from` construction's head? Asked of
 	// the whole-program index, which is complete in the real parse; during the tolerant sweep every alias
 	// answers no, which is sound because the sweep's artifact is discarded.
+	//
+	// ⚠⚠ **THE *SHAPE* QUESTION, NEVER THE RUNTIME ONE (W90).** `CharSet from ['x']` is a construction
+	// whoever serves the container: which runtime executes it is settled inside `parseSetFromConstruction`,
+	// and it has nothing to do with whether this token sequence IS a construction. Asked through
+	// `isSetInstance` — the runtime question — this answered false for every alias head the instant
+	// `stdlib/Set.maxon` was listed, `atSetFromConstruction` stopped claiming the shape, and the head fell
+	// through to **`E2004: Undefined variable 'CharSet'`** on six cases across `character-set`,
+	// `unicode-category` and `lazy-static`. See `ProgramSignatures.isSetShapedInstance`.
 	function namesSetInstanceAlias(name ByteArray) returns bool
-		return self.signatures.isGenericAlias(name) and self.signatures.isSetInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
+		return self.signatures.isGenericAlias(name) and self.signatures.isSetShapedInstance(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
 	end 'namesSetInstanceAlias'
 
 	// The same question one container over — is `name` a typealias for an `Array` instance? Its own predicate
@@ -51827,13 +51904,105 @@ export type Parser
 		// the elements cannot, so the bracket list is read as members directly and each element adopts
 		// `Character` the way every other Character-expecting position makes a literal adopt it.
 		if self.namesSetInstanceAlias(setTok.value) and self.signatures.genericAliasInstanceFrom(setTok.value, readerFilePath: self.filePath) == self.signatures.setInstanceForCharacter() 'characterKeyed'
-			return try self.parseCharacterMemberSetLiteral(func, range: SourceRange.ofToken(setTok))
+			return try self.parseCharacterMemberSetLiteral(func, anchor: setTok, range: SourceRange.ofToken(setTok))
 		end 'characterKeyed'
+
+		// ⭐⭐ **A CORPUS `Set` IS BUILT MEMBER BY MEMBER AND NEVER THROUGH AN ARRAY (W90).** `__set_from` is a
+		// runtime entry that CONSUMES a source array one machine word at a time; the corpus type's own
+		// `InitableFromArrayLiteral` `init` is not exported, so a user file naming it is
+		// **`E3008: function 'Set.init' is not exported`**. `W41` met the identical wall one container over and
+		// answered it the same way — `Map.create()` plus one `upsert` per pair — so this is `Map`'s route, and
+		// it also spares the intermediate `Array` record the `from` spelling used to allocate.
+		if not self.signatures.isSetBaseName(SetBuiltinBaseName) 'corpusSet'
+			return try self.parseSetMemberList(func, setTok: setTok)
+		end 'corpusSet'
 
 		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
 		let setGid = try self.setInstanceForArrayLiteral(self.valueNameId(arr), setTok: setTok)
 		return self.emitOwnedRuntimeResult(SetFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: setGid, range: SourceRange.ofToken(setTok))
 	end 'parseSetFromConstruction'
+
+	// ⭐⭐ **`Set from [m0, m1, …]` ONTO A DECLARED `Set` — `Set.create()` plus one `Set.insert` per member
+	// (W90).** The cursor sits on the `[`. The FIRST member fixes the element type and therefore the
+	// instance, exactly as `parseMapLiteralBody`'s first pair fixes both of its columns, and every later
+	// member is held to that type through the SHARED hash-table column door — so a mixed literal is refused
+	// with the sentence a written `s.insert(x)` of the wrong type already gets.
+	//
+	// ⚠ **`consume: false` AT EVERY MEMBER, AND IT IS NOT AN OVERSIGHT.** The corpus `Set.insert` declares its
+	// parameter, so the ORDINARY call machinery decides the move — see `movedCharacterSetMember` for the leak
+	// a second, parse-time move produces. That also makes the fencing-token ordering `parseHashTableColumnArg`
+	// insists on vacuous here: nothing reads `rhsWasBareLocalReference` on this path.
+	function parseSetMemberList(func IrFunction, setTok Token) returns ValueId throws ParseError
+		let range = SourceRange.ofToken(setTok)
+		try self.consume(TokenKind.leftBracket)
+		// A BRACKETED LIST MAY BE WRITTEN OVER SEVERAL LINES, and the three skips below are exactly where
+		// `parseArrayLiteral` puts its own — the spelling this arm replaced, so a literal that parsed before the
+		// retirement must parse after it. They are unconditional here, where the array literal's trailing one has
+		// to wait for the element's move-in: nothing on this path reads `rhsWasBareLocalReference`, so there is no
+		// `[valueStart, self.pos)` window a skip could widen.
+		self.skipNewlines()
+
+		// An EMPTY literal names no element, so there is no instance to create — and unlike an array literal,
+		// which has `[]`'s own int default, a set's element must satisfy `Set`'s `where` clause before a
+		// witness can be threaded. The alias form is the spelling that states a key type, so it is what the
+		// refusal points at.
+		if self.at(TokenKind.rightBracket) 'noMembers'
+			throw ParseError.unsupported("`{String.from(SetBuiltinBaseName)} from []` states no {HashTableKeyColumnNoun} type — an empty set is `<alias>.{String.from(CreateMethod)}()` over a `{String.from(SetBuiltinBaseName)} with <{HashTableKeyColumnNoun}>` alias", line: setTok.line, column: setTok.column)
+		end 'noMembers'
+
+		let firstTok = self.current()
+		let first = try self.parseExpression(func, block: self.currentBlock)
+		let keyType = try self.literalColumnTypeFor(first, literalKind: SetLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstTok)
+		let giid = try self.setInstanceForLiteralKey(keyType, setTok: setTok)
+
+		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION**, because it is the one door a set is born through
+		// with no `with <Key>` to anchor an E3017 on — `gateMapLiteralColumns`' arm, for its reason. The
+		// verdict is `Set`'s own `where Element is Hashable and Equatable`, taken whole-program by
+		// `checkWhereConstraints` where the conformance store is complete.
+		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: setTok.line, nameColumn: setTok.column, filePath: self.filePath))
+
+		let set = try self.emitSetCreate(giid, anchor: setTok, range: range)
+		try self.emitSetInsert(set, giid: giid, member: first, anchor: setTok, range: range)
+		self.skipNewlines()
+
+		let declaredType = self.resolvedSlotType(keyType)
+		let declared = maxonTypeTag(declaredType)
+		let identity = self.declaredColumnIdentity(declaredType)
+		while self.at(TokenKind.comma) 'moreMembers'
+			try self.consume(TokenKind.comma)
+			self.skipNewlines()
+			let member = try self.parseHashTableColumnArg(func, columnType: keyType, declaredType: declaredType, columnSubject: "`{String.from(SetBuiltinBaseName)} with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}", consume: false)
+			try self.emitSetInsert(set, giid: giid, member: member, anchor: setTok, range: range)
+			self.skipNewlines()
+		end 'moreMembers'
+
+		try self.consume(TokenKind.rightBracket)
+		return set
+	end 'parseSetMemberList'
+
+	// ⭐ **THE `Set with <key>` INSTANCE A CORPUS `Set from […]` BUILDS — bounded by what the SWEEP PRE-INTERNED
+	// and by nothing else (W90).** `internWellKnownContainerInstances` over-interns exactly `Set with integer`
+	// and `Set with String` for a file whose tokens hold a `Set from`, and `atSetFromConstruction`'s discipline
+	// is that the parser may only READ back what the sweep wrote: a first intern here would make the gid depend
+	// on parse order, which no drift guard can see.
+	//
+	// ⚠⚠ **SO THIS IS AN INTERNING BOUND, NOT A CONFORMANCE VERDICT, AND THE DISTINCTION IS THE WHOLE
+	// DIFFERENCE FROM ITS SYNTHESIZED TWIN.** `setInstanceForArrayLiteral` refuses a narrow-packed element for
+	// the `__set_from` element STRIDE and everything else for the builtin's key roster; neither reason survives
+	// here — create-plus-insert reads no buffer, and whether the key can be hashed is `Set`'s own `where` clause,
+	// checked whole-program against the site the caller records. What is left is the one thing this door can
+	// still state: the program's own `typealias <X> = Set with <Key>` is how any other key type reaches a set,
+	// and it is what the refusal names.
+	function setInstanceForLiteralKey(keyType MaxonType, setTok Token) returns GenericInstanceId throws ParseError
+		if tagIsPlainInteger(maxonTypeTag(keyType)) 'intKey'
+			return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
+		end 'intKey'
+		if tagIsText(maxonTypeTag(keyType)) 'stringKey'
+			return self.signatures.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
+		end 'stringKey'
+
+		throw ParseError.unsupported("`{String.from(SetBuiltinBaseName)} from […]` infers its {HashTableKeyColumnNoun} type from the members, and only `{String.from(IntConformerName)}` and `{String.from(StringConformerName)}` members are inferred — declare `{String.from(SetBuiltinBaseName)} with <{HashTableKeyColumnNoun}>` and build it with `{String.from(CreateMethod)}` and `{String.from(InsertMethod)}` instead", line: setTok.line, column: setTok.column)
+	end 'setInstanceForLiteralKey'
 
 	// ⭐⭐ **`FilePath from "C:\\x.txt"` — THE `InitableFromStringLiteral` CONSTRUCTION, WHICH IS SUGAR AND
 	// NOTHING MORE.** It is exactly `<Type>.init(<the literal as a String>)`, which is what both references

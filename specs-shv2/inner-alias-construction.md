@@ -137,12 +137,20 @@ end 'main'
 0
 ```
 
-### An inner `Set` alias is constructible in the body that declares it
+### An inner `Set` alias's `{}` is E3076 — because `Set` is a DECLARED generic now
 
-Every builtin container answers `{}` the same way, because the two spellings share ONE producer and ONE
-roster of which containers this compiler owns. A `Set` inner alias is that roster's second member.
+⭐⭐ **THIS CASE ASSERTED `exitcode 8` UNTIL W90, AND THE MOVE IS THE RETIREMENT AND NOT A LOST CAPABILITY.**
+Its prose read *"every builtin container answers `{}` the same way … a `Set` inner alias is that roster's
+second member"* — and with `stdlib/Set.maxon` listed, `Set` has left that roster. It is an ordinary declared
+generic whose fields are unexported, so `Nums{}` from another type's body takes the ordinary refusal, which is
+**exactly** `user-generic-inner-alias-keeps-e3076` below with `Pair` replaced by `Set`.
 
-<!-- test: inner-set-alias -->
+⭐ **AND THE CURE THAT DIAGNOSTIC PRESCRIBES IS ALREADY PINNED GREEN, ONE CASE DOWN**
+(`inner-set-alias-create`, `exitcode 8`) — which is this file's own standing rule that *"a diagnostic that
+names a cure owes a case that takes it"*. So the surface is not lost: it moved one spelling over, to the one
+the message tells the author to write.
+
+<!-- test: error.inner-set-alias-literal-keeps-e3076 -->
 ```maxon
 typealias ExitCode = int(0 to 125)
 typealias Count = int(0 to u64.max)
@@ -166,8 +174,8 @@ function main() returns ExitCode
 	return 1
 end 'main'
 ```
-```exitcode
-8
+```maxoncstderr
+error E3076: <fragment>:9:16: type 'Nums' can only be constructed from within its own methods; use a static factory method instead
 ```
 
 ### An inner `Set` alias's `create()` builds the same container the literal does

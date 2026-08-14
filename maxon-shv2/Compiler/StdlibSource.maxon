@@ -522,7 +522,7 @@ function drainReachableWorklist(module MaxonModule, project Project, signatures 
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
 		markConformerWitnessImpls(func, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		if markMaxonCallees(module, project: project, func: func, byName: byName, reached: reached, worklist: worklist, names: names) 'anOpThreadsOne'
+		if markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names) 'anOpThreadsOne'
 			demandsWitnessTable = true
 		end 'anOpThreadsOne'
 		// ⚠ **THE `not demandsWitnessTable` GUARD IS A COST GUARD AND IS WORTH ITS LINE.** The op question
@@ -840,14 +840,14 @@ end 'markOneReachable'
 // already computes per op, and its only other home would be a second pass over the same blocks of the same
 // reached functions — doubling the walk on every compile to re-derive a callee name this one already holds.
 // See `functionDeclaresAWitnessPosition`'s header for what the answer is used for.
-function markMaxonCallees(module MaxonModule, project Project, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet) returns bool
+function markMaxonCallees(module MaxonModule, project Project, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet) returns bool
 	var threadsAWitnessTable = false
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-			markCorpusCalleesOfSynthesizedRuntime(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+			markCorpusCalleesOfSynthesizedRuntime(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 			if opThreadsAWitnessTable(op) 'threadsOne'
 				threadsAWitnessTable = true
 			end 'threadsOne'
@@ -1003,7 +1003,7 @@ end 'markWitnessImplsOfConformer'
 // REACHED stdlib body that calls one of these entries needs the seed just as much as a user body does.
 // Asking at the op, inside the walk, is exact for both: the question becomes "does something this program
 // actually reaches name one of these?", which is the question the walk exists to answer.
-function markCorpusCalleesOfSynthesizedRuntime(op MaxonOp, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+function markCorpusCalleesOfSynthesizedRuntime(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not opNamesGraphemeRuntimeEntry(op) 'notASynthesizedSegmenterCaller'
 		return
 	end 'notASynthesizedSegmenterCaller'
@@ -1012,6 +1012,13 @@ function markCorpusCalleesOfSynthesizedRuntime(op MaxonOp, project Project, byNa
 	markReachable(CorpusCountGraphemes, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 	markReachable(CorpusUtf8DecodeAt, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 	markReachable(CorpusUtf8ByteLengthAt, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	// ⭐ **AND THE MEMBER PROBE, ONCE `stdlib/Set.maxon` IS LISTED (W90).** `__cs_contains`'s body calls the
+	// corpus `Set.contains` on the box's member set, which is the same invisible edge as the four above and
+	// needs the same seed. It is asked of `characterMemberSetContainsCallee` rather than spelled, so the name
+	// this roots is the name that body will emit; under a SYNTHESIZED `Set` that answers `__set_contains`,
+	// which `markReachable` files as "not a module function" and drops — the same non-case a typo'd name
+	// would take, and harmless because there is then nothing corpus-side to root.
+	markReachable(characterMemberSetContainsCallee(signatures), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 end 'markCorpusCalleesOfSynthesizedRuntime'
 
 // One op. Asks the callee question through `maxonOpCalleeKind`/`maxonOpCalleeName` — the same pair

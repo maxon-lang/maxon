@@ -219,6 +219,13 @@ error E2015: <fragment>:8:14: Unsupported: `Array` member 'frobnicate' — P1.7 
 
 <!-- test: error.unknown-set-method-in-value-position -->
 The same for a `Set` — the two containers shared the misplaced check, so they share the fix.
+
+⭐ **THE SENTENCE MOVED WHEN `Set` STOPPED BEING SYNTHESIZED (W90), AND THE SUBJECT DID NOT.** With
+`stdlib/Set.maxon` listed there is no builtin roster left to quote: an unknown member of a declared type is
+the ordinary undefined-callee refusal, which is character-for-character what the already-retired `Map` answers
+for `m.frobnicate()` today (MEASURED: `error E3004: … call to undefined function 'Map.frobnicate'`). What this
+case is FOR is unchanged and still checked — the refusal is about the member being unknown, not about the call
+being in value position.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
@@ -231,7 +238,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:8:12: Unsupported: `Set` method 'frobnicate' — shv2 provides create/insert/contains/remove/count/map, plus `Set from […]` construction; `for … in` over a `Set` needs the cursor protocol a later slice brings
+error E3004: <fragment>:8:12: call to undefined function 'Set.frobnicate'
 ```
 
 <!-- test: error.unknown-buffer-member-in-value-position -->
@@ -288,6 +295,11 @@ error E2004: <fragment>:7:12: Function 'push' does not return a value
 
 <!-- test: error.set-void-mutator-in-value-position -->
 ⚠ THE CONTROL for `Set` — `insert` is its one void mutator.
+
+⭐ **IT NAMES `Set.insert` RATHER THAN A BARE `insert` SINCE W90, FOR THE REASON ITS `String` NEIGHBOUR TWO
+CASES DOWN ALREADY RECORDS**: an arm blames the member the author wrote, while a corpus call names the
+function it actually resolved to. `stdlib/Set.maxon` is listed, so this is that second shape. The code, the
+position and the answer are unchanged.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
@@ -299,7 +311,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2004: <fragment>:7:12: Function 'insert' does not return a value
+error E2004: <fragment>:7:12: Function 'Set.insert' does not return a value
 ```
 
 <!-- test: error.string-void-mutator-in-value-position -->
