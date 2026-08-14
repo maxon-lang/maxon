@@ -1127,3 +1127,148 @@ end 'main'
 error E3017: <fragment>:13:11: Type 'Opaque' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
 error E3017: <fragment>:13:11: Type 'Opaque' does not satisfy constraint 'Equatable' required by type parameter 'Key' of 'Map'
 ```
+
+### The corpus declaration is what serves a `Map` — pinned by members the synthesized record never had
+
+⭐⭐ **THE SYNTHESIZED `Map` IS RETIRED, AND THESE ARE THE CASES THAT CAN ONLY PASS IF IT IS.** Every
+case above this section passes under EITHER regime — `count`, `contains`, `get`, `upsert`, `insert`,
+`remove` and `map` are the seven names `Parser.mapSurfaceMemberNames` served, so a green suite over
+them says nothing about which `Map` answered. `stdlib/Map.maxon` declares two members that roster
+never had — `getCapacity()` and `createIterator()` — and a program calling one is refused outright
+(`E2015 … that list IS the surface`) the moment the builtin is the thing serving the type.
+
+⚠ **MEASURED RED, by removing `stdlib/Map.maxon`'s `listWhitelistedModule` line and rebuilding**: all
+three cases in this section fail to COMPILE against the synthesized record and pass against the
+declaration —
+
+```
+error E2015: Unsupported: `Map` member 'getCapacity' — shv2 provides count/contains/get/upsert/insert/remove/map
+error E2015: Unsupported: `Map` member 'createIterator' — shv2 provides count/contains/get/upsert/insert/remove/map
+error E4016: 'MapError' is the error enum the Map runtime (MapError) throws, and this compile declares no enum of that name
+```
+
+— which is the control this file owed and did not have. `ProgramSignatures.isMapBaseName` answers
+FALSE once a `Map` is declared, so the whole retirement is ONE predicate, and a predicate with no case
+behind it is a switch nothing would notice being flipped back.
+
+⚠⚠ **AND THE THIRD LINE IS THE ONE WORTH READING: THE SYNTHESIZED RECORD IS NOT A WORKING FALLBACK.**
+It throws `MapError`, whose ordinals it can only get from a *declared* enum of that name — and the
+only file that declares one is `stdlib/Map.maxon` itself. So the regime selected by that module's
+absence cannot survive its absence: it is unreachable in every shipped compile, not merely unused.
+
+<!-- test: corpus.get-capacity -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+typealias ValMap = Map with (Val, Val)
+
+function main() returns ExitCode
+	var m = ValMap.create()
+	let empty = m.getCapacity()
+	m.upsert(1, value: 1)
+	let one = m.getCapacity()
+
+	for i in 0 upto 40 'fill'
+		m.upsert(i, value: i * 10)
+	end 'fill'
+
+	print("capacity {empty} {one} {m.getCapacity()} count {m.count()}")
+	return m.count() as ExitCode
+end 'main'
+```
+```stdout
+capacity 0 16 64 count 40
+```
+```exitcode
+40
+```
+
+The three capacities are the corpus's own schedule and not a shape any other reader could supply: a
+map created empty holds no buffers at all (`capacity = 0`), the first `upsert` allocates sixteen
+slots, and `ensureCapacity` doubles at a load factor of 75% — 16 ⇒ 32 at the twelfth entry, 32 ⇒ 64
+at the twenty-fourth, and forty entries therefore rest at 64 rather than growing again.
+
+<!-- test: corpus.create-iterator -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+typealias ValMap = Map with (Val, Val)
+
+function main() returns ExitCode
+	var m = ValMap.create()
+	m.upsert(1, value: 10)
+	m.upsert(2, value: 20)
+	m.upsert(3, value: 30)
+
+	var it = try m.createIterator() otherwise panic("a three-entry map has an occupied first slot")
+	var total = 0
+	var more = true
+	while more 'walk'
+		let entry = it.current()
+		total = total + entry.0 * entry.1
+
+		try it.advance() otherwise 'exhausted'
+			more = false
+		end 'exhausted'
+	end 'walk'
+
+	print("total {total} count {m.count()}")
+	return total as ExitCode
+end 'main'
+```
+```stdout
+total 140 count 3
+```
+```exitcode
+140
+```
+
+⚠ **DRIVEN BY HAND RATHER THAN THROUGH `for … in`, which is the point.** A `for (k, v) in m` reaches
+`MapIterator` too, but it reaches it through the cursor-protocol rewrite that `Range` and `views`
+also take — so it would still compile if `Map` were served by something else that happened to publish
+a cursor. Naming `createIterator()`, `current()` and `advance()` at the call site pins the declared
+protocol itself: the `(Key, Value)` tuple `current()` returns, and `advance()`'s
+`throws IterationError` as the loop's own termination.
+
+### An empty map iterates ZERO times, however it became empty
+
+⚠ **THE EDGE THE CURSOR FORM MAKES NON-OBVIOUS, AND THE FILE HAD NO CASE FOR IT.** `for … in` over a
+cursor is a DO-WHILE — its first test is licensed by the protocol's invariant that a live cursor is
+already positioned on an element — so an empty source has to be refused by the FACTORY rather than by
+the loop, and `Map.createIterator()` is the throwing factory that does it
+(`IterationError.exhausted`). A map that never held an entry has `capacity == 0`; one emptied by
+`remove` has a full slot array of tombstones and a non-zero capacity, and `findNextOccupied` has to
+walk all of it to reach the same answer. Both must run the body zero times, and the body is written to
+say so loudly if either does not: it adds `1 + v`, so one spurious trip moves `trips` off zero whatever
+the slot it read held.
+
+<!-- test: corpus.empty-map-iterates-zero-trips -->
+```maxon
+typealias Val = int(i64.min to i64.max)
+typealias ValMap = Map with (Val, Val)
+
+function main() returns ExitCode
+	let never = ValMap.create()
+	var trips = 0
+	for (_, v) in never 'neverPopulated'
+		trips = trips + 1 + v
+	end 'neverPopulated'
+
+	var emptied = ValMap.create()
+	emptied.upsert(1, value: 10)
+	emptied.upsert(2, value: 20)
+	_ = emptied.remove(1)
+	_ = emptied.remove(2)
+
+	for (_, v) in emptied 'allRemoved'
+		trips = trips + 1 + v
+	end 'allRemoved'
+
+	print("trips {trips} counts {never.count()} {emptied.count()}")
+	return trips as ExitCode
+end 'main'
+```
+```stdout
+trips 0 counts 0 0
+```
+```exitcode
+0
+```
