@@ -22,7 +22,7 @@ Each case names the sabotage that found it.
 | a `Set` key argument no longer adopts the set's key type | **0** | 2 | `character-key-insert-contains`, `character-key-remove` |
 | `Character` withdrawn from the `Set` key-type gate | **0** | 3 | `character-set-create` (+ the two above) |
 | `__ucd_cat`'s supplementary-plane search removed | **0** | 2 | `supplementary-plane-category`, `supplementary-plane-trim` |
-| a bare-local member set not poisoned when `from` consumes it | **0** | 2 | `member-set-moved-into-from`, `member-set-consumed-twice` |
+| a bare-local member set not CO-OWNED when `from` consumes it | **0** | 2 | `member-set-co-owned-by-from`, `one-member-set-fills-two-character-sets` |
 | `availableUnicodeEscapeText`'s UNTRUNCATED window (`available = whole`) | **0** | 1 | `malformed-escape-full-window` |
 | `__ucd_cat`'s `Cn` fall-out (`UcdUnassignedCategory`) reading any other category | **0** | 1 | `supplementary-plane-table-bounds` |
 | `CharSet`/`CharacterSet` withdrawn from `isCompilerOwnedTypeName` | **0** | 2 | `charset-alias-is-compiler-owned`, `characterset-name-is-compiler-owned` |
