@@ -707,3 +707,48 @@ FROM REASONING WHERE A CONTROL WAS AVAILABLE.** The controls cost two builds. **
 from **inheriting a class rather than re-running the control**. The controls are cheap — an injection and
 a `+ 100` are two builds — and each time one was actually run it moved a module between classes.
 **A module's class is a MEASUREMENT with a date, never a property.**
+
+---
+
+## ✅ `Set` IS RETIRED — 2026-08-14, `W90` (+`W95`), main `4db9343b88`
+
+**Written back BY the rung that did it**, because this file's standing complaint is that four consecutive
+rungs worked its rows and none of them wrote back. That is the whole reason it keeps going stale.
+
+`stdlib/Set.maxon` is **LISTED AND LIVE**. The differing-declarations control this file demands, run in
+both directions: `count()` sabotaged to `return count + 100` ⇒ the program answers **102**; restored ⇒
+**2**, `git status stdlib/` clean. **Before the rung it answered 2 EITHER WAY at a byte-identical 6,077
+code bytes** — that Δ0 was the RED. Code size 6,077 → 11,795. `Set` leaves the synthesized-twin class.
+
+### The remaining shape — 9 actionable modules
+
+| kind | modules | can an unrelated rung clear it? |
+|---|---|---|
+| **Synthesized-twin chains** | ~~`Set`~~ ✅ · `Vector` · `List` · `PrimitiveExtensions` | ⛔ no |
+| **Inert-if-listed** | `unicodeCategory` | ⛔ no |
+| **Convergence** (compiler-owned name) | `CharacterSet` | ⛔ no |
+| **Runtime slices** (intrinsics that do not exist) | `Subprocess` · `TcpClient` → `HttpClient` → `httpHelpers` | ⛔ no |
+| **Listed but incomplete** | — (`Map` closed at `W52`) | — |
+
+⭐ **`CharacterSet` GOT CHEAPER, AND IT WAS NOT PREDICTED HERE.** `W90`'s row once ordered `CharacterSet`
+*before* `Set` on the belief that a private member store was needed. `W96` refuted it and `W90` proved it:
+`setInstanceForCharacter()` already interns `Set with Character` through the same interner a user
+`typealias CharSet = Set with Character` folds into, so **only the CALLEES moved** — six sites, two cuts.
+The convergence that remains for `CharacterSet` is the NAME (`CharacterSetBuiltinName`/`CharSet` in
+`isCompilerOwnedTypeName`), not the member store.
+
+### ⚠ What retiring a container now COSTS, measured — read this before the next chain
+
+**Any program whose stdlib cone reaches a `String` trim now compiles four corpus `Set` bodies plus
+`__fieldDefault`/`spreadHash`** — measured by roster-diffing goldens, not by line counts: `url` 42/42,
+`directory` 9/9, `file-io` 7/7, but `async-await` 33/47 and `process-executable-path` 4/7. The partial
+families are the evidence that this is REACHABILITY and not a blanket emit. ⇒ **each remaining
+retirement adds its own bodies to unrelated programs**, and the payback is the DELETION half
+(`installSetRuntime`, `SetRuntime.maxon`, the `Map` half of `HashTableRuntime.maxon` — now dead weight,
+and `W93` is unblocked). **Recount the residue after a deletion, never before.**
+
+⚖ **AND A STANDING RULING NOW APPLIES TO EVERY REMAINING CHAIN** (user, 2026-08-14): **E3019 is a
+BUILTIN-SURFACE rule and a declared type is exempt**, so a retirement DROPS the immutable-receiver
+refusal by design. `Set` cost 3 cases, rewritten as value-asserting `ok` cases. `Vector`, `List`,
+`PrimitiveExtensions` — and eventually `Array`/`String` — will each do the same. **That is not a
+regression to file; it is the ruling arriving.**
