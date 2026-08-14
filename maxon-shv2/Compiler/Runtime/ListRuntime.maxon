@@ -8,7 +8,7 @@
 // The structure is not an implementation detail the spec leaves open — those complexities ARE the type's
 // contract, and an `Array`-backed `List` could not meet the `prepend`/`removeFirst` half of them.
 //
-// ⭐ THE SHAPE IS `ManagedMemoryRuntime`'s and `HashTableRuntime`'s: one fused `__mm_alloc`'d backing record whose
+// ⭐ THE SHAPE IS `ManagedMemoryRuntime`'s: one fused `__mm_alloc`'d backing record whose
 // fields the runtime functions read and the parser writes, plus a set of `__`-prefixed Std runtime functions
 // built as `StdOp` graphs (so they get register allocation, frames and the whole backend for free), installed
 // on demand from `RuntimeUsage.usesList`.
@@ -44,7 +44,7 @@
 // construction. It is 0 for a trivial element and the teardown walk then frees nodes without touching them.
 //
 // A fresh record comes ZEROED from `__mm_alloc` (head 0, tail 0, count 0), so `__list_create` writes only the
-// destructor stamp — the same zeroing contract `__managed_create` and `__set_create` rely on.
+// destructor stamp — the same zeroing contract `__managed_create` relies on.
 export let ListHeadOffset = 0 as ByteOffset
 export let ListTailOffset = 8 as ByteOffset
 export let ListCountOffset = 16 as ByteOffset
@@ -133,7 +133,7 @@ export let ListNodeValueName = b"__list_node_value"
 export let ListNodeNextName = b"__list_node_next"
 
 // `__list_from(arr) -> listPtr` — the `List from [a, b, c]` construction. It BORROWS `arr` and appends each
-// element in order, so — like `__set_from` — it needs nothing from the parser but the array.
+// element in order, so it needs nothing from the parser but the array.
 export let ListFromName = b"__list_from"
 
 // `__list_node_alloc` is INTERNAL — called only by `append`/`prepend`, the two entry points that mint a node.
@@ -205,7 +205,8 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 	buildListFrom(module)
 	buildListDecref(module)
 
-	// ⭐ **THE THREE LISTS, HELD TO EACH OTHER AT INSTALL** — `installMapRuntime`'s guard, one family over.
+	// ⭐ **THE THREE LISTS, HELD TO EACH OTHER AT INSTALL** — `installManagedDirectoryRuntime`'s guard, one
+	// family over.
 	// `isThrowingListRuntimeCallee` names a set, the builders stamp a `throws` clause on a set, and
 	// `listAccessorSourceMethodName` maps a set; nothing in the language ties the three. Checked in BOTH
 	// directions for their stated reason — a stamp without a name is a `try` that silently stops being required
@@ -650,12 +651,12 @@ function buildListNodeNext(module StdModule)
 	buildListFieldRead(module, name: ListNodeNextName, offset: ListNextOffset)
 end 'buildListNodeNext'
 
-// `__list_from(arr) -> listPtr` — the `List from [a, b, c]` construction, the `__set_from` twin. Create an
+// `__list_from(arr) -> listPtr` — the `List from [a, b, c]` construction. Create an
 // empty list STAMPED with the source array's own `element_destroy@40` (the array and the list share an
 // element type, so the array's stamped destructor IS the list's — which is why this needs no parser
 // threading), then walk the array in order appending each element.
 //
-// ⚠ Each moved-out array slot is NULLED, exactly as `__set_from` nulls its. The array stays the CALLER's
+// ⚠ Each moved-out array slot is NULLED. The array stays the CALLER's
 // owned temporary and its `__managed_decref` walks `[0, length)` dropping every NON-null slot — so a managed
 // element the list now owns must read null there or it is freed twice. A trivial element is copied inline
 // and the null is harmless.
@@ -689,7 +690,7 @@ function buildListFrom(module StdModule)
 	let atEnd = emitCmp(module, block: header, a: i, b: count, pred: StdCmpPred.ge, ids: ids)
 	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
 
-	// The move-out clear is CONDITIONAL for `__set_from`'s reason, which `emitMovedOutSlotClear` states in
+	// The move-out clear is CONDITIONAL, and `emitMovedOutSlotClear` states the reason in
 	// full: on a trivial element the null does nothing, and the source buffer may be immortal `.rdata`.
 	let elem = emitWordSlotLoad(module, block: body, base: buffer, index: i, ids: ids)
 	let appended = ids.mint()

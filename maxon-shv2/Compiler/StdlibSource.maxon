@@ -577,9 +577,9 @@ end 'drainReachableWorklist'
 // prediction of which call sites will fire, which is the shape the measured `+81%` cut got wrong (see
 // `markConformerWitnessImpls`):
 //
-//   • **A CONTAINER's key** (`withWitnessTableArgs` — `__set_*`/`__map_*`'s key, `__str_trim`/
-//     `__cs_contains`'s hardcoded `Character`). Its evidence is an OP: the runtime callee that threads the
-//     table, asked through `opThreadsAWitnessTable`.
+//   • **A CONTAINER's key** (`withWitnessTableArgs` — today only `__cs_contains`'s hardcoded `Character`,
+//     the member set's key; the `__set_*`/`__map_*` keys were its siblings until W105). Its evidence is an
+//     OP: the runtime callee that threads the table, asked through `opThreadsAWitnessTable`.
 //   • **A `where T is I` CONSTRAINT witness** (`materializeWitnessArg`), carried by every call to a method of
 //     a `where`-constrained type. Its evidence is that method's own DECLARATION, and the reached method is
 //     exactly the one whose call materialized the table.
@@ -650,25 +650,22 @@ end 'functionDeclaresAWitnessPosition'
 // `CharacterSet`'s hardcoded `Character` are named by the RECEIVER's type at lowering, not by any
 // declaration.
 //
-// ⚠ **THE ROSTER IS READ FROM THE THREE RUNTIMES THAT OWN IT** (`isSetWitnessCallee`, `isMapWitnessCallee`,
-// `isCharacterKeyedWitnessCallee`) — the very three `LowerMaxonToStd`'s `lowerRuntimeCall` parts on. Spelling
-// `__set_insert` a second time here would be this project's signature bug in the file that seeds off it, and
-// a fourth family would then be learned by the lowering and missed by this walk, which is the silent
-// direction. (It WAS four: the `Array`'s ELEMENT retired with `__managed_contains` at ARR3b, and the corpus
-// `contains` now carries its element witness as an ordinary dictionary parameter — covered by the
-// DECLARATION route above, not by this one.)
+// ⚠ **THE ROSTER IS READ FROM THE RUNTIME THAT OWNS IT** (`isCharacterKeyedWitnessCallee`) — the very
+// predicate `LowerMaxonToStd`'s `lowerRuntimeCall` parts on. Spelling `__cs_contains` a second time here
+// would be this project's signature bug in the file that seeds off it, and a second family would then be
+// learned by the lowering and missed by this walk, which is the silent direction.
+//
+// ⚠ **IT WAS FOUR FAMILIES, THEN THREE, AND IS NOW ONE — each shrink a RETIREMENT rather than a
+// simplification.** The `Array`'s ELEMENT went with `__managed_contains` at ARR3b (the corpus `contains`
+// carries its element witness as an ordinary dictionary parameter, covered by the DECLARATION route above);
+// `isSetWitnessCallee` and `isMapWitnessCallee` went with the whole synthesized hash table at W105, whose
+// corpus replacements are dictionary-passing generic methods and take the same route.
 function opThreadsAWitnessTable(op MaxonOp) returns bool
 	return match maxonOpCalleeKind(op) 'kind'
-		direct to functionValue gives calleeThreadsAWitnessTable(maxonOpCalleeName(op))
+		direct to functionValue gives isCharacterKeyedWitnessCallee(maxonOpCalleeName(op))
 		noCallee gives false
 	end 'kind'
 end 'opThreadsAWitnessTable'
-
-// The three witness-threading runtime families, joined once so the reached-op scan and the user-op
-// short-circuit cannot come to test different sets.
-function calleeThreadsAWitnessTable(callee ByteArray) returns bool
-	return isSetWitnessCallee(callee) or isMapWitnessCallee(callee) or isCharacterKeyedWitnessCallee(callee)
-end 'calleeThreadsAWitnessTable'
 
 // Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
 // or a root whose runtime this program never installs) is not found and not queued — nothing to
@@ -1015,9 +1012,7 @@ function markCorpusCalleesOfSynthesizedRuntime(op MaxonOp, project Project, sign
 	// ⭐ **AND THE MEMBER PROBE, ONCE `stdlib/Set.maxon` IS LISTED (W90).** `__cs_contains`'s body calls the
 	// corpus `Set.contains` on the box's member set, which is the same invisible edge as the four above and
 	// needs the same seed. It is asked of `characterMemberSetContainsCallee` rather than spelled, so the name
-	// this roots is the name that body will emit; under a SYNTHESIZED `Set` that answers `__set_contains`,
-	// which `markReachable` files as "not a module function" and drops — the same non-case a typo'd name
-	// would take, and harmless because there is then nothing corpus-side to root.
+	// this roots is the name that body will emit.
 	markReachable(characterMemberSetContainsCallee(signatures), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 end 'markCorpusCalleesOfSynthesizedRuntime'
 

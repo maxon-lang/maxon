@@ -3730,8 +3730,8 @@ let MixedArrayLiteralElementsMessage = "an array literal with mixed element type
 // `specs-shv2/character-ownership.md`'s `an-array-literal-element-is-not-a-character` quotes the composed
 // message in a `maxoncstderr` block. Changing either constant rewrites a committed expectation.
 //
-// The three column nouns are the ones `requireHashTableKeyType` / `parseMapColumnValue` /
-// `requireMapColumnTypes` / `requireOneWordSlotType` were each spelling as their own bare `"key"` /
+// The three column nouns are the ones the container-column doors (`parseMapColumnValue`,
+// `parseSetMemberList`, `requireOneWordSlotType`) were each spelling as their own bare `"key"` /
 // `"value"` / `"element"` literal — one fact, several writings, which is what naming them here retires.
 // `ContainerElementColumnNoun` serves the array LITERAL's column and a chain's declared ELEMENT alike: it is
 // one word for one slot, and a second constant holding the same string is how the two would drift apart.
@@ -3771,17 +3771,6 @@ let AssignPatternSubject = "a tuple assignment"
 let AssignPatternSourceNoun = "right-hand side"
 let AssignPatternNeedsClause = "`(x, y) = …` needs a right-hand side that is a tuple"
 
-// ⭐ **THE `(key, value)` PAIR BOX'S VALUE SLOT, AS A FIELD INDEX** — the `_1` of the synthesized tuple
-// `__map_entries` fills, read by `emitMapEntriesArray` off the interned layout to get its displacement.
-//
-// ⚠ **IT IS 1 IN ITS OWN NUMBERING SPACE, AND SO ARE TWO OTHER CONSTANTS IN TWO OTHER SPACES.** This site
-// used to pass `SignatureIndex.MapValueArgPosition`, which is a `TypeParamPosition` — the position of `Map`'s
-// value TYPE ARGUMENT, the thing `mapValueType` reads back — and it happened to have the same number. The
-// runtime's own `MapRuntime.PairKeySlotOffset` is a third space again: a byte DISPLACEMENT, which is 0.
-// Describing the pair's layout with an argument position makes a renumber of either space silently move the
-// other's answer, so the layout says which space it is in.
-let MapPairValueFieldIndex = 1 as FieldIndex
-
 // ⭐ **ONE `, e` STEP OF AN ARRAY LITERAL — the parsed element and where its FIRST TOKEN was.** The pair
 // travels together because its two consumers each need both and for the same reason: the value is what gets
 // pushed (or collected), and the start index is what `moveElementIntoContainer` reads to decide whether the
@@ -3795,20 +3784,6 @@ type ArrayLiteralElement
 		return Self{value: value, start: start}
 	end 'create'
 end 'ArrayLiteralElement'
-
-// ⭐ **ONE `Map` ENTRY'S TWO COLUMNS, PARSED — what `( key, value: v )` yields.** They travel as one value
-// rather than as two returns for the reason the runtime's `HtInsertValue` states one tier down: two bare
-// `ValueId`s of the same type, handed to a call in the wrong order, store the value under the key — a wrong
-// answer with no diagnostic anywhere, since both are machine words. Named fields make the swap visible at
-// every call site. See `parseMapEntryArgList`.
-type MapEntryArgs
-	export var key as ValueId
-	export var value as ValueId
-
-	export static function create(key ValueId, value ValueId) returns MapEntryArgs
-		return Self{key: key, value: value}
-	end 'create'
-end 'MapEntryArgs'
 
 // ⚠ **THE EMPTY LITERAL IS REFUSED IN BOTH POSITIONS AND THE ADVICE DIFFERS, so this text is deliberately
 // NOT shared with `parseArrayLiteral`'s.** The defect is identical — `[]` carries no element to infer a
@@ -5247,7 +5222,7 @@ end 'quadArgs'
 // SAYS SO** (`set`/`append` moved at D12, `get`/`first`/`last`/`pop`/`remove`/`slice` at D11c, and `insert`
 // the day `Map.insert` became a `Map`'s second throwing entry point). Each names a throwing runtime callee
 // whose diagnostics must quote the AUTHOR's method rather than the emitted symbol, and the source-method maps
-// (`ManagedMemoryRuntime`'s, and now `MapRuntime`'s) do that quoting by answering with the constant THIS dispatch
+// (`ManagedMemoryRuntime`'s, and `ListRuntime`'s) do that quoting by answering with the constant THIS dispatch
 // matches on — a map cannot name a constant its file cannot see, and a second `b"set"` beside the first is
 // the drift these blocks exist to prevent. Nothing about the dispatch changed: it still matches the same byte
 // strings.
@@ -5284,16 +5259,15 @@ let ClearMethod = b"clear"
 // line above them. `isEmpty` and `clone` joined the group at that slice rather than growing a fifth and
 // sixth `String`-prefixed twin.
 //
-// ⚠ **THE `Set` FAMILY JOINED IT AT THE SLICE E REVIEW, AND THE REASON IT HAD BEEN LEFT OUT DOES NOT
+// ⚠ **THE `Set` FAMILY JOINED IT AT THE SLICE E REVIEW, AND THE REASON IT HAD BEEN LEFT OUT DID NOT
 // SURVIVE READING THE FIVE NAMES.** `count`/`contains`/`create`/`insert`/`remove` were a second
-// `Set*Method` block in `SetRuntime.maxon` — five spellings each written twice, against `count`,
-// `contains`, `create`, `insert` and `remove` already spelled here for `Array`/`String`. The stated
-// reason was that they sat beside `setMethodMutatesReceiver` "so adding a method here and forgetting the
-// rule is one edit away rather than two files away" — but that rule names only `insert` and `remove`,
-// so it was no reason at all for the other three, and it argues for keeping the RULE beside the names,
-// not the SPELLING beside the rule. So the rule moved to `arrayMethodMutatesReceiver`'s side (below,
-// where its twin already lived) and the spellings folded in here. `SetRuntime.maxon` keeps what is
-// actually its own: the `__set_*` entry-point names.
+// `Set*Method` block in the then-existing `SetRuntime.maxon` — five spellings each written twice, against
+// `count`, `contains`, `create`, `insert` and `remove` already spelled here for `Array`/`String`. The stated
+// reason was that they sat beside a `Set`-only receiver-mutation rule "so adding a method here and
+// forgetting the rule is one edit away rather than two files away" — but that rule named only `insert` and
+// `remove`, so it was no reason at all for the other three. The spellings folded in here, and they are what
+// `emitSetCreate`/`emitSetInsert` still compose a desugared corpus call from (W105 deleted the runtime that
+// once held the second copy).
 //
 // A rename that reached one copy and not the other was a WRONG ANSWER with no diagnostic: `Array.count`
 // and `Set.count` would answer to different tokens, each dispatcher still compiling.
@@ -5323,9 +5297,9 @@ let MapMethod = b"map"
 // against it, so the rule and its sentence read one number.
 let ElementTransformArity = 1 as ParamCount
 
-// `Map.upsert(key, value: v)` — insert-or-replace. It joins the shared block rather than sitting in
-// `MapRuntime.maxon` for the reason the `Set` five did: a method-name SPELLING belongs where the parser
-// dispatches on it, and the runtime's business is its `__map_` entry-point names.
+// `Map.upsert(key, value: v)` — insert-or-replace. It joins the shared block rather than sitting beside a
+// runtime, for the reason the `Set` five did: a method-name SPELLING belongs where the parser composes it,
+// and it is what `emitMapLiteralUpsert` builds a desugared `[k: v]` literal's call from.
 let UpsertMethod = b"upsert"
 
 // ⭐⭐ **`from` — A METHOD NAME THAT IS ALSO A KEYWORD, AND THE CONSTANT THAT MAKES THAT STOP MATTERING
@@ -5368,7 +5342,7 @@ let EndIndexArgLabel = b"endIndex"
 let ArrayValueLabel = b"value"
 
 // ⭐ **WHICH `Array` METHODS WRITE THEIR RECEIVER** — the `Array` half of the one immutable-receiver
-// rule (`noteReceiverWrite`, E3019; `setMethodMutatesReceiver` is the `Set` half, and `String`'s
+// rule (`noteReceiverWrite`, E3019; a declared container states its own through `var self`, and `String`'s
 // half is the single method `append`). Every one of these rewrites the record's own slots:
 // `push`/`insert`/`append`/`reserve`/`resize` can grow (`buffer@0` + `capacity@16`), `set` writes an
 // element, and `pop`/`remove`/`clear` shorten it (`length@8`).
@@ -6189,34 +6163,10 @@ end 'stringIndexSurfaceMemberNames'
 // every remaining answer is its fall-through's is a copy of that fall-through, so it is the fall-through
 // that survives. `Character` has never had such a door, which is what a `String` without one now looks like.
 
-// ⭐⭐ **WHICH MEMBERS THE `Map` SURFACE HAS — the seventh roster, and the one whose hand-written predecessor
-// was ALREADY STALE THE DAY `insert` AND `remove` WERE BUILT.** It read *"shv2 provides
-// create/upsert/contains/get/count/map"*, and the two names this port added would have had to be threaded
-// into that literal by hand — the standing obligation `rosterRefusalSentence` measured the cost of, three
-// surfaces ago. The entries are the very constants `dispatchMapMethod`'s arms match on, the ORDER is the
-// message's order because the message is joined from this list, the dispatch GATES on it ahead of every arm,
-// and its fall-through is a PANIC naming it.
-//
-// ⚠ **`create` IS NOT MISSING FROM THIS LIST, IT IS NOT A MEMBER** — `StrMap.create()` is a static factory
-// reached through the type's own name, exactly as `Array.create(…)` is, and the `Array` roster's header
-// carries the measurement of what naming it here costs.
-//
-// ⚠ **THE LITERAL LIST'S OTHER TWO CLAUSES WERE NOT MEMBERS EITHER, and they are gone rather than moved.**
-// `[k: v, …]` construction is a LITERAL form (`parseMapLiteralBody`) and `for (key, value) in …` is a
-// STATEMENT form (`parseForStatement`); a reader who wrote `m.frobnicate()` reached neither door, and a
-// refusal that describes other doors is how one fact comes to be maintained in two places — the exact clause
-// this shape deleted from the five surfaces above.
-function mapSurfaceMemberNames() returns ByteArrayArray
-	var names = ByteArrayArray.create()
-	names.push(CountMethod)
-	names.push(ContainsMethod)
-	names.push(GetMethod)
-	names.push(UpsertMethod)
-	names.push(InsertMethod)
-	names.push(RemoveMethod)
-	names.push(MapMethod)
-	return names
-end 'mapSurfaceMemberNames'
+// ⚠ **`mapSurfaceMemberNames` — the seventh roster — WENT WITH `dispatchMapMethod` (W105).** A roster exists
+// to hold a SYNTHESIZED surface's dispatch arms and its refusal sentence to one list; a declared `Map`'s
+// members are its own declaration's, and an unknown one is E4006 off that declaration rather than a
+// hand-written sentence. `MemberSurface.map` and its per-file memo went with it.
 
 // ⭐⭐ **WHICH MEMBERS THE `Vector` SURFACE HAS — THE EIGHTH ROSTER, AND THE LAST DISPATCH STILL CARRYING A
 // HAND-WRITTEN ONE (W86).** `dispatchVectorMethod` gated on three `equals` arms and ended in a typed-out
@@ -6291,8 +6241,6 @@ enum MemberSurface
 	string
 	character
 	stringIndex
-	// `Map with (Key, Value)` — the two-column hash table's own surface.
-	map
 	// `Vector with N Element` — the FIXED-SIZE array's own surface, and a surface of its own rather than
 	// more of the `Array`'s even though the two share a record: what may be DONE to a vector is a strict
 	// subset (no `push`/`pop`/`append`/`resize`/`clear`), and its `count()` is a constant read off the TYPE
@@ -6467,34 +6415,19 @@ function surfaceRosterProvider(surface MemberSurface) returns String
 
 	// The other six are shv2's own synthesized surfaces and say so with one arm rather than six identical
 	// ones — a fall-through is still impossible, which is the property the split arms existed for.
-	if surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.map or surface == MemberSurface.cursor or surface == MemberSurface.vector 'shv2sOwnSurface'
+	if surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.cursor or surface == MemberSurface.vector 'shv2sOwnSurface'
 		return "shv2"
 	end 'shv2sOwnSurface'
 
 	panic("surfaceRosterProvider: no provider for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then credit another slice's roster")
 end 'surfaceRosterProvider'
 
-// ⭐ **WHICH `Set` METHODS WRITE THEIR RECEIVER** — the `Set` half of the same immutable-receiver rule,
-// beside the `Array` half above rather than in `SetRuntime.maxon`, where it used to sit holding the five
-// method-name spellings hostage with it (see the shared-spelling block). The two halves answer the same
-// question about two containers; a reader checking one now sees the other.
-//
-// `insert` adds a member and `remove` takes one out — both rewrite the record's own slots (and `insert`
-// may `__set_grow` the buffers); `contains` and `count` only read.
-//
-// **MEASURED AGAINST THE RUNNABLE ORACLE, one method at a time**, over `let s = IntSet.create()`: both of
-// these are E3019 ("cannot pass 's' to function that mutates parameter 'self'") and `contains` / `count`
-// are accepted.
-function setMethodMutatesReceiver(name ByteArray) returns bool
-	return name.equals(InsertMethod) or name.equals(RemoveMethod)
-end 'setMethodMutatesReceiver'
-
-// ⭐ **WHICH `Map` METHODS WRITE THEIR RECEIVER** — the third half of the one immutable-receiver rule, here
-// with its two siblings for their stated reason. `upsert` and `insert` publish a slot (and may `__map_grow`
-// the four buffers); `remove` tombstones one and drops the count; `contains` and `get` only probe.
-function mapMethodMutatesReceiver(name ByteArray) returns bool
-	return name.equals(UpsertMethod) or name.equals(InsertMethod) or name.equals(RemoveMethod)
-end 'mapMethodMutatesReceiver'
+// ⚠ **`setMethodMutatesReceiver` AND `mapMethodMutatesReceiver` STOOD HERE, BESIDE THE `Array` HALF, AND
+// WENT WITH THEIR DISPATCHERS (W105).** They were the immutable-receiver rule for the two SYNTHESIZED hash
+// tables, whose members were runtime calls with no declared `self` for E3019 to read. `Set` and `Map` are
+// declared generics now: `stdlib/Set.maxon`'s `insert`/`remove` and `stdlib/Map.maxon`'s
+// `upsert`/`insert`/`remove` each declare `var self`, so the ordinary parameter-mutation rule raises the same
+// E3019 off the declaration rather than off a hand-written roster.
 
 // ⭐ **WHICH `List` METHODS WRITE THEIR RECEIVER** — the fourth half of the one immutable-receiver rule, here
 // with its three siblings for their stated reason. `append`/`prepend` link a fresh node and bump the count;
@@ -6545,11 +6478,10 @@ end 'managedListMethodFreesANode'
 // *"a int"*, so without it the article would be written out once per refusal site and the three would be
 // free to disagree.
 //
-// ⚠ Of the admitted KEY types whose TAG this can be handed (`requireHashTableKeyType` — `int`, `String`,
-// `Character`), exactly one takes *"an"*, which is why the test is the integral one and not a vowel scan over
-// the name. But `tag` is NOT confined to those — the roster also admits the array record and, since
-// enum-hashable, any payload-free `enum`, and a `Map`'s VALUE column is held to the wider
-// `slotTypeFitsOneWord`, and see `columnValueTagMatches`'s last arm for the measured reason a refused
+// ⚠ Of the key types a hash table admits (`int`, `String`, `Character`), exactly one takes *"an"*, which is
+// why the test is the integral one and not a vowel scan over the name. But `tag` is NOT confined to those —
+// a conforming array record and any payload-free `enum` are keys too, and a `Map`'s VALUE column is held to
+// the wider `slotTypeFitsOneWord`, and see `columnValueTagMatches`'s last arm for the measured reason a refused
 // instance reaches here with any column type at all — so the `"a"` branch is a real default and not an
 // unreachable one, and it is CORRECT for every remaining tag name (`float`, `bool`, `function`, a struct's
 // name…), all of which begin with a consonant. A further admitted type whose name opens with a vowel needs
@@ -11179,7 +11111,6 @@ export type Parser
 	var stringSurfaceRoster as ByteArrayArray
 	var characterSurfaceRoster as ByteArrayArray
 	var stringIndexSurfaceRoster as ByteArrayArray
-	var mapSurfaceRoster as ByteArrayArray
 	var cursorSurfaceRoster as ByteArrayArray
 	var vectorSurfaceRoster as ByteArrayArray
 	// ⭐ **THE `Array` DECLARATION NAMES, memoized off the SAME anchor and for the same measurement (ARR2)** —
@@ -11396,7 +11327,6 @@ export type Parser
 			stringSurfaceRoster: sharedEmptySurfaceRoster,
 			characterSurfaceRoster: sharedEmptySurfaceRoster,
 			stringIndexSurfaceRoster: sharedEmptySurfaceRoster,
-			mapSurfaceRoster: sharedEmptySurfaceRoster,
 			cursorSurfaceRoster: sharedEmptySurfaceRoster,
 			vectorSurfaceRoster: sharedEmptySurfaceRoster,
 			arrayDeclarationRoster: sharedEmptySurfaceRoster,
@@ -11815,7 +11745,7 @@ export type Parser
 	//
 	// ONE predicate, read by BOTH the declaration sweep (which PRE-INTERNS `Set with integer` AND `Set with String`
 	// so the parser's own read is never the first to mutate the shared registry) and `parsePrimary`'s construction
-	// arm (which BUILDS the `__set_from`), for the reason `atTopLevelBindingKeyword` is one predicate. Taught to one
+	// arm (which BUILDS the member list), for the reason `atTopLevelBindingKeyword` is one predicate. Taught to one
 	// and not the other — a broadened `from`-construction trigger the parser builds but the sweep does not recognize
 	// — a `Set from` would go un-pre-interned, and the parser's instance read would become the FIRST write to the
 	// shared registry mid-parse: an order-dependent gid no drift guard can see. Teaching this one predicate teaches both.
@@ -18010,8 +17940,8 @@ export type Parser
 		// `Set with Element` and `Map with (Key, Value)` are all built by the compiler, so `structOf` finds
 		// nothing for any of them and the arity is validated against the index's own table instead. Their
 		// KEY/ELEMENT-type restrictions are not checked here: those need the RESOLVED argument type and are
-		// enforced where the container is materialized — `requireHashTableKeyType` for a `Set`'s key and a
-		// `Map`'s, `requireOneWordSlotType` for a `Map`'s value and a chain's element.
+		// enforced where the container is materialized — `requireOneWordSlotType` for a chain's element, and a
+		// declared container's own `where` clause for a hash table's key (`checkWhereConstraints`).
 		//
 		// ⚠ One arm for all three, reading `builtinGenericTypeParamCount` — this used to be a per-builtin arm
 		// that spelled the predicate and the count together, and a third builtin generic is exactly the edit
@@ -32795,7 +32725,7 @@ export type Parser
 		let bodyEndIndex = self.blockStatementEndIndex(forIndex, continuesAtElse: false)
 
 		// ⭐⭐ **THE LOOP VARIABLE IS A PATTERN, NOT A NAME — `for (key, value) in m` (TUPLES + `Map`).** A
-		// `Map`'s element IS a `(Key, Value)` tuple (`emitMapEntriesArray`), so the destructuring spelling is
+		// `Map`'s element IS a `(Key, Value)` tuple (`MapIterator.current()`), so the destructuring spelling is
 		// how `/specs/map.md` and `/specs/tuples.md` both write a map loop; the single-name form is the same
 		// pattern with one position and no parens. Read as a LIST of names either way, so every question below
 		// — the anchor, the discard, the E3012 candidate, the borrow — is asked once per position rather than
@@ -32934,22 +32864,17 @@ export type Parser
 		// binding, exactly as the lock is.
 		var elementBorrowSubject = EmptySourceText
 		if not isRange 'collectionSource'
-			// ⭐⭐ **A `Map` SOURCE BECOMES ITS ENTRIES, AND THEN IT IS AN ARRAY LIKE ANY OTHER.** A map has no
-			// stored element to hand the body — its keys and values live in two parallel buffers — so the
-			// `(key, value)` pair has to be BUILT, one heap box per entry, whatever shape the loop takes.
-			// Materializing them into an `Array with (Key, Value)` right here buys back every answer the array
-			// form already has: the counter, the live length read, the borrowed element, its E3070 subject and
-			// the source's drop. See `MapRuntime.MapEntriesName` for why that beats a fifth `for` form.
+			// ⚠ **A `Map` REWRITE STOOD HERE AND WENT WITH `__map_entries` (W105).** It replaced a SYNTHESIZED
+			// map source with an `Array with (Key, Value)` the runtime walk materialized, because that record
+			// stored no element a loop body could be handed. A corpus `Map` declares `Iterable` and its
+			// `MapIterator` hands out the pair itself, so it takes the cursor rewrite below like every other
+			// declared iterable.
 			//
-			// ⚠ It runs BEFORE `lockIterationSource`/`borrowSubjectNameAt`, and both of those still key on
-			// `sourceStart` — the token the USER wrote — so `for pair in m` locks `m` and blames `m`, not the
-			// entries temporary that has no name in the source at all.
-			source = try self.materializeMapIterationSource(source, forTok: forTok)
-
-			// ⭐⭐ **AN `Iterable` SOURCE BECOMES ITS CURSOR, AND THEN IT IS A CURSOR LIKE ANY OTHER (W3)** —
-			// the `Map` rewrite one interface over, and placed beside it for the same reasons: it runs before
-			// the lock and the borrow subject, both of which go on keying on `sourceStart`, the token the USER
-			// wrote. See `materializeIterableIterationSource` for why the ENTRY SEED travels with the cursor.
+			// ⭐⭐ **AN `Iterable` SOURCE BECOMES ITS CURSOR, AND THEN IT IS A CURSOR LIKE ANY OTHER (W3).** It
+			// runs before `lockIterationSource`/`borrowSubjectNameAt`, and both of those key on `sourceStart` —
+			// the token the USER wrote — so `for pair in m` locks `m` and blames `m`, not a temporary that has
+			// no name in the source at all. See `materializeIterableIterationSource` for why the ENTRY SEED
+			// travels with the cursor.
 			let iterable = try self.materializeIterableIterationSource(func, source: source, forTok: forTok)
 			source = match iterable 'walkedValue'
 				notIterable gives source
@@ -33597,22 +33522,10 @@ export type Parser
 		return vals
 	end 'loopHeaderArgs'
 
-	// ⭐ **A `Map` ITERATION SOURCE IS REPLACED BY ITS ENTRIES; EVERY OTHER SOURCE PASSES THROUGH UNTOUCHED.**
-	// The one rewrite `parseForStatement`'s collection fork performs, and it is a rewrite rather than a fifth
-	// loop form because the result is an `Array with (Key, Value)` — a source the four existing forms already
-	// know everything about. `emitMapEntriesArray`'s header carries the ownership argument; `MapEntriesName`'s
-	// carries the design one.
-	function materializeMapIterationSource(source ValueId, forTok Token) returns ValueId throws ParseError
-		if not self.signatures.isMapInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'notAMap'
-			return source
-		end 'notAMap'
-
-		return try self.emitMapEntriesArray(self.valueNameId(source), map: source, anchor: forTok, range: SourceRange.ofToken(forTok))
-	end 'materializeMapIterationSource'
-
 	// ⭐⭐ **AN `Iterable` SOURCE IS REPLACED BY THE CURSOR ITS `createIterator()` RETURNS (W3)** — the SECOND
-	// rewrite `parseForStatement`'s collection fork performs, and a rewrite for `materializeMapIterationSource`'s
-	// exact reason: what comes back is a cursor, and the cursor form already knows everything about walking one.
+	// rewrite `parseForStatement`'s collection fork performs (the `Map`-entries rewrite beside it went with the
+	// synthesized hash table at W105): what comes back is a cursor, and the cursor form already knows
+	// everything about walking one.
 	// It is what makes `for item in self` inside `stdlib/Interfaces.maxon`'s `extension Iterable` mean what that
 	// file's own documentation says it means (*"types that can be iterated over (used by for-in loops)"*), and
 	// it is how `stdlib/Range.maxon` and `stdlib/helpers/string/views.maxon` become iterable.
@@ -47789,17 +47702,10 @@ export type Parser
 			return try self.dispatchArrayMethod(func, arr: recv.value, giid: recv.nameId, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName), viaManagedField: false)
 		end 'arrayMethod'
 
-		// A SET RECEIVER (`s.insert(e)`, `s.contains(e)`) goes to the set runtime, like an array receiver
-		// (P1.7b slice A).
-		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isSetInstance(recv.nameId) 'setMethod'
-			return try self.dispatchSetMethod(func, set: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner)
-		end 'setMethod'
-
-		// A MAP RECEIVER (`m.upsert(k, value: v)`, `m.contains(k)`, `try m.get(k)`) goes to the map runtime —
-		// the two-column twin of the set arm above.
-		if recv.tag == ValueTypeTag.genericInstance and self.signatures.isMapInstance(recv.nameId) 'mapMethod'
-			return try self.dispatchMapMethod(func, map: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, receiverOwner: recv.owner)
-		end 'mapMethod'
+		// ⚠ **A SET ARM AND A MAP ARM STOOD HERE AND WENT WITH THEIR RUNTIME (W105).** Each routed a receiver
+		// whose base was the SYNTHESIZED record into a hand-written dispatcher over `__set_*` / `__map_*`. Both
+		// containers are declared generics now, so `s.insert(e)` and `m.upsert(k, value: v)` fall through to
+		// the ordinary declared-method path — the same one every other `stdlib/` type's members take.
 
 		// A LIST RECEIVER (`list.append(x)`, `try list.first()`, `list.count()`) goes to the list runtime. It
 		// carries the BORROW SUBJECT the two hash-table arms above do not: a list's `first`/`get` hand back a
@@ -49234,7 +49140,7 @@ export type Parser
 	// owned temporary.
 	//
 	// ⚠ **`(source, dest, …)` IS THE ARGUMENT ORDER EVERY SUCH RUNTIME ENTRY TAKES, and it is stated once
-	// here.** Two callees now share it (`__str_to_bytes`, `__managed_map`/`__set_map`) where four did until W49
+	// here.** Two callees now share it (`__str_to_bytes` and `__managed_map`) where four did until W49
 	// wave 6 retired the two decoding views; a caller that assembled its own list would be free to swap the
 	// two records, which reads as a valid call at every tier and writes into the source at run time.
 	//
@@ -50167,32 +50073,30 @@ export type Parser
 	end 'emitPredefinedCharacterSet'
 
 	// A fresh `Set with Character` seeded from a preset's byte sequences. Each member is a `Character`
-	// LITERAL the parser mints, promoted to an owned copy on the way in exactly as a source `insert` is —
-	// while the set is the synthesized record; see `movedCharacterSetMember` for who owns it otherwise.
+	// LITERAL the parser mints; the corpus `Set.insert` DECLARES its parameter, so the ordinary call machinery
+	// decides the move and no parse-time promotion happens here (see `emitCharacterMemberInsert`).
 	function emitCharacterMemberSet(members ByteArrayArray, anchor Token, range SourceRange) returns ValueId throws ParseError
 		let chars = try self.emitEmptyCharacterMemberSet(anchor, range: range)
 		for bytes in members 'eachMember'
-			let owned = self.movedCharacterSetMember(self.emitCharacterLiteral(bytes, range: range), argBareLocal: false, range: range)
-			try self.emitCharacterMemberInsert(chars, member: owned, anchor: anchor, range: range)
+			try self.emitCharacterMemberInsert(chars, member: self.emitCharacterLiteral(bytes, range: range), anchor: anchor, range: range)
 		end 'eachMember'
 		return chars
 	end 'emitCharacterMemberSet'
 
 	// `CharSet from ['x', 'y', 'z']` — the SOURCE form of a member set. The cursor sits on the `[`. Each
 	// element is a `Character` by being written as a character literal (A5m-ab; it used to have to ADOPT the
-	// type here, because a one-byte literal was an int) and is MOVED in, exactly as a preset's minted literal
-	// is, so the two producers cannot disagree about who owns a member.
+	// type here, because a one-byte literal was an int) and joins the set exactly as a preset's minted literal
+	// does, so the two producers cannot disagree about who owns a member.
 	function parseCharacterMemberSetLiteral(func IrFunction, anchor Token, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftBracket)
 		let chars = try self.emitEmptyCharacterMemberSet(anchor, range: range)
 		while not self.at(TokenKind.rightBracket) 'eachMember'
 			let memberTok = self.current()
-			let memberStart = self.pos
 			let member = try self.parseExpression(func, block: self.currentBlock)
 			if self.tagOf(member) != ValueTypeTag.character 'notACharacter'
 				throw ParseError.builtinOperandType(String.from(CharacterMemberSetAliasName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(member)), line: memberTok.line, column: memberTok.column)
 			end 'notACharacter'
-			try self.emitCharacterMemberInsert(chars, member: self.movedCharacterSetMember(member, argBareLocal: self.rhsWasBareLocalReference(memberStart), range: range), anchor: anchor, range: range)
+			try self.emitCharacterMemberInsert(chars, member: member, anchor: anchor, range: range)
 			if not self.at(TokenKind.rightBracket) 'moreMembers'
 				try self.consume(TokenKind.comma)
 			end 'moreMembers'
@@ -50216,7 +50120,7 @@ export type Parser
 	// with the door above is what keeps the member set's INSTANCE — the fact both the create and the insert
 	// are keyed on — spelled in one place per act rather than at each of the two producers.
 	function emitCharacterMemberInsert(chars ValueId, member ValueId, anchor Token, range SourceRange) throws ParseError
-		try self.emitSetInsert(chars, giid: self.signatures.setInstanceForCharacter(), member: member, anchor: anchor, range: range)
+		try self.emitSetInsert(chars, member: member, anchor: anchor, range: range)
 	end 'emitCharacterMemberInsert'
 
 	// ⭐ **THE ONE DOOR A `CharacterSet` BOX IS BORN THROUGH** — `__cs_make(chars, categoryMask)`, whose
@@ -50812,7 +50716,7 @@ export type Parser
 		// silently wrong TYPE rather than a diagnostic. Under a stated head a `:` is simply not part of the
 		// literal, and the element rule or the closing `]` refuses it.
 		if self.at(TokenKind.colon) and elementSourceIsInferred(element) 'mapLiteral'
-			return try self.parseMapLiteralBody(func, firstKey: first, firstKeyStart: firstStart, firstKeyTok: firstTok, range: range)
+			return try self.parseMapLiteralBody(func, firstKey: first, firstKeyTok: firstTok, range: range)
 		end 'mapLiteral'
 
 		// ⚠ **THE STATED INSTANCE IS TAKEN WITHOUT ASKING THE FIRST ELEMENT AT ALL**, which is the point: under
@@ -51627,12 +51531,6 @@ export type Parser
 	// than a name threaded into one template, because the three tails are not the same sentence with a noun
 	// swapped — a `List` points the author at `List from […]`, which the other two have no equivalent of.
 	function containerStaticSurfaceSentence(giid GenericInstanceId, method ByteArray) returns String
-		if self.signatures.isSetInstance(giid) 'set'
-			return "`Set` static method '{String.from(method)}' — P1.7b slice A provides `create()` only"
-		end 'set'
-		if self.signatures.isMapInstance(giid) 'map'
-			return "`Map` static method '{String.from(method)}' — shv2 provides `create()` only"
-		end 'map'
 		if self.signatures.isListInstance(giid) 'list'
 			return "`List` static method '{String.from(method)}' — shv2 provides `create()` only; a `List` is otherwise built with `List from […]`"
 		end 'list'
@@ -51658,12 +51556,6 @@ export type Parser
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
 
-		if self.signatures.isSetInstance(giid) 'set'
-			return self.emitSetCreateOp(giid, range: range)
-		end 'set'
-		if self.signatures.isMapInstance(giid) 'map'
-			return self.emitMapCreateOp(giid, range: range)
-		end 'map'
 		if self.signatures.isListInstance(giid) or self.signatures.isManagedListInstance(giid) 'chain'
 			return self.emitListCreateOp(giid, range: range)
 		end 'chain'
@@ -51802,14 +51694,6 @@ export type Parser
 		if self.signatures.isArrayInstance(giid) 'array'
 			return
 		end 'array'
-		if self.signatures.isSetInstance(giid) 'set'
-			try self.requireHashTableKeyType(giid, containerName: String.from(SetBuiltinBaseName), tok: aliasTok)
-			return
-		end 'set'
-		if self.signatures.isMapInstance(giid) 'map'
-			try self.requireMapColumnTypes(giid, tok: aliasTok)
-			return
-		end 'map'
 		if self.signatures.isListInstance(giid) or self.signatures.isManagedListInstance(giid) 'chain'
 			try self.requireListElementType(giid, tok: aliasTok)
 			return
@@ -51832,12 +51716,6 @@ export type Parser
 	// an `emitCall` result is classified +1 owned by the call machinery itself (`enrolOwnedCallTemp`). A
 	// caller that tracked unconditionally would enrol the corpus result TWICE and drop it twice.
 	function emitSetCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
-		if self.signatures.isSetInstance(giid) 'synthesizedRecord'
-			let set = self.emitSetCreateOp(giid, range: range)
-			self.trackOwnedTemp(set, exclusivity: OwnedHeapExclusivity.sole)
-			return set
-		end 'synthesizedRecord'
-
 		var args = ValueIdArray.create()
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
@@ -51849,53 +51727,32 @@ export type Parser
 		return set
 	end 'emitSetCreate'
 
-	// ⭐ **ONE MEMBER INTO THE SET — `emitSetCreate`'s twin.** The insert is a VOID mutator either way; the set
-	// OWNS the member from here. `Set.insert(element Element)` declares its one parameter POSITIONALLY, so the
-	// synthesized call spells no label — the half `emitMapLiteralUpsert` had to spell and this one must not.
-	function emitSetInsert(set ValueId, giid GenericInstanceId, member ValueId, anchor Token, range SourceRange) throws ParseError
-		if self.signatures.isSetInstance(giid) 'synthesizedRecord'
-			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(set, second: member), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-			return
-		end 'synthesizedRecord'
-
+	// ⭐ **ONE MEMBER INTO THE SET — `emitSetCreate`'s twin.** The insert is a VOID mutator; the set OWNS the
+	// member from here, and the declared `Set.insert(element Element)` parameter is what says so. It declares
+	// that parameter POSITIONALLY, so the desugared call spells no label — the half `emitMapLiteralUpsert` had
+	// to spell and this one must not.
+	function emitSetInsert(set ValueId, member ValueId, anchor Token, range SourceRange) throws ParseError
 		var args = pairArgs(set, second: member)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
 		_ = try self.emitCall(qualifiedMethodName(SetBuiltinBaseName, methodName: InsertMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(set), mint: CalleeMint.notMinted)
 	end 'emitSetInsert'
 
-	// ⭐⭐ **A MEMBER MOVES INTO THE SET AT THE PARSE ONLY WHILE THE SET *IS* THE SYNTHESIZED RECORD (W90) — the
-	// OWNERSHIP half of the switch `emitSetInsert` above is the CALLEE half of.** `moveMapLiteralColumnValue`'s
-	// twin, and its header carries the measurement: a synthesized table takes ownership at the parse because
-	// `__set_insert` is a runtime call with no signature for `applyCallerConsume` to read, while the corpus
-	// `Set.insert` has one and the ORDINARY call machinery decides. Doing BOTH is not belt-and-braces, it is a
-	// leak — the parse-time move DRAINS the value from the statement's pending drops, so the call then takes
-	// its own reference and the statement releases nothing.
+	// ⚠⚠ **`movedCharacterSetMember` AND `emitSetCreateOp` STOOD HERE AND ARE GONE (W105).** The first was the
+	// OWNERSHIP half of the retirement switch: a SYNTHESIZED table took ownership of a member at the parse,
+	// because `__set_insert` was a runtime call with no signature for `applyCallerConsume` to read. The corpus
+	// `Set.insert` has one, so the ORDINARY call machinery decides — and doing BOTH was measured to be a LEAK,
+	// not belt-and-braces (the parse-time move DRAINS the value from the statement's pending drops, so the call
+	// then takes its own reference and the statement releases nothing). With the runtime deleted the function
+	// was the identity, and its callers hand `Set.insert` the member as it was parsed.
 	//
-	// ⚠ **ASKED OF THE BASE NAME AND NOT OF A giid**, for `moveMapLiteralColumnValue`'s reason: a preset's
-	// member is minted before any instance is in hand, and a member set's base is `Set` by construction.
-	function movedCharacterSetMember(member ValueId, argBareLocal bool, range SourceRange) returns ValueId
-		if not self.signatures.isSetBaseName(SetBuiltinBaseName) 'theInsertCallTakesOwnership'
-			return member
-		end 'theInsertCallTakesOwnership'
-
-		// `isString: true` — `tagIsByteRecord`'s protocol, since a `Character` IS a String record.
-		return self.moveManagedValueInto(member, argBareLocal: argBareLocal, isString: true, range: range)
-	end 'movedCharacterSetMember'
-
-	// Emit `__set_create(elemDrop)` for instance `giid`, yielding the empty set record (P1.7b). The record is
-	// zeroed by `__mm_alloc`, so the first insert lazily allocates the buffers; `elemDrop@40` carries the key
-	// destructor (`__str_decref` for a String key, 0 for a trivial int key) so the set drops its owned keys at
-	// teardown / dup-insert / remove.
-	function emitSetCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
-		let elemDrop = self.columnDestroyValue(self.signatures.setKeyType(giid), range: range)
-		return self.emitRuntimeCall(SetCreateName, args: singletonArgs(elemDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
-	end 'emitSetCreateOp'
+	// The second emitted `__set_create(elemDrop)` and stamped the record's `keyDrop@40`; a declared `Set`
+	// builds its own fields in its own `create()`.
 
 	// ⭐ **THE `elemDrop@40` STAMP VALUE for a `Set` (P1.7b) — the `Set` twin of `arrayElementDestroyValue`.** A
 	// MANAGED key (String) → the RAW `.text` address of its drop callee (`__str_decref`), via the same P1.5-A1
 	// `funcAddr` code→register path the array element destructor rides (no rdata reloc, no descriptor); a trivial
-	// int key → 0. `__set_decref`'s teardown walk calls it through a `callIndirect` on each live key.
+	// int element → 0. `__list_decref`'s teardown walk calls it through a `callIndirect` on each live element.
 	// ⚠ It is keyed on the column's TYPE and not on a `(giid, which-column)` pair, because a `Map` has TWO of
 	// these stamps and a per-column copy is exactly how the key's and the value's teardown would come to
 	// disagree about what "managed" means.
@@ -51906,162 +51763,21 @@ export type Parser
 		return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
 	end 'columnDestroyValue'
 
-	// ⭐ **THE KEY-TYPE GATE (P1.7b).** A `Set`'s key type must be `int` (or a ranged-int alias) OR `String`:
-	// this slice dispatches `hash`/`equals` through the key's `Hashable`/`Equatable` WITNESSES, and those are
-	// the two key types a witness can carry. A struct / `ByteArray` key rides a later slice, so it is a clean
-	// E2015 here rather than a link failure at the missing witness impl.
+	// ⚠⚠ **THE HASH-TABLE KEY-ROSTER GATE STOOD HERE AND IS GONE (W105):** `requireHashTableKeyType` and its
+	// five helpers (`hashTableKeyIsAdmitted`, `hashTableAdmittedKeys`, `reservedHashTableKeyNames`,
+	// `grantedConformerKeyPhrase`, `requireArrayKeyElementConforms`). It admitted `int` / `String` /
+	// `Character` / a conforming `Array` and refused everything else as "a later slice", because the
+	// SYNTHESIZED table hashed and compared its key through witness tables the compiler itself had to name.
 	//
-	// ⚠⚠ **IT IS THE KEY'S GATE AND ONLY THE KEY'S — A `Map`'s VALUE IS HELD TO
-	// `ProgramSignatures.slotTypeFitsOneWord` INSTEAD, and asking it here was a measured false refusal.** The
-	// whitelist below exists because the key is HASHED and COMPARED through witnesses; a value is stored and
-	// dropped, which is the one-machine-word question `List` already answers wider. See that predicate's
-	// header for the two programs this cost.
-	// ⚠ `float` is NOT the counter-example it looks like now that `float.hash`/`float.equals` are both
-	// synthesized: a float key is refused one gate EARLIER, by E2062 on the type ARGUMENT, because a type
-	// parameter is an opaque general-purpose slot and a float has no way through it. So this gate never sees
-	// one, and admitting `float` here would name a witness whose receiver could not travel.
-	//
-	// The key type is read through
-	// `conformerTypeArgName` — the SAME canonical-conformer reducer the witness threading uses
-	// (`LowerMaxonToStd.appendSetWitnessArgs`) — so the gate and the dispatch agree on the key's identity (an
-	// `int` and a ranged-int alias both reduce to `int`; a `String` names itself).
-	// ⚠ It is asked of a `Map`'s key as well as a `Set`'s, which is why the container is a parameter rather
-	// than the literal a `Set`-only gate would have spelled.
-	//
-	// ⭐⭐ **THE REFUSAL RENDERS THE ADMITTED SET FROM THE SAME TWO SOURCES THE TEST READS**, so an admitted
-	// key type moves the sentence by being admitted. A hand-written roster that has to be edited beside the
-	// test is this project's most frequent single rot — the sentence stays true only until someone widens the
-	// test and not the prose, and nothing fails to say so.
-	//
-	// ⚠ **AND IT IS TWO SOURCES RATHER THAN ONE, because the admitted keys are two KINDS of fact.** The
-	// RESERVED names are a list this file may hold, so both sides walk `reservedHashTableKeyNames`. The
-	// DISCOVERED ones have no spelling this file may hold (the array record's is the corpus's, ARR6; an
-	// enum's is the author's), so the test asks `ProgramSignatures.discoveredConformerOf` while the sentence
-	// renders `arrayRecordDeclaredName()` and, for an enum, a SHAPE — one fact each, and since enum-hashable
-	// both sides walk `DiscoveredConformer` under an EXHAUSTIVE match, so a category APPENDED there fails to
-	// compile in the test and in the sentence together (see that enum's header for the ordering the two
-	// range arms depend on).
-	function requireHashTableKeyType(giid GenericInstanceId, containerName String, tok Token) throws ParseError
-		let keyType = self.signatures.conformerTypeArgName(giid, position: HashTableKeyArgPosition).toByteArray()
-		if self.hashTableKeyIsAdmitted(keyType) 'admitted'
-			return
-		end 'admitted'
-
-		try self.requireArrayKeyElementConforms(giid, containerName: containerName, tok: tok)
-		throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, so a {HashTableKeyColumnNoun} must be a type that carries them: {self.hashTableAdmittedKeys()} — a '{String.from(keyType)}' {HashTableKeyColumnNoun} is a later slice", line: tok.line, column: tok.column)
-	end 'requireHashTableKeyType'
-
-	// ⭐⭐ **MAY THIS TYPE BE A HASH TABLE'S KEY? — the three RESERVED intrinsic conformers, plus every
-	// conformer the compiler GRANTS its `Hashable`/`Equatable` pair to without an `implements`.**
-	//
-	// ⭐ **`Array` NEEDED NO SECOND PREDICATE AND NEITHER DOES AN `enum` (array-hashable, enum-hashable)** —
-	// which is the reduction and the discovery doing their job. An `Array with E` reduces to the conformer
-	// `Array` exactly when `E` satisfies the conditional conformance, and an `enum` names itself and is
-	// recognized by SHAPE (`namesAPayloadFreeEnum`); an array whose element does not conform keeps its own
-	// unreduced spelling and is refused, as is a `union`, which the granted row withholds.
-	//
-	// ⚠ **THE MATCH IS EXHAUSTIVE, AND THAT IS THE ROT GUARD THIS GATE'S HEADER DEMANDS** — a category added
-	// to `DiscoveredConformer` fails to compile here and in `hashTableAdmittedKeys` together, so a key can
-	// never be admitted by the test while the refusal goes on denying it.
-	//
-	// ⚠ **A USER TYPE DECLARING `implements Hashable, Equatable` IS DELIBERATELY NOT ADMITTED, and "a later
-	// slice" stays true of it**: its key column is a heap box whose ownership this container does not stamp.
-	// `Map` reaches such a key through its OWN declared `where` clause instead (`gateMapLiteralColumns` routes
-	// a corpus `Map` past this gate entirely) — a different mechanism, not this roster widened.
-	function hashTableKeyIsAdmitted(keyType ByteArray) returns bool
-		for reservedName in reservedHashTableKeyNames() 'eachReserved'
-			if keyType.equals(reservedName) 'aReservedIntrinsicConformer'
-				return true
-			end 'aReservedIntrinsicConformer'
-		end 'eachReserved'
-
-		return match self.signatures.discoveredConformerOf(keyType) 'discovered'
-			arrayRecord to payloadFreeEnum gives true
-			none gives false
-		end 'discovered'
-	end 'hashTableKeyIsAdmitted'
-
-	// The admitted key types AS THE REFUSAL PRINTS THEM — one phrase per arm of the test above: the reserved
-	// names off the very list that test walks, then the discovered categories in `DiscoveredConformer`'s own
-	// declaration order, so the sentence can omit neither.
-	function hashTableAdmittedKeys() returns String
-		var phrases = StringArray.create()
-		for reservedName in reservedHashTableKeyNames() 'eachReserved'
-			phrases.push("`{String.from(reservedName)}`")
-		end 'eachReserved'
-		for discovered in DiscoveredConformer.allCases 'eachCategory'
-			if discovered == DiscoveredConformer.none 'grantsNothingToName'
-				continue
-			end 'grantsNothingToName'
-
-			phrases.push(self.grantedConformerKeyPhrase(discovered))
-		end 'eachCategory'
-		return renderPhraseList(phrases)
-	end 'hashTableAdmittedKeys'
-
-	// ⭐⭐ **THE RESERVED CONFORMER NAMES A HASH TABLE ADMITS OUTRIGHT — ONE list, walked by the TEST and by
-	// the SENTENCE.** They were spelled out at both sites, agreeing only by inspection: a fourth added to the
-	// test would have left the refusal denying a key type the compiler accepts, which is the rot this gate's
-	// own header names as the project's most frequent — stated there while the code carried two copies of it.
-	//
-	// ⚠ The three are RESERVED spellings this file may hold (two keywords and one name
-	// `TypeResolution.isCompilerOwnedTypeName` refuses to every declaration), which is exactly what the
-	// DISCOVERED categories are not — theirs are the corpus's and the author's, so they cannot join this list
-	// and are asked through `ProgramSignatures.discoveredConformerOf` instead.
-	function reservedHashTableKeyNames() returns ByteArrayArray
-		var names = ByteArrayArray.create()
-		names.push(IntConformerName)
-		names.push(StringConformerName)
-		names.push(CharacterConformerName)
-		return names
-	end 'reservedHashTableKeyNames'
-
-	// How ONE compiler-granted conformer category reads in that sentence. The array record is a NAME the
-	// corpus chose, so it is fetched; an enum has no one name, so what is printed is the shape the discovery
-	// actually tests for — which is the only rendering that stays true for every enum in every program.
-	//
-	// It PANICS on `none` for `IrInterface.builtinConformerName`'s reason: the category names no grant, so
-	// only a caller that has already skipped it may ask for a phrase.
-	function grantedConformerKeyPhrase(discovered DiscoveredConformer) returns String
-		match discovered 'discovered'
-			arrayRecord then return "`{String.from(self.signatures.arrayRecordDeclaredName())}`"
-			payloadFreeEnum then return "any `enum` with no associated values"
-			none then panic("grantedConformerKeyPhrase: `none` names no compiler-granted conformance and so no admitted key category — its one caller walks the granted categories and skips it")
-		end 'discovered'
-	end 'grantedConformerKeyPhrase'
-
-	// ⭐⭐ **AN ARRAY KEY THAT FAILED THE ROSTER FAILED IT FOR ITS ELEMENT, AND THE ROSTER SENTENCE MAY NOT
-	// SAY OTHERWISE (array-hashable review).** `Array` IS an admitted key, so "a '…' key is a later slice"
-	// is TRUE of a struct and FALSE of an `Array with <non-conforming element>` — that one is refused
-	// because `Array`'s `Hashable`/`Equatable` is CONDITIONAL and this element does not satisfy the clause,
-	// a feature that exists rather than one that is owed. The reduction is what hides it: a withheld array
-	// arrives under its own unreduced spelling and is indistinguishable HERE from a type nothing conforms
-	// for, so the array question has to be asked again, of the key's own type.
-	//
-	// ⭐ It is the SAME walk the method surface is withheld by (`arrayElementConstraintCheck`), under the
-	// SAME clause, so the two doors cannot come to disagree about which arrays carry the conformance — only
-	// about what to say when one does not.
-	//
-	// ⚠ An OPAQUE element falls through to the roster sentence deliberately: `Map with (Array with T, V)`
-	// inside a generic body is not an array whose element failed the clause, it is a key this rung does not
-	// support at all — which is what "a later slice" says.
-	function requireArrayKeyElementConforms(giid GenericInstanceId, containerName String, tok Token) throws ParseError
-		let keyType = self.signatures.substitutedInstanceArg(giid, position: HashTableKeyArgPosition)
-		if not self.signatures.denotesArrayInstance(keyType) 'notAnArrayKey'
-			return
-		end 'notAnArrayKey'
-
-		let keyArray = self.signatures.denotedArrayInstance(keyType)
-		if self.signatures.containerElementIsOpaque(keyArray) 'opaqueElement'
-			return
-		end 'opaqueElement'
-
-		let interfaces = self.signatures.arrayConformanceProtocolNames()
-		match self.signatures.arrayElementConstraintCheck(keyArray, clauseInterfaces: interfaces) 'clause'
-			satisfied then return
-			unmet(unmetInterfaceName, bindingName) then throw ParseError.unsupported("`{containerName}` hashes and compares its {HashTableKeyColumnNoun}s through their `Hashable`/`Equatable` witnesses, and `{String.from(self.signatures.arrayRecordDeclaredName())}` supplies those only as a conditional extension ({arrayWhereClause(interfaces)}) — this {HashTableKeyColumnNoun}'s element '{String.from(bindingName)}' does not implement '{String.from(unmetInterfaceName)}'", line: tok.line, column: tok.column)
-		end 'clause'
-	end 'requireArrayKeyElementConforms'
+	// ⭐ **THE RULE IT ENFORCED IS THE GENERAL ONE NOW, AND
+	// `specs-shv2/array-conditional-conformance-withheld.md` ALREADY SAYS SO IN ITS OWN WORDS**
+	// (*"the roster is gone, and any `Hashable + Equatable` type is a key"*): `stdlib/Map.maxon` and
+	// `stdlib/Set.maxon` declare `where Key is Hashable and Equatable`, so a bad key is the ordinary
+	// `where`-constraint refusal at the INSTANTIATION (`checkWhereConstraints`) — which NAMES the constraint
+	// that failed instead of reciting a roster, and admits any conforming user type (`map.md`'s
+	// `a-user-type-can-be-a-map-key`). Its two doors — `requireContainerColumnTypes`'s hash-table arms and
+	// `gateMapLiteralColumns`' synthesized arm — had both already become unreachable at W41/W90; W105 deletes
+	// what they used to reach.
 
 	// ⭐⭐ **THE ONE-MACHINE-WORD SLOT GATE — a `List`/`__ManagedList` ELEMENT and a `Map`'s VALUE column.**
 	// Both slots are one word and both are torn down by the destructor `columnDestroyValue` stamps, so the
@@ -52077,7 +51793,7 @@ export type Parser
 	// slot would arrive in the XMM file where every container entry is declared `i64`, but it never reaches
 	// here: `typealias FList = List with F` is already **E2062 on the type ARGUMENT** (a type parameter is an
 	// opaque general-purpose slot and a float has no way through it) — the same gate
-	// `requireHashTableKeyType` records for a float key. What the second refusal is for is therefore any slot
+	// the deleted `requireHashTableKeyType` recorded for a float key. What the second refusal is for is therefore any slot
 	// type neither managed nor word-shaped that a future type kind might introduce: a clean E2015 rather than
 	// a wrong stride.
 	//
@@ -52103,13 +51819,6 @@ export type Parser
 		throw ParseError.unsupported("`{containerName}` holds one machine word per {columnNoun}, so its {columnNoun} must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(slotType))}' {columnNoun} does not fit that slot", line: tok.line, column: tok.column)
 	end 'requireOneWordSlotType'
 
-	// ⭐ **`Set from [1, 2, 3]` — CONSTRUCT A SET FROM AN ARRAY LITERAL (P1.7b slice B).** The cursor sits on the
-	// `Set` identifier. Parse `from` then the `[…]` through the EXISTING array-literal parser — which infers the
-	// element type and yields an OWNED `Array with <elem>` temporary — then emit `__set_from` over it, yielding an
-	// OWNED `Set with <elem>`. The array is BORROWED: `__set_from` reads its elements (it does not consume or free
-	// it), so the array stays a pending owned temporary the caller drops at statement end, and the constructed set
-	// drops at scope exit through `genericInstanceBoxDropCallee` → `__set_decref` — no double-free. INT keys only
-	// this slice (a String / managed-element literal is a later slice), gated like `IntSet.create()`.
 	// Is `name` a typealias for a `Set` instance — the alias form of a `from` construction's head? Asked of
 	// the whole-program index, which is complete in the real parse; during the tolerant sweep every alias
 	// answers no, which is sound because the sweep's artifact is discarded.
@@ -52117,7 +51826,7 @@ export type Parser
 	// ⚠⚠ **THE *SHAPE* QUESTION, NEVER THE RUNTIME ONE (W90).** `CharSet from ['x']` is a construction
 	// whoever serves the container: which runtime executes it is settled inside `parseSetFromConstruction`,
 	// and it has nothing to do with whether this token sequence IS a construction. Asked through
-	// `isSetInstance` — the runtime question — this answered false for every alias head the instant
+	// the deleted `isSetInstance` — the runtime question — this answered false for every alias head the instant
 	// `stdlib/Set.maxon` was listed, `atSetFromConstruction` stopped claiming the shape, and the head fell
 	// through to **`E2004: Undefined variable 'CharSet'`** on six cases across `character-set`,
 	// `unicode-category` and `lazy-static`. See `ProgramSignatures.isSetShapedInstance`.
@@ -52127,7 +51836,7 @@ export type Parser
 
 	// The same question one container over — is `name` a typealias for an `Array` instance? Its own predicate
 	// rather than a base-name parameter over the pair, because the two bases are not asked the same way:
-	// `isSetInstance` is a name EQUALITY, while `isArrayInstance` also admits the compiler's own minted
+	// `isSetShapedInstance` is a name EQUALITY, while `isArrayInstance` also admits the compiler's own minted
 	// `__Array_<T>` spellings (`SignatureIndex.isArrayBaseName`), and a shared base-name compare would have
 	// answered `false` for every one of those.
 	function namesArrayInstanceAlias(name ByteArray) returns bool
@@ -52164,6 +51873,11 @@ export type Parser
 		return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.stated(self.signatures.genericAliasInstanceFrom(headTok.value, readerFilePath: self.filePath)))
 	end 'parseArrayFromConstruction'
 
+	// ⭐ **`Set from [1, 2, 3]` — CONSTRUCT A SET FROM A BRACKETED MEMBER LIST.** The cursor sits on the head
+	// identifier. The two forks below split on what the members ARE: a `Set with Character` reads them as
+	// character literals (`parseCharacterMemberSetLiteral`), and every other key type reads them as ordinary
+	// expressions whose first fixes the instance (`parseSetMemberList`). Both desugar to `Set.create()` plus
+	// one `Set.insert` per member.
 	function parseSetFromConstruction(func IrFunction) returns ValueId throws ParseError
 		let setTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.from)
@@ -52184,19 +51898,14 @@ export type Parser
 			return try self.parseCharacterMemberSetLiteral(func, anchor: setTok, range: SourceRange.ofToken(setTok))
 		end 'characterKeyed'
 
-		// ⭐⭐ **A CORPUS `Set` IS BUILT MEMBER BY MEMBER AND NEVER THROUGH AN ARRAY (W90).** `__set_from` is a
-		// runtime entry that CONSUMES a source array one machine word at a time; the corpus type's own
+		// ⭐⭐ **A `Set` IS BUILT MEMBER BY MEMBER AND NEVER THROUGH AN ARRAY (W90).** `__set_from` was a runtime
+		// entry that CONSUMED a source array one machine word at a time; the corpus type's own
 		// `InitableFromArrayLiteral` `init` is not exported, so a user file naming it is
 		// **`E3008: function 'Set.init' is not exported`**. `W41` met the identical wall one container over and
 		// answered it the same way — `Map.create()` plus one `upsert` per pair — so this is `Map`'s route, and
-		// it also spares the intermediate `Array` record the `from` spelling used to allocate.
-		if not self.signatures.isSetBaseName(SetBuiltinBaseName) 'corpusSet'
-			return try self.parseSetMemberList(func, setTok: setTok)
-		end 'corpusSet'
-
-		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
-		let setGid = try self.setInstanceForArrayLiteral(self.valueNameId(arr), setTok: setTok)
-		return self.emitOwnedRuntimeResult(SetFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: setGid, range: SourceRange.ofToken(setTok))
+		// it also spares the intermediate `Array` record the `from` spelling used to allocate. The `__set_from`
+		// arm was the other half of a switch until W105 deleted that runtime.
+		return try self.parseSetMemberList(func, setTok: setTok)
 	end 'parseSetFromConstruction'
 
 	// ⭐⭐ **`Set from [m0, m1, …]` ONTO A DECLARED `Set` — `Set.create()` plus one `Set.insert` per member
@@ -52206,7 +51915,7 @@ export type Parser
 	// with the sentence a written `s.insert(x)` of the wrong type already gets.
 	//
 	// ⚠ **`consume: false` AT EVERY MEMBER, AND IT IS NOT AN OVERSIGHT.** The corpus `Set.insert` declares its
-	// parameter, so the ORDINARY call machinery decides the move — see `movedCharacterSetMember` for the leak
+	// parameter, so the ORDINARY call machinery decides the move — see the W105 note above `emitSetCreate` for the leak
 	// a second, parse-time move produces. That also makes the fencing-token ordering `parseHashTableColumnArg`
 	// insists on vacuous here: nothing reads `rhsWasBareLocalReference` on this path.
 	function parseSetMemberList(func IrFunction, setTok Token) returns ValueId throws ParseError
@@ -52239,7 +51948,7 @@ export type Parser
 		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: setTok.line, nameColumn: setTok.column, filePath: self.filePath))
 
 		let set = try self.emitSetCreate(giid, anchor: setTok, range: range)
-		try self.emitSetInsert(set, giid: giid, member: first, anchor: setTok, range: range)
+		try self.emitSetInsert(set, member: first, anchor: setTok, range: range)
 		self.skipNewlines()
 
 		let declaredType = self.resolvedSlotType(keyType)
@@ -52249,7 +51958,7 @@ export type Parser
 			try self.consume(TokenKind.comma)
 			self.skipNewlines()
 			let member = try self.parseHashTableColumnArg(func, columnType: keyType, declaredType: declaredType, columnSubject: "`{String.from(SetBuiltinBaseName)} with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}", consume: false)
-			try self.emitSetInsert(set, giid: giid, member: member, anchor: setTok, range: range)
+			try self.emitSetInsert(set, member: member, anchor: setTok, range: range)
 			self.skipNewlines()
 		end 'moreMembers'
 
@@ -52264,12 +51973,12 @@ export type Parser
 	// on parse order, which no drift guard can see.
 	//
 	// ⚠⚠ **SO THIS IS AN INTERNING BOUND, NOT A CONFORMANCE VERDICT, AND THE DISTINCTION IS THE WHOLE
-	// DIFFERENCE FROM ITS SYNTHESIZED TWIN.** `setInstanceForArrayLiteral` refuses a narrow-packed element for
-	// the `__set_from` element STRIDE and everything else for the builtin's key roster; neither reason survives
-	// here — create-plus-insert reads no buffer, and whether the key can be hashed is `Set`'s own `where` clause,
-	// checked whole-program against the site the caller records. What is left is the one thing this door can
-	// still state: the program's own `typealias <X> = Set with <Key>` is how any other key type reaches a set,
-	// and it is what the refusal names.
+	// DIFFERENCE FROM THE SYNTHESIZED TWIN IT REPLACED.** `setInstanceForArrayLiteral` (deleted with the
+	// runtime at W105) refused a narrow-packed element for the `__set_from` element STRIDE and everything else
+	// for the builtin's key roster; neither reason survives here — create-plus-insert reads no buffer, and
+	// whether the key can be hashed is `Set`'s own `where` clause, checked whole-program against the site the
+	// caller records. What is left is the one thing this door can still state: the program's own
+	// `typealias <X> = Set with <Key>` is how any other key type reaches a set, and it is what the refusal names.
 	function setInstanceForLiteralKey(keyType MaxonType, setTok Token) returns GenericInstanceId throws ParseError
 		if tagIsPlainInteger(maxonTypeTag(keyType)) 'intKey'
 			return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
@@ -52337,135 +52046,15 @@ export type Parser
 		return try self.emitCall(qualifiedMethodName(typeTok.value, methodName: StringInitMethod), anchor: typeTok, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rparenTok: literalTok, resultUsed: true, constructorInstance: self.constructorInstanceOf(typeTok.value), mint: CalleeMint.stringLiteralInit)
 	end 'parseStringLiteralInitConstruction'
 
-	// The `Set with <elem>` instance a `Set from [<literal>]` constructs — its key type is the array literal's
-	// ELEMENT type. A `Set from [ints]` → `Set with integer` (whose `integer` element canonicalizes to the `int`
-	// witness); a `Set from ["…"]` → `Set with String`. INT and STRING elements this slice: a struct / ByteArray
-	// literal is a clean E2015 here rather than a link failure at the missing key witness. Both source instances
-	// (`Array with integer` / `Array with String`) and both `Set` instances are pre-interned by the sweep, so
-	// these are pure reads.
-	function setInstanceForArrayLiteral(arrGid GenericInstanceId, setTok Token) returns GenericInstanceId throws ParseError
-		if arrGid == self.signatures.internBuiltinIntegerInstance(self.signatures.arrayRecordBaseName()) 'intKey'
-			return self.signatures.internBuiltinIntegerInstance(SetBuiltinBaseName)
-		end 'intKey'
-		if arrGid == self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: MaxonType.string) 'stringKey'
-			return self.signatures.builtinInstanceForElement(SetBuiltinBaseName, element: MaxonType.string)
-		end 'stringKey'
-
-		// ⛔⛔ **A NARROW-PACKED ELEMENT IS REFUSED FOR THE STRIDE, NOT FOR ITS TYPE — and the door that told
-		// an author otherwise was a MEASURED wrong answer waiting (enum-hashable).** `requireHashTableKeyType`
-		// admits an enum key, so this door was widened to match, and the program it then compiled was WRONG:
-		// `Set from [Color.red, Color.green, Color.red]` answered **`count=3`, `contains(Color.red)=false`**
-		// against the oracle's `count=2, contains=true` — three elements where two went in, and a member the
-		// set could not find.
-		//
-		// ⭐ **THE CAUSE IS THE ELEMENT STRIDE, AND IT IS NOT THE KEY'S CONFORMANCE.** An enum ARRAY packs to
-		// the enum's own narrow storage (`array-enum-element-size.md` — one byte for a three-case enum) while
-		// `__set_from` consumes its source buffer as 8-byte elements, so it hashed three garbage words and the
-		// probe, which hashes a real tag, matched none of them. The conformance, the witness tables and the
-		// `int.hash`/`int.equals` impls are all correct on this path — one buffer stride is not.
-		//
-		// ⚠⚠ **SO THE TEST IS THE STRIDE PREDICATE AND NOT "IS THIS AN ENUM", WHICH THE REVIEW CAUGHT AS A
-		// FALSE SENTENCE.** Asked by SHAPE, this told every payload-free enum its array "packs narrower" —
-		// including the wide-backed one MEASURED as correct on both compilers (`a = 5000000000` answers
-		// `count=2, contains=true`), which is precisely the case the claim does not describe. Asked by STRIDE
-		// it is true of exactly the arrays it refuses, and it is the SAME question — `arrayElementIsMachineWord`
-		// — that `parseListFromConstruction` guards the identical `__list_from` hazard with.
-		//
-		// ⚠ Both arms still throw, so no compiled program moved: a wide-backed enum falls through to the
-		// roster refusal below rather than being admitted, because `__set_from` taking an element SIZE is a
-		// runtime entry's ABI on three targets and not a rule this door can state. What changed is which
-		// sentence each author is told, and the working route is named: `Set with <Enum>` + `create()` +
-		// `insert`, whose column is built one member at a time and is measured correct on every backing.
-		if not self.signatures.arrayElementIsMachineWord(arrGid) 'packedElement'
-			throw ParseError.unsupported("`Set from […]` reads its source array one machine word per element, and this literal's elements are packed narrower — build the set with `{String.from(SetBuiltinBaseName)} with <element>` and `insert` instead", line: setTok.line, column: setTok.column)
-		end 'packedElement'
-
-		throw ParseError.unsupported("`Set from […]` supports `{String.from(IntConformerName)}` and `{String.from(StringConformerName)}` {HashTableKeyColumnNoun}s — a struct / ByteArray literal is a later slice", line: setTok.line, column: setTok.column)
-	end 'setInstanceForArrayLiteral'
-
-	// Dispatch a builtin `Set` method — cursor on the method NAME, `set` the (borrowed) receiver record (P1.7b).
-	// `contains`/`remove` return `bool`; `count` returns the member count; `insert` is a VOID mutator (refused in
-	// value position by `requireVoidMethodIsStatement`) that returns the receiver — what the statement still
-	// denotes, like `emitArrayVoidCall`.
-	// `insert`/`contains`/`remove` carry the key's witness tables, appended by `LowerMaxonToStd.appendSetWitnessArgs`;
-	// the parser passes only `[set, elem]`. The set's key type (`giid`, off the receiver's name-id) gates the key
-	// argument's type and decides ownership: `insert` MOVES a managed key in (`consume: true`), while
-	// `contains`/`remove` BORROW it (`consume: false`).
-	function dispatchSetMethod(func IrFunction, set ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.ofToken(methodTok)
-		let giid = self.valueNameId(set)
-
-		// A `let`-bound set is not writable either — the same rule, through the same home the `String` and
-		// `Array` receivers ask (`noteReceiverWrite`). This dispatcher carried NO such guard, which
-		// accepted `let s = IntSet.create()` / `s.insert(1)` where the oracle raises E3019.
-		// `receiverStorage: NoParamPositions` for the reason the `String` dispatcher states: a `Set` write
-		// cannot free an ARRAY element, which is the only borrow E3070 tracks.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: setMethodMutatesReceiver(methodTok.value))
-
-		if methodTok.value.equals(CountMethod) 'count'
-			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(SetCountName, args: singletonArgs(set), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-		end 'count'
-		if methodTok.value.equals(ContainsMethod) 'contains'
-			let elem = try self.parseSetKeyArg(func, giid: giid, consume: false)
-			return self.emitRuntimeCall(SetContainsName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-		end 'contains'
-		if methodTok.value.equals(RemoveMethod) 'remove'
-			let elem = try self.parseSetKeyArg(func, giid: giid, consume: false)
-			return self.emitRuntimeCall(SetRemoveName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-		end 'remove'
-
-		// `insert` is a non-throwing VOID mutator, so a value-position call is refused — from INSIDE the arm
-		// its name matched, which is the shared check's whole scoping (`requireVoidMethodIsStatement`). Ahead
-		// of the arm it caught every unknown `Set` method too, and told it that it exists and is void (D11).
-		if methodTok.value.equals(InsertMethod) 'insert'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			let elem = try self.parseSetKeyArg(func, giid: giid, consume: true)
-			_ = self.emitRuntimeCall(SetInsertName, args: pairArgs(set, second: elem), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-			return set
-		end 'insert'
-
-		// ⭐ **`map(transform)` yields an ARRAY, never a set (interface-extensions).** That is the reference
-		// declaration's own answer (`stdlib/Interfaces.maxon:187` returns `Array with Element` for every
-		// `Iterable`), and it is the only one that is honest here: a transform may map two distinct members
-		// onto one value, and a set would silently swallow the duplicate. So the result instance is
-		// `Array with <this set's key>` — the exact inverse of the pair `setInstanceForArrayLiteral` reads
-		// the other way round for `Set from […]`.
-		if methodTok.value.equals(MapMethod) 'map'
-			return try self.parseContainerMap(func, container: set, resultGiid: self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: self.signatures.setKeyType(giid)), callee: SetMapName, range: range)
-		end 'map'
-
-		// ⚠ **`from`-CONSTRUCTION IS NOT A LATER SLICE AND HAS NOT BEEN SINCE P1.7b SLICE B** — this sentence
-		// said it was, for as long as `parseSetFromConstruction` has existed one screen above. A hand-written
-		// roster is what let it rot (the `Array` surface's is DERIVED from `arraySurfaceMemberNames`, so its
-		// list cannot); what is left here is the one clause that is still true, and `for … in` over a `Set`
-		// says so in its own words at `parseForStatement`.
-		throw ParseError.unsupported("`Set` method '{String.from(methodTok.value)}' — shv2 provides create/insert/contains/remove/count/map, plus `Set from […]` construction; `for … in` over a `Set` needs the cursor protocol a later slice brings", line: methodTok.line, column: methodTok.column)
-	end 'dispatchSetMethod'
-
-	// `( key )` — a single positional key argument for `insert`/`contains`/`remove` (P1.7b). The BRACKETS are
-	// what is left here: the argument itself is parsed, type-checked and moved in by the shared
-	// `parseHashTableColumnArg`, which a `Map`'s two columns ride too. For `insert` (`consume: true`) a managed
-	// (String) key is stored into the set, which then holds one reference to it; `contains`/`remove` (`consume: false`)
-	// BORROW the key for the compare (its owned temp drops at statement end). A trivial int key is a scalar —
-	// no move either way.
+	// ⚠⚠ **`dispatchSetMethod` AND `parseSetKeyArg` STOOD HERE AND WENT WITH THE `__set_*` RUNTIME (W105).**
+	// They were the builtin `Set` surface — `count`/`contains`/`remove`/`insert`/`map` over the synthesized
+	// record, plus the `( key )` argument list whose `consume` flag decided who owned a managed key. A `Set` is
+	// a declared generic now, so every one of those members is `stdlib/Set.maxon`'s own body reached through
+	// the ordinary method path, its key argument is an ordinary declared PARAMETER, and the ownership question
+	// is the call machinery's. `Set.map` is `stdlib/Interfaces.maxon`'s `Iterable` extension.
 	//
-	// The refusal's SUBJECT is composed here because only the caller knows which container is speaking: a `Set`
-	// says *"`Set with int` requires an int key"* where a `Map` says *"this `Map`'s key is an int"*. The shared
-	// core appends the `— got a '<tag>' value` tail the two have always shared.
-	function parseSetKeyArg(func IrFunction, giid GenericInstanceId, consume bool) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let keyType = self.signatures.setKeyType(giid)
-		// The RESOLVED column type is computed ONCE and handed to the shared core, so the sentence names the
-		// very type the check compared — see `parseHashTableColumnArg` for why the raw column type is not it.
-		let declaredType = self.resolvedSlotType(keyType)
-		let declared = maxonTypeTag(declaredType)
-		let identity = self.declaredColumnIdentity(declaredType)
-		let key = try self.parseHashTableColumnArg(func, columnType: keyType, declaredType: declaredType, columnSubject: "`Set with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}", consume: consume)
-		try self.consume(TokenKind.rightParen)
-		return key
-	end 'parseSetKeyArg'
+	// ⭐ What did NOT go with them is `parseHashTableColumnArg` below: `parseSetMemberList` and the `Map`
+	// literal still parse a column argument, and that door's ordering contract is unchanged.
 
 	// ⭐⭐ **ONE HASH-TABLE COLUMN ARGUMENT, PARSED — a `Set`'s key, a `Map`'s key and a `Map`'s VALUE.** Parse
 	// the expression, characterize a lone literal against the column's declared type, refuse a mismatched tag,
@@ -52526,7 +52115,7 @@ export type Parser
 	end 'parseHashTableColumnArg'
 
 	// ⭐⭐ **THE NOMINAL IDENTITY OF A COLUMN'S RESOLVED DECLARED TYPE — the ONE expression the three column
-	// doors share.** `parseSetKeyArg` and `parseMapColumnValue` build the refusal's SUBJECT from it and
+	// doors share.** `parseSetMemberList` and `parseMapColumnValue` build the refusal's SUBJECT from it and
 	// `parseHashTableColumnArg` runs the `elementTypePreserved` COMPARISON with it, so "the name a refusal
 	// PRINTS" and "the name the check COMPARED" are one string BY CONSTRUCTION rather than by three copies of
 	// one expression agreeing. Spelled out at each site, changing one described a different program from the
@@ -52541,7 +52130,7 @@ export type Parser
 	end 'declaredColumnIdentity'
 
 	// ⭐ **MOVE A PARSED KEY INTO A MANAGED-KEY SET (P1.7b String keys).** The `Set` twin of `moveElementIntoContainer`:
-	// the set becomes the key's sole owner (its `__set_decref` walk / dup-drop / remove-drop destroys it), so a
+	// the table becomes the value's sole owner (its own teardown / dup-drop / remove-drop destroys it), so a
 	// managed (String) key is consumed exactly as an array element is — a borrowed String literal is promoted to
 	// an owned copy, an owned value is transferred (bare local poisoned / temp de-listed) — through the SHARED
 	// `moveManagedValueInto`. A trivial int key owns no heap and passes through unchanged. A `Set` key is always
@@ -52568,16 +52157,9 @@ export type Parser
 
 	// --- The `Map` builtin generic: `create` / `upsert` / `contains` / `get` / `count` ---
 
-	// BOTH of a map's column types, gated together at the one door a map is born through, so a program can
-	// never build a table whose key is admissible and whose value is not.
-	function requireMapColumnTypes(giid GenericInstanceId, tok Token) throws ParseError
-		try self.requireHashTableKeyType(giid, containerName: String.from(MapBuiltinBaseName), tok: tok)
-		try self.requireOneWordSlotType(self.signatures.mapValueType(giid), containerName: String.from(MapBuiltinBaseName), columnNoun: HashTableValueColumnNoun, tok: tok)
-	end 'requireMapColumnTypes'
-
 	// ⭐⭐ **A LITERAL'S COLUMNS ARE HELD TO WHOEVER SERVES THE MAP (W41-lit) — the door the retirement
 	// missed.** Every other `Map` door asks its column question through `requireContainerColumnTypes`, whose
-	// `map` arm is `isMapInstance`, so a corpus `Map` reaches none of the builtin's rules and is governed by
+	// `map` arm was `isMapInstance`, so a corpus `Map` reached none of the builtin's rules and is governed by
 	// its own declared `where` clause instead. This door called `requireMapColumnTypes` DIRECTLY and went on
 	// enforcing the retired record's four-name key roster: a user `Hashable`/`Equatable` type was
 	// **`E2015 … a key must be one of int, String, Character, Array`** in a `[k: v]` while the identical key
@@ -52594,14 +52176,13 @@ export type Parser
 	// `name.equals(…)` — so those containers have no second regime to route to, and their construction still
 	// emits the runtime ops their gate describes. The day one of them is listed the way `stdlib/Map.maxon`
 	// was, its `from` door needs exactly this arm and its literal-born values need
-	// `moveMapLiteralColumnValue`'s, or it inherits both halves of W41-lit.
+	// the no-parse-time-move rule `parseMapLiteralBody` now states, or it inherits both halves of W41-lit.
 	//
 	// ⛔ **THIS PARAGRAPH NAMED `isMapBaseName` AS "THE ONLY CONTAINER PREDICATE CARRYING THE SWITCH" AND
 	// LISTED `isSet` AMONG THE BARE ONES — W90 FALSIFIED BOTH HALVES IN THE COMMIT THAT SHIPPED THIS FILE
-	// (found at review).** `isSetBaseName` and `isMapBaseName` are now one shared switch
-	// (`ProgramSignatures.isUnretiredBuiltinBaseName`), and `Set`'s own `from` door DID take this arm
-	// (`parseSetMemberList`'s corpus branch). A count of which siblings are safe is a fact written twice, so
-	// it is stated as a PREDICATE list here rather than as an exclusive claim about one name.
+	// (found at review).** The two were one shared switch, and `Set`'s own `from` door DID take this arm
+	// (`parseSetMemberList`). W105 then deleted the switch entirely — both containers are declared, always —
+	// so what is left is the SECOND half of this door's job, below.
 	//
 	// ⛔⛔ **DROPPING THE ROSTER IS ONLY HALF, BECAUSE A LITERAL IS THE ONE DOOR A MAP IS BORN THROUGH WITH NO
 	// `with (K, V)` TO ANCHOR AN E3017 ON.** `ProgramSignatures.instantiationSites` is built by the token
@@ -52615,57 +52196,30 @@ export type Parser
 	// `implements` clause is recorded when its OWN file is parsed and shv2 orders files only by source path,
 	// so the answer at this cursor depends on which file came first — `checkLiteralInitConformance`'s reason,
 	// one door over, for the identical deferral.
-	function gateMapLiteralColumns(giid GenericInstanceId, tok Token) throws ParseError
-		if self.signatures.isMapInstance(giid) 'synthesizedRecord'
-			try self.requireMapColumnTypes(giid, tok: tok)
-			return
-		end 'synthesizedRecord'
-
+	function gateMapLiteralColumns(giid GenericInstanceId, tok Token)
 		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: tok.line, nameColumn: tok.column, filePath: self.filePath))
 	end 'gateMapLiteralColumns'
 
-	// ⭐⭐ **A `[k: v]` LITERAL'S COLUMN VALUE MOVES IN AT THE PARSE ONLY WHILE THE TABLE *IS* THE SYNTHESIZED
-	// RECORD (W41-lit) — the OWNERSHIP half of the switch `gateMapLiteralColumns` above is the RULE half of.**
-	// A synthesized table takes ownership here, because `__map_upsert` is a runtime call with no signature for
-	// `applyCallerConsume` to read. The corpus `Map.upsert` has one, so the ORDINARY call machinery decides:
-	// it MOVES an owned managed argument at a consuming position, and CO-OWNS a borrowed one with a real
-	// `__mm_retain` (`handleEscapingBorrowFeed`). Doing BOTH is not belt-and-braces, it is a LEAK —
-	// `moveColumnValueIntoTable` drains the value from the statement's pending drops, so the map takes its
-	// reference and the statement then releases nothing.
+	// ⚠⚠ **`moveMapLiteralColumnValue` STOOD HERE AND WAS THE OWNERSHIP HALF OF THE RETIREMENT SWITCH
+	// (W41-lit), GONE WITH IT AT W105.** A SYNTHESIZED table took ownership of a `[k: v]` column at the parse,
+	// because `__map_upsert` was a runtime call with no signature for `applyCallerConsume` to read. The corpus
+	// `Map.upsert` has one, so the ORDINARY call machinery decides: it MOVES an owned managed argument at a
+	// consuming position and CO-OWNS a borrowed one with a real `__mm_retain` (`handleEscapingBorrowFeed`).
 	//
-	// ⚠ **ONLY ONE COLUMN CLASS EVER SHOWED IT, which is why the suite was green over the whole defect.** The
-	// two protocols AGREE wherever the call CONSUMES: an `int` column owns no record, and a `String` column is
-	// `typeArgIsOwned` TRUE, so the ordinary machinery moves exactly what the literal had already moved. An
-	// all-scalar STRUCT answers that question `false` and is BORROWED — and there the drained temporary is a
-	// reference nobody releases (MEASURED: `let m = [1: Pair.create(3, b: 4)]` exited **101** against the
-	// oracle's 1; `specs-shv2/map.md`'s `literal.aggregate-value-column` is that program).
-	//
-	// ⚠ **ASKED OF THE BASE NAME AND NOT OF A giid, because the KEY moves in before the VALUE has been
-	// parsed** — the two-column instance does not exist yet, and the move may not wait for it
-	// (`parseMapLiteralBody`'s ordering contract). It is the same answer `isMapInstance(giid)` gives at the
-	// gate, the create and the upsert: a map literal's base is `Map` by construction.
-	function moveMapLiteralColumnValue(value ValueId, columnType MaxonType, valueStart TokenIndex) returns ValueId throws ParseError
-		if not self.signatures.isMapBaseName(MapBuiltinBaseName) 'theUpsertCallTakesOwnership'
-			return value
-		end 'theUpsertCallTakesOwnership'
+	// ⚠ **DOING BOTH WAS NOT BELT-AND-BRACES, IT WAS A LEAK, and only ONE column class ever showed it.** The
+	// two protocols AGREE wherever the call CONSUMES — an `int` column owns no record, and a `String` column is
+	// `typeArgIsOwned` TRUE — so the suite was green over the whole defect. An all-scalar STRUCT answers that
+	// question `false` and is BORROWED, and there the drained temporary is a reference nobody releases
+	// (MEASURED: `let m = [1: Pair.create(3, b: 4)]` exited **101** against the oracle's 1;
+	// `specs-shv2/map.md`'s `literal.aggregate-value-column` is that program). That case is what holds the
+	// no-parse-time-move rule down now that the switch it lived in has gone.
 
-		return self.moveColumnValueIntoTable(value, columnType: columnType, valueStart: valueStart)
-	end 'moveMapLiteralColumnValue'
-
-	// Emit `__map_create(keyDrop, valueDrop)` for instance `giid`, yielding the empty map record. The record is
-	// zeroed by `__mm_alloc`, so the first `upsert` lazily allocates the four buffers; the two destructor stamps
-	// carry the key's and the value's drop callees (`__str_decref` for a managed column, 0 for a trivial one) so
-	// the map drops what it owns at teardown, at a replaced value and at a redundant duplicate key.
-	// ⭐ **THE EMPTY MAP A LITERAL STARTS FROM — the builtin op, or the corpus type's own `create()` (W41).**
-	// The one place the literal's two representations part company, so the `isMapBaseName` question is asked
-	// once per step rather than once per pair. `ConstructorInstance.instance(giid)` is what re-types the
+	// ⭐ **THE EMPTY MAP A LITERAL STARTS FROM — the corpus type's own `create()` (W41).** It was the one place
+	// the literal's two representations parted company, with `__map_create(keyDrop, valueDrop)` on the other
+	// arm; W105 deleted that runtime and the switch with it. `ConstructorInstance.instance(giid)` is what re-types the
 	// `returns Self` result to THIS instance — the same thing a written `IntIntMap.create()` gets from
 	// `constructorInstanceForBaseName`, so a literal-built map and a hand-built one carry one type.
 	function emitMapLiteralCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
-		if self.signatures.isMapInstance(giid) 'synthesizedRecord'
-			return self.emitMapCreateOp(giid, range: range)
-		end 'synthesizedRecord'
-
 		var args = ValueIdArray.create()
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
@@ -52686,11 +52240,6 @@ export type Parser
 	// synthesized call must spell it exactly as a written `m.upsert(k, value: v)` does or the argument
 	// matcher answers about a parameter the author never named.
 	function emitMapLiteralUpsert(map ValueId, key ValueId, value ValueId, anchor Token, range SourceRange) throws ParseError
-		if self.signatures.isMapInstanceAt(self.tagOf(map), nameId: self.valueNameId(map)) 'synthesizedRecord'
-			self.emitMapUpsert(map, key: key, value: value, range: range)
-			return
-		end 'synthesizedRecord'
-
 		var args = tripleArgs(map, second: key, third: value)
 		var argLabels = emptyArgLabels(args)
 		try argLabels.set(MapUpsertValueArgSlot, value: MapUpsertValueLabel) otherwise panic("emitMapLiteralUpsert: the label column for a three-argument call has no slot {MapUpsertValueArgSlot} — `emptyArgLabels` mints one entry per argument")
@@ -52698,57 +52247,44 @@ export type Parser
 		_ = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: UpsertMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(map), mint: CalleeMint.notMinted)
 	end 'emitMapLiteralUpsert'
 
-	function emitMapCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
-		let keyDrop = self.columnDestroyValue(self.signatures.mapKeyType(giid), range: range)
-		let valueDrop = self.columnDestroyValue(self.signatures.mapValueType(giid), range: range)
-		return self.emitRuntimeCall(MapCreateName, args: pairArgs(keyDrop, second: valueDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
-	end 'emitMapCreateOp'
-
 	// ⭐⭐ **`[k0: v0, k1: v1, …]` — A MAP LITERAL.** The cursor sits on the `:` after the first key, which
-	// `parseArrayLiteral` has already parsed and handed over. It desugars to `__map_create(keyDrop, valueDrop)`
-	// plus one `__map_upsert` per pair — the SAME two calls a `MapAlias.create()` + `upsert` program emits, so
-	// a literal-built map and a hand-built one are one representation and one instance.
+	// `parseArrayLiteral` has already parsed and handed over. It desugars to `Map.create()` plus one
+	// `Map.upsert` per pair — the SAME two calls a `MapAlias.create()` + `upsert` program emits, so a
+	// literal-built map and a hand-built one are one representation and one instance.
 	//
 	// ⚠ **THE FIRST PAIR FIXES BOTH COLUMNS, so the record cannot be created until both halves are parsed** —
 	// the create stamps the two per-column destructors, and those are read off the column TYPES. That is
 	// `parseArrayLiteral`'s managed path exactly, one column wider.
 	//
-	// ⚠⚠ **EACH HALF OF THE FIRST PAIR MOVES IN THE INSTANT IT IS PARSED, BEFORE THE NEXT FENCING TOKEN IS
-	// CONSUMED.** `rhsWasBareLocalReference` reads `[valueStart, self.pos)` to decide whether a managed column
-	// value is a bare local to POISON (`parseHashTableColumnArg`'s ordering contract), so moving the key in
-	// after the `:` — let alone after the whole value expression — would widen that window across another
-	// expression entirely and silently mis-decide the move. A column's TYPE is settled by the value alone, so
-	// each move-in has everything it needs at that point; only the two-column INSTANCE has to wait.
-	function parseMapLiteralBody(func IrFunction, firstKey ValueId, firstKeyStart TokenIndex, firstKeyTok Token, range SourceRange) returns ValueId throws ParseError
+	// ⚠ **NO HALF OF A PAIR MOVES IN AT THE PARSE, AND THAT IS THE RULE THE DELETED `moveMapLiteralColumnValue`
+	// LEAVES BEHIND (W105).** The desugared `Map.upsert` declares both parameters, so the ordinary call
+	// machinery decides each column's ownership; a second, parse-time move would drain the value from the
+	// statement's pending drops and leak. See the note above that function's grave for the measured case.
+	function parseMapLiteralBody(func IrFunction, firstKey ValueId, firstKeyTok Token, range SourceRange) returns ValueId throws ParseError
 		let keyType = try self.literalColumnTypeFor(firstKey, literalKind: MapLiteralSubject, columnNoun: HashTableKeyColumnNoun, valueTok: firstKeyTok)
-		let storedKey = try self.moveMapLiteralColumnValue(firstKey, columnType: keyType, valueStart: firstKeyStart)
 
 		try self.consume(TokenKind.colon)
 		self.skipNewlines()
 		let firstValueTok = self.current()
-		let firstValueStart = self.pos
 		let firstValue = try self.parseExpression(func, block: self.currentBlock)
 		let valueType = try self.literalColumnTypeFor(firstValue, literalKind: MapLiteralSubject, columnNoun: HashTableValueColumnNoun, valueTok: firstValueTok)
-		let storedValue = try self.moveMapLiteralColumnValue(firstValue, columnType: valueType, valueStart: firstValueStart)
 
 		let giid = self.signatures.builtinInstanceForColumns(MapBuiltinBaseName, key: keyType, value: valueType)
 		// The literal is the one door a map can be born through without a `with (K, V)` annotation, so it owes
 		// the same column gate the annotated door owes — asked BEFORE the create, so a refused literal emits no op.
-		try self.gateMapLiteralColumns(giid, tok: firstKeyTok)
+		self.gateMapLiteralColumns(giid, tok: firstKeyTok)
 
-		// ⭐⭐ **ONCE `Map` IS THE CORPUS TYPE, THE LITERAL CALLS ITS METHODS (W41).** The desugar is
-		// UNCHANGED in shape — an empty map plus one insert-or-replace per pair — and changes only in what
-		// those two steps ARE: `__map_create`/`__map_upsert` while the record is synthesized,
-		// `Map.create`/`Map.upsert` once `stdlib/Map.maxon` is listed and `isMapBaseName` has retired the
-		// builtin. Anything else would be a literal-built map and a hand-built one that are not the same
-		// representation, which is the property this function's header has always claimed.
+		// ⭐⭐ **THE LITERAL CALLS THE CORPUS TYPE'S OWN METHODS (W41).** The desugar is an empty map plus one
+		// insert-or-replace per pair, so a literal-built map and a hand-built one are one representation and one
+		// instance — the property this function's header has always claimed.
 		//
-		// ⚠ **MEASURED, and it is why the branch exists at all**: with the corpus type live and this door
-		// still emitting the builtin ops, `let m = [1: 10]` built a `MapRecordBytes` fused record and then
-		// dispatched `m.count()` into the corpus body that reads six declared fields — **0xC0000005 on 32 of
-		// `map.md`'s cases**, a green compile every time.
+		// ⚠ **MEASURED, and it is why the W41 branch existed at all**: with the corpus type live and this door
+		// still emitting the builtin ops, `let m = [1: 10]` built a fused hash-table record and then dispatched
+		// `m.count()` into the corpus body that reads six declared fields — **0xC0000005 on 32 of `map.md`'s
+		// cases**, a green compile every time. Both builtin emitters are deleted at W105, so the wrong half is
+		// no longer spellable.
 		let map = try self.emitMapLiteralCreate(giid, anchor: firstKeyTok, range: range)
-		try self.emitMapLiteralUpsert(map, key: storedKey, value: storedValue, anchor: firstKeyTok, range: range)
+		try self.emitMapLiteralUpsert(map, key: firstKey, value: firstValue, anchor: firstKeyTok, range: range)
 
 		self.skipNewlines()
 		while self.at(TokenKind.comma) 'morePairs'
@@ -52758,14 +52294,12 @@ export type Parser
 			// `requireArrayLiteralElementMatches` — and rides the ordinary column-argument door, which
 			// characterizes a lone literal, refuses a mismatched tag and moves the value in. A mixed literal is
 			// therefore refused by the same sentence a mismatched `upsert` argument is.
-			// ⚠ `consume` is the FIRST PAIR's question one door along, and it is asked with the giid in hand
-			// rather than off the base name: the table takes ownership at the parse only while it IS the
-			// synthesized record, else the desugared `Map.upsert` call takes it — see `moveMapLiteralColumnValue`.
-			let takesOwnershipAtTheParse = self.signatures.isMapInstance(giid)
-			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: takesOwnershipAtTheParse)
+			// ⚠ `consume: false` is the FIRST PAIR's answer one door along: the desugared `Map.upsert` declares
+			// both parameters, so the call machinery takes each column and a parse-time move would leak.
+			let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: false)
 			try self.consume(TokenKind.colon)
 			self.skipNewlines()
-			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: takesOwnershipAtTheParse)
+			let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: false)
 			try self.emitMapLiteralUpsert(map, key: key, value: value, anchor: firstKeyTok, range: range)
 			self.skipNewlines()
 		end 'morePairs'
@@ -52775,192 +52309,19 @@ export type Parser
 		return map
 	end 'parseMapLiteralBody'
 
-	// The `__map_upsert(map, key, value)` call itself — ONE home, so the `upsert` METHOD and the map LITERAL
-	// cannot come to disagree about the argument order or about the call being void. The key's two hidden
-	// witness-table arguments are appended a tier down (`LowerMaxonToStd.appendSetWitnessArgs`).
-	function emitMapUpsert(map ValueId, key ValueId, value ValueId, range SourceRange)
-		_ = self.emitRuntimeCall(MapUpsertName, args: threeArgs(map, second: key, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-	end 'emitMapUpsert'
-
-	// ⭐⭐ **A MAP'S ENTRIES AS AN `Array with (Key, Value)` — THE ONE THING BOTH `for … in <map>` AND
-	// `<map>.map(f)` ARE BUILT ON.** A `Map` stores no element: its keys and values sit in two PARALLEL
-	// buffers, so the `(Key, Value)` pair a reader wants does not exist until something builds it. This mints
-	// the pair TYPE (an ordinary synthesized tuple — `internTupleLayout`, so the drop cascade and the layout
-	// registration are the ones every tuple gets), creates the result array, and hands both to the runtime
-	// walk that fills it. See `MapRuntime.MapEntriesName` for why materializing beats a cursor here.
+	// ⚠⚠ **THE WHOLE BUILTIN `Map` SURFACE STOOD HERE AND WENT WITH THE `__map_*` RUNTIME (W105):**
+	// `emitMapUpsert` (the one home of the `__map_upsert(map, key, value)` call), `emitMapEntriesArray` and its
+	// `columnCloneValue` stamp (the `(Key, Value)` pair materialization both `for … in <map>` and `<map>.map(f)`
+	// were built on), `dispatchMapMethod` (`count`/`contains`/`get`/`remove`/`upsert`/`insert`/`map` over the
+	// synthesized record) and the two argument lists it read them through.
 	//
-	// The four trailing arguments are what the walk cannot derive for itself: a tuple's slots are not
-	// unconditionally two machine words, so the box SIZE and the VALUE slot's displacement are read off the
-	// layout, and each column's `(box) -> newBox` cloner is the one `SignatureIndex.managedFieldCloneStrategy`
-	// names (0 for a trivial column). `emitMaterializedFill` supplies the `(source, dest)` prefix every
-	// push-only runtime walk takes, and enrols the ARRAY as this statement's owned temporary.
-	function emitMapEntriesArray(giid GenericInstanceId, map ValueId, anchor Token, range SourceRange) returns ValueId throws ParseError
-		var pairElements = MaxonTypeArray.create()
-		pairElements.push(self.signatures.mapKeyType(giid))
-		pairElements.push(self.signatures.mapValueType(giid))
-		let pair = try self.internTupleLayout(pairElements, anchor: anchor)
-
-		var walkArgs = ValueIdArray.create()
-		walkArgs.push(self.emitLiteral(pair.sizeBytes() as ParsedInt, valueType: MaxonType.integer, range: range))
-		walkArgs.push(self.emitLiteral(pair.offsetOfField(MapPairValueFieldIndex) as ParsedInt, valueType: MaxonType.integer, range: range))
-		walkArgs.push(try self.columnCloneValue(self.signatures.mapKeyType(giid), anchor: anchor, range: range))
-		walkArgs.push(try self.columnCloneValue(self.signatures.mapValueType(giid), anchor: anchor, range: range))
-
-		return try self.emitMaterializedFill(self.signatures.builtinInstanceForNamedElement(self.signatures.arrayRecordBaseName(), element: pair.name), callee: MapEntriesName, source: map, extraArgs: walkArgs, range: range)
-	end 'emitMapEntriesArray'
-
-	// ⭐ **THE ADDRESS OF A COLUMN'S DEEP-CLONE CALLEE, OR 0 FOR A TRIVIAL COLUMN — `columnDestroyValue`'s
-	// DUAL**, and it is stamped into a call rather than into a record because only `__map_entries` needs it:
-	// a table OWNS what it stores and therefore always needs a destructor, but it CLONES only when something
-	// asks it for a second owner. Written beside its twin so the drop and the clone of one column are chosen
-	// by one reading of that column's type.
+	// A `Map` is a declared generic now: every one of those members is `stdlib/Map.maxon`'s own body reached
+	// through the ordinary method path, `Map.get`/`Map.insert` declare `throws MapError` themselves, and the
+	// entry pair is `MapIterator.current()`'s — so `for … in` and `map` both take the `Iterable` cursor route
+	// (`materializeIterableIterationSource`) rather than a materialized array.
 	//
-	// An unsupported strategy is a positioned refusal rather than a panic: `managedFieldCloneStrategy` answers
-	// `unsupported` for a column shv2 cannot deep-clone, and a `Map` column is gated to int / String /
-	// Character by `requireMapColumnTypes` — so this arm is unreachable through today's doors, and it says so
-	// in the one place that would learn otherwise if a wider column type were ever admitted.
-	function columnCloneValue(columnType MaxonType, anchor Token, range SourceRange) returns ValueId throws ParseError
-		if not self.signatures.slotTypeIsManaged(columnType) 'trivial'
-			return self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
-		end 'trivial'
-
-		match managedFieldCloneStrategy(self.signatures, typeNames: self.artifact.typeNames, fieldType: columnType) 'strategy'
-			direct(callee) then return self.emitRuntimeFuncAddr(callee, range: range)
-			managedArray to unsupported then break 'strategy'
-		end 'strategy'
-
-		throw ParseError.unsupported("iterating a `Map` whose {typeTagName(maxonTypeTag(columnType))} column has no deep clone — every entry is handed out as an owned `(key, value)` pair, so both columns must be cloneable into it", line: anchor.line, column: anchor.column)
-	end 'columnCloneValue'
-
-	// ⭐ **DISPATCH A BUILTIN `Map` METHOD** — cursor on the method NAME, `map` the (borrowed) receiver record.
-	// `count` returns the entry count, `contains` and `remove` a `bool`; `get` returns the VALUE and THROWS
-	// `MapError.keyNotFound`; `upsert` is a VOID mutator (refused in value position by
-	// `requireVoidMethodIsStatement`) that returns the receiver — what the statement still denotes, like
-	// `emitArrayVoidCall` — and `insert` is that same mutator under a refusal, THROWING
-	// `MapError.keyAlreadyExists` on a duplicate.
-	//
-	// Every key-touching arm carries the KEY's witness tables, appended by `LowerMaxonToStd`; the parser
-	// passes only the receiver, the key and (for the two entry writers) the value. Ownership splits exactly as
-	// the `Set` dispatcher's does: `upsert`/`insert` MOVE a managed key AND a managed value in (the map
-	// becomes their sole owner, or — when `insert` refuses — drops both), while `contains`/`get`/`remove`
-	// BORROW the key for the compare.
-	//
-	// ⭐ **THE ROSTER GATE IS ASKED FIRST**, as it is on every other surface that carries one: it is the
-	// question every other refusal about the call presupposes, and it is what stopped the old hand-written
-	// sentence — which still said this dispatch served six names — from having to be edited by hand here.
-	function dispatchMapMethod(func IrFunction, map ValueId, resultUsed bool, immutableReceiverName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
-		let methodTok = try self.consume(TokenKind.identifier)
-		let roster = try self.requireSurfaceMember(MemberSurface.map, typeName: MapBuiltinBaseName, methodTok: methodTok)
-		let range = SourceRange.ofToken(methodTok)
-		let giid = self.valueNameId(map)
-
-		// `receiverStorage: NoParamPositions` for the reason the `String` and `Set` dispatchers state: a map
-		// write cannot free an ARRAY element, which is the only borrow E3070 tracks.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: mapMethodMutatesReceiver(methodTok.value))
-
-		if methodTok.value.equals(CountMethod) 'count'
-			try self.consumeEmptyArgList()
-			return self.emitRuntimeCall(MapCountName, args: singletonArgs(map), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-		end 'count'
-
-		if methodTok.value.equals(ContainsMethod) 'contains'
-			let key = try self.parseMapKeyArgList(func, giid: giid)
-			return self.emitRuntimeCall(MapContainsName, args: pairArgs(map, second: key), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-		end 'contains'
-
-		// `get` is a THROWING accessor: an ordinary `call` here, which the enclosing `try` rewrites into a
-		// `tryCall` (`rewriteLastCallToTryCall`) — the same shape every throwing `Array` accessor takes. Its
-		// result is a BORROW of the stored value: the map keeps owning it, so it is neither tracked owned nor
-		// dropped by the caller, exactly as `__managed_get`'s element read is.
-		if methodTok.value.equals(GetMethod) 'get'
-			let key = try self.parseMapKeyArgList(func, giid: giid)
-			let resultType = self.containerSlotValueType(self.signatures.mapValueType(giid))
-			return self.emitRuntimeCall(MapGetName, args: pairArgs(map, second: key), resultTag: maxonTypeTag(resultType), resultNameId: typeNameIdOf(resultType), range: range)
-		end 'get'
-
-		// `remove(key)` answers a bool and BORROWS the key for the compare (its owned temp drops at statement
-		// end) — the `Set` dispatcher's arm exactly. What is one column wider is at the RUNTIME end, where a
-		// map also drops the VALUE it vacates; the surface is identical, which is why `__map_remove` and
-		// `__set_remove` are one graph (`HashTableRuntime.buildHtRemove`).
-		if methodTok.value.equals(RemoveMethod) 'remove'
-			let key = try self.parseMapKeyArgList(func, giid: giid)
-			return self.emitRuntimeCall(MapRemoveName, args: pairArgs(map, second: key), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-		end 'remove'
-
-		// `upsert` is a non-throwing VOID mutator, so a value-position call is refused — from INSIDE the arm its
-		// name matched, which is the shared check's whole scoping (`requireVoidMethodIsStatement`).
-		if methodTok.value.equals(UpsertMethod) 'upsert'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			let entry = try self.parseMapEntryArgList(func, giid: giid, methodTok: methodTok)
-			self.emitMapUpsert(map, key: entry.key, value: entry.value, range: range)
-			return map
-		end 'upsert'
-
-		// ⭐ **`insert` IS `upsert` UNDER A REFUSAL** — the same two columns, moved in the same way, and a
-		// duplicate key throws `MapError.keyAlreadyExists` instead of replacing the stored value. So it is a
-		// THROWING void mutator: `requireVoidMethodIsStatement` for the arm above's reason, and the enclosing
-		// `try` rewrites the call into a `tryCall` (`rewriteLastCallToTryCall`) exactly as it does for `get`.
-		//
-		// ⚠ **IT GOES THROUGH `emitRuntimeCall` AND DOES NOT RETURN THE RECEIVER, WHICH `upsert` DOES.** That
-		// is `buildManagedSetLength`'s measured rule (see the `setLength`/`setByte` arms): a throwing call that
-		// yields the receiver makes the TRY's value an owned managed record, which the ok/error reconciliation
-		// then acts on — an access violation, not a diagnostic.
-		if methodTok.value.equals(InsertMethod) 'insert'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			let entry = try self.parseMapEntryArgList(func, giid: giid, methodTok: methodTok)
-			return self.emitRuntimeCall(MapInsertName, args: threeArgs(map, second: entry.key, third: entry.value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		end 'insert'
-
-		// ⭐ **`map(transform)` YIELDS AN ARRAY OF `(Key, Value)` PAIRS** — `stdlib/Interfaces.maxon:187`'s
-		// `Array with Element` for every `Iterable`, where a `Map`'s Element IS its entry pair. So it is
-		// literally `__managed_map` over `emitMapEntriesArray`'s materialization: the entry walk is the one thing a
-		// `Map` needs that an `Array` does not, and once it has run there is no second `map` to write. The
-		// intermediate entries array is this statement's owned temporary and drops at its end, having handed
-		// each pair a co-owner (the transform's own result) on the way through.
-		if methodTok.value.equals(MapMethod) 'map'
-			let entries = try self.emitMapEntriesArray(giid, map: map, anchor: methodTok, range: range)
-			return try self.parseContainerMap(func, container: entries, resultGiid: self.valueNameId(entries), callee: ManagedMapName, range: range)
-		end 'map'
-
-		let drift = rosterDriftMessage("dispatchMapMethod", member: methodTok.value, roster: roster, rosterFuncs: "`mapSurfaceMemberNames`")
-		panic("{drift}")
-	end 'dispatchMapMethod'
-
-	// ⭐ **`( key, value: v )` — THE ENTRY-WRITING ARGUMENT LIST BOTH `upsert` AND `insert` TAKE.** BOTH columns
-	// are consumed: the map becomes the sole owner of a managed key and of a managed value alike.
-	// `ArrayValueLabel` is the same `value:` label the two-argument `Array` mutators give their value argument
-	// — one label, three containers. The two methods differ in what the RUNTIME does with a duplicate and in
-	// nothing the parser can see, so the fencing tokens, the label check and the two move-ins are written once.
-	//
-	// ⚠ **THE FENCING TOKENS ARE CONSUMED HERE AND NOT INSIDE `parseHashTableColumnArg`** — that function's
-	// ordering contract: each column moves in BEFORE the `,`/`)` that fences it is consumed, because
-	// `rhsWasBareLocalReference` reads `[valueStart, self.pos)` and a token consumed first widens that window
-	// and silently mis-decides the move.
-	//
-	// The refusal names the method the AUTHOR wrote rather than a fixed `upsert`, for the reason D12 states
-	// about every builtin diagnostic: a reader who typed `insert` must not be corrected about `upsert`.
-	function parseMapEntryArgList(func IrFunction, giid GenericInstanceId, methodTok Token) returns MapEntryArgs throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: true)
-		try self.consume(TokenKind.comma)
-		let labelTok = try self.consumeNameToken(NamePosition.declaration)
-		if not labelTok.value.equals(ArrayValueLabel) 'wrongLabel'
-			throw ParseError.unsupported("`Map.{String.from(methodTok.value)}` names its second argument '{String.from(ArrayValueLabel)}:' — got '{String.from(labelTok.value)}:'", line: labelTok.line, column: labelTok.column)
-		end 'wrongLabel'
-		try self.consume(TokenKind.colon)
-		let value = try self.parseMapColumnValue(func, giid: giid, position: MapValueArgPosition, columnNoun: HashTableValueColumnNoun, consume: true)
-		try self.consume(TokenKind.rightParen)
-		return MapEntryArgs.create(key, value: value)
-	end 'parseMapEntryArgList'
-
-	// `( key )` — the argument list of `contains` / `get`, whose key is BORROWED for the compare (its owned temp
-	// drops at statement end). The `Set` twin is `parseSetKeyArg(consume: false)`.
-	function parseMapKeyArgList(func IrFunction, giid GenericInstanceId) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let key = try self.parseMapColumnValue(func, giid: giid, position: HashTableKeyArgPosition, columnNoun: HashTableKeyColumnNoun, consume: false)
-		try self.consume(TokenKind.rightParen)
-		return key
-	end 'parseMapKeyArgList'
+	// ⭐ What did NOT go with them is `parseMapColumnValue` below: `parseMapLiteralBody` still parses a `[k: v]`
+	// literal's columns, and it is the one door a map is born through with no `with (K, V)` to anchor on.
 
 	// ONE `Map` column argument — the `Set` key's twin, and it rides the same `parseHashTableColumnArg`: this
 	// end resolves WHICH column (key or value) and composes the `Map`'s own refusal subject, and nothing else.
@@ -54572,14 +53933,6 @@ export type Parser
 			return self.stringIndexSurfaceRoster
 		end 'stringIndexSurface'
 
-		if surface == MemberSurface.map 'mapSurface'
-			if self.mapSurfaceRoster is sharedEmptySurfaceRoster 'firstMapCallInThisFile'
-				self.mapSurfaceRoster = mapSurfaceMemberNames()
-			end 'firstMapCallInThisFile'
-
-			return self.mapSurfaceRoster
-		end 'mapSurface'
-
 		if surface == MemberSurface.cursor 'cursorSurface'
 			if self.cursorSurfaceRoster is sharedEmptySurfaceRoster 'firstCursorCallInThisFile'
 				self.cursorSurfaceRoster = cursorSurfaceMemberNames()
@@ -55535,7 +54888,7 @@ export type Parser
 	//
 	// ⚠ **IT IS SHARED BY `String`, `Array` AND `Set` BECAUSE THE THREE HAD ALREADY DRIFTED APART.**
 	// `parseStringAppend` asked `not binding.mutable`, `dispatchArrayMethod` asked `mutable or
-	// isParameter`, and `dispatchSetMethod` asked NOTHING — three premises for one rule, and two of them
+	// isParameter`, and the then-existing `dispatchSetMethod` asked NOTHING — three premises for one rule, and two of them
 	// disagreed with the runnable oracle, MEASURED:
 	//
 	//   • `function grow(s String) … s.append("XY")` — the oracle ACCEPTS it (a parameter is a borrowed
@@ -55568,7 +54921,7 @@ export type Parser
 	// function. Refusing the write and recording it are the same question asked of the same receiver at the
 	// same instant — `mutatesReceiver` is the per-container authority's answer and is read ONCE — so they
 	// are answered together rather than by two passes that would then have to agree for ever. A summary
-	// built by re-reading the LOWERED callee names (`__managed_push`, `__managed_append`, `__set_insert`) would be
+	// built by re-reading the LOWERED callee names (`__managed_push`, `__managed_append`, `__list_append`) would be
 	// precisely that second list, three tiers away from the one the parser already consults.
 	//
 	// ⭐⭐ **IT RECORDS TWO MASKS, BECAUSE ONE WRITE ANSWERS TWO QUESTIONS AND shv2 ANSWERS THEM
@@ -61682,7 +61035,7 @@ export type Parser
 		return members
 	end 'evalConstSetMembers'
 
-	// ⭐ **ONE MEMBER, ADMITTED BY THE SET'S KEY TYPE** — the folding twin of `parseSetKeyArg`, which holds a
+	// ⭐ **ONE MEMBER, ADMITTED BY THE SET'S KEY TYPE** — the folding twin of `parseSetMemberList`, which holds a
 	// body's `insert` argument to the same type off the same `setKeyType`. Without it a `Set with String`
 	// declared from `[1, 2]` would build a set whose slots hold integers and whose teardown walk calls
 	// `__str_decref` on them.

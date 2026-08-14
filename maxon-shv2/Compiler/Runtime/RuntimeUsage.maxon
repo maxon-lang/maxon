@@ -110,20 +110,12 @@ export type RuntimeUsage
 	// prefix test (`MmRuntime.isRuntimeCallee`) decides `usesHeap`, and one spelling would make every
 	// heap-touching program carry this runtime too. See `ManagedMemoryRuntime`'s header.
 	export var usesManagedMemory as bool
-	// The program touches a `Set` (P1.7b slice A). Any `__set_*` runtime call turns this on — and, like
-	// `usesManagedMemory`, turns on `usesHeap` too, because the set helpers `__mm_alloc`/`__mm_free` the record and
-	// its three external buffers inside their Std bodies, which this Maxon-module scan cannot see. It drives
-	// `installSetRuntime`. Its own bit so a set-free program stays golden-neutral (installs nothing).
-	export var usesSet as bool
-	// The program touches a `Map`. Any `__map_*` runtime call turns this on — and, like `usesSet`, turns on
-	// `usesHeap` too, because the map helpers `__mm_alloc`/`__mm_free` the record and its FOUR external
-	// buffers inside their Std bodies, which this Maxon-module scan cannot see. It drives `installMapRuntime`.
-	// Its OWN bit and NOT `usesSet`, even though the two runtimes are built from one shared graph
-	// (`HashTableRuntime`): the graph is shared at BUILD time, but the installed functions are two disjoint
-	// name sets, so a set-only program must not carry `__map_*` and a map-only program must not carry
-	// `__set_*`.
-	export var usesMap as bool
-	// The program touches a `List`. Any `__list_*` call turns this on — and, like `usesSet`, turns on
+	// ⚠ **`usesSet` AND `usesMap` STOOD HERE AND WENT WITH THE RUNTIMES THEY DROVE (W105).** Each turned on
+	// its container's whole install and `usesHeap` beside it; both installs are deleted, so the bits had no
+	// consumer left. The `usesHeap` half survives where it was actually needed —
+	// `closeCharacterSetNeeds` states it in its own arms rather than borrowing `usesSet`'s, which is what
+	// makes their removal free rather than an under-declaration.
+	// The program touches a `List`. Any `__list_*` call turns this on — and, like `usesManagedMemory`, turns on
 	// `usesHeap` too, because the list helpers `__mm_alloc` the chain header and every node and `__mm_free`
 	// them again inside their Std bodies, which this Maxon-module scan cannot see. It drives
 	// `installListRuntime`. Its OWN bit so a list-free program stays golden-neutral (installs nothing).
@@ -298,14 +290,14 @@ export type RuntimeUsage
 	// Each is set by `recordCharacterSetUsage` from whichever entry point the module actually names, and
 	// `__cs_contains` in turn declares the member probe and `__ucd_cat` through `closeCharacterSetNeeds`.
 	//
-	// ⚠ **`usesSet` IS NOW A CONSERVATIVE TERM RATHER THAN A DESCRIPTION, AND SAYING SO IS THE POINT (found
-	// at review).** This line read *"declares `__set_contains`"*, which is true only while `Set` is
-	// SYNTHESIZED; once `stdlib/Set.maxon` is listed (W90) the probe is the corpus `Set.contains` and the drop
-	// is a `__destruct_Set_Character` cascade, so neither body names a `__set_*` entry. The bit STAYS because
-	// `closeCharacterSetNeeds` is a `RuntimeUsage`-only closure with no `ProgramSignatures` in reach to ask
-	// which regime is live, and over-declaring can only install bodies dead-function elimination then drops —
-	// MEASURED: `string-trim/trim-whitespace-both`'s golden contains ZERO `__set_` symbols. Under-declaring
-	// would be a `resolveCallFixups` panic, so the conservative direction is the correct one to be stuck on.
+	// ⚠ **A `usesSet` FEED STOOD IN THAT CLOSURE AND IS GONE WITH THE RUNTIME IT DROVE (W105).** It was kept
+	// deliberately at W90's review as a CONSERVATIVE term — this closure has no `ProgramSignatures` in reach
+	// to ask which regime served the member set, over-declaring only installed bodies DFE then dropped, and
+	// under-declaring would have been a `resolveCallFixups` panic. With the synthesized runtime deleted there
+	// is no regime to be conservative ABOUT: the probe is the corpus `Set.contains` and the drop a
+	// `__destruct_Set_Character` cascade, both ordinary Maxon call edges the reachability walk finds. What
+	// the bit carried BESIDE itself — `usesHeap` — is stated by the closure in its own right, which is the
+	// half that had to survive.
 	//
 	// ⚠ A FOURTH, `usesStrTrim`, went at W49 wave 4 with the three trims, which are `stdlib/String.maxon`'s
 	// now. It was the one bit here that reached into all THREE sibling families, which is what fixed this
@@ -341,7 +333,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesSet: false, usesMap: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -578,25 +570,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesManagedMemory = true
 		usage.usesHeap = true
 	end 'array'
-	// Any `__set_*` call carries the whole set runtime, and the heap under it: `__set_create`/`__set_grow`
-	// `__mm_alloc` the record and its three buffers, `__set_decref` `__mm_free`s them — none of which this
-	// Maxon-module scan sees, since those calls live in the synthesized Std bodies. So a single reference
-	// declares both bits, exactly as the `__managed_*` arm above does (P1.7b slice A).
-	if isSetRuntimeCallee(callee) 'set'
-		usage.usesSet = true
-		usage.usesHeap = true
-	end 'set'
-	// Any `__map_*` call carries the whole map runtime, and the heap under it — the `__set_*` arm above, one
-	// column wider: `__map_create`/`__map_grow` `__mm_alloc` the record and its FOUR buffers and
-	// `__map_decref` `__mm_free`s them, none of which this Maxon-module scan sees. It is a SEPARATE arm rather
-	// than a widened prefix test because the two runtimes install disjoint name sets — see `usesMap`.
-	if isMapRuntimeCallee(callee) 'map'
-		usage.usesMap = true
-		usage.usesHeap = true
-	end 'map'
-	// Any `__list_*` call carries the whole list runtime, and the heap under it — the `__set_*` arm above over
-	// a CHAIN instead of a table: `__list_create` and every insertion `__mm_alloc` (the header, then one node
-	// each) and `__list_decref` `__mm_free`s all of them, none of which this Maxon-module scan sees.
+	// ⚠ **A `__set_*` ARM AND A `__map_*` ARM STOOD HERE UNTIL W105**, each declaring its container's install
+	// plus the heap under it. Both runtimes are deleted and no lowering path can mint either prefix, so the
+	// arms could only ever have answered false — the shape `isStringIndexRuntimeCallee` left in at W49.
+	// Any `__list_*` call carries the whole list runtime, and the heap under it — the `__managed_*` arm above
+	// over a CHAIN instead of a buffer: `__list_create` and every insertion `__mm_alloc` (the header, then one
+	// node each) and `__list_decref` `__mm_free`s all of them, none of which this Maxon-module scan sees.
 	if isListRuntimeCallee(callee) 'list'
 		usage.usesList = true
 		usage.usesHeap = true
@@ -741,20 +720,18 @@ end 'recordCharacterSetUsage'
 // ordinary Maxon call edge the reachability walk finds for itself, and a declared list of them could only go
 // stale. Its `usesCharSetContains` feed is why the `probes` arm below must still run after it did.
 function closeCharacterSetNeeds(usage RuntimeUsage)
-	// `__cs_contains` probes the member set, decodes the character's first codepoint, and classifies it.
-	if usage.usesCharSetContains 'probes'
-		usage.usesSet = true
+	// ⭐ **ALL THREE ENTRY POINTS TOUCH THE HEAP, SO THE HEAP IS ONE ARM AND NOT THREE (W105).** `__cs_make`
+	// is one `__mm_alloc`; `__cs_decref` releases the member set and `__mm_free`s the box; `__cs_contains`
+	// probes a heap-backed `Set with Character`. The three arms that used to say so separately each also set
+	// `usesSet`, which is what made them look different — with that bit gone they were one fact written
+	// three times.
+	if usesCharacterSets(usage) 'everyEntryPointAllocatesOrFrees'
 		usage.usesHeap = true
+	end 'everyEntryPointAllocatesOrFrees'
+	// Only the PROBE classifies: it decodes the character's first codepoint and reads the UCD table.
+	if usage.usesCharSetContains 'classifies'
 		usage.usesUcdCategory = true
-	end 'probes'
-	// The box is one `__mm_alloc`; its drop releases the member set and reclaims the box.
-	if usage.usesCharSetMake 'allocatesABox'
-		usage.usesHeap = true
-	end 'allocatesABox'
-	if usage.usesCharSetDecref 'dropsASet'
-		usage.usesSet = true
-		usage.usesHeap = true
-	end 'dropsASet'
+	end 'classifies'
 end 'closeCharacterSetNeeds'
 
 // ⭐ The P1.8 Slice B grapheme family's arm of the callee → usage-bit map — the `recordStringMethodUsage`

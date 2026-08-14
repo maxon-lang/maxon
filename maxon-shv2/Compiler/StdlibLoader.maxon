@@ -1515,17 +1515,19 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	try listWhitelistedModule(stdlibDir, relative: "helpers/string/views.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "Character.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "String.maxon", into: listed)
-	// ⭐⭐ **`stdlib/Map.maxon` — AND IT RETIRES THE SYNTHESIZED `Map`, WHICH IS WHY THE TWO ARE ONE CHANGE.**
+	// ⭐⭐ **`stdlib/Map.maxon` — AND IT RETIRED THE SYNTHESIZED `Map`, WHICH IS WHY THE TWO WERE ONE CHANGE.**
 	// Listing it while the builtin still shadowed would have loaded a `type Map` no call site could reach —
-	// `Sleep.maxon`'s defect exactly, and this file's own rule names it. `ProgramSignatures.isMapBaseName`
-	// now answers FALSE once a `Map` is declared, so this line is what makes the corpus type the real one.
+	// `Sleep.maxon`'s defect exactly, and this file's own rule names it. W41 added the shared retirement
+	// switch so a DECLARED base won every query; W105 then deleted the synthesized regime outright, so this
+	// line is no longer merely what makes the corpus type the real one — it is what makes `Map` EXIST.
 	try listWhitelistedModule(stdlibDir, relative: "Map.maxon", into: listed)
 	// ⭐⭐ **`stdlib/Set.maxon` — THE HASH TABLE'S OTHER HALF, AND THE SAME ONE CHANGE (W90).** Everything the
 	// entry above says applies here word for word, through the SHARED switch
 	// (`ProgramSignatures.isUnretiredBuiltinBaseName`): listing the module while the builtin still shadowed
 	// buys NOTHING — MEASURED, with `count()` rewritten to `return count + 100` the program still answered
-	// **2** and the executable was byte-identical — because every `Set` query routes through `isSetBaseName`.
-	// The listing plus the switch is the retirement, and the same sabotage then answers **102**.
+	// **2** and the executable was byte-identical — because every `Set` query routed through the switch.
+	// The listing plus the switch was the retirement, and the same sabotage then answered **102**. W105 deleted
+	// the switch and the `__set_*` runtime behind it, so this line is now what makes `Set` EXIST.
 	//
 	// ⚠ **IT CARRIES ONE OBLIGATION `Map` DID NOT, AND IT IS WHY THIS ENTRY WAS NOT TAKEN WITH `Map`'s.**
 	// `CharacterSet` OWNS a `Set with Character` and its three synthesized `__cs_*` bodies BUILD, DROP and
@@ -1913,45 +1915,15 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// bytes**. The two String-initialized `var`s cost a program that never spells `Expect` nothing at all.
 	try listWhitelistedModule(stdlibDir, relative: "Testing.maxon", into: listed)
 
-	//     ⛔⛔ **`stdlib/Set.maxon` IS NOT LISTED, AND THE REASON IS A MEASUREMENT RATHER THAN A BLOCKER
-	//     (W63, BATCH36).** Its last DIAGNOSTIC blocker died with `W61` — it probes `E3001` and nothing
-	//     else, and the injection control fires (`NoSuchType.definitelyUndefined` in `Set.count()`'s body
-	//     answers `E3001` + `E3004`), so unlike the six `helpers/sort/*` files its readiness is real. **The
-	//     entry was ADDED, BUILT GREEN, AND WITHDRAWN**, because green is exactly what this hazard looks
-	//     like.
-	//
-	//     `Set` is a SYNTHESIZED builtin (`SignatureIndex.SetBuiltinBaseName`, P1.7b slice A): no file
-	//     declares `type Set uses Element`, and every `genericInstance*` query special-cases a `Set`
-	//     instance the way it does an `Array` one. So listing the module puts a SECOND declaration of the
-	//     name into the program, and the synthesized one wins everywhere — silently.
-	//
-	//     ⭐ **MEASURED with the differing-declarations control this file's header demands, and it is the
-	//     control that makes the difference visible at all.** With the entry live and `stdlib/Set.maxon`'s
-	//     own `count()` rewritten to `return count + 100`, `NumSet.create()` + two `insert`s + `count()`
-	//     still answers **2**, and the emitted program is **byte-identical at 5,225 bytes both ways**. Then
-	//     the stronger form: with an UNDEFINED CALL injected into that same `count()` body, a program that
-	//     calls `s.count()` **compiles clean, exit 0, prints 1** — so the whitelisted module is not merely
-	//     out-voted at the use site, its BODIES are never analyzed. **The entry buys nothing a cone entry
-	//     is for.**
-	//
-	//     ⚠ **IT IS PARSED, THOUGH, AND "never analyzed at all" WAS TOO STRONG — REVIEW RE-MEASURED IT,
-	//     BATCH36.** Reproduced independently (entry live, undefined call in `Set.count()`, program prints
-	//     `2` and exits 0); but with SYNTAX GARBAGE at `Set.maxon:3` the same program fails
-	//     `E2001 … Expected function declaration, got '@'`. So the file is read and parsed and only its
-	//     semantics are dead. A parse gate is not a compile cone, so the withdrawal stands — but a later
-	//     reader must not infer from this note that the file is untouched by a build.
-	//
-	//     ⛔ **AND `Map` IS NOT THE PARALLEL THIS PARAGRAPH ONCE CLAIMED — MEASURED, same review.** The
-	//     identical injection in LISTED `stdlib/Map.maxon`'s `count()` body answers
-	//     `E3004 … 'NoSuchType.definitelyUndefined'` at `stdlib/Map.maxon:170`, and a `Map.insert` call
-	//     answers `E3057` naming the module's own throwing signature. Map's module is LIVE; Set's is not.
-	//     Whatever still calls `Map` synthesized, it is not the same relationship, so `W52`'s row is not
-	//     evidence about `Set` and this one is not evidence about `Map`.
-	//
-	//     ⇒ **This is `W8`'s hazard, and the whitelist line is not what fixes it.** Listing waits on the
-	//     synthesized `Set` being retired in favour of the declaration. A whitelist entry that changes no
-	//     emitted byte and survives its own module's BODIES being sabotaged is not a cone entry; it is a
-	//     green light over a module nothing compiles.
+	// ⛔⛔ **A `stdlib/Set.maxon` IS NOT LISTED` PARAGRAPH STOOD HERE UNTIL W105, AND IT HAD BEEN FALSE SINCE
+	// W90 LISTED THE MODULE 390 LINES ABOVE.** It was a W63/BATCH36 measurement — the entry was added, built
+	// green, and WITHDRAWN, because with the synthesized `Set` still winning every query the listing bought
+	// nothing: `Set.count()` rewritten to `return count + 100` still answered **2**, and an UNDEFINED CALL
+	// injected into that body compiled clean. The withdrawal's own closing line named the condition that
+	// lifted it (*"listing waits on the synthesized `Set` being retired in favour of the declaration"*), W90
+	// met it, and nothing came back to strike the paragraph. Its lesson survives where it is still true —
+	// this file's header rule that a whitelist entry which changes no emitted byte and survives its own
+	// module's bodies being sabotaged is not a cone entry — and the dated claim goes.
 
 	return listed
 end 'whitelistedStdlibModules'

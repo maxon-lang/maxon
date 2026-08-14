@@ -406,10 +406,11 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 		// now, so the corpus `throw StringError.notFound` resolves its ordinal from the declaration itself and
 		// there is no second half to drift from. Re-adding a throwing `__strix_` graph brings the claim back
 		// with it.
-		// `MapError` is here for the reason `StringError` used to be: `MapRuntime` transcribes
-		// `keyNotFound`'s ordinal as a literal to build `__map_get`'s failure edge, while
-		// `Project.builtinMapErrorEnum` declares it by POSITION. See `verifyMapErrorOrdinals`.
-		verifyMapErrorOrdinals(project)
+		// ⚠ **`MapError` WAS A SEVENTH AND WENT THE WAY `StringError` DID (W105).** `MapRuntime` transcribed
+		// `keyNotFound`'s and `keyAlreadyExists`'s ordinals as literals to build `__map_get`'s and
+		// `__map_insert`'s failure edges; both entry points are deleted with the synthesized hash table, so the
+		// corpus `throw MapError.keyNotFound` resolves its ordinal from `stdlib/Map.maxon`'s own declaration and
+		// there is no second half to drift from. Re-adding a throwing `__map_` graph brings the claim back with it.
 		// `__EnumLookupError` is here for `__DivisionByZeroError`'s reason exactly: `EnumLookupRuntime`
 		// transcribes `noSuchRawValue`'s ordinal as the literal error flag every `__enum_from_raw_<Enum>`
 		// returns on a miss, while `Project.builtinEnumLookupErrorEnum` declares it by POSITION. ONE case is
@@ -731,22 +732,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// so an all-or-nothing install is golden-neutral and needs no per-helper dependency tracking (P1.7).
 	installManagedMemoryRuntime(pipeline.stdModule, usage: usage)
 
-	// The Set runtime (`__set_create`/`__set_insert`/`__set_contains`/…) — installed the same already-lowered
-	// way, keyed on its own `usesSet` bit (any `__set_*` reference, which also set `usesHeap` above). Its
-	// `insert`/`contains`/`remove` bodies dispatch the key's `hash`/`equals` through the SAME `witnessCall`
-	// machinery a constrained type-parameter method uses; the int witness tables + `int.hash`/`int.equals`
-	// impls those calls reach are built by `ensureWitnessTable` at the concrete call site (during lowering)
-	// and `installBuiltinConformanceRuntime` below, so this install order is neutral — the linker resolves
-	// the cross-references by name (P1.7b slice A).
-	installSetRuntime(pipeline.stdModule, usage: usage)
-
-	// The Map runtime (`__map_create`/`__map_upsert`/`__map_get`/…) — installed the same already-lowered way,
-	// keyed on its own `usesMap` bit. It sits beside the Set install because the two are ONE graph
-	// (`HashTableRuntime`: a map record IS a set record with a value column appended), told which shape to
-	// build; the order between them is readability, since every bit was settled by `scanRuntimeUsage` before
-	// any install ran and the linker resolves the cross-references by name.
-	installMapRuntime(pipeline.stdModule, usage: usage)
-
+	// ⚠ **THE `Set` AND `Map` RUNTIMES STOOD HERE AND ARE DELETED (W105).** `__set_*` and `__map_*` were one
+	// shared hash-table graph under two names; `W41` made a corpus `Map` retire the synthesized one and `W90`
+	// did the same for `Set`, which took the last live reader — `CharacterSet`'s member probe — with it. Both
+	// containers are ordinary declared generics now, so their `create`/`insert`/`contains`/`remove`/`count`
+	// are compiled Maxon bodies the reachability walk finds for itself, exactly as `StringIndexRuntime`'s
+	// were after W49. The `usesSet`/`usesMap` bits went with them; `closeCharacterSetNeeds` still declares the
+	// `usesHeap` those two arms used to carry alongside.
+	//
 	// The List runtime (`__list_create`/`__list_append`/`__list_get`/…) — installed the same already-lowered
 	// way, keyed on its own `usesList` bit. It shares no graph with the two above (a chain is not a table), so
 	// it is a plain third container install; the order is readability for their reason.

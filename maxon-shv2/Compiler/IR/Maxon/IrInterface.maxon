@@ -322,9 +322,9 @@ let FormattedStringableInterfaceName = b"FormattedStringable"
 // are the reason: the comparison-operator lowerings pick their PROTOCOL by name (`==`/`!=` is Equatable's,
 // `<`/`>`/`<=`/`>=` is Comparable's) and then read everything else off the synthesized interface
 // (`requireBuiltinInterface`); and the `Set` runtime threads a key's `Hashable`/`Equatable` witness tables by
-// name (`LowerMaxonToStd.appendSetWitnessArgs` materializes `rdataAddr(__witness_<key>.Hashable)`), whose label
+// name (`LowerMaxonToStd.withKeyWitnessArgs` materializes `rdataAddr(__witness_<key>.Hashable)`), whose label
 // must be the one the builtin-conformance table registers under. Each reads THIS spelling instead of keeping
-// its own — `SetRuntime` used to keep a second copy of two of them.
+// its own — the deleted `SetRuntime` used to keep a second copy of two of them.
 export let HashableInterfaceName = b"Hashable"
 export let EquatableInterfaceName = b"Equatable"
 export let ComparableInterfaceName = b"Comparable"
@@ -1344,7 +1344,7 @@ end 'markerInterface'
 // parties have to spell one signature: the DISPATCH SITE (which derives it from the declarations just below,
 // through `Parser.interfaceReturnMaxonType` → `valueTagToStdType`), the synthesized IMPL that lands in the
 // slot (`BuiltinConformanceRuntime`, `StringRuntime.buildStrEq`), and the hand-built `Set` runtime whose
-// bodies dispatch `hash`/`equals` through witnesses of their own (`SetRuntime`). Nothing makes a synthesized
+// bodies dispatch `hash`/`equals` through witnesses of their own. Nothing makes a synthesized
 // impl obey a conformance check — there is none to run — so without this the three were three copies.
 //
 // ⚠ **THEY HAD ALREADY DRIFTED, AND ONLY ONE TARGET COULD SEE IT.** `equals` returns `bool` — an `i1`, a

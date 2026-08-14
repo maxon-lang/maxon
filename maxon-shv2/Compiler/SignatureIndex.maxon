@@ -843,7 +843,8 @@ export typealias ConstArrayElementArray = Array with ConstArrayElement
 // it has no elements, and `ItemArray.create()` is the commonest managed global in the corpus.
 export let sharedEmptyConstArrayElements = ConstArrayElementArray.create()
 
-// ⭐ **DOES A FOLDED MEMBER FIT A SET'S DECLARED KEY TYPE?** The folding twin of `Parser.parseSetKeyArg`,
+// ⭐ **DOES A FOLDED MEMBER FIT A SET'S DECLARED KEY TYPE?** The folding twin of the member argument
+// `Parser.parseSetMemberList` parses,
 // which holds a body's `insert` argument to the same `setKeyType`. Without it, `StrSet from [1, 2]` would
 // build a set whose slots hold integers and whose teardown walk `__str_decref`s them — a wrong answer at run
 // time on a program the compiler accepted.
@@ -1169,7 +1170,7 @@ end 'GlobalRecordAndType'
 // `lazy-static`). `ModuleInit` used to spell `__managed_push` itself, which was true while an `Array` was
 // the only container that could arrive holding elements; a `CharSet from ['a', 'e']` INSERTS. Routing it
 // through the same per-container answer `containerCreateCall` already gives keeps one router deciding what
-// a container is, rather than a second `isSetInstance` test inside the synthesis.
+// a container is, rather than a second container test inside the synthesis.
 export type ContainerCreateCall
 	export let callee as ByteArray
 	export let stamps as ContainerCreateStampArray
@@ -3632,7 +3633,7 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 	// wrong answer, but the honest fix is to say which drop each type takes:
 	//
 	//   • **`CharacterSet`** (P1.8 Slice D) — `__cs_decref`, exactly as an `Array` takes `__managed_decref` and a
-	//     `Set` takes `__set_decref`.
+	//     a `Set` takes its own `__destruct_Set_<T>` cascade.
 	//   • **`__ManagedFile` OWNS AN OS HANDLE, WHICH IS NOT MEMORY — SO ITS DROP MUST CLOSE, NOT JUST FREE**
 	//     (R4.2, and this arm IS the RAII destructor). It could not be the cascade, and that was measured
 	//     rather than assumed: `_handle` is a scalar `int` field, so `structFieldIsManaged` is false and
@@ -4014,21 +4015,21 @@ export let ArrayTypeParamCount = 1 as FieldIndex
 // `SynthesizedArrayRecordSeed`. `Set` has no `type Set uses Element` declaration (shv2 reads no stdlib; its
 // runtime is synthesized like `Array`'s), so every `genericInstance*` query that would read a base
 // `StructLayout` (`baseLayoutOf`, box size, per-instance drop) special-cases a `Set` instance exactly as it
-// does an `Array` one — its box is the fixed `SetRecordBytes` fused record and it drops through
-// `__set_decref`. One speller, shared by the parser's `Base with Args` check and every `Set`-instance query.
+// does an `Array` one — its box was a fixed fused hash-table record and it dropped through `__set_decref`.
+// ⚠ **THAT REGIME IS DELETED (W105).** `stdlib/Set.maxon` declares the type, so a `Set with T` is an
+// ordinary declared generic instance and this constant is now only a SPELLING: the base name a desugared
+// `Set.create` / `Set.insert` / `Set.contains` call is composed from, and the one `CharacterSet`'s member set
+// is interned at.
 export let SetBuiltinBaseName = b"Set"
-
-// The single type parameter `Set` declares (`Set with Element`) — the arity `checkGenericInstance`
-// validates a `Set with …` against, the `Array` twin.
-export let SetTypeParamCount = 1 as FieldIndex
 
 // The name of the builtin `Map` generic type (`Map with (Key, Value)`) — the two-parameter twin of
 // `SetBuiltinBaseName`. Like `Set`, no file declares `type Map uses Key, Value`: shv2 reads no stdlib and
 // synthesizes the whole surface, so every `genericInstance*` query that would read a base `StructLayout`
 // special-cases a `Map` instance exactly as it does an `Array` or a `Set` one — its box is the fixed
-// `MapRecordBytes` fused record and it drops through `__map_decref`. One speller, shared by the parser's
-// `Base with Args` arity check and every `Map`-instance query. See `ProgramSignatures.isMapBaseName` for why
-// it is synthesized rather than read from `stdlib/Map.maxon`.
+// fused record with a value column and it dropped through `__map_decref`. ⚠ **THAT REGIME IS DELETED
+// (W105)** for the reason `SetBuiltinBaseName`'s note gives: `stdlib/Map.maxon` declares the type, so this is
+// now only the SPELLING a desugared `Map.create` / `Map.upsert` call and a `[k: v]` literal's instance are
+// composed from.
 // ⭐⭐ **WHAT A GENERIC INSTANCE REDUCES TO FOR A CONFORMANCE QUESTION (W41)** — the answer
 // `ProgramSignatures.instanceConformerReduction` gives its two doors, as a CASE rather than a name.
 //
@@ -4050,19 +4051,13 @@ end 'GenericInstanceConformer'
 
 export let MapBuiltinBaseName = b"Map"
 
-// The two type parameters `Map` declares (`Map with (Key, Value)`) — the arity `checkGenericInstance`
-// validates a `Map with …` against. It is the ONE thing that makes `Map` structurally unlike `Array`/`Set`,
-// so every door that reads "the sole type argument" has a key/value pair here instead.
-export let MapTypeParamCount = 2 as FieldIndex
-
 // ⭐ **WHICH TYPE ARGUMENT IS THE KEY — A FACT ABOUT EVERY HASH TABLE, NOT ABOUT `Map`.** A `Set with Key`
 // and a `Map with (Key, Value)` both put the key first, and three doors depend on it being the same 0:
 // `Parser.gateAndEmitContainerCreate`'s two column gates (the `Set` arm's and, through
-// `requireMapColumnTypes`, the `Map` arm's), and
-// `LowerMaxonToStd.setWitnessKeyTypeName`, which threads the `Hashable`/`Equatable` tables of that argument
-// for BOTH containers. So it is ONE exported constant those three read — it was briefly two, a `Map`-named
-// one here and a file-private `Set`-named copy in `LowerMaxonToStd`, which made the shared invariant
-// something this header ASSERTED while the code that depended on it read a different name.
+// `Parser.parseMapColumnValue`'s key half, `ProgramSignatures.setKeyType` and `mapKeyType`. So it is ONE
+// exported constant those read — it was briefly two, a `Map`-named one here and a file-private `Set`-named
+// copy in `LowerMaxonToStd`, which made the shared invariant something this header ASSERTED while the code
+// that depended on it read a different name.
 //
 // The VALUE position stays `Map`-only, because only a `Map` has a second column.
 export let HashTableKeyArgPosition = 0 as TypeParamPosition
@@ -4259,10 +4254,9 @@ export let VectorBuiltinBaseName = b"Vector"
 export let VectorTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **`MapError` — WHAT A MISSING-KEY `Map.get` THROWS, AND IT WEARS THE BARE NAME FOR `ArrayError`'S
-// EXACT REASON.** `stdlib/Map.maxon:6-9` declares it, and shv2 does not load that module (see
-// `ProgramSignatures.isMapBaseName` for the measured reason), so the compiler synthesizes what that file
-// declares — the same provenance `ArrayError` and `StringError` have, and it takes the same unconditional
-// seed in `Project.createEnumRegistry`.
+// EXACT REASON.** `stdlib/Map.maxon:6-9` declares it and that module is listed, so the DECLARATION is what a
+// program resolves — what the name is doing here is being RESERVED program-wide
+// (`TypeResolution.isCompilerOwnedTypeName`), so no other file may take it.
 //
 // ⚠ It is NOT `__MapError`, because a user function that PROPAGATES a `map.get` failure writes
 // `throws MapError` in its own source; under a reserved spelling every one of those would meet
@@ -4271,13 +4265,12 @@ export let VectorTypeParamCount = 1 as FieldIndex
 // (`TypeResolution.isCompilerOwnedTypeName`), exactly as `ArrayError` is.
 export let MapErrorTypeName = b"MapError"
 
-// The cases of `MapError`, in `stdlib/Map.maxon:7-8`'s DECLARATION ORDER — the ordinals are positional and a
-// handler's `match` arms are resolved against them, so the order is the contract. `keyNotFound` is what
-// `__map_get` throws on a miss; `keyAlreadyExists` is what `__map_insert` throws on a duplicate. It was
-// declared before anything threw it, precisely so that building `insert` could not renumber the case
-// handlers already written against the first — and it did not have to.
-export let MapErrorKeyNotFoundCaseName = b"keyNotFound"
-export let MapErrorKeyAlreadyExistsCaseName = b"keyAlreadyExists"
+// ⚠ **`MapErrorKeyNotFoundCaseName` / `MapErrorKeyAlreadyExistsCaseName` STOOD HERE AND WENT WITH THE
+// ORDINAL CLAIM THAT READ THEM (W105).** `MapRuntime.verifyMapErrorOrdinals` held `stdlib/Map.maxon:7-8`'s
+// declaration ORDER against the literal error flags `__map_get` and `__map_insert` wrote into the
+// error-flag register. Both graphs are deleted, so nothing transcribes an ordinal and the claim would be a
+// dead one — the state `StringError`'s reached at W49 wave 3. A corpus `throw MapError.keyNotFound` resolves
+// its ordinal from the declaration itself; there is no second half left to drift from.
 
 // ⭐⭐ **`IterationError` — WHAT A CURSOR'S `advance()` THROWS (conditional extensions).** Unlike the four
 // error enums above it, the COMPILER never throws this one: it is thrown and caught entirely by USER code
@@ -5134,7 +5127,7 @@ export let RemoveMethod = b"remove"
 export let SliceMethod = b"slice"
 
 // ⚠ **`insert` JOINED THIS BLOCK WHEN `Map.insert` WAS BUILT**, for the block's own reason: it is the second
-// throwing entry point a `Map` has, so `MapRuntime.mapSourceMethodName` must be able to name the very byte
+// throwing entry point a `Map` had while its runtime existed, so the deleted `mapSourceMethodName` had to name the very byte
 // string the parser's dispatch matched. `Array`, `Set` and `Map` all spell it, which is why it carries no
 // family prefix — the rule `set`/`append`/`slice`/`remove` above it already state.
 export let InsertMethod = b"insert"
@@ -15262,7 +15255,7 @@ export type ProgramSignatures
 	// exactly as it already had to for a user `Array` with no contest at all.
 	//
 	// ⚠ **`Array` IS THE ONE CONTESTED NAME THIS BITES, WHICH IS WHY ITS SIBLINGS TAKE NO SUCH ARM.**
-	// `isMapBaseName` answers FALSE the moment the corpus declares a `Map`, because a corpus `Map` is an
+	// `Map` and `Set` left the builtin roster entirely at W105, because a corpus `Map` is an
 	// ordinary declared generic and nothing about it is served by name. An `Array` never stops being
 	// compiler-owned — its record IS its buffer — so its surface is served by name for as long as it exists.
 	//
@@ -15486,54 +15479,35 @@ export type ProgramSignatures
 	// `Element`, synthesized rather than declared, so its instances (`Set with Int`) intern like any other but
 	// have no base `StructLayout`. The same three query doors an `Array` instance special-cases — box size,
 	// per-instance drop, the managed-field gate — special-case such a `Set` instance here (its box is the
-	// fixed `SetRecordBytes` fused record, and it drops through `__set_decref`).
+	// fixed fused hash-table record, and it dropped through `__set_decref`).
 	//
 	// ⭐⭐ **AND `stdlib/Set.maxon` IS LISTED, SO IN THIS CHECKOUT NONE OF THAT IS REACHED (W90).** Every one
-	// of those doors is gated on `isSetBaseName`, which answers FALSE the moment a file declares `type Set` —
+	// of those doors was gated on `isSetBaseName`, which answered FALSE the moment a file declared `type Set` —
 	// so a `Set with T` is an ordinary declared generic instance with a real `StructLayout`, a
 	// `__destruct_Set_<T>` cascade and corpus `create`/`insert`/`contains`/`remove`/`count` bodies. The arms
 	// below are what a program declaring no `Set` would get, and they are kept for exactly the reason the
 	// `Map` section's are: the switch is a property of the PROGRAM, not of this checkout.
 
-	// ⭐⭐ **THE RETIREMENT SWITCH, WRITTEN ONCE FOR BOTH HASH TABLES (W41 for `Map`, W90 for `Set`).** Is
-	// `name` still the SYNTHESIZED `builtin` — i.e. does no file declare a type of that name?
+	// ⚠⚠ **THE RETIREMENT SWITCH IS GONE, AND WITH IT `isSetBaseName` / `isMapBaseName` / `isSetInstance` /
+	// `isMapInstance` / `isMapInstanceAt` (W105).** `isUnretiredBuiltinBaseName` asked *"does no file declare
+	// a type of this name?"*, and a TRUE answer selected the SYNTHESIZED record — the `__set_*` / `__map_*`
+	// runtime, its fixed box size and its per-container drop callee. That runtime is deleted, so there is no
+	// second regime for a switch to choose between, and a predicate whose true arm selects something that no
+	// longer exists is a trap rather than a spare.
 	//
-	// Every `Map`-instance and every `Set`-instance query in the compiler routes through the two one-line
-	// predicates that ask this, so a DECLARED base answering false here is the whole retirement: the
-	// synthesized record, its box size, its builtin member roster and its `__map_*` / `__set_*` runtime all
-	// fall away together, and `Map with (K, V)` / `Set with T` resolve as the ordinary declared generic
-	// instances they now are. One switch rather than ten, because the ten already asked one question.
+	// ⭐ **IT WAS MEASURED DEAD BEFORE IT WAS REMOVED, WITH BOTH HALVES `W52`'s INSTRUMENT ASKS FOR.** A
+	// `panic` wired into the switch's TRUE arm read **0 hits across the whole 5,890-case suite**; the same
+	// probe with `stdlib/Set.maxon` (resp. `Map.maxon`) struck from `StdlibLoader`'s whitelist fired on the
+	// first `typealias` naming the base, inside `Parser.checkGenericInstance`. The listing is unconditional
+	// and both modules load on every compile, so the arm was unreachable by construction and the probe says
+	// so rather than the reading.
 	//
-	// ⚠ **IT KEYS ON THE DECLARATION, NOT ON THE WHITELIST**, which is what makes it correct for a USER
-	// program too: a program declaring its own `type Map uses Key, Value` gets its own, exactly as A1s wave 2
-	// says a user spelling wins. `stdlib/Map.maxon` / `stdlib/Set.maxon` being listed is just the corpus
-	// taking that same door.
-	//
-	// ⛔⛔ **ONLY A BASE WITH *BOTH* REGIMES MAY BE ASKED THIS.** `Array`, `List`, `Vector`, `__ManagedList`,
-	// `__ManagedListNode` and `__ManagedMemoryCursor` have no corpus declaration that reaches this door —
-	// `stdlib/Array.maxon` IS listed, but the `Array` it declares is the compiler-owned base itself
-	// (`recordStruct`'s provenance bit, W16) rather than a SECOND implementation of it — so widening this
-	// predicate to one of them would answer FALSE for a container that has exactly one regime, and every
-	// query routing through it (the box size, the drop callee, the receiver dispatch) would silently stop
-	// recognizing the only `Array` there is.
-	function isUnretiredBuiltinBaseName(name ByteArray, builtin ByteArray) returns bool
-		if not name.equals(builtin) 'notTheName'
-			return false
-		end 'notTheName'
-
-		return match self.structOf(name) 'declaredByTheCorpus'
-			declared gives false
-			undeclared gives true
-		end 'declaredByTheCorpus'
-	end 'isUnretiredBuiltinBaseName'
-
-	// Is `name` the builtin `Set` type — the base of every set instance SERVED BY THE SYNTHESIZED RECORD.
-	export function isSetBaseName(name ByteArray) returns bool
-		return self.isUnretiredBuiltinBaseName(name, builtin: SetBuiltinBaseName)
-	end 'isSetBaseName'
+	// ⇒ **THE SHAPE QUESTIONS STAY AND ARE NOW THE ONLY ONES**: `isSetShapedInstance` and
+	// `isMapShapedInstanceAt` ask what the container IS, off the base NAME, which is the question every
+	// surviving caller had.
 
 	// ⭐⭐ **DOES INSTANCE `id` DENOTE THE `Set` CONTAINER — WHOEVER SERVES IT (W90)?** The SHAPE question,
-	// `isMapShapedInstanceAt`'s twin, and genuinely different from `isSetInstance` above, which since the
+	// `isMapShapedInstanceAt`'s twin, and genuinely different from the deleted `isSetInstance`, which since the
 	// retirement asks *"is this set served by the SYNTHESIZED record"*. See that function's header for the
 	// measured programs the split cost the `Map` family; the `Set` half was measured too and is the reason
 	// this exists: read through the RUNTIME question, `Parser.namesSetInstanceAlias` answered false for every
@@ -15547,11 +15521,6 @@ export type ProgramSignatures
 	export function isSetShapedInstance(id GenericInstanceId) returns bool
 		return self.genericInstanceBaseName(id).equals(SetBuiltinBaseName)
 	end 'isSetShapedInstance'
-
-	// Is generic instance `id` a `Set with T`? (Reads the base NAME, which needs no base struct.)
-	export function isSetInstance(id GenericInstanceId) returns bool
-		return self.isSetBaseName(self.genericInstanceBaseName(id))
-	end 'isSetInstance'
 
 	// The KEY type of `Set with T` — its sole type argument, in this index's own interner. The `Set` twin of
 	// `containerElementType`.
@@ -15588,7 +15557,7 @@ export type ProgramSignatures
 	// declared enum, a function alias, `bool`, `Character`… — all stored inline).
 	//
 	// ⚠ **A `Map`'s VALUE USED TO ASK THE KEY'S QUESTION INSTEAD, AND THAT REFUSED PROGRAMS THE SAME
-	// COMPILER RAN ONE CONTAINER OVER.** The key gate (`Parser.requireHashTableKeyType`) is a
+	// COMPILER RAN ONE CONTAINER OVER.** The key gate (`Parser.requireHashTableKeyType`, deleted at W105) was a
 	// three-name whitelist because the probe HASHES and COMPARES the key through its `Hashable`/`Equatable`
 	// witnesses, and those are the types a witness can carry. A value is never hashed and never compared: it
 	// is stored and dropped, which is the whole of what this asks. Held to the key's rule, an enum value
@@ -15627,9 +15596,9 @@ export type ProgramSignatures
 	// --- The `Map` builtin generic ---
 	//
 	// ⭐ **A `Map with (Key, Value)` IS THE `Set` ABOVE WITH A PARALLEL VALUE COLUMN**, and that is a
-	// REPRESENTATION claim, not a metaphor: `MapRecordBytes`' first 48 bytes are byte-identical to a `Set`
-	// record's, so both tables share one probe, one grow and one teardown walk (`HashTableRuntime`). What is
-	// different here is exactly the ARITY — two type arguments instead of one — so every `Set` door above
+	// REPRESENTATION claim about the DELETED synthesized records, not a metaphor: a map record's first 48 bytes
+	// were byte-identical to a set record's, so both tables shared one probe, one grow and one teardown walk
+	// (`HashTableRuntime`, deleted at W105). What is different here is exactly the ARITY — two type arguments instead of one — so every `Set` door above
 	// that reads "the sole argument" splits in two: a KEY half (which must be `Hashable`/`Equatable`, since
 	// the probe hashes and compares it) and a VALUE half (which needs only a drop callee).
 	//
@@ -15699,26 +15668,6 @@ export type ProgramSignatures
 
 		return false
 	end 'typeMentionsTypeParameter'
-
-	// Is `name` the builtin `Map` type — the base of every map instance SERVED BY THE SYNTHESIZED RECORD.
-	// The switch is the shared `isUnretiredBuiltinBaseName`; see its header for what a declared base retires.
-	export function isMapBaseName(name ByteArray) returns bool
-		return self.isUnretiredBuiltinBaseName(name, builtin: MapBuiltinBaseName)
-	end 'isMapBaseName'
-
-	// Is generic instance `id` a `Map with (K, V)`? (Reads the base NAME, which needs no base struct.)
-	export function isMapInstance(id GenericInstanceId) returns bool
-		return self.isMapBaseName(self.genericInstanceBaseName(id))
-	end 'isMapInstance'
-
-	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Map with (K, V)`?** — `isArrayInstanceAt`'s twin, and it exists
-	// for that function's measured reason rather than for symmetry: a `TypeNameId` and a `GenericInstanceId`
-	// share one numeric space, so `isMapInstance` handed a plain `named` id can answer TRUE about an instance
-	// the caller never had. Its caller (the `for … in` source rewrite) holds a value's (tag, nameId) pair,
-	// which is exactly the shape that hazard bites.
-	export function isMapInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isMapInstance(nameId)
-	end 'isMapInstanceAt'
 
 	// ⭐⭐ **DOES THIS (tag, id) DENOTE THE `Map` CONTAINER — WHOEVER SERVES IT (W41)?** The SHAPE question, and
 	// it is a genuinely different one from `isMapInstanceAt` above, which since the retirement asks *"is this
@@ -16706,9 +16655,9 @@ export type ProgramSignatures
 	// to disagree about who owns a `create`.
 	//
 	// ⚠ **IT IS THE COMPLEMENT OF THE BUILTIN ROSTER AND NOT A SECOND ROSTER**, which is what makes it
-	// self-maintaining: `stdlib/Map.maxon` being listed retires `Map` from `isBuiltinGenericBaseName` (see
-	// `isMapBaseName`) and this predicate starts answering true for every `Map with (K, V)` on the same day,
-	// with nothing here edited. A container promoted or demoted moves both answers at once.
+	// self-maintaining: striking `Map` from `isBuiltinGenericBaseName` (W41 listed the module, W105 removed the
+	// name) makes this predicate answer true for every `Map with (K, V)` with nothing here edited. A container
+	// promoted or demoted moves both answers at once.
 	export function instanceCreateIsDeclared(id GenericInstanceId) returns bool
 		return not self.isBuiltinGenericBaseName(self.genericInstanceBaseName(id))
 	end 'instanceCreateIsDeclared'
@@ -16856,11 +16805,10 @@ export type ProgramSignatures
 	// The routing is settled HERE, where the instance registry is, because the synthesis holds no index.
 	//
 	// ⚠ **IT IS A SECOND COMPOSITION OF THE SAME DECISIONS, NEVER A SECOND DECIDER.** `Parser`'s body
-	// emitters (`emitArrayCreateOp` / `emitSetCreateOp` / `emitMapCreateOp` / `emitListCreateOp` /
-	// `emitVectorCreateOp`) build the same calls as VALUES and deliberately box no description per site —
+	// emitters (`emitArrayCreateOp` / `emitListCreateOp` / `emitVectorCreateOp`) build the same calls as VALUES and deliberately box no description per site —
 	// MEASURED at +1 allocation per creation site in the program (see `Parser.arrayElementDestroyValue`).
 	// What must not be written twice is the RULE, and none of it is: which container this is
-	// (`isSetInstance`/`isMapInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
+	// (`instanceCreateIsDeclared`/`isListInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
 	// (`slotTypeDropCallee`) and which stride (`arrayElementSize`) are each answered in one place and read
 	// from both sides. This is asked ONCE PER MANAGED GLOBAL.
 	//
@@ -16886,19 +16834,10 @@ export type ProgramSignatures
 			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, sizing: ContainerSizing.grown, elementAdd: self.declaredContainerElementAdd(id))
 		end 'declaredGeneric'
 
-		if self.isSetInstance(id) 'set'
-			stamps.push(self.columnDestroyStamp(self.setKeyType(id)))
-			return ContainerCreateCall.create(SetCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.push(SetInsertName))
-		end 'set'
-
-		// A `Map` has no top-level literal — `MapAlias.create()` is the only form — so it never arrives with
-		// elements and names no add callee. `__map_upsert` takes a PAIR, which is not the `(record, value)`
-		// shape this description carries, so naming it here would be a claim the emitter could not honour.
-		if self.isMapInstance(id) 'map'
-			stamps.push(self.columnDestroyStamp(self.mapKeyType(id)))
-			stamps.push(self.columnDestroyStamp(self.mapValueType(id)))
-			return ContainerCreateCall.create(MapCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
-		end 'map'
+		// ⚠ **A `Set` ARM AND A `Map` ARM STOOD HERE AND WENT WITH THEIR RUNTIME (W105).** Each named a
+		// `__set_create` / `__map_create` and pushed its columns' destructor stamps; both containers are
+		// DECLARED generics now, so they return through the `declaredGeneric` arm above with no stamps at all —
+		// a declared `create()` builds its own fields from its own declaration.
 
 		// A `List` names none either, and for the `Map`'s reason rather than a shape one: `__list_append` IS the
 		// `(record, value)` pair this description carries, but no top-level form hands a list elements — the
@@ -16926,9 +16865,8 @@ export type ProgramSignatures
 	// global's slot only as a bare `<Alias>.create()`, which produces nothing to add.
 	//
 	// ⚠ **IT IS THE SHAPE QUESTION AND NOT THE RUNTIME ONE — `isSetShapedInstance`, deliberately.** This arm is
-	// reached only when the base IS declared, so `isSetInstance` is false here by construction and asking it
-	// would make the test unreachable; what decides the callee is that the CONSTRUCTION which produced these
-	// members is a set's, which is a fact about the base NAME.
+	// reached only when the base IS declared — which since W105 is every `Set` there is — and what decides the
+	// callee is that the CONSTRUCTION which produced these members is a set's, which is a fact about the base NAME.
 	//
 	// ⛔ **A DECLARED CONTAINER THAT IS NOT `Set`-SHAPED KEEPS `unsupported`, AND THE PANIC BEHIND IT IS THE
 	// POINT** (`ModuleInit.elementAddCallee`): a description arriving with elements and naming no callee means
@@ -18266,16 +18204,9 @@ export type ProgramSignatures
 		if self.isArrayInstance(id) 'array'
 			return ManagedRecordBytes as ByteOffset
 		end 'array'
-		// A `Set` instance's box is the fixed fused hash-table record (P1.7b slice A), no base struct — the
-		// `Array` twin above.
-		if self.isSetInstance(id) 'set'
-			return SetRecordBytes as ByteOffset
-		end 'set'
-		// A `Map` instance's box is the same fused record with the value column appended — see
-		// `MapRecordBytes`, whose first `SetRecordBytes` bytes ARE a `Set` record's.
-		if self.isMapInstance(id) 'map'
-			return MapRecordBytes as ByteOffset
-		end 'map'
+		// ⚠ A `Set` arm (the fixed 48-byte fused hash-table record) and a `Map` arm (the same record with a
+		// value column appended) stood here until W105. Both are declared generics now, so their box size is
+		// their own base `StructLayout`'s — the fall-through every declared generic takes.
 		// A `List` instance's box is the fixed chain header (`head`/`tail`/`count`/`element_drop`), no base
 		// struct — the `Array` twin above. Its NODES are separate allocations the runtime owns.
 		if self.isListInstance(id) 'list'
@@ -19373,7 +19304,8 @@ export type ProgramSignatures
 	//     wrote it.
 	//
 	// Every walk over an instance's fields must stop for BOTH, because in both cases there are no fields to
-	// read. Four such walks spelled the stop condition as `isArrayInstance(id) or isSetInstance(id)` — the
+	// read. Four such walks spelled the stop condition as `isArrayInstance(id) or isSetInstance(id)` (the latter
+	// deleted at W105) — the
 	// SYNTHESIZED half, four times over, each blind to the UNDECLARED half — so an undeclared base fell
 	// through into `baseLayoutOf` and the compiler died with a stack trace on a program whose real
 	// diagnostic was already written and never printed (measured on `typealias IntMap = Map with (Int, Int)`
@@ -19390,7 +19322,7 @@ export type ProgramSignatures
 	// `StructLayout` exists for it and none is missing. The ONE home of the builtin-container disjunction —
 	// every door that means "a container this compiler owns" asks here rather than re-spelling the four names.
 	export function isBuiltinGenericBaseName(name ByteArray) returns bool
-		return self.isArrayBaseName(name) or self.isSetBaseName(name) or self.isMapBaseName(name) or self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
+		return self.isArrayBaseName(name) or self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
 	end 'isBuiltinGenericBaseName'
 
 	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
@@ -19405,12 +19337,6 @@ export type ProgramSignatures
 		if self.isArrayBaseName(name) 'array'
 			return ArrayTypeParamCount
 		end 'array'
-		if self.isSetBaseName(name) 'set'
-			return SetTypeParamCount
-		end 'set'
-		if self.isMapBaseName(name) 'map'
-			return MapTypeParamCount
-		end 'map'
 		if self.isListBaseName(name) 'list'
 			return ListTypeParamCount
 		end 'list'
@@ -20463,7 +20389,7 @@ export type ProgramSignatures
 	// `__destruct_<instance>` cascade at all (else its box drop is the trivial `__mm_decref`).
 	export function genericInstanceHasManagedField(id GenericInstanceId) returns bool
 		// A base-layout-less instance owns no field this cascade could drop. An `Array`/`Set` instance is
-		// dropped through its own box-drop callee (`__managed_decref` / `__set_decref`, routed by
+		// dropped through its own box-drop callee (`__managed_decref` / a `__destruct_<T>` cascade, routed by
 		// `genericInstanceBoxDropCallee`), NOT a synthesized per-instance `__destruct_<mangled>`, so `false`
 		// is the ANSWER and not a dodge; an UNDECLARED base has no fields at all. Either way the walk below
 		// would read a layout that does not exist — see `genericInstanceHasBaseLayout`.
@@ -20506,17 +20432,10 @@ export type ProgramSignatures
 		if self.isArrayInstance(id) 'array'
 			return ManagedDecrefName
 		end 'array'
-		// A `Set` drops through `__set_decref` — the hash-table twin of `__managed_decref`: it frees the three
-		// external buffers (elements/states/hashes, none of which a generic `__mm_decref` can reach) and then
-		// the record. Its keys are scalar this slice, so there is no per-element walk.
-		if self.isSetInstance(id) 'set'
-			return SetDecrefName
-		end 'set'
-		// A `Map` drops through `__map_decref` — the same teardown with a FOURTH buffer (the values) and a
-		// second per-slot drop walk, since a map's key column and value column are independently managed.
-		if self.isMapInstance(id) 'map'
-			return MapDecrefName
-		end 'map'
+		// ⚠ A `Set` arm (`__set_decref`) and a `Map` arm (`__map_decref`) stood here until W105. Both are
+		// declared generics now, so each drops through its own `__destruct_<mangled>` cascade — the very
+		// fall-through this door ends in, and the name `CharacterSetRuntime.characterMemberSetDropCallee` reads
+		// back for a `Set with Character`.
 		// A `List` drops through `__list_decref` — the same teardown over a CHAIN rather than a buffer: it walks
 		// head→tail destroying each live element through the stamped `element_drop@24`, frees every node, then
 		// frees the record. None of those nodes is reachable from a generic `__mm_decref`.
@@ -21313,7 +21232,7 @@ export type ProgramSignatures
 	// a generic instance's stored type ARGUMENT carries the same two spellings for the same reason
 	// (`conformerNameOfDeclaredName`'s alias arm). One resolution serves both, so a rule written for one
 	// spelling cannot miss the other — which is how an array `Map` key spelled through an alias
-	// (`Parser.requireHashTableKeyType`) and an array FIELD stay one question.
+	// (the deleted `Parser.requireHashTableKeyType`) and an array FIELD stay one question.
 	//
 	// ⚠ **A SUPERSEDED SPELLING ANSWERS `false` RATHER THAN REACHING `genericAliasInstance` (which PANICS on
 	// one).** That door refuses a name two files contest because it can name no reader to choose between

@@ -1426,7 +1426,7 @@ end 'emitElementDestroyRange'
 // callee is a POINTER-taking function whichever destructor is stamped in the slot: `__str_decref`,
 // `__mm_decref`, `__managed_decref` and every synthesized `__destruct_<T>` declare one `i64`. Shared by the array's
 // per-slot destroy walk (`emitElementDestroyRange`), the single-value
-// record-gated entries (`buildRecordGatedAction` — `__drop_type_param`, `__drop_existential` and `__retain_existential`), AND `SetRuntime`'s key drop sites (a managed
+// record-gated entries (`buildRecordGatedAction` — `__drop_type_param`, `__drop_existential` and `__retain_existential`), AND (until W105) the hash table's key drop sites (a managed
 // set's stored key destructor IS its source array's element destructor — same `funcAddr`, same ABI), so the
 // copies cannot drift if that ABI changes. The caller has already loaded `destroy` and confirmed it non-null;
 // this only emits the indirect call.
@@ -3134,7 +3134,7 @@ function buildManagedAppend(module StdModule)
 end 'buildManagedAppend'
 
 // ⭐⭐ **THE ONE `map` STEP — CALL THE USER'S TRANSFORM ON ONE ELEMENT AND PUSH WHAT IT ANSWERED.** Shared by
-// `__managed_map` and `SetRuntime`'s `__set_map`, which differ ONLY in how they reach the next element (an index
+// `__managed_map` and the deleted `__set_map`, which differed ONLY in how they reached the next element (an index
 // walk over `[0, length)` versus an Occupied-slot walk over `[0, capacity)`); everything about what `map`
 // MEANS is here, so the two containers cannot come to disagree about it.
 //
@@ -3165,7 +3165,7 @@ end 'emitMappedElementPush'
 //
 // ⭐ **THE ELEMENT READ IS `__managed_get_unchecked`, NOT A RAW SLOT LOAD.** An array's elements are not uniformly
 // machine words — a `b"…"` blob strides 1 byte and a `bool`/ranged-int element is SUB-BYTE PACKED
-// (`arrayElementSize`'s signed stamp) — so the word-slot load `__set_from` uses over a hash table's key column
+// (`arrayElementSize`'s signed stamp) — so the word-slot load `__list_from` uses over a chain's element column
 // would read a fragment of every packed element. `__managed_get_unchecked` is the one element-size-aware read the
 // `for … in` lowering already goes through, and reusing it is what keeps `for x in arr` and `arr.map(f)`
 // reading the SAME bytes at every stride. Its bounds and empty-slot checks are absent by contract, and this
@@ -3173,7 +3173,7 @@ end 'emitMappedElementPush'
 //
 // ⚠ **`length` IS LOOP-INVARIANT AND LOADED ONCE, WHICH IS ONLY TRUE BECAUSE `dest` IS FRESH.** The pushes go
 // into a record the parser just created, so nothing in the loop can grow or move `src` — the same argument
-// `__set_from` makes about the array it borrows. `dest` may grow; nothing here caches anything of `dest`.
+// `__list_from` makes about the array it borrows. `dest` may grow; nothing here caches anything of `dest`.
 function buildManagedMap(module StdModule)
 	var func = IrFunction.createFromStd(ManagedMapName, returnType: StdReturnType.void, paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(4)

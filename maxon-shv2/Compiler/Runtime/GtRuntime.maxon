@@ -862,6 +862,11 @@ end 'isThrowingGtRuntimeCallee'
 // are expanded in place at the Std tier rather than called (`CheckedDivisionRuntime`'s header says why). That
 // changes nothing here: this predicate answers "must a `try` wrap it", which is a property of the OPERATION, and
 // both gates that read it run on the MAXON tier where the callee is still a call.
+// ⚠ **THE `Map` FAMILY WAS A DISJUNCT AND WENT WITH THE WHOLE SYNTHESIZED HASH TABLE (W105).**
+// `isThrowingMapRuntimeCallee` named `__map_get` (a miss) and `__map_insert` (a duplicate); both bodies are
+// deleted with `MapRuntime`, so no lowering path can mint either callee. The corpus `Map.get`/`Map.insert`
+// are DECLARED throwing functions — the user-signature registry answers for them, which is the route this
+// predicate exists to stand in for.
 // ⚠ **THE `String` FAMILY WAS A NINTH DISJUNCT AND WENT WITH ITS ONE CALLEE (W49 wave 7).**
 // `isThrowingStringRuntimeCallee`'s only term was `__str_byte_at`, minted only by `dispatchStringMethod`'s
 // `byteAt` arm; that member retired onto `stdlib/String.maxon:266`, so nothing can emit the callee and the
@@ -870,7 +875,7 @@ end 'isThrowingGtRuntimeCallee'
 // belonged: `managedMemorySourceMethodName` names `__ManagedMemory.byteAt`, and after the retirement that
 // IS the construct the author wrote.
 export function isThrowingRuntimeCallee(callee ByteArray) returns bool
-	return isThrowingManagedMemoryRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingMapRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
+	return isThrowingManagedMemoryRuntimeCallee(callee) or isThrowingGtRuntimeCallee(callee) or isThrowingManagedFileRuntimeCallee(callee) or isThrowingManagedDirectoryRuntimeCallee(callee) or isThrowingCharacterRuntimeCallee(callee) or isThrowingListRuntimeCallee(callee) or isThrowingDivisionRuntimeCallee(callee) or isEnumLookupRuntimeCallee(callee)
 end 'isThrowingRuntimeCallee'
 
 // ⭐ **THE ONE HOME OF "WHICH ERROR TYPE A COMPILER-INTERNAL RUNTIME CALLEE THROWS"** — the composer beside
@@ -959,18 +964,9 @@ export function runtimeThrowsClause(callee ByteArray) returns ThrowsClause
 		return divisionByZeroThrows()
 	end 'divisionFamily'
 
-	// ⭐ **THE MAP FAMILY** — one callee (`__map_get`) and one case (`MapError.keyNotFound`), and the arm is
-	// here from the family's first day rather than "with the case that needs it", because a map lookup has
-	// NOTHING to answer with on a miss: without this arm `throwsOf` says `none`, `tryErrorEnumType` types the
-	// `(e)` binding `integer`, and `match e` reports a MISSING FEATURE for a program whose feature is present
-	// — the defect R4.1, R4.2 and A1 each paid for once. It asks the THROWING predicate rather than the wide
-	// `isMapRuntimeCallee` for the directory family's reason: `__map_upsert`/`__map_contains`/`__map_decref`
-	// are `__map_`-prefixed and do NOT throw, and typing a non-throwing callee's clause as `throwing` is
-	// exactly what makes `try` required on a call that cannot fail (E3055).
-	if isThrowingMapRuntimeCallee(callee) 'mapFamily'
-		return mapErrorThrows()
-	end 'mapFamily'
-
+	// ⚠ **A MAP ARM STOOD HERE (`__map_get`/`__map_insert` → `MapError`) AND WENT WITH THE RUNTIME (W105).**
+	// The corpus `Map.get`/`Map.insert` declare `throws MapError` in `stdlib/Map.maxon` themselves, so their
+	// clause is read off the signature registry and never composed here.
 	// ⭐ **THE LIST FAMILY THROWS `ArrayError`, NOT AN ERROR OF ITS OWN — and that is `stdlib/List.maxon`'s
 	// OWN declaration rather than a shortcut.** `first`/`get`/`removeFirst` are each written
 	// `throws ArrayError` there (`:44`, `:73`, `:112`), and the case they raise is `indexOutOfBounds`. Minting
@@ -1127,15 +1123,9 @@ export function runtimeCalleeSourceMethod(callee ByteArray) returns RuntimeCalle
 	// an E3057 against it is raised on an ordinary DECLARED function whose name the diagnostic already has.
 	// What the corpus body calls IS `__ManagedMemory.byteAt`, which the `memoryFamily` arm above already
 	// names correctly — so this was the one family whose removal needed no replacement noun at all.
-	// The `Map` family answers through a MAP where the `Character` family above answers from its constant,
-	// and the asymmetry is argued at `MapRuntime.mapSourceMethodName` rather than here: both predicates name
-	// one callee today, but the map's second name (`insert`, refusing a duplicate) is already declared in
-	// `MapError`, so the panic arm is what turns that addition into an install-time failure instead of an
-	// inherited noun.
-	if isThrowingMapRuntimeCallee(callee) 'mapFamily'
-		return RuntimeCalleeSourceMethod.found(mapSourceMethodName(callee))
-	end 'mapFamily'
-
+	// ⚠ **A `Map` ARM STOOD HERE AND WENT THE SAME WAY AT W105.** It mapped `__map_get`/`__map_insert` onto
+	// the `get`/`insert` an author typed; both callees are deleted with `MapRuntime`, and the corpus
+	// `Map.get`/`Map.insert` are declared functions whose own name a diagnostic already has.
 	// The `List` family answers through a map: three callees, three distinct spellings the author writes
 	// (`first`, `get`, `removeFirst`), so this is the several-names shape the five maps above have and not the
 	// `Character` family's one-name identity.

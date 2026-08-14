@@ -42,7 +42,7 @@ export let CharSetBoxBytes = 16 as ParsedInt
 //     compiler-owned one, rather than a synthesized `__destruct_<T>` cascade: the type is not a DECLARED
 //     struct, so it is in no `project.structTypes` for `installStructDestructors` to walk. ⚠ The MEMBER SET's
 //     drop is a different question and is not this file's to answer — see `characterMemberSetDropCallee`,
-//     which is `__set_decref` while `Set` is synthesized and `__destruct_Set_Character` once it is not (W90).
+//     which is the corpus instance's own `__destruct_Set_Character` cascade (W90).
 //   * `__cs_contains(csRec, charRec, memberSetLayout, hashWitness, eqWitness)` — the reference's `contains`
 //     (`stdlib/CharacterSet.maxon:124-136`): explicit membership first, then the category bit. Its last three
 //     arguments are the dictionary-passing block the member probe needs, threaded in by
@@ -55,12 +55,44 @@ export let CharSetMakeName = b"__cs_make"
 export let CharSetDecrefName = b"__cs_decref"
 export let CharSetContainsName = b"__cs_contains"
 
+// ⭐ **THE RUNTIME CALLEE THAT PROBES A `Set with Character` IT DOES NOT HOLD (P1.8 Slice D).** A
+// `CharacterSet` keeps its members in a `Set` FIELD, so `__cs_contains` needs the key's
+// `Hashable`/`Equatable` tables as ordinary arguments — but there is no set among its arguments to read a
+// key type off. Its key is `Character` by construction (`SignatureIndex.characterSetLayout`), so the tables
+// are threaded with the type NAMED rather than derived (`LowerMaxonToStd.withKeyWitnessArgs`).
+//
+// ⚠ **IT IS THE LAST ONE, AND IT LIVED IN `SetRuntime.maxon` UNTIL W105.** `__set_insert`/`contains`/
+// `remove`/`from` and the `Map` family's five were its siblings; every one of them went with the
+// synthesized hash-table runtime, so "which compiler-owned callees carry witness tables?" is now a question
+// about this file alone. It stays a FUNCTION rather than becoming a bare comparison at its three call sites
+// for the reason it always did: the question is asked in one place, and a second family adds a term here.
+export function isCharacterKeyedWitnessCallee(callee ByteArray) returns bool
+	return callee.equals(CharSetContainsName)
+end 'isCharacterKeyedWitnessCallee'
+
+// ⭐⭐ **THE MEMBER SET'S KEY CONSTRAINTS — `stdlib/Set.maxon:13`'s `where Element is Hashable and
+// Equatable` — named by `IrInterface`'s OWN `HashableInterfaceName`/`EquatableInterfaceName` rather than by
+// copies here.** The ORDER is the trailing-argument order the probe is handed and forwards
+// (`LowerMaxonToStd.withKeyWitnessArgs` walks THIS list to build them, and `charSetContainsParamCount`
+// below counts it), so the constraint a corpus declaration states and the argument a probe reads are one
+// fact.
+//
+// ⚠ **IT WAS `HashTableRuntime`'s WHILE THAT FILE EXISTED (W105).** It described the SYNTHESIZED table's
+// key then and it describes the CORPUS `Set`'s key now; the list is the same because the constraint is the
+// same, but its home is the one runtime that still threads it.
+export function hashTableKeyWitnessInterfaces() returns ByteArrayArray
+	var interfaces = ByteArrayArray.create()
+	interfaces.push(HashableInterfaceName)
+	interfaces.push(EquatableInterfaceName)
+	return interfaces
+end 'hashTableKeyWitnessInterfaces'
+
 // The two arguments `__cs_contains` takes because the REFERENCE takes them — `contains(self, character)`
 // (`stdlib/CharacterSet.maxon:124`). Everything after them is threading, not signature.
 let CharSetContainsExplicitParamCount = 2
 
 // The member set's LAYOUT DESCRIPTOR, which rides whether or not the probe forwards it (W90) — see
-// `LowerMaxonToStd.withMemberSetLayoutArg` for why it is passed unconditionally.
+// `LowerMaxonToStd.withKeyWitnessArgs` for why it is passed unconditionally.
 let MemberSetLayoutParamCount = 1
 
 // ⭐⭐ **`__cs_contains`'s ARITY, DERIVED FROM THE THREADING THAT FILLS IT — `[csRec, charRec,
@@ -68,7 +100,7 @@ let MemberSetLayoutParamCount = 1
 //
 // ⛔ **IT WAS THE LITERAL `5`, BESIDE A `fiveI64Params()` THAT SAID THE SAME NUMBER A SECOND TIME, AND
 // NEITHER WAS TIED TO THE SUPPLY SIDE THAT COMPUTES IT.** `LowerMaxonToStd.withKeyWitnessArgs` builds the
-// call as two explicit arguments, then `withMemberSetLayoutArg`'s descriptor, then ONE WITNESS TABLE PER
+// call as two explicit arguments, then the member set's descriptor, then ONE WITNESS TABLE PER
 // ENTRY of `hashTableKeyWitnessInterfaces()` — so the five is a SUM, and a third key constraint would make
 // the lowering supply six against a body declaring five. That is not a panic: `resolveCallFixups` sees a
 // name it knows, and the callee's `param` ops read whatever the ABI registers held — the measured `__map_get`
@@ -278,7 +310,7 @@ end 'declareCharacterSetRuntimeNeeds'
 // the exact question; and the only cost of an over-root is one leaf cascade the program never calls, which
 // dead-function elimination then drops. That asymmetry — a missing root is an unpositioned backend panic, an
 // extra one is nothing — is the same trade `instanceMentionsTypeParameter` states for its own walk.
-function usesCharacterSets(usage RuntimeUsage) returns bool
+export function usesCharacterSets(usage RuntimeUsage) returns bool
 	return usage.usesCharSetMake or usage.usesCharSetDecref or usage.usesCharSetContains
 end 'usesCharacterSets'
 
@@ -294,7 +326,9 @@ function characterMemberSetDropCallee(signatures ProgramSignatures) returns Byte
 	return signatures.genericInstanceBoxDropCallee(signatures.setInstanceForCharacter())
 end 'characterMemberSetDropCallee'
 
-// ⭐ **WHO PROBES THE MEMBER SET — `__set_contains`, or the corpus `Set.contains` (W90).**
+// ⭐ **WHO PROBES THE MEMBER SET — the corpus `Set.contains` (W90), and since W105 there is no second
+// answer.** It was a switch while a SYNTHESIZED `Set` could still serve the member set and `__set_contains`
+// was the other arm; that runtime is deleted, so the corpus method is the only probe there is.
 //
 // ⚠⚠ **THIS HEADER CLAIMED THE NAME WAS "ASKED OF THE INDEX RATHER THAN SPELLED AS A CONSTANT", AND IT IS
 // ONLY HALF ASKED (found at review).** The two contests it named are a `static` member wearing an instance
@@ -314,12 +348,8 @@ end 'characterMemberSetDropCallee'
 // `resolveCallFixups: call to unknown function`. The `memberRegistrationKey` call is kept because it is the
 // door that WOULD carry a re-keying rule; the overload half needs a door that does not exist yet, and
 // inventing one is a mechanism rather than a review edit. Stated here so the next reader inherits the gap
-// rather than the reassurance.
+// rather than the reassurance. (That gap is `W100`'s row.)
 export function characterMemberSetContainsCallee(signatures ProgramSignatures) returns ByteArray
-	if signatures.isSetBaseName(SetBuiltinBaseName) 'synthesizedRecord'
-		return SetContainsName
-	end 'synthesizedRecord'
-
 	return signatures.memberRegistrationKey(qualifiedMethodName(SetBuiltinBaseName, methodName: ContainsMethod), takesReceiver: true)
 end 'characterMemberSetContainsCallee'
 
@@ -327,16 +357,13 @@ end 'characterMemberSetContainsCallee'
 // arity leaves the callee's `param` ops reading whatever the ABI registers held
 // (`LowerMaxonToStd.withWitnessTableArgs` records the measured `__map_get` access violation).
 //
-// The synthesized entry takes `[set, key, hashWitness, eqWitness]`. The corpus method is dictionary-passing,
-// so it takes `[user][layout][witness_0..k]` — and whether it carries the LAYOUT at all is a per-METHOD
-// verdict of the whole-program fixpoint (MEASURED on this tree: `Set.contains` and `Set.insert` take five
-// arguments with the descriptor at index 2, `Set.create` three with it at index 0, and `Set.count` three with
-// none). It is READ, never assumed, so a change to `stdlib/Set.maxon`'s body moves this list with it.
+// The corpus method is dictionary-passing, so it takes `[user][layout][witness_0..k]` — and whether it
+// carries the LAYOUT at all is a per-METHOD verdict of the whole-program fixpoint (MEASURED on this tree:
+// `Set.contains` and `Set.insert` take five arguments with the descriptor at index 2, `Set.create` three with
+// it at index 0, and `Set.count` three with none). It is READ, never assumed, so a change to
+// `stdlib/Set.maxon`'s body moves this list with it. (The synthesized entry's flat
+// `[set, key, hashWitness, eqWitness]` was the other arm until W105 deleted that runtime.)
 function characterMemberSetProbeArgs(signatures ProgramSignatures, chars ValueId, character ValueId, memberSetLayout ValueId, hashWitness ValueId, eqWitness ValueId) returns ValueIdArray
-	if signatures.isSetBaseName(SetBuiltinBaseName) 'synthesizedRecord'
-		return fourArgs(chars, second: character, third: hashWitness, fourth: eqWitness)
-	end 'synthesizedRecord'
-
 	var args = pairArgs(chars, second: character)
 	if signatures.functionNeedsLayoutDescriptor(characterMemberSetContainsCallee(signatures)) 'carriesTheDescriptor'
 		args.push(memberSetLayout)
@@ -392,8 +419,8 @@ function buildCharSetDecref(module StdModule, signatures ProgramSignatures)
 
 	let chars = emitLoadField(module, block: release, record: box, offset: CharSetCharsOffset, ids: ids)
 	let dropped = ids.mint()
-	// A per-instance destructor cascade takes the box and nothing else, exactly as `__set_decref` does, so
-	// the ONE thing that moves with the retirement is the NAME — see `characterMemberSetDropCallee`.
+	// A per-instance destructor cascade takes the box and nothing else — see `characterMemberSetDropCallee`
+	// for who answers the name, which is read rather than spelled.
 	module.appendOp(release, op: StdOp.call(dropped, callee: characterMemberSetDropCallee(signatures), args: argsOf(chars)))
 	let freed = ids.mint()
 	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(box)))
@@ -411,7 +438,7 @@ end 'buildCharSetDecref'
 //
 // It BORROWS both records: the member probe reads the set and the classifier reads the character's bytes,
 // and neither is freed here. The two witness tables are the KEY's `Hashable`/`Equatable` — threaded in by
-// `LowerMaxonToStd.appendSetWitnessArgs`, whose key type for this callee is statically `Character` — and are
+// `LowerMaxonToStd.withKeyWitnessArgs`, whose key type for this callee is statically `Character` — and are
 // forwarded verbatim to the probe, as is the member set's LAYOUT DESCRIPTOR beside them (W90). All three are
 // materialized at the MAXON tier, which is what makes their `.rdata` blobs exist: a Std-only builder can
 // spell a label but cannot register one (`LowerMaxonToStd.withMemberSetLayoutArg`).

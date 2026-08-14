@@ -412,9 +412,9 @@ export function threeI64Params() returns StdTypeArray
 	return types
 end 'threeI64Params'
 
-// Four i64 parameters — the managed-memory runtime's `__managed_slice_managed(arr, start, end, cloneFn)` and the Set
-// runtime's witness-carrying `__set_insert(set, elem, hashWitness, eqWitness)` / `contains` / `remove`. It
-// joins the 1/2/3-param family here (rather than beside a single caller) now that two runtimes need it.
+// Four i64 parameters — the managed-memory runtime's `__managed_slice_managed(arr, start, end, cloneFn)`, plus
+// `__managed_zero_elems` / `__managed_map` / `__managed_slice_opaque` beside it. It joins the 1/2/3-param
+// family here (rather than beside a single caller) because more than one entry needs it.
 export function fourI64Params() returns StdTypeArray
 	var types = threeI64Params()
 	types.push(StdType.i64)
@@ -428,8 +428,7 @@ export function fiveI64Params() returns StdTypeArray
 	return types
 end 'fiveI64Params'
 
-// Six i64 parameters — `__str_trim(strRec, charSet, fromStart, fromEnd, hashWitness, eqWitness)`, whose
-// two trailing witness tables ride the same threading the Set family's four-param helpers take.
+// Six i64 parameters — `__managed_move_elems(dest, destIndex, src, srcIndex, count, elementSize)`.
 export function sixI64Params() returns StdTypeArray
 	var types = fiveI64Params()
 	types.push(StdType.i64)
@@ -502,7 +501,7 @@ export let WordSlotBytes = 8 as ParsedInt
 // The byte address of word slot `index` in a parallel buffer — `base + index · WordSlotBytes`.
 //
 // ⚠ **IT LIVES HERE, WITH THE OTHER SINGLE-OP EMIT HELPERS, BECAUSE THE HASH TABLE WAS NEVER ITS ONLY
-// CALLER.** It was `HashTableRuntime`'s `emitHtSlotAddr` — but `__set_from` already reads an ARRAY's element
+// CALLER.** It was the deleted `HashTableRuntime`'s `emitHtSlotAddr` — but a `from`-construction already reads an ARRAY's element
 // buffer through it, which is what identifies it as a word-slot fact rather than a hash-table one, and
 // `__list_from` reads the same buffer the same way. A second copy under a list-shaped name would have been
 // "the address of word slot i" written down twice, over the same buffers.
@@ -523,7 +522,7 @@ export function emitWordSlotStore(module StdModule, block IrBlock, base ValueId,
 end 'emitWordSlotStore'
 
 // ⭐⭐ **NULL A SLOT WHOSE ELEMENT HAS BEEN MOVED OUT OF A BORROWED ARRAY — AND ONLY WHEN THE NULL MEANS
-// SOMETHING.** `__set_from` and `__list_from` both drain an array the caller still owns: each element is
+// SOMETHING.** `__list_from` drains an array the caller still owns: each element is
 // handed to the new container, and the source slot is then nulled so the array's OWN `__managed_decref` walk
 // does not drop a key the container now owns. This is that step, written once for both.
 //
@@ -542,7 +541,7 @@ end 'emitWordSlotStore'
 // guarantees. So *immortal ⇒ trivial ⇒ guarded out*: the store that could reach read-only memory is
 // precisely the store that was doing nothing. Nothing that was doing work is skipped.
 //
-// ⚠ It is a RUN-TIME test and cannot be a compile-time one: one program's `__set_from` serves every
+// ⚠ It is a RUN-TIME test and cannot be a compile-time one: one program's `__list_from` serves every
 // `Set from […]` in it, so a program with both an int-keyed and a String-keyed set needs both answers from
 // one body.
 //
@@ -628,7 +627,7 @@ end 'emitOkReturn'
 // ⭐ **THE SUCCESS EXIT OF A THROWING *VOID* FUNCTION — the ok return with the placeholder the ABI never
 // moves.** It is not a wrapper around `emitOkReturn`: what it adds is the 0, and that 0 is the whole of the
 // duplication it removes. `__managed_set_length`, `__managed_set_byte`, `__managed_mem_grow`,
-// `__md_create`, `__mf_*`'s void pair and `__map_insert` all end this way, and each spelled the same two
+// `__md_create` and `__mf_*`'s void pair both end this way, and each spelled the same two
 // statements out — one fact written down seven times, whose failure mode is a family that "returns void"
 // with a garbage flag register the day the placeholder is written differently.
 export function emitVoidOkReturn(module StdModule, block IrBlock, ids ValueMinter)
@@ -639,11 +638,11 @@ end 'emitVoidOkReturn'
 // Terminate `block` with `ret <constant>` — the shape EVERY runtime PREDICATE ends in, because there is no
 // `setcc` at this tier: a verdict is a constant-returning block off a fused compare, one block per answer.
 // A predicate therefore returns a CONSTANT from its own block rather than the compare's flag value directly
-// — `HashTableRuntime.buildHtContains`'s shape, and the one the backend has always been exercised on. (It
+// — the shape the deleted `HashTableRuntime.buildHtContains` had, and the one the backend has always been exercised on. (It
 // named `ManagedMemoryRuntime.buildManagedIsEmpty` until ARR4 retired `isEmpty` from the `Array` surface and
 // deleted that function with it; the shape is the tier's, not that one predicate's.)
 //
-// ⚠ It was `HashTableRuntime.emitHtReturnConst` while a hash table was its only caller; the `Array`
+// ⚠ It was the deleted `HashTableRuntime`'s `emitHtReturnConst` while a hash table was its only caller; the `Array`
 // surface's `contains` is the second family to answer a bool this way, and a helper about the STD TIER's
 // lack of a `setcc` is not a hash table's property. It joins the single-op emit helpers here for
 // `emitErrorReturn`'s stated reason. `StringRuntime.emitPredicateReturn` was a byte-identical THIRD copy and
@@ -1547,7 +1546,7 @@ function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, 
 	// walk's precondition either way.)
 	//
 	// Nothing is lost by returning: an `Array`/`Set` instance synthesizes no cascade for its nesting to
-	// close over — its elements are dropped by `__managed_decref`/`__set_decref`, whose own element destructor is
+	// close over — its elements are dropped by `__managed_decref`, whose own element destructor is
 	// rooted by the descriptor reloc that names it (`noteRelocatedFunctionUsage`) — and an UNDECLARED base has no fields to
 	// nest through at all. See `ProgramSignatures.genericInstanceHasBaseLayout` for why those are one gate.
 	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'

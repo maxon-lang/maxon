@@ -129,7 +129,7 @@ let Djb2Multiplier = 33
 // (`witnessMethodSlotOffset(0)`).
 //
 // ⚠ It lives HERE, beside the impls those slots point at, rather than in any one CONSUMER's file: it
-// was `HashTableRuntime`'s `HtWitnessMethodIndex` while a hash table was the only runtime that dispatched
+// was the deleted `HashTableRuntime`'s `HtWitnessMethodIndex` while a hash table was the only runtime that dispatched
 // one, and the `Array` surface's `contains` is the second. A protocol fact named after one of its readers
 // is the shape that becomes two constants the day a third arrives.
 export let BuiltinProtocolSoleMethodIndex = 0 as WitnessMethodIndex
@@ -153,8 +153,9 @@ export let BuiltinProtocolSoleMethodIndex = 0 as WitnessMethodIndex
 // operands are bitcast back and the mask is DERIVED from the very formals that decided the bitcast —
 // `floatParamMaskOf`, never a written-out `3` — so the two halves of one fact cannot disagree.
 //
-// ⚠ The hash-table families pass `false` and that is not an omission: `Set`/`Map` refuse a float key
-// outright (`Parser.requireHashTableKeyType`), so no float ever reaches their probes.
+// ⚠ The `CharacterSet` member probe passes `false` and that is not an omission: its key is `Character` by
+// construction, and a float never reaches a hash table's probe at all — a float type ARGUMENT is E2062 one
+// gate earlier, because a type parameter is an opaque general-purpose slot a float has no way through.
 export function emitEquatableWitnessEquals(module StdModule, block IrBlock, eqWitness ValueId, a ValueId, b ValueId, operandsAreFloat bool, ids ValueMinter) returns ValueId
 	let formals = twoF64Params() if operandsAreFloat else twoI64Params()
 	var lhs = a

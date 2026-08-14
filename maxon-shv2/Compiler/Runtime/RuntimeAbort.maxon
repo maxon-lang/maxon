@@ -78,17 +78,13 @@ export enum RuntimeAbort
 	// goes to the green-thread counter, not the heap one (this file's founding rule: an abort must not report
 	// another abort's number). Pinned by `async-promise-drop`'s never-ran/completed/parked cases.
 	greenThreadLeak = 75
-	// `__set_insert` / `__map_upsert`: the linear probe walked all `capacity` slots without finding an Empty
-	// one AND saw no Deleted tombstone to reuse — i.e. count == capacity. UNREACHABLE from any source program:
-	// insert grows (to <75% load, so >=1/4 of slots are non-Occupied) BEFORE probing, and a fresh table has no
-	// tombstones, so an Empty slot is always found first. It fires only on a broken load-factor/grow invariant
-	// — a COMPILER bug — where the alternative (a silent `retVoid`) would drop the entry and leave `count`
-	// lying. Same "unreachable from source, abort not silence" class as `arrayElementSizeZero`.
-	//
-	// ⚠ **ONE CODE FOR BOTH TABLES, because there is one INSERT** — `HashTableRuntime.buildHtInsert` builds
-	// the set's and the map's from the same graph, so a second number here would be two claimants on one
-	// `osExit` site, which is this registry's founding complaint wearing the opposite hat.
-	hashTableInsertNoFreeSlot = 76
+	// ⚠ **76 IS RETIRED, NOT REUSABLE (W105).** It was `hashTableInsertNoFreeSlot` — the shared
+	// `__set_insert`/`__map_upsert` probe walking every slot without meeting an Empty one or a reusable
+	// tombstone. `HashTableRuntime` is deleted, so nothing emits that `osExit` and a live registry may not go
+	// on claiming the number. It is left VACANT rather than handed to the next abort, for this registry's
+	// founding reason: an exit code is read by a debugger against whatever the tree said at the time, and a
+	// recycled number makes two different faults indistinguishable in an old log. The corpus `Set.insert` /
+	// `Map.upsert` reach the same invariant through an ordinary `panic`, with a message and a source line.
 	// `__mf_stat_field` / `__mf_stat_free`: a NULL stat buffer. Both references treat it as a stdlib-only
 	// INVARIANT violation rather than a catchable error (`__ManagedFile.statField`/`statFree` are registered
 	// non-throwing in each), and `__mm_free` is not null-safe — without the guard the free writes to the
