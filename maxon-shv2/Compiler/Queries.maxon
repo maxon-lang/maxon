@@ -1755,6 +1755,20 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// `Parser.requireWitnessSelfArgs` throws, and both messages end in the same shared sentence.
 		existentialNotComparable(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot compare values held at an interface type using '{op}': {ExistentialPairUnprovableReason}, so the comparison would be answered by the two fat pointers' ADDRESSES rather than by their values. Compare concrete values, or dispatch a requirement the interface declares", line: line, column: column, filePath: path)
 		stringNotOrderable(op, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "cannot order String values using '{op}': a String is a byte record with no ordering, so its only comparisons are '==' and '!='", line: line, column: column, filePath: path)
+		// The two reference-identity arms.
+		//
+		// ⚠ **THE E3068 SENTENCE IS BYTE-FOR-BOTH-REFERENCES ONLY IN ITS *NON-NEGATED* FORM, AND THE THREE
+		// COMPILERS HAVE ALREADY DRIFTED ON THE OTHER ONE.** For `a is b` all three print `'is'`
+		// (2-Parser.cs:27427, maxon-selfhosted/TypeResolution.maxon:7927), and that is the form
+		// `reference-identity.md`'s `primitive-error` `maxoncstderr` golden pins. For `a is not b` the
+		// bootstrap interpolates the operator and says `'is not'`; v1 HARD-CODES `'is'` and so names an
+		// operator the author did not write. shv2 follows the bootstrap here, deliberately — a diagnostic
+		// naming what was written is the rule this file keeps everywhere else — so the claim the golden
+		// enforces is the non-negated one, and the negated one is a KNOWN divergence from v1 rather than an
+		// accident waiting to be discovered.
+		refIdentityOnPrimitive(op, line, column) then reportPositioned(project, code: ErrorCode.refIdentityOnPrimitive, message: "'{op}' requires reference types (structs), not primitive values", line: line, column: column, filePath: path)
+		// The mismatch sentence is the bootstrap's (2-Parser.cs:27432); v1 makes no second check to drift from.
+		refIdentityTypeMismatch(op, left, right, line, column) then reportPositioned(project, code: ErrorCode.typeMismatch, message: "'{op}' requires both operands to be the same type, got '{left}' and '{right}'", line: line, column: column, filePath: path)
 		// The reserved-name arm (P1.2 follow-up). Byte-for-byte the bootstrap's text — the ported
 		// `reserved-double-underscore.md` `maxoncstderr` goldens gate this stderr exactly, so the two
 		// compilers must not drift.

@@ -295,6 +295,21 @@ export enum ErrorCode
 	// values with no object identity. Emitted from the `is`-operand type check
 	// in TypeResolution. Mirrors the C# bootstrap's
 	// `SemanticRefIdentityOnPrimitive`.
+	// shv2 raises it in the PARSER (`Parser.emitReferenceIdentity`), where the
+	// operand tags are already known -- the same tier it states every other
+	// operand rule at -- rather than in a later type pass. It refuses a wider
+	// operand set than the word "primitive" alone suggests, and the reasons
+	// are not all the same reason. An enum case and an opaque type parameter
+	// are VALUES with no object anywhere. A `union` box and a function value
+	// genuinely ARE one-word addresses, and are refused because no spec on
+	// any of the three compilers pins an identity reading for them and both
+	// references refuse them by the same "is the operand a struct value?"
+	// test -- so admitting either would be shv2 inventing a semantics, not
+	// porting one. An existential is a FAT pointer, so a one-word compare
+	// would silently ignore its witness half. Widening the admitted set
+	// yields a POINTER COMPARE, never a type error, so a tag added without a
+	// reading is a wrong answer rather than a missing one. See
+	// `TypeRules.tagHasReferenceIdentity`.
 	semanticRefIdentityOnPrimitive = 3068
 	// borrow conflict -- a collection was mutated (e.g. `arr.push(x)`)
 	// while a reference into its backing buffer is still live (e.g.

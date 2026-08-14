@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "c605708ca0122176",
+  "sourceHash": "eae1b23eb99dceba",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -909,9 +909,9 @@
       "tag": "E3068",
       "name": "SemanticRefIdentityOnPrimitive",
       "stage": "semantic",
-      "doc": "The 'is'/'is not' reference-identity operator is applied to a primitive, which has no object identity.\nthe `is` / `is not` reference-identity operator was applied to a\nprimitive value (`int`, `float`, `bool`, `byte`, ...). Identity only has\nmeaning for reference types (structs are heap pointers); primitives are\nvalues with no object identity. Emitted from the `is`-operand type check\nin TypeResolution. Mirrors the C# bootstrap's\n`SemanticRefIdentityOnPrimitive`.",
-      "emittedBy": {"csharp": "SemanticRefIdentityOnPrimitive", "selfhosted": "semanticRefIdentityOnPrimitive"},
-      "notEmittedBy": ["shv2"]
+      "doc": "The 'is'/'is not' reference-identity operator is applied to a primitive, which has no object identity.\nthe `is` / `is not` reference-identity operator was applied to a\nprimitive value (`int`, `float`, `bool`, `byte`, ...). Identity only has\nmeaning for reference types (structs are heap pointers); primitives are\nvalues with no object identity. Emitted from the `is`-operand type check\nin TypeResolution. Mirrors the C# bootstrap's\n`SemanticRefIdentityOnPrimitive`.\nshv2 raises it in the PARSER (`Parser.emitReferenceIdentity`), where the\noperand tags are already known -- the same tier it states every other\noperand rule at -- rather than in a later type pass. It refuses a wider\noperand set than the word \"primitive\" alone suggests, and the reasons\nare not all the same reason. An enum case and an opaque type parameter\nare VALUES with no object anywhere. A `union` box and a function value\ngenuinely ARE one-word addresses, and are refused because no spec on\nany of the three compilers pins an identity reading for them and both\nreferences refuse them by the same \"is the operand a struct value?\"\ntest -- so admitting either would be shv2 inventing a semantics, not\nporting one. An existential is a FAT pointer, so a one-word compare\nwould silently ignore its witness half. Widening the admitted set\nyields a POINTER COMPARE, never a type error, so a tag added without a\nreading is a wrong answer rather than a missing one. See\n`TypeRules.tagHasReferenceIdentity`.",
+      "emittedBy": {"csharp": "SemanticRefIdentityOnPrimitive", "selfhosted": "semanticRefIdentityOnPrimitive", "shv2": "refIdentityOnPrimitive"},
+      "notEmittedBy": []
     },
     {
       "code": 3069,

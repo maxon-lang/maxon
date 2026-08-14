@@ -1091,6 +1091,25 @@ export union ParseError implements Error
 	// about a type the program never mentions. `stdlib/String.maxon:49` declares no `Comparable` where
 	// `stdlib/Character.maxon:19` does, and that is the fact the message now states.
 	stringNotOrderable(op String, line LineNumber, column ColumnNumber)
+	// An operand of `is` / `is not` has no OBJECT IDENTITY — an `int`, a `float`, a `bool`, a `byte`, an enum
+	// case, an opaque type parameter, an existential. Renders as **E3068**, positioned at the `is`. `op` is the
+	// operator's spelling (`referenceIdentityOpSpelling`), so the negated form names itself.
+	//
+	// ⭐ It is a REFUSAL and not a fallback to `==`, and that is the point of the operator: identity and
+	// equality are the same answer for a primitive and different answers for everything else, so silently
+	// giving one where the other was asked for would make `is` mean two things. Both reference compilers refuse
+	// it by the same test (2-Parser.cs:27423, TypeResolution.maxon:7924) and `specs/reference-identity.md`'s
+	// `primitive-error` pins the sentence.
+	refIdentityOnPrimitive(op String, line LineNumber, column ColumnNumber)
+	// The two operands of `is` / `is not` have object identities of DIFFERENT types — `p is s`, or one `Array`
+	// instance against another. Renders as **E3005**, positioned at the operator, naming both types the way the
+	// author wrote them (`displayTypeNameOf`).
+	//
+	// ⚠ **IT IS A SEPARATE ARM FROM `refIdentityOnPrimitive` BECAUSE THE TWO SAY DIFFERENT THINGS, and it is
+	// not a redundant one: without it the pair would reach the pointer compare and answer `false` for a
+	// question that has no answer.** `specs/reference-identity.md` states it as its own rule ("Both operands
+	// must be the same type"), which is the bootstrap's own second check (2-Parser.cs:27430).
+	refIdentityTypeMismatch(op String, left String, right String, line LineNumber, column ColumnNumber)
 	// --- The reserved-name arm (P1.2 follow-up) ---
 	//
 	// A user DECLARATION whose name starts with `__` — the prefix Maxon reserves for compiler
@@ -4050,6 +4069,13 @@ let AndPrecedence = 3 as InfixPrecedence
 // Comparison `==`/`!=`/`<`/`>`/`<=`/`>=`. Binds tighter than the word operators, so
 // `a > 0 and b > 0` groups as `(a > 0) and (b > 0)` — the reading that makes a
 // short-circuit `and` mean anything at all.
+//
+// ⭐ **AND REFERENCE IDENTITY `is` / `is not` SHARES THIS LEVEL** (`specs/reference-identity.md`), which
+// is v1's own placement — its `infixBindingPower` gives `is` the same 10 the six comparison tokens get
+// (maxon-selfhosted/Parser.maxon:21063). It is the level the operator's RESULT wants: `is` yields a
+// bool, so it must bind tighter than `and`/`or`/`xor` for `a is b and c is d` to group as
+// `(a is b) and (c is d)`, and it has no reading at all against an operand a `+` or a `*` could produce.
+// It is NOT a `comparisonOperator`, though — see `identityOperator`.
 let ComparisonPrecedence = 4 as InfixPrecedence
 
 // Shift `shl`/`shr`. Binds TIGHTER than comparison (`1 shl 3 > 5` is `(1 shl 3) > 5`)
@@ -4078,7 +4104,7 @@ function infixPrecedence(kind TokenKind) returns InfixPrecedence
 		return AndPrecedence
 	end 'and'
 
-	if comparisonOperator(kind) 'comparison'
+	if comparisonOperator(kind) or identityOperator(kind) 'comparison'
 		return ComparisonPrecedence
 	end 'comparison'
 
@@ -4230,6 +4256,32 @@ end 'negatedFloatBits'
 function comparisonOperator(kind TokenKind) returns bool
 	return kind == TokenKind.equalsEquals or kind == TokenKind.bangEquals or kind == TokenKind.lessThan or kind == TokenKind.lessEquals or kind == TokenKind.greaterThan or kind == TokenKind.greaterEquals
 end 'comparisonOperator'
+
+// ⭐⭐ **REFERENCE IDENTITY `is` — AND WHY IT IS ITS OWN CLASSIFIER RATHER THAN A SEVENTH
+// `comparisonOperator`** (`specs/reference-identity.md`). The two share a PRECEDENCE and nothing else:
+// `comparisonOperator`'s six tokens each map to a `MaxonCmpOp` through `infixCmpOp` and are then handed to
+// `emitCompare`, which for a struct pair dispatches the type's own `equals` — the exact CONTENTS answer
+// `is` exists to be the opposite of. Widening that predicate would therefore not add an operator; it would
+// silently make `a is b` mean `a == b`.
+//
+// ⚠ **`is not` IS TWO TOKENS, AND ONLY THIS TOKEN IS CLASSIFIED.** The climber fuses the `not` into the
+// operator itself (see `parseBinary`), which it may do without ambiguity because the alternative reading —
+// `a is (not b)` — cannot exist: `not` yields a bool, and a bool has no object identity, so every program
+// that parses one way is refused under the other.
+//
+// ⚠ **IT DOES NOT COLLIDE WITH THE `where <T> is <Interface>` CLAUSE**, and that is structural rather than
+// lucky: a `where` clause is read by `readWhereClause`, a dedicated recursive descent over
+// `<identifier> is <identifier>` that the expression grammar is never entered from. The clause sits in a
+// declaration HEAD, which has no operand for an infix operator to follow.
+//
+// ⛔ **THAT IS A FACT ABOUT THE HEAD, NOT ABOUT DECLARATIONS — AND STATING IT THE SECOND WAY IS WHAT COST A
+// COMPILER PANIC.** This comment read *"reachable only after an operand, which a declaration header has
+// none of"*, and a top-level `let X = …` is a declaration whose INITIALIZER has operands in abundance. That
+// initializer is climbed by `evalConstBinary`, the second reader of `infixPrecedence`, which had no arm for
+// the token this classifier had just admitted — see that function.
+function identityOperator(kind TokenKind) returns bool
+	return kind == TokenKind.is
+end 'identityOperator'
 
 // The SOURCE-LEVEL TYPE RULES the parser enforces — what an operator's operands may be, and
 // when two types agree — live in TypeRules.maxon, NOT here. They are shared with SemanticCheck
@@ -6658,6 +6710,14 @@ function comparisonOpSpelling(op MaxonCmpOp) returns String
 		ge gives ">="
 	end 'op'
 end 'comparisonOpSpelling'
+
+// The source spelling of the reference-identity operator, for its two diagnostics — `comparisonOpSpelling`'s
+// twin, and it is keyed on a BOOL rather than on an op because `is not` is two TOKENS the climber fuses into
+// one operator (see `identityOperator`): there is no third thing for a token kind to name. Both messages name
+// what the author WROTE, so `a is not 3` is not told about an `is` it does not contain.
+function referenceIdentityOpSpelling(negate bool) returns String
+	return "is not" if negate else "is"
+end 'referenceIdentityOpSpelling'
 
 // Which compiler-owned layouts a file names — the answer `fileNamesProducerMask` walks the tokens once to
 // build, where a walk per probe used to build it one at a time.
@@ -39759,13 +39819,16 @@ export type Parser
 	// supported operator below `minPrec`, a non-operator, or the end of the expression stops
 	// the climb.
 	//
-	// THREE dispatches, and the middle one is the whole rung:
+	// FOUR dispatches, and the second is the whole rung:
 	//
 	//   1. a SHORT-CIRCUIT `and`/`or` over a bool left operand ⇒ not an op at all. It becomes
 	//      blocks and a merge phi, and it MOVES `currentBlock` (see emitShortCircuit), which
 	//      is why `left`'s block is re-read from the field after every recursive call.
 	//   2. a comparison ⇒ `MaxonOp.compare`, typed `boolean`.
-	//   3. everything else ⇒ `MaxonOp.binOp`. This is where a bitwise `and`/`or`/`xor` lands:
+	//   3. REFERENCE IDENTITY `is` / `is not` ⇒ also a `MaxonOp.compare`, but over the two operands'
+	//      POINTERS and with nothing dispatched. It takes its own arm because `is not` is two tokens and
+	//      because neither operand may be `integerizedOperand`ed — see there.
+	//   4. everything else ⇒ `MaxonOp.binOp`. This is where a bitwise `and`/`or`/`xor` lands:
 	//      the short-circuit test above did not fire, so the operands are not bools, and on
 	//      integers the word operators ARE the bit operators.
 	//
@@ -39806,6 +39869,28 @@ export type Parser
 				left = try self.emitShortCircuit(func, leftValue: left, opTok: opTok, rhsMinPrec: prec + 1)
 				continue
 			end 'shortCircuit'
+
+			// ⭐ **REFERENCE IDENTITY `a is b` / `a is not b`** (`specs/reference-identity.md`) — a FOURTH
+			// dispatch, and it takes the operator's own arm rather than the shared tail below for two reasons,
+			// both of which would be silent wrong answers if it did not:
+			//
+			//   • **`is not` is TWO TOKENS.** The `not` is consumed HERE, before the right operand is parsed, so
+			//     it never reaches `parseUnary` as a prefix `not` over a struct. v1's climber fuses it at the
+			//     same point and for the same reason (maxon-selfhosted/Parser.maxon:11421).
+			//   • **NEITHER OPERAND MAY BE `integerizedOperand`ed.** That door turns a lone CHARACTER LITERAL
+			//     into an `int` when the other side is integral — right for `cp - '0'`, and for `is` it would
+			//     replace one of the two records whose ADDRESSES are the whole question with a codepoint.
+			if identityOperator(opTok.kind) 'referenceIdentity'
+				self.advance()
+				let negate = self.at(TokenKind.not)
+				if negate 'isNot'
+					self.advance()
+				end 'isNot'
+
+				let other = try self.parseBinary(func, minPrec: prec + 1)
+				left = try self.emitReferenceIdentity(left, rhs: other, negate: negate, opTok: opTok)
+				continue
+			end 'referenceIdentity'
 
 			self.advance()
 			// The right operand's token span, remembered BEFORE it is parsed and read back after.
@@ -41963,6 +42048,78 @@ export type Parser
 		return result
 	end 'emitCompare'
 
+	// ⭐⭐ **`a is b` / `a is not b` — DO THESE TWO NAMES DENOTE ONE OBJECT?** (`specs/reference-identity.md`.)
+	// The deliberate opposite of `emitCompare`: that one answers about CONTENTS and dispatches a type's own
+	// `equals`, this one compares the two POINTERS and dispatches nothing. So it is a sibling of `emitCompare`
+	// rather than an arm of it — routing `is` through that function would have to bypass, in order, the
+	// byte-record compare, the `StringIndex` compare, the struct-`equals` dispatch and the `Array`-`equals`
+	// dispatch, i.e. every arm that function has.
+	//
+	// ⭐ **WHAT IS COMPARED IS THE VALUE'S OWN WORD, WHICH FOR EVERY ADMITTED TAG IS THE OBJECT'S ADDRESS:**
+	// a struct's `__mm_alloc`'d box, a generic instance's record, and — for a `String` and a `Character` — the
+	// address of the 48-byte FUSED RECORD, not of the `buffer@0` it points at. The record is the object: two
+	// String records legitimately SHARE one buffer (a view carries its source in `parent@32`), so a buffer
+	// compare would report a substring and its source as the same object. That the value in the register
+	// already IS that address is what makes this one `MaxonOp.compare`, with no load anywhere: there is one
+	// spelling of a `String`, so `s is s` cannot come out unequal through two routes to one value.
+	//
+	// ⭐ **AND THE ANSWER IS OBSERVABLE FOR LITERALS, WHICH THE SPEC PINS.** `"hello" is "hello"` is TRUE
+	// because `lowerStringLiteral` registers the blob and the record through `registerRdataConstant`, which
+	// DEDUPES by bytes — every occurrence of one literal shares one immortal `.rdata` record. That is a
+	// property this operator only reveals; nothing here arranges it.
+	//
+	// The `eq`/`ne` split is the whole of `is not`: one operand pair, one compare, the predicate inverted —
+	// so the two spellings cannot come to disagree the way a separate negation emit could.
+	function emitReferenceIdentity(lhs ValueId, rhs ValueId, negate bool, opTok Token) returns ValueId throws ParseError
+		let op = referenceIdentityOpSpelling(negate)
+		let leftTag = self.tagOf(lhs)
+		let rightTag = self.tagOf(rhs)
+
+		// Asked of BOTH operands and BEFORE the agreement test below, because a pair of `int`s AGREES and the
+		// thing wrong with `a is b` there is not that the types differ — it is that neither value is an object.
+		if not tagHasReferenceIdentity(leftTag) or not tagHasReferenceIdentity(rightTag) 'notAReference'
+			throw ParseError.refIdentityOnPrimitive(op, line: opTok.line, column: opTok.column)
+		end 'notAReference'
+
+		if not self.valuesNameOneType(lhs, rhs: rhs) 'typeMismatch'
+			throw ParseError.refIdentityTypeMismatch(op, left: self.valueDisplayTypeName(lhs), right: self.valueDisplayTypeName(rhs), line: opTok.line, column: opTok.column)
+		end 'typeMismatch'
+
+		let result = self.mintValue(ValueTypeTag.boolean, nameId: UnnamedTypeId)
+		self.artifact.emitOp(self.currentBlock, op: MaxonOp.compare(result, lhs: lhs, rhs: rhs, op: MaxonCmpOp.ne if negate else MaxonCmpOp.eq), range: SourceRange.ofToken(opTok))
+		return result
+	end 'emitReferenceIdentity'
+
+	// ⭐⭐ **DO THESE TWO VALUES NAME ONE TYPE? — THE ONE HOME for a question three operator gates ask**, and it
+	// had three spellings before it had one. `structEqualityOperands`, `arrayEqualityOperands` and the `is`
+	// rule's second half (*"both operands must be the same type"*) each wrote out
+	// `tagOf(a) == X and tagOf(b) == X and valueNameId(a) == valueNameId(b)`, and each carried its own comment
+	// promising that *"a later edit cannot widen one side alone"* — a promise three copies of it is precisely
+	// what breaks. The two equality gates keep their own TAG clause, which is what makes each about ONE family;
+	// the agreement itself is here.
+	//
+	// The tag decides it outright for the two builtin byte records: there is exactly one `String` type and
+	// exactly one `Character` type, so a matching tag IS a matching type. The two NOMINAL tags
+	// (`tagIdentityIsNominal`) name a family and additionally need the declared name — `Point` against `Box`,
+	// `Array with int` against `Array with String`.
+	//
+	// ⚠ **IT IS NOT A CONVENIENCE — WITHOUT THE TAG CLAUSE `s is c` IS A SILENT WRONG ANSWER.** A `String` and
+	// a `Character` are the same 48-byte record, so a raw pointer compare across them would answer a question
+	// about two values whose types every other rule keeps apart. `emitCompare`'s byte-record arm spells the
+	// same guard for the same reason.
+	function valuesNameOneType(lhs ValueId, rhs ValueId) returns bool
+		let leftTag = self.tagOf(lhs)
+		if leftTag != self.tagOf(rhs) 'differentTags'
+			return false
+		end 'differentTags'
+
+		if not tagIdentityIsNominal(leftTag) 'theTagIsTheType'
+			return true
+		end 'theTagIsTheType'
+
+		return self.valueNameId(lhs) == self.valueNameId(rhs)
+	end 'valuesNameOneType'
+
 	// Is this an `==`/`!=` between two values of ONE user struct that declares an `equals` method? The gate in
 	// front of the dispatch below, and every clause is load-bearing:
 	//
@@ -41979,7 +42136,9 @@ export type Parser
 			return false
 		end 'notEquality'
 
-		if not (self.tagOf(lhs) == ValueTypeTag.structRef and self.tagOf(rhs) == ValueTypeTag.structRef and self.valueNameId(lhs) == self.valueNameId(rhs)) 'notOneStructsPair'
+		// The TAG clause is this gate's own — it is what makes the rule about STRUCTS — and the agreement is
+		// the shared `valuesNameOneType`, which supplies the other side's tag and the declared name together.
+		if not (self.tagOf(lhs) == ValueTypeTag.structRef and self.valuesNameOneType(lhs, rhs: rhs)) 'notOneStructsPair'
 			return false
 		end 'notOneStructsPair'
 
@@ -42050,7 +42209,9 @@ export type Parser
 			return false
 		end 'notEquality'
 
-		if not (self.tagOf(lhs) == ValueTypeTag.genericInstance and self.tagOf(rhs) == ValueTypeTag.genericInstance and self.valueNameId(lhs) == self.valueNameId(rhs)) 'notOneInstancesPair'
+		// The TAG clause is this gate's own and the agreement is shared — `structEqualityOperands`' split, one
+		// tag over.
+		if not (self.tagOf(lhs) == ValueTypeTag.genericInstance and self.valuesNameOneType(lhs, rhs: rhs)) 'notOneInstancesPair'
 			return false
 		end 'notOneInstancesPair'
 
@@ -47943,8 +48104,38 @@ export type Parser
 		// below dispatches on it. Derived twice, it was two string joins and an allocation on EVERY struct
 		// method call in every program, for one name that cannot differ.
 		let callee = qualifiedMethodName(base.layout.name, methodName: memberTok.value)
+
+		// ⭐⭐ **`p.clone()` ON A DECLARED STRUCT — AN INDEPENDENT COPY, THROUGH THE `__clone_<T>` CLONER THIS
+		// COMPILER ALREADY SYNTHESIZES** (`specs/reference-identity.md`). Both reference compilers give every
+		// struct whose fields are all cloneable an auto-`Cloneable` conformance and a synthesized `<T>.clone`
+		// body (2-Parser.cs:3726 + 7236, maxon-selfhosted/Parser.maxon:19629); shv2 had the BODY —
+		// `MmRuntime.synthesizeStructCloner`, a fresh `__mm_alloc` box, a whole-struct blit, then a deep clone
+		// of each managed field — and no door onto it. It was reachable only as an array element-cloner stamp,
+		// so a source `a.clone()` resolved to a `Point.clone` no file declares and typed as `unresolved`.
+		//
+		// ⭐ **IT IS WIRED HERE, PAST THE `declaresCallee` TEST, SO A USER-WRITTEN `clone` STILL WINS** — which
+		// is both references' rule, stated the same way (v1 skips any struct that already has a
+		// `"{structName}.clone"`, Parser.maxon:19652). What shv2 departs from is the SHAPE: neither reference's
+		// per-type synthesized Maxon-level function is ported, because the Std-tier cloner it would lower to
+		// already exists and is already correct, and `installStructCloners` already emits exactly the ones a
+		// program references. So this is a call site, not a synthesis pass.
+		//
+		// ⚠ **THE `__clone_` CALLEE IS WHAT ROOTS THE SYNTHESIS**: `recordCallUsage` reads the prefix into
+		// `usage.neededCloners`, `noteClonerUsage` closes that set over the nested fields, and
+		// `installStructCloners` builds the bodies. Nothing else has to be told.
+		//
+		// ⚠ **IT IS PLACED BELOW THE TWO GUARDS, NOT ABOVE THEM, AND THAT IS THE POINT.** Each of them calls
+		// itself *"the ONE door every struct method call passes through"*, and a return above them would have
+		// made both claims false — quietly, since neither has anything to say about a synthesized clone today
+		// (both are about a generic receiver, which `requireStructCloneSupported` now refuses outright). An
+		// invariant that holds only because the exception happens to be inert is the shape this file keeps
+		// paying for, so the arm sits where the claims stay literally true.
 		try self.requireWitnessSourceForForwarding(base, callee: callee, memberTok: memberTok)
 		try self.requireMethodNotWithheldByConstraint(base.layout.name, callee: callee, receiver: base.box, memberTok: memberTok)
+
+		if self.structCloneIsSynthesized(callee, memberTok: memberTok) 'synthesizedClone'
+			return try self.emitSynthesizedStructClone(base, memberTok: memberTok, baseTok: baseTok)
+		end 'synthesizedClone'
 
 		// ⭐⭐ **THE FLOOR THE CORPUS CALL WILL LAND AT, READ BEFORE THE EMIT** — `emitRuntimeCall`'s own
 		// discipline, for the reason the stream-write fold needs: `addressableBytes()` produces the 48-byte
@@ -47989,6 +48180,72 @@ export type Parser
 
 		return result
 	end 'dispatchMethodOnBase'
+
+	// Is this member the SYNTHESIZED struct `clone` — the name `clone`, on a struct that declares no `clone` of
+	// its own? The gate in front of the emit below. `declaresCallee` is the WHOLE-PROGRAM index, not this file:
+	// a user's `Point.clone` may be written in any file, which is the same reason `structEqualityOperands` asks
+	// its `equals` question the same way.
+	function structCloneIsSynthesized(callee ByteArray, memberTok Token) returns bool
+		return memberTok.value.equals(CloneMethodName) and not self.signatures.declaresCallee(callee)
+	end 'structCloneIsSynthesized'
+
+	// `p.clone()` as the direct `__clone_<T>(box)` call it is. The result is a FRESH, SOLELY-owned box — the
+	// cloner's first act is an `__mm_alloc` — so it is enrolled as an owned temporary exactly as a struct
+	// literal's box is, and a binding adopts it or the statement drops it.
+	//
+	// The result is stamped `structRef` + the receiver's own layout name, which is the same pair
+	// `emitStructLiteral` mints: a clone of a `Point` IS a `Point`, so `b.x`, `b.equals(a)` and `a is b` all
+	// resolve against the one nominal identity.
+	//
+	// ⚠ The cloneability refusal comes BEFORE the tokens are consumed and before anything is emitted — a
+	// rejected program must leave no ops behind (`emitShift`'s rule).
+	function emitSynthesizedStructClone(base StructBase, memberTok Token, baseTok Token) returns ValueId throws ParseError
+		try self.requireStructCloneSupported(base.layout, memberTok: memberTok)
+		self.advance()
+		try self.consumeEmptyArgList()
+
+		return self.emitOwnedRuntimeResult(clonerSymbol(base.layout.name), args: singletonArgs(base.box), resultTag: ValueTypeTag.structRef, resultNameId: self.artifact.typeNames.intern(base.layout.name), range: SourceRange.between(baseTok, last: memberTok))
+	end 'emitSynthesizedStructClone'
+
+	// ⛔ **THE TWO REASONS A SYNTHESIZED CLONE CANNOT BE EMITTED, AND IN BOTH THE ALTERNATIVE IS A WRONG
+	// ANSWER RATHER THAN A MISSING ONE.** One question — *may this receiver be cloned here?* — with two
+	// clauses, so the emit below has one gate to satisfy.
+	//
+	// ⛔⛔ **CLAUSE 1: A GENERIC BASE. MEASURED, AND IT IS THE DEFECT THIS FUNCTION EXISTS FOR.** A user
+	// generic (`type Box uses T`) is NOT intercepted by the container arms in `dispatchMethodOnReceiver` —
+	// only `Array`/`Set`/`Map`/`List`/`Vector` are — so a `Box with String` receiver reaches
+	// `dispatchMethodOnBase`, where `structLayoutOfType` hands back the BASE layout. Everything downstream
+	// then agreed on the wrong answer, which is why nothing panicked:
+	//
+	//   • the field walk PASSES, because `typeIsManaged` is false for a `typeParameter`-tagged field, so the
+	//     `T` slot is not examined at all;
+	//   • the result was stamped `structRef` + the BARE BASE name — MEASURED: `a is b` reported
+	//     *"got 'StringBox' and 'Box'"*, two names for what the author wrote as one type, and every later
+	//     member dispatch would resolve against that same wrong identity;
+	//   • `synthesizeStructCloner` skips the very same field, so the fresh box is blitted with the `T` word
+	//     ALIASED AND NOT RETAINED — at `String`, a second owner of a record with one refcount.
+	//
+	// ⇒ It is refused until a cloner is minted PER INSTANCE, which is the same slice the field-side refusal
+	// below already advertises for a `Box with T` FIELD. The question is asked of the LAYOUT rather than of
+	// the receiver's tag on purpose: `self.clone()` inside `Box`'s own body has a `structRef` receiver and is
+	// just as unclonable, because what is missing is the instance, not the pointer.
+	//
+	// ⛔ **CLAUSE 2: A FIELD NOTHING CAN DEEP-CLONE.** `synthesizeStructCloner` walks the same fields and
+	// calls `emitCloneCall`, which PANICS on an `unsupported` strategy — so the gate and the strategy must
+	// admit the same set, which is exactly what `ProgramSignatures.structSupportsDeepClone` is (it and
+	// `managedFieldCloneStrategy` are read off one walk). `requireArrayElementCopyable` is this clause's twin
+	// one container out, down to the E2015 it reports.
+	function requireStructCloneSupported(layout StructLayout, memberTok Token) throws ParseError
+		if layout.typeParamCount() > 0 'genericBase'
+			throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which is a GENERIC type — a clone must be minted per INSTANCE (a `{String.from(layout.name)} with String` and a `{String.from(layout.name)} with int` copy different things), and this compiler mints one per declared type only, so the copy would alias the type parameter's value instead of cloning it. Write a `clone` method on `{String.from(layout.name)}` that rebuilds it.", line: memberTok.line, column: memberTok.column)
+		end 'genericBase'
+
+		if self.signatures.structSupportsDeepClone(layout.name) 'cloneable'
+			return
+		end 'cloneable'
+
+		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `Set`, `Map`, `List` or `Vector` field, or any other generic instance that is not an `Array` (each needs a per-instance cloner, a later slice); an OS handle (`__ManagedFile`/`__ManagedDirectory`), which cannot be duplicated at all; a `CharacterSet`; a value held at an interface type; or an array of managed arrays. String, struct, boxed-union, enum and trivial-element `Array` fields ARE supported.", line: memberTok.line, column: memberTok.column)
+	end 'requireStructCloneSupported'
 
 	// ⭐ **THE CONDITIONAL-EXTENSION REFUSAL, AT THE ONE DOOR EVERY STRUCT METHOD CALL PASSES THROUGH.**
 	// Asked before the callee is built, because the answer is about the NAME and not about the arguments: a
@@ -55693,8 +55950,10 @@ export type Parser
 	// ⛔ **AND THIS IS THE ONE `sole` IN THE FILE THAT RESTS ON THE SET OF CALLEES RATHER THAN ON AN OP — SO THE
 	// FRESHNESS IS THE CALLEE'S TO EARN, NOT THIS DOOR'S TO ASSUME.** Every runtime entry reaching here today
 	// mints its result, so the claim holds; but it holds by ENUMERATION, and this tree's enumerated doors rot.
-	// Three of them already return a `structRef` (`__file_open`, `__dir_open_search`, `__charset_make`), and a
-	// struct box CAN serve as `lastFieldReadBox` for a `throw box.unionField` — so an 18th entry that handed
+	// FOUR of them already return a `structRef` (`__file_open`, `__dir_open_search`, `__charset_make`, and the
+	// per-type deep-cloner `__clone_<T>` a source `p.clone()` emits — whose first act is an `__mm_alloc`, so
+	// `sole` is exact for it), and a
+	// struct box CAN serve as `lastFieldReadBox` for a `throw box.unionField` — so a later entry that handed
 	// back a SHARED record would inherit `sole` here in silence and re-arm the destructive write
 	// `OwnedHeapExclusivity` documents three segfaults for. ⇒ **Adding a runtime entry whose result is not
 	// freshly minted means passing `coOwned` here, not extending this list.** (Found by W55's review, which
@@ -61214,6 +61473,15 @@ export type Parser
 	// The precedence-climbing core, mirroring `parseBinary`'s shape over values instead of ops. It
 	// reads the SAME precedence table, so `1 + 2 * 3` is 7 in a constant for the same reason it is 7
 	// in a function.
+	//
+	// ⛔⛔ **BECAUSE IT READS THAT TABLE, EVERY TOKEN `infixPrecedence` ADMITS NEEDS AN ARM IN *BOTH*
+	// CLIMBERS — AND ADDING `is` TO THE TABLE WITHOUT ONE HERE PANICKED THE COMPILER ON ORDINARY SOURCE.**
+	// MEASURED: `let X = 1 is 2` reached `foldConstBinOp`, whose `comparisonOperator` test is false for `is`
+	// by design, and fell to `infixMaxonOp`'s
+	// *"token 'is' is not a supported binary operator — infixPrecedence must gate this call"*. The panic
+	// message named the invariant, and the invariant is this: **`infixPrecedence` is a shared decision with
+	// two readers, so a token admitted there is a claim made about two loops.** Before the table changed,
+	// `is` returned `NotAnInfixOperator`, this loop stopped, and the author got a positioned error.
 	function evalConstBinary(stack TopLevelDeclIndexArray, minPrec InfixPrecedence) returns ConstValue throws ConstEvalError
 		var left = try self.evalConstUnary(stack)
 
@@ -61223,6 +61491,18 @@ export type Parser
 			if prec == NotAnInfixOperator or prec < minPrec 'stop'
 				break
 			end 'stop'
+
+			// ⭐ **REFERENCE IDENTITY HAS NO CONSTANT READING, AND IT IS REFUSED AT THE SAME POINT IN THE CLIMB
+			// `parseBinary` HANDLES IT** — so the two loops special-case the token in the same place and cannot
+			// drift again about which tokens the shared table admits.
+			//
+			// The sentence is the emitting path's own E3068, which is exact rather than convenient: a top-level
+			// constant folds integers, bools and floats and nothing else (`constantValueType`), so EVERY operand
+			// that can reach here is a value with no object identity — precisely what that diagnostic says. The
+			// `not` is PEEKED rather than consumed, only so the message names the form the author wrote.
+			if identityOperator(opTok.kind) 'referenceIdentity'
+				throw ConstEvalError.defective(ParseError.refIdentityOnPrimitive(referenceIdentityOpSpelling(self.peekKind() == TokenKind.not), line: opTok.line, column: opTok.column))
+			end 'referenceIdentity'
 
 			self.advance()
 			let rhsStart = self.pos

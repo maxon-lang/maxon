@@ -21496,6 +21496,28 @@ export type ProgramSignatures
 		return self.typeSupportsDeepClone(self.containerElementType(id), asElement: true, visited: ClonerSet.create())
 	end 'arrayElementSupportsDeepClone'
 
+	// ⭐ **CAN A DECLARED STRUCT BE DEEP-CLONED — the front-end gate for a SOURCE-LEVEL `p.clone()`?**
+	// `arrayElementSupportsDeepClone`'s twin, and it exists for that one's exact reason: the gate and
+	// `synthesizeStructCloner` must agree, or the synthesizer meets an `unsupported` field on a program the
+	// front end accepted and PANICS — a compiler crash on valid-looking input (see `managedNameCloneStrategy`,
+	// which records the measured one).
+	//
+	// It asks by NAME, not by `MaxonType`, because the caller holds a `StructLayout` and the ids in a parser
+	// artifact's interner are not this index's — the mispairing this file's `unionHasManagedPayload` header
+	// calls unrepresentable when the question is asked by name.
+	//
+	// ⚠ **IT GOES THROUGH `aggregateNameSupportsDeepClone`, WHICH IS THE WHOLE OF WHAT THE TWIN DOES ONCE IT
+	// HOLDS A NAME — and it did NOT, which was a real divergence.** Calling the field walk directly skipped
+	// the compiler-owned arm, so this gate and the element gate disagreed about `CharacterSet` /
+	// `__ManagedFile` / `__ManagedDirectory`. The cycle-break seeding comes free with it: that function
+	// inserts the name before it walks, so `type Node { var next as Node }` terminates on the same break.
+	//
+	// ⚠ NOT `asElement`: a struct reached this way is cloned by a DIRECT `__clone_<T>` call the parser emits,
+	// never through the element `callIndirect` that restricts a managed-element array.
+	export function structSupportsDeepClone(structName ByteArray) returns bool
+		return self.aggregateNameSupportsDeepClone(structName, visited: ClonerSet.create())
+	end 'structSupportsDeepClone'
+
 	// Recursively: can a value of `type` be deep-cloned? A scalar owns no heap (nothing to clone); a String is a
 	// `direct` leaf; a struct/union is clonable iff every managed field/payload is; a trivial-element Array is a
 	// `direct` leaf; a managed-element Array is clonable iff its element is itself `direct`-clonable AND clonable
@@ -21550,6 +21572,22 @@ export type ProgramSignatures
 		// It is a REFUSAL and not a gap: there is no `__cs_clone` (the character-set runtime has a decref and
 		// nothing else), and an OS handle cannot be deep-copied at all — duplicating one hands two owners a
 		// descriptor whose `__mf_destruct` closes it once.
+		return self.aggregateNameSupportsDeepClone(name, visited: visited)
+	end 'typeSupportsDeepClone'
+
+	// ⭐ **THE SAME QUESTION ASKED OF A RESOLVED AGGREGATE *NAME*** — the compiler-owned refusal, the cycle
+	// break, and the struct/union field walk, which is everything `typeSupportsDeepClone` does once it has a
+	// name in hand.
+	//
+	// ⚠ **IT IS SPLIT OUT BECAUSE IT HAS A SECOND CALLER THAT SKIPPED THE COMPILER-OWNED ARM.**
+	// `structSupportsDeepClone` went straight to the field walk, which meant the SOURCE-LEVEL `p.clone()`
+	// gate and the ARRAY-ELEMENT gate disagreed about `CharacterSet` / `__ManagedFile` / `__ManagedDirectory`
+	// — the exact three names the arm above records a measured backend panic for
+	// (`call to unknown function '__clone___ManagedFile'`). Three receiver arms in
+	// `dispatchMethodOnReceiver` intercept those types before a clone can reach it today, so the divergence
+	// was latent; a divergence held shut by an unrelated dispatch order is the shape this file keeps paying
+	// for, so the two callers now ask one function rather than two spellings of it.
+	function aggregateNameSupportsDeepClone(name ByteArray, visited ClonerSet) returns bool
 		match compilerOwnedAggregateOf(name) 'compilerOwned'
 			characterSet then return false
 			managedFile then return false
@@ -21567,7 +21605,7 @@ export type ProgramSignatures
 			declared(layout) then return self.unionPayloadsSupportDeepClone(layout, visited: visited)
 			undeclared then return false
 		end 'union'
-	end 'typeSupportsDeepClone'
+	end 'aggregateNameSupportsDeepClone'
 
 	// An `Array` instance recurses into its element (a trivial one is a clonable leaf; a managed one must be a
 	// `direct`-clonable element via `asElement: true`); any other instance (`Box with String`) is a later slice.

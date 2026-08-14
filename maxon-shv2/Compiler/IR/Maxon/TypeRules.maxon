@@ -2322,6 +2322,47 @@ export function tagIsByteRecord(tag ValueTypeTag) returns bool
 	return tagIsText(tag) or tag == ValueTypeTag.character
 end 'tagIsByteRecord'
 
+// ⭐ **DOES A VALUE OF THIS TAG HAVE AN OBJECT IDENTITY — the question `is` / `is not` asks?**
+// (`specs/reference-identity.md`.) True for exactly the tags whose runtime value IS the address of one
+// object, so that "the same object" is a question the machine can answer by comparing the two words:
+// a declared struct's box, a generic instance's record (`Array`, `Set`, …), and the fused byte record a
+// `String` and a `Character` both are.
+//
+// ⚠ **EVERY OTHER TAG IS REFUSED, AND THE REFUSALS ARE NOT ALL THE SAME REFUSAL. The list is exhaustive
+// on purpose: a tag a reader cannot find here reads as one nobody considered.**
+//
+//   • `boolean` / `integer` / `float` / `exitCode` — values, with no object anywhere. The spec's own
+//     wording, and the whole of what E3068 says.
+//   • `typeParameter` — an opaque word inside a shared body, which may turn out to be either.
+//   • `unresolved` / `void` — name no type at all.
+//   • `named` — an ENUM's value IS its i64 tag, so that half is a value again. **But a `union`'s value is
+//     a one-word pointer to an `__mm_alloc` box, and it is refused for a DIFFERENT reason**: no spec on
+//     any of the three compilers pins an identity reading for a union, and both references refuse it by
+//     the same "is the operand a struct value?" test this predicate states (2-Parser.cs:27423). Admitting
+//     it would be shv2 inventing a semantics rather than porting one.
+//   • `function` — likewise a genuine one-word address (a `.text` entry), and likewise unpinned. It has
+//     the extra wrinkle that two spellings of one non-capturing function legitimately share an address
+//     while two closures over one body do not, so "the same object" is not even settled for it.
+//   • `interfaceRef` — a FAT pointer, so a one-word compare would answer about its value half alone and
+//     silently ignore the witness. The same half-an-answer `emitCompare` already refuses an existential
+//     pair for.
+//
+// ⇒ Widening this admits a POINTER COMPARE, never a type error, so a tag added here without a reading
+// is a wrong answer rather than a missing one.
+export function tagHasReferenceIdentity(tag ValueTypeTag) returns bool
+	return tagIdentityIsNominal(tag) or tagIsByteRecord(tag)
+end 'tagHasReferenceIdentity'
+
+// Of the tags that HAVE an identity, which ones name a FAMILY of types rather than one type? A
+// `structRef` is any declared struct and a `genericInstance` is any instantiation, so two operands
+// sharing either tag can still be different types (`Point` against `Box`, `Array with int` against
+// `Array with String`) and the declared NAME has to be compared as well. The two byte records do not:
+// there is exactly one `String` type and exactly one `Character` type, so for them a matching tag IS a
+// matching type — the same reason `emitCompare`'s byte-record arm asks nothing beyond `leftTag == rightTag`.
+export function tagIdentityIsNominal(tag ValueTypeTag) returns bool
+	return tagIsStructRef(tag) or tag == ValueTypeTag.genericInstance
+end 'tagIdentityIsNominal'
+
 // **DOES EITHER OPERAND NAME A `String`?** `operandsAreStructRef`'s twin, and it exists for the same
 // reason: an operator with no reading for a String on one side has none with it on the other.
 //

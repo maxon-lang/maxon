@@ -921,6 +921,7 @@ E3067 SemanticSelfAssignment
 E3068 SemanticRefIdentityOnPrimitive
 	csharp SemanticRefIdentityOnPrimitive
 	selfhosted semanticRefIdentityOnPrimitive
+	shv2 refIdentityOnPrimitive
 	doc The 'is'/'is not' reference-identity operator is applied to a primitive, which has no object identity.
 	doc the `is` / `is not` reference-identity operator was applied to a
 	doc primitive value (`int`, `float`, `bool`, `byte`, ...). Identity only has
@@ -928,6 +929,21 @@ E3068 SemanticRefIdentityOnPrimitive
 	doc values with no object identity. Emitted from the `is`-operand type check
 	doc in TypeResolution. Mirrors the C# bootstrap's
 	doc `SemanticRefIdentityOnPrimitive`.
+	doc shv2 raises it in the PARSER (`Parser.emitReferenceIdentity`), where the
+	doc operand tags are already known -- the same tier it states every other
+	doc operand rule at -- rather than in a later type pass. It refuses a wider
+	doc operand set than the word "primitive" alone suggests, and the reasons
+	doc are not all the same reason. An enum case and an opaque type parameter
+	doc are VALUES with no object anywhere. A `union` box and a function value
+	doc genuinely ARE one-word addresses, and are refused because no spec on
+	doc any of the three compilers pins an identity reading for them and both
+	doc references refuse them by the same "is the operand a struct value?"
+	doc test -- so admitting either would be shv2 inventing a semantics, not
+	doc porting one. An existential is a FAT pointer, so a one-word compare
+	doc would silently ignore its witness half. Widening the admitted set
+	doc yields a POINTER COMPARE, never a type error, so a tag added without a
+	doc reading is a wrong answer rather than a missing one. See
+	doc `TypeRules.tagHasReferenceIdentity`.
 
 E3069 SemanticEqRequiresEquatable
 	csharp SemanticEqRequiresEquatable
