@@ -23,15 +23,18 @@ stack the parser threads, mirroring the block-scope stack.
 
 ## Tests
 
-The only `specs/break.md` case whose prerequisites are all present at M4b: the
-own-label diagnostic for a `continue` inside a comparison-condition loop. Every
-PASSING `break`/`continue` case in `specs/break.md` is DEFERRED — each either uses a
-bare boolean condition (`while true`, deferred past M4b) or carries enough
-simultaneously-distinct SSA values (multiple loop-carried vars, loop-exit phis) to
-exceed the placeholder register allocator's 6-register pool. `continue`'s codegen IS
-exercised by `while-loops.continue` in `specs-shv2/while-loops.md`; a single-variable
-comparison-condition `break` loop compiles and runs correctly, but no such case exists
-verbatim in `specs/break.md`. All deferred cases live under `## Deferred`.
+The `specs/break.md` cases whose prerequisites are all present: the own-label
+diagnostic for a `continue` inside a comparison-condition loop, and the two
+unreachable-code diagnostics (E3071, W118) — `break`/`continue` end a straight-line
+block exactly as `return`/`throw`/`panic` do, so a statement after either in the same
+block is dead code. Every PASSING `break`/`continue` case in `specs/break.md` is
+DEFERRED — each either uses a bare boolean condition (`while true`, deferred past M4b)
+or carries enough simultaneously-distinct SSA values (multiple loop-carried vars,
+loop-exit phis) to exceed the placeholder register allocator's 6-register pool.
+`continue`'s codegen IS exercised by `while-loops.continue` in
+`specs-shv2/while-loops.md`; a single-variable comparison-condition `break` loop
+compiles and runs correctly, but no such case exists verbatim in `specs/break.md`. All
+deferred cases live under `## Deferred`.
 
 <!-- test: break.error-continue-own-label -->
 Labelling a `continue` with its own (innermost) loop's label is redundant.
@@ -66,6 +69,55 @@ end 'main'
 ```
 ```exitcode
 8
+```
+
+<!-- test: break.error-unreachable-after-break -->
+Error: `break` leaves the block unconditionally, so a statement after it in the
+same block is unreachable — the same rule `return`/`throw`/`panic` already carry.
+It is also what keeps the block well formed: `break` emits its branch and leaves
+the parser positioned on the block it just terminated, so a statement accepted
+here would append its ops AFTER a terminator, and the successor walk reads only
+the last op.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		if i == 2 'skip'
+			break
+			total = total + 100
+		end 'skip'
+		total = total + 1
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/fragments/break/break.error-unreachable-after-break.test:9:4: unreachable code after 'break'
+```
+
+<!-- test: break.error-unreachable-after-continue -->
+Error: the same for `continue`, which branches to the loop header.
+```maxon
+function main() returns ExitCode
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		if i == 2 'skip'
+			continue
+			total = total + 100
+		end 'skip'
+		total = total + 1
+	end 'loop'
+	print("{total}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3071: specs/fragments/break/break.error-unreachable-after-continue.test:9:4: unreachable code after 'continue'
 ```
 
 

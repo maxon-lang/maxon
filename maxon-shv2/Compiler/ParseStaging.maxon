@@ -411,7 +411,31 @@ export type FileParseArtifact
 	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
 	// `emitOp`; separate only because a terminator is stored on the block rather
 	// than appended to its op list.
+	//
+	// ⭐⭐ **A SECOND TERMINATOR ON ONE BLOCK IS A MISCOMPILE, AND THIS IS WHERE IT WAS SILENT (W118).**
+	// A block's terminator is a SLOT, not the last op of its list, so `setTerminator` on a block that
+	// already has one simply REPLACES it and the first is gone — no diagnostic, no orphan the backend
+	// trips over, just a `ret` or a `br` that never happens. MEASURED: `return false` followed by an `if`
+	// answered `true`, and a `break` followed by an `if` ran its loop to completion, each emitting a
+	// binary byte-identical to the same program with the terminator deleted.
+	//
+	// The SOURCE-level cure is E3071 (`parseStatements` refuses the statement after a terminator); this
+	// is the structural one behind it, so a construct added to the grammar without that guard fails
+	// LOUDLY here instead of quietly answering wrong. Every legitimate site already asks first —
+	// `finalizeIfNoElse`/`finalizeIfElse` on `thenEnd.isTerminated()`, `closeFunctionBody` and
+	// `parseBlockBody` on `bodyEnd.isTerminated()`. MEASURED with it in place: it did not fire once across
+	// the 5906-case `specs-shv2` suite, so with E3071 landed no parser path in the corpus re-terminates a
+	// block — which is the answer to the question W118 was asked, *"does the diagnostic MASK the wrong
+	// answer or CURE it?"*. It cures it: there is no second route left to overwrite a terminator.
+	//
+	// ⚠ **`hasTerminatorOp` AND NOT `isTerminated`** — a `dead` block (the continuation of an `if` whose
+	// branches all return) holds no terminator op, and giving it one is the ordinary way its unreachable
+	// tail is parsed for syntax. Only a block with a REAL terminator op may not be given a second.
 	export function emitTerminator(block IrBlock, op MaxonOp, range SourceRange)
+		if block.hasTerminatorOp() 'alreadyTerminated'
+			panic("emitTerminator: block '{String.from(block.label)}' already has a terminator at op {block.terminatorIndex()} — a second one would silently replace it (see E3071)")
+		end 'alreadyTerminated'
+
 		let opIndex = self.module.opCount()
 		self.module.setTerminator(block, op: op)
 		self.opRanges.record(opIndex, range: range)

@@ -25,10 +25,9 @@ return expression
 
 The M4a slice of `specs/return-statement.md`: a bare value return, an expression
 return, a return inside an `if`, and a `return` of a variable as the tail
-statement. The tests needing function calls + unreachable-code detection
-(`dead-code-after-return`, which is E3071) or function parameters + calls
-(`return-in-if-then-reachable`) are DEFERRED and recorded under `## Deferred`
-below.
+statement. Both cases once recorded under `## Deferred` are now live —
+`return-in-if-then-reachable` (function parameters + calls) and
+`dead-code-after-return` (E3071, W118).
 
 <!-- test: simple-return -->
 ```maxon
@@ -109,20 +108,7 @@ end 'main'
 1
 ```
 
-
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live
-in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
-scans only `## Tests`, up to the next `## ` heading) never extracts them, and
-they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
-`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-
-### dead-code-after-return
-
-Re-enable once its prerequisites land: function calls AND unreachable-code
-detection after a `return` (E3071), which arrives with the reachability pass.
-
+<!-- test: dead-code-after-return -->
 ```maxon
 function pick() returns ExitCode
 	return 1
@@ -137,3 +123,34 @@ end 'main'
 error E3071: <fragment>:4:2: unreachable code after 'return'
 ```
 
+<!-- test: return-in-if-then-statement-after -->
+The OTHER side of E3071, and the one that must keep compiling: a `return` inside an `if`
+is NOT followed by dead code, because the statements after the `end` are reachable on the
+false path. Written with an ordinary statement — not a second `return` — after the `if`,
+so the case fails if the refusal is widened from "the same straight-line block" to "any
+block that has already returned".
+
+Both exits are executed, and the false path's answer is the one that pins the bug W118
+found: before it, the early `return` in a straight-line body was DISCARDED because
+`setTerminator` silently overwrote it. Here the `return` is in its own block, so nothing
+overwrites it — and the trailing statement proves the continuation still runs.
+```maxon
+function pick(x ExitCode) returns ExitCode
+	if x > 0 'positive'
+		return 1
+	end 'positive'
+	let fallback = 4
+	return fallback
+end 'pick'
+
+function main() returns ExitCode
+	if pick(9) != 1 'tookFalsePath'
+		return 2
+	end 'tookFalsePath'
+
+	return pick(0)
+end 'main'
+```
+```exitcode
+4
+```

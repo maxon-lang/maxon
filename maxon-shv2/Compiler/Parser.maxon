@@ -1301,6 +1301,20 @@ export union ParseError implements Error
 	// else. `label` is the block's own label, taken from its opening token rather than from the `end`'s
 	// optional one, so a block closed by a bare `end` still names itself.
 	emptyBlock(label String, line LineNumber, column ColumnNumber)
+	// ⭐⭐ **A STATEMENT WRITTEN AFTER A TERMINATOR IN THE SAME STRAIGHT-LINE BLOCK** — `return`, `throw`,
+	// `panic(…)`, `break` or `continue`, and then another statement before the block's `end`. Renders as
+	// **E3071**, positioned at the FIRST unreachable statement and naming the keyword control left through.
+	// `terminator` is that keyword's own source bytes, so the sentence quotes what the author wrote rather
+	// than a spelling chosen at the report site.
+	//
+	// ⭐ **IN shv2 THIS IS A CORRECTNESS REFUSAL AND NOT ONLY A LINT** (W118), which is why it unwinds the
+	// parse rather than being a lint anything could choose to ignore. A block's terminator lives in a SLOT
+	// (`IrBlock.terminator`) that `IrModule.setTerminator` overwrites; an accepted statement that terminates
+	// the block ITSELF — an `if`, a `while`, a `for`, a `match` — therefore REPLACES the `ret`/`br` already
+	// standing there, and the earlier one is gone. MEASURED before this arm existed: `return false` followed
+	// by an `if` answered `true`, and a `break` followed by an `if` ran its loop to completion, both emitting
+	// a binary byte-identical to the same program with the terminator deleted.
+	unreachableCode(terminator String, line LineNumber, column ColumnNumber)
 	// --- The DECLARATION-SITE typealias arms (P1.9) ---
 	//
 	// ⭐ A BARE SIZED TYPE AS A TYPEALIAS RHS — `typealias Integer = i64`. Renders as **E2003**,
@@ -8514,6 +8528,38 @@ end 'TryBlockHandlerShape'
 function divergentHandlerOpensAt(kind TokenKind) returns bool
 	return kind == TokenKind.panic or kind == TokenKind.throws
 end 'divergentHandlerOpensAt'
+
+// ⭐⭐ **DOES A STATEMENT OPENING WITH THIS TOKEN LEAVE ITS BLOCK UNCONDITIONALLY?** — the E3071 roster,
+// written once. `return`/`throw`/`panic` leave the FUNCTION; `break`/`continue` leave the enclosing loop or
+// match. All five end the straight-line block they sit in, so whatever is written after one of them before
+// the block's `end` is unreachable and `parseStatements` refuses it.
+//
+// ⚠ **`break`/`continue` ARE IN THE ROSTER, AND THE TWO REFERENCE COMPILERS DISAGREE ABOUT THAT.** The C#
+// bootstrap covers all five (`2-Parser.cs`'s `ParseBodyUntilEnd`, and `specs/break.md` pins the two loop
+// keywords as `maxoncstderr` cases); the deprecated v1 self-hosted parser sets its dead-code flag for
+// `return`/`throw`/`panic` only (`maxon-selfhosted/Compiler/Parser.maxon:2415-2438`), so it accepts a
+// statement after a `break`. shv2 follows the bootstrap, because in shv2 the question is not stylistic —
+// MEASURED (W118): a `break` followed by an `if` in the same block ran the loop to completion, the `if`
+// having overwritten the `break`'s branch in `IrBlock.terminator`. See `ParseError.unreachableCode`.
+//
+// ⚠ **`throws` IS DELIBERATELY ABSENT, and it is not the same word as `throw`.** It opens a DIVERGING
+// TERMINAL FORM in a match arm or a block-`try` handler (`divergentHandlerOpensAt` above), never a
+// statement in a statement list, so a statement list can never be positioned on one.
+function statementEndsItsBlockAt(kind TokenKind) returns bool
+	return kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.panic or kind == TokenKind.break or kind == TokenKind.continue
+end 'statementEndsItsBlockAt'
+
+// The straight-line terminator the PREVIOUS statement was, when it was one — the whole of what
+// `parseStatements` has to remember between iterations to answer E3071.
+//
+// `keyword` carries the terminator token's own SOURCE BYTES rather than a spelling chosen here, so the
+// message quotes exactly the word the author wrote and there is no second roster to hold in step with
+// `statementEndsItsBlockAt`. Keywords are lexed as words and keep their span (see `Token.value`), so those
+// bytes are a zero-copy slice of the source buffer this parse already holds.
+union PrecedingTerminator
+	none
+	keyword(name ByteArray)
+end 'PrecedingTerminator'
 
 // ⭐ **WHICH FORM OF CATCH IS BEING PARSED — the one thing the declaration door cannot see for itself.** A
 // SINGLE-CALL form (`try f() otherwise (e) …`, `if try f() … else (e) …`) catches ONE call's error, so the
@@ -23737,6 +23783,11 @@ export type Parser
 	// create successor blocks. Blank lines separate statements.
 	function parseStatements(func IrFunction, block IrBlock) returns IrBlock throws ParseError
 		var current = block
+		// ⭐⭐ **E3071 LIVES HERE BECAUSE THIS IS THE ONE STATEMENT-LIST LOOP** — a function body and every
+		// nested block body (`parseBlockBody`) both come through it, so the dead-code rule is stated once for
+		// the whole language. See `statementEndsItsBlockAt` for the roster and `PrecedingTerminator` for why
+		// the keyword's own bytes are what travels.
+		var preceding = PrecedingTerminator.none
 		while true 'stmts'
 			self.skipNewlines()
 			if self.at(TokenKind.end) 'endBlock'
@@ -23746,6 +23797,21 @@ export type Parser
 				let tok = self.current()
 				throw ParseError.unexpectedEof(tok.line, column: tok.column)
 			end 'eof'
+
+			// A real statement follows a terminator in THIS block, so control can never reach it (E3071).
+			// Asked after the `end` and EOF tests, both of which are the block ending rather than a statement:
+			// a terminator as the block's LAST statement is the ordinary shape, and a truncated body is
+			// `unexpectedEof`'s to report, not this one's.
+			let stmtTok = self.current()
+			match preceding 'dead'
+				none then break 'dead'
+				keyword(name) then throw ParseError.unreachableCode(String.from(name), line: stmtTok.line, column: stmtTok.column)
+			end 'dead'
+
+			// Recorded BEFORE the statement is parsed, off its opening token, so the next iteration can
+			// refuse whatever follows it.
+			preceding = PrecedingTerminator.keyword(stmtTok.value) if statementEndsItsBlockAt(stmtTok.kind) else PrecedingTerminator.none
+
 			// ⭐⭐ **E3070: AN ELEMENT ACCESSOR NO NAME TOOK DIES WITH ITS STATEMENT** — the watermark is taken
 			// here and the claim list is cut back to it below. See `dropUnclaimedPendingBorrows` for why this
 			// loop is the only place that may do it, and what it cost when nothing did.

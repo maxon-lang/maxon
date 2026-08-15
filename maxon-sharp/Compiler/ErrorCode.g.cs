@@ -546,14 +546,21 @@ public enum ErrorCode {
   SemanticBorrowConflict = 3070,
   /// <summary>
   /// a statement appears in the same straight-line block body
-  /// immediately after a `return`, `throw`, or `panic(...)`. The trailing
-  /// statement is unreachable -- control never falls through a
-  /// function-terminating statement -- so it is dead code. Emitted by the
-  /// parser's statement-list loop when a terminator is not the last
+  /// immediately after a `return`, `throw`, `panic(...)`, `break` or
+  /// `continue`. The trailing statement is unreachable -- control never falls
+  /// through a block-terminating statement -- so it is dead code. Emitted by
+  /// the parser's statement-list loop when a terminator is not the last
   /// statement of its block. Control-flow that creates separate blocks
   /// (a `return` inside an `if`, with code after the `if`) does NOT trigger
   /// this: that following code is reachable on the else path. Mirrors the C#
   /// bootstrap's `SemanticUnreachableCode` (same code, same message format).
+  /// In shv2 it is a CORRECTNESS rule and not only a lint: a block's
+  /// terminator lives in a slot `setTerminator` overwrites, so an accepted
+  /// statement that terminates the block itself (an `if`, `while`, `for`,
+  /// `match`) silently REPLACES the `return`/`break` already there. The
+  /// deprecated v1 compiler applies the rule to `return`/`throw`/`panic`
+  /// only; shv2 follows the bootstrap and covers `break`/`continue` too,
+  /// which `specs/break.md` pins.
   /// </summary>
   SemanticUnreachableCode = 3071,
   /// <summary>

@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "eae1b23eb99dceba",
+  "sourceHash": "d9e304f56e925aa4",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -936,9 +936,9 @@
       "tag": "E3071",
       "name": "SemanticUnreachableCode",
       "stage": "semantic",
-      "doc": "a statement appears in the same straight-line block body\nimmediately after a `return`, `throw`, or `panic(...)`. The trailing\nstatement is unreachable -- control never falls through a\nfunction-terminating statement -- so it is dead code. Emitted by the\nparser's statement-list loop when a terminator is not the last\nstatement of its block. Control-flow that creates separate blocks\n(a `return` inside an `if`, with code after the `if`) does NOT trigger\nthis: that following code is reachable on the else path. Mirrors the C#\nbootstrap's `SemanticUnreachableCode` (same code, same message format).",
-      "emittedBy": {"csharp": "SemanticUnreachableCode", "selfhosted": "semanticUnreachableCode"},
-      "notEmittedBy": ["shv2"]
+      "doc": "a statement appears in the same straight-line block body\nimmediately after a `return`, `throw`, `panic(...)`, `break` or\n`continue`. The trailing statement is unreachable -- control never falls\nthrough a block-terminating statement -- so it is dead code. Emitted by\nthe parser's statement-list loop when a terminator is not the last\nstatement of its block. Control-flow that creates separate blocks\n(a `return` inside an `if`, with code after the `if`) does NOT trigger\nthis: that following code is reachable on the else path. Mirrors the C#\nbootstrap's `SemanticUnreachableCode` (same code, same message format).\nIn shv2 it is a CORRECTNESS rule and not only a lint: a block's\nterminator lives in a slot `setTerminator` overwrites, so an accepted\nstatement that terminates the block itself (an `if`, `while`, `for`,\n`match`) silently REPLACES the `return`/`break` already there. The\ndeprecated v1 compiler applies the rule to `return`/`throw`/`panic`\nonly; shv2 follows the bootstrap and covers `break`/`continue` too,\nwhich `specs/break.md` pins.",
+      "emittedBy": {"csharp": "SemanticUnreachableCode", "selfhosted": "semanticUnreachableCode", "shv2": "semanticUnreachableCode"},
+      "notEmittedBy": []
     },
     {
       "code": 3072,

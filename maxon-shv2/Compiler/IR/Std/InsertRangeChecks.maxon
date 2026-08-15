@@ -101,7 +101,7 @@ end 'GuardSite'
 // alias-named guard may have moved its `ret` onto) and does not extend it — and that asymmetry is what
 // makes "this block's `ret` is already guarded" derivable rather than tracked: the split leaves a
 // CONDITIONAL BRANCH where the `ret` was, so a second site naming the same block finds no `ret` of its
-// own (see `RetBlockLookup`).
+// own — a program E3071 has refused at the parse since W118 (see `RetBlockLookup`).
 union GuardChain
 	blockChain(blockId BlockId)
 	retChain
@@ -139,35 +139,54 @@ end 'GuardedOperand'
 
 // The block whose terminator is this site's own `ret` — the return site to guard.
 //
-// ⚠ `notFound` IS REACHABLE, on a program that compiles today, and it means "this site's `ret` is not
-// there any more", which has exactly two causes and both are UNREACHABLE SOURCE. shv2 does not emit
-// E3071 (`unreachable code after 'return'`), so a second `return` in one block compiles — and a block
-// holds ONE terminator:
+// ⭐⭐ **W118 CLOSED TWO OF `notFound`'s CAUSES AND MEASURED A FOURTH THAT IS STILL OPEN.** `notFound`
+// means "this site's `ret` is not there any more". Two of its causes were the same program shape — a
+// second `return` in ONE block, which compiled only because shv2 did not emit E3071, a block holding ONE
+// terminator in a slot `setTerminator` overwrites:
 //
-//   * `return n` twice ⇒ the second `setTerminator` overwrites the first with an identical `ret(n)`,
-//     the FIRST site guards it, and that guard leaves a conditional branch where the `ret` stood. The
-//     second site finds no `ret`. Skipping is right: the one guard already stands in front of the one
-//     `ret`, at the line the value actually leaves through.
-//   * `return a` then `return b` ⇒ the block's terminator is `ret(b)`, so site `a` finds a `ret` naming
-//     a value that is not its own. Skipping is right for the same reason — the emitted function returns
-//     `b`, and there is no `ret(a)` to guard.
+//   * `return n` twice ⇒ the second `setTerminator` overwrote the first with an identical `ret(n)`, the
+//     FIRST site guarded it, and that guard left a conditional branch where the `ret` stood — so the
+//     second site found no `ret`.
+//   * `return a` then `return b` ⇒ the block's terminator was `ret(b)`, so site `a` found a `ret` naming
+//     a value that was not its own.
 //
-// Both are the answers this pass gave before the site recorded its block, and the bootstrap refuses the
-// programs outright. A `ret` of the wrong value is therefore SKIPPED, never panicked on: a panic here
-// would turn shv2's acceptance of unreachable code into a compiler crash.
+// **Both are now refused at the parse** (`ParseError.unreachableCode`, plus the structural backstop in
+// `ParseStaging.emitTerminator`), exactly as the bootstrap has always refused them. Neither can reach
+// here again.
 //
-// ⛔⛔ **"EXACTLY TWO CAUSES" WAS A HAND-MAINTAINED ENUMERATION, AND G14 FOUND A THIRD THAT WAS NOT
-// UNREACHABLE SOURCE AT ALL: A `throws` FUNCTION.** Its `return` leaves through `errorReturn`, which
-// `retMatchesValue` did not recognise as a return, so `notFound` came back for EVERY ranged return in
-// EVERY throwing function and the silent skip above absorbed it — a wrong answer on ordinary source,
-// wearing the clothes of an enumeration that said the answer could only mean unreachable code. The
-// third cause is CLOSED (`errorReturn` is a recognised arm), and the two above are once more the whole
-// list. ⚠ **BUT NOTHING CHECKS THAT.** The set of Std terminators that RETURN A VALUE is written twice
-// — here in `retMatchesValue`'s arms, and in `StdOpMeta.role` (`OpRole.ret` / `OpRole.errorReturn`,
+// ⛔⛔ **BUT THE SKIP STAYS, BECAUSE TURNING IT INTO A PANIC IMMEDIATELY FOUND A FOURTH CAUSE ON ORDINARY
+// SOURCE — A RETURN WHOSE VALUE IS *PROMOTED* AT THE HAND-OFF.** MEASURED: with the panic in place the
+// whole `specs-shv2` suite raised it exactly once, on
+// `array-declared-record/the-self-spelling-of-a-corpus-served-member-reaches-the-same-body`, in a
+// corpus-declared `Array.at` whose `returns Num` body hands back an opaque `Element`.
+// `parseCheckedValueReturn` records the site's ValueId BEFORE calling `emitOwnedValueReturn`, which
+// SHADOWS the name: `coOwnBorrowedOpaque` (and `promoteBorrowedToOwned`) replaces the value, and it is
+// the REPLACEMENT the `ret` terminator carries. So `retMatchesValue` correctly answers `false` about a
+// perfectly ordinary program, and the guard the pass had already decided it needed is dropped in
+// silence. The surrounding comment at that push site states the opposite premise — *"a ranged int return
+// is never an owned value, so `emitOwnedValueReturn` passes it through unwrapped"* — which a corpus
+// GENERIC body falsifies, its declared return being a ranged alias while its value's tag is
+// `typeParameter`.
+//
+// ⛔ **AND IT IS A LIVE WRONG ANSWER, not merely a dead cascade dropped.** In the corpus case the element
+// type IS the declared alias, so the lost guard could not have fired; widen the instance and it can.
+// MEASURED: a `Holder uses Element` whose `narrowedAt(i) returns Num` reads `try managed.get(i)`, held as
+// `Holder with Wide` (`Num = int(0 to 1000)`, `Wide = int(0 to 100000)`), pushed `5000` and PRINTED
+// `5000` — where every non-promoted spelling of the same narrowing panics *"Range check failed: value
+// outside typealias 'Num'"*. **Its fix is its own rung**, because it is not one line: recording what the
+// `ret` actually carries is the mechanical half, and the other half is a design question with a cost —
+// whether an opaque `T`'s range is provable from the enclosing instance, or whether every corpus generic
+// body gains a cascade that can never fire. Reported to the coordinator, not fixed here.
+//
+// ⚠ **G14 IS WHY THE SKIP IS THE COST IT IS, NOT A REASON TO KEEP IT COMFORTABLY.** A `throws` function's
+// `return` leaves through `errorReturn`, `retMatchesValue` did not recognise it as a return, and so EVERY
+// ranged return in EVERY throwing function came back `notFound` and was dropped here — a wrong answer on
+// ordinary source, absorbed in silence. The set of Std terminators that RETURN A VALUE is still written
+// twice — here in `retMatchesValue`'s arms, and in `StdOpMeta.role` (`OpRole.ret` / `OpRole.errorReturn`,
 // which has no reader in the compiler) — and the two are held in agreement by hand. `retMatchesValue`'s
 // match is exhaustive, so a NEW variant is a compile error there; what defeated it was a variant that
-// already existed being swept into a RANGE arm, which exhaustiveness cannot see. Until `role` is the
-// derived authority, read this list as a claim maintained by whoever last touched either file.
+// already existed being swept into a RANGE arm, which exhaustiveness cannot see. ⇒ **The panic is the
+// right end state and the fourth cause is the one thing standing between here and it.**
 union RetBlockLookup
 	notFound
 	found(block IrBlock)
@@ -1308,8 +1327,8 @@ function recordConstNeg(constMap ConstValueMap, resultId ValueId, operand ValueI
 end 'recordConstNeg'
 
 // Is `term` the `ret` of exactly `target`? Asked ONCE PER RETURN SITE, of the one block that site's
-// `return` put its terminator in — so a `false` says the site's own `ret` is gone, which is the whole of
-// `RetBlockLookup.notFound`.
+// `return` put its terminator in — so a `false` says the site's own `ret` is gone (or carries a value the
+// hand-off promoted out from under the site), which is the whole of `RetBlockLookup.notFound`.
 //
 // ⚠ IT ANSWERS A `bool` AND NOT A UNION, AND THAT IS MEASURED. A1h tried a payload-carrying
 // `RetTarget` union in a loop over every ret-bearing block; a payload case is a heap box, so it cost +2

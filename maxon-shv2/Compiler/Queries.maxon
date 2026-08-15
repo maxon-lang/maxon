@@ -1922,6 +1922,13 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		// two compilers emit it from; shv2 raises it in the parser only because `parseBlockBody` is the
 		// one place that knows a nested block consumed no statements.
 		emptyBlock(label, line, column) then reportPositioned(project, code: ErrorCode.semanticEmptyBlock, message: "empty block: '{label}'", line: line, column: column, filePath: path)
+		// ⭐ E3071, wording verbatim from the reference bootstrap (`2-Parser.cs`'s `ParseBodyUntilEnd`), which
+		// `specs/return-statement.md` and `specs/break.md` pin as `maxoncstderr` goldens for all of `return`,
+		// `break` and `continue`. The keyword is interpolated rather than the sentence being written five
+		// times, exactly as the reference does it. The code sits in the SEMANTIC band and shv2 raises it from
+		// the parser for `emptyBlock`'s reason: the statement-list loop is the one place that knows a
+		// terminator was not the last statement of its block.
+		unreachableCode(terminator, line, column) then reportPositioned(project, code: ErrorCode.semanticUnreachableCode, message: "unreachable code after '{terminator}'", line: line, column: column, filePath: path)
 		// E3067's two messages — both verbatim the reference compilers' (`self-assignment.md` compares this
 		// stderr exactly). ONE code, TWO sentences, for `tryOnNonThrowingBuiltin`'s reason: the mistake is
 		// one — a statement that computes nothing — while what the author has to change differs, so a
