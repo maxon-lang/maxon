@@ -801,3 +801,45 @@ one instruction changed. `5890 passed, 0 failed` throughout.
 `W105`/`W93` clear no bring-up row: `slotScan.maxon` is a NEW file rather than one of the 12, and the
 deletion removes compiler code rather than unlisting anything. The table under *The remaining shape — 9
 actionable modules* stands as written.
+
+---
+
+## ⛔ TWO CLASSIFICATIONS IN THIS FILE ARE REFUTED — 2026-08-14, by `W115`, which landed nothing
+
+**Written back by the attempt that measured them**, per this file's own standing rule.
+
+### 1. `unicodeCategory` IS NOT "inert-if-listed"
+
+It is listed in the **Inert-if-listed** class on the ground that its one export is synthesized as
+`__ucd_cat`. **MEASURED on a scaffolded convergence tree:** once `CharacterSet.maxon` is listed,
+`CharacterSet.contains` calls `unicodeGeneralCategory`, and sabotaging that function's BMP arm to
+`return 0` moves the program's answer from `[hello] true false` to **`[  hello  ] false false`**.
+⇒ **it becomes LIVE.** `CharacterSet` is a **THREE-module cone** (`CharacterSet` +
+`helpers/string/unicodeCategory`, retiring `__ucd_cat` with them), not one module.
+
+### 2. `CharacterSet`'s first blocker is NOT the compiler-owned name — §"11 actionable" and `:528` are wrong
+
+Both say `E2004 :31:33` is caused by `isCompilerOwnedTypeName` claiming `CharacterSet`/`CharSet`.
+**CONTROL: `type Pair` — on NO reservation list — with `static let origin = Pair{a: 1, b: 2}` gives the
+IDENTICAL `E2004: Undefined constant 'Pair'`, and the oracle compiles and runs it.** The real first
+blocker is **a missing struct-literal arm in the top-level / lazy-static initializer evaluator**
+(`W116`); the reservation is blocker **2**. A third, `W117`, needs a design ruling.
+
+⇒ **`CharacterSet` is not a name retirement. It is a three-module cone behind two prerequisites that
+have nothing to do with it**, and the sizing is measured: on a scaffolded tree the suite reads
+**5878/19 against a 5897/0 baseline with 3555 of 5878 goldens differing.**
+
+### ⭐ THE ONE PIECE OF GOOD NEWS, AND IT IS A FIRST
+
+**The differing-declarations control PASSES for this cone** — two independent sabotages both move the
+program's answer, and an injected undefined call proves the body is analyzed. **`W63` (`Set`), `W86` and
+`W112` (`Vector`) all WITHDREW on this control.** This is the first remaining module whose listing would
+buy something real.
+
+### ⚠⚠ AND THE CONTROL ITSELF CAN READ FALSE — `W118`
+
+`W115`'s first sabotage did not move the answer *and the executable was byte-identical*. The cause was
+not inertness: **shv2 DISCARDS a `return` and runs the code after it** (no `E3071`, and the early return
+is absent from the emitted IR). ⇒ **a sabotage placed before an existing `return` is silently
+discarded, so this file's central instrument reads INERT on a module that is LIVE.** Until `W118` lands,
+**place the sabotage where no earlier `return` precedes it.**
