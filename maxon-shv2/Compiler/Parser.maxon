@@ -47862,7 +47862,25 @@ export type Parser
 			// three doors now share the ONE verdict and none of them words this fact for itself.
 			try self.requireDeclaredBaseTypeName(recv.tag, nameId: recv.nameId, tok: memberTok)
 
-			throw ParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here", line: memberTok.line, column: memberTok.column)
+			// ⭐⭐ **THE SENTENCE NAMES THE GATE'S THREE ARMS, NOT A ROSTER OF TYPES — AND THAT IS THE CURE
+			// FOR HOW IT WENT STALE (W105 review).** It used to end *"the builtin types (`String`,
+			// `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`)"*, and `Set` stopped being a
+			// builtin the day W105 deleted the synthesized hash table — a hand-spelled roster one file away
+			// from the code that decides, which is this project's signature bug in a USER-FACING string.
+			//
+			// ⚠ **DERIVING IT FROM `isBuiltinGenericBaseName` WAS CONSIDERED AND IS THE WRONG ROSTER**, not
+			// merely a costly one. That predicate answers `Array`, `List`, `Vector`, `__ManagedList`,
+			// `__ManagedListNode`, `__ManagedMemoryCursor` — three reserved spellings no user program may
+			// write, and it names none of `String`/`Character`/`StringIndex`/`CharacterSet`. Generating from
+			// it would have replaced a stale list with a WRONG one.
+			//
+			// ⇒ The gate is `tagCarriesStructLayoutHere` on the line above, and it admits exactly three
+			// things: a `structRef`, a `genericInstance`, and a BYTE RECORD whose corpus declaration is
+			// loaded (`tagIsByteRecord` — `String` and `Character`, and only those two). Every name the old
+			// roster spelled is already one of the first two: an `Array`/`Set`/`Map` value is a
+			// `genericInstance`, a `StringIndex` and a `CharacterSet` are `structRef`s. A sentence that
+			// enumerates nothing cannot go stale when a container is retired or added.
+			throw ParseError.unsupported("a member access '{String.from(memberTok.value)}' on a '{typeTagName(recv.tag)}' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here", line: memberTok.line, column: memberTok.column)
 		end 'notAStruct'
 
 		// ⚠ **AN AGGREGATE-TYPED SELF-FIELD ALIAS IS REFUSED HERE ONLY WHEN NO VALUE OF ITS TYPE COULD EXIST**
@@ -51711,10 +51729,17 @@ export type Parser
 	// producer. Its callers are the `CharacterSet` member set (a preset's seed and a `CharSet from […]`) and
 	// the corpus arm of `Set from […]`.
 	//
-	// ⭐ **THE RESULT IS ENROLLED AS AN OWNED TEMPORARY IN BOTH ARMS, BY DIFFERENT MEANS, WHICH IS WHY THE
-	// ENROLMENT IS HERE AND NOT AT THE CALLERS.** A runtime op owns nothing until `trackOwnedTemp` says so;
-	// an `emitCall` result is classified +1 owned by the call machinery itself (`enrolOwnedCallTemp`). A
-	// caller that tracked unconditionally would enrol the corpus result TWICE and drop it twice.
+	// ⭐⭐ **THE RESULT IS ALREADY ENROLLED AS AN OWNED TEMPORARY, SO NO CALLER MAY TRACK IT.** `emitCall`
+	// classifies its result +1 owned by the call machinery itself (`enrolOwnedCallTemp`); a caller that
+	// tracked it as well would enrol ONE record twice and drop it twice.
+	//
+	// ⚠ **THIS PARAGRAPH USED TO SAY "IN BOTH ARMS, BY DIFFERENT MEANS", AND THAT WORDING OUTLIVED ITS
+	// SECOND ARM.** While a builtin `__set_create` / `__map_create` op existed, a runtime op owned nothing
+	// until `trackOwnedTemp` said so, and the enrolment lived HERE precisely so the two arms could not
+	// disagree. W105 deleted the runtime arm; the conditional half of the rule went with it and the
+	// unconditional half is all that is left. The `Map` twin's caller kept the now-wrong `trackOwnedTemp`
+	// and double-dropped every map literal used as a temporary — see the grave at `parseMapLiteralBody`'s
+	// closing brace, which is where that was found and measured.
 	function emitSetCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		var args = ValueIdArray.create()
 		var argLabels = emptyArgLabels(args)
@@ -52305,7 +52330,25 @@ export type Parser
 		end 'morePairs'
 		try self.consume(TokenKind.rightBracket)
 
-		self.trackOwnedTemp(map, exclusivity: OwnedHeapExclusivity.sole)
+		// ⛔⛔ **A `trackOwnedTemp(map, exclusivity: sole)` STOOD HERE AND DOUBLE-DROPPED EVERY MAP LITERAL
+		// USED AS A TEMPORARY (found at W105 review, MEASURED).** `[1: 10, 2: 20, 3: 30].count()` exited
+		// **0xC0000005** against the bootstrap oracle's **3**, and `dump_ir` named the cause in `@main` — two
+		// consecutive `x64.callDirect __destruct_Map_int_int` on the same record.
+		//
+		// ⭐ **THE LINE WAS CONDITIONALLY CORRECT UNTIL THIS RUNG, WHICH IS WHY IT SURVIVED THE DELETION.**
+		// `emitMapLiteralCreate` had a `__map_create` arm — a raw runtime op, and a runtime op owns nothing
+		// until a caller says so. That arm is gone: the create is now an `emitCall`, and `emitCall`
+		// classifies its result +1 owned by itself (`enrolOwnedCallTemp`). Tracking it again enrols one
+		// record TWICE. `emitSetCreate`'s header states exactly this rule and `parseSetMemberList` obeys it
+		// by returning without tracking — the `Set` twin was correct throughout, and the fork is what let the
+		// two come apart.
+		//
+		// ⚠ **THE SUITE WAS GREEN OVER IT, AND THE REASON IS WORTH KEEPING**: `removeFromPendingTemps` strips
+		// ALL occurrences, so the BOUND form (`let m = [1: 10]`) cancels both enrolments and answers
+		// correctly. Only the unbound temporary — a literal consumed in value or condition position —
+		// reaches scope exit still holding two. `specs-shv2/block-condition-temporaries.md` is the spec for
+		// exactly that shape and every one of its cases used an ARRAY literal; the map cases below it are
+		// this fix's gate.
 		return map
 	end 'parseMapLiteralBody'
 

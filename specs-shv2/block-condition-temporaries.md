@@ -276,3 +276,68 @@ end 'main'
 ```exitcode
 3
 ```
+
+<!-- test: map-literal-temporary-in-value-position -->
+
+⛔⛔ **EVERY CASE ABOVE BUILDS ITS TEMPORARY FROM AN *ARRAY* LITERAL, AND THAT GAP SHIPPED A DOUBLE FREE**
+(found at the `W105` review). A `[k: v]` literal is the other container born through a bracket, and
+`Parser.parseMapLiteralBody` tracked its create result as an owned temporary on top of the enrolment
+`emitCall` had already made — one record, two `__destruct_Map_<K>_<V>` calls. The program below exited
+**0xC0000005** against the bootstrap oracle's **3**.
+
+⚠ **IT HID BEHIND THE *BOUND* FORM, WHICH IS WHY THE WHOLE SUITE WAS GREEN OVER IT.**
+`removeFromPendingTemps` strips ALL occurrences of a value, so `let m = [1: 10]` cancels both enrolments
+and answers correctly — and every map literal in `specs-shv2/map.md` is bound. Only a literal left as a
+TEMPORARY reaches scope exit still holding two. The three cases here are that shape, one per construct
+this spec's table covers.
+
+```maxon
+function main() returns ExitCode
+	return [1: 10, 2: 20, 3: 30].count() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: map-literal-temporary-in-a-condition -->
+
+The `if` row of this spec's table, over a map rather than an array: the literal is live on both edges of
+the branch and must be released exactly once before it.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var flag = 0 as Integer
+	if [1: 10, 2: 20].count() == 2 'x'
+		flag = 5
+	end 'x'
+	return flag
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: map-literal-temporary-with-managed-columns-does-not-leak -->
+
+⭐ **THE OTHER HALF OF THE SAME RULE, AND THE ONE A DOUBLE FREE CANNOT BE MISTAKEN FOR.** The fix must
+release the record ONCE — not twice (the crash above) and not zero times. Both columns are heap `String`s
+and the loop builds two hundred of them, so a missed release exits **101** and a second release faults;
+answering `4` is the only outcome that is neither.
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function main() returns ExitCode
+	var total = 0 as Integer
+	for i in 0 upto 200 'spin'
+		total = total + i - i + ["alpha a fairly long heap string": "beta another long heap string", "gamma a third long heap string": "delta a fourth long heap string"].count()
+	end 'spin'
+	return (total / 100) as ExitCode
+end 'main'
+```
+```exitcode
+4
+```

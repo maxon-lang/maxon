@@ -899,8 +899,11 @@ total 21190
 ## The `[k: v]` LITERAL is the same map — the door the retirement missed (W41-lit)
 
 ⭐⭐ **EVERY `Map` DOOR WAS GATED BY THE RETIREMENT SWITCH EXCEPT THE LITERAL.** `Map` is
-`stdlib/Map.maxon` now, and `ProgramSignatures.isMapBaseName` answering false for a declared `Map` is
-what retires the synthesized record at every door that asks it. `Parser.parseMapLiteralBody` asked
+`stdlib/Map.maxon` now, and at the time this was written `ProgramSignatures.isMapBaseName` answering
+false for a declared `Map` was what retired the synthesized record at every door that asked it. **W105
+then deleted the synthesized record outright, and the switch with it** — the retirement is unconditional
+today and there is no predicate left to ask, so read the paragraph below as the history of how the
+literal got here rather than as a control that still exists. `Parser.parseMapLiteralBody` asked
 none of them for its COLUMN RULES: it called `requireMapColumnTypes` — the *builtin's* rule —
 directly, and it moved each column value in under the *builtin's* ownership protocol. So a `[k: v]`
 literal and the `create()` + `upsert` spelling of the identical map were two different containers,
@@ -1147,9 +1150,10 @@ error E2015: Unsupported: `Map` member 'createIterator' — shv2 provides count/
 error E4016: 'MapError' is the error enum the Map runtime (MapError) throws, and this compile declares no enum of that name
 ```
 
-— which is the control this file owed and did not have. `ProgramSignatures.isMapBaseName` answers
-FALSE once a `Map` is declared, so the whole retirement is ONE predicate, and a predicate with no case
-behind it is a switch nothing would notice being flipped back.
+— which is the control this file owed and did not have. `ProgramSignatures.isMapBaseName` answered
+FALSE once a `Map` was declared, so the whole retirement was ONE predicate — and a predicate with no case
+behind it is a switch nothing would notice being flipped back, which is exactly why **W105 deleted it
+along with the `__map_*` runtime its true arm selected.** The refusal above is now unconditional.
 
 ⚠⚠ **AND THE THIRD LINE IS THE ONE WORTH READING: THE SYNTHESIZED RECORD IS NOT A WORKING FALLBACK.**
 It throws `MapError`, whose ordinals it can only get from a *declared* enum of that name — and the

@@ -424,7 +424,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:14:18: Unsupported: a member access 'x' on a 'function' value — only a struct, a generic instance and the builtin types (`String`, `Character`, `Array`, `Set`, `StringIndex`, `CharacterSet`) carry members here
+error E2015: <fragment>:14:18: Unsupported: a member access 'x' on a 'function' value — only a struct, a generic instance and the byte records (`String`, `Character`) carry members here
 ```
 
 **A FIELD READ OFF A TEMPORARY — THE BORROW WHOSE OWNER DIES AT THE SEMICOLON.**
