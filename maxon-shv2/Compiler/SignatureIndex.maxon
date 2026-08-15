@@ -19400,6 +19400,22 @@ export type ProgramSignatures
 	// ⚠ The `__`-prefixed three cannot be reached from a USER file (`Parser.requireUnreservedName`), and they
 	// are here anyway because the set is the CLASS: `stdlib/Builtins.maxon` is the one module allowed those
 	// names, so a corpus edit is exactly the route the `Vector` half of the measurement above came in by.
+	//
+	// ⛔⛔ **THIS IS NOT A FREE-STANDING ROSTER — `isBuiltinGenericBaseName` DERIVES FROM IT, SO A NAME ADDED
+	// HERE JOINS THE SYNTHESIZED SET TOO, AND THAT SET'S CONSUMERS PANIC.** The membership rule for the wide
+	// predicate is "shv2 SYNTHESIZES it, so no `StructLayout` exists"; the rule here is "shv2 serves a
+	// container under the name and its instances are not the managed record". Today those two coincide on
+	// every name but `Array`, which is what makes the derivation legal — they are not the same rule, and the
+	// next container to be LISTED is where they come apart. **MEASURED (review, W112)**: one extra arm here
+	// for `Set` — a name shv2 still composes `Set.create` / `Set from […]` / `contains` from, but which
+	// `stdlib/Set.maxon` has DECLARED since `W105` — turns an ordinary `typealias NumSet = Set with Num` into
+	// `panic … builtinGenericTypeParamCount: 'Set' is not a synthesized builtin generic`, out of
+	// `Parser.checkGenericInstance`, on the first program compiled. `instanceCreateIsDeclared` and
+	// `genericInstanceBoxDropCallee` read the wide predicate the same way.
+	//
+	// ⇒ **The panic is the reason this is a note and not a defect: the coupling is LOUD and immediate.** A
+	// name that belongs in the narrow question but NOT in the synthesized one cannot be added here — it needs
+	// the two rosters separated first, with the shared five lifted into a helper both read.
 	export function isBuiltinGenericBaseNameBesidesTheRecord(name ByteArray) returns bool
 		return self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
 	end 'isBuiltinGenericBaseNameBesidesTheRecord'

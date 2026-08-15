@@ -45268,14 +45268,37 @@ export type Parser
 	// conformance REQUIRES `static init(value __ManagedMemory) returns Self`, so a conformer that constructs
 	// always reaches here; one that DELEGATES never does, and rests on the skip alone (that case's table).
 	//
-	// ⚠ **THE MARKER IS RENDERED, NOT SPELLED**, so a `BuiltinStringLiteral` conformer named for a container
-	// meets its own marker in the sentence rather than the array one — `requireBufferIsItsOwnRecord`'s rule.
+	// ⛔⛔ **IT IS GATED ON THE ARRAY MARKER, AND RENDERING THE MARKER INTO THE SENTENCE WAS NOT ENOUGH —
+	// MEASURED (review, W112).** This header used to claim that because the marker is RENDERED rather than
+	// spelled, "a `BuiltinStringLiteral` conformer named for a container meets its own marker in the sentence
+	// rather than the array one". **That is false, and rendering is why it reads as true**: the marker's NAME
+	// interpolates correctly while the REASON below it stays hardcoded to the array surface. Measured on
+	// `type Vector implements BuiltinStringLiteral` with a `managed` + `flag` pair — the
+	// `interface-conformance.error.literal-marker-conformer-…` shape with only the name changed — this door
+	// answered *"…not the `__ManagedMemory` record a `BuiltinStringLiteral` conformer's literal is an identity
+	// on. Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize`"*.
+	// Every clause of that is wrong for it: the declaration is NOT generic, so there is no `Vector with …`;
+	// `noteArrayLiteralConformer` is never called for a string marker, so no array surface is at stake; and it
+	// PREEMPTED `requireFusedWrapperTag`'s sentence, which is the right one and is what the identical
+	// declaration named `Wrapped` gets. The wrong NOUN is the one failure this door exists to prevent, so it
+	// arrived carrying it.
+	//
+	// ⇒ **The gate is the array marker, the same opening clause `requireArrayMarkerDeclaresTheBuffer` has**,
+	// because the hazard the sentence names — the growable surface reached through
+	// `isArrayBaseName`'s widening — is reachable through no other marker. A container-named conformer of any
+	// OTHER literal marker falls through to `requireFusedWrapperTag`, whose subject is the byte record and
+	// whose sentence is true of it.
+	// (`array-declared-record.error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject`)
 	function requireNameIsNotABuiltinContainerBase(layout StructLayout, anchor Token) throws ParseError
+		if not layout.requireBuiltinManagedWrapperInterfaceName().equals(BuiltinArrayLiteralInterfaceName) 'notTheArrayMarker'
+			return
+		end 'notTheArrayMarker'
+
 		if not self.signatures.isBuiltinGenericBaseNameBesidesTheRecord(layout.name) 'aNameNoContainerHolds'
 			return
 		end 'aNameNoContainerHolds'
 
-		throw ParseError.unsupported("`{String.from(layout.name)}` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `{String.from(layout.name)} with …` is already this compiler's own instance and not the `{String.from(ManagedMemoryTypeName)}` record a `{String.from(layout.requireBuiltinManagedWrapperInterfaceName())}` conformer's literal is an identity on. Honouring the marker would put every `{String.from(layout.name)}` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker", line: anchor.line, column: anchor.column)
+		throw ParseError.unsupported("`{String.from(layout.name)}` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `{String.from(layout.name)} with …` is already this compiler's own instance and not the `{String.from(ManagedMemoryTypeName)}` record a `{String.from(BuiltinArrayLiteralInterfaceName)}` conformer's literal is an identity on. Honouring the marker would put every `{String.from(layout.name)}` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker", line: anchor.line, column: anchor.column)
 	end 'requireNameIsNotABuiltinContainerBase'
 
 	// ⭐⭐ **A GENERIC `BuiltinArrayLiteral` CONFORMER WHOSE FIRST FIELD IS NOT THE BUFFER (ARR5)** — it exists

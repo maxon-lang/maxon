@@ -1566,3 +1566,47 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:18:4: Unsupported: `Vector` member 'push' — shv2 provides count/get/set; that list IS the surface, so nothing else is served here
 ```
+
+<!-- test: error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject -->
+⛔ **THE NEW REFUSAL'S NOUN WAS WRONG FOR EVERY MARKER BUT ITS OWN, AND THE HEADER SAID IT COULD NOT BE
+(found in review).** `Parser.requireNameIsNotABuiltinContainerBase` RENDERS the marker into its sentence
+rather than spelling it, and its header read that as proof a `BuiltinStringLiteral` conformer would "meet
+its own marker in the sentence rather than the array one". Rendering carries the marker's NAME and not the
+REASON under it, which stayed hardcoded to the growable surface. **MEASURED before the gate**, on the
+declaration below — `interface-conformance.error.literal-marker-conformer-would-be-discarded-at-construction`
+with only the type's name changed:
+
+> ``…not the `__ManagedMemory` record a `BuiltinStringLiteral` conformer's literal is an identity on.
+> Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize`…``
+
+Three clauses, none of them true of it: the declaration is **not generic**, so the `Vector with …` the
+sentence quotes does not exist; `ProgramSignatures.noteArrayLiteralConformer` is called for the ARRAY marker
+alone, so no array surface is at stake and nothing was skipped; and it **preempted**
+`requireFusedWrapperTag`, whose sentence is the right one here and is what the byte-for-byte identical
+declaration named `Wrapped` still gets.
+
+⇒ **The door is gated on the array marker, the same opening clause its sibling
+`requireArrayMarkerDeclaresTheBuffer` already had.** The assertion below is that the name `Vector` buys this
+declaration NOTHING — it meets the byte-record sentence a `Wrapped` meets, because the byte record is what
+its marker is about. A container name is disqualifying for the ARRAY marker specifically, and that is the
+whole of the rule.
+```maxon
+type Vector implements BuiltinStringLiteral
+	var managed as __ManagedMemory
+	var flag as bool
+
+	export static function init(value __ManagedMemory) returns Self
+		return Self{managed: value, flag: false}
+	end 'init'
+end 'Vector'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
+	try mm.setLength(40) otherwise return 2
+	let w = Vector.init(mm)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:10: Unsupported: `Vector` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
+```

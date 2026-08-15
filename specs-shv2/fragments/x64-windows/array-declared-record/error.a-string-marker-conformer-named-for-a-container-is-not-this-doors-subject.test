@@ -1,0 +1,19 @@
+// Test: error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject
+type Vector implements BuiltinStringLiteral
+	var managed as __ManagedMemory
+	var flag as bool
+
+	export static function init(value __ManagedMemory) returns Self
+		return Self{managed: value, flag: false}
+	end 'init'
+end 'Vector'
+
+function main() returns ExitCode
+	let mm = try __ManagedMemory.create(64, elementSize: 1) otherwise return 1
+	try mm.setLength(40) otherwise return 2
+	let w = Vector.init(mm)
+	return 0
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:7:10: Unsupported: `Vector` implements `BuiltinStringLiteral`, one of `stdlib/Builtins.maxon`'s literal markers, so its record would be the compiler's own fused byte record rather than the fields it declares. shv2 mints that record only for the two names it owns the record FOR — `String` and `Character` — because a conformer of any other name gets a VALUE whose bytes are a byte record's and whose IDENTITY is a struct's: every declared field the fused record has no slot for is discarded at construction, and the struct cascade that later drops or clones it reads past the record's end
