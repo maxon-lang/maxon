@@ -45212,6 +45212,7 @@ export type Parser
 			return self.coOwnAggregateAsTemp(buffer, range: range)
 		end 'theBufferRecord'
 
+		try self.requireNameIsNotABuiltinContainerBase(layout, anchor: anchor)
 		try self.requireArrayMarkerDeclaresTheBuffer(layout, anchor: anchor)
 		let tag = try self.requireFusedWrapperTag(layout, anchor: anchor)
 
@@ -45244,9 +45245,43 @@ export type Parser
 		return UnnamedTypeId
 	end 'fusedWrapperNameId'
 
-	// ⭐⭐ **A GENERIC `BuiltinArrayLiteral` CONFORMER WHOSE FIRST FIELD IS NOT THE BUFFER (ARR5)** — the
-	// third sentence in this family, and it exists because the other two are each about something this
-	// declaration does not get wrong.
+	// ⭐⭐ **A LITERAL MARKER ON A NAME SHV2 ALREADY SERVES A CONTAINER UNDER (W112)** — asked FIRST of this
+	// family's sentences, because the NAME disqualifies the declaration whatever its fields say.
+	//
+	// The others each presume the compiler could own the record if the declaration were shaped right:
+	// `requireArrayMarkerDeclaresTheBuffer` tells a conformer to make its first field the buffer,
+	// `requireBufferIsItsOwnRecord` tells it to drop its second field, and `requireFusedWrapperTag` says the
+	// compiler owns no record under that name. **All three are the wrong advice here.** A declaration named
+	// `Vector` or `List` may be perfectly shaped — `stdlib/Vector.maxon`'s is, to the field — and it is still
+	// not the array record, because shv2 serves a container of its own under that name and a `Vector with 3 T`
+	// carries a SIZE the record has no coordinate for.
+	//
+	// ⚠ **THIS IS A NOUN, NOT A GATE, AND THE MEASUREMENT SAYS SO — READ IT BEFORE ASSUMING WHAT IT BUYS.**
+	// The rule that actually keeps a container off the array surface is
+	// `ProgramSignatures.noteArrayLiteralConformer`'s skip, and it is also what makes this door REACHABLE:
+	// without the skip, `isArrayBaseName` answers TRUE for the name, `firstFieldIsItsOwnBuffer` follows, and
+	// the caller returns down its IDENTITY arm before any of these sentences is asked. **Sabotage-measured on
+	// the three `array-declared-record.error.a-conformer-named-for-…` cases**: with the skip reverted and this
+	// refusal in place, the two constructing cases COMPILE CLEAN; with the skip in place and this refusal
+	// reverted, they are refused with `requireFusedWrapperTag`'s `String`/`Character` sentence — accurate
+	// about a `Holder` and misleading about a `Vector`, which is the whole of what this door adds. The
+	// conformance REQUIRES `static init(value __ManagedMemory) returns Self`, so a conformer that constructs
+	// always reaches here; one that DELEGATES never does, and rests on the skip alone (that case's table).
+	//
+	// ⚠ **THE MARKER IS RENDERED, NOT SPELLED**, so a `BuiltinStringLiteral` conformer named for a container
+	// meets its own marker in the sentence rather than the array one — `requireBufferIsItsOwnRecord`'s rule.
+	function requireNameIsNotABuiltinContainerBase(layout StructLayout, anchor Token) throws ParseError
+		if not self.signatures.isBuiltinGenericBaseNameBesidesTheRecord(layout.name) 'aNameNoContainerHolds'
+			return
+		end 'aNameNoContainerHolds'
+
+		throw ParseError.unsupported("`{String.from(layout.name)}` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `{String.from(layout.name)} with …` is already this compiler's own instance and not the `{String.from(ManagedMemoryTypeName)}` record a `{String.from(layout.requireBuiltinManagedWrapperInterfaceName())}` conformer's literal is an identity on. Honouring the marker would put every `{String.from(layout.name)}` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker", line: anchor.line, column: anchor.column)
+	end 'requireNameIsNotABuiltinContainerBase'
+
+	// ⭐⭐ **A GENERIC `BuiltinArrayLiteral` CONFORMER WHOSE FIRST FIELD IS NOT THE BUFFER (ARR5)** — it exists
+	// because the family's other sentences are each about something this declaration does not get wrong. (The
+	// ordinal that used to open this line was a count kept in prose with nothing checking it, and adding a
+	// fourth sentence at `W112` was the edit that would have made it silently false.)
 	//
 	// `requireBufferIsItsOwnRecord` is about a SECOND field, and there is only one here.
 	// `requireFusedWrapperTag` is about the two NAMES the compiler owns a byte record for, and it would say

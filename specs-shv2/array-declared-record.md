@@ -1442,3 +1442,127 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:18:15: Unsupported: `Array` member 'nosuchmember' — P1.7 provides managed/get/set/first/count/push/resize/append/appendMemory; that list IS the surface, so nothing else is served here
 ```
+
+<!-- test: error.a-conformer-named-for-a-container-the-compiler-serves-is-refused -->
+⛔⛔ **THE MARKER IS OPEN TO ANY NAME EXCEPT ONE SHV2 ALREADY SERVES A CONTAINER UNDER, AND THAT
+EXCEPTION WAS MISSING — A FIXED-SIZE `Vector with 3 Num` GREW.** `Bag` above is admitted because the
+compiler owns no `Bag`; `Vector` is different in kind, because shv2 synthesizes that container itself and
+a `Vector with N T` states its SIZE as a second coordinate of its instance identity
+(`GenericInstanceRegistry.fixedSizes`) where a `__ManagedMemory with T` states none.
+
+**MEASURED on the tree before this case existed, with nothing but the declaration below added to an
+ordinary program**: `noteArrayLiteralConformer` filed `Vector` as a conformer, `isArrayBaseName("Vector")`
+went TRUE through the non-corpus widening, and `Parser.dispatchMethodOnReceiver` — which asks the ARRAY
+arm before the vector one — served the growable surface on a fixed-size receiver. `Vec3.create()` reported
+**count 0**, four `push`es took it to **4**, and `resize(9)` to **9**. Not a refusal and not a diagnostic:
+the size that is part of the type was simply gone.
+
+⇒ **A name shv2 serves a container under is not open to the marker.** The conformance REQUIRES a
+`static init(value __ManagedMemory) returns Self` (E3016 without one), and that body's identity is
+precisely what cannot be honoured under such a name — so the declaration is refused where it constructs,
+with the container's own reason rather than the `String`/`Character` sentence a `Holder` gets.
+```maxon
+typealias Num = int(0 to 100)
+
+type Vector uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+end 'Vector'
+
+typealias Vec3 = Vector with 3 Num
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.push(5 as Num)
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:10: Unsupported: `Vector` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `Vector with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
+```
+
+<!-- test: error.a-conformer-named-for-the-list-is-refused-for-the-same-reason -->
+⭐ **THE SAME REFUSAL AT THE SECOND NAME, BECAUSE THE RULE IS ABOUT THE CLASS AND NOT ABOUT `Vector`.**
+`List` is the other container shv2 still synthesizes under a name a user may write, and its record is a
+chain of 24-byte nodes dropped through `__list_decref` — nothing like the 48-byte managed record. **MEASURED
+before the rule existed:** the identical declaration named `List` compiled, and `l.resize(9)` — a member
+the list roster does not carry, and cannot (`shv2 provides create/append/prepend/get/first/removeFirst/count`)
+— answered **count 9**. Pinning one name would have left the other open, which is the shape a
+`covered-by` roster written twice always takes.
+```maxon
+typealias Num = int(0 to 100)
+
+type List uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Self{managed: managed}
+	end 'init'
+end 'List'
+
+typealias NumList = List with Num
+
+function main() returns ExitCode
+	var l = NumList.create()
+	l.resize(9)
+	return l.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:10:10: Unsupported: `List` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `List with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `List` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
+```
+
+<!-- test: error.a-conformer-named-for-a-container-that-constructs-nothing-still-does-not-take-its-surface -->
+⭐⭐ **THE HALF THE TWO CASES ABOVE CANNOT SEE: A CONFORMER THAT CONSTRUCTS NOTHING.** Its `init` satisfies
+the conformance by DELEGATING, so it never reaches a fused-wrapper literal and the declaration stands. What
+must still hold is that the marker did not make `Vector` an ARRAY declaration, and the only thing holding
+that is `ProgramSignatures.noteArrayLiteralConformer`'s skip. The assertion is the ROSTER in the sentence:
+`count/get/set` is the VECTOR surface, and a hijacked receiver would be reciting the growable array's
+`managed/get/set/first/count/push/resize/append/appendMemory` instead — or, as it did before this rung,
+not being refused at all.
+
+⭐ **BOTH SABOTAGES WERE RUN, AND THE FIRST ONE REFUTED THE PARAGRAPH THAT USED TO STAND HERE.** It said the
+skip covers the surface, the refusal covers the declaration, and neither substitutes for the other — a tidy
+split, and wrong about the direction of the dependency:
+
+| sabotage | this case | the two above |
+|---|---|---|
+| **skip off**, refusal on | `E3005 … Cannot return 'Vector' from function declared to return 'Vector.ElementMemory'` | **compilation SUCCEEDS** — no refusal at all |
+| skip on, **refusal off** | **PASS** | `requireFusedWrapperTag`'s `String`/`Character` sentence |
+
+⇒ **The skip is the load-bearing rule and it is what makes the refusal REACHABLE.** Without it
+`isArrayBaseName` answers TRUE for the name, `firstFieldIsItsOwnBuffer` follows, and
+`Parser.emitFusedWrapperLiteral` returns down its IDENTITY arm before any of the three sentences is asked —
+which is precisely how a fixed-size vector came to be served `push`. The refusal is not a second half; it is
+the NOUN the declaration gets once the skip has taken it off the array surface.
+```maxon
+typealias Num = int(0 to 100)
+
+type Vector uses Element implements BuiltinArrayLiteral
+	typealias ElementMemory = __ManagedMemory with Element
+
+	export var managed as ElementMemory
+
+	export static function init(managed ElementMemory) returns Self
+		return Vector.init(managed)
+	end 'init'
+end 'Vector'
+
+typealias Vec3 = Vector with 3 Num
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.push(5 as Num)
+	return v.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:18:4: Unsupported: `Vector` member 'push' — shv2 provides count/get/set; that list IS the surface, so nothing else is served here
+```

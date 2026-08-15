@@ -4193,13 +4193,37 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 //      count travels in the LAYOUT DESCRIPTOR. shv2's descriptors carry a stride and no count, which is the
 //      same gap board row `S2u` names, and it costs one copy of every member per size.
 //
-// ⚠ **AND LISTING THE MODULE COSTS THREE MECHANISMS BEFORE ANY OF THAT — all built by `W86`, all measured,
-// all withdrawn with the entry.** `ProgramSignatures.noteArrayLiteralConformer` (a second stdlib
-// `BuiltinArrayLiteral` conformer STEALS `corpusArrayRecordName` and every program in the tree fails to
-// compile — see that header); `firstFieldIsItsOwnBuffer` + `Parser.emitFusedWrapperLiteral` (the identity
-// arm must RETYPE, or `init`'s `Self{managed: managed}` is `E3005`); and `requireVectorElementType` (an
-// instance stating NO count publishes no slots, so the element rule is vacuous — without it `create()`'s
-// `Self{}` is `E2015`). A future listing rung owes all three.
+// ⚠ **AND LISTING THE MODULE COSTS THREE MECHANISMS BEFORE ANY OF THAT.** `W86` named all three and
+// withdrew all three; **`W112` LANDED THE FIRST AND WALKED THE OTHER TWO TO A FIXED POINT**, so what
+// follows is a MEASURED ORDER rather than a list.
+//
+//   1. **`ProgramSignatures.noteArrayLiteralConformer` — BUILT AND LANDED (`W112`), and not on the stdlib
+//      route's account.** A second STDLIB conformer steals `corpusArrayRecordName` and every program in the
+//      tree fails to compile; `W86` judged the fix untestable while the module stays unlisted and was right
+//      about that route and wrong about the other. **The USER route needs no whitelist line at all** — a
+//      program declaring `type Vector uses Element implements BuiltinArrayLiteral` grew a fixed-size vector
+//      through the array surface on `main`, silently. See that function's header for both measurements.
+//   2. **`firstFieldIsItsOwnBuffer` + `Parser.emitFusedWrapperLiteral` — the identity arm must admit a
+//      `Vector` base and RETYPE its result.** MEASURED past (1) with the module listed:
+//      **`E3005 stdlib/Vector.maxon:14:3: Cannot return 'Vector.ElementMemory' from function declared to
+//      return 'Vector_T…'`** — `init`'s `Self{managed: managed}`, exactly as `W86` predicted. ⚠ **And the
+//      skip in (1) is WHY the buffer's type reads as the raw inner alias**: the in-body `__ManagedMemory`
+//      fold learns its target from the conformer set (`array-declared-record`'s
+//      `a-generic-conformer-of-another-name-is-the-record-too`), and a `Vector` is no longer in it. So (2)
+//      owes the fold target too, not only the retype — a fact (1) created and nobody would predict.
+//   3. **`requireVectorElementType`** — an instance stating NO count publishes no slots, so the element rule
+//      is vacuous and `create()`'s `Self{}` is `E2015` without it. NOT reached by `W112`'s walk: the wall
+//      below stops the compile first.
+//
+// ⛔⛔ **AND PAST ALL THREE THE `self` WALL IS EXACTLY WHERE `W86` LEFT IT — RE-MEASURED AT THE DOOR BY
+// `W112`, WITH NO ROSTER STRIKE AT ALL.** With (1) landed and (2) probed in, `--filter=vector` is
+// **51 passed, 4 failed** against a base of 55/0, and all four are this wall:
+// `argument type mismatch for 'self': expected 'Vector_Int', got 'Vec3'` /`'Vec4'`, and
+// `expected 'Vector_int', got 'Vector_N4_int'` / `expected 'Vector_bool', got 'Vector_N9_bool'` — the
+// mangled receiver spelling the size the declaration's own `Self` does not. ⚠ **A ROSTER STRIKE IS NOT THE
+// TRIGGER, ONLY AN AMPLIFIER**: `for … in` (through the corpus `createIterator`), `Vector from […]` (through
+// the corpus `init`) and a VARIABLE-index `set` (through the throwing accessor) all reach the declaration on
+// VISIBILITY alone. The two candidate cures above are unchanged and neither is built.
 //
 // ⚠⚠ **AND A FOURTH THING IT OWES IS NOT A MECHANISM AT ALL — IT IS A DECISION ABOUT THE `for … in` FORM,
 // WHICH FLIPS ON VISIBILITY ALONE (added in review, W86).** `Parser.parseForIn`'s own header states, as a
@@ -4215,12 +4239,18 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 // it. The trade may well be worth taking for uniformity with `Array`; what must not happen is its arriving
 // as a side effect of a whitelist line.
 //
-// ⚠ **THE `listWhitelistedModule` LINE IS NOT THE DELIVERABLE AND WAS WITHDRAWN, `W63`'s `Set` RULE
-// APPLIED.** With the entry live and nothing retired the differing-declarations control comes back INERT:
-// `stdlib/Vector.maxon`'s `count()` rewritten to `return managed.length() + 100` leaves a
+// ⚠ **THE `listWhitelistedModule` LINE IS NOT THE DELIVERABLE AND WAS WITHDRAWN TWICE, `W63`'s `Set` RULE
+// APPLIED BOTH TIMES.** With the entry live and nothing retired the differing-declarations control comes
+// back INERT: `stdlib/Vector.maxon`'s `count()` rewritten to `return managed.length() + 100` leaves a
 // `Vec3.create()`+`set`+`get`+`count()` program answering **8**, byte-for-byte identical at **11,795
 // bytes**; an UNDEFINED CALL in that same body compiles clean and still answers 8. The entry is byte-neutral
 // (`return 7` identical at 5,567 bytes) and buys nothing.
+//
+// ⭐ **`W112` RE-RAN THAT CONTROL WITH MECHANISMS (1) AND (2) ABOVE IN PLACE — i.e. with the corpus `init`
+// GENUINELY REACHED — and it is still INERT for the members that matter.** Same sabotage, same program
+// answering **8** at an identical **5,650 code bytes**, and the undefined-call injection still compiles
+// clean. So the entry does not become worth taking one door earlier: everything it makes REACHABLE is red on
+// the `self` wall, and everything that still PASSES is passing from the synthesized surface.
 //
 // ⭐ **ITS RUNTIME REPRESENTATION IS AN `Array`'s, EXACTLY — the 48-byte `ManagedRecordBytes` fused record, the
 // `__managed_*` helpers, `__managed_decref`.** A fixed-size buffer and a growable one differ in what may be DONE to
@@ -8443,35 +8473,46 @@ export type ProgramSignatures
 	// fact derived from a marker two declarations carry is decided by walk order, and the note admitted as
 	// much while resting on the count staying at one.
 	//
-	// ⭐ **THE TIEBREAK IS NAMED HERE AND DELIBERATELY NOT BUILT, BECAUSE NOTHING IN THIS TREE CAN RUN IT.**
-	// It is a skip at the top of this function for a name shv2 already owns as its own SIZED container base
-	// (`isVectorBaseName`): a `Vector`'s size is the second coordinate of its instance identity
+	// ⭐⭐ **THE TIEBREAK IS THE SKIP BELOW, AND `W112` BUILT IT BECAUSE THE TREE COULD RUN IT AFTER ALL.**
+	// `W86` named it, judged it unreachable while `Vector.maxon` stays unlisted, and withdrew it as a fix no
+	// case could turn red. ⛔ **That judgement was scoped to the STDLIB route and the USER route was open the
+	// whole time**: `noteArrayLiteralConformer` is called for a USER file too, and a user program declaring
+	// `type Vector uses Element implements BuiltinArrayLiteral` needs no whitelist line to reach it. **MEASURED
+	// on `main`, no compiler edit**: `Vec3.create()` answered count **0**, four `push`es **4**, `resize(9)`
+	// **9** — the size that is part of the type, gone, with no diagnostic. See
+	// `isBuiltinGenericBaseNameBesidesTheRecord` for the full measurement and for the `List` twin; the two
+	// `array-declared-record.error.a-conformer-named-for-…` cases pin both.
+	//
+	// The rule the skip states: a name shv2 already serves a container under is not made an ARRAY declaration
+	// by the marker. A `Vector`'s size is the second coordinate of its instance identity
 	// (`GenericInstanceRegistry.fixedSizes`, see `VectorBuiltinBaseName`), so `Vector with 3 Int` is not the
 	// record a `__ManagedMemory with Int` folds onto and never can be — one instance would have to be two —
 	// and its literal already has its own door (`Parser.parseVectorFromConstruction`, a RETYPE of the array
-	// literal rather than an identity).
+	// literal rather than an identity). A `List`'s record is a chain of nodes and shares nothing but the word.
 	//
-	// ⛔⛔ **AND THE SKIP IS NOT ONLY ABOUT THE FOLD TARGET — IT IS WHAT KEEPS A VECTOR OFF THE `Array`
-	// SURFACE, IN EVERY PROGRAM RATHER THAN ONLY IN A CONTESTED ONE (sharpened in review, W86).** Taking
-	// `corpusArrayRecordName` makes `isArrayBaseName(b"Vector")` answer TRUE at THAT predicate's first test
-	// (the bare name equality, not the `hasNonCorpusArrayConformer` widening under it), so every
-	// `Vector with N T` is an `Array` instance as well — and `Parser.dispatchMethodOnReceiver` asks the array
-	// arm FIRST. A vector receiver would then reach `dispatchArrayMethod`, whose roster SERVES `push`,
-	// `resize` and `clear`: a fixed-size container grown through its own type's back door, which is a WRONG
-	// ANSWER and not a refusal. It is unreachable today only because the tree-wide `E2015` above stops the
-	// compile before any dispatch runs — so the loud failure is what stands between here and the silent one,
-	// and a rung that fixed only the loud half would uncover the quiet one.
+	// ⇒ **ONE SKIP CLOSES BOTH HALVES, WHICH IS WHY IT IS HERE AND NOT AT EITHER SYMPTOM.** The loud half is
+	// the stdlib one: a second STDLIB conformer takes `corpusArrayRecordName` outright, so listing
+	// `stdlib/Vector.maxon` made `isArrayBaseName(b"Array")` FALSE and refused `stdlib/Array.maxon:114`'s own
+	// identity — every program in the tree, `return 7` included. The quiet half is the user one above, where
+	// `isArrayBaseName` goes TRUE through the `hasNonCorpusArrayConformer` widening and
+	// `Parser.dispatchMethodOnReceiver` — which asks the array arm FIRST — serves `push`/`resize` on a
+	// fixed-size receiver. Same cause, opposite volume.
 	//
-	// ⇒ **It lands on the day the module is listed and not before**: with `Vector.maxon` unlisted the skip
-	// cannot fire, so it would be a fix no case in the suite could turn red — the shape this tree refuses to
-	// carry. `W86` built it, measured it (the tree-wide E2015 above becomes a clean compile of every program),
-	// and withdrew it with the entry.
+	// ⚠ **THE SKIP IS SILENT HERE AND THE REFUSAL IS AT THE CONSTRUCTION**, because that is where the noun is
+	// right: `Parser.requireNameIsNotABuiltinContainerBase`. The marker's own conformance requires a
+	// `static init(value __ManagedMemory) returns Self` (E3016 without one), so every legal conformer builds
+	// the identity this compiler cannot honour under such a name, and the declaration is refused there rather
+	// than being quietly ignored.
 	//
 	// ⚠ v1 breaks the same tie by PROBING THE NAME `"Array"` first
 	// (`maxon-selfhosted/Compiler/Parser.maxon:16034-16049`) under a comment claiming the compiler knows
 	// nothing about `Array` — the probe is the knowledge. Not to be ported: the fact shv2 reads instead is
 	// one it genuinely holds, and it names the declaration that is DISQUALIFIED rather than the one that wins.
 	export function noteArrayLiteralConformer(name ByteArray, isStdlibSource bool)
+		if self.isBuiltinGenericBaseNameBesidesTheRecord(name) 'shv2AlreadyServesAContainerUnderThisName'
+			return
+		end 'shv2AlreadyServesAContainerUnderThisName'
+
 		if not self.declaresTheArrayLiteralMarker(name) 'firstDeclarationOfThisName'
 			self.arrayLiteralConformers.push(name)
 		end 'firstDeclarationOfThisName'
@@ -19325,10 +19366,43 @@ export type ProgramSignatures
 
 	// Is `name` a BUILTIN generic base — one shv2 synthesizes rather than reads a declaration for, so no
 	// `StructLayout` exists for it and none is missing. The ONE home of the builtin-container disjunction —
-	// every door that means "a container this compiler owns" asks here rather than re-spelling the four names.
+	// every door that means "a container this compiler owns" asks here rather than re-spelling the names. (The
+	// count that used to be written into that sentence is gone: it said FOUR against six arms, which is a
+	// roster kept in prose with nothing checking it.) It is spelled as the record's arm plus the rest so that
+	// the narrower question below is not a second copy of the same list.
 	export function isBuiltinGenericBaseName(name ByteArray) returns bool
-		return self.isArrayBaseName(name) or self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
+		return self.isArrayBaseName(name) or self.isBuiltinGenericBaseNameBesidesTheRecord(name)
 	end 'isBuiltinGenericBaseName'
+
+	// ⭐⭐ **THE SAME DISJUNCTION WITHOUT ITS `Array` ARM — the set of container names shv2 SERVES ITSELF AND
+	// WHOSE INSTANCES ARE NOT THE MANAGED RECORD (W112).** The split exists for one caller,
+	// `noteArrayLiteralConformer`, and it is not a convenience: that function RUNS the discovery
+	// `corpusArrayRecordName` is the answer to, so it cannot ask `isArrayBaseName` — the state it would read
+	// is the one being built. Every arm here is a bare name comparison against a constant this file exports,
+	// so it answers the same at any point in the compile.
+	//
+	// ⛔⛔ **WHAT IT KEEPS OUT, AND IT WAS A MEASURED WRONG ANSWER RATHER THAN A HAZARD.** `isArrayBaseName`'s
+	// non-corpus widening admits ANY name a program declares `BuiltinArrayLiteral` on, which is right for a
+	// user's own `Bag` and wrong for a name this compiler already serves a container under. **MEASURED on
+	// `main` with no compiler edit at all**, from a user file declaring
+	// `type Vector uses Element implements BuiltinArrayLiteral` beside an ordinary
+	// `typealias Vec3 = Vector with 3 Num`: `Parser.dispatchMethodOnReceiver` asks the ARRAY arm before the
+	// vector one, so `Vec3.create()` reported **count 0**, four `push`es took it to **4** and `resize(9)` to
+	// **9** — a fixed-size container grown through its own type's name, no diagnostic. The `List` twin is the
+	// same program with the name changed: `resize(9)`, a member the list roster does not carry, answered 9.
+	//
+	// ⚠ **AND THE OTHER HALF OF THE SAME FACT IS A TREE-WIDE REFUSAL, WHICH IS WHY ONE PREDICATE SERVES
+	// BOTH.** A SECOND STDLIB conformer takes `corpusArrayRecordName` outright (last-stdlib-wins, see
+	// `noteArrayLiteralConformer`), so listing `stdlib/Vector.maxon` made `isArrayBaseName(b"Array")` answer
+	// FALSE and refused `stdlib/Array.maxon:114`'s own identity — `function main() returns ExitCode /
+	// return 7` failed to compile. Loud where the user route is silent; one cause.
+	//
+	// ⚠ The `__`-prefixed three cannot be reached from a USER file (`Parser.requireUnreservedName`), and they
+	// are here anyway because the set is the CLASS: `stdlib/Builtins.maxon` is the one module allowed those
+	// names, so a corpus edit is exactly the route the `Vector` half of the measurement above came in by.
+	export function isBuiltinGenericBaseNameBesidesTheRecord(name ByteArray) returns bool
+		return self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
+	end 'isBuiltinGenericBaseNameBesidesTheRecord'
 
 	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
 	// validates a `Base with …` against when there is no declaration to read one off.
