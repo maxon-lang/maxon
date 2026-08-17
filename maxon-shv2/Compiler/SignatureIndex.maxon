@@ -12300,12 +12300,11 @@ export type ProgramSignatures
 	// same way (`Outer{inner: Inner{…}}` is refused earlier by E3076 today, but nothing about THIS rule may
 	// depend on that staying true).
 	//
-	// ⚠ The outcome is read through `declaredOutcome`, NOT off the argument: the real parse hands this a decl
-	// it has just READ from the tokens, whose own outcome field is the `pending` every freshly-read binding
-	// carries. The settled one lives on the SWEEP's record, which is exactly the distinction
-	// `raiseBindingFailure`'s own `declaredOutcome` call makes two lines above the caller.
-	export function existentialFieldOfConstConstruction(decl TopLevelDecl) returns ConstConstructionFieldLookup
-		let outcome = self.declaredOutcome(decl)
+	// ⚠ **IT TAKES THE SETTLED OUTCOME AND NOT THE DECL, WHICH IS NOT AN ECONOMY.** The real parse hands its
+	// binding door a decl it has just READ from the tokens, and that one's own `outcome` field is the
+	// `pending` every freshly-read binding carries — the settled one lives on the SWEEP's record. A parameter
+	// that cannot be given the wrong one is worth more here than one that reads convenient.
+	export function existentialFieldOfConstConstruction(outcome TopLevelConstant) returns ConstConstructionFieldLookup
 		match outcome 'state'
 			// Every outcome that builds no box from a layout: unevaluated, failed, a folded scalar, a
 			// materialized record, a container, a `CharacterSet` preset. Named as the same bands

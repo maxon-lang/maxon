@@ -16790,17 +16790,6 @@ export type Parser
 			throw ParseError.duplicateTopLevelDeclaration(String.from(decl.name), line: decl.nameLine, column: decl.nameColumn)
 		end 'redeclared'
 
-		// ⭐⭐ **A STRUCT CONSTRUCTION FILLING AN INTERFACE-TYPED FIELD IS REFUSED HERE, AND HERE IS THE
-		// EARLIEST DOOR THAT CAN (W116 review).** The constant evaluator cannot see such a field at all — the
-		// swept column is still a bare `named` while it runs — so its slot check compared a scalar against a
-		// slot nothing had yet called an interface and admitted a box with an uninitialized witness half.
-		// `ProgramSignatures.existentialFieldOfConstConstruction` carries the measurement; the SENTENCE is the
-		// body path's own, through the one producer both doors throw it from.
-		match self.signatures.existentialFieldOfConstConstruction(decl) 'existentialField'
-			none then break 'existentialField'
-			existentialField(layout, index) then throw self.existentialFieldStoreUnsupported(layout, index: index, line: decl.nameLine, column: decl.nameColumn)
-		end 'existentialField'
-
 		// ⚠ The outcome is bound to a LOCAL before the match, and the match's payload is bound to a
 		// second one before the throw. Neither is style. Matching the CALL directly and throwing the
 		// arm's binding —
@@ -16814,6 +16803,22 @@ export type Parser
 		// union that was RETURNED rather than constructed inline LEAKS); here it is not a leak but a
 		// null-pointer panic. Recorded for OPEN.md.
 		let outcome = self.signatures.declaredOutcome(decl)
+
+		// ⭐⭐ **A STRUCT CONSTRUCTION FILLING AN INTERFACE-TYPED FIELD IS REFUSED HERE, AND HERE IS THE
+		// EARLIEST DOOR THAT CAN (W116 review).** The constant evaluator cannot see such a field at all — the
+		// swept column is still a bare `named` while it runs — so its slot check compared a scalar against a
+		// slot nothing had yet called an interface and admitted a box with an uninitialized witness half.
+		// `ProgramSignatures.existentialFieldOfConstConstruction` carries the measurement; the SENTENCE is the
+		// body path's own, through the one producer both doors throw it from.
+		//
+		// It reads the outcome bound just above rather than fetching its own: the settled outcome is one fact
+		// and `declaredOutcome` carries the drift guard that asserts it, so asking twice would be one lookup
+		// spent twice on a value that cannot have changed between the two lines.
+		match self.signatures.existentialFieldOfConstConstruction(outcome) 'existentialField'
+			none then break 'existentialField'
+			existentialField(layout, index) then throw self.existentialFieldStoreUnsupported(layout, index: index, line: decl.nameLine, column: decl.nameColumn)
+		end 'existentialField'
+
 		match outcome 'outcome'
 			// ⭐ **NOTHING A TOP-LEVEL BINDING CAN FOLD TO IS UNSTORABLE ANY MORE** (P1.7 slice 2a). A
 			// scalar occupies its `.data` slot as a value; a MANAGED one occupies it as a POINTER that
