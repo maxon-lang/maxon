@@ -1,0 +1,129 @@
+// Test: a-chain-at-an-opaque-element-holds-trivial-values
+typealias Count = int(0 to u64.max)
+typealias Small = int(0 to 1000)
+
+type Bag uses Element
+	typealias EChain = __ManagedList with Element
+	var chain as EChain
+
+	export static function create() returns Self
+		return Self{chain: EChain.create()}
+	end 'create'
+
+	export function add(v Element)
+		self.chain.insertLast(v)
+	end 'add'
+
+	export function size() returns Count
+		return self.chain.count()
+	end 'size'
+end 'Bag'
+
+typealias SmallBag = Bag with Small
+
+function main() returns ExitCode
+	var b = SmallBag.create()
+	b.add(7)
+	b.add(9)
+	return b.size() as ExitCode
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Bag.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __list_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.add {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __list_append
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.size {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __list_count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.leaRegRdata rcx, [rip + __layout_Bag_Small]
+    x64.callDirect Bag.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 7
+    x64.leaRegRdata rax, [rip + __layout_Bag_Small]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Bag.add
+    x64.movRegImm32 rdx, 9
+    x64.leaRegRdata rax, [rip + __layout_Bag_Small]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Bag.add
+    x64.movRegReg rcx, rbx
+    x64.callDirect Bag.size
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Bag_Small
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

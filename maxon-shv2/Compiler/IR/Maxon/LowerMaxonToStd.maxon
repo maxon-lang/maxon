@@ -2367,18 +2367,19 @@ type MaxonToStdLowering
 			quotient to remainder then panic("lowerRuntimeCall: the THROWING '{String.from(callee)}' reached the plain call path — `isThrowingRuntimeCallee` names it, so `Parser.emitDivOrMod` must have emitted it without the `try` that E3057 requires")
 			notCheckedDivision then break 'guardedDivision'
 		end 'guardedDivision'
-		// An OPAQUE-`T` `__managed_create` (P1.7 slice 3b-i) arrives with ONE argument (element_size); its
-		// `element_destroy@40` is not known statically, so it is READ from the enclosing instance's threaded
-		// layout descriptor (`destroyFunc@40`) HERE — the tier that owns the descriptor's ValueId — and appended
-		// as the second argument, mirroring how `sizeof(T)` reads `elementLogicalSize@56`.
-		if self.isOpaqueArrayCreateCall(callee, result: result) 'opaqueArrayCreate'
-			self.appendOpaqueArrayCreate(result, callee: callee, args: args, dstBlock: dstBlock)
+		// An OPAQUE-`T` container create arrives SHORT ONE ARGUMENT — a `__managed_create` (P1.7 slice 3b-i)
+		// with only element_size, a `__list_create` (W134) with none at all; its element destructor is not
+		// known statically, so it is READ from the enclosing instance's threaded layout descriptor
+		// (`destroyFunc@40`) HERE — the tier that owns the descriptor's ValueId — and appended as the LAST
+		// argument, mirroring how `sizeof(T)` reads `elementLogicalSize@56`.
+		if self.isOpaqueContainerCreateCall(callee, result: result) 'opaqueContainerCreate'
+			self.appendOpaqueContainerCreate(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
-		end 'opaqueArrayCreate'
+		end 'opaqueContainerCreate'
 		// A `__drop_type_param` (P1.7 slice 3b-v) arrives with ONE argument (the opaque owned value); its
 		// element destructor is not known statically, so the enclosing instance's layout descriptor is
 		// PREPENDED as the first argument (`__drop_type_param(descriptor, value)`) — the drop twin of
-		// `appendOpaqueArrayCreate`'s destructor read, off the SAME `implicitLayoutValueId`.
+		// `appendOpaqueContainerCreate`'s destructor read, off the SAME `implicitLayoutValueId`.
 		// A `__drop_type_param` (P1.7 slice 3b-v) and its co-ownership twin `__retain_type_param` (W41-opaque)
 		// each arrive with ONE argument (the opaque value) and take the descriptor in front of it. ONE arm
 		// because the prepend is one act: the block is chosen off the VALUE's own type parameter either way,
@@ -2426,13 +2427,13 @@ type MaxonToStdLowering
 
 	// Append the enclosing instance's layout DESCRIPTOR to an OPAQUE-`T` array-copy call's arguments (P1.7 slice
 	// 3b-vi-b-β) — the LAST argument the `__managed_{slice,clone,append}_opaque` wrappers read `copyFunc@32` from,
-	// exactly as `appendOpaqueArrayCreate` appends the `destroyFunc@40` read for an opaque `__managed_create`. A
+	// exactly as `appendOpaqueContainerCreate` appends the `destroyFunc@40` read for an opaque `__managed_create`. A
 	// non-opaque-copy callee passes through UNCHANGED, so this is a safe wrapper over every runtime call's args.
 	// Shared by the non-throwing (`lowerRuntimeCall`) and throwing (`lowerTryCall`, the throwing `slice`) paths so
 	// they cannot drift on whether — or where — the descriptor is appended. The descriptor is guaranteed by the
 	// parser's copy-descriptor-need seed (a method that copies an opaque array reserves it, exactly as an opaque
 	// `X.create()` or a `sizeof(T)` method does), so its absence here is a parser/lowering divergence — a loud
-	// bug, not a silent wrong load, matching `appendOpaqueArrayCreate`.
+	// bug, not a silent wrong load, matching `appendOpaqueContainerCreate`.
 	function opaqueCopyArgsWithDescriptor(callee ByteArray, args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
 		if not isOpaqueElementCopyCallee(callee) 'notOpaqueCopy'
 			return args
@@ -2441,11 +2442,11 @@ type MaxonToStdLowering
 			panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's copy-descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 		// The COPIED array's own type parameter decides the block (W43b) — its `copyFunc@32` is that column's
-		// cloner and no other's, the exact dual of `appendOpaqueArrayCreate`'s destructor read.
+		// cloner and no other's, the exact dual of `appendOpaqueContainerCreate`'s destructor read.
 		let source = try args.get(0) otherwise panic("opaqueCopyArgsWithDescriptor: opaque array copy '{String.from(callee)}' has no receiver argument — its first parameter is the array record")
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
-		fullArgs.push(self.descriptorBlockAddr(self.opaqueArrayBlockOffset(source, callee: callee), dstBlock: dstBlock))
+		fullArgs.push(self.descriptorBlockAddr(self.opaqueContainerBlockOffset(source, callee: callee), dstBlock: dstBlock))
 		return fullArgs
 	end 'opaqueCopyArgsWithDescriptor'
 
@@ -2454,7 +2455,7 @@ type MaxonToStdLowering
 	// emitted. The descriptor parameter is guaranteed by the parser's descriptor-need seed (a method that drops
 	// an opaque feed binding, or STORES a borrowed opaque value into a record, needs it exactly as a
 	// `sizeof(T)` / opaque `X.create()` method does), so its absence here is a parser/lowering divergence — a
-	// loud bug, not a silent wrong load, matching `appendOpaqueArrayCreate`. `result` is the parser's result
+	// loud bug, not a silent wrong load, matching `appendOpaqueContainerCreate`. `result` is the parser's result
 	// value — VOID for the drop, the CO-OWNER for the retain — passed through so the Std op's result column
 	// stays dense either way.
 	function appendTypeParamDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
@@ -2482,50 +2483,57 @@ type MaxonToStdLowering
 		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(MaxonType.typeParameter(token)))
 	end 'typeParamValueBlockOffset'
 
-	// Is this runtime call an OPAQUE-`T` `Array.create()` — an `__managed_create` whose result instance's element
-	// is a type parameter (P1.7 slice 3b-i)? The parser emits such a create with only `element_size`; the
-	// `element_destroy@40` argument is supplied by `appendOpaqueArrayCreate`. A concrete `__managed_create` (its
-	// element known) already carries both arguments and takes the plain path.
-	function isOpaqueArrayCreateCall(callee ByteArray, result ValueId) returns bool
-		if not callee.equals(ManagedCreateName) 'notCreate'
+	// Is this runtime call an OPAQUE-`T` container `create()` — an `__managed_create` (P1.7 slice 3b-i) or a
+	// `__list_create` (W134) whose result instance's element is a type parameter? The parser emits such a create
+	// SHORT its element-destructor argument, which `appendOpaqueContainerCreate` supplies. A CONCRETE create (its
+	// element known) already carries every argument and takes the plain path.
+	//
+	// ⚠ The callee test is a two-name set rather than `opaqueInstanceCreateReadsTheDescriptor` over the result, and
+	// deliberately: the runtime ENTRY is what decides whether an argument is missing, and a container whose
+	// opaque create ever takes a third route would be admitted here by its instance while emitting a call this
+	// arm knows nothing about.
+	function isOpaqueContainerCreateCall(callee ByteArray, result ValueId) returns bool
+		if not callee.equals(ManagedCreateName) and not callee.equals(ListCreateName) 'notCreate'
 			return false
 		end 'notCreate'
 		if self.valueTagOf(result) != ValueTypeTag.genericInstance 'notInstance'
 			return false
 		end 'notInstance'
-		return self.signatures.containerElementIsOpaque(try self.valueNameIds.get(result) otherwise panic("isOpaqueArrayCreateCall: genericInstance __managed_create result v{result} has no name-id (its GenericInstanceId)"))
-	end 'isOpaqueArrayCreateCall'
+		return self.signatures.containerElementIsOpaque(try self.valueNameIds.get(result) otherwise panic("isOpaqueContainerCreateCall: genericInstance '{String.from(callee)}' result v{result} has no name-id (its GenericInstanceId)"))
+	end 'isOpaqueContainerCreateCall'
 
-	// Emit an opaque-`T` `__managed_create` (P1.7 slice 3b-i): load the element destructor from the enclosing
-	// instance's layout descriptor `destroyFunc@40` slot, then call `__managed_create(element_size, element_destroy)`.
-	// The reserved descriptor param is guaranteed by the parser's descriptor-need seed (an opaque `X.create()`
-	// seeds it exactly as `sizeof(T)` does), so its absence here is a parser/lowering divergence — a loud bug,
-	// not a silent wrong load, matching `lowerSizeofType`.
-	function appendOpaqueArrayCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+	// Emit an opaque-`T` container create: load the element destructor from the enclosing instance's layout
+	// descriptor `destroyFunc@40` slot, then call the runtime entry with it as the LAST argument —
+	// `__managed_create(element_size, element_destroy)` for an array or vector, `__list_create(element_drop)`
+	// for a chain, which states its whole argument list in that one word. The reserved descriptor param is
+	// guaranteed by the parser's descriptor-need seed (an opaque `X.create()` seeds it exactly as `sizeof(T)`
+	// does), so its absence here is a parser/lowering divergence — a loud bug, not a silent wrong load,
+	// matching `lowerSizeofType`.
+	function appendOpaqueContainerCreate(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
 		if not self.hasImplicitLayout 'noLayout'
-			panic("appendOpaqueArrayCreate: an opaque managed-record `create()` (`Array with <type parameter>`, or a `Vector with <N> <type parameter>` since S2u — see `ProgramSignatures.instanceCreateBuildsTheManagedRecord`) in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
+			panic("appendOpaqueContainerCreate: an opaque container `create()` (`{String.from(callee)}` — an `Array with <type parameter>`, a `Vector with <N> <type parameter>` since S2u, or a chain since W134; see `ProgramSignatures.opaqueInstanceCreateReadsTheDescriptor`) in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
 		end 'noLayout'
 		// ⭐ **WHICH type parameter's dictionary — the block for the ELEMENT's OWN parameter (W43b).** A
-		// two-parameter generic creates one opaque array per column from ONE shared body, and reading a fixed
+		// two-parameter generic creates one opaque container per column from ONE shared body, and reading a fixed
 		// `destroyFunc@40` gave both columns the FIRST column's destructor: measured, an `Array with Value`
 		// over `Integer` was stamped `__str_decref` and freed its ints as Strings at teardown.
 		let destroyId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: self.opaqueArrayBlockOffset(result, callee: callee) + LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
+		self.stdModule.appendOp(dstBlock, op: StdOp.loadIndirect(destroyId, addrId: self.implicitLayoutValueId, offset: self.opaqueContainerBlockOffset(result, callee: callee) + LAYOUT_OFFSET_DESTROY_FUNC, valueType: StdType.i64))
 		var fullArgs = ValueIdArray.create()
 		fullArgs.append(args)
 		fullArgs.push(destroyId)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
-	end 'appendOpaqueArrayCreate'
+	end 'appendOpaqueContainerCreate'
 
-	// ⭐ **THE DESCRIPTOR BLOCK an OPAQUE `Array with T` VALUE's dictionary lives in (W43b)** — the block for
-	// the type parameter its ELEMENT names. Read off the array instance's own element type, which is the same
+	// ⭐ **THE DESCRIPTOR BLOCK an OPAQUE CONTAINER VALUE's dictionary lives in (W43b)** — the block for the type
+	// parameter its ELEMENT names. Read off the container instance's own element type, which is the same
 	// `typeParameter` token `managedOpaqueArrayElementOf` matched positions against when it stamped the slot,
-	// so the write side and this read side name one block by construction. A concrete-element array never
+	// so the write side and this read side name one block by construction. A concrete-element container never
 	// reaches here (its callers gate on `containerElementIsOpaque` / `isOpaqueElementCopyCallee`).
-	function opaqueArrayBlockOffset(arrayInstance ValueId, callee ByteArray) returns ByteOffset
-		let gid = try self.valueNameIds.get(arrayInstance) otherwise panic("opaqueArrayBlockOffset: opaque array value v{arrayInstance} of '{String.from(callee)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+	function opaqueContainerBlockOffset(containerInstance ValueId, callee ByteArray) returns ByteOffset
+		let gid = try self.valueNameIds.get(containerInstance) otherwise panic("opaqueContainerBlockOffset: opaque container value v{containerInstance} of '{String.from(callee)}' has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
 		return layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.containerElementType(gid)))
-	end 'opaqueArrayBlockOffset'
+	end 'opaqueContainerBlockOffset'
 
 	// ⭐ **THE ADDRESS OF ONE TYPE PARAMETER'S DICTIONARY BLOCK inside the current function's descriptor
 	// (W43b)** — what a runtime graph that takes a descriptor POINTER and reads a FIXED field offset from it

@@ -25,10 +25,22 @@
 //
 // with the identical program over `Holder with Int` clean at exit 0. Inside a shared generic body the
 // container's element is an OPAQUE type parameter, so its managed-ness is erased and no element destructor is
-// stamped; a CONCRETE `Array with Person` is correct in the same program. That is a live, pre-existing defect
-// (the `Map` tick recorded the same measurement), and it sits under `chain`, so whitelisting the module would
-// have shipped it. Synthesizing is what `Array`, `String`, `Set` and `Map` already do, and it is the only
-// route with no wrong answer in it.
+// stamped; a CONCRETE `Array with Person` is correct in the same program. Synthesizing is what `Array`,
+// `String`, `Set` and `Map` already do, and it is the only route with no wrong answer in it.
+//
+// ⭐⭐ **THAT DEFECT IS CLOSED, AND THIS PARAGRAPH IS KEPT AS THE MEASUREMENT IT IS RATHER THAN AS A LIVE
+// REASON — a blocker note ages faster than the code.** The `Array` half went at P1.7 slice 3b (an opaque
+// element's destructor is READ from the enclosing instance's layout descriptor at run time, not stamped
+// statically) and the CHAIN half at W134, which gave `__ManagedList with <type parameter>` the same treatment:
+// `specs-shv2/managed-list-opaque-element.md` runs one generic body over a `String` bag and an `int` bag in one
+// program, and MEASURED with the descriptor read replaced by the old static 0 stamp, both managed cases exit
+// **101** while the trivial one still passes.
+//
+// ⚠ **THE MODULE IS STILL NOT LISTED, AND WHAT REMAINS WAS MEASURED (2026-08-17, at W134's tip), NOT
+// ASSUMED.** `stdlib/List.maxon`'s first error is `E3086` at `:21:10` (`create`'s `return Self{}` against a
+// declared type with an uninitialized field); patch that and its twin at `:26` and the next is
+// **`E2015 __ManagedList method 'isEmpty'`** — the surface gap. Listing it is a chain of further rungs (that
+// `Self{}` reading, the missing chain methods, and the `Iterable` question below); none of them is this file's.
 //
 // ⭐ **AND THERE IS NO ITERATOR PROTOCOL FOR THAT FILE TO CONFORM TO.** `for … in` is lowered directly
 // (`Parser.parseForStatement`); shv2 has no `Iterable`/associated-type machinery, so `stdlib/List.maxon`'s
@@ -42,6 +54,11 @@
 // the `Array`'s `element_destroy@40` and the hash table's `keyDrop@40` under a third name, stamped from the
 // SAME `Parser.columnDestroyValue`, so a value moved into a node and the value dropped out of it agree by
 // construction. It is 0 for a trivial element and the teardown walk then frees nodes without touching them.
+//
+// ⭐ **AN OPAQUE `T` ELEMENT FILLS THE SAME WORD FROM THE ENCLOSING INSTANCE'S LAYOUT DESCRIPTOR AT RUN TIME**
+// (`destroyFunc@40`, W134) rather than from a compile-time stamp — one compiled body, a per-instantiation
+// destructor, and 0 for a trivial instantiation, which is the very value the walk already skips on. Nothing
+// below reads the word differently: it was always a run-time read.
 //
 // A fresh record comes ZEROED from `__mm_alloc` (head 0, tail 0, count 0), so `__list_create` writes only the
 // destructor stamp — the same zeroing contract `__managed_create` relies on.

@@ -16432,8 +16432,9 @@ export type ProgramSignatures
 	// Is a container slot's declared type an OPAQUE TYPE PARAMETER — a `T` from an enclosing generic type's
 	// shared body (`type W uses T { var xs as List with T }`), rather than a concrete type? A concrete slot
 	// knows its destructor at the construction site (the `funcAddr` stamp); an opaque `T` does not — its
-	// destructor lives in the layout descriptor, which is a later slice — so a managed instantiation would
-	// tear down without dropping what it holds.
+	// destructor lives in the enclosing instance's LAYOUT DESCRIPTOR and is read from `destroyFunc@40` at run
+	// time, which is why every asker BRANCHES on this rather than composing a static stamp
+	// (`requireStaticColumnStamp` is what makes forgetting to branch loud).
 	export function slotTypeIsOpaque(slotType MaxonType) returns bool
 		return maxonTypeTag(slotType) == ValueTypeTag.typeParameter
 	end 'slotTypeIsOpaque'
@@ -16603,6 +16604,19 @@ export type ProgramSignatures
 		return tag == ValueTypeTag.genericInstance and self.isManagedListInstance(nameId)
 	end 'isManagedListInstanceAt'
 
+	// ⭐⭐ **IS INSTANCE `id` THE CHAIN — under EITHER of its two surfaces?** `ListRuntime.maxon`'s header states
+	// the fact this predicate is: *"ONE structure, TWO surfaces … every `__list_*` entry serves both; the split
+	// is entirely in the parser's two dispatchers"*. So every door that is about the STRUCTURE — its `create`,
+	// its element gate, its top-level record — asks this, and only a door about a SURFACE (which methods exist,
+	// which sentence a missing one gets) asks the two identities apart.
+	//
+	// ⚠ It was spelled `isListInstance(id) or isManagedListInstance(id)` at three call sites in two files, which
+	// is the shape a fourth door joins by writing a fourth copy — and the copy that gets forgotten admits one
+	// surface and refuses the other for a structure that cannot tell them apart.
+	export function isChainInstance(id GenericInstanceId) returns bool
+		return self.isListInstance(id) or self.isManagedListInstance(id)
+	end 'isChainInstance'
+
 	// Is `name` the builtin `__ManagedListNode` type — the base of every node handle.
 	export function isManagedListNodeBaseName(name ByteArray) returns bool
 		return name.equals(ManagedListNodeBuiltinBaseName)
@@ -16670,20 +16684,36 @@ export type ProgramSignatures
 		return self.isVectorBaseName(self.genericInstanceBaseName(id))
 	end 'isVectorInstance'
 
-	// ⭐⭐ **WHICH CONTAINERS' `create` BUILDS THE FUSED MANAGED RECORD — the ONE family test the
-	// descriptor-need SEED and the descriptor-reading EMIT both read (S2u).** `Parser.emitVectorCreateOp` IS
-	// `emitArrayCreateOp` plus the `__managed_resize` that publishes the N slots, so a `Vector` reaches the
-	// opaque, descriptor-reading create by exactly the route an `Array` does. Asked separately, the seed
-	// (`Parser.opaqueManagedRecordConstructionAt`) and the emit would be free to disagree about which containers take
-	// that route — and that disagreement is a compiler PANIC rather than a wrong answer: **MEASURED**, the
-	// opaque refusal relaxed with this family still spelled `isArrayInstance`, `Holder.create()` writing
-	// `Slot.create()` reached *"appendOpaqueArrayCreate: opaque `Array.create()` in 'Holder.create' but the
-	// function carries no layout descriptor parameter"*. It is `opaqueManagedRecordConstructionAt`'s own stated
-	// discipline, one axis over: that door already reads the SAME `containerElementIsOpaque` the emit branches
-	// on, and this is the other half of the same pairing.
+	// ⭐⭐ **WHICH CONTAINERS' `create` BUILDS THE FUSED MANAGED RECORD — i.e. is born through
+	// `__managed_create` (S2u).** `Parser.emitVectorCreateOp` IS `emitArrayCreateOp` plus the `__managed_resize`
+	// that publishes the N slots, so a `Vector` reaches the opaque, descriptor-reading create by exactly the
+	// route an `Array` does. Its readers are `containerCreateCall`, which goes on to EMIT that very callee, and
+	// the descriptor family below, which is defined FROM it.
+	//
+	// ⚠⚠ **IT WAS ALSO "the ONE family test the descriptor-need SEED and the descriptor-reading EMIT both
+	// read", AND SINCE W134 IT IS NOT — that is `opaqueInstanceCreateReadsTheDescriptor` below**, because a
+	// chain is born through `__list_create` and still reads the same descriptor word. The DISCIPLINE the two
+	// halves of that pairing owe each other is unchanged, and it is a compiler PANIC rather than a wrong
+	// answer when they part: **MEASURED**, the opaque refusal relaxed with the family still spelled
+	// `isArrayInstance`, `Holder.create()` writing `Slot.create()` reached *"appendOpaqueArrayCreate: opaque
+	// `Array.create()` in 'Holder.create' but the function carries no layout descriptor parameter"*. It is
+	// `opaqueContainerConstructionAt`'s own stated discipline, one axis over: that door already reads the SAME
+	// `containerElementIsOpaque` the emit branches on, and this is the other half of the same pairing.
 	export function instanceCreateBuildsTheManagedRecord(id GenericInstanceId) returns bool
 		return self.isArrayInstance(id) or self.isVectorInstance(id)
 	end 'instanceCreateBuildsTheManagedRecord'
+
+	// ⭐⭐ **WHICH CONTAINERS' `create` READS THE ENCLOSING LAYOUT DESCRIPTOR when its element is OPAQUE — the
+	// family the descriptor-need SEED (`Parser.opaqueContainerConstructionAt`) and the descriptor-reading EMIT
+	// (`LowerMaxonToStd.isOpaqueContainerCreateCall`) both read (W134).** It is a WIDER family than the one
+	// above, and the two must stay apart: `instanceCreateBuildsTheManagedRecord` names the containers born
+	// through `__managed_create` — which is what `containerCreateCall` goes on to EMIT — while a chain is born
+	// through `__list_create` and yet reads the very same `destroyFunc@40` word out of the very same descriptor.
+	// Fusing them would make one of the two sentences false; asking them separately at each door is what the
+	// header above records costing a compiler PANIC.
+	export function opaqueInstanceCreateReadsTheDescriptor(id GenericInstanceId) returns bool
+		return self.instanceCreateBuildsTheManagedRecord(id) or self.isChainInstance(id)
+	end 'opaqueInstanceCreateReadsTheDescriptor'
 
 	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Vector with N T`?** — `isArrayInstanceAt`'s twin, and it exists
 	// for that function's MEASURED reason and not for symmetry: a `TypeNameId` and a `GenericInstanceId` share
@@ -17480,13 +17510,41 @@ export type ProgramSignatures
 	// ⚠ It is keyed on the column's TYPE and not on a `(giid, which-column)` pair, for the reason its value
 	// twin states: a `Map` has TWO of these stamps, and a per-column copy is exactly how the key's and the
 	// value's teardown come to disagree about what "managed" means.
+	//
+	// ⛔ **AN OPAQUE COLUMN HAS NO STAMP HERE AND NEVER HAD ONE — SEE `requireStaticColumnStamp` (W134).**
 	function columnDestroyStamp(columnType MaxonType) returns ContainerCreateStamp
+		self.requireStaticColumnStamp(columnType, asker: "ProgramSignatures.columnDestroyStamp")
 		if self.slotTypeIsManaged(columnType) 'managed'
 			return ContainerCreateStamp.dropCallee(self.slotTypeDropCallee(columnType))
 		end 'managed'
 
 		return ContainerCreateStamp.inline(TrivialDestructor)
 	end 'columnDestroyStamp'
+
+	// ⛔⛔ **THE ONE SENTENCE SAYING AN OPAQUE COLUMN HAS NO STATIC DESTRUCTOR STAMP, AND ITS TWO ASKERS ARE THE
+	// TWO PLACES A STAMP IS PRODUCED (W134).** `Parser.columnDestroyValue` (a body's `create()`, as a VALUE) and
+	// `columnDestroyStamp` (a top-level global's record, as a DESCRIPTION) each end in a `managed → drop callee`
+	// / `otherwise → 0` pair, and **a 0 there is not a refusal, it is a leak that compiles**: the teardown walk
+	// reads `element_drop@24` (or `element_destroy@40`) and skips a chain whose elements a managed instantiation
+	// really does own. Before W134 both answered 0 for a `typeParameter` column and both were correct only
+	// because the parser's element gate refused every opaque chain outright.
+	//
+	// ⭐ **THAT GATE IS GONE, AND WHAT REPLACES IT IS A BRANCH AT EACH PRODUCER'S CALLER, NOT A DIFFERENT
+	// ANSWER HERE.** An opaque `create` reads `destroyFunc@40` off the enclosing instance's threaded layout
+	// descriptor at RUN TIME (`Parser.emitOpaqueContainerCreateOp` → `LowerMaxonToStd.appendOpaqueContainerCreate`),
+	// so whoever holds an opaque instance takes that road *before* asking for a stamp. This panic is what makes
+	// "the caller branched" a checked property of both producers rather than a convention one of them could
+	// drift out of — the same discipline `instanceCreateBuildsTheManagedRecord` states for the seed/emit pair.
+	//
+	// ⚠ The top-level asker cannot reach it TODAY for a structural reason worth writing down rather than
+	// relying on: a `.data` global is not inside a generic body, so no type parameter is in scope for its
+	// element — and `__module_init` carries no layout-descriptor parameter to read one from even if it were.
+	// That is precisely why a silent 0 there would have gone unnoticed.
+	export function requireStaticColumnStamp(columnType MaxonType, asker String)
+		if self.slotTypeIsOpaque(columnType) 'opaqueColumn'
+			panic("{asker}: an OPAQUE type-parameter column has no statically known destructor to stamp — its `create` reads `destroyFunc@40` off the enclosing instance's layout descriptor at run time, so this producer's caller must branch on `containerElementIsOpaque` before asking. Stamping 0 here is not a refusal, it is a leak that compiles")
+		end 'opaqueColumn'
+	end 'requireStaticColumnStamp'
 
 	// ⭐ **DOES THIS BUILTIN CONTAINER HAVE A `create()` AT ALL?** The one home of that question, so the body
 	// door and the top-level door refuse the same instances. Exactly one builtin says no — a
@@ -17693,7 +17751,7 @@ export type ProgramSignatures
 		// `(record, value)` pair this description carries, but no top-level form hands a list elements — the
 		// `List from […]` construction is a function body's (`atListFromConstruction`), and the initializer walk
 		// has no list arm — so naming a callee here would be a route nothing takes. See `ContainerElementAdd`.
-		if self.isListInstance(id) or self.isManagedListInstance(id) 'chain'
+		if self.isChainInstance(id) 'chain'
 			stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
 			return ContainerCreateCall.create(ListCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
 		end 'chain'

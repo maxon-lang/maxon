@@ -2365,7 +2365,7 @@ export typealias ForwardFeedEdgeArray = Array with ForwardFeedEdge
 
 // ⭐ **ONE BARE TYPE-PARAMETER ARGUMENT found in a call's argument list** — the CALL-ALIGNED parameter position
 // it references, and the token it sits at (which `argLabelBefore` reads its label from). The two feed scans
-// (`markOpaqueArrayMutatorFeeds`, an array move-in; `collectForwardFeedEdges`, a self-call forward) ask the same
+// (`markOpaqueContainerMutatorFeeds`, an array move-in; `collectForwardFeedEdges`, a self-call forward) ask the same
 // question of an argument list and used to spell the same paren-depth walk twice, one action apart; this is what
 // they now share (`bareTypeParamArgsIn`), so a refinement to what counts as a bare type-parameter argument
 // cannot land on only one of the two — and a disagreement there is not a diagnostic, it is a feed marked at one
@@ -3758,13 +3758,20 @@ let MixedArrayLiteralElementsMessage = "an array literal with mixed element type
 // message in a `maxoncstderr` block. Changing either constant rewrites a committed expectation.
 //
 // The three column nouns are the ones the container-column doors (`parseMapColumnValue`,
-// `parseSetMemberList`, `requireOneWordSlotType`) were each spelling as their own bare `"key"` /
+// `parseSetMemberList`, `requireListElementType`) were each spelling as their own bare `"key"` /
 // `"value"` / `"element"` literal — one fact, several writings, which is what naming them here retires.
 // `ContainerElementColumnNoun` serves the array LITERAL's column and a chain's declared ELEMENT alike: it is
 // one word for one slot, and a second constant holding the same string is how the two would drift apart.
 let ArrayLiteralSubject = "an array literal"
 let ContainerElementColumnNoun = "element"
 let MapLiteralSubject = "a map literal"
+
+// ⭐ **THE NOUN `requireDescriptorSourceForOpaqueCreate`'s TAIL NAMES THE CONSTRUCTED CONTAINER BY** (W134) —
+// *"Build the {noun} in the method and capture it"*. The array's spelling is PINNED byte-for-byte by
+// `specs-shv2/inner-alias-construction.md`, which is why it is a named constant rather than a word inlined at
+// one of two call sites: the two must not drift, and the pinned one must not move at all.
+let OpaqueArrayCreateNoun = "array"
+let OpaqueChainCreateNoun = "chain"
 
 // The `Set from […]` member list's subject (W90). It is a THIRD construct spelling a bracketed literal, and it
 // reaches `literalColumnTypeFor` for the same one question the other two put — which `MaxonType` does this
@@ -5363,7 +5370,7 @@ let ArrayValueLabel = b"value"
 // stdlib `Array` signatures — which shv2 does not read, so the list is stated here and pinned by
 // `specs-shv2/arrays.md`'s `error.let-array-*` cases rather than left to be re-derived.
 //
-// ⚠ It is NOT `isArrayMoveInMutator`, and neither can be defined from the other: that one answers
+// ⚠ It is NOT `isContainerMoveInMutator`, and neither can be defined from the other: that one answers
 // "does this method take OWNERSHIP of an element?" (push/set/insert only), which is a question about
 // the ARGUMENT. This one is about the RECEIVER.
 // ⚠ **`isManagedMemory` IS NOT DECORATION: the buffer-only mutators EXIST ONLY ON THE BUFFER SURFACE**, so
@@ -12719,7 +12726,7 @@ export type Parser
 				// argument is fed — a concrete element (a monomorphic `Array with String` field) already moves in at
 				// the array call.
 				//
-				// An array MUTATOR call (`markOpaqueArrayMutatorFeeds`, receiver-blind) and a bare-field REASSIGNMENT
+				// A container MUTATOR call (`markOpaqueContainerMutatorFeeds`, receiver-blind) and a bare-field REASSIGNMENT
 				// `self.saved = item` (`markOpaqueFieldReassignFeed`, P1.7 Finding A) are the two opaque-`T`
 				// callee-storage shapes.
 				//
@@ -12741,9 +12748,9 @@ export type Parser
 				// `enclosingTypeParams` is empty) — so the whole probe is skipped for every function on a
 				// generics-free program, which the `self`-headed predecessor paid for at every `self` token.
 				if genericScope 'maybeOpaqueFeed'
-					if self.markOpaqueArrayMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedArray'
+					if self.markOpaqueContainerMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedContainer'
 						any = true
-					end 'fedArray'
+					end 'fedContainer'
 					if kind == TokenKind.self and self.markOpaqueFieldReassignFeed(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedField'
 						any = true
 					end 'fedField'
@@ -12951,7 +12958,7 @@ export type Parser
 	// ⚠ **IT RUNS AFTER `allFilesFolded` AND IT HAS TO**, which is the other half of why the walk cannot be
 	// the sweep's own. Three of its seeds are whole-program answers the sweep is still building while it walks
 	// a body: `functionFeedsCalleeStorage` (the consume/feed record), an inner alias naming an OPAQUE `Array`
-	// (`opaqueManagedRecordConstructionAt` → `isGenericAlias`), and a managed opaque field (`opaqueFieldReassignAt`).
+	// (`opaqueContainerConstructionAt` → `isGenericAlias`), and a managed opaque field (`opaqueFieldReassignAt`).
 	// Read mid-sweep they answer "no" for a declaration folded later, and a reservation is ABI — so the sweep
 	// records a POSITION and this walks it once the index is whole. That is also what makes the answer
 	// independent of declaration order, which a descriptor parameter must be.
@@ -12961,7 +12968,7 @@ export type Parser
 	// cursor is positioned from the site and the `Parser` this runs on parses nothing.
 	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap)
 		// The type scope the seeds are read against: `sizeofOperandIsTypeParamAt` needs the `uses` list, and
-		// `opaqueManagedRecordConstructionAt` / `opaqueFieldReassignAt` key on `enclosingType`. Taken from the
+		// `opaqueContainerConstructionAt` / `opaqueFieldReassignAt` key on `enclosingType`. Taken from the
 		// whole-program layout rather than re-read from a header, so an EXTENSION body — which has no `uses`
 		// clause of its own — is scanned in exactly its target's scope.
 		self.enterTypeScope(site.typeName, isEnum: false)
@@ -13324,13 +13331,13 @@ export type Parser
 			if kind == TokenKind.return or kind == TokenKind.throw or kind == TokenKind.break or kind == TokenKind.continue 'earlyExit'
 				hasControlFlow = true
 			end 'earlyExit'
-			// Constructing an opaque-`T` fused managed record (`ElementArray.create()`, or the literal
-			// `ElementArray{}` it shares a producer with — and since S2u a `Vector with <N> <type parameter>` too)
-			// stamps its `element_destroy@40` from the enclosing instance's threaded descriptor, so — like
-			// `sizeof(T)` — it needs the descriptor param (P1.7 slice 3b-i, S2i).
-			if kind == TokenKind.identifier and self.opaqueManagedRecordConstructionAt(q) 'opaqueManagedRecordConstruction'
+			// Constructing an opaque-`T` container (`ElementArray.create()`, or the literal `ElementArray{}` it
+			// shares a producer with — and since S2u a `Vector with <N> <type parameter>`, since W134 a
+			// `__ManagedList with <type parameter>`) stamps its element destructor from the enclosing instance's
+			// threaded descriptor, so — like `sizeof(T)` — it needs the descriptor param (P1.7 slice 3b-i, S2i).
+			if kind == TokenKind.identifier and self.opaqueContainerConstructionAt(q) 'opaqueContainerConstruction'
 				direct = true
-			end 'opaqueManagedRecordConstruction'
+			end 'opaqueContainerConstruction'
 			// ⭐⭐ **`Self{}` IS A THIRD SPELLING OF THAT SAME CONSTRUCTION (W57)**, and it is here for the
 			// reason the header above records the literal form being added for: the parser grew a producer and
 			// this scan did not, so `appendOpaqueArrayCreate` met a function with no descriptor reserved and
@@ -13679,12 +13686,14 @@ export type Parser
 		return not self.enclosingType.isEmpty() and not hasStaticModifier
 	end 'declarationTakesReceiver'
 
-	// Is the identifier at `aliasPos` a member-level opaque-`T` MANAGED-RECORD alias being CONSTRUCTED — the
+	// Is the identifier at `aliasPos` a member-level opaque-`T` CONTAINER alias being CONSTRUCTED — the
 	// construction that seeds the descriptor need (P1.7 slice 3b-i)? `X` qualifies (`Container.X`) to a
-	// whole-program generic alias naming an OPAQUE instance of a container whose `create` builds the fused
-	// managed record — `Array with <type parameter>`, and since S2u the fixed-size `Vector with <N> <type
-	// parameter>`, whose create IS that same one plus the `__managed_resize` that publishes its slots. WHICH
-	// containers those are is `instanceCreateBuildsTheManagedRecord`'s to say, for the reason that function
+	// whole-program generic alias naming an OPAQUE instance of a container whose `create` reads the enclosing
+	// instance's layout descriptor — `Array with <type parameter>`, since S2u the fixed-size `Vector with <N>
+	// <type parameter>` (whose create IS that same one plus the `__managed_resize` that publishes its slots),
+	// and since W134 a `__ManagedList`/`List with <type parameter>` (a different runtime create reading the
+	// same `destroyFunc@40` word). WHICH containers those are is
+	// `ProgramSignatures.opaqueInstanceCreateReadsTheDescriptor`'s to say, for the reason that function
 	// carries: asked separately here and at the emit, the two are free to disagree, and the disagreement is
 	// a compiler panic. The opacity is read straight off
 	// `self.signatures` — the SAME index and the SAME `containerElementIsOpaque` predicate `emitArrayCreateOp`
@@ -13699,7 +13708,7 @@ export type Parser
 	// reserved — *"the parser's descriptor-need seed and this lowering disagree"*, which is exactly what
 	// happened. The two spellings are one construction (`parseInnerAliasLiteral` routes them to one producer),
 	// so they are one shape test here.
-	function opaqueManagedRecordConstructionAt(aliasPos TokenIndex) returns bool
+	function opaqueContainerConstructionAt(aliasPos TokenIndex) returns bool
 		if not self.aliasConstructionFollows(aliasPos) 'notAConstruction'
 			return false
 		end 'notAConstruction'
@@ -13708,8 +13717,8 @@ export type Parser
 			return false
 		end 'notAlias'
 		let giid = self.signatures.genericAliasInstanceFrom(qualified, readerFilePath: self.filePath)
-		return self.signatures.instanceCreateBuildsTheManagedRecord(giid) and self.signatures.containerElementIsOpaque(giid)
-	end 'opaqueManagedRecordConstructionAt'
+		return self.signatures.opaqueInstanceCreateReadsTheDescriptor(giid) and self.signatures.containerElementIsOpaque(giid)
+	end 'opaqueContainerConstructionAt'
 
 	// ⭐ **THE `Self{…}` SPELLING OF THE CONSTRUCTION ABOVE (W57)** — a separate shape test because `Self` is a
 	// KEYWORD and names no alias, so there is no qualified name to look an instance up by; the instance is the
@@ -13788,12 +13797,12 @@ export type Parser
 		return name.equals(SliceMethod) or name.equals(CloneMethodName) or name.equals(AppendMethod)
 	end 'arrayCopyMethodAt'
 
-	// ⭐ Is the identifier at `q` the method name of a `push`/`set`/`insert` container MOVE-IN — the descriptor
-	// signal for a BORROWED opaque element store (W60)? Like its two siblings above it resolves no RECEIVER, for
-	// the reason they do not: the pre-scan runs before any body is parsed, and the array owns its element
-	// wherever the array lives (`markOpaqueArrayMutatorFeeds` states that argument in full). It reads the ONE
-	// move-in name set (`isArrayMoveInMutator`), so "which methods take ownership of an element" cannot come to
-	// mean two things between the feed sweep and this reservation.
+	// ⭐ Is the identifier at `q` the method name of a container MOVE-IN — the descriptor signal for a BORROWED
+	// opaque element store (W60)? Like its two siblings above it resolves no RECEIVER, for
+	// the reason they do not: the pre-scan runs before any body is parsed, and the container owns its element
+	// wherever the container lives (`markOpaqueContainerMutatorFeeds` states that argument in full). It reads the
+	// ONE move-in name set (`isContainerMoveInMutator`), so "which methods take ownership of an element" cannot
+	// come to mean two things between the feed sweep and this reservation.
 	//
 	// ⚠ **IT ASKS FOR A CALL HEAD AND NOT FOR `isDotMethodCallHeadAt`, WHICH BOTH SIBLINGS DO — because the
 	// BARE spelling is a store too.** Implicit self resolves `push(v)` to `self.push(v)` and that is the same
@@ -13803,7 +13812,7 @@ export type Parser
 	// everything. A bare `push(…)` that is a FREE function reserves a parameter nothing reads, which is this
 	// whole family's stated asymmetry.
 	function containerMoveInMutatorCallAt(q TokenIndex) returns bool
-		return self.kindAt(q + 1) == TokenKind.leftParen and self.isArrayMoveInMutator(self.tokenAt(q).value)
+		return self.kindAt(q + 1) == TokenKind.leftParen and self.isContainerMoveInMutator(self.tokenAt(q).value)
 	end 'containerMoveInMutatorCallAt'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer (P1.7 Finding A).** Both the
@@ -13943,21 +13952,21 @@ export type Parser
 	// `__drop_type_param`, which needs a layout descriptor a straight-line body reserves none of. That
 	// disagreement is caught and REFUSED once the body is emitted (`requireDescriptorForOpaqueDrops`); it is not
 	// swallowed here, because nothing at sweep time can resolve the receiver's type.
-	function markOpaqueArrayMutatorFeeds(mutatorPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray) returns bool
+	function markOpaqueContainerMutatorFeeds(mutatorPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray) returns bool
 		if not self.isDotMethodCallHeadAt(mutatorPos) or not tokenCanBeAName(self.tokenAt(mutatorPos)) 'notMethodCall'
 			return false
 		end 'notMethodCall'
-		if not self.isArrayMoveInMutator(self.tokenAt(mutatorPos).value) 'notMoveInMutator'
+		if not self.isContainerMoveInMutator(self.tokenAt(mutatorPos).value) 'notMoveInMutator'
 			return false
 		end 'notMoveInMutator'
 
 		var any = false
 		for arg in self.bareTypeParamArgsIn((mutatorPos + 2) as TokenIndex, paramNames: paramNames, typeParamPositions: typeParamPositions) 'eachArg'
-			try feeds.set(arg.paramIndex, value: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: arg.paramIndex), sink: FeedSink.calleeStorage)) otherwise panic("markOpaqueArrayMutatorFeeds: feeds.set OOB at {arg.paramIndex} despite it being a resolved parameter position")
+			try feeds.set(arg.paramIndex, value: TypeParamFeed.feeds(self.paramTypeParamPositionAt(typeParamPositions, index: arg.paramIndex), sink: FeedSink.calleeStorage)) otherwise panic("markOpaqueContainerMutatorFeeds: feeds.set OOB at {arg.paramIndex} despite it being a resolved parameter position")
 			any = true
 		end 'eachArg'
 		return any
-	end 'markOpaqueArrayMutatorFeeds'
+	end 'markOpaqueContainerMutatorFeeds'
 
 	// ⭐ **THE BARE TYPE-PARAMETER ARGUMENTS of ONE call's argument list**, whose first argument token is at
 	// `argsStart` (just past the `(`). An argument qualifies when it is the WHOLE of its argument slot
@@ -14006,7 +14015,7 @@ export type Parser
 	// `self . <field> = <param>` where the RHS is a bare type-parameter parameter.
 	function markOpaqueFieldReassignFeed(selfPos TokenIndex, paramNames ByteArrayArray, typeParamPositions TypeParamPositionArray, feeds TypeParamFeedArray) returns bool
 		// The field's opacity is NOT queried here: this runs in the SWEEP, before the struct layouts are merged
-		// into `self.signatures` (exactly why `markOpaqueArrayMutatorFeeds` is purely token-based too). It need
+		// into `self.signatures` (exactly why `markOpaqueContainerMutatorFeeds` is purely token-based too). It need
 		// not be — a type-parameter argument can be assigned ONLY to a type-parameter (opaque) field, so a bare
 		// type-parameter RHS on a `self.<field> =` write IMPLIES the field is opaque; any non-opaque target is a
 		// type error the real parse rejects before this feed can matter. The precise opacity + managed-ness check
@@ -14032,9 +14041,18 @@ export type Parser
 		return true
 	end 'markOpaqueFieldReassignFeed'
 
-	// The three `Array` mutators that MOVE an element in — `push` (its sole argument), `set` / `insert` (their
-	// labelled `value:` argument) — all of which transfer ownership of that element to the array (P1.7 slice
-	// 3b-iii). `append` borrows another array, `reserve`/`resize`/`clear` take no element, so none feeds.
+	// The container mutators that MOVE an element in, all of which transfer ownership of that element to the
+	// container (P1.7 slice 3b-iii): the `Array`'s `push` (its sole argument) and `set` / `insert` (their
+	// labelled `value:` argument), and the CHAIN's four (W134) — `append` / `prepend` on the `List` surface,
+	// `insertFirst` / `insertLast` on the `__ManagedList` one, each taking the element as its sole argument.
+	// `reserve`/`resize`/`clear` take no element, so none feeds.
+	//
+	// ⚠ **`append` IS ALSO AN `Array` METHOD, WHERE IT BORROWS ANOTHER ARRAY RATHER THAN MOVING AN ELEMENT —
+	// AND SHARING THE NAME COSTS NOTHING, BECAUSE BOTH READERS ASK A SECOND QUESTION THE ARRAY'S ANSWERS NO.**
+	// `markOpaqueContainerMutatorFeeds` marks only a BARE TYPE-PARAMETER argument, and `xs.append(other)` hands
+	// over an `Array with T`, never a `T`; `containerMoveInMutatorCallAt` reserves a descriptor parameter this
+	// family is explicitly allowed to over-reserve. What the shared name may NOT do is go missing, which is the
+	// other direction: a chain insert with no descriptor is a refused legal program.
 	//
 	// ⚠ **`insert` STAYS HERE THOUGH IT LEFT THE ROSTER (ARR1), AND THAT IS THE SAME SPLIT `clone` KEEPS ONE
 	// SWEEP UP** (`arrayCopyMethodAt`): a roster says which surface shv2 SERVES, and this asks what a method
@@ -14042,9 +14060,18 @@ export type Parser
 	// `self.items.insert(i, value: item)` still owes a descriptor to take that reference through — and this
 	// pre-scan resolves no receiver, so it is over-approximate BY DESIGN and errs toward reserving one. The
 	// other direction is a MISSING descriptor, which is a fault.
-	function isArrayMoveInMutator(name ByteArray) returns bool
-		return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod)
-	end 'isArrayMoveInMutator'
+	function isContainerMoveInMutator(name ByteArray) returns bool
+		return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or self.isChainMoveInMutator(name)
+	end 'isContainerMoveInMutator'
+
+	// The chain's four insertions, split out because they are the ones whose receiver is a `List`/`__ManagedList`
+	// and because the two SURFACES spell the same act differently — `append`/`prepend` link an element the caller
+	// never sees again, `insertFirst`/`insertLast` link it and hand back the node handle. What both surfaces
+	// share is the only thing this asks: the chain becomes the element's sole owner, released once by
+	// `element_drop@24` (`ListRuntime.maxon`), exactly as an array slot is by `element_destroy@40`.
+	function isChainMoveInMutator(name ByteArray) returns bool
+		return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(ManagedListInsertFirstMethod) or name.equals(ManagedListInsertLastMethod)
+	end 'isChainMoveInMutator'
 
 	// Is the identifier at `p` a BARE argument value — the whole of its argument slot? True iff it is bounded
 	// by an argument delimiter on both sides: `(`, a top-level `,`, or a label `:` before it, and a `,` or the
@@ -14141,7 +14168,7 @@ export type Parser
 			// `<receiver>.push/set/insert(param)` is a DIRECT feed wherever its receiver lives (W10) — probed at
 			// every token, exactly as `scanBodyFacts` probes it, so the two seedings cannot disagree about what a
 			// direct feed is.
-			_ = self.markOpaqueArrayMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds)
+			_ = self.markOpaqueContainerMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds)
 			if kind == TokenKind.self 'selfToken'
 				// `self.<opaqueField> = param` (P1.7 Finding A) is a DIRECT feed too — seeded here so the transitive
 				// closure marks a forwarder INTO a field-reassigning sibling as consuming its own argument.
@@ -14295,7 +14322,7 @@ export type Parser
 	// non-directly-fed parameter is touched, so a type with no forwarder is byte-identical.
 	//
 	// ⚠ EVERY feed published here is a CALLEE-STORAGE one, and structurally so: the fixpoint's seeds are exactly
-	// the two direct callee-storage shapes (`markOpaqueArrayMutatorFeeds`, `markOpaqueFieldReassignFeed`), and a
+	// the two direct callee-storage shapes (`markOpaqueContainerMutatorFeeds`, `markOpaqueFieldReassignFeed`), and a
 	// `Self{f: p}` CONSTRUCTOR feed is not a seed and has no forward edge, so nothing here can reach one. A
 	// forwarder INTO callee storage owns its own argument for the same reason its callee does — it hands it on.
 	function publishTransitiveFeeds(scans MethodFeedScanArray, paramBase CsrColumn, isFeed BoolArray, gained BoolArray, paramConsumes ParamConsumeEntryArray, feedStart ElementCount)
@@ -22871,7 +22898,7 @@ export type Parser
 			// transferring a value nobody drops (a leak). The sink is recorded, so this reads it.
 			//
 			// Gated on the opaque `typeParameter` tag as well: a feed parameter is type-parameter-typed by
-			// construction (`markOpaqueArrayMutatorFeeds` marks only such a parameter), so the tag test
+			// construction (`markOpaqueContainerMutatorFeeds` marks only such a parameter), so the tag test
 			// is redundant with the sink — but it makes this branch PROVABLY exclusive of the managed branch above
 			// (which needs `valueIsManagedHeap`, false for a `typeParameter`), so no parameter is ever enrolled
 			// twice, and it pins the drop router's `typeParameter` arm to exactly what is enrolled here.
@@ -51600,27 +51627,35 @@ export type Parser
 	//     owns the descriptor's ValueId (`implicitLayoutValueId`) is the tier that reads it — the same split
 	//     `sizeof(T)` uses. For a TRIVIAL instance the slot reads 0 and the array's drop walk is skipped.
 	//
-	// ⛔ **A LIFTED CLOSURE HAS NO DESCRIPTOR TO READ, AND THE LOWERING PANICKED ON IT RATHER THAN SAYING SO
-	// (S2i).** The reserved descriptor parameter is a GENERIC TYPE'S METHOD's (`parseFunction`'s
-	// `needsLayoutParam`, seeded by `scanDescriptorNeedsInto`, which walks METHODS). A closure literal is
-	// lifted to a top-level function whose uniform `(userargs, env)` indirect ABI carries one machine word per
-	// argument and has no slot for a descriptor — so the fixpoint marks the enclosing METHOD and the
-	// construction is emitted into the LIFTED body, which carries nothing. MEASURED on BOTH spellings
-	// (`ElementArray{}` and `ElementArray.create()`) inside `function() gives …` in a generic method:
-	// `appendOpaqueArrayCreate`'s panic naming `Holder.sized$closure_0`, with no source position at all.
-	//
-	// Refused here — the one producer of the descriptor-reading create, so no door can miss it — and the exact
-	// sibling of `parseFunction`'s `staticLayoutNeedsSelfReturn`: both are "this position has no descriptor
-	// SOURCE", answered where the source would have been needed. It can reject nothing that used to compile,
-	// because everything it rejects used to abort the compiler.
+	// ⛔ **A LIFTED CLOSURE HAS NO DESCRIPTOR TO READ (S2i), and the refusal is now the shared
+	// `requireDescriptorSourceForOpaqueCreate`** — the chain's opaque create owes the identical one. Its header
+	// carries the measurement and the argument.
 	function emitOpaqueArrayCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
-		if not self.closureCaptureScopes.isEmpty() 'insideALiftedClosure'
-			throw ParseError.unsupported("constructing an opaque type-parameter `{String.from(self.signatures.arrayRecordDeclaredName())}` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the array in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice", line: range.line, column: range.column)
-		end 'insideALiftedClosure'
+		try self.requireDescriptorSourceForOpaqueCreate(self.signatures.arrayRecordDeclaredName(), containerNoun: OpaqueArrayCreateNoun, range: range)
 
 		let sizeVal = self.emitLiteral(LAYOUT_TYPE_PARAM_SLOT_BYTES as ParsedInt, valueType: MaxonType.integer, range: range)
 		return self.emitRuntimeCall(ManagedCreateName, args: singletonArgs(sizeVal), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitOpaqueArrayCreateOp'
+
+	// ⛔⛔ **A LIFTED CLOSURE HAS NO DESCRIPTOR TO READ — THE ONE REFUSAL BOTH DESCRIPTOR-READING CREATES OWE
+	// (W134).** Its argument is `emitOpaqueArrayCreateOp`'s header in full: the reserved descriptor parameter is
+	// a GENERIC TYPE'S METHOD's, and a closure literal is lifted to a top-level function whose uniform
+	// `(userargs, env)` indirect ABI carries one machine word per argument and has no slot for one — so the
+	// construction is emitted into a body that carries nothing, and the LOWERING panicked with no source
+	// position at all. It is asked at each opaque producer, which is why it is ONE function: the chain's
+	// `create` reads the identical `destroyFunc@40` off the identical parameter, so a second copy of this test
+	// is a second chance to forget it, and forgetting it aborts the compiler rather than refusing a program.
+	//
+	// ⚠ **THE SENTENCE IS PINNED BYTE-FOR-BYTE** by `specs-shv2/inner-alias-construction.md`'s two
+	// `maxoncstderr` blocks, over the `Array` spelling. The container's NAME and the noun the tail uses are the
+	// only parts that vary, and at `("Array", "array")` this composes exactly the committed text.
+	function requireDescriptorSourceForOpaqueCreate(containerName ByteArray, containerNoun String, range SourceRange) throws ParseError
+		if self.closureCaptureScopes.isEmpty() 'notInsideALiftedClosure'
+			return
+		end 'notInsideALiftedClosure'
+
+		throw ParseError.unsupported("constructing an opaque type-parameter `{String.from(containerName)}` inside a CLOSURE literal — the create reads its element destructor from the enclosing instance's layout descriptor at run time, and only a generic type's own METHOD reserves the parameter that carries it: a closure is lifted to a top-level function whose uniform `(userargs, env)` ABI has no slot for one. Build the {containerNoun} in the method and capture it, or move the construction out of the closure. Threading a layout descriptor into a lifted closure is a later slice", line: range.line, column: range.column)
+	end 'requireDescriptorSourceForOpaqueCreate'
 
 	// ⭐ **THE `element_destroy@40` STAMP VALUE (P1.7 slice 3).** For a MANAGED-element array it is the RAW
 	// `.text` ADDRESS of the element's drop callee (`__str_decref` / `__destruct_<T>` / `__mm_decref` / nested
@@ -51666,10 +51701,14 @@ export type Parser
 	// of type `unknown` (see the caller's `innerAlias` arm).
 	//
 	// `Array` alone has a SECOND static (`init(managed)`), so it keeps its own reader; every other container
-	// is `create()`-only and shares one. A container with no usable `create` for the instance in hand — a
-	// `List with <type parameter>`, which has no statically known element destructor to stamp — is refused by
-	// `requireContainerColumnTypes` with a sentence naming the list, at the `.create()` the author wrote,
-	// rather than falling through to the mangled `Base.create` (a callee no file declares).
+	// is `create()`-only and shares one. A container with no usable `create` for the instance in hand is
+	// refused by `requireContainerColumnTypes` with a sentence naming that container, at the `.create()` the
+	// author wrote, rather than falling through to the mangled `Base.create` (a callee no file declares).
+	//
+	// ⚠ **THE EXAMPLE THIS PARAGRAPH USED TO GIVE WAS `List with <type parameter>`, AND IT IS NO LONGER
+	// REFUSED (W134)** — a chain over an opaque element reads its element destructor off the enclosing
+	// instance's layout descriptor at run time, exactly as an `Array with <type parameter>` does. What the
+	// door still refuses is a NODE HANDLE, which has no `create()` at all.
 	function parseContainerAliasStaticCall(func IrFunction, aliasTok Token, aliasName ByteArray, giid GenericInstanceId) returns ValueId throws ParseError
 		if self.signatures.isArrayInstance(giid) 'array'
 			return try self.parseArrayStaticCall(func, aliasTok: aliasTok, aliasName: aliasName, giid: giid)
@@ -51918,8 +51957,8 @@ export type Parser
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
 
-		if self.signatures.isListInstance(giid) or self.signatures.isManagedListInstance(giid) 'chain'
-			return self.emitListCreateOp(giid, range: range)
+		if self.signatures.isChainInstance(giid) 'chain'
+			return try self.emitListCreateOp(giid, range: range)
 		end 'chain'
 		if self.signatures.isVectorInstance(giid) 'vector'
 			return try self.emitVectorCreateOp(giid, range: range)
@@ -52056,7 +52095,7 @@ export type Parser
 		if self.signatures.isArrayInstance(giid) 'array'
 			return
 		end 'array'
-		if self.signatures.isListInstance(giid) or self.signatures.isManagedListInstance(giid) 'chain'
+		if self.signatures.isChainInstance(giid) 'chain'
 			try self.requireListElementType(giid, tok: aliasTok)
 			return
 		end 'chain'
@@ -52125,7 +52164,13 @@ export type Parser
 	// ⚠ It is keyed on the column's TYPE and not on a `(giid, which-column)` pair, because a `Map` has TWO of
 	// these stamps and a per-column copy is exactly how the key's and the value's teardown would come to
 	// disagree about what "managed" means.
+	//
+	// ⛔ **AN OPAQUE COLUMN HAS NO STAMP HERE AND NEVER HAD ONE** — its destructor is the enclosing instance's
+	// descriptor `destroyFunc@40`, read at run time, so `emitListCreateOp` branches to `emitOpaqueChainCreateOp`
+	// before asking. See `ProgramSignatures.requireStaticColumnStamp`, which is the one sentence saying so and
+	// which the top-level twin of this function asks as well (W134).
 	function columnDestroyValue(columnType MaxonType, range SourceRange) returns ValueId
+		self.signatures.requireStaticColumnStamp(columnType, asker: "Parser.columnDestroyValue")
 		if self.signatures.slotTypeIsManaged(columnType) 'managed'
 			return self.emitRuntimeFuncAddr(self.signatures.slotTypeDropCallee(columnType), range: range)
 		end 'managed'
@@ -52147,46 +52192,6 @@ export type Parser
 	// `a-user-type-can-be-a-map-key`). Its two doors — `requireContainerColumnTypes`'s hash-table arms and
 	// `gateMapLiteralColumns`' synthesized arm — had both already become unreachable at W41/W90; W105 deletes
 	// what they used to reach.
-
-	// ⭐⭐ **THE ONE-MACHINE-WORD SLOT GATE — a `List`/`__ManagedList` ELEMENT and a `Map`'s VALUE column.**
-	// Both slots are one word and both are torn down by the destructor `columnDestroyValue` stamps, so the
-	// RULE is `ProgramSignatures.slotTypeFitsOneWord` (see its header for what that buys and what it cost to
-	// have two of them); what differs is only the container and the noun the sentence names, which is why
-	// those are parameters and the sequence is not.
-	//
-	// The OPAQUE arm is asked first and says something else entirely: a `T` slot is not a type that fails to
-	// fit a word, it is a slot with no statically known destructor to stamp — so a managed instantiation would
-	// tear down without dropping what it holds. That is a different refusal and it gets its own sentence.
-	//
-	// ⚠ **`float` IS NOT WHAT THE SECOND REFUSAL IS FOR, AND THAT WAS MEASURED RATHER THAN ASSUMED.** A float
-	// slot would arrive in the XMM file where every container entry is declared `i64`, but it never reaches
-	// here: `typealias FList = List with F` is already **E2062 on the type ARGUMENT** (a type parameter is an
-	// opaque general-purpose slot and a float has no way through it) — the same gate
-	// the deleted `requireHashTableKeyType` recorded for a float key. What the second refusal is for is therefore any slot
-	// type neither managed nor word-shaped that a future type kind might introduce: a clean E2015 rather than
-	// a wrong stride.
-	//
-	// MEASURED to pass through it as a `List` ELEMENT, each printing and tearing down clean: `bool`, a ranged
-	// `Byte`, a declared enum, a function alias, a nested `List`, a nested `Array`, `String`, and a struct
-	// with a `String` field.
-	//
-	// ⚠⚠ **AND PASSING *THIS* GATE IS NOT THE WHOLE ADMISSION — `TypeRules.columnValueTagMatches` DECIDES
-	// WHAT MAY BE WRITTEN, AND THE ROSTER ABOVE WAS MEASURED ON THE OTHER SLOT.** Moving the header onto the
-	// now-shared gate silently re-claimed it for a `Map`'s VALUE column, where `bool` was admitted here and
-	// refused at the first `upsert`; the arm that closes it is that predicate's, and its own header carries
-	// the obligation. RE-MEASURED on a `Map` value after the fix: `bool`, a ranged `Byte`, a declared enum,
-	// `String` and a struct all store and read back.
-	function requireOneWordSlotType(slotType MaxonType, containerName String, columnNoun String, tok Token) throws ParseError
-		if self.signatures.slotTypeIsOpaque(slotType) 'opaqueSlot'
-			throw ParseError.unsupported("`{containerName}` over a bare type parameter — a container inside a generic body has no {columnNoun} destructor to stamp, so a managed instantiation would leak the {columnNoun}s it holds; declare it at a concrete {columnNoun} type", line: tok.line, column: tok.column)
-		end 'opaqueSlot'
-
-		if self.signatures.slotTypeFitsOneWord(slotType) 'fitsTheSlot'
-			return
-		end 'fitsTheSlot'
-
-		throw ParseError.unsupported("`{containerName}` holds one machine word per {columnNoun}, so its {columnNoun} must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(slotType))}' {columnNoun} does not fit that slot", line: tok.line, column: tok.column)
-	end 'requireOneWordSlotType'
 
 	// Is `name` a typealias for a `Set` instance — the alias form of a `from` construction's head? Asked of
 	// the whole-program index, which is complete in the real parse; during the tolerant sweep every alias
@@ -52741,19 +52746,81 @@ export type Parser
 	// `count` are zeroed by `__mm_alloc`, so only the stamp is written; `element_drop@24` carries the element's
 	// destructor (the SAME `columnDestroyValue` a `Set`'s key and a `Map`'s two columns are stamped from) so
 	// the list drops what it owns at teardown.
-	function emitListCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId
+	//
+	// ⭐ **AN OPAQUE ELEMENT TAKES THE OTHER ROAD, AND THE BRANCH IS HERE FOR THE REASON `emitArrayCreateOp`'s
+	// IS (W134)**: this is the ONE producer of a chain's `create`, so no door can reach the static stamp with a
+	// `typeParameter` element and no door can miss the descriptor-reading form.
+	function emitListCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+		if self.signatures.containerElementIsOpaque(giid) 'opaque'
+			return try self.emitOpaqueChainCreateOp(giid, range: range)
+		end 'opaque'
+
 		let elementDrop = self.columnDestroyValue(self.signatures.containerElementType(giid), range: range)
 		return self.emitRuntimeCall(ListCreateName, args: singletonArgs(elementDrop), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
 	end 'emitListCreateOp'
 
-	// ⭐ **THE `List` ELEMENT-TYPE GATE.** A node's `value@16` is ONE MACHINE WORD — the same slot a `Map`'s
-	// VALUE column is — so the rule and both its refusals are the shared `requireOneWordSlotType`, whose
-	// header carries the two measurements this gate used to state (why `float` is not what the last refusal
-	// is for, and what an opaque `T` would leak). What is this container's own is the SUBJECT: it serves both
-	// chain surfaces (`__ManagedList` is the same record with the same one-word value slot), so the name it
-	// blames is read off the instance rather than spelled twice.
+	// ⭐ **CREATE AN OPAQUE-`T` CHAIN inside a shared generic body (W134)** — `EChain.create()` where
+	// `EChain = __ManagedList with typeParameter(token)`, the shape `stdlib/List.maxon`'s sole field is. It is
+	// `emitOpaqueArrayCreateOp` with the size argument removed, and for the same reason that one has one: a
+	// chain's node holds ONE MACHINE WORD whatever the element is (`ListRuntime.maxon`'s `value@16`), so unlike
+	// an array there is no stride to state and the descriptor read is the create's ONLY argument. The parser
+	// therefore emits a ZERO-argument `__list_create`; `LowerMaxonToStd.appendOpaqueContainerCreate` supplies
+	// the `destroyFunc@40` read, so the tier that owns the descriptor's ValueId is the tier that reads it.
+	//
+	// ⭐ **A TRIVIAL INSTANTIATION READS 0 OUT OF THE SAME SLOT AND ITS TEARDOWN WALK IS SKIPPED**, which is
+	// what makes ONE compiled body serve a `String` bag and an `int` bag in one program — the case
+	// `specs-shv2/managed-list-opaque-element.md` exists for. The alternative the refusal replaced was a
+	// statically stamped 0 (`columnDestroyValue`'s trivial arm), which is the same instruction for both and
+	// leaks the managed one.
+	function emitOpaqueChainCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
+		try self.requireDescriptorSourceForOpaqueCreate(self.signatures.genericInstanceBaseName(giid), containerNoun: OpaqueChainCreateNoun, range: range)
+
+		return self.emitRuntimeCall(ListCreateName, args: ValueIdArray.create(), resultTag: ValueTypeTag.genericInstance, resultNameId: giid, range: range)
+	end 'emitOpaqueChainCreateOp'
+
+	// ⭐ **THE CHAIN ELEMENT-TYPE GATE.** A node's `value@16` is ONE MACHINE WORD, so the positive rule is
+	// `ProgramSignatures.slotTypeFitsOneWord` (see its header for what that buys and what it cost to have two
+	// of them). It serves both chain surfaces — `__ManagedList` is the same record with the same one-word value
+	// slot — so the name it blames is read off the instance rather than spelled twice.
+	//
+	// ⭐⭐ **AN OPAQUE `T` IS ADMITTED, AND IT IS ASKED FIRST BECAUSE IT IS A DIFFERENT QUESTION (W134)** — a
+	// `T` slot is not a type that fails to fit a word, it is a slot whose destructor is not statically known.
+	// This arm used to refuse outright, on the ground that *"a container inside a generic body has no element
+	// destructor to stamp, so a managed instantiation would leak the elements it holds"* — a true sentence
+	// about a **0 stamp**, which is what `columnDestroyValue` would have produced, and not about the construct:
+	// the destructor is in the enclosing instance's layout descriptor, whose `destroyFunc@40` the caller
+	// already threads in, and `emitOpaqueContainerCreateOp` reads it there at run time exactly as an
+	// `Array with <type parameter>` has since P1.7 slice 3b-i. A chain PUBLISHES no slots — it is empty at
+	// birth and grows one node per insertion — so it needs none of the per-instantiation reasoning
+	// `requireVectorElementType` does at this same fork; the descriptor is the whole of the answer.
+	//
+	// ⚠ **`float` IS NOT WHAT THE LAST REFUSAL IS FOR, AND THAT WAS MEASURED RATHER THAN ASSUMED.** A float
+	// slot would arrive in the XMM file where every container entry is declared `i64`, but it never reaches
+	// here: `typealias FList = List with F` is already **E2062 on the type ARGUMENT** (a type parameter is an
+	// opaque general-purpose slot and a float has no way through it) — the same gate the deleted
+	// `requireHashTableKeyType` recorded for a float key. What the last refusal is for is therefore any slot
+	// type neither managed nor word-shaped that a future type kind might introduce: a clean E2015 rather than
+	// a wrong stride.
+	//
+	// MEASURED to pass through it as a `List` ELEMENT, each printing and tearing down clean: `bool`, a ranged
+	// `Byte`, a declared enum, a function alias, a nested `List`, a nested `Array`, `String`, and a struct
+	// with a `String` field.
+	//
+	// ⚠⚠ **AND PASSING THIS GATE IS NOT THE WHOLE ADMISSION — `TypeRules.columnValueTagMatches` DECIDES WHAT
+	// MAY BE WRITTEN.** That was measured on a `Map`'s VALUE column, which shared this rule while the
+	// synthesized table existed (W105 retired it, leaving the chain as the sole asker): `bool` was admitted
+	// here and refused at the first `upsert`, and the arm that closes it is that predicate's.
 	function requireListElementType(giid GenericInstanceId, tok Token) throws ParseError
-		try self.requireOneWordSlotType(self.signatures.containerElementType(giid), containerName: String.from(self.signatures.genericInstanceBaseName(giid)), columnNoun: ContainerElementColumnNoun, tok: tok)
+		if self.signatures.containerElementIsOpaque(giid) 'opaqueElement'
+			return
+		end 'opaqueElement'
+
+		let elementType = self.signatures.containerElementType(giid)
+		if self.signatures.slotTypeFitsOneWord(elementType) 'fitsTheSlot'
+			return
+		end 'fitsTheSlot'
+
+		throw ParseError.unsupported("`{String.from(self.signatures.genericInstanceBaseName(giid))}` holds one machine word per {ContainerElementColumnNoun}, so its {ContainerElementColumnNoun} must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(elementType))}' {ContainerElementColumnNoun} does not fit that slot", line: tok.line, column: tok.column)
 	end 'requireListElementType'
 
 	// ⭐ **DISPATCH A BUILTIN `List` METHOD** — cursor on the method NAME, `list` the (borrowed) receiver
