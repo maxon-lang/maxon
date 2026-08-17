@@ -1704,6 +1704,47 @@ end 'byteRecordTagOfTypeName'
 // and so must not become a second constant.
 export let BoolConformerName = b"bool"
 
+// ⭐⭐ **WHICH PRIMITIVE VALUE TAG A TYPE *NAME* DENOTES — `byteRecordTagOfTypeName`'s twin one type-class
+// over, and here for its reason (W133).** Two doors hold a primitive only as the bytes an author wrote and
+// have to ask: `ProgramSignatures.extensionTargetOf` (may an `extension` target this name?) and
+// `Parser.enclosingSelfType` (what does `Self` mean inside the body it opened?). ONE table, so an extension
+// can never be admitted over a name whose `Self` the other door cannot then type — which is exactly the
+// defect the self-hosted compiler recorded (`maxon-selfhosted/ROADMAP.md:472`: `internMaxonType` mapped the
+// primitive to `MaxonType.named(…)`, so an `extension float` body declared its `__self` as a NAMED Float
+// rather than the float primitive and `"{self}"` interpolation broke).
+//
+// ⛔⛔ **`byte` IS DELIBERATELY ABSENT THOUGH `Parser.namesAPrimitiveType` CARRIES IT, AND THE TWO ANSWER
+// DIFFERENT QUESTIONS.** That predicate is about a STATIC call (`byte.fromString`), where the name is only a
+// qualifier on a reserved-space free function; this one is about VALUES, and `byte` HAS NO VALUE TAG OF ITS
+// OWN — a byte IS an `int(0 to 255)`, so it reaches every receiver door as `integer` and dispatches
+// `int.<method>` (`builtinConformerOfTag`'s header: *"`Integer`, `Byte` and a bare `int` all arrive here as
+// `integer`"*). An `extension byte` admitted here would publish `byte.<method>` symbols **no receiver can
+// ever reach**: a body declared, type-checked and never called — precisely the silent wrong answer W133
+// exists to close one door over, reintroduced by the door itself.
+//
+// ⚖ **THE ORACLE TAKES FOUR KEYWORDS AND shv2 TAKES THREE, AND THAT IS A DIFFERENCE IN THE MECHANISM, NOT
+// IN THE RULE.** `2-Parser.cs:4982-4989` accepts `Int|Float|Bool|Byte` because the bootstrap HAS a
+// `TokenType.Byte` (`1-Lexer.cs:222`) with a primitive IR type behind it (`TryGetPrimitiveIrType`); shv2 has
+// neither — no `TokenKind.byte` at all (`Parser.ByteTypeName`'s header) — so copying the fourth would be
+// copying a spelling with nothing under it. `extension byte` therefore keeps the answer it has today, the
+// `undeclaredTarget` every other name no file declares gets: no conformer, no body parsed, no crash.
+//
+// `unresolved` is the "not a primitive" answer for `byteRecordTagOfTypeName`'s reason: it is the tag's own
+// no-answer and is never a value's, so a caller wanting a `MaxonType` feeds the hit straight to
+// `maxonTypeOfTag` and a caller wanting a predicate tests against it.
+export function primitiveTagOfTypeName(name ByteArray) returns ValueTypeTag
+	if name.equals(IntConformerName) 'theInt'
+		return ValueTypeTag.integer
+	end 'theInt'
+	if name.equals(FloatConformerName) 'theFloat'
+		return ValueTypeTag.float
+	end 'theFloat'
+	if name.equals(BoolConformerName) 'theBool'
+		return ValueTypeTag.boolean
+	end 'theBool'
+	return ValueTypeTag.unresolved
+end 'primitiveTagOfTypeName'
+
 // ⭐⭐ **WHICH COMPILER-GRANTED CONFORMER A NAME IS — the half of the intrinsic-conformance answer that has
 // to be DISCOVERED FROM THE PROGRAM rather than read off the spelling.** Four of the rows below are keyed by
 // compiler-owned names this file may state (three keywords and `String`); the other two are keyed by a

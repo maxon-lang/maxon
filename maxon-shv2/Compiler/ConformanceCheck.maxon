@@ -1217,11 +1217,29 @@ function checkOneConformance(project Project, functionsByName FunctionNameIndex,
 	// not an index, so the position is recovered by re-spelling and never by subscripting this list), read
 	// ONCE per declaration rather than per rendered type (it is a map lookup, and it does not vary).
 	//
-	// Only a `type` declaration records a ConformanceDecl (`Parser.parseTypeDeclaration` is the sole caller
-	// of `parseTypeImplementsClause`) and every parsed `type` commits its layout (`commitStructTypes`), so a
-	// conformer with no layout is a merge-invariant violation exactly as a signature-less module function is.
-	let layout = try project.structTypes.get(conformance.typeName) otherwise panic("checkOneConformance: conforming type '{String.from(conformance.typeName)}' declares `implements` but is in no struct registry — only a declared `type` records a ConformanceDecl, and every declared `type` commits a StructLayout")
-	let typeParamNames = layout.typeParamNames
+	// ⛔⛔ **THIS PARAGRAPH CLAIMED A SOLE PRODUCER AND WAS ALREADY WRONG ABOUT ITS OWN INPUT, WHICH IS WHAT
+	// MADE THE PANIC BELOW A REACHABLE COMPILER ABORT (W133).** It read *"Only a `type` declaration records a
+	// ConformanceDecl (`Parser.parseTypeDeclaration` is the sole caller of `parseTypeImplementsClause`)"* —
+	// false since conditional extensions: `Parser.recordExtensionConformance` files one per CONFORMER of every
+	// `extension X implements …`. It was harmless only because every conformer such an extension could reach
+	// was a declared `type`, so the two producers happened to agree about what a conformer is. **W133 makes
+	// `extension int implements Hashable` a program, and `int` is in no struct registry and never will be** —
+	// a primitive has no fields, so there is nothing for a layout to describe. Left unnarrowed the check
+	// aborted the compiler on a legal program that both references compile.
+	//
+	// ⚠ **NARROWED, NOT DELETED.** What it protects is real for every conformer that names a DECLARATION: a
+	// `type` that recorded a conformance and committed no layout is a merge-invariant violation exactly as a
+	// signature-less module function is. The primitive is the one conformer that legitimately has none, and it
+	// is recognized by the SAME table (`primitiveTagOfTypeName`) that admitted it at the extension door, so
+	// the two cannot come to disagree about which names those are.
+	//
+	// A primitive declares no `uses` parameters, which is also what a non-generic type's layout already holds
+	// — so the empty list is not a fallback here, it is the answer.
+	var typeParamNames = ByteArrayArray.create()
+	if primitiveTagOfTypeName(conformance.typeName) == ValueTypeTag.unresolved 'aDeclaredConformer'
+		let layout = try project.structTypes.get(conformance.typeName) otherwise panic("checkOneConformance: conforming type '{String.from(conformance.typeName)}' declares `implements` but is in no struct registry — a ConformanceDecl comes from a declared `type` (which commits a StructLayout) or from an `extension` over a primitive (which is not a declared type and was admitted above)")
+		typeParamNames = layout.typeParamNames
+	end 'aDeclaredConformer'
 
 	for i in 0 upto conformance.interfaces.count() 'eachIface'
 		let entry = try conformance.interfaces.get(i) otherwise panic("checkOneConformance: interfaces.get OOB at {i}")

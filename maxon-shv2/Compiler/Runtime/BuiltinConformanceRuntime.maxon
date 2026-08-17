@@ -325,8 +325,12 @@ end 'candidateImplName'
 // ⚠ **"NAMES BUT DOES NOT DEFINE" — AND THE SECOND HALF IS NOT PEDANTRY, IT IS A MEASURED WRONG ANSWER.**
 // A synthesized impl exists to SUPPLY a symbol nothing else provides; a symbol the module already defines
 // needs none, and installing one anyway appends a SECOND function under that name, which the by-name link
-// then resolves to whichever it likes. `int.*` cannot collide (`int` is a keyword, so no user method can
-// wear that qualifier), but `String.*` can: a user `type String` with its own `hash()` mints exactly the
+// then resolves to whichever it likes. **This paragraph used to except `int.*` — *"`int` is a keyword, so no
+// user method can wear that qualifier"* — and W133 ended that**: an `extension int implements Hashable`
+// declares a real `int.hash`, so all three primitives now collide exactly as `String.*` always could. The
+// narrowing below was already the right shape and needed no change; what needed changing is the reason
+// written beside it, because a premise that has quietly expired is how the next reader talks themselves out
+// of the guard. `String.*` was the first: a user `type String` with its own `hash()` mints exactly the
 // symbol `String.hash`. MEASURED — crediting that call site made `String.create(7).hash()` return **5381**,
 // djb2's seed read off the user's box, instead of `7`. So the candidates are narrowed to the UNDEFINED ones
 // before a single reference is credited.

@@ -1,0 +1,34 @@
+// Test: a-declared-hash-beats-the-synthesized-impl
+extension int implements Hashable
+	export function hash() returns HashValue
+		return 77
+	end 'hash'
+end 'int'
+
+function main() returns ExitCode
+	let n = 5
+	return n.hash()
+end 'main'
+---
+ExitCode: 77
+---
+func @int.hash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 r8, 77
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect int.hash
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

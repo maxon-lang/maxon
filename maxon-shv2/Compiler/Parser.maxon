@@ -15572,9 +15572,10 @@ export type Parser
 	function recordScannedExtension(sites ExtensionDeclSiteArray)
 		// The site is the cursor BEFORE the keyword is consumed, because that is where the two later passes
 		// have to be put back down: both open by consuming `extension`, exactly as the real parse reaches it.
-		// The interface NAME travels with the site so those passes can find the conformers without re-reading
-		// the header first.
-		sites.push(ExtensionDeclSite.create(self.filePath, tokenPos: self.pos, targetName: self.identifierNameAt(self.pos + 1)))
+		// The TARGET does not travel with it — each pass reads the header for itself through the one reader
+		// (`readExtensionHeader`); see `ExtensionDeclSite` for the dead copy W133 removed and why a copy taken
+		// here could not have seen a primitive keyword anyway.
+		sites.push(ExtensionDeclSite.create(self.filePath, tokenPos: self.pos))
 
 		try self.consume(TokenKind.extension) otherwise return
 		self.skipPastBlockEnd()
@@ -15925,7 +15926,26 @@ export type Parser
 	// next site's own call to this reader — which overwrites the field before anything reads it.
 	function readExtensionHeader() returns ExtensionHeader throws ParseError
 		try self.consume(TokenKind.extension)
-		let nameTok = try self.consume(TokenKind.identifier)
+		// ⭐⭐ **THE TARGET IS READ THROUGH THE TYPE-BASE READER, NOT `consume(TokenKind.identifier)`, AND THAT
+		// ONE LINE IS THE WHOLE OF W133's PARSE HALF.** Three of Maxon's types are spelled with a KEYWORD
+		// (`Lexer.keywordTable`), so `extension int` arrived here as `E2010 Expected identifier but got 'int'` —
+		// a refusal of the very declaration `stdlib/PrimitiveExtensions.maxon` opens with and both references
+		// accept. `typeBaseTokenAt` is ALREADY the compiler's one answer to *"which token names a type here?"*:
+		// it re-mints a primitive keyword as an identifier-kinded token carrying the keyword's own spelling,
+		// line, column and span, so every reader below — `extensionTargetOf`, `enterTypeScope`,
+		// `declaredMethodName`, the `where` clause's blame token — serves a primitive without learning that a
+		// keyword got here. Widening this reader instead would have been a second table of "which keywords name
+		// types", which is the one-fact-written-twice bug this file keeps paying for.
+		//
+		// ⚠ **AND IT IS WIDENED IN EXACTLY ONE PLACE BECAUSE THIS IS THE ONE READER** (see this function's
+		// header): the pre-scan, the whole-program fold and the real parse all come through here, so the three
+		// cannot come to disagree about whether `int` names a target.
+		//
+		// ⚠ It also admits `Self`, which the reader resolves to the enclosing declaration's name — and an
+		// `extension` is always at file scope, so that path is `requireEnclosingTypeName`'s positioned
+		// *"'Self' outside a type declaration"* rather than the `E2010` it used to be. A strictly better
+		// sentence about the same rejected program; no case in the corpus writes it.
+		let nameTok = try self.consumeTypeBaseToken()
 		let target = self.signatures.extensionTargetOf(nameTok.value)
 
 		// ⭐ **THE `implements` CLAUSE IS READ BEFORE THE `where`, WHICH IS THE ORDER THE LANGUAGE WRITES
@@ -18812,6 +18832,30 @@ export type Parser
 	// visibility exactly as a `type`'s members do (`parseTypeMember`).
 	function parseExtensionDeclaration() throws ParseError
 		let header = try self.readExtensionHeader()
+
+		// ⛔⛔ **`extension byte` IS REFUSED HERE, AND THE REFUSAL IS DERIVED RATHER THAN SPELLED (W133).**
+		// `namesAPrimitiveType` admits FOUR names because that is the set with STATICS (`byte.fromString`);
+		// `primitiveTagOfTypeName` admits THREE because that is the set with a VALUE TAG, and only the second
+		// set can be extended — `byte` names no type in shv2 at all, and a byte VALUE is an ordinary `int`
+		// range (`typealias Byte = int(0 to u8.max)`, `stdlib/Character.maxon:12`) which reaches every receiver
+		// door tagged `integer`. So an `extension byte` body would publish `byte.<method>` symbols nothing can
+		// ever dispatch.
+		//
+		// ⚠ **WITHOUT THIS IT IS NOT AN ERROR, IT IS SILENCE — WHICH IS THE WORSE HALF OF THE TRADE.** `byte`
+		// falls to `undeclaredTarget`, whose zero conformers mean the body is never parsed at all, so the whole
+		// declaration compiles to nothing with no diagnostic (MEASURED on this tree before this gate: exit 0,
+		// the extension inert, and its body's own `Integer` reported unused because nothing ever read it).
+		// That general silence is DELIBERATE and stays — an `extension <Interface>` no type implements is a
+		// legal, documented no-op (see this function's ⚠) — so the refusal is narrowed to the one case where
+		// the author named something the compiler DOES recognize as a primitive and cannot honour.
+		//
+		// ⇒ Written as the DIFFERENCE between the two tables, not as `b"byte"`: the day a fifth primitive
+		// joins `namesAPrimitiveType` without a value representation it is refused here automatically, and the
+		// day `byte` acquires one it is admitted by `extensionTargetOf` and never reaches this line.
+		if namesAPrimitiveType(header.nameTok.value) and primitiveTagOfTypeName(header.nameTok.value) == ValueTypeTag.unresolved 'aPrimitiveWithNoValuesOfItsOwn'
+			throw ParseError.unsupported("`extension {String.from(header.nameTok.value)}` — `{String.from(header.nameTok.value)}` is the qualifier of a static (`{String.from(header.nameTok.value)}.fromString`) and names no type of its own, so it has no values for these methods to be dispatched on; a byte-sized value is an `int` range (`typealias Byte = int(0 to u8.max)`), so extend `int`", line: header.nameTok.line, column: header.nameTok.column)
+		end 'aPrimitiveWithNoValuesOfItsOwn'
+
 		let bodyStart = self.pos
 
 		// The conformer list and the per-conformer verdict are `readExtensionHeader`'s and
@@ -21293,7 +21337,12 @@ export type Parser
 		// `self.x` spelling instead). So a bare name in an enum method's body is an ordinary local or an
 		// undefined variable, never a field — which is also what makes the E3006 collision contract below
 		// vacuous here.
-		if takesReceiver and not self.enclosingTypeIsEnum 'selfFieldAliases'
+		// ⚠ **A PRIMITIVE RECEIVER IS THE SECOND SUCH DECLARATION (W133), AND IT IS THE SAME SENTENCE FOR A
+		// DIFFERENT REASON.** `extension int`'s methods take a receiver and the enclosing type is `int`, which
+		// no struct registry holds — a primitive IS its value, so there is nothing for a layout to describe.
+		// MEASURED before this clause: every method of `extension int` took the compiler down at
+		// `enclosingLayout`, blaming the declaration sweep for a `type int` no program wrote.
+		if takesReceiver and not self.enclosingTypeIsEnum and primitiveTagOfTypeName(self.enclosingType) == ValueTypeTag.unresolved 'selfFieldAliases'
 			try self.declareSelfFieldAliases(nameTok)
 		end 'selfFieldAliases'
 
@@ -23599,10 +23648,23 @@ export type Parser
 	function enclosingSelfType(anchor Token) returns MaxonType throws ParseError
 		let name = try self.requireEnclosingTypeName(anchor)
 
+		// ⭐⭐ **A PRIMITIVE IS THE THIRD KIND OF BUILTIN VALUE TYPE `Self` CAN NAME (W133), AND IT JOINS THE
+		// BYTE RECORDS' ARM RATHER THAN GETTING ONE OF ITS OWN.** `extension int` enters this body with
+		// `enclosingType` = `int`, so `equals(other Self)`, `compare(other Self)` and `clone() returns Self` all
+		// resolve through here — and the `structRef` below would hand every one of them a reference to a type no
+		// registry holds. That is the defect the self-hosted compiler recorded and fixed
+		// (`maxon-selfhosted/ROADMAP.md:472`), one door over: there `internMaxonType`'s primitive mapping
+		// answered `MaxonType.named(…)`, so an `extension float` body declared its `__self` as a NAMED Float
+		// rather than the float primitive and `"{self}"` interpolation broke.
+		//
+		// The two tables stay APART — four other doors need "is this name a BYTE RECORD?" and must not start
+		// admitting `int` — while the QUESTION is asked once, because what this reader wants is neither table
+		// but their union: *"does this name denote a builtin value type, and which tag?"*
 		let byteRecord = byteRecordTagOfTypeName(name)
-		if byteRecord != ValueTypeTag.unresolved 'theBuiltinByteRecord'
-			return maxonTypeOfTag(byteRecord, nameId: UnnamedTypeId)
-		end 'theBuiltinByteRecord'
+		let builtinValueTag = primitiveTagOfTypeName(name) if byteRecord == ValueTypeTag.unresolved else byteRecord
+		if builtinValueTag != ValueTypeTag.unresolved 'theBuiltinValueType'
+			return maxonTypeOfTag(builtinValueTag, nameId: UnnamedTypeId)
+		end 'theBuiltinValueType'
 
 		// ⭐⭐ **THE GENERIC TWIN OF THE ARM ABOVE (W57): `Self` INSIDE `type Array` IS THE INSTANCE.** A
 		// non-generic byte record answers with its TAG for the reason `ProgramSignatures.ownRecordSelfInstance`
@@ -47628,10 +47690,17 @@ export type Parser
 		// ordinary path below builds, so the two readings of one call site cannot disagree about what "the
 		// user declared it" means. ⭐ **AND ASKING IT OF THAT NAME MAKES A GENERIC ALIAS FALL OUT FOR FREE** —
 		// `typealias byte = Box with Num` resolves `byte.fromString` to `Box.fromString` before this test, so a
-		// user's own generic instance keeps its static (measured: exit 9) with no arm of its own here. It is
-		// the identity for the three KEYWORD qualifiers, which can name no declaration at all (`typealias int`
-		// is `E2010: Expected identifier but got 'int'`, measured) — so what
-		// `requirePrimitiveStaticIsResolvable` then tests really is the qualifier the author wrote.
+		// user's own generic instance keeps its static (measured: exit 9) with no arm of its own here.
+		//
+		// ⛔ **AND THE CLAUSE STOPPED BEING `byte`'s ALONE AT W133, WHICH IS WHY THIS PARAGRAPH IS AMENDED
+		// RATHER THAN LEFT TO READ TRUE-BY-ACCIDENT.** It said the test *"is the identity for the three KEYWORD
+		// qualifiers, which can name no declaration at all"* — true only while no declaration could be written
+		// against `int`. `extension int` can, and a `static function make()` in one publishes `int.make`: this
+		// clause is what makes that call LINK, by declining to mint `__int_make` for a name the program
+		// actually has. The rule needed no change — it was always *"a declaration outranks the primitive
+		// reading"* — but the reason under it had expired, and a premise nobody re-checks is how a guard gets
+		// deleted as dead. What `requirePrimitiveStaticIsResolvable` then tests is a qualifier the author
+		// wrote for which NO declaration exists, which is still exactly the case it words its sentence for.
 		//
 		// The order of the two probes is cost: `namesAPrimitiveType` is four `equals` on a short slice and
 		// allocates nothing (the discipline the math-intrinsic table measured), while each `declaresCallee`
@@ -48250,7 +48319,7 @@ export type Parser
 		// resolves the first two and reports the third.
 		let receiverConformer = self.builtinConformerOfType(recv.tag, nameId: recv.nameId)
 		if isBuiltinConformer(receiverConformer) 'builtinConformer'
-			return try self.dispatchBuiltinConformanceMethod(func, receiver: recv.value, conformer: receiverConformer, baseTok: recv.anchor)
+			return try self.dispatchBuiltinConformanceMethod(func, recv: recv, conformer: receiverConformer, resultUsed: resultUsed)
 		end 'builtinConformer'
 
 		// A `__ManagedFile` RECEIVER (R4.1) — `f.close()`. Its own dispatcher for the reason the
@@ -50765,24 +50834,64 @@ export type Parser
 	// Resolve the method name against the conformer's INTRINSIC conformances and emit the call. The cursor
 	// sits on the method NAME. A name no intrinsic conformance supplies is a clean positioned reject — never
 	// a route to a `<type>.<method>` symbol nothing installs.
-	function dispatchBuiltinConformanceMethod(func IrFunction, receiver ValueId, conformer BuiltinConformer, baseTok Token) returns ValueId throws ParseError
-		let methodTok = try self.consume(TokenKind.identifier)
+	function dispatchBuiltinConformanceMethod(func IrFunction, recv MethodReceiver, conformer BuiltinConformer, resultUsed bool) returns ValueId throws ParseError
 		let typeName = builtinConformerName(conformer)
 
-		// ⭐⭐ **THE TWO LOWERED PROTOCOL METHODS COME FIRST, and neither reaches an impl.** Both reference
+		// ⭐⭐⭐ **A DECLARED BODY BEATS EVERY ARM BELOW, AND THIS TEST HAS TO COME FIRST OR TWO OF THEM ARE A
+		// SILENT WRONG ANSWER (W133).** Until this rung the parser could not PARSE an `extension int`, so every
+		// arm below was the only surface a primitive had and the ordering question did not exist. It does now:
+		// `extension int implements Stringable` declaring a `toString()` publishes a real `int.toString`
+		// function, type-checked and linked — and the `toString` arm below LOWERS INLINE AND CALLS NO SYMBOL, so
+		// left ahead of this test it would emit the compiler's own conversion and the author's body would never
+		// run. Not a refusal, not a link failure: a program that compiles, links, runs and prints the wrong
+		// thing. `clone` is the identical shape (`emitPrimitiveClone` hands back the receiver), which is why
+		// `specs-shv2/extension-over-primitive.md` spends a differing-declarations case on each.
+		//
+		// ⚠ **IT IS A PEEK, BECAUSE THE DECLARED PATH MAY NOT CONSUME THE NAME** — `parseCallNamed` consumes it
+		// itself, exactly as `dispatchMethodOnBase` peeks for the same reason. The cursor is on the method name
+		// (the `.` is already consumed), which is the same position `methodCallCancelsAPromise` peeks from.
+		//
+		// ⭐ **THE SYNTHESIZED SURFACE IS NOT RETIRED BY THIS, AND MUST NOT BE:** a program that declares
+		// nothing still reaches every arm below unchanged, which is what keeps `5.hash()`, `"{x}"` and
+		// `x.clone()` working with no `stdlib/PrimitiveExtensions.maxon` listed. This is the `structCloneIsSynthesized`
+		// rule — *"wired PAST the `declaresCallee` test, so a user-written `clone` still wins"* — asked of a
+		// primitive instead of a struct, and it is both references' rule too (v1 skips any struct that already
+		// has a `"{structName}.clone"`, `Parser.maxon:19652`).
+		//
+		// ⚠ **`declaresCallee` IS THE WHOLE-PROGRAM SWEEP, NOT THIS FILE**, for `structCloneIsSynthesized`'s
+		// reason: the `extension int` may be written in any file, and an answer that depended on which file the
+		// call is in would dispatch one `n.hash()` to the declaration and another to the synthesized impl.
+		let methodTok = self.current()
+		let declaredCallee = qualifiedMethodName(typeName, methodName: methodTok.value)
+		if self.signatures.declaresCallee(declaredCallee) 'theProgramDeclaresItsOwn'
+			// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver, and no token at this call
+			// site spells the type — `dispatchMethodOnBase`'s mint, for its reason. `ConstructorInstance.none`
+			// because a primitive has no box for a constructor to have built.
+			return try self.parseCallNamed(func, callee: declaredCallee, anchor: methodTok, receiver: ReceiverArg.value(recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName, anchor: recv.anchor), resultUsed: resultUsed, constructorInstance: ConstructorInstance.none, mint: CalleeMint.resolvedTypeQualifier)
+		end 'theProgramDeclaresItsOwn'
+
+		// The peek above only READ the name; the arms below all consume it, and this is the one place they
+		// share to do it — which is also where a member that is not a name at all still gets the E2010 it
+		// always got.
+		try self.consume(TokenKind.identifier)
+
+		// ⭐⭐ **THE TWO LOWERED PROTOCOL METHODS COME NEXT, and neither reaches an impl.** Both reference
 		// compilers give `int`/`float`/`bool` these through an `extension … implements …` in
-		// `stdlib/PrimitiveExtensions.maxon` whose whole body is ONE expression; shv2 has no `extension`
-		// mechanism to hang a body on, so it emits that one expression here and skips the frame — which is why
-		// these arms sit AHEAD of the conformance lookup rather than adding protocols to it. They are named
-		// once, beside the refusal that advertises them, in `IrInterface.builtinConformerLoweredMethodNames`,
-		// whose header carries why a lowering is kept out of `isIntrinsicBuiltinConformance`.
+		// `stdlib/PrimitiveExtensions.maxon` whose whole body is ONE expression; shv2 has that mechanism as of
+		// W133 but does not yet LIST that module (`IrInterface.isIntrinsicBuiltinConformance` withholds
+		// `Stringable`/`Cloneable` from the primitives on purpose — `:2243-2247`), so with nothing declared it
+		// still emits that one expression here and skips the frame. That is why these arms sit AHEAD of the
+		// conformance lookup rather than adding protocols to it, and BEHIND the declared-body test above. They
+		// are named once, beside the refusal that advertises them, in
+		// `IrInterface.builtinConformerLoweredMethodNames`, whose header carries why a lowering is kept out of
+		// `isIntrinsicBuiltinConformance`.
 
 		// `x.toString()` is `Stringable`'s method and lowers to exactly what `"{x}"` lowers to
 		// (`specs-shv2/primitive-stringable.md`, whose Notes say "uses the same conversion as string
 		// interpolation" and mean it literally; the reference's body is `return "{self}"`).
 		if methodTok.value.equals(ToStringMethodName) 'stringableLowering'
 			try self.consumeEmptyArgList()
-			return try self.emitValueToString(receiver, exprTok: methodTok, range: SourceRange.between(baseTok, last: methodTok))
+			return try self.emitValueToString(recv.value, exprTok: methodTok, range: SourceRange.between(recv.anchor, last: methodTok))
 		end 'stringableLowering'
 
 		// ⭐ **`x.clone()` IS `Cloneable`'S METHOD AND ITS LOWERING IS THE IDENTITY** — the reference's three
@@ -50803,11 +50912,11 @@ export type Parser
 		// already calls load-bearing.
 		if methodTok.value.equals(CloneMethodName) 'cloneableLowering'
 			try self.consumeEmptyArgList()
-			return try self.emitPrimitiveClone(receiver, methodTok: methodTok)
+			return try self.emitPrimitiveClone(recv.value, methodTok: methodTok)
 		end 'cloneableLowering'
 
 		match builtinConformerMethod(typeName, methodName: methodTok.value, discovered: DiscoveredConformer.none) 'lookup'
-			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: receiver, target: DirectConformanceTarget.builtinValue(conformer), method: method, baseTok: baseTok, methodTok: methodTok)
+			supplied(method) then return try self.emitBuiltinConformanceCall(func, receiver: recv.value, target: DirectConformanceTarget.builtinValue(conformer), method: method, baseTok: recv.anchor, methodTok: methodTok)
 			notSupplied then throw ParseError.unsupported("'{String.from(typeName)}' has no method named '{String.from(methodTok.value)}' — a builtin-typed receiver supplies {builtinConformerDispatchMethodNames(typeName)}", line: methodTok.line, column: methodTok.column)
 		end 'lookup'
 	end 'dispatchBuiltinConformanceMethod'
@@ -58059,6 +58168,17 @@ export type Parser
 		if self.enclosingTypeIsEnum 'enumHasNoFields'
 			throw ParseError.unsupported("a field access through `self` in a method of `enum`/`union` `{String.from(self.enclosingType)}` — an enum/union declares no fields; a case's PAYLOAD is bound by a pattern (`match self 'k' … fail(reason) then …`), never read through the receiver", line: anchor.line, column: anchor.column)
 		end 'enumHasNoFields'
+
+		// ⛔ **A PRIMITIVE HAS NO LAYOUT EITHER (W133), AND IT IS THE ARM ABOVE'S TWIN FOR A DIFFERENT REASON:**
+		// an enum has fields nowhere to *put*, and a primitive IS its value — `self` inside `extension int` is
+		// the integer, not a box, so there is nothing a `.field` could name. `parseFunction` installs no
+		// self-field aliases for such a body (its `⚠` states the measured abort), so the only spelling that
+		// reaches here is the EXPLICIT `self.x`, which is exactly the door the enum arm was added at.
+		//
+		// Positioned rather than panicking for that arm's reason: the source can perfectly well write it.
+		if primitiveTagOfTypeName(self.enclosingType) != ValueTypeTag.unresolved 'aPrimitiveHasNoFields'
+			throw ParseError.unsupported("a field access through `self` in a method of `extension {String.from(self.enclosingType)}` — a primitive IS its value and declares no fields, so `self` here is the {String.from(self.enclosingType)} itself and has no members to read", line: anchor.line, column: anchor.column)
+		end 'aPrimitiveHasNoFields'
 
 		match self.signatures.structOf(self.enclosingType) 'declared'
 			declared(layout) then return layout

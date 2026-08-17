@@ -6949,22 +6949,24 @@ export typealias InterfaceDeclSiteArray = Array with InterfaceDeclSite
 // types may be declared in files this sweep has not reached; read per-file, an extension would publish
 // methods for the conformers declared ABOVE it and none for the ones below.
 //
-// ⚠ **IT IS ITS OWN TYPE RATHER THAN AN `InterfaceDeclSite` WITH A DIFFERENT MEANING, BECAUSE THE NAME IT
-// CARRIES IS A DIFFERENT KIND OF NAME.** An interface site's `name` is a name the file DECLARES, which is
-// why it travels — the stdlib/user shadow contest is settled before the declaration is read and has to see
-// it. An extension declares no name at all; `interfaceName` is a name it USES, and no contest reads it.
+// ⚠ **IT IS ITS OWN TYPE RATHER THAN AN `InterfaceDeclSite` WITH A DIFFERENT MEANING, BECAUSE OF WHAT IT
+// DOES *NOT* CARRY.** An interface site holds a `name` the file DECLARES, and that name travels because the
+// stdlib/user shadow contest is settled before the declaration is read and has to see it. An extension
+// declares no name at all, so there is nothing for a contest to see and this site is a POSITION and nothing
+// else — which is exactly what `Parser.recordScannedExtension`'s header already says it is.
+//
+// ⛔ **IT CARRIED A `targetName` UNTIL W133, WRITTEN BY THE SWEEP AND READ BY NOTHING IN THE COMPILER.** The
+// sweep filled it with `identifierNameAt`, which answers the EMPTY name for a keyword — so an
+// `extension int` would have travelled here under no name at all, and the field would have gone from dead to
+// dead-and-wrong. The target is read from the TOKENS by `readExtensionHeader`, once, at each of the three
+// passes that need it (that function's header is why there is one reader); a copy on the site would be that
+// answer derived twice, and the copy is the one that cannot see a keyword.
 export type ExtensionDeclSite
 	export var path as FilePath
 	export var tokenPos as TokenIndex
-	// The name being extended, read by the sweep off the token after the `extension` keyword — the same token
-	// the two later passes consume. It is an INTERFACE name or a declared TYPE name; which one it is cannot be
-	// told here (the index is still being built) and is decided by `extensionTargetOf` once it is whole. A
-	// malformed header carries the empty name, which matches neither and expands nothing; the real parse
-	// reports it with a position.
-	export var targetName as ByteArray
 
-	export static function create(path FilePath, tokenPos TokenIndex, targetName ByteArray) returns ExtensionDeclSite
-		return Self{path: path, tokenPos: tokenPos, targetName: targetName}
+	export static function create(path FilePath, tokenPos TokenIndex) returns ExtensionDeclSite
+		return Self{path: path, tokenPos: tokenPos}
 	end 'create'
 end 'ExtensionDeclSite'
 
@@ -14322,6 +14324,33 @@ export type ProgramSignatures
 	// mutually exclusive and the order they are asked in cannot matter. The type arm is asked first only
 	// because `structTypes` is the cheaper lookup.
 	export function extensionTargetOf(targetName ByteArray) returns ExtensionTarget
+		// ⭐⭐ **A PRIMITIVE IS ITS OWN SOLE CONFORMER — the same answer a non-generic declared `type` gets one
+		// arm down, and deliberately the SAME union case rather than a fourth one (W133).** Everything that
+		// reads an extension target asks it for two things and only two: `extensionTargetConformers` (which
+		// types get the methods) and `extensionTargetParamNames` (what vocabulary the `where` clause may name).
+		// A primitive answers both exactly as a non-generic type does — itself, and nothing — so a case of its
+		// own would be a fourth arm at every one of those readers whose body is `typeExtension`'s, plus a third
+		// arm at `extensionConformerVerdict`, `noteTypeExtensionWitnessConstraints` and
+		// `openExtensionBodyScope`. The departure a new case would BUY is nowhere.
+		//
+		// ⚠ **THE `typeExtension` PATH IS THE ONE THAT REACHES NO `StructLayout` LOOKUP, WHICH IS WHY THIS IS
+		// SOUND AND THE INTERFACE PATH WOULD NOT BE.** `Parser.conformerAssociatedBindings` PANICS on a
+		// conformer `structOf` misses, and it is reached only from the `interfaceExtension` arms of
+		// `openExtensionBodyScope` and `extensionConformerVerdict`; both return before it for a
+		// `typeExtension`. The two lookups this arm's conformer DOES reach —
+		// `typeExtensionWitnessConstraints` and `structDeclaresTypeParams` — both answer an undeclared name
+		// with the shared empty / `false` by construction.
+		//
+		// ⚠ **ASKED FIRST, AND NOTHING CAN SHADOW IT, BECAUSE THE THREE NAMES ARE KEYWORDS** (`Lexer.keywordTable`):
+		// no declaration can bind `int`, `float` or `bool`, so there is no struct and no interface for this to
+		// pre-empt. `byte` is an ordinary identifier and is NOT in this table (`primitiveTagOfTypeName` states
+		// why), so a user's `type byte` still resolves through the struct arm below.
+		if primitiveTagOfTypeName(targetName) != ValueTypeTag.unresolved 'aPrimitive'
+			var itsOwnConformer = ByteArrayArray.create()
+			itsOwnConformer.push(targetName)
+			return ExtensionTarget.typeExtension(sharedEmptyTypeParamNames, conformers: itsOwnConformer)
+		end 'aPrimitive'
+
 		if let layout = try self.structTypes.get(targetName) 'aDeclaredType'
 			var itself = ByteArrayArray.create()
 			itself.push(targetName)
