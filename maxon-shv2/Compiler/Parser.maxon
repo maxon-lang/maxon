@@ -10479,6 +10479,23 @@ export type Parser
 	// `parseClosureExpression` saves and clears it with the marks themselves, so the boundary costs no test of
 	// its own and cannot be forgotten at one of the two doors.
 	var enclosingFunctionMayReturnAGlobalAlias as bool
+
+	// ⭐⭐ **THE ENCLOSING FUNCTION'S MARKS, KEPT ALIVE ACROSS A CLOSURE BODY SO A CAPTURE CAN INHERIT ONE
+	// (W117 review).** `immutableGlobalReads` is SWAPPED to empty at a closure, and it must be — a closure's
+	// value ids are its own SSA space. But a closure that CAPTURES a tainted binding reads the very same
+	// record, and clearing the marks made that read arrive unmarked, which LAUNDERED the taint: MEASURED on
+	// the rung tip, `var b = expose()` + `callThunk(function() gives grow(b))` (where `grow` pushes) mutated
+	// a `let`-declared global and exited 3, while the identical program without the closure is refused E3019.
+	//
+	// So the enclosing set rides here instead of being dropped, read at exactly one place —
+	// `emitCaptureRead`, the ONE door a captured name's value is minted at — where the enclosing binding's
+	// `boundValue` is still in hand and can be asked. The mark is then re-minted in the CLOSURE's own space,
+	// which is what keeps every write door inside the body working on ids it owns.
+	//
+	// ⚠ **IT IS THE *IMMEDIATELY* ENCLOSING FUNCTION'S, AND NESTING IS WHY IT IS SAVED/RESTORED LIKE THE
+	// REST.** A closure inside a closure captures out of the closure it sits in, whose marks are by then the
+	// current ones — so the triple hands this field the set that was current at entry, not the outermost.
+	var capturedImmutableGlobalReads as ValueMarkSet
 	// ⭐ **THE MERGE ARMS' E3019 BLAME, CARRIED ONTO THE RESULT PHI** (see `MergeBlameMap`). Written at the
 	// three merges that can join a bare binding reference — the ternary, a `match … gives`, and a
 	// `try … otherwise <expr>` — and read at the one consumer, `expressionImmutableBlame`, whenever the
@@ -11348,6 +11365,7 @@ export type Parser
 			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			enclosingFunctionMayReturnAGlobalAlias: false,
+			capturedImmutableGlobalReads: sharedEmptyImmutableGlobalReads,
 			mergeImmutableBlame: sharedEmptyMergeBlames,
 			rebindableSlotReads: sharedEmptyRebindableSlotReads,
 			constructorFeedParams: sharedEmptyConstructorFeedParams,
@@ -21158,6 +21176,9 @@ export type Parser
 		// promotion path of every returned aggregate. Gated on the whole-program flag so a program with no
 		// such function pays one bool instead of a hash per declaration.
 		self.enclosingFunctionMayReturnAGlobalAlias = self.signatures.programReturnsAnImmutableGlobalAlias() and self.signatures.returnsImmutableGlobalAlias(name)
+		// A DECLARED function captures nothing — only a closure body has an enclosing frame to inherit a mark
+		// from — so the capture view is empty here and is filled only by `parseClosureExpression`'s triple.
+		self.capturedImmutableGlobalReads = sharedEmptyImmutableGlobalReads
 		// The rebindable-slot reads (W41) are per-function for that same reason — see `rebindableSlotReads`.
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
@@ -22514,6 +22535,7 @@ export type Parser
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		self.enclosingFunctionMayReturnAGlobalAlias = false
+		self.capturedImmutableGlobalReads = sharedEmptyImmutableGlobalReads
 		// W41's mark crosses the same boundary and for the same reason — see `rebindableSlotReads`.
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
@@ -25662,6 +25684,10 @@ export type Parser
 		end 'cellTakesOwnership'
 
 		self.emitIndirectStore(cell, offset: CellContentOffset, value: stored, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(declared)), range: range)
+		// The FIRST value into a cell hands it W117's mark exactly as a later rebind does (`emitCellStore`) —
+		// asked of `value` rather than of `stored`, because the ownership move above mints the occupant and it
+		// is the incoming value the promotion marked.
+		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: value, to: cell)
 		return cell
 	end 'fillFreshCell'
 
@@ -35961,7 +35987,17 @@ export type Parser
 	function edgeArgsFor(phiVars LoopPhiVarArray, preLoop bool) returns ValueIdArray
 		var vals = ValueIdArray.create()
 		for pv in phiVars 'each'
-			self.pushMergedEdgeValue(vals, binding: pv.binding, value: pv.entryValue if preLoop else pv.binding.boundValue)
+			let carried = pv.entryValue if preLoop else pv.binding.boundValue
+			self.pushMergedEdgeValue(vals, binding: pv.binding, value: carried)
+			// ⭐⭐ **A LOOP NAMES ITS PHI SEPARATELY FROM THE BINDING, WHICH IS WHY W117's MARK IS CARRIED HERE
+			// AS WELL (review).** On a BACK edge the binding's own value IS what is being pushed, so the carry
+			// `pushMergedEdgeValue` makes is a self-carry and the HEADER phi — the value every later read of the
+			// name sees — inherits nothing. `pv.phiId` is that phi, and it is the loop's own to name.
+			//
+			// ⛔ MEASURED without this line: `var b = ["q"]` + `for _ in 0 upto 2  b = expose()  end` +
+			// `grow(b)` compiled and grew a `let`-declared global (exit 6), while the same rebind under an `if`
+			// was already refused. The `if` half and this one are the same defect at two merge shapes.
+			self.carryImmutableGlobalMark(self.immutableGlobalReads, from: carried, to: pv.phiId)
 		end 'each'
 		return vals
 	end 'edgeArgsFor'
@@ -39697,6 +39733,13 @@ export type Parser
 			self.markValuePromise(phiId)
 		end 'promisePhi'
 
+		// ⭐⭐ **W117's MARK CROSSES A BINDING MERGE (review), and this half alone is not enough — see
+		// `pushMergedEdgeValue`.** The value flowing IN here is only ONE of the phi's incomings (the path parsed
+		// last); the others arrive as edge args, which is why the twin below carries from each of them. Both are
+		// needed and neither is redundant: this one covers a phi whose edges are pushed BEFORE it exists (the
+		// loop join), the other covers a phi minted before its edges are known (the `if` continuation).
+		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: binding.boundValue, to: phiId)
+
 		// ⭐⭐ **AN EXISTENTIAL BINDING MERGES AS TWO PHIS, BECAUSE IT IS TWO VALUES
 		// (P1.7a-existentials slice 1).** The witness half is not derivable at the merge — two arms may carry
 		// two DIFFERENT conformers, and which one arrives is exactly what the branch decided — so it has to be
@@ -39750,6 +39793,18 @@ export type Parser
 		if bindingCarriesWitness(binding) 'existentialBinding'
 			args.push(self.witnessOfValue(value))
 		end 'existentialBinding'
+
+		// ⭐⭐ **AN INCOMING EDGE HANDS W117's MARK TO THE PHI (review)** — placed here because this is the ONE
+		// routine every merge in the parser pushes every carried binding's incoming value through, which is the
+		// same census argument its header already makes about the witness half. `binding.boundValue` is the
+		// merged name's settled value at each of these call sites (the continuation phi at an `if`/`match`, the
+		// exit phi at a loop), so a marked incoming makes the merged name marked.
+		//
+		// ⛔ **WITHOUT IT A BRANCH OR A LOOP LAUNDERED THE TAINT, MEASURED** (exit 6): `var b = ["q"]` +
+		// `for _ in 0 upto 2  b = expose()  end` + `grow(b)` compiled and grew a `let`-declared global, where
+		// the same rebind outside a loop is refused. The value-producing merges were already covered
+		// (`propagateImmutableGlobalReadToPhi`); the merges that REBIND A NAME were not.
+		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: value, to: binding.boundValue)
 	end 'pushMergedEdgeValue'
 
 	// ⭐⭐ **DOES THIS CARRIED BINDING CONTRIBUTE A WITNESS TO A MERGE? — THE ONE FACT BOTH HALVES READ
@@ -59214,6 +59269,13 @@ export type Parser
 			self.markRebindableSlotRead(loaded)
 		end 'managedOccupant'
 
+		// ⭐⭐ **W117's MARK COMES BACK OUT OF THE CELL (review).** A cell holding an immutable global's record
+		// hands that same record to every reader, so the load inherits the mark the STORE put on the cell. Its
+		// absence was a wrong answer and not a cosmetic gap: a `var` that a closure captures becomes
+		// cell-resident, and MEASURED on the rung tip that alone laundered the taint — `grow(b)` in the very
+		// frame that owns `b` compiled and mutated a `let` global (exit 8) purely because a closure elsewhere
+		// in the body had turned `b` into a cell, while the identical program without that closure is refused.
+		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: binding.boundValue, to: loaded)
 		return loaded
 	end 'emitCellLoad'
 
@@ -59221,6 +59283,16 @@ export type Parser
 	// not a `Scope.setValue`. That is the whole of what makes a caller observe a callee's `x = 99`.
 	function emitCellStore(binding VarInfo, value ValueId, range SourceRange)
 		self.emitIndirectStore(binding.boundValue, offset: CellContentOffset, value: value, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(binding.varType)), range: range)
+		// ⭐ **THE CELL ITSELF CARRIES W117's MARK (review)** — put on the BOX rather than on the occupant,
+		// because the occupant is a value this frame may never name again while the cell is what every later
+		// read, every capture and every write door (`bindingAliasesAnImmutableGlobal` reads `boundValue`, which
+		// for a cell binding IS the cell) has in hand.
+		//
+		// ⚠ **MONOTONE ON PURPOSE: a later clean store does not CLEAR it.** A cell is written by reference, so
+		// the tainted store and the clean one may reach any given read in either order at run time; keeping the
+		// mark costs a false REJECT on a rebound-then-written cell and dropping it would cost a silent
+		// acceptance, which is the direction this whole rule refuses to err in.
+		self.carryImmutableGlobalMark(self.immutableGlobalReads, from: value, to: binding.boundValue)
 	end 'emitCellStore'
 
 	function emitIndirectStore(box ValueId, offset ByteOffset, value ValueId, storageType MaxonType, range SourceRange)
@@ -59547,14 +59619,46 @@ export type Parser
 		// ⚠ It costs nothing for every OTHER capture: a binding that is not cell-resident is unchanged, which
 		// is every capture in the corpus — `closure-capture-by-ref`'s `let x = 42` included, because a `let`
 		// never needs a cell.
+		// ⭐⭐ **A CAPTURE OF A TAINTED BINDING IS TAINTED (W117 review).** Both arms mint a value for a record
+		// the ENCLOSING frame already knows may alias a `let`-declared global, so the mark is re-minted in the
+		// CLOSURE's own SSA space — which is what every write door inside the body is keyed by. Without it the
+		// closure LAUNDERED the taint: measured, `callThunk(function() gives grow(b))` mutated the global and
+		// exited 3 where the same call spelled directly is refused E3019. The source is the ENCLOSING frame's
+		// mark set, which `parseClosureExpression` hands over rather than dropping.
+		//
+		// ⚠ **BOTH ARMS, and the CELL one is not the odd case.** A cell-resident capture is captured BY
+		// REFERENCE, so its content is if anything more certainly the same record; the two arms differ in how
+		// many loads deep the value sits, never in what it points at.
 		if binding.isCellBinding 'capturedByItsCell'
 			let cell = self.emitIndirectLoad(MaxonType.integer, box: self.closureEnvParamId, offset: envSlotOffset(self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: MaxonType.integer)), storageType: self.wordSlotStorageType(MaxonType.integer), range: range)
-			return self.emitIndirectLoad(captureType, box: cell, offset: CellContentOffset, storageType: self.wordSlotStorageType(captureType), range: range)
+			let occupant = self.emitIndirectLoad(captureType, box: cell, offset: CellContentOffset, storageType: self.wordSlotStorageType(captureType), range: range)
+			self.carryImmutableGlobalMark(self.capturedImmutableGlobalReads, from: binding.boundValue, to: occupant)
+			return occupant
 		end 'capturedByItsCell'
 
 		let slot = self.captureSlotFor(name, enclosingValue: binding.boundValue, captureType: captureType)
-		return self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.wordSlotStorageType(captureType), range: range)
+		let captured = self.emitIndirectLoad(captureType, box: self.closureEnvParamId, offset: envSlotOffset(slot), storageType: self.wordSlotStorageType(captureType), range: range)
+		self.carryImmutableGlobalMark(self.capturedImmutableGlobalReads, from: binding.boundValue, to: captured)
+		return captured
 	end 'emitCaptureRead'
+
+	// ⭐⭐ **THE ONE SPELLING OF "THIS VALUE DENOTES THE SAME RECORD AS THAT ONE, SO IT INHERITS THE MARK"
+	// (W117 review).** Four sites move a may-alias-an-immutable-global record from one SSA name to another
+	// without going through a promotion — the two capture reads above, and the cell store/load pair — and each
+	// of them is a place the taint was silently DROPPED before this existed. One function so that a fifth such
+	// carrier is a call rather than a fourth copy of the test.
+	//
+	// ⚠ **`marks` IS A PARAMETER BECAUSE THE SOURCE SET IS NOT ALWAYS THIS FUNCTION'S.** A capture reads the
+	// ENCLOSING frame's marks (a closure body's ids are its own SSA space); a cell load reads this one's. The
+	// DESTINATION is always this function's, which is why only the source is passed.
+	//
+	// ⚡ Both sets are the shared empty one for every program that declares no aggregate `let` global, so this
+	// is a membership test on an empty set.
+	function carryImmutableGlobalMark(marks ValueMarkSet, from ValueId, to ValueId)
+		if marks.contains(from) 'sourceMayAliasAnImmutableGlobal'
+			self.markImmutableGlobalRead(to)
+		end 'sourceMayAliasAnImmutableGlobal'
+	end 'carryImmutableGlobalMark'
 
 	// The env slot for `name`, appending a fresh one (recording the enclosing value + type to store) on first
 	// sight and reusing it thereafter. Dedup keeps `multiple-captures` (`x + a + b`) at one slot per distinct
@@ -60433,6 +60537,7 @@ export type Parser
 		let savedIterationLockedBindings = self.iterationLockedBindings
 		let savedImmutableGlobalReads = self.immutableGlobalReads
 		let savedMayReturnAGlobalAlias = self.enclosingFunctionMayReturnAGlobalAlias
+		let savedCapturedImmutableGlobalReads = self.capturedImmutableGlobalReads
 		let savedMergeImmutableBlame = self.mergeImmutableBlame
 		let savedRebindableSlotReads = self.rebindableSlotReads
 		let savedConstructorFeedParams = self.constructorFeedParams
@@ -60567,6 +60672,11 @@ export type Parser
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
 		self.enclosingFunctionMayReturnAGlobalAlias = false
+		// ⭐ **NOT CLEARED — HANDED THE SET THE BODY IS ABOUT TO CAPTURE OUT OF.** The line above and this one
+		// are the two halves of the closure boundary: the RETURN fact cannot cross it (no static callee), and
+		// the per-value marks cannot cross it BY ID (another SSA space) — but a captured binding names the
+		// same record, so the marks cross by BINDING instead, at `emitCaptureRead`.
+		self.capturedImmutableGlobalReads = savedImmutableGlobalReads
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
 		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
@@ -60773,6 +60883,7 @@ export type Parser
 		self.iterationLockedBindings = savedIterationLockedBindings
 		self.immutableGlobalReads = savedImmutableGlobalReads
 		self.enclosingFunctionMayReturnAGlobalAlias = savedMayReturnAGlobalAlias
+		self.capturedImmutableGlobalReads = savedCapturedImmutableGlobalReads
 		self.mergeImmutableBlame = savedMergeImmutableBlame
 		self.rebindableSlotReads = savedRebindableSlotReads
 		self.constructorFeedParams = savedConstructorFeedParams

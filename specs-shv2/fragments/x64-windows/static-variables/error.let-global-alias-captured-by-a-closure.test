@@ -1,0 +1,28 @@
+// Test: error.let-global-alias-captured-by-a-closure
+typealias Names = Array with String
+typealias IntThunk = function() returns int
+
+let A = ["a", "b"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function grow(xs Names) returns int
+	xs.push("zz")
+	return xs.count()
+end 'grow'
+
+function callThunk(f IntThunk) returns int
+	return f()
+end 'callThunk'
+
+function main() returns ExitCode
+	var b = expose()
+	b = expose()
+	let n = callThunk(function() gives grow(b))
+	return A.count() as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:23:37: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'xs' (in main$closure_0)

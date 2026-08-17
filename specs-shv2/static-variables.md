@@ -1458,6 +1458,161 @@ end 'main'
 error E2015: <fragment>:5:21: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
 ```
 
+<!-- test: error.let-global-alias-in-a-cell-keeps-its-mark -->
+⛔⛔ **A CELL IS A THIRD PLACE THE RECORD LIVES, AND IT USED TO DROP THE MARK — MEASURED SILENTLY MUTATING
+THE GLOBAL (W117 review, exit 8).** `var b` becomes CELL-RESIDENT the moment anything captures it, and a
+cell binding's `boundValue` is the CELL, not the value the promotion marked — so the write doors, which
+ask about `boundValue`, saw an unmarked binding and let `grow(b)` through **in the very frame that owns
+`b`**. The closure below does nothing but exist: delete it and the identical program is refused, which is
+what makes this a defect of the CELL and not of the capture.
+
+⇒ The mark is now carried onto the cell at the store and back off it at the load, so where a binding's
+value lives cannot change what may be done through it.
+```maxon
+typealias Names = Array with String
+typealias IntThunk = function() returns int
+
+let A = ["a", "b"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function size(xs Names) returns int
+	return xs.count()
+end 'size'
+
+function grow(xs Names) returns int
+	xs.push("zz")
+	return xs.count()
+end 'grow'
+
+function callThunk(f IntThunk) returns int
+	return f()
+end 'callThunk'
+
+function main() returns ExitCode
+	var b = expose()
+	b = expose()
+	let k = callThunk(function() gives size(b))
+	let n = grow(b)
+	return (A.count() + k + n) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:28:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
+```
+
+<!-- test: error.let-global-alias-captured-by-a-closure -->
+⛔⛔ **AND THE CAPTURE ITSELF IS THE OTHER HALF: A CLOSURE MUST NOT LAUNDER THE TAINT** (W117 review;
+MEASURED mutating the global and exiting 3 before the fix). A closure body is its own SSA space, so the
+per-value marks are swapped out at its boundary — correctly, since an id means nothing there — but a
+CAPTURED binding names the very same record, and dropping the marks made the capture read arrive clean.
+The enclosing frame's marks therefore ride across the boundary and the capture re-mints one in the
+closure's own space.
+
+⚠ **THE BLAME IS THE NOUN, not `b`.** A captured name publishes no bare-binding blame, and the value is
+what knows; the sentence is the one `bump(Box.get())` already uses. The FRAME named is the lifted closure,
+which is where the call is.
+```maxon
+typealias Names = Array with String
+typealias IntThunk = function() returns int
+
+let A = ["a", "b"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function grow(xs Names) returns int
+	xs.push("zz")
+	return xs.count()
+end 'grow'
+
+function callThunk(f IntThunk) returns int
+	return f()
+end 'callThunk'
+
+function main() returns ExitCode
+	var b = expose()
+	b = expose()
+	let n = callThunk(function() gives grow(b))
+	return A.count() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:23:37: cannot pass 'a read of a `let`-declared global' to function that mutates parameter 'xs' (in main$closure_0)
+```
+
+<!-- test: error.let-global-alias-across-an-if-merge -->
+⛔ **A MERGE THAT REBINDS A NAME MUST CARRY THE MARK, AND ONLY THE MERGES THAT PRODUCE A VALUE DID**
+(W117 review). The ternary and `match … gives` merges were covered from the start
+(`propagateImmutableGlobalReadToPhi`, and `error.top-level-let-array-owned-merge-alias` above pins one);
+an `if` that REBINDS a carried `var` mints its phi through a different door and inherited nothing, so
+`b` came out of the merge clean and `grow(b)` was accepted.
+```maxon
+typealias Names = Array with String
+
+let A = ["a", "b"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function grow(xs Names) returns int
+	xs.push("zz")
+	return xs.count()
+end 'grow'
+
+function main() returns ExitCode
+	var b = ["q"]
+	if A.count() > 1 'sometimes'
+		b = expose()
+	end 'sometimes'
+	let n = grow(b)
+	return (A.count() + n) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
+```
+
+<!-- test: error.let-global-alias-carried-by-a-loop -->
+⛔ **AND A LOOP IS THE SAME MERGE WITH THE EDGE PUSHED BEFORE THE PHI IS NAMED — MEASURED MUTATING THE
+GLOBAL (W117 review, exit 6).** On a back edge the binding's own value IS the pushed value, so the header
+phi — which is what every read of `b` after the loop resolves to — is a THIRD name for the record and got
+the mark from neither end. It is now carried onto the loop's phi explicitly, at the one place the loop
+names it.
+
+⚠ The condition is runtime and the body may run zero times; the refusal is deliberately independent of
+that, because "may alias" is the whole question.
+```maxon
+typealias Names = Array with String
+
+let A = ["a", "b"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function grow(xs Names) returns int
+	xs.push("zz")
+	return xs.count()
+end 'grow'
+
+function main() returns ExitCode
+	var b = ["q"]
+	for _ in 0 upto 2 'each'
+		b = expose()
+	end 'each'
+	let n = grow(b)
+	return (A.count() + n) as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
+```
+
 <!-- test: error.top-level-array-empty -->
 An empty array literal has no element to infer a type from, so it is refused — and the advice is the
 same one a function body's `[]` gets, because a top-level `<Alias>.create()` now names the element type
