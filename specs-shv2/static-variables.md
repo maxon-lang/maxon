@@ -1064,14 +1064,28 @@ reference compiler.
 ⚠ **THE REFUSAL IS ON THE WRITE, NOT ON THE BINDING** (⚖ user, 2026-08-14, W117). `var b = A` is legal —
 reading a `let` global and naming the result is what the language means by reading it — and `b.push(9)`
 is the error. The mark rides the VALUE and is CARRIED through the promotion rather than refused at it, so
-it reaches every use in this function (the direct binding, a reassignment, and a ternary/`match` merge
-that joins it — all four are pinned below) and, through a whole-program fact, every caller of a function
-that returns one.
+it reaches every use in this function — the direct binding, a reassignment, a ternary/`match` merge that
+joins it, an `if`/loop merge that REBINDS it, a cell it is spilled into and a closure that captures it,
+each pinned below — and, through a whole-program fact, every caller of a function that returns one.
 
-⚠ **THE ONE SHAPE STILL OUTSIDE IT is a callee that ALIASES the parameter before writing** — `g(A)` where
-`g(xs …)` does `var b = xs` then `b.push(9)`. The argument check reads the callee's summary of what IT
-writes, and the callee writes a LOCAL that happens to carry the same record. Closing that needs the taint
-to flow INTO a callee's SSA space, which is a per-call-site fact, not a per-function one.
+⚠ **WHAT IS STILL OUTSIDE IT IS ONE BOUNDARY WITH SEVERAL SPELLINGS: A PARAMETER.** The mark is a fact
+about a VALUE in ONE function's SSA space; a callee's parameter is a fresh value in a fresh space, and
+whether it may alias an immutable global is a property of every CALL SITE rather than of the callee. So
+the taint neither enters a callee nor comes back out of one, and all of these are accepted today:
+
+  • the callee ALIASES the parameter before writing — `g(A)` where `g(xs …)` does `var b = xs` then
+    `b.push(9)` (measured: `A` grows). The argument check reads the callee's summary of what IT writes,
+    and the callee writes a LOCAL that happens to carry the same record;
+  • the callee RETURNS the parameter — `var c = idBox(a)` where `idBox(x Box)` is `return x`. The sweep
+    sees the `return x`, recognises `x` as this body's own binder and correctly declines to seed on it,
+    so `c` comes back unmarked (measured: the caller's `c.n = 99` reaches the global);
+  • the callee STORES the parameter into a record it returns — `Holder.of(a)` then `h.inner.n = 99`.
+
+⚠ **NONE OF THE THREE IS NEW, and that is checkable rather than asserted: none of them needs an accessor
+or any other W117 machinery — `g(A)` and `idBox(G)` are written against a bare `let` global and behave
+identically on the merge base.** They are named together here so a later rung scopes the cure to the
+BOUNDARY rather than to whichever spelling it happened to be shown. Closing it needs the taint to flow
+into (and back out of) a callee's SSA space, which is a per-call-site fact, not a per-function one.
 ```maxon
 let A = [1, 2]
 
