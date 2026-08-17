@@ -354,3 +354,40 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:6:10: Unsupported: a field access through `self` in a method of `extension int` — a primitive IS its value and declares no fields, so `self` here is the int itself and has no members to read
 ```
+
+<!-- test: error.an-interface-extension-publishes-nothing-onto-a-primitive -->
+⭐⭐ **THE BOUNDARY OF THIS RUNG, PINNED SO IT CANNOT DRIFT INTO A WRONG ANSWER (W133 review).** A
+primitive may be an extension TARGET, and this case's `extension int implements Doubler` is accepted and
+conformance-checked. It may NOT be an interface CONFORMER: `ProgramSignatures.conformersOf` builds its
+list by walking `structNamesInDeclOrder`, so `int` is in no interface's conformer set and an
+`extension Doubler` body is expanded onto every declared conforming `type` and onto no primitive.
+⚠ **The guarantee worth pinning is that this is a REFUSAL rather than silence** — the same shape
+`conformersOf` already documents for `enum` and `union`. A capability this rung did not build, stated by
+a case instead of by a comment nobody reruns.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Doubler
+	function doubled() returns Integer
+end 'Doubler'
+
+extension int implements Doubler
+	export function doubled() returns Integer
+		return self * 2
+	end 'doubled'
+end 'int'
+
+extension Doubler
+	export function quadrupled() returns Integer
+		return self.doubled() * 2
+	end 'quadrupled'
+end 'Doubler'
+
+function main() returns ExitCode
+	let n = 5
+	return n.quadrupled() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:22:11: Unsupported: 'int' has no method named 'quadrupled' — a builtin-typed receiver supplies `hash`, `equals`, `compare`, `toString`, `clone`
+```

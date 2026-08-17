@@ -14341,6 +14341,16 @@ export type ProgramSignatures
 		// `typeExtensionWitnessConstraints` and `structDeclaresTypeParams` — both answer an undeclared name
 		// with the shared empty / `false` by construction.
 		//
+		// ⭐⭐ **AND ARM ORDERING IS THE WEAKER OF THE TWO GUARANTEES — THE STRONGER ONE IS THAT A PRIMITIVE
+		// CANNOT BE AN INTERFACE CONFORMER AT ALL (W133 review), which is worth stating because the
+		// paragraph above would go stale the day someone reorders those arms.** `conformersOf` (`:14206`)
+		// builds its list by walking `structNamesInDeclOrder`, so `int` is not in any interface's conformer
+		// set and `conformerAssociatedBindings` is never handed one however the arms are asked. ⇒ the
+		// consequence a reader should expect, MEASURED: an `extension <SomeInterface>` publishes NOTHING onto
+		// a primitive, even one whose `extension int implements <SomeInterface>` was accepted here — the call
+		// is a clean `E2015 'int' has no method named …`, never a wrong answer. That is the same documented
+		// gap this function's own ⚠ already grants `enum` and `union`, and it is a REFUSAL, so it is a
+		// capability this rung did not build rather than one it half-built.
 		// ⚠ **ASKED FIRST, AND NOTHING CAN SHADOW IT, BECAUSE THE THREE NAMES ARE KEYWORDS** (`Lexer.keywordTable`):
 		// no declaration can bind `int`, `float` or `bool`, so there is no struct and no interface for this to
 		// pre-empt. `byte` is an ordinary identifier and is NOT in this table (`primitiveTagOfTypeName` states
