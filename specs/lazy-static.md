@@ -112,8 +112,8 @@ end 'main'
 1 1 1 1
 ```
 
-<!-- test: lazy-static.struct-literal -->
-### Lazy static with struct literal
+<!-- test: lazy-static.factory-call-with-labelled-argument -->
+### Lazy static built by a static factory call with a labelled argument
 
 ```maxon
 typealias Count = int(0 to u64.max)
@@ -420,6 +420,403 @@ end 'main'
 ```
 ```stdout
 A1B2A3 A1A3
+```
+
+## A struct literal as a static field's initializer
+
+A struct construction is a CALL whose callee is a TYPE rather than a function, and whose labelled
+arguments are its FIELDS. Everything the cases below assert follows from that one sentence: a field's
+value is admitted from exactly the set a factory ARGUMENT is (a constant, a String or array literal, an
+empty container, another call — or another construction), a field the literal omits takes the DEFAULT its
+declaration supplies, and the record is built on first access by the same deferred machinery a
+`static var x = T.create()` already uses.
+
+The construction is legal **inside the type's own body and nowhere else**, which is the ordinary E3076
+restriction rather than a rule of its own — a `static` member's initializer is written inside the `type`
+body that declares it, so `Pair{…}` is admitted there for the same reason `Self{…}` is admitted in a
+method, and the same literal at file scope is refused.
+
+<!-- test: lazy-static.struct-literal-initializer -->
+### A static field initialized with a struct literal
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: 1, b: 2}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: lazy-static.struct-literal-managed-field -->
+### A struct literal whose field is a String
+
+The box becomes the field's sole owner, so the literal's immortal record is CLONED in and released with
+the box after `main` — this case is leak-gated (a missed drop, or a doubled one, is exit 101).
+
+```maxon
+type Holder
+	export var name as String
+
+	static var greeting = Holder{name: "hi"}
+
+	export static function get() returns Holder
+		return Holder.greeting
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.get()
+	print("{h.name}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hi
+```
+
+<!-- test: lazy-static.struct-literal-field-from-constant -->
+### A struct literal whose field is a top-level constant
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+let SEED = 5
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: SEED, b: 2}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+5 2
+```
+
+<!-- test: lazy-static.struct-literal-array-field -->
+### A struct literal whose field is an array literal
+
+```maxon
+typealias Count = int(0 to u64.max)
+typealias CountArray = Array with Count
+
+type Holder
+	export var xs as CountArray
+
+	static var seeded = Holder{xs: [1, 2, 3]}
+
+	export static function get() returns Holder
+		return Holder.seeded
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.get()
+	print("{try h.xs.get(1) otherwise 0}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: lazy-static.struct-literal-field-is-a-call -->
+### A struct literal whose field is a static factory call
+
+The case that says a field is an ARGUMENT: its value is produced by running the program's own code, and
+the result is moved into the box exactly as a materialized constant is.
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Inner
+	export var n as Count
+
+	export static function create(n Count) returns Inner
+		return Inner{n: n}
+	end 'create'
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static var base = Outer{inner: Inner.create(7)}
+
+	export static function get() returns Outer
+		return Outer.base
+	end 'get'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.get()
+	print("{o.inner.n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```
+
+<!-- test: lazy-static.struct-literal-field-default -->
+### A struct literal that omits a field with a declared default
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count = 7
+
+	static var origin = Pair{a: 1}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 7
+```
+
+<!-- test: lazy-static.struct-literal-reassigned -->
+### A struct-literal static var reassigned to another literal
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: 1, b: 2}
+
+	export static function bump()
+		Pair.origin = Pair{a: 9, b: 9}
+	end 'bump'
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	Pair.bump()
+	let q = Pair.get()
+	print("{p.a} {q.a}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 9
+```
+
+<!-- test: lazy-static.struct-literal-in-two-types -->
+### Two types, each with its own struct-literal static
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+type A
+	export var n as Count
+
+	static var one = A{n: 1}
+
+	export static function get() returns A
+		return A.one
+	end 'get'
+end 'A'
+
+type B
+	export var n as Count
+
+	static var two = B{n: 2}
+
+	export static function get() returns B
+		return B.two
+	end 'get'
+end 'B'
+
+function main() returns ExitCode
+	print("{A.get().n} {B.get().n}")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1 2
+```
+
+<!-- test: lazy-static.struct-literal-never-read -->
+### A struct-literal static nothing ever reads
+
+The initializer runs on first access, so a static nothing accesses builds nothing — and the program still
+exits cleanly, with no record left behind for the cleanup to trip over.
+
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: 1, b: 2}
+end 'Pair'
+
+function main() returns ExitCode
+	print("no read")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+no read
+```
+
+### Error: a struct literal names a type other than the one whose body it is written in
+
+E3076 is the ordinary constructor restriction, reached from a static field's initializer exactly as it is
+from a method body — the type name is what decides, not the position.
+
+<!-- test: error.struct-literal-initializer-nested-other-type -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Inner
+	export var n as Count
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static var base = Outer{inner: Inner{n: 7}}
+
+	export static function get() returns Outer
+		return Outer.base
+	end 'get'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.get()
+	print("{o.inner.n}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3076: specs/fragments/lazy-static/error.struct-literal-initializer-nested-other-type.test:11:39: type 'Inner' can only be constructed from within its own methods; use a static factory method instead
+```
+
+### Error: a struct literal at FILE scope is refused, including for the type's own name
+
+A file-scope binding is written inside no type body, so there is no body the restriction could admit it
+in — which is what makes the static-member spelling the only one this feature adds.
+
+<!-- test: error.struct-literal-initializer-at-file-scope -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+end 'Pair'
+
+let origin = Pair{a: 1, b: 2}
+
+function main() returns ExitCode
+	print("{origin.a}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3076: specs/fragments/lazy-static/error.struct-literal-initializer-at-file-scope.test:9:19: type 'Pair' can only be constructed from within its own methods; use a static factory method instead
+```
+
+### Error: a struct literal's fields are LABELLED, in a static field's initializer too
+
+A struct literal names slots outright, so every field carries its `name:` — including the first, which is
+the opposite of a call's rule. The refusal is the grammar's own, in the same words a literal written in a
+method body gets.
+
+<!-- test: error.struct-literal-initializer-positional-fields -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{1, 2}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2010: specs/fragments/lazy-static/error.struct-literal-initializer-positional-fields.test:8:27: Expected identifier but got '1'
 ```
 
 ### Error: A lazy static field's initializer must consume everything up to the end of its line

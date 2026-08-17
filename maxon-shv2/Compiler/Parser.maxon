@@ -16865,7 +16865,7 @@ export type Parser
 		// body it is reading (`parseTypeMember` passes the enclosing type, the file-scope dispatcher passes
 		// nothing), so the fact is recorded at the one place that is TOLD it rather than inferred later from
 		// the shape of the name. See `TopLevelDecl.scope` for why the two positions differ at all.
-		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column, scope: TopLevelBindingScope.fileScope if qualifier.isEmpty() else TopLevelBindingScope.typeMember)
+		return TopLevelDecl.create(self.declaredBindingName(qualifier, nameTok: nameTok), mutable: mutable, visibility: visibility, declFilePath: self.filePath, tokens: self.tokens, initStart: initStart, initEnd: initEnd, nameLine: nameTok.line, nameColumn: nameTok.column, scope: TopLevelBindingScope.fileScope if qualifier.isEmpty() else TopLevelBindingScope.typeMember(qualifier))
 	end 'readTopLevelBinding'
 
 	// ⭐ **THE STORAGE NAME A BINDING DECLARATION CLAIMS — bare at file scope, `Type.member` inside a `type`
@@ -51771,7 +51771,7 @@ export type Parser
 	// ⚠ **ARITY IS DELIBERATELY NOT HERE — IT IS `SemanticCheck.validateCall`'s, for every top-level
 	// initializer alike.** `installManagedGlobalInit` runs before the pipeline, so the emitted call is slotted
 	// against the callee's signature by the same pass that slots a body's, and a `create()` with a required
-	// parameter is E3036 at the global's own range. The user factory form (`evalConstFactoryCall`) leaves it
+	// parameter is E3036 at the global's own range. The user factory form (`evalConstFactoryCallInto`) leaves it
 	// there for the same reason; re-asking it here would be a second arity rule, free to disagree with the one
 	// the call is actually checked by.
 	//
@@ -58886,64 +58886,15 @@ export type Parser
 	// both places since ranged typealiases landed. What is new is that a slot's type has to be
 	// resolved at PARSE time at all, and that is forced by the op: `resolveTypes` never rewrites an
 	// op's type, so the parser is the last tier that can make it concrete.
+	// ⭐⭐ **THE CASCADE ITSELF LIVES IN `SignatureIndex` (W116), BECAUSE A SECOND FAMILY OF ASKER ARRIVED
+	// WITHOUT A PARSER.** A top-level `static var origin = Pair{a: 1}` resolves its box's slot widths on the
+	// INDEX side — `SynthesizedFunction` holds neither an interner nor the alias registry — and a slot stored
+	// at one width by `__module_init` and loaded at another by a body is a corrupted box no diagnostic can
+	// report. The two facts only a `Parser` holds are the interner an id was minted in and the READER's file
+	// path, so those are what this supplies; everything else is `slotStorageType`'s, once. That is exactly the
+	// arrangement `denotedSlotType` states for the id-keyed vs name-keyed halves of the type cascade.
 	function fieldStorageType(declared MaxonType) returns MaxonType
-		match declared 'kind'
-			// Already concrete. `structRef` included — a struct FIELD is a pointer, and
-			// `maxonTypeToStdType` gives it the machine word without help.
-			boolean to float then return declared
-			exitCode then return declared
-			structRef then return declared
-			unresolved then panic("fieldStorageType: a slot is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, and the one other producer of the sentinel is a VOID callee's result type, which `voidCallResultUsed` refuses to bind; so neither a field declaration nor a captured binding can carry one")
-			// A String field stores an i64 POINTER, exactly like a struct-ref field — `maxonTypeToStdType`
-			// gives it the machine word. A managed field IS now constructed (`moveInPayload`), and its
-			// self-field READ loads through this same width.
-			string then return declared
-			// A FUNCTION-typed field (P1.5-A1) stores an i64 code POINTER, exactly like a struct/String
-			// field — `maxonTypeToStdType`/`valueTagToStdType` give it the machine word. `emitFieldLoad`
-			// functionizes a `named` function alias BEFORE this, so a function field arrives here concrete.
-			function then return declared
-			// A TYPE-PARAMETER field stores an opaque i64 and a GENERIC-INSTANCE field a struct POINTER
-			// (P1.6-A) — both already concrete, so `maxonTypeToStdType` gives the machine word directly.
-			// This is what a `b.value` read on `type Box uses T` loads through.
-			typeParameter then return declared
-			genericInstance then return declared
-			// A CHARACTER field stores a POINTER to the fused byte record, exactly as a String field
-			// does — already concrete, so `maxonTypeToStdType` gives the machine word directly.
-			character then return declared
-			// ⭐ **AN INTERFACE-TYPED FIELD ACCESSES ITS VALUE HALF AS ONE MACHINE WORD**
-			// (P1.7a-existentials slice 2). The field occupies TWO slots — `(value@+0, witness@+8)` — but a
-			// `loadIndirect`/`storeIndirect` moves ONE of them, and `emitFieldLoad`/`emitFieldStore` emit two
-			// ops at the two offsets rather than one op of a doubled width. So the width this answers is the
-			// word, exactly as a declared enum/union field's is: `integer`, because `maxonTypeToStdType` panics
-			// on the declared `interfaceRef` the way it panics on a `named`.
-			//
-			// ⚠ A CAPTURED interface binding — this function's other caller, a closure env slot — is still
-			// refused by the capture path's own E2015, so no env slot reaches this arm.
-			interfaceRef then return MaxonType.integer
-			named then break 'kind'
-		end 'kind'
-
-		let name = try self.artifact.typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("fieldStorageType: a slot's named type has an id that is not in this file's interner — a field's type is adopted through `fieldTypeOf`, which re-interns into exactly this table, and a captured binding's was interned by this file's own `parseTypeReference`")
-		match self.signatures.aliasOf(name, readerFilePath: self.filePath) 'alias'
-			declared(alias) then return alias.underlying
-			undeclared then break 'alias'
-		end 'alias'
-
-		// A declared enum/union field's width, through the accessor the UNION-PAYLOAD slot reads too
-		// (`SignatureIndex.declaredAggregateSlotWidth`) — so the two slot kinds cannot come to store the SAME
-		// union at two different widths, a divergence no diagnostic and no exit code can report. `TypeResolution.
-		// resolveNamedType` is the third deriver and is out of this rung's files; that accessor's header names it.
-		if self.signatures.containsEnum(name) 'enumOrUnion'
-			return declaredAggregateSlotWidth()
-		end 'enumOrUnion'
-
-		// A name NO file declares, or a `type` the sweep recorded but whose reference the parser typed
-		// `named` rather than `structRef` (a field declared with its own struct's name is `structRef` and
-		// never reaches here). The first is a user error — E3011, which `TypeResolution` reports against
-		// the merged registry, the authority — and it is not this routine's to report: the sweep is the
-		// tolerant half. Returning `integer` keeps the op well-formed for the instant before the
-		// pipeline's error gate throws, exactly as `resolveNamedType`'s own recovery does.
-		return MaxonType.integer
+		return slotStorageType(self.signatures, declared: declared, typeNames: self.artifact.typeNames, readerFilePath: self.filePath)
 	end 'fieldStorageType'
 
 	// ⭐ **THE ONE UNION-PAYLOAD REJECTION MESSAGE, so the construct and the extract site report a refused
@@ -60709,20 +60660,27 @@ export type Parser
 	// evaluator before a single operator is read.
 	export function evalConstInitializer(decl TopLevelDecl, stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
 		self.pos = decl.initStart
+		self.seatInDeclaringTypeBody(decl)
 
-		// ⭐⭐ **A USER STATIC FACTORY CALL IS THE ONE INITIALIZER THAT IS NOT A FOLD** (spec-port
-		// `map-struct-bytearray`) — `var db = Database.create(EntryMap.create(), sourcePaths: …)`. Nothing
-		// about it is evaluated here: what the walk produces is WHICH function to call and WHAT to pass it,
-		// and the record is built before `main` by `__module_init`, exactly as a top-level array literal's
-		// already is. It is claimed on the same three-token lookahead the container factory below is, and for
-		// the same reason — the scalar walk reads `<identifier> .` as a RANGED-TYPE BOUND and has no other
-		// reading of it.
-		if self.atConstInitializerCall() 'factoryCallInitializer'
-			let call = try self.evalConstFactoryCall(stack)
+		// ⭐⭐ **A NODE — A USER STATIC FACTORY CALL, OR A STRUCT LITERAL — IS THE ONE INITIALIZER THAT IS NOT A
+		// FOLD** (spec-port `map-struct-bytearray`; W116) — `var db = Database.create(EntryMap.create(),
+		// sourcePaths: …)`, `static var origin = Pair{a: 1, b: 2}`. Nothing about either is evaluated here: what
+		// the walk produces is WHAT to build and WHAT to put in it, and the record is built before `main` by
+		// `__module_init` (or on first access by `__lazy_init#<label>`), exactly as a top-level array literal's
+		// already is.
+		//
+		// Both are claimed on a LOOKAHEAD, and for one reason: the scalar walk reads `<identifier> .` as a
+		// RANGED-TYPE BOUND and a bare `<identifier>` as a reference to another top-level `let`, and has no
+		// other reading of either — so a call surfaced as *"Expected 'min' or 'max'"* and a struct literal as
+		// **E2004 `Undefined constant 'Pair'`**, a message about a `let` the author never wrote. That is the
+		// identical misattribution the `CharSet from […]` and `ItemArray.create()` arms below were added for.
+		if self.atConstInitializerCall() or self.atConstStructConstruction() 'deferredNodeInitializer'
+			var calls = ConstFactoryCallArray.create()
+			let root = try self.evalConstInitializerNodeInto(calls, stack: stack, nested: false)
 			try self.requireInitializerConsumed(decl, deferred: true)
 
-			return call
-		end 'factoryCallInitializer'
+			return ConstInitializerValue.factoryCall(calls, root: root)
+		end 'deferredNodeInitializer'
 
 		let folded = try self.evalConstFoldedValue(stack)
 		// ⭐ **ONE CONSUMED CHECK FOR EVERY FORM.** It used to be spelled once per arm below, four identical
@@ -60875,6 +60833,55 @@ export type Parser
 		return self.signatures.globalFactoryReturnsARecord(self.current().value)
 	end 'atConstInitializerCall'
 
+	// ⭐⭐ **SEAT THIS THROWAWAY EVALUATOR IN THE BODY THE DECLARATION WAS WRITTEN IN (W116).** The evaluator is
+	// a `Parser` built per DECL over a token range (`ProgramSignatures.walkConstInitializer`), so it starts at
+	// file scope however the binding was declared — and a `static var origin = Pair{…}` is written INSIDE
+	// `type Pair`, which is the whole of why that literal is legal there and E3076 anywhere else. Pointing the
+	// evaluator at the owning type is therefore not a licence, it is the truth about where those tokens are,
+	// and it is what lets the construction door reach `requireConstructible` VERBATIM instead of restating a
+	// location rule.
+	//
+	// ⭐ **BOTH REFERENCES DO EXACTLY THIS.** The runnable oracle re-points `_currentTypeName` at the owning
+	// type while it generates a static's lazy initializer (`2-Parser.cs:2973-2984`, whose own comment names
+	// `CharacterSet`'s statics as the motivating case), and v1 saves and restores `currentTypeName` around its
+	// `parseLazyStaticStructDecl` (`Parser.maxon:3795-3797`). What shv2 does NOT take from either is the block
+	// surgery around it: this seats a scope and emits nothing.
+	//
+	// The KIND rides with the name because `enterTypeScope` takes both and they are one fact — a `static`
+	// inside an `enum` body must reach the enum's own refusal rather than a `structOf` miss (`requireConstructible`).
+	function seatInDeclaringTypeBody(decl TopLevelDecl)
+		match decl.scope 'declaredIn'
+			fileScope then break 'declaredIn'
+			typeMember(typeName) then self.enterTypeScope(typeName, isEnum: self.signatures.containsEnum(typeName))
+		end 'declaredIn'
+	end 'seatInDeclaringTypeBody'
+
+	// ⭐ **IS THE CURSOR ON `<TypeName>{` — A STRUCT LITERAL?** (W116) The two-token shape
+	// `atEnumStructRawValue` already reads for the same question one construct over. It needs nothing more:
+	// `{` follows an identifier in no other constant-expression form, and WHICH type it names — declared,
+	// visible, constructible from here — is `requireConstructible`'s to answer, with the diagnostics it
+	// already has. Asking any of that here would be a second copy of a rule the body path owns.
+	function atConstStructConstruction() returns bool
+		return self.at(TokenKind.identifier) and self.peekKind() == TokenKind.leftBrace
+	end 'atConstStructConstruction'
+
+	// ⭐ **WALK WHICHEVER NODE IS HERE INTO THE ARENA** — the ONE fork between the two ways a top-level
+	// initializer produces a record without folding one (W116), so a whole initializer and a nested
+	// argument/field admit exactly the same pair rather than two lists that could drift.
+	//
+	// ⚠ **`nested` REACHES ONLY THE CALL ARM, AND THAT IS BECAUSE ONLY IT HAS A VERDICT TO WORD DIFFERENTLY**
+	// (`requireFactoryReturnsARecord`'s return-refusal table). A construction's admissibility is decided by
+	// WHERE it is written, which is the same answer in slot position and in argument position — so there is
+	// nothing for the flag to reach, and threading it into the construct arm would invite a rule that differs
+	// by position, which is exactly what that table's header warns against.
+	function evalConstInitializerNodeInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, nested bool) returns InitializerCallId throws ConstEvalError
+		if self.atConstStructConstruction() 'structLiteral'
+			return try self.evalConstStructConstructionInto(calls, stack: stack)
+		end 'structLiteral'
+
+		return try self.evalConstFactoryCallInto(calls, stack: stack, nested: nested)
+	end 'evalConstInitializerNodeInto'
+
 	// ⭐⭐ **`Database.create(EntryMap.create(), sourcePaths: StringArray.create())` — A GLOBAL BUILT BY THE
 	// PROGRAM'S OWN CODE** (spec-port `map-struct-bytearray`). The cursor sits on the type name;
 	// `atConstInitializerCall` has already established that some file declares this callee.
@@ -60889,16 +60896,18 @@ export type Parser
 	// later global would read the null the image left there. The reason no ordering pass is needed is the
 	// same one `ModuleInit`'s header already states for the literal kinds: a managed initializer cannot NAME
 	// another global (`ProgramSignatures.evaluateDecl` answers `notFound` for every record-valued decl), and
-	// the admitted argument set below inherits that unchanged — every argument is a constant or a fresh
-	// empty container. What a factory BODY does is not bounded here, and `specs/static-variables.md` does
-	// not bound it in any compiler in the tree.
-	function evalConstFactoryCall(stack TopLevelDeclIndexArray) returns ConstInitializerValue throws ConstEvalError
-		var calls = ConstFactoryCallArray.create()
-		let root = try self.evalConstFactoryCallInto(calls, stack: stack, nested: false)
-
-		return ConstInitializerValue.factoryCall(calls, root: root)
-	end 'evalConstFactoryCall'
-
+	// the admitted argument set below inherits that unchanged — every argument is a constant, a fresh empty
+	// container, or another NODE. What a factory BODY does is not bounded here, and
+	// `specs/static-variables.md` does not bound it in any compiler in the tree.
+	//
+	// ⚠ **W116's STRUCT CONSTRUCTION INHERITS THAT BOUND WHOLE, AND IT IS A REAL LIMIT RATHER THAN AN
+	// ARTEFACT OF THE NEW ARM.** MEASURED, all three spellings alike: `Holder{name: NAME}`,
+	// `Holder.make(NAME)` and `Holder{xs: SEEDS}` are each `E2004 Undefined constant '…'` against a
+	// top-level managed `let` the runnable oracle reads happily — because ITS static initializer is
+	// ordinary code in a lazy-init function, where naming a global is a LOAD and not a fold. Admitting
+	// that here means an initializer value that READS another slot, which is the ordering invariant this
+	// paragraph rests on; it is one feature for all three positions and belongs to whichever rung takes it.
+	//
 	// ⭐⭐ **WALK ONE CALL INTO THE ARENA AND ANSWER WHICH ENTRY IT BECAME** — the recursion, and the whole of
 	// what admitting a nested call costs. Its ARGUMENTS are walked first, so an inner call has already taken
 	// its slot by the time this one takes its own; the id handed back is therefore stable the moment it is
@@ -60933,7 +60942,7 @@ export type Parser
 		// The slot this call is about to occupy. Read BEFORE the push and AFTER the arguments, which is what
 		// makes it this call's own index: every nested call the walk above found has already appended itself.
 		let id = calls.count()
-		calls.push(ConstFactoryCall.create(callee.name, args: args))
+		calls.push(ConstFactoryCall.call(callee.name, args: args))
 
 		return id
 	end 'evalConstFactoryCallInto'
@@ -61007,12 +61016,214 @@ export type Parser
 	// never had a problem with; only the TYPE had to be flattened.
 	function evalConstFactoryArgument(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgument throws ConstEvalError
 		let label = self.consumeConstArgumentLabel()
-		if self.atConstInitializerCall() 'nestedCall'
-			return ConstFactoryArgument.create(label, value: ConstFactoryArgumentValue.call(try self.evalConstFactoryCallInto(calls, stack: stack, nested: true)))
-		end 'nestedCall'
 
-		return ConstFactoryArgument.create(label, value: ConstFactoryArgumentValue.folded(try self.evalConstFoldedValue(stack)))
+		return ConstFactoryArgument.create(label, value: try self.evalConstNodeValue(calls, stack: stack))
 	end 'evalConstFactoryArgument'
+
+	// ⭐ **THE VALUE HALF OF AN ARGUMENT, WHICH IS ALSO THE WHOLE OF A FIELD (W116)** — the thesis
+	// `ConstFactoryCall` states, made operative: a struct literal's field is a labelled argument minus its
+	// label, so both positions admit one set through one walk. `Outer{inner: Inner.create(7)}` and
+	// `Pair.create(Pair{a: 1, b: 2})` both fall out of this, in both directions, without either door knowing
+	// the other exists.
+	function evalConstNodeValue(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns ConstFactoryArgumentValue throws ConstEvalError
+		if self.atConstInitializerCall() or self.atConstStructConstruction() 'nestedNode'
+			return ConstFactoryArgumentValue.call(try self.evalConstInitializerNodeInto(calls, stack: stack, nested: true))
+		end 'nestedNode'
+
+		return ConstFactoryArgumentValue.folded(try self.evalConstFoldedValue(stack))
+	end 'evalConstNodeValue'
+
+	// ⭐⭐ **`Pair{a: 1, b: 2}` AS A TOP-LEVEL INITIALIZER OR AS A FIELD/ARGUMENT OF ONE (W116)** — the SAME
+	// construction `parseStructLiteral` reads inside a function, walked into the arena instead of emitted.
+	// Its shape is that walk's, step for step, and every refusal it can raise is that walk's OWN:
+	//
+	//   • **E3072 / E3076 / the enum refusal** — `requireConstructible`, called with the cursor on the `{`
+	//     exactly as the body's door is, so its brace-interior anchor lands on the token the oracle blames.
+	//   • **E3018** (`requireFieldIndex`), **E3006** (a repeated field) and **E3086**
+	//     (`requireAllFieldsInitialized`) — the same three deciders, in the same order.
+	//
+	// ⚠ **NOTHING HERE RESTATES A FIELD ROSTER OR A CONSTRUCTIBILITY RULE**, which is the point: those six
+	// refusals were the whole of the gap between this door and the oracle, and a second copy of any of them is
+	// this project's signature bug in the place it would be hardest to see, because both copies would "work".
+	function evalConstStructConstructionInto(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray) returns InitializerCallId throws ConstEvalError
+		let typeTok = try self.consumeConst(TokenKind.identifier)
+		// This walk is the ONLY reader of a top-level initializer's tokens, so it is the only thing that can
+		// tell the E3062 check the name was written here — `evalConstContainerCreate`'s hook, and recorded
+		// BEFORE the refusal below for its reason: a name about to be rejected is still a mention.
+		self.signatures.recordConstInitializerTypeName(typeTok.value, declFilePath: self.filePath)
+
+		let layout = try self.requireConstructible(typeTok) otherwise (err) 'notConstructibleHere'
+			throw ConstEvalError.defective(err)
+		end 'notConstructibleHere'
+
+		// Parallel to the LAYOUT, not to the source — `parseStructLiteral`'s columns, for its reason: entry `i`
+		// belongs to the field the type declares at `i`, whatever position the literal wrote it in. The seeded
+		// value is a placeholder for a slot nothing has written yet (the body seeds `0 as ValueId` for the same
+		// instant), and `filled` is what keeps it from ever being read: a slot neither the literal nor a
+		// declared default fills is E3086 below.
+		var fields = ConstFactoryArgumentValueArray.create()
+		var filled = BoolArray.create()
+		for _ in 0 upto layout.fieldCount() 'initSlots'
+			fields.push(ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(0, tag: ValueTypeTag.integer))))
+			filled.push(false)
+		end 'initSlots'
+
+		try self.evalConstStructFields(calls, stack: stack, layout: layout, fields: fields, filled: filled)
+		// Defaults BEFORE the check, so an omitted-but-defaulted field is legal without teaching
+		// `requireAllFieldsInitialized` a second rule — `parseStructLiteral`'s ordering, for its reason.
+		try self.applyConstFieldDefaults(calls, layout: layout, fields: fields, filled: filled, anchor: typeTok)
+		try self.requireAllFieldsInitialized(layout, filled: filled, anchor: typeTok) otherwise (err) 'unfilledSlot'
+			throw ConstEvalError.defective(err)
+		end 'unfilledSlot'
+
+		// The slot this construction is about to occupy. Read BEFORE the push and AFTER the fields, which is
+		// what makes it this node's own index — `evalConstFactoryCallInto`'s invariant, for its reason: every
+		// nested node the walk above found has already appended itself.
+		let id = calls.count()
+		calls.push(ConstFactoryCall.construct(layout.name, fields: fields))
+
+		return id
+	end 'evalConstStructConstructionInto'
+
+	// The `name: value` pairs inside the braces, into the layout-parallel columns — `parseStructLiteralFields`
+	// without the ops, and with its newline rule unchanged: a literal's shape must not depend on where its
+	// author pressed return. The caller is on the type token; this consumes `{` through `}`.
+	function evalConstStructFields(calls ConstFactoryCallArray, stack TopLevelDeclIndexArray, layout StructLayout, fields ConstFactoryArgumentValueArray, filled BoolArray) throws ConstEvalError
+		try self.consumeConstToken(TokenKind.leftBrace)
+		self.skipNewlines()
+		while not self.at(TokenKind.rightBrace) 'eachField'
+			let nameTok = try self.consumeConst(TokenKind.identifier)
+			try self.consumeConstToken(TokenKind.colon)
+
+			let index = try self.requireFieldIndex(layout, fieldTok: nameTok) otherwise (err) 'noSuchField'
+				throw ConstEvalError.defective(err)
+			end 'noSuchField'
+			let alreadyFilled = try filled.get(index) otherwise panic("evalConstStructFields: filled.get OOB at {index} — the columns are sized to the layout's field count")
+			if alreadyFilled 'duplicate'
+				throw ConstEvalError.defective(ParseError.duplicateFieldInitializer(String.from(layout.name), fieldName: String.from(nameTok.value), line: nameTok.line, column: nameTok.column))
+			end 'duplicate'
+
+			try fields.set(index, value: try self.requireConstFieldValueFits(calls, layout: layout, index: index, value: try self.evalConstNodeValue(calls, stack: stack), fieldTok: nameTok)) otherwise panic("evalConstStructFields: fields.set OOB at {index} — the columns are sized to the layout's field count")
+			try filled.set(index, value: true) otherwise panic("evalConstStructFields: filled.set OOB at {index} — the columns are sized to the layout's field count")
+
+			self.skipNewlines()
+			if not self.at(TokenKind.comma) 'lastField'
+				break
+			end 'lastField'
+			try self.consumeConstToken(TokenKind.comma)
+			self.skipNewlines()
+		end 'eachField'
+		try self.consumeConstToken(TokenKind.rightBrace)
+	end 'evalConstStructFields'
+
+	// ⭐ **A SLOT THE LITERAL DID NOT WRITE TAKES ITS DECLARED DEFAULT** — `applyFieldDefaults` without the ops,
+	// and it produces the same two things that one does: a folded LITERAL, or a CALL to the nullary helper the
+	// declaration synthesized (`FieldDefault.helper`).
+	//
+	// ⭐⭐ **THE HELPER BECOMES AN ORDINARY ARENA ENTRY, WHICH IS WHAT ROOTS IT.** `factoryInitializerCallees`
+	// walks this arena to name everything a top-level initializer calls, and a helper reached any other way
+	// would be filed unreachable, never lowered, and met as an empty function by the call `__module_init`
+	// makes — `requireUnreachableStdlibStayedDead`'s failure, exactly as the union header describes for a
+	// nested factory. That is also why the defaults are applied HERE and not on the index side.
+	//
+	// Both kinds go through the same `requireConstFieldValueFits` a WRITTEN value does, so a `= 3` meeting a
+	// float slot widens and a `= 500` meeting `int(0 to 100)` is refused identically whichever way the slot
+	// came to have a value — the property `fillFieldDefault` states for the body path.
+	function applyConstFieldDefaults(calls ConstFactoryCallArray, layout StructLayout, fields ConstFactoryArgumentValueArray, filled BoolArray, anchor Token) throws ConstEvalError
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let alreadyFilled = try filled.get(i) otherwise panic("applyConstFieldDefaults: filled.get OOB at {i} — the columns are sized to the layout's field count")
+			if alreadyFilled 'literalWins'
+				continue
+			end 'literalWins'
+
+			match layout.fieldDefault(i) 'declared'
+				// The literal did not fill this slot and the declaration offers nothing. That is E3086, and
+				// `requireAllFieldsInitialized` is what says so — not this function.
+				none then continue
+				literal(payload, tag) then try self.fillConstFieldDefault(calls, layout: layout, index: i, value: ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(payload, tag: tag))), fields: fields, filled: filled, anchor: anchor)
+				helper(helperName) then try self.fillConstFieldDefault(calls, layout: layout, index: i, value: ConstFactoryArgumentValue.call(self.pushConstNullaryCall(calls, callee: helperName)), fields: fields, filled: filled, anchor: anchor)
+			end 'declared'
+		end 'eachField'
+	end 'applyConstFieldDefaults'
+
+	// Record one default as slot `index`'s value and mark the slot filled — the last two lines of BOTH ways a
+	// declared default becomes one, exactly as `recordFieldDefaultValue` is for the body path, with the fit
+	// check in front so neither way can install a value the slot cannot hold.
+	function fillConstFieldDefault(calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, fields ConstFactoryArgumentValueArray, filled BoolArray, anchor Token) throws ConstEvalError
+		try fields.set(index, value: try self.requireConstFieldValueFits(calls, layout: layout, index: index, value: value, fieldTok: anchor)) otherwise panic("fillConstFieldDefault: fields.set OOB at {index} — the columns are sized to the layout's field count")
+		try filled.set(index, value: true) otherwise panic("fillConstFieldDefault: filled.set OOB at {index} — the columns are sized to the layout's field count")
+	end 'fillConstFieldDefault'
+
+	// Append a no-argument call to the arena and answer which entry it became — the field-default helper's
+	// whole shape. It takes its slot the same way every other node does (after its arguments, of which it has
+	// none), so nothing about the arena's numbering is special-cased for it.
+	function pushConstNullaryCall(calls ConstFactoryCallArray, callee ByteArray) returns InitializerCallId
+		let id = calls.count()
+		calls.push(ConstFactoryCall.call(callee, args: ConstFactoryArgumentArray.create()))
+
+		return id
+	end 'pushConstNullaryCall'
+
+	// ⭐⭐ **MAY THIS CONSTANT FILL THIS SLOT — and if it may only after a widening, WHICH VALUE ACTUALLY GOES
+	// IN** (W116). The VERDICT is `ProgramSignatures.constStructFieldCheck`'s, because both halves of the
+	// comparison resolve against the index's own interner and registries; what is decided here is only where
+	// it is BLAMED, which is the half only a token walk can see.
+	//
+	// ⛔ **WITHOUT IT `Pair{a: "hi"}` STORED A STRING POINTER IN AN `int` SLOT** — a wrong answer on a program
+	// the oracle refuses (MEASURED: `E3005 … cannot assign a value of type 'struct' to field 'a' of 'Pair',
+	// which holds 'int'`). shv2's own body path refuses the same program as `E3005 cannot assign 'String' to
+	// variable 'a' of type 'int'`, and this raises that same arm so the two spellings of one mistake agree.
+	//
+	// The site is named `<Struct>.<field>` (`fieldSiteName`) rather than the bare field name: this ONE door
+	// covers scalar and managed slots alike, where the body path splits them across two, and the more precise
+	// of the two names is the one that is right for both.
+	function requireConstFieldValueFits(calls ConstFactoryCallArray, layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, fieldTok Token) returns ConstFactoryArgumentValue throws ConstEvalError
+		match self.signatures.constStructFieldCheck(layout, index: index, value: value, calls: calls, declName: layout.name, elementFilePath: layout.declFilePath) 'verdict'
+			agrees then break 'verdict'
+			widensToFloat then return ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(self.constFloatBits(self.constScalarFilling(value, layout: layout, index: index)), tag: ValueTypeTag.float)))
+			mismatch(got, expected) then throw ConstEvalError.defective(ParseError.assignTypeMismatch(self.fieldSiteName(layout, index: index), got: got, expected: expected, line: fieldTok.line, column: fieldTok.column))
+		end 'verdict'
+
+		try self.requireConstFieldValueInRange(layout, index: index, value: value, fieldTok: fieldTok)
+
+		return value
+	end 'requireConstFieldValueFits'
+
+	// ⭐ **THE RANGE HALF, WHICH THE TAG COMPARISON ABOVE CANNOT SEE** — `Pair{a: 500}` against
+	// `var a as Percent`, where `typealias Percent = int(0 to 100)`. A top-level initializer is not a function,
+	// so it records no site for `InsertRangeChecks` to fold, and the compile-time E3005 a body's literal gets
+	// from that pass has to be raised by the evaluator instead — which is exactly the arrangement
+	// `checkConstCastRange` already makes for `let X = 5 as T`, reached here through its own decider so the two
+	// positions cannot word or judge one refusal differently. MEASURED: both compilers report
+	// `Value 500 is outside the range of 'Percent' (int(0 to 100))` for the body spelling, anchored at the
+	// FIELD NAME, which is where this anchors too.
+	//
+	// A non-scalar value has no number to compare and simply is not asked; a float alias resolves to a bare
+	// `float` (`denotedSlotType`'s ranged arm) and so denotes no alias here, which is the same unchecked
+	// promotion `reportConstCastIfOutOfRange` declines for the body.
+	function requireConstFieldValueInRange(layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, fieldTok Token) throws ConstEvalError
+		match constScalarOf(value) 'scalar'
+			notAScalar then return
+			scalar(folded) then try self.requireConstScalarSuitsFieldRange(folded, layout: layout, index: index, fieldTok: fieldTok)
+		end 'scalar'
+	end 'requireConstFieldValueInRange'
+
+	// The tail of the question above, split out because a `match` arm may not open one.
+	function requireConstScalarSuitsFieldRange(folded ConstValue, layout StructLayout, index FieldIndex, fieldTok Token) throws ConstEvalError
+		match self.declaredAliasOfType(self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)) 'alias'
+			undeclared then return
+			declared(alias) then try self.reportConstCastIfOutOfRange(folded, alias: alias, anchor: fieldTok)
+		end 'alias'
+	end 'requireConstScalarSuitsFieldRange'
+
+	// The number a `widensToFloat` verdict is about. The verdict is returned only for an integer-tagged folded
+	// scalar, so anything else here is the index and this walk disagreeing about what was compared.
+	function constScalarFilling(value ConstFactoryArgumentValue, layout StructLayout, index FieldIndex) returns ConstValue
+		match constScalarOf(value) 'scalar'
+			scalar(folded) then return folded
+			notAScalar then panic("Parser.constScalarFilling: field {index} of `{String.from(layout.name)}` was told to widen to float, but its value is not a folded scalar — `ProgramSignatures.constStructFieldCheck` answers `widensToFloat` only for an integer constant")
+		end 'scalar'
+	end 'constScalarFilling'
 
 	// The `name:` an argument was written with, or the EMPTY bytes that mean "positional" — the same "no
 	// label" spelling `MaxonOp.call`'s `argLabels` uses, so what this walk records and what a body's call
@@ -61772,7 +61983,7 @@ export type Parser
 
 		match self.signatures.aliasOf(targetTok.value, readerFilePath: self.filePath) 'a'
 			undeclared then break 'a'
-			declared(alias) then try self.reportConstCastIfOutOfRange(value, alias: alias, asTok: asTok)
+			declared(alias) then try self.reportConstCastIfOutOfRange(value, alias: alias, anchor: asTok)
 		end 'a'
 	end 'checkConstCastRange'
 
@@ -61784,7 +61995,11 @@ export type Parser
 	// int const into a float alias is a promotion, which is legal and simply unchecked — so the
 	// mismatched pair is skipped, exactly as `InsertRangeChecks.needsRuntimeGuard` falls through to the
 	// runtime guard for the same pair, and exactly as the bootstrap does.
-	function reportConstCastIfOutOfRange(value ConstValue, alias RangedTypeAlias, asTok Token) throws ConstEvalError
+	//
+	// ⚠ The anchor is the CAST's `as` token for a cast and the FIELD NAME for a struct-literal slot (W116) —
+	// each is where its own compiler reports the same refusal — so the parameter names the ROLE and not one
+	// caller's token.
+	function reportConstCastIfOutOfRange(value ConstValue, alias RangedTypeAlias, anchor Token) throws ConstEvalError
 		let isFloat = aliasIsFloat(alias)
 		if tagIsFloat(value.tag) != isFloat 'domainMismatch'
 			return
@@ -61794,7 +62009,7 @@ export type Parser
 			return
 		end 'inRange'
 
-		throw ConstEvalError.defective(ParseError.constantCastOutOfRange(value.payload, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, line: asTok.line, column: asTok.column))
+		throw ConstEvalError.defective(ParseError.constantCastOutOfRange(value.payload, aliasName: String.from(alias.name), low: alias.low, high: alias.high, isFloat: isFloat, line: anchor.line, column: anchor.column))
 	end 'reportConstCastIfOutOfRange'
 
 	// Consume `kind` in the constant evaluator, wrapping a mismatch as a `ConstEvalError`.

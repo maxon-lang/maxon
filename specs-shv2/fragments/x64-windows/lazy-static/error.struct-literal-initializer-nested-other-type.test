@@ -1,0 +1,25 @@
+// Test: error.struct-literal-initializer-nested-other-type
+typealias Count = int(0 to u64.max)
+
+type Inner
+	export var n as Count
+end 'Inner'
+
+type Outer
+	export var inner as Inner
+
+	static var base = Outer{inner: Inner{n: 7}}
+
+	export static function get() returns Outer
+		return Outer.base
+	end 'get'
+end 'Outer'
+
+function main() returns ExitCode
+	let o = Outer.get()
+	print("{o.inner.n}")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3076: <fragment>:11:39: type 'Inner' can only be constructed from within its own methods; use a static factory method instead

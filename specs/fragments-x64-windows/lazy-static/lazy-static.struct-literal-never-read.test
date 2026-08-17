@@ -1,0 +1,48 @@
+// Test: lazy-static.struct-literal-never-read
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: 1, b: 2}
+end 'Pair'
+
+function main() returns ExitCode
+	print("no read")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+no read
+```
+---
+// CompiledIR
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rax, [rip+__static_lit_13]
+    x64.mov rcx, rax
+    x64.mov rdx, 32
+    x64.add rcx, rdx
+    x64.mov [rbp-8], rcx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call stdlib.print
+    x64.mov rdi, [rbp-8]
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

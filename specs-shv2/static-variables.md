@@ -350,11 +350,146 @@ restricted to literals** — a user static FACTORY CALL is built by `__module_in
 `top-level-factory-globals.md` describes it, and a managed one is released by `__maxon_global_cleanup`
 (these cases are leak-gated: a missed drop is exit 101).
 
-⚠ The form neither this spec nor its file-scope twin admits is a bare STRUCT LITERAL
-(`static let ws = CharacterSet{chars: …}` — `E2004 Undefined constant 'CharacterSet'`), and that is a
-property of the top-level initializer grammar rather than of `static`: `let origin = Point{x: 42}` at file
-scope is refused identically. `specs/lazy-static.md` is the spec that admits it, and closing it is that
-file's rung.
+⭐ **THE ONE FORM WHOSE ANSWER DEPENDS ON *WHICH* BODY THE BINDING WAS DECLARED IN IS A STRUCT LITERAL**, and
+that is E3076's ordinary constructor restriction rather than a rule of the initializer grammar. A static
+member is written inside the `type` body that declares it, so `static var origin = Pair{a: 1, b: 2}` inside
+`type Pair` is admitted for the same reason `Self{…}` is admitted in a method; the identical initializer at
+FILE scope is written inside no type body and stays refused. `specs/lazy-static.md` holds the cases for both
+halves.
+
+⛔ **THIS SECTION USED TO ASSERT THE OPPOSITE** — that a struct literal is refused as a static initializer,
+"a property of the top-level initializer grammar rather than of `static`", with `specs/lazy-static.md`
+nominated as the rung that would close it. That rung has landed, and the sentence was already only half
+true when it was written: the refusal it described was `E2004 Undefined constant 'CharacterSet'`, a message
+about a `let` nobody wrote, and the file-scope spelling it pointed at is refused for a completely different
+reason (E3076). The two cases below are what a claim of this shape is owed.
+
+### A struct-literal initializer's field refusals are the LITERAL's own, not the initializer grammar's
+
+The construction reaches the same three deciders a literal written in a method body reaches — the field
+roster, the "every slot must end up initialized" rule and the constructor restriction — so a bad field is
+refused for what is wrong with it rather than for standing in an initializer.
+
+⚠ **THE TWO CASES BELOW ARE HERE, AND NOT IN `specs/lazy-static.md`, BECAUSE shv2 AND THE BOOTSTRAP WORD
+THESE TWO DIAGNOSTICS DIFFERENTLY — AND HAVE DONE SINCE LONG BEFORE THIS FORM EXISTED.** MEASURED on ONE
+program with the literal written in a method BODY, where both compilers have always accepted it:
+
+| | shv2 | bootstrap |
+|---|---|---|
+| a field the type does not declare | `E3018 …:8:27: type 'Pair' has no field named 'c'` | `E3018 …:8:27: Type 'Pair' has no field 'c'` |
+| a field the literal never fills | `E3086 …:8:10: field 'b' of 'Pair' is not initialized by this literal, and it has no default value` | `E3086 …:8:14: Field 'b' of type 'Pair' is not initialized (provide in literal, add a default value on the declaration, or assign via self.field in a static factory)` |
+
+The CODES agree and E3018's column agrees; only the sentences (and E3086's anchor) do not. A shared
+`maxoncstderr` block can carry one spelling, so the canonical file carries the cases whose two compilers
+already agree byte for byte and these two live here, pinned against shv2's own — which is the arrangement
+`error.static-let-reassign` above already makes for E2013 and for the same reason.
+
+<!-- test: error.static-struct-literal-unknown-field -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: 1, b: 2, c: 3}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3018: <fragment>:8:39: type 'Pair' has no field named 'c'
+```
+
+<!-- test: error.static-struct-literal-missing-field -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: 1}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3086: <fragment>:8:22: field 'b' of 'Pair' is not initialized by this literal, and it has no default value
+```
+
+### A struct-literal initializer's field must suit the slot it fills
+
+The tag comparison is what makes the STORE right: a pointer written into a scalar slot reads back as a
+number, and a number written into a managed one is a wild pointer. The range half is the evaluator's own,
+for the reason `top-level-let.md` gives a constant cast — a top-level initializer is not a function, so it
+records no site for the range pass to fold and the compile-time refusal has to be raised where the constant
+is read.
+
+<!-- test: error.static-struct-literal-field-type-mismatch -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Pair
+	export var a as Count
+	export var b as Count
+
+	static var origin = Pair{a: "hi", b: 2}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a} {p.b}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:27: cannot assign 'String' to variable 'Pair.a' of type 'int'
+```
+
+<!-- test: error.static-struct-literal-field-out-of-range -->
+```maxon
+typealias Percent = int(0 to 100)
+
+type Pair
+	export var a as Percent
+
+	static var origin = Pair{a: 500}
+
+	export static function get() returns Pair
+		return Pair.origin
+	end 'get'
+end 'Pair'
+
+function main() returns ExitCode
+	let p = Pair.get()
+	print("{p.a}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:7:27: Value 500 is outside the range of 'Percent' (int(0 to 100))
+```
 
 <!-- test: static-factory-initializer -->
 ```maxon

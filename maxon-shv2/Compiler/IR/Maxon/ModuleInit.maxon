@@ -230,7 +230,7 @@ end 'buildModuleInit'
 function initialRecordOf(fn SynthesizedFunction, global ManagedGlobal) returns ValueId
 	return match global.initializer 'initializer'
 		record(build) gives builtRecord(fn, build: build, valueType: global.valueType, range: global.range)
-		factoryCall(calls, root) gives calledFactoryRecord(fn, calls: calls, id: root, valueType: global.valueType, range: global.range)
+		factoryCall(calls, root) gives initializerNodeRecord(fn, calls: calls, id: root, valueType: global.valueType, range: global.range)
 	end 'initializer'
 end 'initialRecordOf'
 
@@ -378,6 +378,26 @@ function containerStampValue(fn SynthesizedFunction, stamp ContainerCreateStamp,
 	end 'stamp'
 end 'containerStampValue'
 
+// ⭐⭐ **THE TWO WAYS AN ARENA NODE PRODUCES ITS RECORD — the program's own code RETURNS one, or the compiler
+// BUILDS the box itself** (spec-port `map-struct-bytearray`; W116).
+//
+// ⭐⭐ **AN ARGUMENT OR A FIELD MAY BE ANOTHER NODE, AND THEN THIS IS THE RECURSION** (spec-port
+// `module-level-struct-var`) — `var state = Outer.create(Inner.create(0))`, `static var base = Outer{inner:
+// Inner.create(7)}`. `id` names the entry to emit in the initializer's flat arena; a nested value names
+// another entry, and materializing it comes back here. The emitted order is exactly a body's: depth-first,
+// left to right, so an inner node — and the drops of ITS borrowed arguments — is complete before the node
+// that receives it is made.
+//
+// `valueType` is supplied by whoever RECEIVES the result — the global's slot for the root, the argument or
+// field for a nested one — which is why no arena entry carries a return type of its own, and why both arms
+// mint at it identically.
+function initializerNodeRecord(fn SynthesizedFunction, calls GlobalInitCallArray, id InitializerCallId, valueType MaxonType, range SourceRange) returns ValueId
+	return match globalInitCallAt(calls, id: id) 'node'
+		call(callee, args) gives calledFactoryRecord(fn, callee: callee, args: args, calls: calls, valueType: valueType, range: range)
+		construct(sizeBytes, fields) gives builtStructBox(fn, sizeBytes: sizeBytes, fields: fields, calls: calls, valueType: valueType, range: range)
+	end 'node'
+end 'initializerNodeRecord'
+
 // ⭐⭐ **THE SLOT'S OCCUPANT, RETURNED BY THE PROGRAM'S OWN CODE** (spec-port `map-struct-bytearray`) —
 // `var db = Database.create(EntryMap.create(), sourcePaths: StringArray.create())`. Each argument is
 // materialized first, in SOURCE order, and then one ordinary `MaxonOp.call`: the same op a body's call site
@@ -394,27 +414,44 @@ end 'containerStampValue'
 // this frame owns them; a body's call site hands that job to the statement's own temp list
 // (`Parser.trackOwnedTemp`) and `__module_init` has no statement to end. So each one is dropped right after
 // the call, on the decision the index already made per argument (`GlobalInitArgumentCleanup`).
-//
-// ⭐⭐ **AN ARGUMENT MAY BE ANOTHER CALL, AND THEN THIS IS THE RECURSION** (spec-port
-// `module-level-struct-var`) — `var state = Outer.create(Inner.create(0))`. `id` names the entry to emit in
-// the initializer's flat arena; a nested argument names another entry, and materializing it comes back here.
-// The emitted order is exactly a body's: depth-first, left to right, so the inner call and the drops of
-// ITS borrowed arguments are complete before the outer call is made. `valueType` is supplied by whoever
-// RECEIVES the result — the global's slot for the root, the argument for a nested one — which is why no
-// arena entry carries a return type of its own.
-function calledFactoryRecord(fn SynthesizedFunction, calls GlobalInitCallArray, id InitializerCallId, valueType MaxonType, range SourceRange) returns ValueId
-	let call = globalInitCallAt(calls, id: id)
+function calledFactoryRecord(fn SynthesizedFunction, callee ByteArray, args GlobalInitArgumentArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
 	var values = ValueIdArray.create()
 	var labels = ByteArrayArray.create()
-	for arg in call.args 'eachArgument'
-		values.push(factoryArgumentValue(fn, arg: arg, calls: calls, range: range))
+	for arg in args 'eachArgument'
+		values.push(materializedValue(fn, value: arg.value, valueType: arg.valueType, calls: calls, range: range))
 		labels.push(arg.label)
 	end 'eachArgument'
 
-	let record = fn.emitCall(call.callee, args: values, argLabels: labels, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
-	dropBorrowedArguments(fn, args: call.args, values: values, range: range)
+	let record = fn.emitCall(callee, args: values, argLabels: labels, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	dropBorrowedArguments(fn, args: args, values: values, range: range)
 	return record
 end 'calledFactoryRecord'
+
+// ⭐⭐ **`Pair{a: 1, b: 2}` AT MODULE SCOPE — THE BOX, THEN ONE STORE PER SLOT (W116)** — the same shape
+// `Parser.emitStructLiteral` emits inside a function, for the same construct written in a `static` field's
+// initializer. Every layout fact it needs was resolved where the layout lives
+// (`ProgramSignatures.globalStructConstruct`), so nothing here reads a registry.
+//
+// ⚠⚠ **A MANAGED FIELD IS CONSUMED BY THE BOX, AND THERE IS NO DROP AFTER THE STORES — WHICH IS THE
+// OPPOSITE OF THE CALL ARM ABOVE.** Every producer `materializedValue` reaches hands back a value this frame
+// OWNS: a String literal arrives already CLONED off its immortal `.rdata` record (`clonedStringRecord`), a
+// container is freshly built, and a nested node's result is fresh. Storing it makes the box its sole owner
+// and `__destruct_<Struct>` releases exactly one reference per managed slot — so a drop here would be the
+// second half of a double free, exactly as `dropBorrowedArguments` would be if a callee had CONSUMED its
+// argument. That is why `GlobalStructField` carries no cleanup bit to get wrong.
+//
+// ⚠ The stores go down in DECLARATION order because `fields` is layout-parallel, which is the ordering
+// `emitStructLiteral` also stores in and deliberately not the order the literal was written
+// (`ConstFactoryCall.construct`).
+function builtStructBox(fn SynthesizedFunction, sizeBytes ByteOffset, fields GlobalStructFieldArray, calls GlobalInitCallArray, valueType MaxonType, range SourceRange) returns ValueId
+	let box = fn.emitBoxAlloc(sizeBytes as ParsedInt, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
+	for field in fields 'eachField'
+		let value = materializedValue(fn, value: field.value, valueType: field.valueType, calls: calls, range: range)
+		fn.emit(MaxonOp.storeIndirect(box, offset: field.offset, value: value, valueType: field.storageType), range: range)
+	end 'eachField'
+
+	return box
+end 'builtStructBox'
 
 // Release every argument record the callee did not take. AFTER the call, never before: the callee reads
 // through the borrow, so the record has to outlive the body it was lent to.
@@ -429,22 +466,27 @@ function dropBorrowedArguments(fn SynthesizedFunction, args GlobalInitArgumentAr
 	end 'eachArgument'
 end 'dropBorrowedArguments'
 
-// ONE argument, materialized. A scalar is a `literal` at its own folded type; a record is built through the
-// very producer a global's own slot goes through; and a nested CALL is made through the very producer the
-// enclosing call is made through — which is what makes "an argument is anything an initializer may be" a
-// fact about the emitted code and not only about the grammar.
+// ONE constant, materialized. A scalar is a `literal` at its own folded type; a record is built through the
+// very producer a global's own slot goes through; and a nested NODE is produced through the very producer the
+// enclosing one is — which is what makes "an argument is anything an initializer may be" a fact about the
+// emitted code and not only about the grammar.
 //
-// ⚠ **ALL THREE HAND BACK A VALUE THIS FRAME OWNS, and `arg.cleanup` answers for it identically.** A record
-// the callee borrows is dropped after the call whether `__module_init` materialized it or a nested factory
-// returned it (`ProgramSignatures.recordArgumentCleanup`), so nothing downstream of here has to know which
-// arm produced the value.
-function factoryArgumentValue(fn SynthesizedFunction, arg GlobalInitArgument, calls GlobalInitCallArray, range SourceRange) returns ValueId
-	return match arg.value 'value'
-		scalar(payload) gives fn.emitTypedLiteral(payload, valueType: arg.valueType, range: range)
-		record(build) gives builtRecord(fn, build: build, valueType: arg.valueType, range: range)
-		call(id) gives calledFactoryRecord(fn, calls: calls, id: id, valueType: arg.valueType, range: range)
+// ⭐ **AN ARGUMENT AND A STRUCT FIELD COME THROUGH HERE ALIKE (W116)**, which is what makes `Outer{inner:
+// Inner.create(7)}` fall out of the arena rather than needing an emitter of its own. It takes the value and
+// its type rather than the enclosing `GlobalInitArgument` for exactly that reason: a field carries no label
+// and no cleanup, and a producer that could read them would be a producer only one caller could use.
+//
+// ⚠ **EVERY ARM HANDS BACK A VALUE THIS FRAME OWNS.** What differs is who ENDS that ownership, and it is
+// decided by the caller: an argument the callee only borrowed is dropped after the call
+// (`ProgramSignatures.recordArgumentCleanup`), a field is consumed by the box and dropped by its destructor
+// (`builtStructBox`). Nothing downstream of here has to know which arm produced the value.
+function materializedValue(fn SynthesizedFunction, value GlobalInitArgumentValue, valueType MaxonType, calls GlobalInitCallArray, range SourceRange) returns ValueId
+	return match value 'value'
+		scalar(payload) gives fn.emitTypedLiteral(payload, valueType: valueType, range: range)
+		record(build) gives builtRecord(fn, build: build, valueType: valueType, range: range)
+		call(id) gives initializerNodeRecord(fn, calls: calls, id: id, valueType: valueType, range: range)
 	end 'value'
-end 'factoryArgumentValue'
+end 'materializedValue'
 
 // ONE element's value, ready to be pushed. An integer element is its number; a String element is the
 // immortal `.rdata` literal CLONED, because the array becomes the element's sole owner and `__managed_decref`'s
@@ -751,6 +793,23 @@ type SynthesizedFunction
 		self.emit(MaxonOp.literal(result, value: value, valueType: valueType), range: range)
 		return result
 	end 'emitTypedLiteral'
+
+	// ⭐ **THE HEAP RECORD A STRUCT-SHAPED LITERAL LIVES IN (W116)** — `Parser.emitBoxAlloc`'s twin on this
+	// carrier, and the ONE genuinely new emit primitive this file needed: the size, the trivial destructor and
+	// the `__mm_alloc` are one sequence, so a change to what a record COSTS — a header, an alignment, another
+	// allocator door — reaches both producers or neither.
+	//
+	// ⚠ **THE PARSER'S DOOR ALSO ENROLS THE BOX AS AN OWNED TEMPORARY (`trackOwnedTemp`), AND THIS ONE MUST
+	// NOT.** That enrolment is a STATEMENT's drop obligation, and `__module_init` has no statement: the box
+	// this returns is stored straight into a `.data` slot (or into an enclosing box), whose owner then drops it
+	// through `__maxon_global_cleanup` or through a destructor cascade. That difference is why the two are
+	// twins rather than one function on a shared carrier.
+	function emitBoxAlloc(sizeBytes ParsedInt, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+		var allocArgs = ValueIdArray.create()
+		allocArgs.push(self.emitTypedLiteral(sizeBytes, valueType: MaxonType.integer, range: range))
+		allocArgs.push(self.emitTypedLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range))
+		return self.emitPositionalCall(MmAllocName, args: allocArgs, resultTag: resultTag, resultNameId: resultNameId, range: range)
+	end 'emitBoxAlloc'
 
 	// A two-operand comparison yielding an i1 — `Parser.emitCompareAgainstLiteral`'s twin on this carrier,
 	// minted at the `boolean` tag its `condBranch` consumer expects.

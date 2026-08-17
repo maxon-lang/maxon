@@ -1085,23 +1085,54 @@ end 'GlobalInitArgument'
 
 export typealias GlobalInitArgumentArray = Array with GlobalInitArgument
 
-// ⭐ **ONE CALL OF A FACTORY-CALL GLOBAL'S FLATTENED CALL TREE, RESOLVED FOR THE SYNTHESIS** — the fold
-// tier's `ConstFactoryCall` with every argument turned into a materialization instruction. `callee` is the
-// mangled `Type.method` name (`qualifiedMethodName`), which is the same key a body's call site emits and
-// the signature registry files the declaration under — so the argument reordering `LowerMaxonToStd.lowerCall`
-// does for a labelled call happens here for free.
+// ⭐ **ONE NODE OF A FACTORY-CALL GLOBAL'S FLATTENED TREE, RESOLVED FOR THE SYNTHESIS** — the fold tier's
+// `ConstFactoryCall` with every argument turned into a materialization instruction, arm for arm.
 //
 // It carries no return type for `ConstFactoryCall`'s reason: the receiver of the result already holds it.
-export type GlobalInitCall
-	export let callee as ByteArray
-	export let args as GlobalInitArgumentArray
-
-	export static function create(callee ByteArray, args GlobalInitArgumentArray) returns GlobalInitCall
-		return Self{callee: callee, args: args}
-	end 'create'
+export union GlobalInitCall
+	// `callee` is the mangled `Type.method` name (`qualifiedMethodName`), which is the same key a body's call
+	// site emits and the signature registry files the declaration under — so the argument reordering
+	// `LowerMaxonToStd.lowerCall` does for a labelled call happens here for free.
+	call(callee ByteArray, args GlobalInitArgumentArray)
+	// ⭐ **A STRUCT LITERAL'S BOX (W116)** — the payload size `__mm_alloc` is asked for, and one instruction
+	// per declared field.
+	//
+	// ⭐⭐ **EVERY LAYOUT FACT IS RESOLVED HERE AND TRAVELS WITH THE NODE**, which is the discipline
+	// `ManagedGlobal.dropCallee` and `ContainerCreateCall` already set: `SynthesizedFunction` holds neither
+	// the interner nor the struct registry, so a size, a byte offset or a slot width re-derived over there
+	// would be a second reading of a layout — and a field stored at one width and loaded at another corrupts
+	// the box silently (`Parser.emitIndirectStore`'s header states the same hazard for the body's two doors).
+	construct(sizeBytes ByteOffset, fields GlobalStructFieldArray)
 end 'GlobalInitCall'
 
 export typealias GlobalInitCallArray = Array with GlobalInitCall
+
+// ⭐ **ONE SLOT OF A STRUCT-LITERAL BOX, RESOLVED (W116)** — where it goes, how wide the store is, and what
+// produces the value.
+//
+// ⚠ **IT CARRIES NO `GlobalInitArgumentCleanup`, AND THE ABSENCE IS THE OWNERSHIP RULE RATHER THAN AN
+// OMISSION.** A factory ARGUMENT asks who frees it because the callee may only have borrowed it; a FIELD is
+// consumed by construction — the box becomes its sole owner and `__destruct_<Struct>` releases every managed
+// slot — so there is no second answer for a per-field bit to carry. That is the same handoff
+// `Parser.moveInPayload` makes at a body's literal, expressed here by there being no drop rather than by a
+// de-listing, because `__module_init` has no statement whose pending temporaries a value could be on.
+export type GlobalStructField
+	// The slot's byte offset — `StructLayout.offsetOfField`.
+	export let offset as ByteOffset
+	// The width the store moves — `Parser.fieldStorageType`'s answer for this slot, so a field written by
+	// `__module_init` and the same field written by an assignment land at one width.
+	export let storageType as MaxonType
+	// What produces the value, and the type it is minted at — the same pair a `GlobalInitArgument` carries,
+	// materialized through the very same producer.
+	export let value as GlobalInitArgumentValue
+	export let valueType as MaxonType
+
+	export static function create(offset ByteOffset, storageType MaxonType, value GlobalInitArgumentValue, valueType MaxonType) returns GlobalStructField
+		return Self{offset: offset, storageType: storageType, value: value, valueType: valueType}
+	end 'create'
+end 'GlobalStructField'
+
+export typealias GlobalStructFieldArray = Array with GlobalStructField
 
 // `factoryCallAt`'s twin over the resolved arena, and the reason the two arenas are built entry-for-entry:
 // one id, one miss message, whichever tier is holding the array.
@@ -1154,6 +1185,19 @@ export type GlobalRecordAndType
 		return Self{build: build, valueType: valueType}
 	end 'create'
 end 'GlobalRecordAndType'
+
+// ⭐ **ONE CONSTANT, RESOLVED INTO A MATERIALIZATION INSTRUCTION AND THE TYPE IT IS MINTED AT** — the pair
+// `ProgramSignatures.globalInitValue` hands back, and the reason it is a pair: the two are read together at
+// every site and must not be able to disagree about what the value IS. `GlobalRecordAndType` above makes the
+// same argument one arm down; this is that arm plus the scalar and the nested-node ones.
+export type GlobalInitValueAndType
+	export let value as GlobalInitArgumentValue
+	export let valueType as MaxonType
+
+	export static function create(value GlobalInitArgumentValue, valueType MaxonType) returns GlobalInitValueAndType
+		return Self{value: value, valueType: valueType}
+	end 'create'
+end 'GlobalInitValueAndType'
 
 // ⭐ **THE `create` ONE CONTAINER INSTANCE IS BORN THROUGH** — which callee, which stamps it is born holding,
 // and whether the record is then SIZED. ONE description, so a global `Array`, a global `List` and a global
@@ -1406,13 +1450,32 @@ end 'TopLevelDecl'
 
 // ⭐ **THE BODY A TOP-LEVEL BINDING WAS DECLARED IN** — see `TopLevelDecl.scope` for the measurement that
 // makes this a semantic fact rather than a provenance note.
-export enum TopLevelBindingScope
+//
+// ⭐⭐ **A UNION RATHER THAN A TWO-CASE ENUM, BECAUSE *WHICH* TYPE IS PART OF THE SAME FACT (W116).** The
+// enclosing type name is what `readTopLevelBinding` is already handed (`qualifier`) and was throwing away
+// after reducing it to a bit; a `static var origin = Pair{…}` needs it back, because E3076's rule is about
+// WHERE the literal is written and the const evaluator is a throwaway `Parser` seated on a token range with
+// no enclosing declaration of its own. Recovering it by splitting `Type.member` back out of `decl.name` would
+// be exactly the "lossy key used as an identity" `TopLevelDecl.scope`'s header refuses; carrying it is the
+// same fact stated once, by the one party that is TOLD it.
+export union TopLevelBindingScope
 	// `var x = …` / `let X = …` at file scope. Its initializer runs in `__module_init`, before `main`,
 	// unconditionally.
 	fileScope
-	// `static var x = …` / `static let X = …` inside a `type` body. Its initializer runs on FIRST ACCESS.
-	typeMember
+	// `static var x = …` / `static let X = …` inside `type <typeName>`'s body. Its initializer runs on FIRST
+	// ACCESS, and it is written INSIDE that type — which is what makes `Self`-shaped construction legal there
+	// and nowhere else (`Parser.seatInDeclaringTypeBody`).
+	typeMember(typeName ByteArray)
 end 'TopLevelBindingScope'
+
+// Was this binding declared inside a `type` body? The one place the union above is reduced to the BIT
+// `declSlotIsLazy` reads, so the payload the other reader needs cannot make the lazy rule read two ways.
+function declaredInATypeBody(decl TopLevelDecl) returns bool
+	return match decl.scope 'declaredIn'
+		fileScope gives false
+		typeMember gives true
+	end 'declaredIn'
+end 'declaredInATypeBody'
 
 export typealias TopLevelDeclArray = Array with TopLevelDecl
 
@@ -1482,20 +1545,40 @@ export union ConstInitializerValue
 	factoryCall(calls ConstFactoryCallArray, root InitializerCallId)
 end 'ConstInitializerValue'
 
-// ⭐ **ONE CALL OF A TOP-LEVEL INITIALIZER'S FLATTENED CALL TREE** — the mangled `Type.method` name
-// (`qualifiedMethodName`, which is the same key a body's call site emits and the signature registry files
-// the declaration under) and the arguments the author wrote, in SOURCE order.
+// ⭐ **ONE NODE OF A TOP-LEVEL INITIALIZER'S FLATTENED CONSTRUCTION TREE.**
 //
-// It carries no return TYPE, and that absence is deliberate: a call's result type is a fact its RECEIVER
-// already holds — `ManagedGlobal.valueType` for the root, `GlobalInitArgument.valueType` for a nested one —
-// so recording it here too would be the same type written down twice, on two paths that could drift.
-export type ConstFactoryCall
-	export let callee as ByteArray
-	export let args as ConstFactoryArgumentArray
-
-	export static function create(callee ByteArray, args ConstFactoryArgumentArray) returns ConstFactoryCall
-		return Self{callee: callee, args: args}
-	end 'create'
+// ⭐⭐ **A STRUCT CONSTRUCTION IS A CALL WHOSE CALLEE IS A TYPE RATHER THAN A FUNCTION, AND WHOSE LABELLED
+// ARGUMENTS ARE ITS FIELDS (W116).** That one sentence is why `Pair{a: 1, b: 2}` lives in THIS arena and not
+// in a structure of its own: a field's value is measurably anything a factory argument is — `Outer{inner:
+// Inner.create(7)}` makes it a CALL and `Holder{xs: [1, 2, 3]}` makes it an ARRAY LITERAL — so a private
+// element union could hold neither, and widening one until it could would rebuild `ConstFactoryArgumentValue`
+// over a second flat arena. Both already exist here, for the E4014 reason stated below.
+//
+// A UNION rather than a `kind` beside a `callee` only one arm can fill — `ManagedGlobalInitializer`'s own
+// argument, one tier down: each arm carries exactly what its construction needs and nothing else, so a
+// callee cannot be read off a construction and a field roster cannot be read off a call.
+//
+// Neither arm carries a return TYPE, and that absence is deliberate: a node's result type is a fact its
+// RECEIVER already holds — `ManagedGlobal.valueType` for the root, `GlobalInitArgument.valueType` for a
+// nested one — so recording it here too would be the same type written down twice, on two paths that could
+// drift. `ProgramSignatures.constFactoryCallResultType` is the one place either is derived.
+export union ConstFactoryCall
+	// A user static factory: the mangled `Type.method` name (`qualifiedMethodName`, which is the same key a
+	// body's call site emits and the signature registry files the declaration under) and the arguments the
+	// author wrote, in SOURCE order.
+	call(callee ByteArray, args ConstFactoryArgumentArray)
+	// ⭐ **A STRUCT LITERAL — `Pair{a: 1, b: 2}` inside `type Pair`'s own body** (W116). `typeName` is the
+	// declared struct's name, and `fields` is LAYOUT-PARALLEL rather than source-ordered: entry `i` is the
+	// value for the field the type declares at `i`, whichever position the literal wrote it in and whether it
+	// was written at all (a slot the literal omitted carries its declared DEFAULT, resolved by the same walk).
+	// That is the ordering `Parser.emitStructLiteral` already stores in, made explicit here because this arena
+	// has no layout to walk at emit time.
+	//
+	// ⚠ **THE VALUES ALONE, WITHOUT THE `name:` LABELS AN ARGUMENT CARRIES — because a field's DESTINATION IS
+	// ITS INDEX.** A call's labels exist so `LowerMaxonToStd.lowerCall` can slot them against the callee's
+	// declared parameter names; a field is already in its slot, so a label here would be a second spelling of
+	// the position, read by nothing.
+	construct(typeName ByteArray, fields ConstFactoryArgumentValueArray)
 end 'ConstFactoryCall'
 
 export typealias ConstFactoryCallArray = Array with ConstFactoryCall
@@ -1514,6 +1597,17 @@ export typealias InitializerCallId = int(0 to u64.max)
 export function factoryCallAt(calls ConstFactoryCallArray, id InitializerCallId) returns ConstFactoryCall
 	return try calls.get(id) otherwise panic("factoryCallAt: no call {id} in an initializer arena of {calls.count()} — every id is the index the evaluator pushed that call at")
 end 'factoryCallAt'
+
+// ⭐ **THE NAME A ROOT NODE CONTRIBUTES TO A DECLARING FILE'S CONTENT HASH** — the callee for a call, the
+// STRUCT for a construction (W116). One derivation, so the two spellings of "what fixes this slot's type"
+// cannot be mixed two ways; see `ProgramSignatures.mixConstant`'s `factoryValue` arm for why the arguments
+// and the fields are deliberately left out of the hash.
+export function constFactoryCallHashName(call ConstFactoryCall) returns ByteArray
+	return match call 'node'
+		call(callee, _) gives callee
+		construct(typeName, _) gives typeName
+	end 'node'
+end 'constFactoryCallHashName'
 
 // What a top-level initializer folds to when it does NOT call. Its own union for `ManagedGlobalRecord`'s
 // reason — Maxon forbids a recursive type (E4014) — and the two say the same thing at the two tiers: this
@@ -1570,6 +1664,45 @@ export union ConstFactoryArgumentValue
 	// (`GlobalInitArgumentCleanup`) exactly as a materialized one does.
 	call(id InitializerCallId)
 end 'ConstFactoryArgumentValue'
+
+// The layout-parallel field column a `ConstFactoryCall.construct` carries — see there for why a field is an
+// argument VALUE with no label.
+export typealias ConstFactoryArgumentValueArray = Array with ConstFactoryArgumentValue
+
+// Is this value a folded NUMBER, and which? A union rather than a bool beside an accessor, because "it is a
+// record" is an ANSWER here and not a failure: the two askers are the range check (which has nothing to
+// compare a record against) and the float widening (for which anything else is an invariant break).
+export union ConstScalarLookup
+	scalar(value ConstValue)
+	notAScalar
+end 'ConstScalarLookup'
+
+export function constScalarOf(value ConstFactoryArgumentValue) returns ConstScalarLookup
+	match value 'value'
+		call then return ConstScalarLookup.notAScalar
+		folded(folded) then return foldedConstScalarOf(folded)
+	end 'value'
+end 'constScalarOf'
+
+// The tail of the question above, split out because a `match` arm may not open one.
+function foldedConstScalarOf(folded ConstFoldedValue) returns ConstScalarLookup
+	match folded 'folded'
+		scalar(constant) then return ConstScalarLookup.scalar(constant)
+		managed to characterSet then return ConstScalarLookup.notAScalar
+	end 'folded'
+end 'foldedConstScalarOf'
+
+// ⭐ **WHETHER A CONSTANT MAY FILL A STRUCT-LITERAL SLOT (W116)** — `ProgramSignatures.constStructFieldCheck`'s
+// answer. The two halves of `mismatch` arrive ALREADY RENDERED because only the index side holds the interner
+// that can name them; the fold tier's job is to raise the diagnostic, at the position only it can see.
+export union ConstStructFieldCheck
+	agrees
+	// The slot is an f64 and the value an integer constant. The fold tier converts through the very primitive
+	// `Parser.fillFieldDefault` uses (`constFloatBits`), so a written value and a declared default reach an
+	// f64 slot as the same bits.
+	widensToFloat
+	mismatch(got String, expected String)
+end 'ConstStructFieldCheck'
 
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
 // diagnostic is already recorded on the decl that owns it — it is the instruction to STOP.
@@ -1983,6 +2116,84 @@ export function retainCalleeForProtocol(protocol ExistentialOwnershipProtocol) r
 		none then return EmptySourceText
 	end 'protocol'
 end 'retainCalleeForProtocol'
+
+// ⭐⭐ **THE CONCRETE `MaxonType` A SLOT HOLDING A `declared`-TYPED VALUE IS ACCESSED AS** — what a
+// `loadIndirect`/`storeIndirect` carries, and the only type in the compiler that says how wide the access is.
+// `Parser.fieldStorageType` is the parser-side door onto it and carries the rest of the argument; it is
+// homed HERE, in `classifyUnionPayload`'s shape and for its stated reason, because the askers hold their
+// layout ids in DIFFERENT interners and a name is the one currency all of them have.
+//
+// THREE kinds of slot ask it, and they are one question: a struct/union FIELD, a capturing closure's ENV
+// SLOT, and — since W116 — a struct-literal BOX built by `__module_init`, whose asker has no `Parser` at all.
+//
+// It resolves a `named` alias through `signatures.aliasOf`, the SAME whole-program door THE SHIFT RULE asks
+// (`valueIsUnsigned`), for the same reason: an alias declared in another file is still an alias here, and a
+// single file's own table would answer for neither it nor a forward reference.
+//
+// ⚠ **IT IS THE SECOND STATEMENT OF "WHAT A `named` TYPE DENOTES", AND `TypeResolution.resolveNamedType` IS
+// THE FIRST.** That is the standing shape of the two registries (see `ProgramSignatures.structTypes`): the
+// sweep answers the PARSER, the project registry answers the AUTHORITY, and the alias half has been written
+// in both places since ranged typealiases landed. What forces a slot's type to be resolved this early is the
+// op: `resolveTypes` never rewrites an op's type, so whoever EMITS is the last tier that can make it concrete.
+export function slotStorageType(signatures ProgramSignatures, declared MaxonType, typeNames TypeNameInterner, readerFilePath FilePath) returns MaxonType
+	match declared 'kind'
+		// Already concrete. `structRef` included — a struct FIELD is a pointer, and
+		// `maxonTypeToStdType` gives it the machine word without help.
+		boolean to float then return declared
+		exitCode then return declared
+		structRef then return declared
+		unresolved then panic("slotStorageType: a slot is declared `unresolved` — `parseTypeReference` produces only `named`, `structRef` and the three primitive keywords, and the one other producer of the sentinel is a VOID callee's result type, which `voidCallResultUsed` refuses to bind; so neither a field declaration nor a captured binding can carry one")
+		// A String field stores an i64 POINTER, exactly like a struct-ref field — `maxonTypeToStdType`
+		// gives it the machine word. A managed field IS now constructed (`moveInPayload`), and its
+		// self-field READ loads through this same width.
+		string then return declared
+		// A FUNCTION-typed field (P1.5-A1) stores an i64 code POINTER, exactly like a struct/String
+		// field — `maxonTypeToStdType`/`valueTagToStdType` give it the machine word. `emitFieldLoad`
+		// functionizes a `named` function alias BEFORE this, so a function field arrives here concrete.
+		function then return declared
+		// A TYPE-PARAMETER field stores an opaque i64 and a GENERIC-INSTANCE field a struct POINTER
+		// (P1.6-A) — both already concrete, so `maxonTypeToStdType` gives the machine word directly.
+		// This is what a `b.value` read on `type Box uses T` loads through.
+		typeParameter then return declared
+		genericInstance then return declared
+		// A CHARACTER field stores a POINTER to the fused byte record, exactly as a String field
+		// does — already concrete, so `maxonTypeToStdType` gives the machine word directly.
+		character then return declared
+		// ⭐ **AN INTERFACE-TYPED FIELD ACCESSES ITS VALUE HALF AS ONE MACHINE WORD**
+		// (P1.7a-existentials slice 2). The field occupies TWO slots — `(value@+0, witness@+8)` — but a
+		// `loadIndirect`/`storeIndirect` moves ONE of them, and `emitFieldLoad`/`emitFieldStore` emit two
+		// ops at the two offsets rather than one op of a doubled width. So the width this answers is the
+		// word, exactly as a declared enum/union field's is: `integer`, because `maxonTypeToStdType` panics
+		// on the declared `interfaceRef` the way it panics on a `named`.
+		//
+		// ⚠ A CAPTURED interface binding — this function's other caller, a closure env slot — is still
+		// refused by the capture path's own E2015, so no env slot reaches this arm.
+		interfaceRef then return MaxonType.integer
+		named then break 'kind'
+	end 'kind'
+
+	let name = try typeNames.nameOf(typeNameIdOf(declared)) otherwise panic("slotStorageType: a slot's named type has an id that is not in the interner it was asked against — a field's type is adopted through `fieldTypeOf`, which re-interns into exactly that table, and a captured binding's was interned by its own file's `parseTypeReference`")
+	match signatures.aliasOf(name, readerFilePath: readerFilePath) 'alias'
+		declared(alias) then return alias.underlying
+		undeclared then break 'alias'
+	end 'alias'
+
+	// A declared enum/union field's width, through the accessor the UNION-PAYLOAD slot reads too
+	// (`declaredAggregateSlotWidth`) — so the two slot kinds cannot come to store the SAME union at two
+	// different widths, a divergence no diagnostic and no exit code can report. `TypeResolution.
+	// resolveNamedType` is the third deriver; that accessor's header names it.
+	if signatures.containsEnum(name) 'enumOrUnion'
+		return declaredAggregateSlotWidth()
+	end 'enumOrUnion'
+
+	// A name NO file declares, or a `type` the sweep recorded but whose reference the parser typed
+	// `named` rather than `structRef` (a field declared with its own struct's name is `structRef` and
+	// never reaches here). The first is a user error — E3011, which `TypeResolution` reports against
+	// the merged registry, the authority — and it is not this routine's to report: the sweep is the
+	// tolerant half. Returning `integer` keeps the op well-formed for the instant before the
+	// pipeline's error gate throws, exactly as `resolveNamedType`'s own recovery does.
+	return MaxonType.integer
+end 'slotStorageType'
 
 // Classify a union payload field's storage and ownership. `typeNames` resolves a `named` field's id to
 // a NAME; pass the interner the LAYOUT's ids live in — the file-local artifact interner at the
@@ -7994,7 +8205,7 @@ export type ProgramSignatures
 	// `SemanticCheck.calleeVisibleFrom` answers the same question for a call in a BODY, off `FunctionNameIndex`
 	// — but that index is built long after the constant evaluator has run, and a top-level initializer's call
 	// is decided during `queryProgramSignatures`, before any file is parsed. So the sweep publishes the two
-	// facts here and `Parser.evalConstFactoryCall` asks them through the very same `isVisibleFrom`: two
+	// facts here and `Parser.evalConstFactoryCallInto` asks them through the very same `isVisibleFrom`: two
 	// SOURCES for one declaration, never two RULES.
 	//
 	// ⚠ Written UNCONDITIONALLY by `record` — `returnTypes`' discipline rather than
@@ -11599,9 +11810,39 @@ export type ProgramSignatures
 			// because it must live in THIS index's interner: the drop callee the cleanup emits is routed
 			// against `self.typeNames`, and a type adopted into a file's artifact interner would name an id
 			// this side cannot resolve.
-			factoryCall(calls, root) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.factoryValue(calls, root: root, returnType: self.declaredReturnValueType(factoryCallAt(calls, id: root).callee, name: decl.name)))
+			factoryCall(calls, root) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.factoryValue(calls, root: root, returnType: self.constFactoryCallResultType(factoryCallAt(calls, id: root), name: decl.name)))
 		end 'kind'
 	end 'walkConstInitializer'
+
+	// ⭐ **THE TYPE ONE ARENA NODE PRODUCES, IN THIS INDEX'S OWN INTERNER (W116)** — the ONE derivation, read
+	// by the ROOT (which types the global's `.data` slot and routes its drop) and by a NESTED node (which
+	// types the argument or field receiving it). A call's is its callee's declared return; a construction's is
+	// the struct it names, which is the whole of what makes `Outer{inner: Inner.create(7)}` and
+	// `Pair.create(Pair{…})` type each other's results without either side asking how the other was written.
+	function constFactoryCallResultType(call ConstFactoryCall, name ByteArray) returns MaxonType
+		return match call 'node'
+			call(callee, _) gives self.resolvedReturnValueType(callee, name: name)
+			construct(typeName, _) gives MaxonType.structRef(self.typeNames.intern(typeName))
+		end 'node'
+	end 'constFactoryCallResultType'
+
+	// ⭐ **THE DECLARED RETURN, WITH A STILL-BARE `named` SETTLED AS ITS OWN DECLARING FILE MEANS IT (W116)** —
+	// and the FIRST reader of `funcReturnDeclFiles`, the map the sweep fills for exactly this and nothing else.
+	//
+	// It is a no-op for every callee that was here before: a `returns Self` / `returns Database` factory is
+	// recorded already concrete, which is what lets `recordPointerSlotType` panic on a bare `named` rather than
+	// handle one. What arrives unresolved is the FIELD-DEFAULT HELPER — `recordScannedFieldDefaultHelper`
+	// records the field's own SWEPT type, before any alias is known — so `var items as IntArray =
+	// IntArray.create()` would otherwise type its value `named` (which reads as an INT: see `denotedSlotType`)
+	// and mint the call's result at a tag the slot cannot hold.
+	function resolvedReturnValueType(callee ByteArray, name ByteArray) returns MaxonType
+		let declared = self.declaredReturnValueType(callee, name: name)
+		if let scope = try self.funcReturnDeclFiles.get(callee) 'namesATypeStillToResolve'
+			return self.declaredSlotType(declared, into: self.typeNames, slotScopeFilePath: scope)
+		end 'namesATypeStillToResolve'
+
+		return declared
+	end 'resolvedReturnValueType'
 
 	// The VALUE type `callee` returns, in this index's own interner. The evaluator has already established
 	// that the callee is declared and that its return type is a managed value (`Parser.requireGlobalFactory`),
@@ -11979,7 +12220,7 @@ export type ProgramSignatures
 	// time" — so there is no initializer to defer and, decisively, no null a guard could test. An inlined
 	// managed `let` has no slot either. The record arms are named as the same band `managedGlobals` walks.
 	export function declSlotIsLazy(decl TopLevelDecl) returns bool
-		if decl.scope == TopLevelBindingScope.fileScope or not decl.hasStorage 'eagerOrSlotless'
+		if not declaredInATypeBody(decl) or not decl.hasStorage 'eagerOrSlotless'
 			return false
 		end 'eagerOrSlotless'
 
@@ -12022,19 +12263,49 @@ export type ProgramSignatures
 	// held flat, "every callee in this initializer" is one pass over `calls` rather than a recursive descent
 	// that a later arm could forget to make. The `call` argument arm therefore contributes NOTHING here: the
 	// call it names is its own entry, and pushing it again would root one name twice.
+	// ⭐ **A `construct` NODE NAMES NO CALLEE OF ITS OWN, AND ITS FIELDS STILL CONTRIBUTE (W116).** Its record
+	// is an `__mm_alloc` plus one store per slot — compiler-synthesized allocation with no source body to
+	// root, exactly as a builtin container's `create` is — but a FIELD is admitted from the same set an
+	// argument is, so a `Holder{xs: StrMap.create()}` reaches a declared generic's static and a defaulted
+	// field reaches its synthesized `__fieldDefault#…` helper. Both are rooted here or they are lowered by
+	// nothing and `requireUnreachableStdlibStayedDead` fires.
 	function factoryInitializerCallees(calls ConstFactoryCallArray) returns ByteArrayArray
 		var callees = ByteArrayArray.create()
 		for call in calls 'eachCall'
-			callees.push(call.callee)
-			for arg in call.args 'eachArgument'
-				match arg.value 'value'
-					call then continue
-					folded(folded) then self.appendFoldedArgumentCallee(callees, folded: folded)
-				end 'value'
-			end 'eachArgument'
+			match call 'node'
+				call(callee, args) then self.appendCallNodeCallees(callees, callee: callee, args: args)
+				construct(_, fields) then self.appendConstructNodeCallees(callees, fields: fields)
+			end 'node'
 		end 'eachCall'
 		return callees
 	end 'factoryInitializerCallees'
+
+	// A CALL node: the function it names, then whatever its arguments name.
+	function appendCallNodeCallees(callees ByteArrayArray, callee ByteArray, args ConstFactoryArgumentArray)
+		callees.push(callee)
+		for arg in args 'eachArgument'
+			self.appendArgumentValueCallee(callees, value: arg.value)
+		end 'eachArgument'
+	end 'appendCallNodeCallees'
+
+	// A CONSTRUCT node: its FIELDS only. The box is an `__mm_alloc` plus one store per slot, so the node names
+	// no function of its own — compiler-synthesized allocation with no source body to reach, exactly as a
+	// builtin container's `create` is.
+	function appendConstructNodeCallees(callees ByteArrayArray, fields ConstFactoryArgumentValueArray)
+		for value in fields 'eachField'
+			self.appendArgumentValueCallee(callees, value: value)
+		end 'eachField'
+	end 'appendConstructNodeCallees'
+
+	// What ONE argument or field value contributes. The `call` arm contributes NOTHING: the call it names is
+	// its own arena entry, which this walk reaches on its own pass, and pushing it again would root one name
+	// twice.
+	function appendArgumentValueCallee(callees ByteArrayArray, value ConstFactoryArgumentValue)
+		match value 'value'
+			call then break 'value'
+			folded(folded) then self.appendFoldedArgumentCallee(callees, folded: folded)
+		end 'value'
+	end 'appendArgumentValueCallee'
 
 	// The callee a FOLDED argument contributes, which is one only for a declared generic's empty container.
 	//
@@ -12292,7 +12563,10 @@ export type ProgramSignatures
 	function globalInitCalls(calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCallArray
 		var resolved = GlobalInitCallArray.create()
 		for call in calls 'eachCall'
-			resolved.push(GlobalInitCall.create(call.callee, args: self.globalInitArguments(call.args, callee: call.callee, calls: calls, declName: declName, elementFilePath: elementFilePath)))
+			match call 'node'
+				call(callee, args) then resolved.push(GlobalInitCall.call(callee, args: self.globalInitArguments(args, callee: callee, calls: calls, declName: declName, elementFilePath: elementFilePath)))
+				construct(typeName, fields) then resolved.push(self.globalStructConstruct(typeName, fields: fields, calls: calls, declName: declName, elementFilePath: elementFilePath))
+			end 'node'
 		end 'eachCall'
 
 		// ⚠ **THE MAPPING IS ONE-TO-ONE, AND A FILTER HERE WOULD BE A WRONG ANSWER RATHER THAN A CRASH.** Every
@@ -12341,23 +12615,130 @@ export type ProgramSignatures
 	// established it is a record (`Parser.requireFactoryReturnsARecord`, at the nested position), which is what
 	// makes the cleanup router below answerable for it.
 	function globalInitArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitArgument
-		return match arg.value 'value'
-			call(id) gives self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: self.declaredReturnValueType(factoryCallAt(calls, id: id).callee, name: declName), value: GlobalInitArgumentValue.call(id))
-			folded(folded) gives self.foldedInitArgument(arg, consume: consume, argIndex: argIndex, folded: folded, elementFilePath: elementFilePath)
-		end 'value'
+		let produced = self.globalInitValue(arg.value, calls: calls, declName: declName, elementFilePath: elementFilePath)
+		return match produced.value 'produced'
+			// A scalar owns nothing, so it needs no cleanup.
+			scalar gives GlobalInitArgument.create(arg.label, value: produced.value, valueType: produced.valueType, cleanup: GlobalInitArgumentCleanup.none)
+			record to call gives self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: produced.valueType, value: produced.value)
+		end 'produced'
 	end 'globalInitArgument'
 
-	// The scalar/record fork over an argument the compiler MATERIALIZES — the walk this side has always had,
-	// now reached through one arm of the union above so each union is matched exactly once.
-	function foldedInitArgument(arg ConstFactoryArgument, consume CalleeConsume, argIndex ParamCount, folded ConstFoldedValue, elementFilePath FilePath) returns GlobalInitArgument
+	// ⭐⭐ **WHAT ONE CONSTANT BECOMES FOR THE SYNTHESIS, AND THE TYPE IT IS MINTED AT — the ONE producer, read
+	// by a factory ARGUMENT and by a struct-literal FIELD (W116).** The two differ only in what they do with the
+	// answer: an argument asks who frees it (`recordArgumentCleanup`), a field is consumed by the box and asks
+	// nothing. Splitting the production too would let a `String` argument and a `String` field come to be
+	// materialized two ways — which is precisely the divergence `globalRecordOf`'s header exists to prevent one
+	// tier down.
+	function globalInitValue(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitValueAndType
+		return match value 'value'
+			call(id) gives GlobalInitValueAndType.create(GlobalInitArgumentValue.call(id), valueType: self.constFactoryCallResultType(factoryCallAt(calls, id: id), name: declName))
+			folded(folded) gives self.foldedInitValue(folded, elementFilePath: elementFilePath)
+		end 'value'
+	end 'globalInitValue'
+
+	// The scalar/record fork over a value the compiler MATERIALIZES — the walk this side has always had,
+	// reached through one arm of the union above so each union is matched exactly once. A SCALAR's type is
+	// rebuilt from the folded tag alone (`UnnamedTypeId`, because the evaluator folds an integer, a bool or a
+	// float and none of the three names a type).
+	function foldedInitValue(folded ConstFoldedValue, elementFilePath FilePath) returns GlobalInitValueAndType
 		match folded 'kind'
-			scalar(value) then return GlobalInitArgument.create(arg.label, value: GlobalInitArgumentValue.scalar(value.payload), valueType: maxonTypeOfTag(value.tag, nameId: UnnamedTypeId), cleanup: GlobalInitArgumentCleanup.none)
+			scalar(value) then return GlobalInitValueAndType.create(GlobalInitArgumentValue.scalar(value.payload), valueType: self.foldedMintType(folded, elementFilePath: elementFilePath))
 			managed to characterSet then break 'kind'
 		end 'kind'
 
 		let record = self.globalRecordOf(folded, elementFilePath: elementFilePath)
-		return self.ownedRecordArgument(arg, consume: consume, argIndex: argIndex, valueType: record.valueType, value: GlobalInitArgumentValue.record(record.build))
-	end 'foldedInitArgument'
+		return GlobalInitValueAndType.create(GlobalInitArgumentValue.record(record.build), valueType: record.valueType)
+	end 'foldedInitValue'
+
+	// ⭐ **A STRUCT LITERAL'S BOX, RESOLVED (W116)** — the payload size and one instruction per DECLARED field,
+	// in layout order, off the very layout the fold tier held the fields to. The columns are walked here rather
+	// than carried from the parser because each of them — the offset, the slot width, the value's own type —
+	// resolves against THIS index's interner and registries, which is the discipline
+	// `GlobalInitCall.construct` states.
+	function globalStructConstruct(typeName ByteArray, fields ConstFactoryArgumentValueArray, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns GlobalInitCall
+		let layout = self.constStructLayoutOf(typeName, declName: declName)
+		if fields.count() != layout.fieldCount() 'notLayoutParallel'
+			panic("ProgramSignatures.globalStructConstruct: '{String.from(declName)}' constructs `{String.from(typeName)}` with {fields.count()} field value(s) against a layout of {layout.fieldCount()} — the fold tier fills one entry per DECLARED field (`Parser.evalConstStructConstructionInto`), from the literal or from the field's default, and refuses the declaration otherwise")
+		end 'notLayoutParallel'
+
+		var resolved = GlobalStructFieldArray.create()
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let fieldType = self.fieldTypeOf(layout, index: i, into: self.typeNames)
+			let produced = self.globalInitValue(try fields.get(i) otherwise panic("ProgramSignatures.globalStructConstruct: fields.get OOB at {i} below the count this loop was just held to"), calls: calls, declName: declName, elementFilePath: elementFilePath)
+			resolved.push(GlobalStructField.create(layout.offsetOfField(i), storageType: slotStorageType(self, declared: fieldType, typeNames: self.typeNames, readerFilePath: layout.declFilePath), value: produced.value, valueType: produced.valueType))
+		end 'eachField'
+
+		return GlobalInitCall.construct(layout.sizeBytes(), fields: resolved)
+	end 'globalStructConstruct'
+
+	// ⭐⭐ **MAY THIS CONSTANT FILL THIS SLOT? (W116)** — asked by the FOLD tier, answered HERE, because both
+	// halves of the comparison have to be resolved against the interner and the registries this index owns.
+	// It is the const twin of `Parser.requireFieldType`, which cannot serve: that one reads a `ValueId` out of
+	// the parser's value columns, and a top-level initializer mints no values at all.
+	//
+	// ⚠⚠ **IT COMPARES THE STORAGE TAG, PLUS THE STRUCT'S NAME WHERE THE TAG IS `structRef` — AND THAT LIMIT
+	// IS MEASURED RATHER THAN CHOSEN.** The tag is what makes the STORE itself right or wrong: a pointer
+	// written into a scalar slot reads back as a number and a number written into a managed slot is a wild
+	// pointer, which is the class `Pair{a: "hi"}` falls in (E3005 on the oracle, MEASURED). `structRef` earns
+	// its second half because a nested node returning the WRONG struct is the same hazard wearing a matching
+	// tag, and both sides' ids are minted in `self.typeNames`.
+	//
+	// ⛔ **A GENERIC INSTANCE IS DELIBERATELY *NOT* COMPARED BY IDENTITY, and comparing it would REFUSE A
+	// PROGRAM THE ORACLE RUNS.** A top-level array literal is typed by the canonical instance its ELEMENT KIND
+	// fixes (`constArrayValueType` — `Array with Integer`), never by the alias the slot was declared with, so
+	// `Holder{xs: [1, 2, 3]}` against `var xs as CountArray` is two instance ids for one array. That is the
+	// fold tier's own typing rule and not something this door may overrule; the argument position has never
+	// compared them either.
+	export function constStructFieldCheck(layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns ConstStructFieldCheck
+		let slot = slotStorageType(self, declared: self.fieldTypeOf(layout, index: index, into: self.typeNames), typeNames: self.typeNames, readerFilePath: layout.declFilePath)
+		let held = self.constFieldValueType(value, calls: calls, declName: declName, elementFilePath: elementFilePath)
+		if maxonTypeTag(slot) == maxonTypeTag(held) and (maxonTypeTag(slot) != ValueTypeTag.structRef or typeNameIdOf(slot) == typeNameIdOf(held)) 'fits'
+			return ConstStructFieldCheck.agrees
+		end 'fits'
+
+		// The ONE conversion a slot performs on the way in — the same one `Parser.fillFieldDefault` applies to a
+		// declared `= 3` meeting a `float(lo to hi)` field, so a written value and a defaulted one reach an f64
+		// slot through one rule rather than two.
+		if tagIsFloat(maxonTypeTag(slot)) and maxonTypeTag(held) == ValueTypeTag.integer 'widens'
+			return ConstStructFieldCheck.widensToFloat
+		end 'widens'
+
+		return ConstStructFieldCheck.mismatch(maxonTypeName(held, typeNames: self.typeNames), expected: maxonTypeName(slot, typeNames: self.typeNames))
+	end 'constStructFieldCheck'
+
+	// The type one field VALUE is minted at — a nested node's result, or what the constant folded to. It is
+	// `globalInitValue`'s type half asked on its own, because the check runs at PARSE time where no record may
+	// be built yet: `globalRecordOf` interns stamps and resolves drop callees, work that belongs to the
+	// synthesis and would be thrown away here.
+	function constFieldValueType(value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns MaxonType
+		return match value 'value'
+			call(id) gives self.constFactoryCallResultType(factoryCallAt(calls, id: id), name: declName)
+			folded(folded) gives self.foldedMintType(folded, elementFilePath: elementFilePath)
+		end 'value'
+	end 'constFieldValueType'
+
+	// `foldedValueType` plus the arm it deliberately refuses. That one is a RECORD builder's door and panics
+	// on a scalar for a good reason — a number occupies its slot as a value and has no record to describe —
+	// while a TYPE CHECK must be able to ask about a number, so the scalar arm lives here and the other five
+	// route through the one home they already had.
+	function foldedMintType(folded ConstFoldedValue, elementFilePath FilePath) returns MaxonType
+		match folded 'kind'
+			scalar(value) then return maxonTypeOfTag(value.tag, nameId: UnnamedTypeId)
+			managed to characterSet then break 'kind'
+		end 'kind'
+
+		return self.foldedValueType(folded, elementFilePath: elementFilePath)
+	end 'foldedMintType'
+
+	// The layout a `construct` node names. The fold tier admitted the node only after `Parser.requireConstructible`
+	// answered `declared` for this very name, so a miss here is the declaration sweep and the arena disagreeing
+	// about what a `type` is — `recordedDeclFor`'s drift guard, stated for a struct.
+	function constStructLayoutOf(typeName ByteArray, declName ByteArray) returns StructLayout
+		match self.structOf(typeName) 'declared'
+			declared(layout) then return layout
+			undeclared then panic("ProgramSignatures.constStructLayoutOf: '{String.from(declName)}' is initialized by a `{String.from(typeName)}\{…\}` literal, and no file declares `type {String.from(typeName)}` — the evaluator admits the form only after `Parser.requireConstructible` has resolved that very layout")
+		end 'declared'
+	end 'constStructLayoutOf'
 
 	// An argument whose value is an owned RECORD — materialized here or returned by a nested call — paired
 	// with the answer to who frees it. ONE assembly point, so the two producers cannot come to ask the
@@ -12695,7 +13076,10 @@ export type ProgramSignatures
 			// depend on is the ROOT CALLEE — it fixes the slot's type, and swapping `Database.create` for
 			// `Database.empty` can retype every use — and the LABEL, which is the slot the emitted
 			// `globalAddr` names.
-			factoryValue(calls, root, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeFactoryValue), bytes: factoryCallAt(calls, id: root).callee), bytes: decl.dataLabel)
+			// ⭐ A STRUCT-LITERAL global (W116) mixes the STRUCT NAME in the callee's place, and its fields in
+			// the arguments' — i.e. not at all — because the two facts a reader depends on are the same two:
+			// the name fixes the slot's type, and `Pair{a: 1}` becoming `Pair{a: 2}` moves no reader's bytes.
+			factoryValue(calls, root, _) then return mixBytes(mixBytes(mix(keyed, value: ConstShapeFactoryValue), bytes: constFactoryCallHashName(factoryCallAt(calls, id: root))), bytes: decl.dataLabel)
 			// A constant with no value bakes no number into a reader, so every failure hashes alike —
 			// but it must still hash differently from every VALUE, or `let X = compute()` becoming
 			// `let X = 0` would leave a reader's memo valid. The failure's DETAILS are deliberately not
@@ -22361,7 +22745,7 @@ export type ProgramSignatures
 	//
 	// ⚠ **THE VISIBILITY TIER MUST RIDE TOO, for `recordAlias`'s reason one declaration kind over.** Adding or
 	// removing `export` on a `static function` changes whether ANOTHER file's `var db = Database.create()`
-	// compiles at all (`Parser.evalConstFactoryCall`), and that decision is baked into that file's memoized
+	// compiles at all (`Parser.evalConstFactoryCallInto`), and that decision is baked into that file's memoized
 	// parse. The whole ORDINAL rather than an exported bit, exactly as `recordAlias` states: `module` is a
 	// third answer a user can write, and a fourth tier would ride automatically.
 	//
