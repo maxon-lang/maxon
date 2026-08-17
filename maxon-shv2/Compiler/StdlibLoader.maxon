@@ -1610,8 +1610,13 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//   • the cone's one FREE function is `unicodeGeneralCategory`, declared nowhere else in `stdlib/` and not
 	//     claimed by `Parser.parseCallNamed`'s bare-name chain;
 	//   • its TYPE names are `CharacterSet` and `CharSet` — both compiler-owned, and admitted from the CORPUS
-	//     by `recordStruct`'s provenance bit exactly as `Set`/`Map`/`String` are — plus the file-private
-	//     ranged aliases `CategoryBitmask`, `GeneralCategory`, which no other module declares;
+	//     by `recordStruct`'s provenance bit exactly as `Set`/`Map`/`String` are — plus the ranged aliases
+	//     `CategoryBitmask` and `GeneralCategory`, which no other module declares. ⚠ **THOSE TWO ARE NOT
+	//     `export`ed AND ARE STILL PROGRAM-VISIBLE, so "unexported" is not the reason they are safe** (found
+	//     at review, MEASURED: a program that declares neither compiles `let m = 5 as CategoryBitmask` and
+	//     prints `5`). What makes them safe is the clause actually checked — nothing else declares them — and
+	//     a program that DOES declare its own keeps its own (measured both ways: `int(0 to 5)` refuses 100 in
+	//     the user's file while `stdlib/CharacterSet.maxon`'s own `58720256` masks still compile beside it);
 	//   • it CONSUMES `Set`, `Character` and `Codepoint`, all listed or builtin above, so it is a second
 	//     reader of three declarations and not a second declaration of any;
 	//   • `unicodeCategory.maxon`'s forty top-level `let`s are FILE-PRIVATE scalars and only `UCD_SUPP_COUNT`

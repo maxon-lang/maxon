@@ -12530,11 +12530,18 @@ export type ProgramSignatures
 		return live.contains(self.dataLabelOf(decl))
 	end 'contributesStorage'
 
-	// `declInitializerCall`, silenced for a LAZY slot — the one place the eager "keep it for its side
-	// effects" rule is asked. It is a separate function rather than a condition inside `declInitializerCall`
-	// because that answer has a SECOND reader (`StdlibFacts.deriveStdlibFacts`, which roots the callees) and
-	// that one must still see them: a lazy static's initializer callees are reached from `__lazy_init$…`,
-	// which is real code that has to be lowered.
+	// `declInitializerCall`, silenced for a LAZY slot — the two places the eager "keep it for its side
+	// effects" rule is asked (`contributesStorage` above, `globalInitCallees` below). It is a separate
+	// function rather than a condition inside `declInitializerCall` because that answer has a SECOND reader
+	// that must still see a lazy slot's callees: they are reached from `__lazy_init$…`, which is real code
+	// that has to be lowered.
+	//
+	// ⚠ **WHICH READER THAT IS MOVED AT W115, AND THIS HEADER NAMED THE OLD ONE.** It used to be
+	// `StdlibFacts.deriveStdlibFacts`, reached through `globalInitCallees` — rooting a lazy static's callees
+	// beside `main`, which is the very claim W115 measured as false (see `globalInitCallees`). The reader now
+	// is `assignDataLabels`' lazy branch, which files them under the slot's label for
+	// `lazyStaticInitCalleesOf` to answer AT THE ACCESS. The split still earns its keep for the same reason,
+	// against a different second reader.
 	function declScopeInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		if self.declSlotIsLazy(decl) 'runsOnFirstAccessOrNotAtAll'
 			return TopLevelInitializerCall.none
@@ -12810,7 +12817,6 @@ export type ProgramSignatures
 	export function lazyStaticInitCalleesOf(label ByteArray) returns ByteArrayArray
 		return try self.lazyStaticInitCallees.get(label) otherwise sharedEmptyLazyStaticInitCallees
 	end 'lazyStaticInitCalleesOf'
-
 
 	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, with the label and value
 	// its `.data` slot carries — the door the backend's data-section layout asks through.
@@ -15057,6 +15063,15 @@ export type ProgramSignatures
 		// ⚠ It therefore RESERVES the name program-wide for a file that names a `CharacterSet` producer,
 		// exactly as listing a stdlib module reserves its type names (`StdlibLoader`'s collision rule). The
 		// reference reserves it too, being an exported alias of a module every program loads.
+		//
+		// ⚠⚠ **SINCE W115 THIS IS A FALLBACK, NOT THE AUTHORITY, AND THE MEASUREMENT RUNS THE OTHER WAY FROM
+		// THE ONE W115 INFERRED (found at review).** `stdlib/CharacterSet.maxon:19` declares the same alias,
+		// and the CORPUS declaration wins: rename every `CharSet` out of that file and a user's
+		// `CharSet from ['x','y']` still compiles through this line, but leave the file declaring
+		// `typealias CharSet = Set with String` and the same user program is REFUSED (`E2015 … a set literal
+		// key of type 'Character'`). ⇒ the two copies cannot silently disagree — a disagreement is a
+		// diagnostic — which is why this line is a residue to delete with the rest of the compiler-owned
+		// `CharacterSet` surface rather than a live second authority.
 		self.genericAliases.upsert(CharacterMemberSetAliasName, value: charsInstance)
 		if self.structTypes.contains(CharacterSetTypeName) 'alreadyRegistered'
 			return

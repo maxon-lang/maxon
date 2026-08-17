@@ -61035,15 +61035,11 @@ export type Parser
 			return try self.evalConstSetFrom(stack)
 		end 'setLiteralInitializer'
 
-		// ⭐⭐ **`CharacterSet.whitespacesAndNewlines()` IS THE SIXTH** (spec-port `lazy-static`) — the one
-		// initializer whose value is neither folded nor CALLED. shv2 has no `stdlib/CharacterSet.maxon` to
-		// declare the eleven accessors, so `atConstInitializerCall` cannot claim them (no file declares
-		// `CharacterSet.whitespacesAndNewlines`) and the scalar walk reported **E2015 `… in a constant
-		// initializer`** — true of the grammar it was reading and not of the program. The presets are DATA, so
-		// this arm materializes one exactly as `parseCharacterSetStaticCall` does inside a function.
-		if self.atCharacterSetStaticCall() 'characterSetInitializer'
-			return try self.evalConstCharacterSetStatic()
-		end 'characterSetInitializer'
+		// ⚠⚠ **`CharacterSet.whitespacesAndNewlines()` WAS A SIXTH ARM HERE, AND W115'S REVIEW DELETED IT.** It
+		// existed because *"shv2 has no `stdlib/CharacterSet.maxon` to declare the eleven accessors, so
+		// `atConstInitializerCall` cannot claim them"* — and W115 listed that module, which is exactly what
+		// gives `atConstInitializerCall` a declaration to claim them BY. See the deleted pair's headstone below
+		// for the measurement that the arm had become unreachable and its refusal false.
 
 		return ConstFoldedValue.scalar(try self.evalConstBinary(stack, minPrec: OrPrecedence))
 	end 'evalConstFoldedValue'
@@ -61713,58 +61709,31 @@ export type Parser
 		return element
 	end 'evalConstSetMember'
 
-	// Is the cursor on `CharacterSet.<name>(` — the compiler-owned type's static-call shape? The head is the
-	// BUILTIN name, which no declaration can take (`isCompilerOwnedTypeName`), so the four tokens are
-	// unambiguous. `parseCharacterSetStaticCall` claims the same shape inside a function through
-	// `atCharacterSetTypeName`, whose other spelling is the `CharSet` alias — deliberately not admitted here,
-	// because `CharSet` names the MEMBER SET and its statics are the ordinary `Set` ones, which the container
-	// arm above already claims.
+	// ⛔⛔ **`atCharacterSetStaticCall` AND `evalConstCharacterSetStatic` STOOD HERE AND W115'S REVIEW DELETED
+	// THEM, BECAUSE THE RETIREMENT LEFT THEM DEAD IN THE FOLD AND FALSE IN THE REFUSAL.** They claimed
+	// `CharacterSet.<name>(` at a top-level initializer and folded the eleven presets out of
+	// `CharacterSetRuntime.characterSetPresets` — a SECOND transcription of what `stdlib/CharacterSet.maxon`
+	// now declares, consulted at a door the corpus was supposed to own.
 	//
-	// ⚠ **THE MEMBER IS `tokenCanBeAName`, NOT `identifier`, and the twelfth static is why (D8: after a `.`, a
-	// keyword IS a name).** `from` lexes as `TokenKind.from`, so an `identifier` test declines
-	// `CharacterSet.from(…)` — which then fell to the scalar walk and was refused as *"a `create()`-style
-	// factory at the TOP of an initializer"*, a sentence about a grammar the author was not writing in. The
-	// body's reader takes all twelve through `consumeNameToken` for exactly this reason; this one asks the
-	// same predicate so the two doors claim the same shape.
-	function atCharacterSetStaticCall() returns bool
-		return self.at(TokenKind.identifier) and self.current().value.equals(CharacterSetBuiltinName) and self.peekKind() == TokenKind.dot and tokenCanBeAName(self.tokenAt(self.pos + 2)) and self.kindAt(self.pos + 3) == TokenKind.leftParen
-	end 'atCharacterSetStaticCall'
-
-	// ⭐⭐ **ONE OF THE ELEVEN PREDEFINED `CharacterSet`s, FOLDED TO ITS DATA** (spec-port `lazy-static`).
+	// ⭐ **THE FOLD WAS ALREADY UNREACHABLE, MEASURED.** `atConstInitializerCall` is asked FIRST
+	// (`evalConstInitializer`) and claims any `<Type>.<method>(` some file DECLARES — which, since the module
+	// is listed, is all eleven. Proven rather than read: seeding the corpus's `cachedWhitespaces` with `'x'`
+	// moved a TOP-LEVEL `let ws = CharacterSet.whitespaces()` from `false` to `true`, so the value came from
+	// the corpus body and not from this table.
 	//
-	// ⭐ **THE TABLE IS THE ONE `parseCharacterSetStaticCall` WALKS** (`CharacterSetRuntime.characterSetPresets`),
-	// so the mask and the member list a global is born with are the same numbers a body's call is born with —
-	// which is what makes `static var ws = CharacterSet.whitespacesAndNewlines()` and a call to the accessor
-	// inside a function the same set rather than two transcriptions of one.
+	// ⛔ **AND THE ONLY EXIT LEFT WAS A REFUSAL STATING A FACT THIS RUNG DELETED** — *"a global `CharacterSet`
+	// is one of the eleven predefined sets, whose members the compiler holds as data"*. MEASURED on
+	// `let bogus = CharacterSet.inverted()`: E2015 with that sentence, while the SAME name inside a function
+	// answers *"'CharacterSet' has no static method named 'inverted' — the compiler owns that type name, so a
+	// static of its own can only come from the module that declares it"*. Two doors, one question, and the
+	// stale one was the confident one. With the arm gone the top-level door answers exactly as it does for any
+	// other declared type's undeclared static (`Foo.nope()`), which is the whole point of the retirement.
 	//
-	// ⚠ **`from` IS NOT ADMITTED HERE, AND THAT IS THE ARGUMENT RULE RATHER THAN AN OMISSION.**
-	// `CharacterSet.from(chars)` takes a `Set with Character` EXPRESSION, and the one this position could
-	// supply — `CharSet from […]` — is already a whole initializer of its own; nesting it would make the
-	// admitted argument set of a compiler-owned static a second, hand-written list beside
-	// `evalConstFoldedValue`. The refusal names the eleven, exactly as the body's dispatcher does for an
-	// unknown static.
-	function evalConstCharacterSetStatic() returns ConstFoldedValue throws ConstEvalError
-		let typeTok = try self.consumeConst(TokenKind.identifier)
-		try self.consumeConstToken(TokenKind.dot)
-		// Read rather than `consumeConst`ed: the member may be a KEYWORD (`from`), which the claim test above
-		// has already established is here — see there.
-		let methodTok = self.current()
-		self.advance()
-
-		// ⚠ **THE NAME IS JUDGED BEFORE THE ARGUMENT LIST IS TOUCHED.** `CharacterSet.from(chars)` HAS an
-		// argument, so requiring `()` first would report `Expected ')' but got …` — a complaint about the
-		// parenthesis rather than about the static, which is the misattribution this whole arm exists to end.
-		for preset in characterSetPresets() 'eachPreset'
-			if methodTok.value.equals(preset.method) 'match'
-				try self.consumeConstToken(TokenKind.leftParen)
-				try self.consumeConstToken(TokenKind.rightParen)
-
-				return ConstFoldedValue.characterSet(self.signatures.setInstanceForCharacter(), members: constCharacterMembers(preset.members), categoryMask: preset.categoryMask)
-			end 'match'
-		end 'eachPreset'
-
-		throw ConstEvalError.defective(ParseError.unsupported("`{String.from(typeTok.value)}.{String.from(methodTok.value)}` as a top-level initializer — a global `{String.from(CharacterSetBuiltinName)}` is one of the eleven predefined sets, whose members the compiler holds as data. `{String.from(FromMethod)}(chars)` builds one from an expression, which needs the program to be running; declare it inside a function", line: methodTok.line, column: methodTok.column))
-	end 'evalConstCharacterSetStatic'
+	// ⚠ **WHAT WENT WITH IT: `CharacterSet.from(…)` AT A TOP-LEVEL INITIALIZER NOW GETS THE GENERIC SENTENCE**,
+	// because `atConstInitializerCall` tests the member position for `identifier` and `from` lexes as
+	// `TokenKind.from`. That is a property of that predicate and of every keyword-named static, not of this
+	// type — it is pinned as its own case below, so widening it is a decision with a witness rather than a
+	// silent side effect of this deletion.
 
 	// ONE element of a top-level array literal: a STRING literal, or anything the scalar evaluator folds to
 	// an integer. The managed/scalar split is `evalConstInitializer`'s, applied between two separators —

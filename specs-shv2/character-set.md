@@ -26,6 +26,7 @@ Each case names the sabotage that found it.
 | `availableUnicodeEscapeText`'s UNTRUNCATED window (`available = whole`) | **0** | 1 | `malformed-escape-full-window` |
 | `__ucd_cat`'s `Cn` fall-out (`UcdUnassignedCategory`) reading any other category | **0** | 1 | `supplementary-plane-table-bounds` |
 | `CharSet`/`CharacterSet` withdrawn from `isCompilerOwnedTypeName` | **0** | 2 | `charset-alias-is-compiler-owned`, `characterset-name-is-compiler-owned` |
+| the const evaluator's `CharacterSet.<name>(` arm restored ahead of `atConstInitializerCall` (W115 review) | **0** | 2 | `error.characterset-undeclared-static-at-a-top-level-initializer`, `error.characterset-from-at-a-top-level-initializer` |
 
 Two sabotages the ported corpus already covered well, recorded so the next reader does not re-run them:
 a member set never enrolled as an owned temporary is **31** red, and explicit membership never winning
@@ -525,4 +526,48 @@ end 'main'
 ```
 ```exitcode
 0
+```
+
+<!-- test: error.characterset-undeclared-static-at-a-top-level-initializer -->
+### Error: an undeclared `CharacterSet` static at a TOP-LEVEL initializer
+
+⭐ **THE TOP-LEVEL DOOR MUST NOT KEEP A ROSTER OF ITS OWN (W115 review).** Until this case, the constant
+evaluator claimed `CharacterSet.<name>(` before `atConstInitializerCall` could and folded the eleven presets
+out of `CharacterSetRuntime.characterSetPresets` — the compiler's own transcription of what
+`stdlib/CharacterSet.maxon` declares. Listing that module made the fold unreachable (the declaration wins at
+`atConstInitializerCall`, which is asked first) and left only its refusal, which went on asserting *"a global
+`CharacterSet` is one of the eleven predefined sets, whose members the compiler holds as data"* — a claim the
+retirement had deleted, and a more confident sentence than the true one the same name gets inside a function.
+
+⇒ what a retired builtin's undeclared static earns here is the sentence EVERY declared type's undeclared
+static earns. Restore the arm and this case reads the old roster claim instead.
+```maxon
+let bogus = CharacterSet.inverted()
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:13: Unsupported: `CharacterSet.inverted` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
+```
+
+<!-- test: error.characterset-from-at-a-top-level-initializer -->
+### Error: `CharacterSet.from` — a KEYWORD-named static — at a TOP-LEVEL initializer
+
+⚠ **THIS PINS A PROPERTY OF `atConstInitializerCall`, NOT OF THIS TYPE.** That predicate tests the member
+position for `TokenKind.identifier`, and `from` lexes as `TokenKind.from` — so a declared static whose name is
+a keyword is invisible to it and falls to the scalar walk, however ordinary its declaration. `CharacterSet.from`
+is the one such static the corpus ships, which makes it the witness. Widening the member test to
+`tokenCanBeAName` (D8: after a `.`, a keyword IS a name) would admit this form and move this case; that is a
+decision to take deliberately, and this case is what makes it visible rather than silent.
+```maxon
+let custom = CharacterSet.from(CharSet from ['a', 'e'])
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:14: Unsupported: `CharacterSet.from` in a constant initializer — a constant is folded before any code runs, so it can name another top-level `let`, a literal, an empty container, a `create()`-style factory at the TOP of an initializer, or a sized type's `.min`/`.max`, and nothing else
 ```
