@@ -250,33 +250,18 @@ end 'initialRecordOf'
 //   • a **container** with no constant image has no literal record at all (P1.7 slice 2b): the record is
 //     BUILT here, exactly as `Parser`'s body emitters build one — this instance's `create` with the stamps
 //     it fixes, then one `__managed_push` per folded element.
-//   • a **CharacterSet PRESET** is the third of those with a fourth thing on top: its member set is built
-//     exactly as any container is, and then SEALED into the box `__cs_make` mints.
+//
+// ⚠ **A FOURTH ARM, A `CharacterSet` PRESET, WENT AT W129** with the `__cs_*` runtime it sealed its member set
+// into. It was the container arm plus one `__cs_make`; `stdlib/CharacterSet.maxon` declares the eleven presets
+// now (W115), so a preset at module scope is an ordinary LAZY STATIC calling ordinary declared code, and there
+// is no compiler-owned record left for a global to hold.
 function builtRecord(fn SynthesizedFunction, build ManagedGlobalRecord, valueType MaxonType, range SourceRange) returns ValueId
 	return match build 'build'
 		stringRecord(bytes) gives clonedStringRecord(fn, bytes: bytes, valueType: valueType, range: range)
 		constArrayRecord(elementSize, elementCount, bytes) gives ownedConstArrayRecord(fn, elementSize: elementSize, elementCount: elementCount, bytes: bytes, valueType: valueType, range: range)
 		containerRecord(create, elements) gives builtContainerRecord(fn, create: create, elements: elements, valueType: valueType, range: range)
-		characterSetRecord(chars, charsType, members, categoryMask) gives builtCharacterSetRecord(fn, chars: chars, charsType: charsType, members: members, categoryMask: categoryMask, valueType: valueType, range: range)
 	end 'build'
 end 'builtRecord'
-
-// ⭐⭐ **`CharacterSet.whitespacesAndNewlines()` AT MODULE SCOPE** (spec-port `lazy-static`) — the member set,
-// then `__cs_make(chars, categoryMask)`, which is exactly the pair `Parser.emitCharacterSetBox` emits for the
-// same accessor written inside a function.
-//
-// ⚠ **THE MEMBER SET GOES IN OWNED AND IS *NOT* DROPPED HERE.** `__cs_make` is the one door the box is born
-// through and the box OWNS its member set — `__cs_decref` releases it before reclaiming the box — so the set
-// this function built has exactly one owner from the call onwards. That is the same handoff
-// `moveManagedValueInto` makes at the body's call site, expressed here by there being no drop rather than by
-// a de-listing, because `__module_init` has no statement whose pending temporaries a value could be on.
-//
-// `charsType` is the member set's own type and `valueType` the BOX's; they are two different records, which
-// is why the description carries both rather than this function deriving one from the other.
-function builtCharacterSetRecord(fn SynthesizedFunction, chars ContainerCreateCall, charsType MaxonType, members ConstArrayElementArray, categoryMask ParsedInt, valueType MaxonType, range SourceRange) returns ValueId
-	let memberSet = builtContainerRecord(fn, create: chars, elements: members, valueType: charsType, range: range)
-	return fn.emitPositionalCall(CharSetMakeName, args: pairArgs(memberSet, second: fn.emitTypedLiteral(categoryMask, valueType: MaxonType.integer, range: range)), resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
-end 'builtCharacterSetRecord'
 
 // The String arm: materialize the immortal `.rdata` literal, then CLONE it into a fresh owned heap
 // String the slot can own, mutate and eventually free. Shared with the array build, whose STRING ELEMENTS

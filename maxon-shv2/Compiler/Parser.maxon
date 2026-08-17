@@ -6714,17 +6714,17 @@ end 'referenceIdentityOpSpelling'
 // Which compiler-owned layouts a file names — the answer `fileNamesProducerMask` walks the tokens once to
 // build, where a walk per probe used to build it one at a time.
 //
-// ⚠ **THERE WAS A FOURTH BIT, AND W49 WAVE 3 DID NOT MOVE IT — IT DELETED THE QUESTION.**
+// ⚠ **TWO BITS HAVE GONE, AND NEITHER MOVED — EACH TIME THE QUESTION WAS DELETED.**
 // `StringIndexProducerBit` asked "does this file name `startIndex`/`endIndex`/`findFirst`/`findLast`?",
-// purely so the sweep could decide whether to register a `StringIndex` layout the compiler itself wrote.
-// The corpus declares that type (`stdlib/String.maxon:917`), so the ordinary declaration fold registers it
-// in every program and there is nothing per-file left to answer. The remaining three name types the
-// compiler still owns outright.
-typealias ProducerMask = int(0 to 31)
+// purely so the sweep could decide whether to register a `StringIndex` layout the compiler itself wrote;
+// the corpus declares that type (`stdlib/String.maxon:917`), so the ordinary declaration fold registers it
+// in every program (W49 wave 3). `CharacterSetProducerBit` asked the identical question about
+// `CharacterSet`/`CharSet` and went the identical way once `stdlib/CharacterSet.maxon` was listed (W115) and
+// its compiler-owned layout deleted (W129). The remaining two name types the compiler still owns outright.
+typealias ProducerMask = int(0 to 15)
 
-let CharacterSetProducerBit = 1 as ProducerMask
-let ManagedFileProducerBit = 2 as ProducerMask
-let ManagedDirectoryProducerBit = 4 as ProducerMask
+let ManagedFileProducerBit = 1 as ProducerMask
+let ManagedDirectoryProducerBit = 2 as ProducerMask
 
 // ⭐ **A `<Enum>.allCaseNames` — the fourth question this walk answers, and the only one that names no
 // compiler-owned LAYOUT.** What it registers is the `Array with String` INSTANCE the member materializes,
@@ -6733,7 +6733,7 @@ let ManagedDirectoryProducerBit = 4 as ProducerMask
 // `recordScannedEnum` consume a declaration WHOLE, so a `Color.allCaseNames` inside a method body is
 // invisible to an arm written there, and the instance would go uninterned in exactly the programs that
 // declare their enums and their uses together.
-let AllCaseNamesProducerBit = 8 as ProducerMask
+let AllCaseNamesProducerBit = 4 as ProducerMask
 
 // ⭐ **A `<Enum>.allCases` — the FIFTH question, and `allCaseNames`' twin in every respect but its element
 // type.** What it registers is an `Array with <Enum>` instance PER DECLARED ENUM, which the sweep cannot
@@ -6741,8 +6741,8 @@ let AllCaseNamesProducerBit = 8 as ProducerMask
 // registry is still being built while this walk runs. So the bit is only NOTED here and the over-interning
 // waits for the whole program, exactly as `noteWellKnownInstanceNeeds`' do and for the same measured
 // O(files × types) reason (`ProgramSignatures.internLiteralContainerInstances`).
-let AllCasesProducerBit = 16 as ProducerMask
-let AllProducerBits = 31 as ProducerMask
+let AllCasesProducerBit = 8 as ProducerMask
+let AllProducerBits = 15 as ProducerMask
 
 // --- Character literals ---
 //
@@ -11692,13 +11692,12 @@ export type Parser
 		// ⇒ ONE such walk answers all of them (`fileNamesProducerMask`, R4.1). The completeness the paragraph
 		// above demands is a property of what the walk VISITS, not of how many walks there are.
 		//
-		// ⭐ **AND `StringIndex` IS NO LONGER AMONG THEM (W49 wave 3).** Its four producers retired onto
-		// `stdlib/String.maxon`, which also DECLARES the type — so the layout arrives through the ordinary
-		// declaration fold, in every program, and the question this probe existed to answer is gone rather
-		// than moved. The crash it was written against cannot recur for that type: there is no per-file
-		// decision left to get wrong. The three below still name types the compiler owns outright.
+		// ⭐ **AND NEITHER `StringIndex` NOR `CharacterSet` IS AMONG THEM ANY MORE (W49 wave 3, W129).** Each
+		// one's producers retired onto a stdlib module that also DECLARES the type — so the layout arrives
+		// through the ordinary declaration fold, in every program, and the question the probe existed to answer
+		// is gone rather than moved. The crash they were written against cannot recur for those types: there is
+		// no per-file decision left to get wrong. The two below still name types the compiler owns outright.
 		let producers = self.fileNamesProducerMask()
-		let hasCharacterSetProducer = (producers and CharacterSetProducerBit) != 0
 		let hasManagedFileProducer = (producers and ManagedFileProducerBit) != 0
 		let hasManagedDirectoryProducer = (producers and ManagedDirectoryProducerBit) != 0
 		let hasAllCaseNamesAccess = (producers and AllCaseNamesProducerBit) != 0
@@ -11826,7 +11825,7 @@ export type Parser
 		// A `.bytes()` byte VIEW joins the byte-string literal's bit because it constructs the same
 		// `Array with Byte`, and `<Enum>.allCaseNames` joins the string literal's for the same reason; neither
 		// has a typealias of its own to intern from, which is the property this whole set shares.
-		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, vectorSizes: vectorFromSizes, characterSetProducer: hasCharacterSetProducer, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer)
+		index.noteWellKnownInstanceNeeds(hasIntArrayLiteral, byteStringLiteral: hasByteStringLiteral or hasByteViewCall, stringArrayLiteral: hasStringArrayLiteral or hasAllCaseNamesAccess, aggregateArrayLiteral: hasAggregateArrayLiteral, enumAllCasesAccess: hasAllCasesAccess, setFromConstruction: hasSetFromLiteral, listFromConstruction: hasListFromLiteral, vectorSizes: vectorFromSizes, managedFileProducer: hasManagedFileProducer, managedDirectoryProducer: hasManagedDirectoryProducer)
 	end 'foldDeclaredSignaturesInto'
 
 	// Is the cursor on a `let` or a `var` — the two keywords that introduce a top-level binding?
@@ -11981,38 +11980,28 @@ export type Parser
 	// there is nothing left to over-intern. Deleted rather than left answering `false`, on wave 5's rule for
 	// `atStringSplitCall`.
 
-	// ⭐ **DOES THIS FILE NAME A `CharacterSet` PRODUCER ANYWHERE? (P1.8 Slice D)** — it needs its OWN
-	// complete walk of the token array, because `foldDeclaredSignaturesInto`'s loop is a DECLARATION walk:
-	// three of its arms (`recordScannedType`, `recordScannedEnum`, `recordScannedBinding`) consume a
-	// construct whole and resume past its `end`, so a `CharacterSet` built inside a `type`'s method body
-	// never reaches the loop body. A question about the whole file is answered by reading the whole file.
-	// ⇒ That walk is shared: `fileNamesProducerMask` asks this probe and the two below on one pass.
+	// ⚠⚠ **A `CharacterSet` PROBE STOOD HERE UNTIL W129, AND WHAT IT COST TO GET WRONG IS THE FACT WORTH
+	// KEEPING** — because it is the fact every surviving probe on this walk rests on. MEASURED, by making it
+	// answer `false` for every file: **8 red, every one of them a file that SPELLS `CharSet`**
+	// (`error E2015: a field access on 'cs', which is declared 'unknown'` — `CharSet.create()` with no alias
+	// to resolve), and nothing else. So what an unregistered file cost was **the alias and the gid, not a
+	// crash**, and what the probe bought was the pre-interning discipline `atSetFromConstruction` states:
+	// an instance is interned by the SWEEP so the parser's own read is never the first write to the shared
+	// registry mid-parse, which would make its gid depend on parse order.
+	// ⇒ The corpus declares the type and the alias now (W115), so both arrive through the ordinary
+	// declaration fold and there is no per-file question left.
 	//
-	// ⚠ It had a `StringIndex` sibling (`atStringIndexProducer`) whose miss was measured to cost the
-	// compiler's LIFE rather than an interning opportunity — that is the crash recorded at
-	// `foldDeclaredSignaturesInto`'s probe block. W49 wave 3 retired the four producers it scanned for onto
-	// `stdlib/String.maxon`, which declares the type too, so the layout now arrives through the ordinary
-	// declaration fold and the probe is gone rather than moved.
+	// ⚠ A `StringIndex` sibling (`atStringIndexProducer`) went the same way at W49 wave 3, and ITS miss was
+	// measured to cost the compiler's LIFE rather than an interning opportunity — the crash recorded at
+	// `foldDeclaredSignaturesInto`'s probe block. **The two outcomes differ, so neither generalizes**: a
+	// probe removed because its subject is corpus-declared is safe; one removed because it "looks unused" is
+	// the crash.
 	//
-	// ⚠ **WHAT AN UNREGISTERED FILE ACTUALLY COSTS IS THE ALIAS AND THE GID, NOT A CRASH** — MEASURED, by
-	// making this answer `false` for every file: **8 red, every one of them a file that SPELLS `CharSet`**
-	// (`error E2015: a field access on 'cs', which is declared 'unknown'` — `CharSet.create()` with no
-	// alias to resolve), and nothing else. The `__CharacterSet` LAYOUT is read by no one (see
-	// `SignatureIndex`'s note where its `…OrPanic` accessor would be), so a missing one takes nothing down;
-	// the drop router answers from the NAME and needs no registry entry. What the trim arm below buys is
-	// therefore the pre-interning discipline `atSetFromConstruction` states, not a rescue from a panic:
-	// `Set with Character` is interned by the SWEEP so the parser's own read is never the first write to
-	// the shared registry mid-parse, which would make its gid depend on parse order.
-	//
-	// ONE producer: naming the type (`CharacterSet.letters()`, `CharacterSet.from(…)`).
-	//
-	// ⚠ **IT SCANNED FOR A NO-ARGUMENT TRIM TOO UNTIL W49 WAVE 4, AND THAT PROBE RETIRED WITH ITS SUBJECT.**
-	// `s.trim()` was a SYNTHESIZED arm that built `CharacterSet.whitespacesAndNewlines()` *in the calling
-	// file*, which is what made the call a producer there. The member is now `stdlib/String.maxon`'s
-	// (`:760-772`), so the set is built inside the corpus body — in a file that names the type outright and
-	// registers through the clause above. Kept, the probe would scan every file for a construction that no
-	// longer happens in any of them. Same shape as wave 3's `atStringIndexProducer`, and the same reason.
-	// ⇒ Asked on the shared walk (`fileNamesProducerMask`), not on one of its own.
+	// ⚠ Every probe here needs its OWN complete walk of the token array, because `foldDeclaredSignaturesInto`'s
+	// loop is a DECLARATION walk: three of its arms (`recordScannedType`, `recordScannedEnum`,
+	// `recordScannedBinding`) consume a construct whole and resume past its `end`, so a producer inside a
+	// `type`'s method body never reaches the loop body. A question about the whole file is answered by reading
+	// the whole file — and `fileNamesProducerMask` asks every probe on ONE such pass.
 
 	// The `__ManagedFile` probe (R4.1) is `atManagedFileProducer` and the `__ManagedDirectory` one (R4.3) is
 	// `atManagedDirectoryProducer`, both asked on the same shared walk.
@@ -12024,7 +12013,8 @@ export type Parser
 	// asks every question per token and walks once, so the cost of the next probe is a compare rather than a
 	// scan. It restores the cursor, so it is invisible to the caller.
 	//
-	// ⚠ It asked FOUR until W49 wave 3 struck the `StringIndex` one, whose type the corpus now declares.
+	// ⚠ It asked FOUR until W49 wave 3 struck the `StringIndex` one and W129 the `CharacterSet` one — the
+	// corpus declares both types now.
 	//
 	// ⚠ It cannot stop at the first hit the way a single-probe walk does, because a later token may be the
 	// only producer for a DIFFERENT probe — so it exits early only once every bit is satisfied. That makes
@@ -12038,9 +12028,6 @@ export type Parser
 		var mask = 0 as ProducerMask
 
 		while not self.isEof() 'scan'
-			if (mask and CharacterSetProducerBit) == 0 and self.atCharacterSetProducer() 'cs'
-				mask = (mask or CharacterSetProducerBit) as ProducerMask
-			end 'cs'
 			if (mask and ManagedFileProducerBit) == 0 and self.atManagedFileProducer() 'mf'
 				mask = (mask or ManagedFileProducerBit) as ProducerMask
 			end 'mf'
@@ -12062,15 +12049,6 @@ export type Parser
 		self.pos = resume
 		return mask
 	end 'fileNamesProducerMask'
-
-	// A `CharacterSet` identifier — see `fileNamesCharacterSetProducer` for why that is now the only one.
-	// Deliberately TOLERANT, like every sweep probe: it sees tokens, not types, so it over-registers rather
-	// than missing.
-	function atCharacterSetProducer() returns bool
-		// The TYPE's own name, or its member-set ALIAS: `CharSet` is registered by the same call, so a file
-		// that only writes `CharSet from ['x']` must trigger it too or the alias would not exist.
-		return self.at(TokenKind.identifier) and (self.current().value.equals(CharacterSetBuiltinName) or self.current().value.equals(CharacterMemberSetAliasName))
-	end 'atCharacterSetProducer'
 
 	// ⭐⭐ **IS THE CURSOR ON THE STATIC MEMBER NAMED `member`?** — asked by BOTH halves of every member of
 	// this surface, and deliberately ONCE PER MEMBER: the SWEEP asks it to decide whether the file needs the
@@ -17108,7 +17086,7 @@ export type Parser
 			// the same enumeration and is now the only one.
 			value then break 'outcome'
 			failed(error) then try self.throwRecordedConstantError(error)
-			poisoned to characterSetValue then break 'outcome'
+			poisoned to factoryValue then break 'outcome'
 			pending to evaluating then panic("Parser.raiseBindingFailure: top-level binding '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` runs to completion inside `queryProgramSignatures`, before any file is parsed")
 		end 'outcome'
 	end 'raiseBindingFailure'

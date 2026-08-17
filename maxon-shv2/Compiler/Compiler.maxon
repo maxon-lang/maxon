@@ -547,11 +547,10 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// cascade fixpoint to close over them — the same obligation, and the same ordering, the cascades have.
 	let asyncSpawnTargets = collectAsyncSpawnTargets(module)
 	declareAsyncReleaserNeeds(usage, targets: asyncSpawnTargets, funcSignatures: project.funcSignatures, signatures: signatures, typeNames: project.typeNames)
-	// ⭐ **W90: `__cs_decref`'s body drops its member set, and once `stdlib/Set.maxon` is listed that drop is
-	// a per-instance `__destruct_Set_Character` cascade.** Same seam, same ordering and the same reason as the
-	// releaser line above: a synthesized body's callee is invisible to the module scan, and a cascade nobody
-	// rooted before the fixpoint is never synthesized.
-	declareCharacterSetRuntimeNeeds(usage, signatures: signatures)
+	// ⚠ **`declareCharacterSetRuntimeNeeds` STOOD HERE AND WENT WITH THE `__cs_*` RUNTIME (W129).** It rooted the
+	// `__destruct_Set_Character` cascade `__cs_decref`'s body would name, which is the obligation any FUTURE
+	// synthesized body owning a declared generic's instance still carries — see `declareAsyncReleaserNeeds`
+	// above, which states it for the one family that still has one.
 	noteDestructorUsage(usage, project: project, signatures: signatures)
 	// A managed-element array/struct/union DEEP-CLONE (P1.7 slice 3b-vi-b) synthesizes `__clone_<T>` cascades
 	// that call `__str_clone`/`__managed_clone`/nested `__clone_<T>` inside bodies this scan cannot see. Close the
@@ -680,20 +679,23 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// functions are appended to one module and the backend resolves calls by name.
 	installGraphemeRuntime(pipeline.stdModule, usage: usage, ordering: orderingEnum)
 
-	// The Unicode `General_Category` lookup (`__ucd_cat`, P1.8 Slice D / R2) — installed the same
-	// already-lowered way, on its own `usesUcdCategory` bit. Unlike every install above it, it also
-	// REGISTERS `.rdata`: the two checked-in tables it reads are ordinary read-only constants (v1's route,
+	// The two RAW Unicode table loads (`__ucd_bmp_at`/`__ucd_supp_at`, P1.8 Slice D / R2 / W64) — installed the
+	// same already-lowered way, on their own `usesUcdCategory` bit. Unlike every install above it, this one also
+	// REGISTERS `.rdata`: the two checked-in tables they read are ordinary read-only constants (v1's route,
 	// not the bootstrap's dedicated section — see `UnicodeCategoryRuntime`'s header), so they must be in
 	// `globalData` before the backend lays the section out. It needs `project.stdlibDir` because the tables
 	// are checked into `stdlib/helpers/string/` and are read at COMPILE time, exactly as both reference
 	// compilers read them.
+	//
+	// ⚠ **THE WHOLE `General_Category` LOOKUP (`__ucd_cat`) WAS INSTALLED HERE TOO, AND WENT AT W129** with its
+	// one caller, `__cs_contains`. `stdlib/helpers/string/unicodeCategory.maxon` writes the same algorithm out
+	// of these two raw reads, so what the corpus reaches is the pair — never a third synthesized entry point.
 	try installUnicodeCategoryRuntime(pipeline.stdModule, globalData: project.globalData, usage: usage, stdlibDir: project.stdlibDir)
 
-	// The `CharacterSet` runtime (`__cs_*` + `__str_trim`, P1.8 Slice D) — installed the same already-lowered
-	// way, keyed on its own per-entry-point bits. It sits after the category install because `__cs_contains`
-	// classifies a codepoint through `__ucd_cat`; as with every install above, the bit was settled by
-	// `scanRuntimeUsage` before any install ran, so the order is readability rather than a dependency.
-	installCharacterSetRuntime(pipeline.stdModule, usage: usage, signatures: signatures)
+	// ⚠ **THE `CharacterSet` RUNTIME (`__cs_make`/`__cs_decref`/`__cs_contains`) WAS INSTALLED HERE AND IS
+	// DELETED (W129).** `W115` listed `stdlib/CharacterSet.maxon`, which declares the eleven presets, `from` and
+	// `contains` as ordinary Maxon; with the parser's interceptions gone nothing could emit any of the three
+	// callees, so all three bits were unsettable and this install could only ever install nothing.
 
 	// The file-IO runtime (`__mf_open_read`, R4.1) — installed the same already-lowered way, on its own
 	// `usesManagedFile` bit. It must come AFTER the array install is decided but has no ordering dependency
@@ -737,8 +739,8 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// did the same for `Set`, which took the last live reader — `CharacterSet`'s member probe — with it. Both
 	// containers are ordinary declared generics now, so their `create`/`insert`/`contains`/`remove`/`count`
 	// are compiled Maxon bodies the reachability walk finds for itself, exactly as `StringIndexRuntime`'s
-	// were after W49. The `usesSet`/`usesMap` bits went with them; `closeCharacterSetNeeds` still declares the
-	// `usesHeap` those two arms used to carry alongside.
+	// were after W49. The `usesSet`/`usesMap` bits went with them, and the `CharacterSet` install that was the
+	// last thing still declaring the `usesHeap` those two arms carried alongside went at W129.
 	//
 	// The List runtime (`__list_create`/`__list_append`/`__list_get`/…) — installed the same already-lowered
 	// way, keyed on its own `usesList` bit. It shares no graph with the two above (a chain is not a table), so

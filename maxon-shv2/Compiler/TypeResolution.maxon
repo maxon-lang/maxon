@@ -879,10 +879,12 @@ end 'resolveType'
 //
 // ⭐ **`CharacterSet` AND `CharSet` JOIN THE LIST AT P1.8 SLICE D, AND THEIR SEED IS A DIFFERENT SHAPE —
 // WHICH IS WHY THEY BELONG HERE RATHER THAN IN A CHECK OF THEIR OWN.** The three above are seeded by
-// `resolveNamedType`'s arms and by `createEnumRegistry`; these two are seeded by
-// `ProgramSignatures.registerCharacterSetType`, which upserts the `CharSet` → `Set with Character` entry
-// into the SAME `genericAliases` map a user `typealias` folds into. That upsert is unconditional, so
-// before this line a user declaration was not refused — it was silently OVERWRITTEN, and the author was
+// `resolveNamedType`'s arms and by `createEnumRegistry`; these two are seeded by a DECLARATION —
+// `stdlib/CharacterSet.maxon`'s own `type CharacterSet` and `typealias CharSet = Set with Character`, the
+// second of which fills the `CharSet` entry of the SAME `genericAliases` map a user `typealias` folds into.
+// (The compiler wrote its own unconditional upsert of that entry until W129; the seed moved, the reservation
+// did not.) A map entry is OVERWRITTEN rather than contested, so
+// before this line a user declaration was not refused — it was silently taken, and the author was
 // then blamed at the first USE of the name the compiler had taken from them. MEASURED, on
 // `typealias CharSet = Set with String` + `s.insert("a")`:
 // *"`Set with Character` requires a Character key — got a 'String' value"*, reported at line 5 for a

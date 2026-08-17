@@ -38,23 +38,27 @@
 // reaching for `stdlib/helpers/string/ucd_../../../evil.bin`. The roster is the guard; the prefix is what
 // makes an `.rdata` label tell a reader which mechanism owns a blob.
 
-// ⭐ **THE ENTRY POINTS.** All `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
+// ⭐ **THE ENTRY POINTS.** Both `__`-prefixed compiler-internal (`isCompilerInternalCallee` — no E3004, no
 // signature slotting) but NOT `__mm_`-prefixed, so they widen no heap decision; the family declares its
-// floor in `recordCallUsage` exactly as the String and grapheme families do. Each is a LEAF: `.rdata`
-// reads and integer arithmetic, calling nothing, allocating nothing.
+// floor in `recordCallUsage` exactly as the String and grapheme families do. Each is a LEAF: one `.rdata`
+// read and integer arithmetic, calling nothing, allocating nothing.
 //
-// `__ucd_cat` is the whole `General_Category` lookup, which is what `CharacterSet.contains` reaches.
-// ⭐ **THE OTHER TWO ARE THE LOOKUP TAKEN APART**, and they exist because `stdlib/helpers/string/
-// unicodeCategory.maxon` writes the SAME algorithm out of two raw table reads — the intrinsic pair both
-// reference compilers give it. They are the lowering of `__Builtins.ucdByteAt`/`ucdI64At`, one per
-// (table, stride) pairing, and each shares its load with `__ucd_cat`'s own arm (`emitBmpCategoryByte` /
-// `emitSuppEntryAt`) so the two routes onto one table cannot come to read it differently.
-export let UcdCategoryName = b"__ucd_cat"
+// They are the RAW TABLE READS, and they exist because `stdlib/helpers/string/unicodeCategory.maxon` writes
+// the `General_Category` lookup out of exactly them — the intrinsic pair both reference compilers give it.
+// They are the lowering of `__Builtins.ucdByteAt`/`ucdI64At`, one per (table, stride) pairing.
+//
+// ⚠⚠ **A THIRD, `__ucd_cat`, WAS THE WHOLE LOOKUP AS ONE SYNTHESIZED GRAPH, AND IT WENT AT W129 WITH ITS
+// ONLY CALLER `__cs_contains`.** It is the shape not to rebuild: it was a SECOND implementation of
+// `unicodeCategory.maxon:53-75` — the same plane test, the same direct BMP index and the same binary search
+// over the packed supplementary ranges — written in `StdOp` because shv2 read no stdlib when Slice D landed.
+// With `stdlib/CharacterSet.maxon` listed (W115) the corpus body is what every classification reaches, and
+// it reaches it through these two. ⇒ **A future caller wanting a category asks the CORPUS function; it does
+// not get a third transcription of the algorithm here.**
 export let UcdBmpAtName = b"__ucd_bmp_at"
 export let UcdSuppAtName = b"__ucd_supp_at"
 
 // ⭐ **THE FAMILY, AS A PREFIX** — the shape `isClockRuntimeCallee`/`isGtRuntimeCallee` already use, and
-// the reason `recordCallUsage` needs no row per entry point: all three above read the same two tables and
+// the reason `recordCallUsage` needs no row per entry point: both above read the same two tables and
 // carry the same nothing else, so "does this program touch the UCD tables?" is ONE question. A per-entry-
 // point bit would buy only the deletion of a leaf whose whole body is a `lea` and a load, against the
 // 72 KB of table the family installs either way.
@@ -75,43 +79,31 @@ let UcdLabelPrefix = "__"
 let UcdTableExtension = ".bin"
 let UcdTableDir = "helpers/string"
 
-// The BMP table is indexed DIRECTLY by codepoint, so its length IS the ceiling — one byte each for
-// U+0000..U+FFFF. Anything at or above it is a supplementary codepoint and takes the sorted search.
-let UcdBmpCodepointCeiling = 65536
-
-// ⭐ **ONE SUPPLEMENTARY ENTRY, PACKED INTO ONE MACHINE WORD** (the generator's layout, read back by
-// `unicodeCategory.maxon:62-70`): bits 0..20 are `rangeStart`, bits 21..41 are `rangeEnd`, bits 42..46 are
-// the category. 21 bits covers U+10FFFF exactly. The ENTRY COUNT is deliberately NOT written down here —
-// v1's stdlib carries it as `UCD_SUPP_COUNT = 806`, a second copy of the file's own length that a
-// regenerated table would silently invalidate; `installUnicodeCategoryRuntime` derives it from the bytes.
+// ⭐ **ONE SUPPLEMENTARY ENTRY IS ONE MACHINE WORD** (the generator's layout, read back by
+// `unicodeCategory.maxon:62-70`, which unpacks the three fields itself). The ENTRY COUNT is deliberately NOT
+// written down — v1's stdlib carries it as `UCD_SUPP_COUNT = 806`, a second copy of the file's own length
+// that a regenerated table would silently invalidate.
 let UcdSuppEntryBytes = 8
-let UcdRangeFieldBits = 21
-let UcdRangeFieldMask = 2097151
-let UcdCategoryShift = 42
-let UcdCategoryMask = 31
 
-// The category a codepoint in NO supplementary range has — `Cn`, unassigned. It is the same 0 the BMP
-// table stores for an unassigned codepoint, and the same 0 the reference's search falls out to
-// (`unicodeCategory.maxon:74`), so a `CharacterSet` bitmask never has bit 0 set for a real category.
-let UcdUnassignedCategory = 0
-
-// Install the `General_Category` lookup and register the two tables it reads, when — and only when — the
-// program names it. Appended AFTER the pipeline like every other runtime install, so it is never
+// Install the two raw table loads and register the tables they read, when — and only when — the
+// program names them. Appended AFTER the pipeline like every other runtime install, so it is never
 // re-optimized and still flows through the whole backend.
 //
 // ⚠ It takes `globalData` because it REGISTERS, not merely emits: the two blobs must be in `.rdata`
 // before the backend lays the section out. A missing table is a broken checkout and raises the ordinary
 // `fileNotFound` naming the path — never a silent skip, which would link a `rdataAddr` at a label nothing
 // registered.
+//
+// ⚠ **BOTH BLOBS ARE REGISTERED WHATEVER THE PROGRAM READS, and that is the family's one bit showing.** A
+// codepoint's plane is a run-time fact, so the corpus lookup names both leaves and a per-table register would
+// be a second answer to the question `usesUcdCategory` already gives.
 export function installUnicodeCategoryRuntime(module StdModule, globalData GlobalDataTable, usage RuntimeUsage, stdlibDir FilePath) throws CompileError
 	if not usage.usesUcdCategory 'noCategoryLookup'
 		return
 	end 'noCategoryLookup'
 
 	_ = globalData.registerRdataConstantLabeled(ucdLabel(UcdBmpStem), bytes: try ucdTableBytes(stdlibDir, stem: UcdBmpStem))
-	let supp = try ucdTableBytes(stdlibDir, stem: UcdSuppStem)
-	_ = globalData.registerRdataConstantLabeled(ucdLabel(UcdSuppStem), bytes: supp)
-	buildUcdCategory(module, suppEntryCount: supp.count() / UcdSuppEntryBytes)
+	_ = globalData.registerRdataConstantLabeled(ucdLabel(UcdSuppStem), bytes: try ucdTableBytes(stdlibDir, stem: UcdSuppStem))
 	buildUcdTableLoads(module)
 end 'installUnicodeCategoryRuntime'
 
@@ -130,39 +122,11 @@ function ucdTableBytes(stdlibDir FilePath, stem String) returns ByteArray throws
 	return try File.readBinary(path) otherwise throw CompileError.fileNotFound(path)
 end 'ucdTableBytes'
 
-// ⭐⭐ **`__ucd_cat(cp) -> GeneralCategory` — the reference's `unicodeGeneralCategory`
-// (`stdlib/helpers/string/unicodeCategory.maxon:53-75`), verbatim in structure.**
-//
-// A BMP codepoint is ONE indexed byte load and nothing else — no search, no branch beyond the plane test
-// — which is what makes `"  hello  ".trim()` cost a table read per space rather than a scan. A
-// supplementary codepoint takes a binary search over the sorted range table; `suppEntryCount` is the
-// table's own length in entries, passed in by the installer that read it.
-function buildUcdCategory(module StdModule, suppEntryCount ElementCount)
-	var func = IrFunction.createFromStd(UcdCategoryName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
-
-	var entry = module.addBlock(func, label: b"entry")
-	var bmp = module.addBlock(func, label: b"bmp")
-	var supp = module.addBlock(func, label: b"supp")
-
-	emitParams(module, block: entry, count: 1)
-	let cp = 0 as ValueId
-
-	let ceiling = emitConst(module, block: entry, value: UcdBmpCodepointCeiling, ids: ids)
-	let inBmp = emitCmp(module, block: entry, a: cp, b: ceiling, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(inBmp, thenBlockId: bmp.id, elseBlockId: supp.id))
-
-	module.setTerminator(bmp, op: StdOp.ret(emitBmpCategoryByte(module, block: bmp, index: cp, ids: ids)))
-
-	emitSupplementarySearch(module, func: func, cur: supp, cp: cp, suppEntryCount: suppEntryCount, ids: ids)
-	module.functions.push(func)
-end 'buildUcdCategory'
-
 // ⭐ **`__ucd_bmp_at(offset)` AND `__ucd_supp_at(index)` — the two RAW TABLE READS, as callable leaves.**
 // They are what `__Builtins.ucdByteAt`/`ucdI64At` lower to (`Parser.parseUcdTableLoad`), and they exist
 // because `stdlib/helpers/string/unicodeCategory.maxon` builds the `General_Category` lookup out of the
-// raw reads rather than calling `__ucd_cat`. Both routes onto a table share ONE emitter apiece, so the
-// stride and the load width cannot come apart between them.
+// raw reads. Each table has ONE emitter here, so a stride and a load width cannot come apart between two
+// readers of one blob.
 //
 // ⚠ **NEITHER BOUNDS-CHECKS ITS INDEX, and both reference compilers agree** (v1's `lowerBuiltinsUcdByteAt`
 // and the bootstrap's `LowerUcdByteLoad` emit a bare `base + index` load). The `__Builtins` namespace is
@@ -219,9 +183,16 @@ end 'ucdIndexParamNameOf'
 let UcdByteAtIndexParamName = b"offset"
 let UcdI64AtIndexParamName = b"index"
 
-// One raw-load leaf: one parameter, one table read, one `ret`. Its NAME is derived from the stride like
-// every other half of the table, so the leaf this builds and the leaf the parser emits a call to are one
-// spelling rather than two that happen to match.
+// One raw-load leaf: one parameter, one table read, one `ret`. Its NAME **and its table's ADDRESS** are
+// derived from the stride like every other half of the table (`ucdRuntimeNameOf`, `ucdTableStemOf`), so the
+// leaf this builds, the blob it reads and the leaf the parser emits a call to are one spelling rather than
+// three that happen to match.
+//
+// ⚠ **THE ADDRESS IS TAKEN HERE RATHER THAN INSIDE EACH ARM, AND THAT IS THE FILE'S OWN RULE (W129).** The
+// two arms spelled `UcdBmpStem` and `UcdSuppStem` directly, which is a SECOND answer to "which table does
+// this stride name?" beside `ucdTableStemOf` — the exact shape the enum's header warns about, where a call
+// site pairing one stride with the other's stem is a WRONG ANSWER out of a green build rather than a compile
+// error. Hoisted, a stride names its table once.
 function buildUcdTableLoad(module StdModule, load UcdTableStride)
 	var func = IrFunction.createFromStd(ucdRuntimeNameOf(load), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -230,102 +201,29 @@ function buildUcdTableLoad(module StdModule, load UcdTableStride)
 	emitParams(module, block: entry, count: 1)
 	let index = 0 as ValueId
 
+	// A `rdataAddr` naming a label nothing registered is a link failure, so the label comes from the same
+	// stem `installUnicodeCategoryRuntime` registers under.
+	let base = ids.mint()
+	module.appendOp(entry, op: StdOp.rdataAddr(base, label: ucdLabel(ucdTableStemOf(load)).toByteArray()))
+
+	// The BMP table is one byte per codepoint, indexed DIRECTLY and zero-extended; the supplementary table is
+	// 8-byte packed entries, so its read is `base + index * 8` as a machine word. That difference IS the
+	// stride, which is why it is the only thing these two arms disagree about.
 	let value = match load 'stride'
-		byteIndexed gives emitBmpCategoryByte(module, block: entry, index: index, ids: ids)
-		packedEntry gives emitSuppEntryAt(module, block: entry, base: emitRdataAddr(module, block: entry, label: ucdLabel(ucdTableStemOf(load)), ids: ids), index: index, ids: ids)
+		byteIndexed gives emitLoadByteIndexed(module, block: entry, base: base, index: index, ids: ids)
+		packedEntry gives emitSuppEntryAt(module, block: entry, base: base, index: index, ids: ids)
 	end 'stride'
 
 	module.setTerminator(entry, op: StdOp.ret(value))
 	module.functions.push(func)
 end 'buildUcdTableLoad'
 
-// One byte of the BMP table, indexed DIRECTLY by codepoint and zero-extended. The base address is taken
-// per-read rather than hoisted because each of the two readers is a single-block straight line — this IS
-// the whole of `__ucd_bmp_at`, and it is `__ucd_cat`'s `bmp` arm entire.
-function emitBmpCategoryByte(module StdModule, block IrBlock, index ValueId, ids ValueMinter) returns ValueId
-	let base = emitRdataAddr(module, block: block, label: ucdLabel(UcdBmpStem), ids: ids)
-	return emitLoadByteIndexed(module, block: block, base: base, index: index, ids: ids)
-end 'emitBmpCategoryByte'
-
-// One packed supplementary entry: `base + index * 8`, loaded as a machine word. `base` is a PARAMETER
-// because the binary search hoists it out of its loop while the leaf takes it fresh — the address math is
-// the part that must not be written twice, not the `lea`.
+// One packed supplementary entry: `base + index * 8`, loaded as a machine word — the whole of
+// `__ucd_supp_at`. A function rather than an inline arm because a `match` arm may not open a block, and the
+// address math is four ops.
 function emitSuppEntryAt(module StdModule, block IrBlock, base ValueId, index ValueId, ids ValueMinter) returns ValueId
 	let stride = emitConst(module, block: block, value: UcdSuppEntryBytes, ids: ids)
 	let offset = emitBin(module, block: block, a: index, b: stride, opcode: StdBinOpcode.mul, ids: ids)
 	let addr = emitBin(module, block: block, a: base, b: offset, opcode: StdBinOpcode.add, ids: ids)
 	return emitLoadField(module, block: block, record: addr, offset: 0, ids: ids)
 end 'emitSuppEntryAt'
-
-// The `.rdata` address of `label` as a value. One line, but written once: a `rdataAddr` naming a label
-// nothing registered is a link failure, and both readers here name their label from the same two
-// constants the installer registers under.
-function emitRdataAddr(module StdModule, block IrBlock, label String, ids ValueMinter) returns ValueId
-	let addr = ids.mint()
-	module.appendOp(block, op: StdOp.rdataAddr(addr, label: label.toByteArray()))
-	return addr
-end 'emitRdataAddr'
-
-// The supplementary-plane half: a binary search over the sorted `(rangeStart, rangeEnd, category)` table,
-// the reference's `while lo <= hi` loop (`unicodeCategory.maxon:57-74`) as a block graph. `lo`/`hi` are the
-// header's two phis; a codepoint in no range falls out of the loop as `Cn`.
-//
-// The two range fields are decoded from ONE loaded word rather than two loads, exactly as the reference
-// decodes them, and the low-bound test is made BEFORE the high one is decoded — a codepoint below the
-// probe's range never pays for the shift.
-function emitSupplementarySearch(module StdModule, func IrFunction, cur IrBlock, cp ValueId, suppEntryCount ElementCount, ids ValueMinter)
-	var header = module.addBlock(func, label: b"probe")
-	var lookAt = module.addBlock(func, label: b"lookAt")
-	var goLeft = module.addBlock(func, label: b"goLeft")
-	var testHigh = module.addBlock(func, label: b"testHigh")
-	var goRight = module.addBlock(func, label: b"goRight")
-	var found = module.addBlock(func, label: b"found")
-	var missing = module.addBlock(func, label: b"missing")
-
-	let base = emitRdataAddr(module, block: cur, label: ucdLabel(UcdSuppStem), ids: ids)
-	let firstLo = emitConst(module, block: cur, value: 0, ids: ids)
-	let firstHi = emitConst(module, block: cur, value: suppEntryCount - 1, ids: ids)
-	module.setTerminator(cur, op: StdOp.branch(header.id))
-
-	let lo = ids.mint()
-	let hi = ids.mint()
-	header.blockArgs.push(IrBlockArg.create(lo, argType: StdType.i64))
-	header.blockArgs.push(IrBlockArg.create(hi, argType: StdType.i64))
-	cur.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(firstLo, second: firstHi)))
-
-	let live = emitCmp(module, block: header, a: lo, b: hi, pred: StdCmpPred.le, ids: ids)
-	module.setTerminator(header, op: StdOp.condBranch(live, thenBlockId: lookAt.id, elseBlockId: missing.id))
-
-	// `(lo + hi) shr 1` — a LOGICAL shift, because both bounds are non-negative table indices and the
-	// reference's own `shr` on them is the same halving.
-	let span = emitBin(module, block: lookAt, a: lo, b: hi, opcode: StdBinOpcode.add, ids: ids)
-	let one = emitConst(module, block: lookAt, value: 1, ids: ids)
-	let mid = emitBin(module, block: lookAt, a: span, b: one, opcode: StdBinOpcode.shrLogical, ids: ids)
-	let packed = emitSuppEntryAt(module, block: lookAt, base: base, index: mid, ids: ids)
-	let rangeStart = emitFieldOf(module, block: lookAt, packed: packed, shift: 0, mask: UcdRangeFieldMask, ids: ids)
-	let below = emitCmp(module, block: lookAt, a: cp, b: rangeStart, pred: StdCmpPred.lt, ids: ids)
-	module.setTerminator(lookAt, op: StdOp.condBranch(below, thenBlockId: goLeft.id, elseBlockId: testHigh.id))
-
-	let midMinusOne = emitBin(module, block: goLeft, a: mid, b: emitConst(module, block: goLeft, value: 1, ids: ids), opcode: StdBinOpcode.sub, ids: ids)
-	module.setTerminator(goLeft, op: StdOp.branch(header.id))
-	goLeft.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(lo, second: midMinusOne)))
-
-	let rangeEnd = emitFieldOf(module, block: testHigh, packed: packed, shift: UcdRangeFieldBits, mask: UcdRangeFieldMask, ids: ids)
-	let above = emitCmp(module, block: testHigh, a: cp, b: rangeEnd, pred: StdCmpPred.gt, ids: ids)
-	module.setTerminator(testHigh, op: StdOp.condBranch(above, thenBlockId: goRight.id, elseBlockId: found.id))
-
-	let midPlusOne = emitBin(module, block: goRight, a: mid, b: emitConst(module, block: goRight, value: 1, ids: ids), opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(goRight, op: StdOp.branch(header.id))
-	goRight.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(midPlusOne, second: hi)))
-
-	module.setTerminator(found, op: StdOp.ret(emitFieldOf(module, block: found, packed: packed, shift: UcdCategoryShift, mask: UcdCategoryMask, ids: ids)))
-	module.setTerminator(missing, op: StdOp.ret(emitConst(module, block: missing, value: UcdUnassignedCategory, ids: ids)))
-end 'emitSupplementarySearch'
-
-// One packed field: `(packed shr shift) and mask`. All three of the entry's fields are this, and the
-// low one takes it with `shift: 0` rather than a shortcut — one extraction shape means a field cannot be
-// read with the wrong mask in one arm and the right one in another.
-function emitFieldOf(module StdModule, block IrBlock, packed ValueId, shift ParsedInt, mask ParsedInt, ids ValueMinter) returns ValueId
-	let shifted = emitBin(module, block: block, a: packed, b: emitConst(module, block: block, value: shift, ids: ids), opcode: StdBinOpcode.shrLogical, ids: ids)
-	return emitBin(module, block: block, a: shifted, b: emitConst(module, block: block, value: mask, ids: ids), opcode: StdBinOpcode.bitAnd, ids: ids)
-end 'emitFieldOf'

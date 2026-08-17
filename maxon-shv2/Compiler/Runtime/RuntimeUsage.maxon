@@ -6,7 +6,7 @@
 // Every line below lived in `Runtime/StringRuntime.maxon` — 760 of that file's 2,229 — where it decided
 // the install of the green-thread scheduler, the IOCP substrate, the streaming subprocess API, the array,
 // set, map and list runtimes, the descriptor and existential drops, the incref/retain helpers, the union
-// destructors and struct cloners, the wall clock, the `CharacterSet` family, the grapheme family, managed
+// destructors and struct cloners, the wall clock, the UCD tables, the grapheme family, managed
 // files, managed directories, the command line, standard input and process introspection.
 //
 // **A String is one tenant of that list and was never its landlord.** The file's name said otherwise, and
@@ -23,11 +23,11 @@
 // The three rules the whole file rests on, stated once here rather than re-argued per family:
 //
 //   1. **ONE BIT PER ENTRY POINT.** Vocabulary does not ship ahead of its consumer: a program that only
-//      prints must not carry the stderr writer, and one that only builds a `CharacterSet` must not carry
-//      the membership probe. Where two near-identical graphs exist, they get two bits.
+//      prints must not carry the stderr writer, and one that only reads a String's bytes must not carry
+//      the segmenter. Where two near-identical graphs exist, they get two bits.
 //   2. **A SYNTHESIZED BODY'S CALLS ARE *DECLARED*, NEVER DISCOVERED.** This scan walks the MAXON module;
 //      a runtime function's body is a `StdOp` graph that no Maxon module contains. So `__str_decref`'s
-//      `__mm_free`, `__managed_create`'s `__mm_alloc` and `__cs_contains`'s `__ucd_cat` are stated in the
+//      `__mm_free` and `__managed_create`'s `__mm_alloc` are stated in the
 //      `close*Needs` closures. What a CORPUS body calls is the opposite case — an ordinary Maxon call
 //      edge the reachability walk FINDS — and a declared list of those could only go stale.
 //   3. **A CLOSURE RUNS AFTER EVERY RECORD, NOT INSIDE THE ARM THAT SET THE BIT**, so the answer cannot
@@ -112,9 +112,9 @@ export type RuntimeUsage
 	export var usesManagedMemory as bool
 	// ⚠ **`usesSet` AND `usesMap` STOOD HERE AND WENT WITH THE RUNTIMES THEY DROVE (W105).** Each turned on
 	// its container's whole install and `usesHeap` beside it; both installs are deleted, so the bits had no
-	// consumer left. The `usesHeap` half survives where it was actually needed —
-	// `closeCharacterSetNeeds` states it in its own arms rather than borrowing `usesSet`'s, which is what
-	// makes their removal free rather than an under-declaration.
+	// consumer left. Their one surviving reader was the `CharacterSet` family's closure, which stated the
+	// `usesHeap` half in its own arms rather than borrowing theirs — and that family went at W129 too, so
+	// nothing is left holding a bit on either's behalf.
 	// The program touches a `List`. Any `__list_*` call turns this on — and, like `usesManagedMemory`, turns on
 	// `usesHeap` too, because the list helpers `__mm_alloc` the chain header and every node and `__mm_free`
 	// them again inside their Std bodies, which this Maxon-module scan cannot see. It drives
@@ -279,33 +279,27 @@ export type RuntimeUsage
 	// caller `__strix_advance` and `__strix_slice` had. `Runtime/StringIndexRuntime.maxon` is deleted, not
 	// emptied — the corpus bodies behind every one of them are ordinary Maxon call edges now, which the
 	// reachability walk FINDS rather than being told.
-	// ⭐ **THE UNICODE `General_Category` TABLE (P1.8 Slice D, R2).** Its own bit, and DECOUPLED from every
-	// String bit: `__ucd_cat` is a LEAF that reads two `.rdata` blobs and does integer arithmetic — no heap,
-	// no copy loop, no segmenter — so a program that classifies a codepoint carries nothing else, and a
-	// program that never does carries neither the 65,536-byte BMP table nor the supplementary one. Set by
-	// `recordCallUsage` on a `__ucd_cat` reference, which is what `CharacterSet.contains` emits.
+	// ⭐ **THE UNICODE `General_Category` TABLES (P1.8 Slice D, R2; the two raw loads W64).** Its own bit, and
+	// DECOUPLED from every String bit: `__ucd_bmp_at`/`__ucd_supp_at` are LEAVES that read a `.rdata` blob and
+	// do integer arithmetic — no heap, no copy loop, no segmenter — so a program that classifies a codepoint
+	// carries nothing else, and a program that never does carries neither the 65,536-byte BMP table nor the
+	// supplementary one. Set by `recordCallUsage` on any `__ucd_` reference, which is what the corpus
+	// `unicodeGeneralCategory` lowers to (`Parser.parseUcdTableLoad`).
+	//
+	// ⚠ **A THIRD ENTRY POINT, `__ucd_cat`, FED THIS BIT UNTIL W129** — the whole lookup as one synthesized
+	// graph, emitted by `__cs_contains` and by nothing else. Both went together; the corpus writes the same
+	// algorithm out of the two raw reads.
 	export var usesUcdCategory as bool
-	// ⭐ **THE P1.8 SLICE D `CharacterSet` FAMILY — ONE BIT PER ENTRY POINT**, following this file's
-	// existing discipline: a program that only builds a `CharacterSet` must not carry the membership probe.
-	// Each is set by `recordCharacterSetUsage` from whichever entry point the module actually names, and
-	// `__cs_contains` in turn declares the member probe and `__ucd_cat` through `closeCharacterSetNeeds`.
+	// ⚠⚠ **THE P1.8 SLICE D `CharacterSet` FAMILY HELD THREE BITS HERE — `usesCharSetMake`/`Decref`/`Contains`
+	// — AND ALL THREE WENT WITH THE `__cs_*` RUNTIME (W129).** `W115` listed `stdlib/CharacterSet.maxon`, after
+	// which nothing could emit any of the three callees, so no arm could set any of the three bits. Two facts
+	// from that family are worth keeping, because neither is visible from the corpus:
 	//
-	// ⚠ **A `usesSet` FEED STOOD IN THAT CLOSURE AND IS GONE WITH THE RUNTIME IT DROVE (W105).** It was kept
-	// deliberately at W90's review as a CONSERVATIVE term — this closure has no `ProgramSignatures` in reach
-	// to ask which regime served the member set, over-declaring only installed bodies DFE then dropped, and
-	// under-declaring would have been a `resolveCallFixups` panic. With the synthesized runtime deleted there
-	// is no regime to be conservative ABOUT: the probe is the corpus `Set.contains` and the drop a
-	// `__destruct_Set_Character` cascade, both ordinary Maxon call edges the reachability walk finds. What
-	// the bit carried BESIDE itself — `usesHeap` — is stated by the closure in its own right, which is the
-	// half that had to survive.
-	//
-	// ⚠ A FOURTH, `usesStrTrim`, went at W49 wave 4 with the three trims, which are `stdlib/String.maxon`'s
-	// now. It was the one bit here that reached into all THREE sibling families, which is what fixed this
-	// family's recording ORDER — the order is kept, because it is a rule about families and not about the arm
-	// that first needed it.
-	export var usesCharSetMake as bool
-	export var usesCharSetDecref as bool
-	export var usesCharSetContains as bool
+	//   * a fourth bit, `usesStrTrim`, went at W49 wave 4 with the three trims. It was the one bit here that
+	//     reached into all THREE sibling families, which is what fixed the recording ORDER `recordCallUsage`
+	//     still keeps — that order is a rule about families, not about the arm that first needed it;
+	//   * the family's closure was the last reader of `usesSet`/`usesMap` (see those bits' note above), and it
+	//     carried the `usesHeap` those two used to declare.
 	// R4.1: the program opens a file. Unlike the wall clock it DOES declare a transitive dependency —
 	// `__mf_open_read` allocates a NUL-terminated scratch copy of the path and the handle box through
 	// `__mm_alloc`/`__mm_free`, so it carries `usesHeap` too (set together below).
@@ -333,7 +327,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesCharSetMake: false, usesCharSetDecref: false, usesCharSetContains: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -654,20 +648,19 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 		usage.usesIncref = true
 		usage.usesHeap = true
 	end 'strretain'
-	// The `General_Category` family (P1.8 Slice D; the two raw table loads added at W64). It declares
-	// NOTHING else — see `usesUcdCategory` — which makes it the second family, beside `__clock_*`, whose
-	// bodies call nothing this scan cannot see. A PREFIX, exactly as `__clock_*` and `__gt_*` are: all
-	// three entry points read the same two tables and carry the same nothing else, so "does this program
-	// touch the UCD tables?" is one question with one answer.
+	// The `General_Category` family (P1.8 Slice D; the two raw table loads added at W64, the last of the three
+	// entry points after W129 deleted `__ucd_cat`). It declares NOTHING else — see `usesUcdCategory` — which
+	// makes it the second family, beside `__clock_*`, whose bodies call nothing this scan cannot see. A PREFIX,
+	// exactly as `__clock_*` and `__gt_*` are: both entry points read the same two tables and carry the same
+	// nothing else, so "does this program touch the UCD tables?" is one question with one answer.
 	if isUcdRuntimeCallee(callee) 'ucdtables'
 		usage.usesUcdCategory = true
 	end 'ucdtables'
-	// ⚠ **THE ORDER IS A RULE ABOUT FAMILIES, NOT ABOUT TODAY'S ARMS, WHICH IS WHY IT SURVIVES THE ARM THAT
-	// FORCED IT.** The `CharacterSet` family closes into the two below it — `__cs_contains` decodes a
-	// codepoint — so it must record FIRST: a bit turned on after its own family's closure has run installs an
-	// entry point without what it calls. A `StringIndex` family recorded here too, ahead of these, for the
-	// identical reason; W49 wave 4 retired `String.slice` and its last two entry points went with it.
-	recordCharacterSetUsage(callee, usage: usage)
+	// ⚠ **THE ORDER IS A RULE ABOUT FAMILIES, NOT ABOUT TODAY'S ARMS, WHICH IS WHY IT SURVIVES EVERY ARM THAT
+	// FORCED IT.** A family that closes into another must record FIRST: a bit turned on after its own family's
+	// closure has run installs an entry point without what it calls. Two families have stood ahead of these
+	// for exactly that reason and both are gone — a `StringIndex` one (W49 wave 4, with `String.slice`) and a
+	// `CharacterSet` one (W129, with the `__cs_*` runtime, whose probe decoded a codepoint).
 	recordStringMethodUsage(callee, usage: usage)
 	recordGraphemeUsage(callee, usage: usage)
 	// The three MANAGED-element array copies (`__managed_slice_managed`/`__managed_clone_managed`/`__managed_append_managed`,
@@ -694,45 +687,12 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	end 'structcloner'
 end 'recordCallUsage'
 
-// ⭐ The P1.8 Slice D `CharacterSet` family's arm of the callee → usage-bit map — the
-// `recordGraphemeUsage` twin, split out for the same reason: `recordCallUsage` stays a readable list of
-// families. Direct references only; what each referenced body in turn needs is closed by
-// `closeCharacterSetNeeds`.
-function recordCharacterSetUsage(callee ByteArray, usage RuntimeUsage)
-	if callee.equals(CharSetMakeName) 'make'
-		usage.usesCharSetMake = true
-	end 'make'
-	if callee.equals(CharSetDecrefName) 'decref'
-		usage.usesCharSetDecref = true
-	end 'decref'
-	if callee.equals(CharSetContainsName) 'contains'
-		usage.usesCharSetContains = true
-	end 'contains'
-	closeCharacterSetNeeds(usage)
-end 'recordCharacterSetUsage'
-
-// ⭐ **WHAT EACH `CharacterSet` BODY CALLS THAT THIS SCAN CANNOT SEE.** Declared here rather than
-// discovered, exactly as the three sibling closures declare their families'. Run as a CLOSURE after every
-// record so the answer cannot depend on the order in which the module happens to name its entry points.
-// ⚠ **A `__str_trim` ARM STOOD HERE UNTIL W49 WAVE 4** — it declared the cluster walk, the `Character` mint,
-// the per-cluster drop, the set probe and the slice producer that the SYNTHESIZED trim reached from inside a
-// body this scan cannot read. The three trims are `stdlib/String.maxon`'s now, so every one of those is an
-// ordinary Maxon call edge the reachability walk finds for itself, and a declared list of them could only go
-// stale. Its `usesCharSetContains` feed is why the `probes` arm below must still run after it did.
-function closeCharacterSetNeeds(usage RuntimeUsage)
-	// ⭐ **ALL THREE ENTRY POINTS TOUCH THE HEAP, SO THE HEAP IS ONE ARM AND NOT THREE (W105).** `__cs_make`
-	// is one `__mm_alloc`; `__cs_decref` releases the member set and `__mm_free`s the box; `__cs_contains`
-	// probes a heap-backed `Set with Character`. The three arms that used to say so separately each also set
-	// `usesSet`, which is what made them look different — with that bit gone they were one fact written
-	// three times.
-	if usesCharacterSets(usage) 'everyEntryPointAllocatesOrFrees'
-		usage.usesHeap = true
-	end 'everyEntryPointAllocatesOrFrees'
-	// Only the PROBE classifies: it decodes the character's first codepoint and reads the UCD table.
-	if usage.usesCharSetContains 'classifies'
-		usage.usesUcdCategory = true
-	end 'classifies'
-end 'closeCharacterSetNeeds'
+// ⚠⚠ **`recordCharacterSetUsage` AND `closeCharacterSetNeeds` STOOD HERE AND WENT WITH THE `__cs_*` RUNTIME
+// (W129).** The pair is worth one paragraph because what it declared is the obligation any future synthesized
+// family inherits, and it is invisible from the corpus: a closure declares what a SYNTHESIZED body calls that
+// this Maxon-module scan cannot see (`__cs_contains` decoded a codepoint and probed a `Set with Character`),
+// and a family that closes into another must RECORD ahead of it. `recordStringMethodUsage`/`closeStringNeeds`
+// and `recordGraphemeUsage`/`closeGraphemeNeeds` below are the same pair for the families that remain.
 
 // ⭐ The P1.8 Slice B grapheme family's arm of the callee → usage-bit map — the `recordStringMethodUsage`
 // twin, split out for the same reason: `recordCallUsage` stays a readable list of families. Direct

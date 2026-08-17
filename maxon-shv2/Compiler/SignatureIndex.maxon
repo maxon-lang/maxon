@@ -328,31 +328,18 @@ let ConstShapeContainerValue = 70 as ContentHash
 // the reason stated above — and deliberately not the arguments, which reach only `__module_init`.
 let ConstShapeFactoryValue = 71 as ContentHash
 
-// A top-level binding that folded to a `CharacterSet` PRESET (spec-port `lazy-static`). Its own
-// discriminator for `ConstShapeContainerValue`'s reason: the slot's TYPE is the compiler-owned
-// `CharacterSet` box, so `var ws = CharSet.create()` becoming `var ws = CharacterSet.whitespaces()` retypes
-// every reader's use even though the label and the load are unchanged.
-//
-// ⚠ **THE CATEGORY MASK RIDES AND THE MEMBERS DO NOT, which is the array-literal arm's rule with the mask
-// standing in for the element kind.** Every preset gives the slot the same type and every reader emits the
-// same `globalAddr` + `loadIndirect`, so by that rule neither half would strictly have to ride; the mask
-// does because it is one integer and it is what makes this hash a function of the ACCESSOR the author
-// wrote — the property `ConstShapeFactoryValue` gets for free from its callee name, and the thing a future
-// reader-visible difference between two presets would need. The MEMBERS are left out because they reach
-// only `__module_init`, which is rebuilt from this arena whenever the query misses.
-//
-// ⛔⛔ **IT HELD 72 — `DeclShapeConformanceBinding`'s NUMBER — FOR EIGHT DAYS, WHICH IS THE THIRD TIME THIS
-// SPACE HAS HAD TWO CLAIMANTS FOR ONE NUMBER (W81 review).** `DeclShapeConformanceBinding` took 72 at
-// BATCH22 (`7523c881c1`), for the express reason that sharing a discriminator "would be a live collision
-// rather than a tidiness point"; the `lazy-static` port (`dc395d6958`) then took the same 72 for this
-// constant, whose own header one line up claims it has a discriminator "of its own". Both are mixed into the
-// ONE rolling `self.hash` that runs across every declaration in the program, so that claim was false the
-// moment it was written — exactly as BATCH22's header says its own predecessor's was.
+// ⛔⛔ **`ConstShapeCharacterSetValue` HELD 103 AND WENT AT W129 WITH THE OUTCOME IT DISCRIMINATED, BUT ITS
+// LESSON IS THE NUMBER SPACE AND THAT DOES NOT GO WITH IT.** It held **72** — `DeclShapeConformanceBinding`'s
+// number — for eight days, the THIRD time this space has had two claimants for one number (W81 review):
+// BATCH22 (`7523c881c1`) took 72 for the express reason that sharing a discriminator "would be a live
+// collision rather than a tidiness point", and the `lazy-static` port (`dc395d6958`) then took the same 72
+// for a constant whose own header claimed a discriminator "of its own". Both are mixed into the ONE rolling
+// `self.hash` running across every declaration in the program, so that claim was false the moment it was
+// written — exactly as BATCH22's header says its own predecessor's was.
 //
 // ⚠ **AND THE NUMBER SPACE IS STILL WRITTEN DOWN RATHER THAN DERIVED**, so nothing in the compiler can
 // refuse the fourth occurrence: these are ~60 free-standing `let`s, and a duplicate compiles. The cure is to
 // make the space a declaration order rather than a literal — reported for its own rung, not taken here.
-let ConstShapeCharacterSetValue = 103 as ContentHash
 
 // A declaration's MUTABILITY, mixed into the hash beside its value. `let X = 5` and `var X = 5`
 // are the same name and the same number and compile to COMPLETELY different code — one inlines
@@ -780,17 +767,12 @@ export union TopLevelConstant
 	// ⚠ APPENDED AT THE END, for `managedValue`'s reason: every range arm over this union then EXCLUDES it
 	// and fails to compile until it has been visited and decided.
 	factoryValue(calls ConstFactoryCallArray, root InitializerCallId, returnType MaxonType)
-	// ⭐ **IT EVALUATED TO A `CharacterSet` PRESET** (spec-port `lazy-static`) — the `containerValue` twin for
-	// the one compiler-owned record a global can hold. See `ConstFoldedValue.characterSet` for what it is and
-	// `ManagedGlobalRecord.characterSetRecord` for why the compiler materializes it rather than recording a
-	// call.
-	//
-	// ⚠ APPENDED AT THE END, for `managedValue`'s reason and now against SIX range arms rather than three —
-	// `managedValue to containerValue`, `managedValue to factoryValue` (×3), `arrayValue to factoryValue` and
-	// `value to poisoned` all EXCLUDE this case, so each site failed to compile until it had been visited and
-	// decided. Placing it beside `containerValue`, where it semantically belongs, would have let four of them
-	// swallow it silently — which is the whole reason this union appends.
-	characterSetValue(chars GenericInstanceId, members ConstArrayElementArray, categoryMask ParsedInt)
+	// ⚠ **A `characterSetValue` ARM WAS APPENDED PAST THIS ONE AND WENT AT W129**, with the compiler-owned
+	// `CharacterSet` record a global could hold. What it demonstrated is this union's own rule and is why the
+	// rule is written here: appended at the END, it fell OUTSIDE six existing range arms — `managedValue to
+	// containerValue`, `managedValue to factoryValue` (×3), `arrayValue to factoryValue` and `value to
+	// poisoned` — so every one of those sites failed to compile until it had been visited and decided. Placed
+	// beside `containerValue`, where it semantically belonged, four of them would have swallowed it silently.
 end 'TopLevelConstant'
 
 // ⭐⭐ **DOES A TOP-LEVEL DECLARATION'S INITIALIZER RUN THE PROGRAM'S OWN CODE, AND WHOSE?** — ONE
@@ -873,17 +855,6 @@ function constSetMemberKeyTag(element ConstArrayElement) returns ValueTypeTag
 		character gives ValueTypeTag.character
 	end 'e'
 end 'constSetMemberKeyTag'
-
-// The eleven presets' member lists are `ByteArrayArray`s of decoded UTF-8 (`CharacterSetRuntime`), and a
-// global's member list is a `ConstArrayElementArray` — one conversion, so the table stays the single source
-// of what a preset contains and this walk adds no second transcription of it.
-export function constCharacterMembers(members ByteArrayArray) returns ConstArrayElementArray
-	var elements = ConstArrayElementArray.create()
-	for bytes in members 'eachMember'
-		elements.push(ConstArrayElement.character(bytes))
-	end 'eachMember'
-	return elements
-end 'constCharacterMembers'
 
 // WHICH element type a top-level array literal settled on — the ONE fact its `Array with T` instance, its
 // element size and its element destructor all follow from, decided from the FIRST element and enforced on
@@ -1063,17 +1034,11 @@ export union ManagedGlobalRecord
 	// elements — and it is what made the ADD callee ride `create` rather than being `__managed_push` written
 	// into the emitter (a `Set` inserts).
 	containerRecord(create ContainerCreateCall, elements ConstArrayElementArray)
-	// ⭐⭐ **A `CharacterSet` PRESET — `CharacterSet.whitespacesAndNewlines()`** (spec-port `lazy-static`). It
-	// is the ONE compiler-owned record a global can hold, and it is here rather than in the factory arena
-	// because it is not a CALL the author wrote: shv2 has no `stdlib/CharacterSet.maxon` to declare
-	// `whitespacesAndNewlines` as a callee, so the parser MATERIALIZES the eleven presets from data
-	// (`CharacterSetRuntime.characterSetPresets`) and this is the same materialization at module scope.
-	//
-	// It is the member set — `chars` + `charsType` + `members`, the very triple `containerRecord` above
-	// describes (that arm takes its type from the receiving slot; here the receiving slot is the BOX's, so
-	// the member set's own type has to ride) — plus the `categoryMask` that `__cs_make` seals it into a box
-	// with. Flat rather than holding a nested `ManagedGlobalRecord`, for this union's own stated reason (E4014).
-	characterSetRecord(chars ContainerCreateCall, charsType MaxonType, members ConstArrayElementArray, categoryMask ParsedInt)
+	// ⚠ **A `characterSetRecord` ARM STOOD HERE AND WENT AT W129.** It was the ONE compiler-owned record a
+	// global could hold — a member set plus the mask `__cs_make` sealed it into a box with — and it was here
+	// rather than in the factory arena because it was not a CALL the author wrote: shv2 had no
+	// `stdlib/CharacterSet.maxon` to declare `whitespacesAndNewlines` as a callee. `W115` listed that module,
+	// so a preset IS a call now and rides `ManagedGlobalInitializer.factoryCall` like any other.
 end 'ManagedGlobalRecord'
 
 // ONE argument a top-level factory call passes: its source-level `name:` LABEL (empty for a positional
@@ -1636,11 +1601,9 @@ export union ConstFoldedValue
 	// resolved to. That difference is exactly why the `from` form exists at all: a bare `['a', 'e']` is an
 	// array of characters, and only the alias can say the container is a `Set` over them.
 	containerCreate(giid GenericInstanceId, elements ConstArrayElementArray)
-	// ⭐⭐ **A `CharacterSet` PRESET — `CharacterSet.whitespacesAndNewlines()`** (spec-port `lazy-static`).
-	// It is `containerCreate` (the member set the preset seeds) plus the `categoryMask` `__cs_make` seals it
-	// with; see `ManagedGlobalRecord.characterSetRecord` for why the compiler MATERIALIZES it rather than
-	// recording a call, and why it is flat.
-	characterSet(chars GenericInstanceId, members ConstArrayElementArray, categoryMask ParsedInt)
+	// ⚠ **A `characterSet` ARM STOOD HERE AND WENT AT W129** — `containerCreate` plus the mask `__cs_make`
+	// sealed the member set into a box with. It is `ManagedGlobalRecord`'s deleted `characterSetRecord` at
+	// this tier, and the two went together because the pair is the same fact stated on each side of the fold.
 end 'ConstFoldedValue'
 
 // ONE argument of a top-level factory call, as the evaluator walked it: the source-level `name:` LABEL
@@ -1696,7 +1659,7 @@ end 'constScalarOf'
 function foldedConstScalarOf(folded ConstFoldedValue) returns ConstScalarLookup
 	match folded 'folded'
 		scalar(constant) then return ConstScalarLookup.scalar(constant)
-		managed to characterSet then return ConstScalarLookup.notAScalar
+		managed to containerCreate then return ConstScalarLookup.notAScalar
 	end 'folded'
 end 'foldedConstScalarOf'
 
@@ -2373,8 +2336,9 @@ end 'enumPayloadClass'
 // ⚠ **IT USED TO TAKE A `wantStringOnly` FLAG, AND THAT FLAG WAS A CASCADE-NEEDS DEFECT WEARING A
 // PARAMETER'S CLOTHES.** Its one `true` caller asked "does this union's destructor call `__str_decref`?" —
 // a question about `String` and about nothing else, so a payload of any OTHER managed type with its own
-// install bit declared no bit at all and linked against a runtime nothing installed (measured with
-// `CharacterSet`: `resolveCallFixups: call to unknown function '__cs_decref'`). That caller now derives its
+// install bit declared no bit at all and linked against a runtime nothing installed (measured on the
+// then-compiler-owned `CharacterSet`: `resolveCallFixups: call to unknown function '__cs_decref'`, W129
+// having since deleted that runtime — the DEFECT class is the point, not the type). That caller now derives its
 // bits from the drop CALLEE instead (`MmRuntime.declareUnionPayloadDropNeeds`), which cannot have a
 // favourite type, and the flag went with it.
 export function unionHasManagedField(signatures ProgramSignatures, typeNames TypeNameInterner, layout EnumLayout) returns bool
@@ -3955,8 +3919,8 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 	// `project.structTypes` and a synthesized type is in no file's declarations. A link failure rather than a
 	// wrong answer, but the honest fix is to say which drop each type takes:
 	//
-	//   • **`CharacterSet`** (P1.8 Slice D) — `__cs_decref`, exactly as an `Array` takes `__managed_decref` and a
-	//     a `Set` takes its own `__destruct_Set_<T>` cascade.
+	//   ⚠ A third, `CharacterSet` ⇒ `__cs_decref`, went at W129 with that runtime. The corpus declares the type
+	//   now (W115), so its box is an ordinary declared struct and takes the synthesized cascade below.
 	//   • **`__ManagedFile` OWNS AN OS HANDLE, WHICH IS NOT MEMORY — SO ITS DROP MUST CLOSE, NOT JUST FREE**
 	//     (R4.2, and this arm IS the RAII destructor). It could not be the cascade, and that was measured
 	//     rather than assumed: `_handle` is a scalar `int` field, so `structFieldIsManaged` is false and
@@ -3973,12 +3937,11 @@ function managedNameDropCallee(signatures ProgramSignatures, declaredName ByteAr
 	//     `MmDecrefName` here would free eight bytes and leak BOTH the 336-byte block and the OS search handle
 	//     — the second of which the exit-101 gate cannot see at all.
 	//
-	// ⚠ **THE THREE NAMES ARE `compilerOwnedAggregateOf`'s, NOT THIS FUNCTION'S** (A4n). They used to be
+	// ⚠ **THE NAMES ARE `compilerOwnedAggregateOf`'s, NOT THIS FUNCTION'S** (A4n). They used to be
 	// spelled here and nowhere else, and the CLONE twin — which owes the identical question — did not have
 	// them: it answered `__clone___ManagedFile`, a symbol nothing builds, and the backend panicked on a
 	// compilable program. One list, three doors.
 	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
-		characterSet then return CharSetDecrefName
 		managedFile then return ManagedFileDestructName
 		managedDirectory then return ManagedDirectoryDestructName
 		userDeclared then break 'compilerOwned'
@@ -4106,26 +4069,23 @@ end 'managedFieldCloneStrategy'
 // ⚠ **THE NAME IS ALREADY DENOTED**, exactly as `managedNameDropCallee`'s is — the two duals resolve a tuple
 // typealias at ONE tier, in the `-Field` function above each of them.
 // ⛔⛔ **AND IT MUST ASK THE COMPILER-OWNED QUESTION ITS DROP TWIN ASKS — IT DID NOT, AND THAT WAS A COMPILER
-// PANIC ON A COMPILABLE PROGRAM (A4n).** `managedNameDropCallee` opens with three name tests; this function
-// had none, so a `CharacterSet` / `__ManagedFile` / `__ManagedDirectory` field fell to the struct arm — their
+// PANIC ON A COMPILABLE PROGRAM (A4n).** `managedNameDropCallee` opens with the same name tests; this function
+// had none, so a `__ManagedFile` / `__ManagedDirectory` field fell to the struct arm — their
 // layouts ARE registered, they need a nominal identity — and it handed back `__clone___ManagedFile`, a symbol
 // `installStructCloners` never builds, because that pass walks the PROJECT's declarations and a synthesized
 // type is in no file's. MEASURED on this branch, before the fix: `type Holder { export var f as
 // __ManagedFile }` + `Array with Holder` + `a.clone()` died with
 // `panic at X64Backend.maxon:1905: resolveCallFixups: call to unknown function '__clone___ManagedFile'`.
 //
-// ⇒ All three answer `unsupported`, which is the honest verdict and not a placeholder: there is no
-// `__cs_clone` (the character-set runtime has a decref and nothing else), and an OS HANDLE cannot be
+// ⇒ Both answer `unsupported`, which is the honest verdict and not a placeholder: an OS HANDLE cannot be
 // deep-copied at all — duplicating one would hand two owners a descriptor whose `__mf_destruct` closes it
-// once. `typeSupportsDeepClone` refuses the same three names at the same tier, so the GATE and the STRATEGY
+// once. `typeSupportsDeepClone` refuses the same names at the same tier, so the GATE and the STRATEGY
 // agree by construction and the front end reports a positioned E2015 where the backend used to panic — which
 // is what that gate's own header says it exists for: *"a name the gate and the strategy disagreed about would
 // admit a clone nobody can emit."*
 function managedNameCloneStrategy(signatures ProgramSignatures, declaredName ByteArray) returns ManagedCloneStrategy
 	match compilerOwnedAggregateOf(declaredName) 'compilerOwned'
-		characterSet then return ManagedCloneStrategy.unsupported
-		managedFile then return ManagedCloneStrategy.unsupported
-		managedDirectory then return ManagedCloneStrategy.unsupported
+		managedFile to managedDirectory then return ManagedCloneStrategy.unsupported
 		userDeclared then break 'compilerOwned'
 	end 'compilerOwned'
 
@@ -4170,7 +4130,8 @@ end 'managedNameCloneStrategy'
 // gate in front of that strategy). The drop door had the list; the other two did not, and the missing copy
 // was a backend panic.
 export enum CompilerOwnedAggregate
-	characterSet
+	// ⚠ A `characterSet` case stood first and went at W129 with the compiler-owned `__CharacterSet` layout —
+	// once `stdlib/CharacterSet.maxon` declares the type, its box is an ordinary declared struct.
 	managedFile
 	managedDirectory
 	// An ordinary declaration, whose drop and clone are the synthesized per-type entries.
@@ -4178,9 +4139,6 @@ export enum CompilerOwnedAggregate
 end 'CompilerOwnedAggregate'
 
 export function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAggregate
-	if name.equals(CharacterSetTypeName) 'characterSet'
-		return CompilerOwnedAggregate.characterSet
-	end 'characterSet'
 	if name.equals(ManagedFileTypeName) 'managedFile'
 		return CompilerOwnedAggregate.managedFile
 	end 'managedFile'
@@ -4341,8 +4299,8 @@ export let ArrayTypeParamCount = 1 as FieldIndex
 // does an `Array` one — its box was a fixed fused hash-table record and it dropped through `__set_decref`.
 // ⚠ **THAT REGIME IS DELETED (W105).** `stdlib/Set.maxon` declares the type, so a `Set with T` is an
 // ordinary declared generic instance and this constant is now only a SPELLING: the base name a desugared
-// `Set.create` / `Set.insert` / `Set.contains` call is composed from, and the one `CharacterSet`'s member set
-// is interned at.
+// `Set.create` / `Set.insert` / `Set.contains` call is composed from, and the one a `CharSet from […]`
+// member set is interned at (`setInstanceForCharacter`).
 export let SetBuiltinBaseName = b"Set"
 
 // The name of the builtin `Map` generic type (`Map with (Key, Value)`) — the two-parameter twin of
@@ -4989,35 +4947,31 @@ export let StringIndexTypeName = b"StringIndex"
 export let StringIndexCharIdxFieldIndex = 0 as FieldIndex
 export let StringIndexBytePosFieldIndex = 1 as FieldIndex
 
-// ⭐ **THE COMPILER-OWNED `CharacterSet` TYPE (P1.8 Slice D).** Registered under the RESERVED name
-// `__CharacterSet`: a user `type CharacterSet` and this synthesized layout would otherwise contest one
-// bucket, and the loser's box would be read through the winner's field table.
-// `Parser.requireUnreservedName` refuses (E2051) every `__`-prefixed declaration, so no source can spell
-// this one.
-// ⇒ The consequence to know: a `CharacterSet` cannot cross a function boundary, because a parameter or
-// return type would have to NAME it. Every corpus use is a value flowing from a
-// `CharacterSet.<accessor>()` straight into `contains`/`trim` or a local `let`, which names nothing.
+// ⭐⭐ **`CharacterSet`, AND THE SECOND TIME THE RESERVED-SECOND-LAYOUT ARRANGEMENT WAS RETIRED.** A
+// compiler-owned layout used to be registered under the RESERVED name `__CharacterSet` beside this bare
+// source spelling, so a user `type CharacterSet` and the synthesized layout could not contest one bucket.
+// Its consequence was the cost: such a type CANNOT CROSS A FUNCTION BOUNDARY, because a parameter or return
+// would have to NAME the reserved spelling — every use had to flow from an accessor straight into a call or
+// a local `let`.
 //
-// ⚠⚠ **`StringIndex` USED TO BE ITS TWIN AND IS THE CAUTIONARY TALE NOW (W49 wave 3).** It carried this
-// exact arrangement — reserved `__StringIndex` beside a bare source spelling — until the corpus's own
-// `type StringIndex` made it a SECOND DECLARATION of one type, at which point the reserved name stopped
-// buying safety and started making the corpus's `charAt(idx StringIndex)` unsatisfiable. The cure was to
-// keep the RESERVATION and drop the second LAYOUT (`StringIndexTypeName`), which is the shape to reach for
-// the day `stdlib/CharacterSet.maxon` is listed — see `ProgramSignatures.recordStruct`, which already
-// names that listing as the decision it no longer refuses for you.
-export let CharacterSetTypeName = b"__CharacterSet"
-
-// The user-visible spelling -- what a source `CharacterSet.letters()` writes, and the ONLY door the type
-// is reachable through. Distinct from the reserved registry name above, and deliberately so.
+// ⚠ `StringIndex` carried the identical arrangement until W49 wave 3, when the corpus's own
+// `type StringIndex` made it a SECOND DECLARATION of one type and the reserved name stopped buying safety:
+// it made the corpus's `charAt(idx StringIndex)` unsatisfiable. The cure BOTH took is the same — **keep the
+// RESERVATION, drop the second LAYOUT** — and `stdlib/CharacterSet.maxon` being listed (W115) is what let
+// this one follow. The layout and its registration went at W129; the reservation below stays, and it is what
+// `TypeResolution.isCompilerOwnedTypeName` reads.
+//
+// ⇒ What remains is the user-visible spelling: what a source `CharacterSet.letters()` writes, resolved
+// through the CORPUS declaration like any other listed type's name.
 export let CharacterSetBuiltinName = b"CharacterSet"
 
 // ⭐ **THE COMPILER-OWNED `__ManagedFile` TYPE (R4.1).** An 8-byte box holding one raw OS file HANDLE,
 // with a runtime-owned destructor that closes it on drop — `specs/managed-file.md`'s "Type Structure"
 // states the single `_handle` field and the RAII contract.
 //
-// ⚠ **UNLIKE `__CharacterSet`, THE REGISTRY NAME AND THE USER-FACING NAME ARE THE SAME BYTES, AND THAT IS
-// THE WHOLE REASON THIS TYPE CAN DO WHAT IT CANNOT.** That one is registered under a reserved
-// `__`-prefixed name while the source spells a bare one, and `CharacterSetTypeName`'s comment draws the
+// ⚠ **THE REGISTRY NAME AND THE USER-FACING NAME ARE THE SAME BYTES HERE, AND THAT IS THE WHOLE REASON
+// THIS TYPE CAN DO WHAT `CharacterSet` COULD NOT.** That one was registered under a reserved
+// `__`-prefixed name while the source spelled a bare one, and `CharacterSetBuiltinName`'s comment draws the
 // consequence: such a type "cannot cross a function boundary, because a parameter or return type would
 // have to NAME it". The corpus REQUIRES this one to cross — `specs/managed-file.md` writes
 // `path __ManagedMemory` as a declared parameter and `export var file as __ManagedFile` as a field — and
@@ -5025,15 +4979,15 @@ export let CharacterSetBuiltinName = b"CharacterSet"
 // second spelling to fail to resolve.
 // ⇒ **The `__` prefix is therefore NOT a barrier here, and that was MEASURED rather than assumed:**
 // `requireUnreservedName`'s E2051 refuses a `__`-prefixed DECLARATION (`type __Foo`), not a `__`-prefixed
-// name in a TYPE POSITION. A field declared `as __CharacterSet` today reports `E3011 Unknown type`, not
-// E2051 — it fails to RESOLVE, and resolving is exactly what registering the layout fixes.
+// name in a TYPE POSITION. A field declared at a reserved spelling nothing registers reports
+// `E3011 Unknown type`, not E2051 — it fails to RESOLVE, and resolving is what registering the layout fixes.
 // ⇒ And `StringIndex` is the third answer to the same question: it took the bare name outright at W49
 // wave 3 and crosses a boundary now, because the CORPUS declares it and a reservation over *whose*
 // declaration wins needs no second spelling at all (`StringIndexTypeName`).
 export let ManagedFileTypeName = b"__ManagedFile"
 
 // ⭐ **`__ManagedMemory` IS AN `Array`, NOT A TYPE OF ITS OWN (R4.1, generalized by R4.4).** Registered as
-// a builtin GENERIC ALIAS — the same door `CharSet` goes through (`registerCharacterSetType`) — bound to
+// a builtin GENERIC ALIAS — the same door `CharSet` went through until W129 — bound to
 // the exact instance `internArrayByteInstance()` mints, which is the instance `"…".toByteArray()` already
 // yields and the one a `b"…"` literal already has. So a `path __ManagedMemory` parameter and the argument
 // handed to it are ONE type by construction, and `.managed` is an identity rather than a conversion.
@@ -5702,7 +5656,7 @@ export let ManagedFileHandleFieldIndex = 0 as FieldIndex
 // `ManagedDirectoryRuntime`'s header states why the record is two-level and why the two references disagree
 // about it.
 //
-// ⚠ Like `__ManagedFile` and unlike `__StringIndex`/`__CharacterSet`, the registry name and the user-facing
+// ⚠ Like `__ManagedFile` and unlike the retired `__StringIndex`/`__CharacterSet`, the registry name and the user-facing
 // name are the SAME bytes — which is what lets the type cross a function boundary, and the corpus requires
 // exactly that: `specs/managed-directory.md`'s `search-and-list` declares `export var dir as
 // __ManagedDirectory` and returns a `TestDir` built from one.
@@ -5779,20 +5733,13 @@ export let EnumLookupNoSuchRawValueCaseName = b"noSuchRawValue"
 export let ManagedDirectoryBlockFieldName = b"_block"
 export let ManagedDirectoryBlockFieldIndex = 0 as FieldIndex
 
-// The builtin alias for a `CharacterSet`'s member set — the reference's own `typealias CharSet =
-// Set with Character` (`stdlib/CharacterSet.maxon:19`), which `CharacterSet.from` takes and the corpus
-// spells (`specs/unicode-category.md:121`). Registered by `registerCharacterSetType`.
+// The alias for a `CharacterSet`'s member set — `typealias CharSet = Set with Character`, which
+// `stdlib/CharacterSet.maxon:19` declares and the corpus spells (`specs/unicode-category.md:121`). The
+// compiler upserted its own copy into `genericAliases` until W129; the corpus declaration is the authority
+// now, and this constant survives as the RESERVATION's key: `TypeResolution.isCompilerOwnedTypeName` names
+// it, and `compilerOwnedTypeMeaning` gives it the one non-`nominalIdentity` meaning in that whole set — so a
+// USER file writing the SAME alias is admitted and one writing `Set with String` is refused.
 export let CharacterMemberSetAliasName = b"CharSet"
-
-// Its two fields, in the reference's own declaration ORDER — which IS the layout, since
-// `StructLayout.offsetOfField` derives an offset from the index (`stdlib/CharacterSet.maxon:23-24`). Both
-// are `let` and unexported there, and nothing reads them through a field access here: the front end never
-// loads either, and the runtime writes them through `CharacterSetRuntime`'s own constants. The layout
-// exists to give the type a NOMINAL identity and a size that the drift check below holds to the box.
-let CharacterSetCharsFieldName = b"chars"
-let CharacterSetMaskFieldName = b"categoryMask"
-export let CharacterSetCharsFieldIndex = 0 as FieldIndex
-export let CharacterSetMaskFieldIndex = 1 as FieldIndex
 
 // The one-element `[integer]` argument list of the `Array with integer` literal instance — built fresh
 // per call (a `MaxonTypeArray` is owned by the instance it is interned into).
@@ -7236,10 +7183,11 @@ end 'DeclaredTypeMeaning'
 // ⭐⭐ **THE MEANING THE COMPILER ALREADY HOLDS FOR AN OWNED NAME — ONE TABLE, FOR THE WHOLE SET.**
 //
 // `CharSet` is the only entry, and that is a consequence rather than a shortlist: it is the only owned name
-// the compiler declares as a generic-instance ALIAS — `registerCharacterSetType` upserts it into the very
-// `genericAliases` map a user `typealias` folds into, because the reference declares it exactly so
-// (`typealias CharSet = Set with Character`, `stdlib/CharacterSet.maxon:19`). Every other owned name denotes
-// a builtin TAG (`String`, `Character`, `ExitCode`, `Codepoint`), a compiler-synthesized LAYOUT
+// that DENOTES a generic instance rather than minting an identity — `stdlib/CharacterSet.maxon:19` declares
+// it as `typealias CharSet = Set with Character`, and a USER file writing that exact line therefore says what
+// the compiler already says. (The compiler upserted its own copy of the alias until W129; the meaning stated
+// here is what survived, because it is the RESERVATION's rule and not the registration's.) Every other owned
+// name denotes a builtin TAG (`String`, `Character`, `ExitCode`, `Codepoint`), a corpus TYPE
 // (`CharacterSet`, `StringIndex`) or a corpus enum/alias (`Ordering`, `HashValue`, the `__Managed*Error`s),
 // and none of those is a thing a declaration in a user file can BE. They therefore fall to
 // `nominalIdentity`, which the comparison below declines for every input — so the set is closed by the
@@ -7935,7 +7883,6 @@ export type ProgramSignatures
 	var sawByteStringLiteral as bool
 	var sawStringArrayLiteral as bool
 	var sawSetFromConstruction as bool
-	var sawCharacterSetProducer as bool
 	var sawManagedFileProducer as bool
 	var sawManagedDirectoryProducer as bool
 	// The one need with a PAYLOAD rather than a bit: a vector's instance is keyed by its SIZE as well as its
@@ -8680,7 +8627,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -10945,22 +10892,17 @@ export type ProgramSignatures
 		// (a user `hash()` answering 7 where djb2 answers 5381; `Set with String` counting 3 where the control
 		// says 2) closed. `specs-shv2/string-conformance.md`'s two `may-not-bind-the-name` cases pin it.
 		//
-		// ⚠ **AND THE PREDICTION THE OLD HEADER MADE IS KEPT, BECAUSE ITS SUBJECT IS STILL LIVE (W16 review).**
-		// That header said *"the day a listed module declares one of these names, this arm gains the same
-		// bit"*, and this rung is that day — but only for the PROBE (`maxon-shv2 build stdlib/<M>.maxon`,
-		// where `livesUnderStdlibDirectory` is the ROOT's answer). **No LISTED module declares a
-		// compiler-owned struct name today**, and exactly three stdlib files declare one at all —
-		// `String`, `Character`, `CharacterSet` — all three unlisted, which is what makes this change
-		// codegen-inert by construction rather than by measurement.
-		// ⛔ **LISTING ONE IS THEREFORE A DECISION THIS ARM NO LONGER REFUSES FOR YOU, AND `CharacterSet` IS
-		// THE SHARP CASE.** The compiler registers its own layout under the RESERVED spelling
-		// `__CharacterSet` (`CharacterSetTypeName`) precisely so a declaration cannot contest that bucket,
-		// while the user-facing name is the bare `CharacterSetBuiltinName` — so `containsStruct` answering
-		// FALSE for `CharacterSet` is a fact `Parser.requireDeclaredBaseTypeName` is written against. List
-		// `stdlib/CharacterSet.maxon` and the corpus layout lands here under the BARE name, that answer
-		// flips, and one concept has two layouts under two keys. **That is the listing rung's question to
-		// settle, not this one's** — recorded here because deleting a prediction that already came true
-		// once is how it comes true twice.
+		// ⭐⭐ **THE PREDICTION THIS ARM CARRIED CAME TRUE, AND THE ANSWER IS RECORDED RATHER THAN THE
+		// WARNING (W16 review, settled by W115/W129).** The old header said *"the day a listed module declares
+		// one of these names, this arm gains the same bit"*, and named `CharacterSet` as the sharp case: the
+		// compiler registered its own layout under the RESERVED spelling `__CharacterSet` while the user-facing
+		// name was the bare one, so `containsStruct` answered FALSE for `CharacterSet` — a fact
+		// `Parser.requireDeclaredBaseTypeName` was written against — and listing the module would land a corpus
+		// layout here under the BARE name, giving one concept two layouts under two keys.
+		// ⇒ **`W115` listed it and `W129` deleted the second layout, which is the cure the whole class takes:
+		// KEEP THE RESERVATION, DROP THE SECOND LAYOUT.** `String`, `Character` and `StringIndex` each went the
+		// same way before it. The bit below is what makes the corpus declaration WIN rather than be dropped, and
+		// it is the only thing standing between two numberings of one type.
 		// A struct layout MINTS an identity of its own, so it can agree with no compiler-owned meaning — see
 		// `DeclaredTypeMeaning.nominalIdentity`.
 		if declarationContestsACompilerOwnedName(layout.name, declaredByTheCorpus: declaredByTheCorpus, declares: DeclaredTypeMeaning.nominalIdentity) 'aUserContest'
@@ -11974,7 +11916,7 @@ export type ProgramSignatures
 				// Already settled by an earlier decl's DFS — it referenced this one. A managed constant is
 				// settled too; it is simply not reachable BY a reference (see `evaluateDecl`).
 				value to poisoned then break 'state'
-				managedValue to characterSetValue then break 'state'
+				managedValue to factoryValue then break 'state'
 				evaluating then panic("ProgramSignatures.evaluateInitializers: '{String.from(decl.name)}' is still marked `evaluating` between two top-level walks — every DFS pops what it pushes")
 				pending then self.startDecl(i)
 			end 'state'
@@ -12090,7 +12032,7 @@ export type ProgramSignatures
 			// `let N = db` is `Undefined constant 'db'`, in both declaration orders, exactly as the other
 			// record kinds already are — which is what keeps the arena free of any initialization ORDER to
 			// get wrong: no admitted initializer can name another global.
-			managedValue to characterSetValue then return ConstEvalOutcome.notFound
+			managedValue to factoryValue then return ConstEvalOutcome.notFound
 			// Reached a decl already on this walk's stack: the reference chain has closed on itself.
 			evaluating then return self.recordCycle(index, stack: stack)
 			pending then break 'state'
@@ -12190,7 +12132,7 @@ export type ProgramSignatures
 		end 'returns'
 	end 'declaredReturnValueType'
 
-	// Settle a decl from the value its initializer FOLDED to — the five non-call answers, each keeping the
+	// Settle a decl from the value its initializer FOLDED to — the four non-call answers, each keeping the
 	// arm it has always had. One door rather than five call sites, so the evaluator's union and the arena's
 	// outcome union are mapped in exactly one place.
 	function settleFoldedValue(decl TopLevelDecl, value ConstFoldedValue) returns ConstEvalOutcome
@@ -12199,7 +12141,6 @@ export type ProgramSignatures
 			managed(bytes, managedKind) then return self.settleManagedValue(decl, bytes: bytes, kind: managedKind)
 			arrayLiteral(elements, element) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.arrayValue(elements, element: element))
 			containerCreate(giid, elements) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.containerValue(giid, elements: elements))
-			characterSet(chars, members, categoryMask) then return self.settleStoredRecordValue(decl, outcome: TopLevelConstant.characterSetValue(chars, members: members, categoryMask: categoryMask))
 		end 'kind'
 	end 'settleFoldedValue'
 
@@ -12257,7 +12198,7 @@ export type ProgramSignatures
 			failed to poisoned then break 'state'
 			evaluating then decl.outcome = TopLevelConstant.poisoned
 			value then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a scalar value AND failed to evaluate — an initializer produces one or the other")
-			managedValue to characterSetValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
+			managedValue to factoryValue then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' holds a managed value AND failed to evaluate — an initializer produces one or the other")
 			pending then panic("ProgramSignatures.poisonIfUndecided: '{String.from(decl.name)}' is `pending` while unwinding its own evaluation — `evaluateDecl` marks it `evaluating` before the walk")
 		end 'state'
 	end 'poisonIfUndecided'
@@ -12405,15 +12346,11 @@ export type ProgramSignatures
 			// ⭐ A CONTAINER FACTORY reads as an array literal does — a POINTER slot holding the record
 			// `__module_init` built — and its type needs no inference at all: the alias named the instance.
 			containerValue(giid, _) then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: MaxonType.genericInstance(giid), mutable: decl.mutable)
-			// ⭐ A `CharacterSet` PRESET reads as any struct-typed global does — a POINTER slot holding the box
-			// `__module_init` built — at the compiler-owned layout's own type, which is what makes `ws.contains(c)`
-			// an ordinary `CharacterSet` method dispatch off an ordinary struct pointer.
-			// ⚠ **ADOPTED INTO THE READER'S INTERNER, exactly as the factory arm below is.** A `structRef` id is
-			// meaningless outside the table that minted it, and this one is minted in the INDEX's — so handing
-			// it to a file's parse unadopted panicked in `Parser.internedName` the first time a body wrote
-			// `ws.contains(c)`. The container arm above needs no adoption because a `GenericInstanceId` is
-			// whole-program by construction, which is exactly why the two arms differ here.
-			characterSetValue then return TopLevelGlobalLookup.found(self.dataLabelOf(decl), valueType: self.adoptType(self.characterSetValueType(), into: into), mutable: decl.mutable)
+			// ⚠ A `CharacterSet` PRESET was a sixth arm until W129. Its ONE surviving lesson is the ADOPTION the
+			// factory arm below still performs: a `structRef` id is meaningless outside the table that minted it,
+			// and that one was minted in the INDEX's — so handing it to a file's parse unadopted panicked in
+			// `Parser.internedName` the first time a body read the global. The container arm above needs no
+			// adoption because a `GenericInstanceId` is whole-program by construction, which is why they differ.
 			// ⭐ A FACTORY-CALL GLOBAL reads the same way, at the callee's declared RETURN type — a struct
 			// reference for `Database.create(…)`, which is what makes `db.sourceFiles` an ordinary field
 			// load off an ordinary struct pointer.
@@ -12454,15 +12391,6 @@ export type ProgramSignatures
 	// Both are a pure LOOKUP here: the declaration sweep interns them whenever a file's tokens contain a `[`
 	// (plus a following string literal for the String one), which every array initializer does by definition
 	// — the same sweep-writes/parser-reads discipline `internBuiltinIntegerInstance` states.
-	// ⭐ **THE `MaxonType` A `CharacterSet` GLOBAL DENOTES** — the compiler-owned layout's own struct
-	// reference, interned in THIS index's table (`Parser.characterSetNameId` interns the same name in the
-	// artifact's, which is the same split every other cross-tier type name makes). One derivation, read by the
-	// slot walk, the init walk and the drop router alike, so the box `__cs_make` builds and the drop
-	// `__cs_decref` performs cannot be routed off two different types.
-	export function characterSetValueType() returns MaxonType
-		return MaxonType.structRef(self.typeNames.intern(CharacterSetTypeName))
-	end 'characterSetValueType'
-
 	export function constArrayValueType(element ConstArrayElementKind) returns MaxonType
 		return match element 'e'
 			integer gives MaxonType.genericInstance(self.internBuiltinIntegerInstance(self.arrayRecordBaseName()))
@@ -12570,7 +12498,7 @@ export type ProgramSignatures
 			// Everything that is not a stored RECORD: unevaluated, a folded scalar, or a failure. None has a
 			// slot that can be null, so none can be lazy.
 			pending to poisoned then return false
-			managedValue to characterSetValue then return true
+			managedValue to factoryValue then return true
 		end 'state'
 	end 'declSlotIsLazy'
 
@@ -12579,18 +12507,12 @@ export type ProgramSignatures
 	// `TopLevelInitializerCall`, whose header carries why the two halves may not be derived separately.
 	//
 	// A range arm over the whole union, ending at the current last variant, so an outcome appended past
-	// `characterSetValue` FAILS TO COMPILE here rather than being silently filed as "does not call".
+	// `factoryValue` FAILS TO COMPILE here rather than being silently filed as "does not call".
 	function declInitializerCall(decl TopLevelDecl) returns TopLevelInitializerCall
 		match decl.outcome 'state'
 			pending to arrayValue then return TopLevelInitializerCall.none
 			containerValue(giid, _) then return self.containerInitializerCall(giid)
 			factoryValue(calls, _, _) then return TopLevelInitializerCall.calls(self.factoryInitializerCallees(calls))
-			// ⭐⭐ **A `CharacterSet` PRESET REACHES WHATEVER ITS MEMBER SET IS BUILT BY (W90).** Its box is
-			// `__cs_make` — compiler-synthesized allocation with no source body to root, which is the whole of
-			// what this arm used to be — but the MEMBER SET inside it goes through `builtContainerRecord` like
-			// any other container, so once `stdlib/Set.maxon` is listed the preset calls declared
-			// `Set.create`/`Set.insert` and they are roots exactly as a `StrMap.create()` global's are.
-			characterSetValue(chars, _, _) then return self.containerInitializerCall(chars)
 		end 'state'
 	end 'declInitializerCall'
 
@@ -12618,12 +12540,10 @@ export type ProgramSignatures
 	export function existentialFieldOfConstConstruction(outcome TopLevelConstant) returns ConstConstructionFieldLookup
 		match outcome 'state'
 			// Every outcome that builds no box from a layout: unevaluated, failed, a folded scalar, a
-			// materialized record, a container, a `CharacterSet` preset. Named as the same bands
-			// `declInitializerCall` walks, so the two readers of this outcome cannot come to disagree about
-			// which of them carries an arena.
-			pending to arrayValue then return ConstConstructionFieldLookup.none
-			containerValue then return ConstConstructionFieldLookup.none
-			characterSetValue then return ConstConstructionFieldLookup.none
+			// materialized record, a container. ONE range, ending where the arena-carrying arm begins — it was
+			// three arms while `characterSetValue` sat past `factoryValue` and could not join a range (W129
+			// deleted it). The arena arm is the only thing this question parts on.
+			pending to containerValue then return ConstConstructionFieldLookup.none
 			factoryValue(calls, _, _) then return self.existentialFieldOfArena(calls)
 		end 'state'
 	end 'existentialFieldOfConstConstruction'
@@ -12719,13 +12639,11 @@ export type ProgramSignatures
 	// The callee a FOLDED argument contributes, which is one only for a declared generic's empty container.
 	//
 	// A range arm over every non-container folded kind, ending at the current last variant, so an arm
-	// appended past `characterSet` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
+	// appended past `containerCreate` FAILS TO COMPILE here rather than being silently filed as "calls nothing".
 	function appendFoldedArgumentCallee(callees ByteArrayArray, folded ConstFoldedValue)
 		match folded 'value'
 			scalar to arrayLiteral then return
 			containerCreate(giid, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: giid)
-			// Its member set is a container like any other — see `declInitializerCall`'s arm for the same value.
-			characterSet(chars, _, _) then self.appendDeclaredInstanceCreateCallee(callees, giid: chars)
 		end 'value'
 	end 'appendFoldedArgumentCallee'
 
@@ -12845,11 +12763,7 @@ export type ProgramSignatures
 				// record it will point at cannot be baked into a constant image — a data→data pointer has no
 				// compile-time VA under ASLR (`specs/static-variables.md:729-730`) — so the bytes are zero
 				// here and `__module_init` writes the address before `main` runs.
-				// ⚠ The band is NOT contiguous — `characterSetValue` was appended past `factoryValue` (see that
-				// union) — so the materialized kinds are named as a range plus that one arm, both routed through
-				// the same `foldedValueOf`/`foldedValueType` pair.
 				managedValue to containerValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
-				characterSetValue then entries.push(self.nullPointerSlot(decl, valueType: self.foldedValueType(self.foldedValueOf(decl.outcome, name: decl.name), elementFilePath: decl.declFilePath)))
 				// ⭐ A FACTORY-CALL GLOBAL reserves the SAME null POINTER slot, for the same reason and one
 				// more: the record does not exist until the callee has RUN, which is strictly later than the
 				// image is written.
@@ -12964,10 +12878,7 @@ export type ProgramSignatures
 				// after, and `let` refuses only the WRITE. All three route through `globalRecordOf`, which is
 				// also what a factory ARGUMENT of the same shape routes through: a container factory IS an
 				// array literal with no elements, and that is a fact about the record rather than a shortcut.
-				// ⚠ Not contiguous, for `declaredGlobals`' stated reason: `characterSetValue` is appended past
-				// `factoryValue` and takes the identical materialized-record route.
 				managedValue to containerValue then entries.push(self.recordGlobalOf(decl))
-				characterSetValue then entries.push(self.recordGlobalOf(decl))
 				// ⭐ A FACTORY-CALL GLOBAL's slot holds whatever the callee returns, so its construction is the
 				// CALL and its type is the callee's declared return type — settled when the outcome was.
 				factoryValue(calls, root, returnType) then entries.push(self.managedGlobalEntry(decl, initializer: ManagedGlobalInitializer.factoryCall(self.globalInitCalls(calls, declName: decl.name, elementFilePath: decl.declFilePath), root: root), valueType: returnType))
@@ -13079,7 +12990,7 @@ export type ProgramSignatures
 	function foldedInitValue(folded ConstFoldedValue, elementFilePath FilePath) returns GlobalInitValueAndType
 		match folded 'kind'
 			scalar(value) then return GlobalInitValueAndType.create(GlobalInitArgumentValue.scalar(value.payload), valueType: self.foldedMintType(folded, elementFilePath: elementFilePath))
-			managed to characterSet then break 'kind'
+			managed to containerCreate then break 'kind'
 		end 'kind'
 
 		let record = self.globalRecordOf(folded, elementFilePath: elementFilePath)
@@ -13240,7 +13151,7 @@ export type ProgramSignatures
 	function foldedMintType(folded ConstFoldedValue, elementFilePath FilePath) returns MaxonType
 		match folded 'kind'
 			scalar(value) then return maxonTypeOfTag(value.tag, nameId: UnnamedTypeId)
-			managed to characterSet then break 'kind'
+			managed to containerCreate then break 'kind'
 		end 'kind'
 
 		return self.foldedValueType(folded, elementFilePath: elementFilePath)
@@ -13336,8 +13247,6 @@ export type ProgramSignatures
 			managed(_, kind) then return self.managedConstValueType(kind, elementFilePath: elementFilePath)
 			arrayLiteral(_, element) then return self.constArrayValueType(element)
 			containerCreate(giid, _) then return MaxonType.genericInstance(giid)
-			// The BOX's type, not its member set's — the slot holds the `CharacterSet`, which owns the set.
-			characterSet then return self.characterSetValueType()
 		end 'folded'
 	end 'foldedValueType'
 
@@ -13358,17 +13267,13 @@ export type ProgramSignatures
 			// stamps and the slot's type cannot come from two answers to one question.
 			arrayLiteral(elements, _) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: typeNameIdOf(valueType)), valueType: valueType)
 			containerCreate(giid, elements) then return GlobalRecordAndType.create(self.containerRecordOf(elements, giid: giid), valueType: valueType)
-			// The member set is described by the very same `containerCreateCall` an ordinary `Set` global gets —
-			// so a `CharSet from ['a']` global and the member set inside a `CharacterSet` preset global are built
-			// by one emitter from one description, and the box is the only thing this arm adds.
-			characterSet(chars, members, categoryMask) then return GlobalRecordAndType.create(ManagedGlobalRecord.characterSetRecord(self.containerCreateCall(chars), charsType: MaxonType.genericInstance(chars), members: members, categoryMask: categoryMask), valueType: valueType)
 		end 'folded'
 	end 'globalRecordOf'
 
-	// The folded value the four STORED-RECORD outcomes came from. It exists so ONE resolver serves a global's
+	// The folded value the three STORED-RECORD outcomes came from. It exists so ONE resolver serves a global's
 	// own slot and a factory ARGUMENT: the outcome union records what a declaration SETTLED to (and carries
 	// two arms an argument can never be), while `ConstFoldedValue` records what an initializer FOLDED to, and
-	// these four arms are the same four facts wearing the first union's name.
+	// these three arms are the same three facts wearing the first union's name.
 	function foldedValueOf(outcome TopLevelConstant, name ByteArray) returns ConstFoldedValue
 		match outcome 'o'
 			pending to poisoned then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to an outcome that stores no record — every caller filters on the stored-record arms first")
@@ -13376,7 +13281,6 @@ export type ProgramSignatures
 			arrayValue(elements, element) then return ConstFoldedValue.arrayLiteral(elements, element: element)
 			containerValue(giid, elements) then return ConstFoldedValue.containerCreate(giid, elements: elements)
 			factoryValue then panic("ProgramSignatures.foldedValueOf: '{String.from(name)}' settled to a factory CALL, which is not a folded value — its record is built by calling user code, not by materializing a constant")
-			characterSetValue(chars, members, categoryMask) then return ConstFoldedValue.characterSet(chars, members: members, categoryMask: categoryMask)
 		end 'o'
 	end 'foldedValueOf'
 
@@ -13470,7 +13374,7 @@ export type ProgramSignatures
 			// record with a `.data` slot, so a read is a LOAD and the caller's NEXT probe (`globalDeclFor`)
 			// is the one that answers. That makes `notFound` the right answer here rather than merely a
 			// defensive one — it is the same "no CONSTANT of that name is visible" a `var` has always given.
-			arrayValue to characterSetValue then return TopLevelConstantLookup.notFound
+			arrayValue to factoryValue then return TopLevelConstantLookup.notFound
 			pending to evaluating then panic("ProgramSignatures.resolvedValueOf: '{String.from(decl.name)}' is unevaluated at a use site — `evaluateInitializers` runs to completion before any file is parsed")
 		end 'state'
 	end 'resolvedValueOf'
@@ -13602,10 +13506,6 @@ export type ProgramSignatures
 			// mixed: the build fails either way, and no reader's code depends on which diagnostic it
 			// failed with.
 			failed to poisoned then return mix(keyed, value: ConstShapeNoValue)
-			// ⭐ **A `CharacterSet` PRESET MIXES ITS MASK AND ITS LABEL** — the container arm's two facts, with
-			// the mask standing in for the instance: every preset has the SAME slot type, so the mask is what
-			// tells `whitespaces()` from `newlines()`. Its members are left out for the array literal's reason.
-			characterSetValue(_, _, categoryMask) then return mixBytes(mix(mix(keyed, value: ConstShapeCharacterSetValue), value: categoryMask), bytes: decl.dataLabel)
 			pending to evaluating then panic("ProgramSignatures.mixConstant: '{String.from(decl.name)}' is unevaluated — `evaluateInitializers` folds the hash only after every walk has finished")
 		end 'o'
 	end 'mixConstant'
@@ -15022,7 +14922,7 @@ export type ProgramSignatures
 	// registered under that name, it and `StringRuntime`'s six offsets become two descriptions of one record
 	// — and that assertion belongs with the listing"*. Both declaring modules are listed unconditionally now
 	// (`StdlibLoader.whitelistedStdlibModules`), so the two descriptions are always both present, and this is
-	// what holds them together. It is `characterSetLayout`'s check one type over, with the halves swapped:
+	// what holds them together. It is `managedFileLayout`'s check one type over, with the halves swapped:
 	// there the compiler STATES the shape and the runtime writes it, here the CORPUS states it.
 	//
 	// ⭐ **IT CHECKS THE FIELD *COUNT*, AND THAT IS THE CLAUSE THAT EARNS THE FUNCTION.** The offsets are the
@@ -15086,68 +14986,32 @@ export type ProgramSignatures
 		return try self.structTypes.get(typeName) otherwise panic("ProgramSignatures.checkFusedWrapperRecordLayouts: this compile declares no `type {String.from(typeName)}`, and the compiler mints that type's record FROM the corpus's declaration rather than transcribing it — the module declaring it is listed by `StdlibLoader.whitelistedStdlibModules` and must still declare it")
 	end 'corpusDeclaredFusedWrapper'
 
-	// ⭐ **REGISTER THE COMPILER-OWNED `CharacterSet` TYPE (P1.8 Slice D)** — the `StringIndex` twin, called
-	// by the declaration SWEEP when a file's tokens name a producer (`Parser.fileNamesCharacterSetProducer`).
-	// Idempotent, so the sweep is the WRITE and every parser read is a pure read.
+	// ⚠⚠ **`registerCharacterSetType` AND `characterSetLayout` STOOD HERE AND WENT AT W129, AND THE ONE
+	// THING WORTH KEEPING IS WHY THE LAYOUT EXISTED AT ALL.** It was one half of a PAIR: the front end stated
+	// the `CharacterSet` box's field offsets and size here, the `__cs_*` runtime wrote them through its own
+	// constants, and the registration's whole value was the DRIFT CHECK holding the two descriptions together
+	// (`managedFileLayout`/`managedDirectoryLayout` below are the same pair, still live, and their headers carry
+	// the same argument). Nothing read the layout otherwise — a `CharacterSet` had no field access at all — so
+	// once `stdlib/CharacterSet.maxon` declared the type (W115) and the runtime went, both halves went together.
 	//
-	// It also interns `Set with Character`, because the layout's first field IS that instance: a
-	// `CharacterSet` owns its member set, and the field's declared type is what routes the box's drop.
-	export function registerCharacterSetType()
-		let charsInstance = self.setInstanceForCharacter()
-		// ⭐ **`CharSet` IS A BUILTIN GENERIC-INSTANCE ALIAS, exactly as the reference declares it**
-		// (`typealias CharSet = Set with Character`, `stdlib/CharacterSet.maxon:19`) — it is the type
-		// `CharacterSet.from` takes, and shv2 reads no stdlib to get it from. Registered through the SAME
-		// `genericAliases` map a user `typealias` folds into, so `CharSet.create()` and `CharSet from […]`
-		// reach the ordinary `Set` alias paths with nothing special-cased at either.
-		// ⚠ It therefore RESERVES the name program-wide for a file that names a `CharacterSet` producer,
-		// exactly as listing a stdlib module reserves its type names (`StdlibLoader`'s collision rule). The
-		// reference reserves it too, being an exported alias of a module every program loads.
-		//
-		// ⚠⚠ **SINCE W115 THIS IS A FALLBACK, NOT THE AUTHORITY, AND THE MEASUREMENT RUNS THE OTHER WAY FROM
-		// THE ONE W115 INFERRED (found at review).** `stdlib/CharacterSet.maxon:19` declares the same alias,
-		// and the CORPUS declaration wins: rename every `CharSet` out of that file and a user's
-		// `CharSet from ['x','y']` still compiles through this line, but leave the file declaring
-		// `typealias CharSet = Set with String` and the same user program is REFUSED (`E2015 … a set literal
-		// key of type 'Character'`). ⇒ the two copies cannot silently disagree — a disagreement is a
-		// diagnostic — which is why this line is a residue to delete with the rest of the compiler-owned
-		// `CharacterSet` surface rather than a live second authority.
-		self.genericAliases.upsert(CharacterMemberSetAliasName, value: charsInstance)
-		if self.structTypes.contains(CharacterSetTypeName) 'alreadyRegistered'
-			return
-		end 'alreadyRegistered'
-		self.structTypes.upsert(CharacterSetTypeName, value: characterSetLayout(charsInstance))
-	end 'registerCharacterSetType'
+	// ⚠ It also upserted `CharSet` into `genericAliases`. That copy was a FALLBACK rather than an authority, and
+	// the measurement is `W115`'s review: `stdlib/CharacterSet.maxon:19` declares the same alias and the CORPUS
+	// declaration wins — rename every `CharSet` out of that file and a user's `CharSet from ['x','y']` still
+	// compiled through the upsert, but leave the file declaring `typealias CharSet = Set with String` and the
+	// same user program is REFUSED. ⇒ the two copies could not silently disagree; a disagreement is a
+	// diagnostic. The NAME is still reserved — see `CharacterMemberSetAliasName`.
 
-	// ⭐ **THE LAYOUT, AND THE CHECK THAT IT MATCHES THE BOX THE RUNTIME BUILDS** — the last compiler-owned
-	// layout that needs one, and the reason is the pair it is one half of: the front end states this type's
-	// shape here and `__cs_make` writes it through `CharacterSetRuntime`'s constants, so two readers describe
-	// one shape. (`__StringIndex` was the other, until W49 wave 3 gave the type back to its corpus
-	// declaration and left it with one reader.)
-	function characterSetLayout(charsInstance GenericInstanceId) returns StructLayout
-		var layout = StructLayout.createCompilerOwned(CharacterSetTypeName)
-		layout.addField(CharacterSetCharsFieldName, declaredType: MaxonType.genericInstance(charsInstance), mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
-		layout.addField(CharacterSetMaskFieldName, declaredType: MaxonType.integer, mutable: false, tier: Visibility.file, defaultValue: FieldDefault.none, declaredSurface: sharedEmptyDeclaredSurface)
-
-		if layout.offsetOfField(CharacterSetCharsFieldIndex) != CharSetCharsOffset or layout.offsetOfField(CharacterSetMaskFieldIndex) != CharSetMaskOffset 'offsetDrift'
-			panic("characterSetLayout: the struct layout puts `chars`/`categoryMask` at {layout.offsetOfField(CharacterSetCharsFieldIndex)}/{layout.offsetOfField(CharacterSetMaskFieldIndex)} but `__cs_make` writes them at {CharSetCharsOffset}/{CharSetMaskOffset} — the front end's shape and the runtime's field writes have drifted")
-		end 'offsetDrift'
-		if layout.sizeBytes() as ParsedInt != CharSetBoxBytes 'sizeDrift'
-			panic("characterSetLayout: the struct layout is {layout.sizeBytes()} bytes but `__cs_make` allocates {CharSetBoxBytes} — the box the runtime builds and the shape the front end states have drifted")
-		end 'sizeDrift'
-		return layout
-	end 'characterSetLayout'
-
-	// ⭐ **REGISTER THE COMPILER-OWNED `__ManagedFile` TYPE (R4.1)** — the `CharacterSet` twin, called by the
+	// ⭐ **REGISTER THE COMPILER-OWNED `__ManagedFile` TYPE (R4.1)** — the last of these, called by the
 	// declaration SWEEP when a file's tokens name a producer (`Parser.fileNamesManagedFileProducer`).
 	// Idempotent, so the sweep is the WRITE and every parser read is a pure read.
 	//
 	// ⚠ It registers under the name the SOURCE SPELLS (`__ManagedFile`), where `CharacterSet` and
-	// `StringIndex` register under a reserved name distinct from their user-facing one. See
-	// `ManagedFileTypeName` for why that difference is the point rather than an inconsistency: this type
-	// MUST be namable in a parameter and a field, and the corpus requires it.
+	// `StringIndex` registered under a reserved name distinct from their user-facing one — and both of those
+	// are retired now. See `ManagedFileTypeName` for why the difference is the point rather than an
+	// inconsistency: this type MUST be namable in a parameter and a field, and the corpus requires it.
 	export function registerManagedFileType()
 		// `__ManagedMemory` is an ALIAS, not a layout — see `ManagedMemoryTypeName`. Registered through the
-		// SAME `genericAliases` map a user `typealias` folds into, exactly as `CharSet` is, so a
+		// SAME `genericAliases` map a user `typealias` folds into, exactly as `CharSet` was until W129, so a
 		// `__ManagedMemory` annotation reaches the ordinary `Array` paths with nothing special-cased.
 		//
 		// ⚠⚠ **"NOTHING SPECIAL-CASED" STOPS SHORT OF THE BUFFER SURFACE, AND A2j IS WHY.** The surface is
@@ -15185,7 +15049,7 @@ export type ProgramSignatures
 	end 'registerManagedFileType'
 
 	// The `__ManagedFile` layout, held to the runtime's own constants by the same drift check
-	// `characterSetLayout` uses and for the same reason — the front end states the shape here, the runtime
+	// `managedDirectoryLayout` uses and for the same reason — the front end states the shape here, the runtime
 	// writes the handle through `ManagedFileHandleOffset`, and two readers of one shape is the pair that
 	// drifts. ⚠ Both references register an 8-byte handle struct whose runtime block is a DIFFERENT size,
 	// with nothing tying the two; this check is what keeps that from being repeated here.
@@ -15241,18 +15105,12 @@ export type ProgramSignatures
 		return layout
 	end 'managedDirectoryLayout'
 
-	// ⚠ **THERE IS DELIBERATELY NO `characterSetLayoutOrPanic`**, where `StringIndex` has one. An index is
-	// READ through its layout (`charIndex()`/`bytePos()` are field loads, `stringIndexLayoutOrPanic` serves
-	// them); a `CharacterSet` has no field access at all — the front end never loads either field and the
-	// runtime writes both through `CharacterSetRuntime`'s own constants. So the layout registered above is
-	// read by nothing, and an accessor for it would be an exported function with one caller: its own panic.
-	// What the registration buys is the DRIFT CHECK inside `characterSetLayout` and the nominal identity
-	// `containsStruct` answers for; if a later slice adds a field read, add the accessor with it.
-
-	// The `Set with Character` instance a `CharacterSet`'s explicit members live in, and the instance a
-	// `CharSet from [...]` constructs (P1.8 Slice D) — the `builtinInstanceForElement` twin. Keyed as
-	// `MaxonType.character`, the SAME arg a `typealias CharSet = Set with Character` interns, so a
-	// compiler-built member set and a user-declared one share ONE gid and are type-identical. Idempotent.
+	// The `Set with Character` instance a `CharSet from [...]` constructs (P1.8 Slice D) — the
+	// `builtinInstanceForElement` twin. Keyed as `MaxonType.character`, the SAME arg a
+	// `typealias CharSet = Set with Character` interns, so the instance a `from` literal builds and the one the
+	// corpus alias names share ONE gid and are type-identical. Idempotent.
+	// ⚠ A `CharacterSet`'s member-set FIELD was interned through this too, while the compiler owned that layout
+	// (retired W129); the corpus declaration interns it now, through the ordinary alias path.
 	export function setInstanceForCharacter() returns GenericInstanceId
 		var args = MaxonTypeArray.create()
 		args.push(MaxonType.character)
@@ -15262,8 +15120,8 @@ export type ProgramSignatures
 	// --- Synthesized TUPLE types (P1.10) ---
 	//
 	// ⭐ **THE PARSER IS THE ONLY PRODUCER, AND IT REGISTERS INTO THIS INDEX DIRECTLY.** The other
-	// compiler-owned layout (`__CharacterSet`) is registered by the declaration SWEEP, because a TOKEN scan
-	// can see the method that produces one. A tuple's identity is its ELEMENT TYPES, and
+	// compiler-owned layouts (`__ManagedFile`, `__ManagedDirectory`) are registered by the declaration SWEEP,
+	// because a TOKEN scan can see the name that produces one. A tuple's identity is its ELEMENT TYPES, and
 	// those are known only where the expression is parsed — `let t = (10, 32)` is two `integer`s and a token
 	// scan cannot say so — so the sweep cannot pre-register the set. The registration is nevertheless safe on
 	// exactly the terms that make the sweep-then-read discipline work elsewhere: the layout is a PURE FUNCTION
@@ -19104,13 +18962,10 @@ export type ProgramSignatures
 			_ = self.vectorInstanceForElement(MaxonType.boolean, size: size)
 		end 'eachVectorSize'
 
-		// The three compiler-owned TYPES ride the same call, and two of them for this function's own reason:
+		// The two compiler-owned TYPES ride the same call, and for this function's own reason:
 		// `registerManagedFileType` and `registerManagedDirectoryType` intern the byte and word array
 		// instances themselves, so leaving them in the per-file fold would have left half the defect in place.
-		if self.sawCharacterSetProducer 'characterSetProducer'
-			self.registerCharacterSetType()
-		end 'characterSetProducer'
-
+		// (A third, `registerCharacterSetType`, rode it until W129.)
 		if self.sawManagedFileProducer 'managedFileProducer'
 			self.registerManagedFileType()
 		end 'managedFileProducer'
@@ -19129,8 +18984,9 @@ export type ProgramSignatures
 	// evidence that the program CONTAINS an array of that element — then REFUSES on it.
 	//
 	// ⇒ MEASURED once `stdlib/Array.maxon`, `File.maxon` and `Directory.maxon` are listed. This walk minted
-	// `Array with FileWriter`, `Array with FileReader`, `Array with Directory`, `Array with ArrayIterator` and
-	// `Array with __CharacterSet` — five uncopyable elements, none of them named by any program — and any ONE
+	// `Array with FileWriter`, `Array with FileReader`, `Array with Directory` and `Array with ArrayIterator`
+	// — four uncopyable elements, none of them named by any program (a fifth, `Array with __CharacterSet`, went
+	// with that layout's registration at W129) — and any ONE
 	// of them refused `Array.clone`'s own `managed.slice` (`stdlib/Array.maxon:145`) for the WHOLE program.
 	// `map.md`'s `literal.user-type-key` and `literal.user-type-key-escapes-its-builder` were rejected with a
 	// sentence about `Box with String` on programs mentioning no `Box`, no file and no `CharacterSet`; a map
@@ -19165,10 +19021,10 @@ export type ProgramSignatures
 	// already holds as a local at the one point it calls this; the whole answer is a union across files, which
 	// is why each is OR-ed in rather than assigned.
 	//
-	// ⚠ **ELEVEN PARAMETERS AND NOT ELEVEN FUNCTIONS**: eleven one-line setters is eleven chances to add a
-	// twelfth need and wire it at ten of the eleven call sites. There is exactly one call site, so a need that
+	// ⚠ **TEN PARAMETERS AND NOT TEN FUNCTIONS**: ten one-line setters is ten chances to add an
+	// eleventh need and wire it at nine of the ten call sites. There is exactly one call site, so a need that
 	// is not passed does not compile.
-	export function noteWellKnownInstanceNeeds(intArrayLiteral bool, byteStringLiteral bool, stringArrayLiteral bool, aggregateArrayLiteral bool, enumAllCasesAccess bool, setFromConstruction bool, listFromConstruction bool, vectorSizes FixedSizeArray, characterSetProducer bool, managedFileProducer bool, managedDirectoryProducer bool)
+	export function noteWellKnownInstanceNeeds(intArrayLiteral bool, byteStringLiteral bool, stringArrayLiteral bool, aggregateArrayLiteral bool, enumAllCasesAccess bool, setFromConstruction bool, listFromConstruction bool, vectorSizes FixedSizeArray, managedFileProducer bool, managedDirectoryProducer bool)
 		self.sawIntArrayLiteral = self.sawIntArrayLiteral or intArrayLiteral
 		self.sawByteStringLiteral = self.sawByteStringLiteral or byteStringLiteral
 		self.sawStringArrayLiteral = self.sawStringArrayLiteral or stringArrayLiteral
@@ -19176,7 +19032,6 @@ export type ProgramSignatures
 		self.sawEnumAllCasesAccess = self.sawEnumAllCasesAccess or enumAllCasesAccess
 		self.sawSetFromConstruction = self.sawSetFromConstruction or setFromConstruction
 		self.sawListFromConstruction = self.sawListFromConstruction or listFromConstruction
-		self.sawCharacterSetProducer = self.sawCharacterSetProducer or characterSetProducer
 		self.sawManagedFileProducer = self.sawManagedFileProducer or managedFileProducer
 		self.sawManagedDirectoryProducer = self.sawManagedDirectoryProducer or managedDirectoryProducer
 
@@ -20968,7 +20823,7 @@ export type ProgramSignatures
 	// ⇒ MEASURED once `stdlib/Array.maxon`, `File.maxon` and `Directory.maxon` are listed: `Array.clone`'s own
 	// `managed.slice` (`stdlib/Array.maxon:145`) is gated by `genericTypeFieldUncopyableInstantiation`, and
 	// the speculative walk minted `Array with FileWriter`, `Array with FileReader`, `Array with Directory`,
-	// `Array with ArrayIterator` and `Array with __CharacterSet` — each uncopyable, none named by any program.
+	// and `Array with ArrayIterator` — each uncopyable, none named by any program.
 	// One of them was enough to refuse **every** `clone`/`slice`/`append` in **every** program holding a
 	// `[<identifier>…]`-shaped literal, with a sentence about `Box with String`. A `Map` literal whose keys are
 	// a user struct is exactly that shape, which is how `map.md`'s two `literal.user-type-key` cases were
@@ -21475,8 +21330,6 @@ export type ProgramSignatures
 		end 'array'
 		// ⚠ A `Set` arm (`__set_decref`) and a `Map` arm (`__map_decref`) stood here until W105. Both are
 		// declared generics now, so each drops through its own `__destruct_<mangled>` cascade — the very
-		// fall-through this door ends in, and the name `CharacterSetRuntime.characterMemberSetDropCallee` reads
-		// back for a `Set with Character`.
 		// A `List` drops through `__list_decref` — the same teardown over a CHAIN rather than a buffer: it walks
 		// head→tail destroying each live element through the stamped `element_drop@24`, frees every node, then
 		// frees the record. None of those nodes is reachable from a generic `__mm_decref`.
@@ -22870,9 +22723,8 @@ export type ProgramSignatures
 		// clone nobody can emit. The refusal the front end then reports is `requireArrayElementCopyable`'s
 		// positioned E2015.
 		//
-		// It is a REFUSAL and not a gap: there is no `__cs_clone` (the character-set runtime has a decref and
-		// nothing else), and an OS handle cannot be deep-copied at all — duplicating one hands two owners a
-		// descriptor whose `__mf_destruct` closes it once.
+		// It is a REFUSAL and not a gap: an OS handle cannot be deep-copied at all — duplicating one hands two
+		// owners a descriptor whose `__mf_destruct` closes it once.
 		return self.aggregateNameSupportsDeepClone(name, visited: visited)
 	end 'typeSupportsDeepClone'
 
@@ -22884,15 +22736,13 @@ export type ProgramSignatures
 	// `structSupportsDeepClone` went straight to the field walk, which meant the SOURCE-LEVEL `p.clone()`
 	// gate and the ARRAY-ELEMENT gate disagreed about `CharacterSet` / `__ManagedFile` / `__ManagedDirectory`
 	// — the exact three names the arm above records a measured backend panic for
-	// (`call to unknown function '__clone___ManagedFile'`). Three receiver arms in
+	// (`call to unknown function '__clone___ManagedFile'`). Receiver arms in
 	// `dispatchMethodOnReceiver` intercept those types before a clone can reach it today, so the divergence
 	// was latent; a divergence held shut by an unrelated dispatch order is the shape this file keeps paying
 	// for, so the two callers now ask one function rather than two spellings of it.
 	function aggregateNameSupportsDeepClone(name ByteArray, visited ClonerSet) returns bool
 		match compilerOwnedAggregateOf(name) 'compilerOwned'
-			characterSet then return false
-			managedFile then return false
-			managedDirectory then return false
+			managedFile to managedDirectory then return false
 			userDeclared then break 'compilerOwned'
 		end 'compilerOwned'
 		if visited.contains(name) 'cycle'

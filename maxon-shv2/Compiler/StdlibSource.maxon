@@ -533,14 +533,12 @@ function drainReachableWorklist(module MaxonModule, project Project, signatures 
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
 		markConformerWitnessImpls(func, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		if markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names) 'anOpThreadsOne'
-			demandsWitnessTable = true
-		end 'anOpThreadsOne'
-		// ⚠ **THE `not demandsWitnessTable` GUARD IS A COST GUARD AND IS WORTH ITS LINE.** The op question
-		// above rides the callee classification this loop already computes, but this one asks
+		markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names)
+		// ⚠ **THE `not demandsWitnessTable` GUARD IS A COST GUARD AND IS WORTH ITS LINE.** This asks
 		// `witnessConstraintsOfMethod` — a qualified-name split and a handful of map lookups PER REACHED
 		// FUNCTION, on every compile that touches stdlib. Once the answer is known it cannot change, and `or`
-		// is monotone.
+		// is monotone. (An OP-borne demand rode `markMaxonCallees`' return value beside it until W129, and it
+		// needed no such guard because it rode a classification that loop already computed.)
 		if not demandsWitnessTable and functionDeclaresAWitnessPosition(func, signatures: signatures, funcSignatures: project.funcSignatures) 'aDeclarationWidensOne'
 			demandsWitnessTable = true
 		end 'aDeclarationWidensOne'
@@ -584,13 +582,10 @@ end 'drainReachableWorklist'
 //
 // ⭐⭐⭐ **SO THE SEED IS GATED ON THE QUESTION IT IS THE ANSWER TO: CAN THE REACHED CODE NAME A WITNESS
 // TABLE?** Every table in the emitted image is registered by `LowerMaxonToStd.ensureWitnessTable`, and it has
-// exactly THREE routes in. This asks for the evidence each route needs, of REACHED code only — never for a
+// exactly TWO routes in. This asks for the evidence each route needs, of REACHED code only — never for a
 // prediction of which call sites will fire, which is the shape the measured `+81%` cut got wrong (see
 // `markConformerWitnessImpls`):
 //
-//   • **A CONTAINER's key** (`withWitnessTableArgs` — today only `__cs_contains`'s hardcoded `Character`,
-//     the member set's key; the `__set_*`/`__map_*` keys were its siblings until W105). Its evidence is an
-//     OP: the runtime callee that threads the table, asked through `opThreadsAWitnessTable`.
 //   • **A `where T is I` CONSTRAINT witness** (`materializeWitnessArg`), carried by every call to a method of
 //     a `where`-constrained type. Its evidence is that method's own DECLARATION, and the reached method is
 //     exactly the one whose call materialized the table.
@@ -598,7 +593,14 @@ end 'drainReachableWorklist'
 //     the widening happens at the CALLER, but it happens because the CALLEE declares an interface-typed
 //     parameter or return — and a callee that is called is a callee this walk reaches.
 //
-// ⇒ **EVERY ROUTE'S EVIDENCE IS A REACHED OP OR A REACHED DECLARATION, so the demand is discovered BY the
+// ⚠ **THERE WAS A THIRD, AND IT IS THE ONE WHOSE EVIDENCE COULD ONLY BE AN OP: a COMPILER-OWNED runtime
+// callee that threads a CONTAINER's key witnesses as ordinary arguments** — the `__set_*`/`__map_*` keys until
+// W105, then `__cs_contains`'s hardcoded `Character` until W129. Both retirements are the same move: the
+// corpus replacement is a declared generic method, so its witnesses are a DECLARATION the first route already
+// covers. A new compiler-owned witness-carrying callee needs that route back, in `markMaxonCallees`, because
+// nothing declares such a body's parameters.
+//
+// ⇒ **EVERY ROUTE'S EVIDENCE IS A REACHED DECLARATION, so the demand is discovered BY the
 // drain and the drain is simply run twice** — see `reachableMaxonFunctionNames`. The seed stays an
 // OVER-APPROXIMATION in the CONFORMER (a program that widens only an `int`, or keys a `Set` by one, still
 // credits both byte records), and that is the safe direction by this walk's own rule: *"an OVER-approximation
@@ -613,12 +615,11 @@ end 'drainReachableWorklist'
 // `unreachable` INCLUDING these, and `requireUnreachableStdlibStayedDead` panicked on the witness slot
 // (MEASURED with the cone listed: 33 cases, every one a `Map`/`Set` with `String` keys or a `String`
 // conformance — `let m = ["a": 1]` panicked on `String.hash`, while the same program with one `print` line
-// added compiled, because the `print` dragged it onto the precise path). The two sides now ask ONE PAIR OF
-// PREDICATES — `functionDeclaresAWitnessPosition` and `opThreadsAWitnessTable` — and the short-circuit's
-// exactness argument carries them unchanged: if user code names no stdlib callee then NO stdlib function is
-// reachable, so the reached set is a subset of user code, and a user function or user op is the only place a
-// demand can be. That is the same argument `markCorpusCalleesOfSynthesizedRuntime` rests on, for the same
-// reason, one screen down.
+// added compiled, because the `print` dragged it onto the precise path). The two sides now ask ONE
+// PREDICATE — `functionDeclaresAWitnessPosition` — and the short-circuit's
+// exactness argument carries it unchanged: if user code names no stdlib callee then NO stdlib function is
+// reachable, so the reached set is a subset of user code, and a user function is the only place a
+// demand can be. (An op-borne predicate stood beside it until W129, under the same argument.)
 //
 // ⭐ **THIS HALF IS THE DECLARATION-BORNE PAIR**, asked of the CALLEE rather than of the call site, because
 // the callee is what this walk holds and a caller's demand implies it:
@@ -655,28 +656,6 @@ function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSig
 
 	return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: signatures.extensionMethodConstraintsOf(func.name)).count() > 0
 end 'functionDeclaresAWitnessPosition'
-
-// ⭐ **DOES THIS OP THREAD A WITNESS TABLE INTO A COMPILER-OWNED RUNTIME CALLEE?** — the third
-// `ensureWitnessTable` route, and the one whose evidence can only be an op: a hash table's KEY and a
-// `CharacterSet`'s hardcoded `Character` are named by the RECEIVER's type at lowering, not by any
-// declaration.
-//
-// ⚠ **THE ROSTER IS READ FROM THE RUNTIME THAT OWNS IT** (`isCharacterKeyedWitnessCallee`) — the very
-// predicate `LowerMaxonToStd`'s `lowerRuntimeCall` parts on. Spelling `__cs_contains` a second time here
-// would be this project's signature bug in the file that seeds off it, and a second family would then be
-// learned by the lowering and missed by this walk, which is the silent direction.
-//
-// ⚠ **IT WAS FOUR FAMILIES, THEN THREE, AND IS NOW ONE — each shrink a RETIREMENT rather than a
-// simplification.** The `Array`'s ELEMENT went with `__managed_contains` at ARR3b (the corpus `contains`
-// carries its element witness as an ordinary dictionary parameter, covered by the DECLARATION route above);
-// `isSetWitnessCallee` and `isMapWitnessCallee` went with the whole synthesized hash table at W105, whose
-// corpus replacements are dictionary-passing generic methods and take the same route.
-function opThreadsAWitnessTable(op MaxonOp) returns bool
-	return match maxonOpCalleeKind(op) 'kind'
-		direct to functionValue gives isCharacterKeyedWitnessCallee(maxonOpCalleeName(op))
-		noCallee gives false
-	end 'kind'
-end 'opThreadsAWitnessTable'
 
 // Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
 // or a root whose runtime this program never installs) is not found and not queued — nothing to
@@ -843,27 +822,21 @@ end 'markOneReachable'
 // `scanRuntimeUsage` walks the same way here. A terminator names no callee, so visiting only the body
 // ops in `opRefs` is complete for reachability.
 //
-// ⚠ **IT ALSO ANSWERS "DID ANY OP HERE THREAD A WITNESS TABLE?", AND THAT RIDES ALONG RATHER THAN GETTING
-// ITS OWN WALK ON PURPOSE.** The question is asked of the SAME `maxonOpCalleeKind` classification this loop
-// already computes per op, and its only other home would be a second pass over the same blocks of the same
-// reached functions — doubling the walk on every compile to re-derive a callee name this one already holds.
-// See `functionDeclaresAWitnessPosition`'s header for what the answer is used for.
-function markMaxonCallees(module MaxonModule, project Project, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet) returns bool
-	var threadsAWitnessTable = false
+// ⚠ **IT ALSO ANSWERED "DID ANY OP HERE THREAD A WITNESS TABLE?" UNTIL W129, RIDING ALONG ON THE
+// `maxonOpCalleeKind` CLASSIFICATION THIS LOOP ALREADY COMPUTES.** That question had exactly one subject —
+// `__cs_contains`, the last compiler-owned callee taking witness tables as ordinary arguments — and it went
+// with the `__cs_*` runtime. **A new such callee brings the question back HERE and not into a second pass**:
+// a walk of its own would re-derive, on every compile, a callee name this one already holds. See
+// `functionDeclaresAWitnessPosition`'s header for the two routes that remain.
+function markMaxonCallees(module MaxonModule, project Project, signatures ProgramSignatures, func IrFunction, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for blockRef in func.blockRefs 'eachBlock'
 		let block = try module.blocks.get(blockRef) otherwise panic("markMaxonCallees: blockRef from func.blockRefs not in module.blocks")
 		for opIdx in block.opRefs 'eachOp'
 			let op = try module.ops.get(opIdx) otherwise panic("markMaxonCallees: opRef {opIdx} not in module.ops")
 			markMaxonCalleeEdge(op, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-			markCorpusCalleesOfSynthesizedRuntime(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
 			markLazyStaticInitCallees(op, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			if opThreadsAWitnessTable(op) 'threadsOne'
-				threadsAWitnessTable = true
-			end 'threadsOne'
 		end 'eachOp'
 	end 'eachBlock'
-
-	return threadsAWitnessTable
 end 'markMaxonCallees'
 
 // The static reachability edge one `MaxonOp` names, if any — asked of the DIALECT'S OWN classifier, which
@@ -916,7 +889,7 @@ end 'markMaxonCalleeEdge'
 //     bytes +20.9 MB, and the emitted code moved **3,388 ⇒ 3,788** — because `project.conformances` holds
 //     every LISTED STDLIB module's conformances too, so `URL.equals`/`FilePath.hash` and their whole files'
 //     bodies were demanded by a program that names neither. That is the blanket-seed trap
-//     `markCorpusCalleesOfSynthesizedRuntime` measured at 2223 moved fragments, arriving by a second road.
+//     `seedLazyStaticInitCalleesOfUserCode`'s header records at 2223 moved fragments, by a second road.
 //   ⇒ The conformer key is what makes it exact: a program that never reaches `URL` credits nothing of it.
 //
 // ⚠ **IT JOINS `<Type>.<requirement>` RATHER THAN READING `project.witnessSlotImpls`, AND A CUT THAT READ
@@ -989,48 +962,31 @@ function markWitnessImplsOfConformer(typeName ByteArray, project Project, byName
 	end 'eachInterface'
 end 'markWitnessImplsOfConformer'
 
-// ⭐⭐ **THE ONE CALL EDGE THIS WALK CANNOT SEE, SEEDED AT THE OP THAT IMPLIES IT.**
-// `__str_trim`, `__cs_contains`, the `__strix_*` walks and the two decoding views are SYNTHESIZED Std
-// bodies, appended after the pipeline (`Compiler.compile`'s install block). Their calls into
-// `stdlib/helpers/string/` are therefore not edges of the MAXON call graph — the caller does not exist yet
-// when this walk runs — so without this the corpus segmenter would be filed `unreachable`,
-// `lowerMaxonToStd` would lower no body for it, and the installed body would call a symbol nothing defined.
+// ⚠⚠⚠ **A SECOND SEED, `markCorpusCalleesOfSynthesizedRuntime`, STOOD HERE AND WENT AT W129 WITH ITS LAST
+// SUBJECT.** It rooted the corpus segmenter and the corpus `Set.contains` for the SYNTHESIZED Std bodies that
+// call them — bodies appended after the pipeline, whose calls are therefore not edges of the MAXON call graph
+// this walk reads. Its term list shrank to one (`__cs_contains`) and then to none. Two things it paid for are
+// kept, because they are what the NEXT synthesized body calling corpus code must not re-learn:
 //
-// ⭐ **IT IS A SEED AND NOT A SECOND REACHABILITY RULE.** Everything BELOW these four names is found by the
-// ordinary walk: `findGraphemeEnd` calls `utf8DecodeAt`, `graphemeBreakProperty`, `isGraphemeBreak` and the
-// state helpers, and every one of those is an honest Maxon edge. Only the ENTRY points are declared.
+//   * ⛔ **SEED AT THE REACHED OP, NEVER BY A PRE-PASS OVER THE MODULE.** The first version scanned every
+//     function of the merged module up front — which includes STDLIB's OWN bodies, and a listed module calls
+//     `.codepoints()`. So the seed fired on EVERY program: `return 1 + 1` lowered the whole corpus segmenter,
+//     registered its eleven panic literals in `.rdata`, and shifted `__str_blob_0` to `__str_blob_11` in
+//     **2223 committed fragments** of programs containing no string at all. (DFE then dropped the code, so it
+//     was numbering and lowering work, never emitted bytes — which is exactly why a golden count was the only
+//     thing that could see it.) It is `userCodeReachesStdlib`'s own trap — *"stdlib is internally connected,
+//     so scanning its bodies would find an intra-stdlib edge on EVERY compile"* — and skipping stdlib bodies
+//     would NOT have been the fix: a REACHED stdlib body naming such an entry needs the seed as much as a user
+//     body does. Asked at the op, inside the walk, it is exact for both.
+//   * ⛔ **SHEDDING A TERM EARLY IS THE FAILURE MODE.** A corpus function the seed named would be filed
+//     unreachable, `skipUnreachedFunctionBody` would leave a bare `retVoid` behind, and a synthesized body's
+//     call would land on it. A term goes only when nothing can emit its callee any more — which is the
+//     evidence W129 carried for the last one: the `__cs_*` runtime is deleted, so no module can name it.
 //
-// ⚠⚠ **IT RUNS INSIDE THE WALK, PER REACHED OP, AND A PRE-PASS OVER THE MODULE WAS MEASURABLY WRONG.**
-// The first version scanned every function of the merged module up front — which includes STDLIB's OWN
-// bodies, and a listed module calls `.codepoints()`. So the seed fired on EVERY program: `return 1 + 1`
-// lowered the whole corpus segmenter, registered its eleven panic literals in `.rdata`, and shifted
-// `__str_blob_0` to `__str_blob_11` in **2223 committed fragments** of programs containing no string at
-// all. (DFE then dropped the code, so it was numbering and lowering work, never emitted bytes — which is
-// exactly why a golden count was the only thing that could see it.) This is the trap `userCodeReachesStdlib`
-// documents one screen down — *"stdlib is internally connected, so scanning its bodies would find an
-// intra-stdlib edge on EVERY compile"* — and skipping stdlib bodies would NOT have been the fix either: a
-// REACHED stdlib body that calls one of these entries needs the seed just as much as a user body does.
-// Asking at the op, inside the walk, is exact for both: the question becomes "does something this program
-// actually reaches name one of these?", which is the question the walk exists to answer.
-function markCorpusCalleesOfSynthesizedRuntime(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	if not opNamesGraphemeRuntimeEntry(op) 'notASynthesizedSegmenterCaller'
-		return
-	end 'notASynthesizedSegmenterCaller'
-
-	markReachable(CorpusFindGraphemeEnd, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-	markReachable(CorpusCountGraphemes, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-	markReachable(CorpusUtf8DecodeAt, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-	markReachable(CorpusUtf8ByteLengthAt, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-	// ⭐ **AND THE MEMBER PROBE, ONCE `stdlib/Set.maxon` IS LISTED (W90).** `__cs_contains`'s body calls the
-	// corpus `Set.contains` on the box's member set, which is the same invisible edge as the four above and
-	// needs the same seed. It is asked of `characterMemberSetContainsCallee` rather than spelled, so the name
-	// this roots is the name that body will emit.
-	markReachable(characterMemberSetContainsCallee(signatures), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-end 'markCorpusCalleesOfSynthesizedRuntime'
-
-// The seed above, over the bodies the reachability walk is not the authority for. Stdlib's own bodies are
-// skipped for `userCodeReachesStdlib`'s reason and for `liveGlobalLabels`': an access inside an unreachable
-// stdlib body decides nothing, because that body reaches no back end and its slot is not kept for it.
+// The seed below is the one that remains, over the bodies the reachability walk is not the authority for.
+// Stdlib's own bodies are skipped for `userCodeReachesStdlib`'s reason and for `liveGlobalLabels`': an access
+// inside an unreachable stdlib body decides nothing, because that body reaches no back end and its slot is
+// not kept for it.
 function seedLazyStaticInitCalleesOfUserCode(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	for func in module.functions 'eachFunc'
 		if stdlib.contains(func.name) 'skipStdlibBody'
@@ -1062,8 +1018,8 @@ end 'seedLazyStaticInitCalleesOfUserCode'
 //
 // ⚠ **OVER-CREDITING IS THE SAFE DIRECTION AND THIS DOES IT ONCE:** an access the program never executes
 // still credits the callees, whose bodies are then lowered and dropped by dead-function elimination. A
-// MISSING root is `requireUnreachableStdlibStayedDead` — `markCorpusCalleesOfSynthesizedRuntime`'s own
-// standing warning, one function up.
+// MISSING root is `requireUnreachableStdlibStayedDead` — the standing warning the retired synthesized-runtime
+// seed carried, kept in this function's own header block one screen up.
 function markLazyStaticInitCallees(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
 		return
@@ -1073,32 +1029,6 @@ function markLazyStaticInitCallees(op MaxonOp, project Project, signatures Progr
 		markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachCallee'
 end 'markLazyStaticInitCallees'
-
-// One op. Asks the callee question through `maxonOpCalleeKind`/`maxonOpCalleeName` — the same pair
-// `opNamesStdlibCallee` reads — rather than matching the call forms here, so a new call form is learned by
-// both scans at once.
-function opNamesGraphemeRuntimeEntry(op MaxonOp) returns bool
-	return match maxonOpCalleeKind(op) 'kind'
-		direct to functionValue gives calleeIsGraphemeRuntimeEntry(maxonOpCalleeName(op))
-		noCallee gives false
-	end 'kind'
-end 'opNamesGraphemeRuntimeEntry'
-
-// ⚠ **FOUR TERMS HAVE GONE, AND EACH ONLY BECAUSE EVERY PRODUCER OF ITS CALLEE WENT WITH IT.**
-// `StrTrimName` left with the three trims at W49 wave 4 and `isStringIndexRuntimeCallee` left with
-// `String.slice` — that whole runtime file is deleted, so the prefix test it owned has nothing to answer for.
-// `StrToCodepointsName` and `StrToUtf16Name` left at wave 6 with `String.codepoints()`/`String.utf16()`:
-// `buildStrToCodepoints`/`buildStrToUtf16` are deleted, so those two callees cannot appear in any module and
-// the seed can no longer be reached through them. What replaces the seed is not a substitute — the corpus's
-// `CodepointView`/`UTF16View` call `utf8DecodeAt`/`utf8ByteLengthAt` as ORDINARY Maxon edges, which the walk
-// follows without being told, which is the whole reason this list only ever names SYNTHESIZED bodies.
-//
-// ⚠ Shedding a term EARLY is the failure mode this seed has: the corpus grapheme functions it names would be
-// filed unreachable, `skipUnreachedFunctionBody` would leave a bare `retVoid` behind, and a synthesized
-// body's call would land on it. A term goes only when nothing can emit its callee any more.
-function calleeIsGraphemeRuntimeEntry(callee ByteArray) returns bool
-	return callee.equals(CharSetContainsName)
-end 'calleeIsGraphemeRuntimeEntry'
 
 // True iff any live op in USER code names a STDLIB callee, or a TOP-LEVEL INITIALIZER does — the
 // allocation-free pre-scan that lets a program which never touches stdlib skip the reachability walk and
@@ -1162,7 +1092,11 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 			let block = try module.blocks.get(blockRef) otherwise panic("userCodeReachesStdlib: blockRef from func.blockRefs not in module.blocks")
 			for opIdx in block.opRefs 'eachOp'
 				let op = try module.ops.get(opIdx) otherwise panic("userCodeReachesStdlib: opRef {opIdx} not in module.ops")
-				if opNamesStdlibCallee(op, project: project, stdlib: stdlib) or opNamesGraphemeRuntimeEntry(op) or opAccessesALazyStaticRootedInStdlib(op, signatures: signatures, stdlib: stdlib) 'found'
+				// ⚠ A THIRD term stood here — an op naming a SYNTHESIZED body that in turn calls corpus code —
+				// and it went at W129 with `markCorpusCalleesOfSynthesizedRuntime`, whose roster it shared. The
+				// PAIRING is the invariant, not the term: this short-circuit must answer TRUE for every edge that
+				// seed roots, or the precise walk it skips would have rooted a name this scan called unreachable.
+				if opNamesStdlibCallee(op, project: project, stdlib: stdlib) or opAccessesALazyStaticRootedInStdlib(op, signatures: signatures, stdlib: stdlib) 'found'
 					return true
 				end 'found'
 			end 'eachOp'
@@ -1171,14 +1105,20 @@ function userCodeReachesStdlib(module MaxonModule, project Project, signatures P
 	return false
 end 'userCodeReachesStdlib'
 
-// The short-circuit's half of the witness-table demand — the SAME two predicates the drain asks of reached
-// code (`functionDeclaresAWitnessPosition`, `opThreadsAWitnessTable`), asked of USER code. It is a separate
+// The short-circuit's half of the witness-table demand — the SAME predicate the drain asks of reached
+// code (`functionDeclaresAWitnessPosition`), asked of USER code. It is a separate
 // loop from the stdlib-callee scan above and deliberately so: that scan returns the moment it finds an edge
 // into stdlib, so folding this in would make the answer depend on which of two independent facts a program
 // happens to state first.
 //
 // It over-answers only by ignoring reachability — a user function nothing calls still counts — which is the
 // direction that costs a walk rather than a wrong answer.
+//
+// ⚠ **AN OP-BORNE HALF STOOD BESIDE THE DECLARATION HALF AND WENT AT W129** with the last compiler-owned
+// callee that threaded witness tables (see `functionDeclaresAWitnessPosition`'s header for the two routes
+// that remain). The pairing with the drain is what matters and is unchanged: **this scan and
+// `drainReachableWorklist` must ask the SAME predicates**, or the short-circuit would skip a walk that would
+// have found a demand — the defect W17 measured, arriving from the other side.
 function userCodeDemandsAWitnessTable(module MaxonModule, project Project, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
 	for func in module.functions 'eachFunc'
 		// Stdlib's own declarations are skipped for `userCodeReachesStdlib`'s reason: a demand inside a stdlib
@@ -1190,15 +1130,6 @@ function userCodeDemandsAWitnessTable(module MaxonModule, project Project, signa
 		if functionDeclaresAWitnessPosition(func, signatures: signatures, funcSignatures: project.funcSignatures) 'widensOne'
 			return true
 		end 'widensOne'
-
-		for blockRef in func.blockRefs 'eachBlock'
-			let block = try module.blocks.get(blockRef) otherwise panic("userCodeDemandsAWitnessTable: blockRef from func.blockRefs not in module.blocks")
-			for opIdx in block.opRefs 'eachOp'
-				if opThreadsAWitnessTable(try module.ops.get(opIdx) otherwise panic("userCodeDemandsAWitnessTable: opRef {opIdx} not in module.ops")) 'threadsOne'
-					return true
-				end 'threadsOne'
-			end 'eachOp'
-		end 'eachBlock'
 	end 'eachFunc'
 
 	return false

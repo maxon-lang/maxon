@@ -2387,95 +2387,36 @@ type MaxonToStdLowering
 			self.appendTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'typeParamOwnership'
-		// A compiler-owned runtime call that PROBES a hash table it does not hold (`__cs_contains`) gets the
-		// member set's layout descriptor and the key's `Hashable`/`Equatable` witness-table addresses appended
-		// as hidden trailing arguments — the dictionary-passing twin of `appendWitnessArgs` for a generic
-		// instance method.
-		//
-		// ⚠ **IT WAS THREE FAMILIES AND IS ONE (W105).** `__set_insert`/`contains`/`remove`/`from` and the
-		// `Map` family's `__map_upsert`/`insert`/`contains`/`get`/`remove` read their key type off a RECEIVER;
-		// all nine went with the synthesized hash table, whose corpus replacements are declared generic methods
-		// and take `appendWitnessArgs`. What is left names its key type outright — see `withKeyWitnessArgs`.
-		if isCharacterKeyedWitnessCallee(callee) 'characterKeyedWitness'
-			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.withKeyWitnessArgs(args, dstBlock: dstBlock)))
-			return
-		end 'characterKeyedWitness'
+		// ⚠⚠ **A WITNESS-THREADING ARM STOOD HERE AND IS GONE, AND ITS FAMILY COUNT WENT 3 → 1 → 0.** A
+		// compiler-owned runtime call that PROBES a hash table it does not hold got the key's `Hashable`/
+		// `Equatable` witness-table addresses appended as hidden trailing arguments — the dictionary-passing
+		// twin of `appendWitnessArgs`. `__set_*`/`__map_*` read their key type off a RECEIVER and went with the
+		// synthesized hash table (W105); `__cs_contains` named its `Character` key outright and went with the
+		// `__cs_*` runtime (W129). Every corpus replacement is a declared generic method, so its witnesses are
+		// ordinary dictionary PARAMETERS filled by `appendWitnessArgs`.
+		// ⇒ **No compiler-owned runtime callee threads a witness table today**, and a new one would rebuild the
+		// arm here — see `materializeWitnessTableAddr`, which holds what such an arm must not get wrong.
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))
 	end 'lowerRuntimeCall'
 
-	// ⭐⭐ **`__cs_contains`'s FULL ARGUMENT LIST — the caller's two, then the member set's LAYOUT DESCRIPTOR,
-	// then one witness table per key constraint.** It is a function rather than three statements at the one
-	// call site because the ORDER is an ABI the callee's own body reads back
-	// (`CharacterSetRuntime.charSetContainsParamCount` counts the same three parts), so the supply side is
-	// written once.
-	//
-	// ⭐ **WHY THE DESCRIPTOR IS THREADED FROM HERE (W90).** `Set.contains` is dictionary-passing — its ABI is
-	// `[user][layout][witness_0..k]` (`finalizeCallArgsWithLayout`) — and a `CharacterSet`'s probe is a
-	// SYNTHESIZED Std body, which can spell an `.rdata` label but cannot cause the blob to EXIST.
-	// `ensureLayoutDescriptor` registers the blob and its relocations at the one tier that owns them, exactly
-	// as `materializeWitnessTableAddr` registers the two tables beside it.
-	//
-	// ⭐ **IT IS PASSED UNCONDITIONALLY AND FORWARDED CONDITIONALLY, WHICH IS DELIBERATE.** Whether the corpus
-	// method takes a descriptor is a per-METHOD verdict of the whole-program fixpoint
-	// (`ProgramSignatures.functionNeedsLayoutDescriptor`), so if `__cs_contains`'s OWN arity tracked it too,
-	// two files would have to agree about one fixpoint answer or the callee's `param` ops would read whatever
-	// the ABI registers held — a wrong ANSWER with no panic (the measured `__map_get` case
-	// `withWitnessTableArgs` records). One fixed arity here, one read inside `buildCharSetContains`, and only
-	// that read can be wrong.
-	//
-	// ⚠ **THE CONFORMER TYPE IS NAMED, NOT DERIVED, AND THAT IS THE WHOLE OF WHAT W105 SIMPLIFIED.** A `Set`
-	// or `Map` runtime call read its key type off the RECEIVER's generic instance (`args[0]`, or the RESULT
-	// for `__set_from`); `__cs_contains` has no set among its arguments — its member set is a FIELD of the box
-	// — but its key is `Character` by construction (`SignatureIndex.characterSetLayout`), so it says so
-	// outright. With the nine receiver-reading callees deleted, the "whose key type?" dispatch they needed has
-	// exactly one answer and is written as one.
-	function withKeyWitnessArgs(args ValueIdArray, dstBlock IrBlock) returns ValueIdArray
-		var withLayout = ValueIdArray.create()
-		withLayout.append(args)
-		let descId = self.mintStdValueId()
-		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(self.signatures.setInstanceForCharacter()).toByteArray()))
-		withLayout.push(descId)
-
-		return self.withWitnessTableArgs(withLayout, conformerType: CharacterConformerName, interfaceNames: hashTableKeyWitnessInterfaces(), dstBlock: dstBlock)
-	end 'withKeyWitnessArgs'
-
-	// ⭐ **`args` PLUS ONE `__witness_<conformerType>.<interface>` ADDRESS PER CONSTRAINT, IN ORDER — the whole
-	// of dictionary-passing into a compiler-owned runtime entry, written once.** The constraint list lives
-	// beside the runtime whose entry points declare those trailing parameters — a hash table's KEY is
-	// `Hashable and Equatable` (`hashTableKeyWitnessInterfaces`) — so a body's signature and the arguments it
-	// is handed are one fact, and a second family adds a list rather than a second copy of this loop.
-	//
-	// ⚠ **IT IS DOWN TO ONE FAMILY, AND THAT IS A RETIREMENT AND NOT A SIMPLIFICATION (ARR3b).** An `Array`'s
-	// ELEMENT was the second, `Equatable` alone, threaded into the compiler-owned `__managed_contains`; the corpus
-	// `stdlib/Array.maxon:534` extension serves `contains` now and carries the element's witness as an ordinary
-	// dictionary parameter of its own, filled by `appendWitnessArgs`.
-	//
-	// ⚠⚠ **EVERY LOWERING PATH THAT EMITS A WITNESS-CARRYING CALLEE MUST COME THROUGH HERE, AND THE COST OF
-	// ONE THAT DID NOT WAS A MEASURED ACCESS VIOLATION — not a tidiness point.** Every witness-carrying callee
-	// before `__map_get` was non-throwing (`__set_insert`/`contains`/`remove`/`from`, `__cs_contains`,
-	// `__str_trim`), so "append the witnesses" and "lower a throwing call" had never had to meet, and
-	// `lowerTryCall`'s compiler-owned arm never asked the question. Lowered without them, `__map_get(map, key)`
-	// left the two witness PARAMETERS reading whatever the ABI registers happened to hold, and the fused
-	// `witnessCall` inside the probe's `hash()` jumped through it: measured as `create` + `upsert` + `contains`
-	// all correct and the first `try m.get(k)` faulting with 0xC0000005. ⇒ A new family, or a new op shape for
-	// an existing one, adds an arm that reaches THIS function.
-	function withWitnessTableArgs(args ValueIdArray, conformerType ByteArray, interfaceNames ByteArrayArray, dstBlock IrBlock) returns ValueIdArray
-		var fullArgs = ValueIdArray.create()
-		fullArgs.append(args)
-		for i in 0 upto interfaceNames.count() 'eachConstraint'
-			let interfaceName = try interfaceNames.get(i) otherwise panic("withWitnessTableArgs: interfaceNames.get OOB at {i} below count {interfaceNames.count()}")
-			fullArgs.push(self.materializeWitnessTableAddr(conformerType, interfaceName: interfaceName, dstBlock: dstBlock))
-		end 'eachConstraint'
-		return fullArgs
-	end 'withWitnessTableArgs'
-
-	// The `rdataAddr` of the `__witness_<conformerType>.<interface>` table (P1.7b slice A) — the address a
-	// compiler-owned runtime call passes for one of its conformer's protocol witnesses. `ensureWitnessTable`
-	// registers the blob and its `funcAbs64` slot reloc (to the synthesized `int.hash`/`int.equals`) on first
-	// reference, idempotent by label, so many operations on one conformer build ONE table per interface.
+	// The `rdataAddr` of the `__witness_<conformerType>.<interface>` table (P1.7b slice A) — the address of one
+	// of a conformer's protocol witnesses. `ensureWitnessTable` registers the blob and its `funcAbs64` slot
+	// reloc (to the synthesized `int.hash`/`int.equals`) on first reference, idempotent by label, so many
+	// operations on one conformer build ONE table per interface.
 	//
 	// ⚠ It was `materializeKeyWitness` while a hash-table KEY was the only conformer threaded this way, and an
 	// `Array`'s ELEMENT was briefly the second; nothing here was ever about a key.
+	//
+	// ⚠⚠ **ITS SECOND CALLER WAS `withWitnessTableArgs` — the loop that appended one of these per constraint
+	// into a COMPILER-OWNED runtime callee — and that whole family is retired (W105, then W129).** The rule it
+	// enforced outlives it and is the one a rebuilt arm must not get wrong, because the cost of missing it was a
+	// MEASURED access violation rather than a tidiness point: every witness-carrying callee before `__map_get`
+	// was non-throwing, so "append the witnesses" and "lower a throwing call" had never had to meet, and
+	// `lowerTryCall`'s compiler-owned arm never asked. Lowered without them, `__map_get(map, key)` left the two
+	// witness PARAMETERS reading whatever the ABI registers happened to hold, and the fused `witnessCall` inside
+	// the probe's `hash()` jumped through it — `create` + `upsert` + `contains` all correct and the first
+	// `try m.get(k)` faulting with 0xC0000005. ⇒ **A compiler-owned callee that takes witness parameters must
+	// have EVERY lowering path that emits it reach one appender**, never two that agree by hand.
 	function materializeWitnessTableAddr(conformerType ByteArray, interfaceName ByteArray, dstBlock IrBlock) returns ValueId
 		let label = self.ensureWitnessTable(conformerType, interfaceName: interfaceName)
 		let addrId = self.mintStdValueId()
@@ -3683,10 +3624,10 @@ type MaxonToStdLowering
 			requireRuntimeCallPositional(callee, argLabels: argLabels)
 			// ⚠ **A WITNESS-CARRYING `tryCall` ARM STOOD HERE FOR `__map_get`, AND WENT WITH IT (W105).**
 			// `__map_get` was the only compiler-owned callee that both THREADED witness tables and THREW, and
-			// forgetting it cost a measured 0xC0000005 — the reason `withWitnessTableArgs`' header still states
-			// that every witness-carrying lowering path must come through one door. The rule outlives the arm:
-			// the one witness-carrying runtime callee left (`__cs_contains`) does not throw, so a THROWING one
-			// added later needs this arm back, built through `withKeyWitnessArgs` and not beside it.
+			// forgetting it cost a measured 0xC0000005 — see `materializeWitnessTableAddr`, which now holds that
+			// measurement and the one-door rule it proves. The rule outlives the arm: NO compiler-owned runtime
+			// callee threads a witness table at all since W129, so one added later — throwing or not — builds its
+			// appender once and reaches it from here as well as from `lowerRuntimeCall`.
 			// The throwing OPAQUE-`T` `slice` (`__managed_slice_opaque`) takes the enclosing instance's descriptor as
 			// its last argument, appended here exactly as the non-throwing clone/append do in `lowerRuntimeCall`.
 			self.stdModule.appendOp(dstBlock, op: StdOp.tryCall(result, errorFlagId: errorFlag, callee: callee, args: self.opaqueCopyArgsWithDescriptor(callee, args: args, dstBlock: dstBlock)))

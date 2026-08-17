@@ -1568,14 +1568,12 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// ⚠ **IT CARRIES ONE OBLIGATION `Map` DID NOT, AND IT IS WHY THIS ENTRY WAS NOT TAKEN WITH `Map`'s.**
 	// `CharacterSet` OWNS a `Set with Character` and its three synthesized `__cs_*` bodies BUILD, DROP and
 	// PROBE it. Those callees are not the Maxon call graph's — the caller does not exist when the reachability
-	// walk runs — so all three had to be re-pointed at the corpus type by hand and rooted by hand:
-	// `Parser.emitSetCreate`/`emitSetInsert` (the build), `CharacterSetRuntime.characterMemberSetDropCallee`
-	// (the drop, a per-instance `__destruct_Set_Character`), `characterMemberSetContainsCallee` (the probe,
-	// which also takes a threaded LAYOUT DESCRIPTOR now), plus
-	// `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` and
-	// `CharacterSetRuntime.declareCharacterSetRuntimeNeeds` for the two edges nothing could see. Get any of
+	// walk runs — so all three had to be re-pointed at the corpus type by hand and rooted by hand: the build,
+	// the drop (a per-instance `__destruct_Set_Character`), the probe (which also took a threaded LAYOUT
+	// DESCRIPTOR), plus two reachability seeds for the edges nothing could see. Get any of
 	// them wrong and there is no diagnostic — the backend panics in `resolveCallFixups`, or the callee's
-	// `param` ops read whatever the ABI registers held.
+	// `param` ops read whatever the ABI registers held. **That obligation is DISCHARGED and its machinery
+	// deleted (W129): the corpus declares `CharacterSet`, so no synthesized body owns a `Set` any more.**
 	//
 	// ⚠ **THE COLLISION RULE, CLEARED:** it declares NO free function since W93 moved `findNextOccupiedSet`
 	// into `helpers/hashtable/slotScan.maxon` as the shared `findNextOccupied`. It CONSUMES
@@ -1593,11 +1591,11 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// `parseTypeReference`) every one of them is now an ordinary declared static on an ordinary declared
 	// struct.
 	//
-	// ⚠ **THE `__cs_*` RUNTIME IS STILL IN THE TREE, UNREACHED, AND ITS DELETION IS OWED AS ITS OWN RUNG** —
-	// `W90`/`W105`'s split, deliberately repeated. `W90` retired `Set` and left `SetRuntime.maxon` standing;
-	// `W105` deleted it separately and its acceptance was BYTE-IDENTITY rather than a green suite, because a
-	// green suite says nothing broke while only byte-identity says nothing was LIVE. Deleting 511 lines in
-	// the rung that changes behaviour would make both unattributable.
+	// ✅ **THE `__cs_*` RUNTIME IS DELETED (W129)** — `W90`/`W105`'s split, deliberately repeated and
+	// discharged. `W90` retired `Set` and left `SetRuntime.maxon` standing; `W105` deleted it separately and
+	// its acceptance was BYTE-IDENTITY rather than a green suite, because a green suite says nothing broke
+	// while only byte-identity says nothing was LIVE. Deleting 500 lines in the rung that changed behaviour
+	// would have made both unattributable.
 	//
 	// ⚠ **IT IS ONE CONE IN TWO LINES, AND THE SECOND IS NOT OPTIONAL.** `CharacterSet.contains` classifies a
 	// codepoint through `unicodeGeneralCategory` (`stdlib/CharacterSet.maxon:129`), which only
