@@ -195,3 +195,52 @@ end 'main'
 ```exitcode
 4
 ```
+
+<!-- test: two-type-parameters-each-with-their-own-chain -->
+⭐⭐ **THE BLOCK-OFFSET HAZARD, PINNED (W134 review).** A layout descriptor reserves one block **per type
+parameter**, so a type with two of them holds two chains whose stamps come from two different blocks of
+one descriptor. Reading the wrong block is not a refusal — it stamps the *other* parameter's destructor,
+which for `Small`-then-`String` means either leaking every string or calling a string destructor on an
+integer. The rung's own comments name this hazard; nothing pinned it, and a probe that finds nothing is
+only a result once it is a case.
+```maxon
+typealias Count = int(0 to u64.max)
+typealias Small = int(0 to 1000)
+
+type Twin uses First, Second
+	typealias FirstChain = __ManagedList with First
+	typealias SecondChain = __ManagedList with Second
+	var left as FirstChain
+	var right as SecondChain
+
+	export static function create() returns Self
+		return Self{left: FirstChain.create(), right: SecondChain.create()}
+	end 'create'
+
+	export function addLeft(v First)
+		self.left.insertLast(v)
+	end 'addLeft'
+
+	export function addRight(v Second)
+		self.right.insertLast(v)
+	end 'addRight'
+
+	export function total() returns Count
+		return self.left.count() + self.right.count()
+	end 'total'
+end 'Twin'
+
+typealias SmallThenString = Twin with Small, String
+
+function main() returns ExitCode
+	var t = SmallThenString.create()
+	t.addLeft(1)
+	t.addLeft(2)
+	t.addRight("alpha")
+	return t.total() as ExitCode
+end 'main'
+```
+```exitcode
+3
+```
+
