@@ -147,11 +147,14 @@ export let MaxPathBytes = 260 as ParsedInt
 //
 // ⚠ `iteratorInvalid` (4) has no flag here because nothing throws it: it names "filename() on an exhausted
 // iterator", and `filename()` is non-throwing in both references and in the spec. The case is DECLARED (the
-// ordinals after it depend on its slot) and deliberately unreachable.
+// ordinals after it depend on its slot) and deliberately unreachable — which is why its ORDINAL is here even
+// though its flag is not, and why `claimManagedDirectoryOrdinals` states it as `neverThrown` rather than
+// leaving a gap a corpus reorder could move in silence (W135).
 let ManagedDirectoryNotFoundOrdinal = 0 as ParsedInt
 let ManagedDirectoryAccessDeniedOrdinal = 1 as ParsedInt
 let ManagedDirectoryOpenSearchFailedOrdinal = 2 as ParsedInt
 let ManagedDirectoryNextFailedOrdinal = 3 as ParsedInt
+let ManagedDirectoryIteratorInvalidOrdinal = 4 as ParsedInt
 let ManagedDirectoryCreateFailedOrdinal = 5 as ParsedInt
 let ManagedDirectoryCurrentPathFailedOrdinal = 6 as ParsedInt
 let ManagedDirectoryClosedOrdinal = 7 as ParsedInt
@@ -848,9 +851,13 @@ function claimManagedDirectoryOrdinals(project Project, declaration EnumLayout)
 	directoryErrors.claim(ManagedDirectoryAccessDeniedCaseName, ordinal: ManagedDirectoryAccessDeniedOrdinal)
 	directoryErrors.claim(ManagedDirectoryOpenSearchFailedCaseName, ordinal: ManagedDirectoryOpenSearchFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryNextFailedCaseName, ordinal: ManagedDirectoryNextFailedOrdinal)
+	// `filename()` on an exhausted iterator is non-throwing here and in both references — see the ordinal
+	// block at the top of this file.
+	directoryErrors.neverThrown(ManagedDirectoryIteratorInvalidCaseName, ordinal: ManagedDirectoryIteratorInvalidOrdinal)
 	directoryErrors.claim(ManagedDirectoryCreateFailedCaseName, ordinal: ManagedDirectoryCreateFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryCurrentPathFailedCaseName, ordinal: ManagedDirectoryCurrentPathFailedOrdinal)
 	directoryErrors.claim(ManagedDirectoryClosedCaseName, ordinal: ManagedDirectoryClosedOrdinal)
+	directoryErrors.requireTotal()
 end 'claimManagedDirectoryOrdinals'
 
 export function installManagedDirectoryRuntime(module StdModule, usage RuntimeUsage)

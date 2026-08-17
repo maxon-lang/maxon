@@ -609,7 +609,20 @@ export let ManagedMemSetName = b"__managed_mem_set"
 // constant read by both layouts). It is still declared here rather than aliased to the `ArrayError` flag,
 // because "these two enums agree today" is a fact about their case lists and not a fact about this family's
 // wire format; folding them would make a later divergence in either list silently reroute the other's arms.
+//
+// ⚠ **1 AND 2 CARRY NO FLAG BECAUSE THIS RUNTIME THROWS NEITHER, AND THE ORDINALS ARE HERE ANYWAY (W135).**
+// `emptySlot` is thrown against `ArrayError` by the ARRAY accessors — `__managed_get` and `__managed_first`,
+// through `emitLoadElemAndOkReturn`'s `ArrayErrorEmptySlotFlag` — and never against THIS enum, because the
+// `__ManagedMemory` surface has no element READ (`create`/`grow`/`set`/`swap`/`shift*`). `sliceOutOfBounds`
+// names a `slice(start, end)` that surface does not offer either: an `Array`'s slice is `__managed_slice`,
+// which is bounds-checked against `ArrayError.indexOutOfBounds`. Both are still reachable from CORPUS code
+// (`stdlib/Internals.maxon:3286,3821` throws each), and a corpus `throw` resolves its tag from the
+// declaration itself, so there is no second half there to drift. These two positions are transcribed because
+// they are what puts `invalidLength` at 3 — and until W135 they were the gap a corpus reorder could move in
+// silence.
 let MemoryIndexOutOfBoundsOrdinal = 0 as ParsedInt
+let MemoryEmptySlotOrdinal = 1 as ParsedInt
+let MemorySliceOutOfBoundsOrdinal = 2 as ParsedInt
 let MemoryInvalidLengthOrdinal = 3 as ParsedInt
 let MemoryInvalidCapacityOrdinal = 4 as ParsedInt
 
@@ -985,16 +998,24 @@ function claimArrayErrorOrdinals(project Project, declaration EnumLayout)
 	var arrayErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ArrayErrorOrdinalInstaller)
 	arrayErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: ArrayErrorIndexOutOfBoundsOrdinal)
 	arrayErrors.claim(ManagedMemoryEmptySlotCaseName, ordinal: ArrayErrorEmptySlotOrdinal)
+	// `ArrayError` declares exactly these two, so this walk is already total — which is the ONE shape that
+	// makes the call look redundant and is exactly why it is not: the day a third case is declared, this is
+	// what says so rather than admitting it unwatched.
+	arrayErrors.requireTotal()
 end 'claimArrayErrorOrdinals'
 
 function claimManagedMemoryOrdinals(project Project, declaration EnumLayout)
 	var memoryErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: ManagedMemoryOrdinalInstaller)
 	memoryErrors.claim(ManagedMemoryIndexOutOfBoundsCaseName, ordinal: MemoryIndexOutOfBoundsOrdinal)
+	// The two this runtime never throws — see the ordinal block beside `MemoryIndexOutOfBoundsOrdinal`.
+	memoryErrors.neverThrown(ManagedMemoryEmptySlotCaseName, ordinal: MemoryEmptySlotOrdinal)
+	memoryErrors.neverThrown(ManagedMemorySliceOutOfBoundsCaseName, ordinal: MemorySliceOutOfBoundsOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidLengthCaseName, ordinal: MemoryInvalidLengthOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidCapacityCaseName, ordinal: MemoryInvalidCapacityOrdinal)
 	memoryErrors.claim(ManagedMemoryShiftOutOfBoundsCaseName, ordinal: MemoryShiftOutOfBoundsOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidByteRangeCaseName, ordinal: MemoryInvalidByteRangeOrdinal)
 	memoryErrors.claim(ManagedMemoryInvalidAllocationCaseName, ordinal: MemoryInvalidAllocationOrdinal)
+	memoryErrors.requireTotal()
 end 'claimManagedMemoryOrdinals'
 
 export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage)

@@ -4751,13 +4751,33 @@ end 'addBuiltinEnumCase'
 // and a global initializer may hold no function call (**E2045**). Deriving would mean threading the layout
 // to every throw site — a different rung. So the fact stays written twice and this makes disagreement LOUD.
 //
-// ⚠ **FORWARD ONLY, AND THAT IS A DECISION RATHER THAN HALF THE JOB.** `installManagedFileRuntime`'s drift
-// check is BIDIRECTIONAL because both its sides must be total. Here they must not be: a case may be DECLARED
-// and never thrown — `__ManagedDirectoryError.iteratorInvalid` is exactly that ("filename() on an exhausted
-// iterator", non-throwing in both references), and `__ManagedFileError` and `__ManagedMemoryError` each
-// declare more cases than their runtime throws. A backward "every case is claimed" arm would fire on all of
-// them. The forward arm is COMPLETE for the failure this guards: any insertion, deletion or reorder that
-// moves a case somebody throws moves it away from its claimed ordinal, and is caught here.
+// ⛔⛔ **IT WAS FORWARD ONLY, AND "FORWARD ONLY IS COMPLETE" WAS FALSE — MEASURED (W135).** The paragraph
+// that stood here read: *"a case may be DECLARED and never thrown … a backward 'every case is claimed' arm
+// would fire on all of them. The forward arm is COMPLETE for the failure this guards: any insertion,
+// deletion or reorder that moves a case somebody throws moves it away from its claimed ordinal."* The
+// premise is right and the conclusion does not follow — a perturbation confined to the cases NOBODY claims
+// moves no claimed ordinal, so the check saw nothing. Eight such edits to `stdlib/Builtins.maxon` compiled
+// CLEAN against it: swapping `__ManagedFileError`'s `invalidStatBuffer`/`invalidStatIndex` (8,9) and
+// `__ManagedMemoryError`'s `emptySlot`/`sliceOutOfBounds` (1,2), renaming any of the five unclaimed cases
+// out of existence, and APPENDING a ninth case to `__ManagedDirectoryError` — in the one place whose own
+// sentence two arms down is *"the enum's case ORDER is the wire format"*.
+//
+// ⇒ **THE CURE IS TOTALITY, NOT FIVE MORE CLAIMS.** Five more `claim` lines would have closed those gaps
+// and reopened the identical hole at the next case anyone adds, because the defect is that the check was a
+// SUBSET check at all. A declared case is now accounted for EITHER WAY — `claim` (the runtime throws it at
+// that ordinal) or `neverThrown` (the runtime never produces it, and its POSITION is transcribed anyway) —
+// and `requireTotal` refuses the third answer that used to be available for free: silence. The old
+// paragraph's premise survives intact; it is simply WRITTEN DOWN per case now, rather than inferred from an
+// omission that reads identically to a forgotten line.
+//
+// ⭐ **AN EXEMPT CASE IS TRANSCRIBED *AT AN ORDINAL*, WHICH IS NOT OBVIOUS AND IS THE STRONGER HALF.** A
+// bare `neverThrown(caseName)` would make the check total over the NAME SET and leave it partial over the
+// ORDER — exactly the two swaps above, which move wire values while every claimed ordinal stays put. Naming
+// the position makes this a transcription of the DECLARATION rather than of the throw sites, so an edit to
+// the declaration that nothing here mirrors is loud whichever cases it touches. It costs one literal per
+// exempt case, and that literal is precisely what this type exists to be: the fact written twice, on
+// purpose, so a disagreement is LOUD rather than silent (the ⭐ *WHY A CHECK AND NOT A DERIVATION* note
+// above is why writing it twice is the shape available here at all).
 //
 // ⭐⭐ **ONE CLAIM IS ONE CALL, FOR `EnumLayout.addCase`'s EXACT REASON** (fifteen functions up this file:
 // "a caller that pushed a name and forgot a tag would shift every later case's tag onto the wrong case").
@@ -4796,6 +4816,18 @@ export enum BuiltinErrorDeclarationSource
 	declared
 end 'BuiltinErrorDeclarationSource'
 
+// ⭐ **WHAT A TRANSCRIPTION STATES ABOUT ONE DECLARED CASE (W135).** There are exactly two answers and no
+// third — SILENCE is what `BuiltinErrorOrdinalCheck.requireTotal` withdrew, and this enum is what replaced
+// it. Read at the two failure arms of `recordCase`, which must say different things about a claim and about
+// an exemption: telling an author that a case nothing throws "is thrown as 9" would be a lying diagnostic.
+export enum BuiltinErrorCaseUse
+	// The runtime returns this case's ordinal as an error flag, out of a literal it transcribed.
+	thrown
+	// The runtime never produces this case at all. Its ordinal is transcribed anyway — see the ⭐ paragraph
+	// in `BuiltinErrorOrdinalCheck`'s header for why the POSITION is stated when the throw is not.
+	neverThrown
+end 'BuiltinErrorCaseUse'
+
 export type BuiltinErrorOrdinalCheck
 	// The declaration every claim is checked against.
 	var declaration as EnumLayout
@@ -4808,6 +4840,12 @@ export type BuiltinErrorOrdinalCheck
 	// mutates the project — so the arm could hold it but could not use it. The `synthesized` path never
 	// reads it: it panics, which is exactly the difference `source` records.
 	var project as Project
+	// ⭐ **WHICH DECLARED CASES A VERB HAS ACCOUNTED FOR, BY DECLARATION INDEX (W135)** — the column
+	// `requireTotal` reads, and the reason the two verbs are one code path. It is sized from the declaration
+	// at construction, so "is every case accounted for?" is asked of exactly the case set the claims were
+	// checked against; a set keyed by NAME would re-derive that answer from the claims themselves and could
+	// therefore agree with a transcription that had drifted away from the layout entirely.
+	var accountedByIndex as BoolArray
 
 	// A check over a layout the COMPILER built — the families that have no loadable stdlib declaration to
 	// read, which today are `__DivisionByZeroError` and `__EnumLookupError`.
@@ -4817,36 +4855,105 @@ export type BuiltinErrorOrdinalCheck
 	// naming a caller that was not one, beside a count of them. Both are stated as *"today"* now: the SET is
 	// a consequence of which modules the loader lists, and that changes without this line being read.
 	export static function overSynthesized(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
-		return Self{declaration: declaration, source: BuiltinErrorDeclarationSource.synthesized, installer: installer, project: project}
+		return BuiltinErrorOrdinalCheck.over(project, declaration: declaration, source: BuiltinErrorDeclarationSource.synthesized, installer: installer)
 	end 'overSynthesized'
 
 	// A check over a layout parsed from `stdlib/Builtins.maxon`, reached through `declaredBuiltinErrorEnum`
 	// — which is what turns an ABSENT declaration into one E4016 rather than into a silently-empty enum.
 	export static function overDeclared(project Project, declaration EnumLayout, installer ByteArray) returns BuiltinErrorOrdinalCheck
-		return Self{declaration: declaration, source: BuiltinErrorDeclarationSource.declared, installer: installer, project: project}
+		return BuiltinErrorOrdinalCheck.over(project, declaration: declaration, source: BuiltinErrorDeclarationSource.declared, installer: installer)
 	end 'overDeclared'
+
+	// THE one `Self{…}`, so the field list is written once and the two doors above differ only in the FACT
+	// they name — `EnumLayout.createCompilerOwned`'s shape, four hundred lines up this file. It is also the
+	// one place `accountedByIndex` is sized, which is what makes "sized from the declaration" a property of
+	// the type rather than of each door.
+	static function over(project Project, declaration EnumLayout, source BuiltinErrorDeclarationSource, installer ByteArray) returns BuiltinErrorOrdinalCheck
+		var accountedByIndex = BoolArray.create()
+		var filled = 0 as CaseIndex
+		while filled < declaration.caseCount() 'eachCase'
+			accountedByIndex.push(false)
+			filled = filled + 1
+		end 'eachCase'
+
+		return Self{declaration: declaration, source: source, installer: installer, project: project, accountedByIndex: accountedByIndex}
+	end 'over'
 
 	// One claim — "`installer` throws `caseName` as `ordinal`" — verified against the declaration on the
 	// spot. THE only way to state a claim, so a name can never be recorded without the ordinal it belongs to.
 	export function claim(caseName ByteArray, ordinal ParsedInt)
+		self.recordCase(caseName, ordinal: ordinal, use: BuiltinErrorCaseUse.thrown)
+	end 'claim'
+
+	// One case the runtime NEVER throws, at the ordinal the declaration gives it (W135) — an exemption
+	// STATED rather than an omission left to be read as one. See this type's header for why the ordinal is
+	// named when the throw is not, and each caller for the per-case evidence that nothing produces it.
+	export function neverThrown(caseName ByteArray, ordinal ParsedInt)
+		self.recordCase(caseName, ordinal: ordinal, use: BuiltinErrorCaseUse.neverThrown)
+	end 'neverThrown'
+
+	// THE one place a case is verified AND struck off, so the two verbs above cannot come to disagree about
+	// what "accounted for" means or about which ordinal a case sits at. Both halves belong together for
+	// `EnumLayout.addCase`'s reason: a verb that checked an ordinal without marking the case, or marked it
+	// without checking, would let `requireTotal` pass over a case nothing verified.
+	function recordCase(caseName ByteArray, ordinal ParsedInt, use BuiltinErrorCaseUse)
 		if not self.declaration.hasCase(caseName) 'noSuchCase'
-			self.refuse("{String.from(self.installer)} claims ordinal {ordinal} for '{String.from(caseName)}', but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
+			match use 'absentCase'
+				thrown then self.refuse("{String.from(self.installer)} claims ordinal {ordinal} for '{String.from(caseName)}', but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — the runtime throws a case the enum does not have, so no handler arm could ever match it")
+				neverThrown then self.refuse("{String.from(self.installer)} records '{String.from(caseName)}' at ordinal {ordinal} as a case it never throws, but `{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares no such case — an exemption written for a case that is not there excuses nothing, and whichever case it was written for is now unaccounted for")
+			end 'absentCase'
 			return
 		end 'noSuchCase'
 
-		// `hasCase` above has already established the name, so `tagOfCase`'s own guard cannot fire — it is asked
-		// anyway rather than re-spelling `tagOfIndex(indexOfCase(…))` here, which was the pairing 7b3 collapsed
-		// into that one method. This arm needs `refuse` and not a panic (a drifted runtime is a compiler defect
-		// worth naming, not worth aborting on before the sentence is printed), which is why the two-step shape
-		// stays and only the derivation is shared.
-		let declared = self.declaration.tagOfCase(caseName)
-		if declared != ordinal 'drifted'
-			self.refuse("'{String.from(caseName)}' is ordinal {declared} in `{self.declaration.kindWord()} {String.from(self.declaration.name)}` but {String.from(self.installer)} throws it as {ordinal} — the enum's case ORDER is the wire format and the two have DRIFTED. Every handler arm for this case would name the wrong error, silently. Fix the runtime's ordinal, or move the case back")
-		end 'drifted'
-	end 'claim'
+		// `hasCase` above has already established the name, so this index is a real one. It is taken rather
+		// than asking `tagOfCase` — the pairing 7b3 collapsed into that one method — because the column below
+		// is keyed by declaration index and the index is therefore needed anyway; re-deriving the tag through
+		// the name would scan the case list a third time to reach a position already in hand. The "absent"
+		// convention `tagOfCase` owns is still not re-spelled here: `hasCase` is what asks it.
+		let index = self.declaration.indexOfCase(caseName)
+		let alreadyAccounted = try self.accountedByIndex.get(index) otherwise panic("BuiltinErrorOrdinalCheck.recordCase: accountedByIndex.get OOB at {index} for `{self.declaration.kindWord()} {String.from(self.declaration.name)}`, whose {self.declaration.caseCount()} cases sized this column at construction — the layout was mutated after the check was built")
+		if alreadyAccounted 'accountedTwice'
+			self.refuse("{String.from(self.installer)} accounts for '{String.from(caseName)}' twice in `{self.declaration.kindWord()} {String.from(self.declaration.name)}` — a case is either thrown at its ordinal or never thrown, so two verbs over one case means one of them states something false, and the case the second line was meant to cover is going unaccounted for")
+			return
+		end 'accountedTwice'
 
-	// THE one place a failed claim becomes a verdict, so the two failure shapes above cannot come to
-	// disagree about which severity a source earns. See `BuiltinErrorDeclarationSource` for the split.
+		try self.accountedByIndex.set(index, value: true) otherwise panic("BuiltinErrorOrdinalCheck.recordCase: accountedByIndex.set OOB at {index} for `{self.declaration.kindWord()} {String.from(self.declaration.name)}` — the `get` one line up read the same index")
+
+		// Marked BEFORE the ordinal is tested, so a single drifted case earns one diagnostic rather than two:
+		// it IS accounted for, and reporting it again from `requireTotal` would name the same edit twice under
+		// two different complaints. This arm needs `refuse` and not a panic (a drifted runtime is a compiler
+		// defect worth naming, not worth aborting on before the sentence is printed).
+		let declared = self.declaration.tagOfIndex(index)
+		if declared != ordinal 'drifted'
+			match use 'driftedCase'
+				thrown then self.refuse("'{String.from(caseName)}' is ordinal {declared} in `{self.declaration.kindWord()} {String.from(self.declaration.name)}` but {String.from(self.installer)} throws it as {ordinal} — the enum's case ORDER is the wire format and the two have DRIFTED. Every handler arm for this case would name the wrong error, silently. Fix the runtime's ordinal, or move the case back")
+				neverThrown then self.refuse("'{String.from(caseName)}' is ordinal {declared} in `{self.declaration.kindWord()} {String.from(self.declaration.name)}` but {String.from(self.installer)} transcribes it at {ordinal} as a case it never throws — the enum's case ORDER is the wire format whether or not anybody throws a given case, and the two have DRIFTED. Fix the transcribed ordinal, or move the case back")
+			end 'driftedCase'
+		end 'drifted'
+	end 'recordCase'
+
+	// ⭐⭐ **THE ARM THAT MAKES THIS A TRANSCRIPTION RATHER THAN A SAMPLE (W135), AND EVERY FAMILY OWES ONE
+	// CALL.** Without it the verbs above are a SUBSET check: whatever a caller does not mention is exempt by
+	// accident, which reads exactly like an exemption on purpose and exactly like a line somebody forgot.
+	// The header records the eight measured corpus edits that compiled clean because of it.
+	//
+	// ⚠ It is the LAST statement of each family's claim function and not a step in a shared driver, because
+	// the ordinal literals are file-private to the runtime that transcribes them — so the walk that states
+	// them and the walk that closes them are one function by construction. A family that adds a case to its
+	// enum and no verb to that function is refused HERE, which is the point at which the omission is still
+	// one edit old.
+	export function requireTotal()
+		for index in 0 upto self.declaration.caseCount() 'eachCase'
+			let accounted = try self.accountedByIndex.get(index) otherwise panic("BuiltinErrorOrdinalCheck.requireTotal: accountedByIndex.get OOB at {index} for `{self.declaration.kindWord()} {String.from(self.declaration.name)}`, whose {self.declaration.caseCount()} cases sized this column at construction — the layout was mutated after the check was built")
+			if not accounted 'unaccounted'
+				self.refuse("`{self.declaration.kindWord()} {String.from(self.declaration.name)}` declares '{String.from(self.declaration.caseNameAt(index))}' at ordinal {self.declaration.tagOfIndex(index)} and {String.from(self.installer)} accounts for it NEITHER WAY — every declared case must be either a `claim` (the runtime throws it at that ordinal) or a `neverThrown` (the runtime never produces it, and its position is transcribed anyway). Silence is the third answer this check no longer takes: a case nobody mentions is a GAP, and an insertion, deletion or reorder inside a gap moves a wire value with nothing watching it. Add whichever verb is true of this case")
+			end 'unaccounted'
+		end 'eachCase'
+	end 'requireTotal'
+
+	// THE one place a failed transcription becomes a verdict, so the failure shapes above — an absent case, a
+	// case accounted for twice, a drifted ordinal, a case accounted for neither way — cannot come to disagree
+	// about which severity a source earns. See `BuiltinErrorDeclarationSource` for the split.
 	function refuse(reason String)
 		match self.source 'origin'
 			synthesized then panic("BuiltinErrorOrdinalCheck: {reason}")

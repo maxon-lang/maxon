@@ -74,6 +74,16 @@ let ManagedFileWriteFailedOrdinal = 4 as ParsedInt
 let ManagedFileSizeFailedOrdinal = 5 as ParsedInt
 let ManagedFileDeleteFailedOrdinal = 6 as ParsedInt
 let ManagedFileStatFailedOrdinal = 7 as ParsedInt
+// ⚠ **8 AND 9 CARRY NO FLAG BECAUSE NOTHING THROWS THEM, AND THE ORDINALS ARE HERE ANYWAY (W135).**
+// `invalidStatBuffer` and `invalidStatIndex` name the two ways a `statField`/`statFree` call can be handed
+// something impossible, and shv2 answers both with a runtime ABORT rather than a throw
+// (`buildManagedFileStatField`'s two guards → `RuntimeAbort.managedFileStatNullBuffer` /
+// `managedFileStatIndexOutOfRange`, and `buildManagedFileStatFree`'s → the first of those). The buffer is
+// the runtime's own; a corpus program never forges one, so a caller reaching either guard has a compiler
+// defect and not a recoverable failure. The two positions are transcribed regardless, because they are what
+// puts `closed` at 10 — and until W135 they were the gap a corpus reorder could move in silence.
+let ManagedFileInvalidStatBufferOrdinal = 8 as ParsedInt
+let ManagedFileInvalidStatIndexOrdinal = 9 as ParsedInt
 let ManagedFileClosedOrdinal = 10 as ParsedInt
 let ManagedFileNotFoundFlag = ManagedFileNotFoundOrdinal + ErrorFlagOrdinalBias
 let ManagedFileAccessDeniedFlag = ManagedFileAccessDeniedOrdinal + ErrorFlagOrdinalBias
@@ -1085,7 +1095,11 @@ function claimManagedFileOrdinals(project Project, declaration EnumLayout)
 	fileErrors.claim(ManagedFileSizeFailedCaseName, ordinal: ManagedFileSizeFailedOrdinal)
 	fileErrors.claim(ManagedFileDeleteFailedCaseName, ordinal: ManagedFileDeleteFailedOrdinal)
 	fileErrors.claim(ManagedFileStatFailedCaseName, ordinal: ManagedFileStatFailedOrdinal)
+	// The two the runtime ABORTS on rather than throwing — see the ordinal block at the top of this file.
+	fileErrors.neverThrown(ManagedFileInvalidStatBufferCaseName, ordinal: ManagedFileInvalidStatBufferOrdinal)
+	fileErrors.neverThrown(ManagedFileInvalidStatIndexCaseName, ordinal: ManagedFileInvalidStatIndexOrdinal)
 	fileErrors.claim(ManagedFileClosedCaseName, ordinal: ManagedFileClosedOrdinal)
+	fileErrors.requireTotal()
 end 'claimManagedFileOrdinals'
 
 // ⭐ **INSTALL + THE BIDIRECTIONAL DRIFT GUARD**, copied from `installManagedMemoryRuntime` for its stated reason:
