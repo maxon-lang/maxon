@@ -228,3 +228,50 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:5:2: Unsupported: a `var` declaration in an `extension` body — an extension adds methods to types other declarations named and declares no storage of its own, so there is no type for this binding to belong to; declare it in the `type` body as a `static var`
 ```
+
+<!-- test: error.byte-is-not-an-extendable-primitive -->
+⭐ **`byte` is admitted by `namesAPrimitiveType` and is NOT an extendable target, and the difference is
+the point.** That predicate names the set with STATICS (`byte.fromString`); this door needs the set with
+VALUES. `byte` names no type in shv2 — a byte-sized value is an `int` range (`typealias Byte = int(0 to
+u8.max)`) reaching every receiver door tagged `integer` — so an `extension byte` body would publish
+`byte.<method>` symbols nothing could ever dispatch: a silent declaration, the exact shape this rung
+closes. **Refused with a position rather than compiled to nothing**, which is what it did before.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+extension byte
+	export function widened() returns Integer
+		return 1
+	end 'widened'
+end 'byte'
+
+function main() returns ExitCode
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:4:11: Unsupported: `extension byte` — `byte` is the qualifier of a static (`byte.fromString`) and names no type of its own, so it has no values for these methods to be dispatched on; a byte-sized value is an `int` range (`typealias Byte = int(0 to u8.max)`), so extend `int`
+```
+
+<!-- test: error.self-in-a-primitive-extension-has-no-fields -->
+⭐ A primitive **is** its value. `self` in these bodies is the `int` itself, so there is nothing for a
+field access to read — and reaching for one used to take the compiler down at `enclosingLayout`,
+blaming the pre-scan for a `type int` no program wrote. It is a positioned refusal, mirroring the enum
+arm.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+extension int
+	export function peek() returns Integer
+		return self.v
+	end 'peek'
+end 'int'
+
+function main() returns ExitCode
+	let n = 5
+	return n.peek() as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:10: Unsupported: a field access through `self` in a method of `extension int` — a primitive IS its value and declares no fields, so `self` here is the int itself and has no members to read
+```
