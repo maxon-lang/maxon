@@ -1971,11 +1971,23 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 // The module-level shared empty CALL-ALIGNED parameter-name list the declaration sweep leaves in hand for a
 // declaration it does not walk the parameters of — a NON-GENERIC instance method, which needs neither the
 // consume scan (its direct field stores are the callee-side refusal's business, `detectFieldStores: false`)
-// nor the opaque-parameter record (it has no `uses` list for a parameter to name). `scanBodyFacts` returns
-// at once on an empty list, which is exactly the "not walked" behaviour, so the one shared array is what
-// makes that single call site able to serve every declaration shape. Never mutated; ONE allocation for the
-// whole compile, the discipline every `sharedEmpty*` here states.
+// nor the opaque-parameter record (it has no `uses` list for a parameter to name). `scanBodyFacts` skips its
+// whole parameter half on an empty list (`scansParams`), which is exactly the "not walked" behaviour, so the
+// one shared array is what makes that single call site able to serve every declaration shape. Never mutated;
+// ONE allocation for the whole compile, the discipline every `sharedEmpty*` here states.
 let sharedEmptyScannedParamNames = ByteArrayArray.create()
+
+// The module-level shared EMPTY working columns `scanBodyFacts` starts from — the `sharedEmptyTypeParamFeeds`
+// discipline, one column each, for the three shapes that walk a body and write none of them: a declaration
+// with no parameters to watch (the bit columns, the brace stack, the bracket openers and the forwarding
+// edges) and a body with no `return` in it at all (the two return columns). ONE allocation apiece for the
+// whole compile; never mutated, because every writer of each is reached only past the test that privatises it.
+// `sharedEmptyBoolColumn` serves the parameter bit columns AND the brace stack: one empty `BoolArray` is one
+// empty `BoolArray`, and a second anchor would be the same object under a second name.
+let sharedEmptyBoolColumn = BoolArray.create()
+let sharedEmptyBracketOpeners = TokenIndexArray.create()
+let sharedEmptyForwardCalls = ForwardCallArray.create()
+let sharedEmptyReturnedNames = ByteArrayArray.create()
 
 // The module-level shared EMPTY per-instance-alias placeholders (P1.6-C), held as the INITIAL value of the
 // `enclosingInnerAliases` / `valueInstanceAlias` working fields AND as the COW anchors the reset points at.
@@ -12582,44 +12594,40 @@ export type Parser
 		// callee-side borrowed-value refusal — see the call site). The BY-REFERENCE half reads `byRefParamNames`,
 		// which is call-aligned and filled for every declaration, because an instance method that forwards a
 		// parameter into a reassigning one is exactly as much a forwarder as a free function is
-		// (`pass-by-reference.transitive-reassign-through-sibling-methods` is that program). So the walk runs when
-		// EITHER has something to look for.
-		// ⭐ **THE WALK IS UNCONDITIONAL SINCE W117, AND THAT IS A WIDENING WITH A REASON.** It used to return
-		// here whenever neither name list had anything to look for; W117's question — does this body RETURN a
-		// `let` global's record? — has nothing to do with parameters, and the functions that ask it most are
-		// exactly the receiverless zero-parameter accessors this guard skipped (`Box.get()`,
-		// `CharacterSet.whitespaces()`). The added cost is one pass over those bodies' tokens, once, at the
-		// sweep; every function with a parameter or a receiver was already walked.
-		var consumed = BoolArray.create()
-		for _ in 0 upto paramNames.count() 'initBits'
-			consumed.push(false)
-		end 'initBits'
+		// (`pass-by-reference.transitive-reassign-through-sibling-methods` is that program). So the parameter
+		// half runs when EITHER has something to look for — that disjunction is `scansParams` below.
+		// ⭐ **THE WALK IS UNCONDITIONAL SINCE W117, BUT THE PARAMETER PROBES ARE NOT — THE OLD GUARD BECAME A
+		// SCOPE RATHER THAN A `return`.** It used to return here whenever neither name list had anything to look
+		// for; W117's question — does this body RETURN a `let` global's record? — has nothing to do with
+		// parameters, and the functions that ask it most are exactly the receiverless zero-parameter accessors
+		// that guard skipped (`Box.get()`, `CharacterSet.whitespaces()`). So the walk widened and the guard
+		// stayed, one level in: with BOTH lists empty every parameter probe below is provably inert (each is
+		// gated on an index below a count of zero, and the bracket stacks exist only to feed those probes), so a
+		// zero-parameter body pays the token walk and the return scan and nothing else. ⚠ Do not fold
+		// `scansParams` into the probes individually — it is the pre-W117 guard, and keeping it whole is what
+		// makes "what this widening costs" one predicate rather than five.
+		let scansParams = paramNames.count() > 0 or byRefParamNames.count() > 0
+		var consumed = initialBitColumn(paramNames.count())
 		// The two by-reference columns — see `SignatureIndex.ParamReassignInfo` for what each means and why the
 		// sweep records them separately instead of combining them here.
-		var reassignedDirect = BoolArray.create()
-		var reassignedForwarded = BoolArray.create()
-		for _ in 0 upto byRefParamNames.count() 'initByRefBits'
-			reassignedDirect.push(false)
-			reassignedForwarded.push(false)
-		end 'initByRefBits'
-		var forwardCalls = ForwardCallArray.create()
+		var reassignedDirect = initialBitColumn(byRefParamNames.count())
+		var reassignedForwarded = initialBitColumn(byRefParamNames.count())
+		var forwardCalls = ForwardCallArray.create() if scansParams else sharedEmptyForwardCalls
 		var statesByRef = false
 		// ⭐ **W117's THREE COLUMNS: the names this body RETURNS as a whole statement, their first SEGMENTS, and
 		// the calls whose result it returns.** `returnedHeads` is the head of each name (`Box` of `Box.shared`),
 		// which is what the shadowing filter compares against — a body that binds `Box` returns its own local,
 		// not the global.
 		//
-		// ⚡ **THREE MORE ARRAYS PER SWEPT DECLARATION, ON A SCAN THAT ALREADY BUILDS SIX**, and they are
-		// created outright rather than copy-on-written off a shared empty because the alternatives all cost
-		// more than they save: a COW needs the shape test written twice (once to decide whether to privatise,
-		// once to record), and a reusable per-`Parser` buffer needs a COPY at every body that states something
-		// plus a clear at every body that does not. The recorded POPULATION is already small — a body returning
-		// `a + b`, `self.x` or a bare local states nothing (a local is dropped by the shadowing filter), so
-		// only a body returning a call or an unbound name reaches the map — but the three arrays themselves are
-		// paid per declaration. Flagged for the ladder rather than guessed at.
-		var returnedNames = ByteArrayArray.create()
-		var returnedHeads = ByteArrayArray.create()
-		var returnCalls = ForwardCallArray.create()
+		// ⚡ **COPY-ON-WRITTEN OFF THE SHARED EMPTIES AT THE FIRST `return` TOKEN**, which is the one privatise
+		// test that is NOT the shape test written twice: the shapes are decided in `noteReturnedGlobalOrForward`
+		// and this asks only whether the body has a `return` at all. A body with none — every procedure in the
+		// program — keeps all three shared and allocates nothing, and a body with one pays the three arrays it
+		// was always going to need.
+		var returnedNames = sharedEmptyReturnedNames
+		var returnedHeads = sharedEmptyReturnedNames
+		var returnCalls = sharedEmptyForwardCalls
+		var returnColumnsArePrivate = false
 		// The type-parameter FEED map is a fresh array pre-filled with `none` ONLY inside a generic type's
 		// body — a feed requires a type-parameter-typed field, so a top-level function and a non-generic type's
 		// method (all of them on the generics-free corpus) keep the SHARED empty array (⚡ no per-function
@@ -12630,9 +12638,10 @@ export type Parser
 		var any = false
 		// The bracket stack: `true` for a `{` (struct literal), `false` for a `(`. A `[` is not pushed at all
 		// (`trackBracketAt`). The innermost open bracket being a `{` is what distinguishes a struct-field `:`
-		// from a labelled-call-argument one.
-		var braceStack = BoolArray.create()
-		var openBrackets = TokenIndexArray.create()
+		// from a labelled-call-argument one. ⚡ Both are SHARED EMPTIES for a body with no parameters to watch:
+		// `trackBracketAt` is the only writer and it runs under `scansParams`, as does every reader.
+		var braceStack = BoolArray.create() if scansParams else sharedEmptyBoolColumn
+		var openBrackets = TokenIndexArray.create() if scansParams else sharedEmptyBracketOpeners
 		var blockDepth = 0 as BlockDepth
 
 		var q = bodyStart
@@ -12643,112 +12652,123 @@ export type Parser
 			end 'funcEnd'
 
 			let kind = self.kindAt(q)
-			self.trackBracketAt(q, braceStack: braceStack, openBrackets: openBrackets)
 
-			// ⭐⭐ **PBR-2's SEED: `p =` AT STATEMENT POSITION.** Asked through `assignsAt` — the SAME predicate the
-			// loop-phi scan decides a loop's carried vars by — so "what does a rebind look like in tokens" has one
-			// answer in this compiler. A write form taught to one is taught to both.
-			//
-			// ⚠ It still over-detects a `let cur = …` that SHADOWS a parameter, which is safe in the only
-			// direction that matters: the consequence is a parameter passed by reference that did not have to
-			// be — wasteful, never wrong, because a cell is a legal way to hold any value and both ends read
-			// this one column. The FIELD-store shape (`p.x = 5` where a parameter is named `x`) is excluded
-			// exactly, by `rebindsANameAt`; see there for the golden it moved.
-			// ⭐ **AND THE TUPLE-ASSIGNMENT SPELLING OF THE SAME WRITE** (`(p, _) = f()`), which carries no `=`
-			// of its own and so is invisible to the shape above. Without it a by-reference parameter could be
-			// rebound by `p = f()` and not by `(p, _) = f()` — one operation, two answers decided by spelling.
-			// See `tupleAssignRebindsANameAt` for why the enclosing `(` is free here.
 			// ⭐⭐ **W117's SEED AND EDGE, both read off a `return` statement's own first tokens.** Probed here
 			// rather than in a walk of its own because this walk already stands on every token of the body with
-			// the bracket and block-depth state a second one would have to rebuild.
+			// the block-depth state a second one would have to rebuild. AHEAD of the parameter probes because it
+			// is the one fact this walk collects for a body that has no parameters at all.
 			if kind == TokenKind.return 'returnStatement'
+				if not returnColumnsArePrivate 'firstReturnInThisBody'
+					returnedNames = ByteArrayArray.create()
+					returnedHeads = ByteArrayArray.create()
+					returnCalls = ForwardCallArray.create()
+					returnColumnsArePrivate = true
+				end 'firstReturnInThisBody'
+
 				self.noteReturnedGlobalOrForward(q, returnedNames: returnedNames, returnedHeads: returnedHeads, returnCalls: returnCalls)
 			end 'returnStatement'
 
-			if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'rebindsAName'
-				let target = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
-				if target < byRefParamNames.count() 'ofOwnParameter'
-					try reassignedDirect.set(target, value: true) otherwise panic("scanBodyFacts: reassignedDirect.set OOB at {target} despite target < byRefParamNames.count()")
-					statesByRef = true
-				end 'ofOwnParameter'
-			end 'rebindsAName'
+			if scansParams 'aBodyWithParametersToWatch'
+				self.trackBracketAt(q, braceStack: braceStack, openBrackets: openBrackets)
 
-			// ⭐⭐ **PBR-2's FORWARDING EDGE: this parameter handed on as a bare argument.** The parameter's bit and
-			// the callee's NAME are recorded together; whether the edge is LIVE is settled whole-program by
-			// `ProgramSignatures.closeByRefForwarding`, which is the only party that can see what the callee does.
-			if self.bareCallArgumentAt(q, braceStack: braceStack) 'handedOn'
-				let forwarded = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
-				if forwarded < byRefParamNames.count() 'ofOwnParameter'
-					try reassignedForwarded.set(forwarded, value: true) otherwise panic("scanBodyFacts: reassignedForwarded.set OOB at {forwarded} despite forwarded < byRefParamNames.count()")
-					noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
-					statesByRef = true
-				end 'ofOwnParameter'
-			end 'handedOn'
+				// ⭐⭐ **PBR-2's SEED: `p =` AT STATEMENT POSITION.** Asked through `assignsAt` — the SAME predicate the
+				// loop-phi scan decides a loop's carried vars by — so "what does a rebind look like in tokens" has one
+				// answer in this compiler. A write form taught to one is taught to both.
+				//
+				// ⚠ It still over-detects a `let cur = …` that SHADOWS a parameter, which is safe in the only
+				// direction that matters: the consequence is a parameter passed by reference that did not have to
+				// be — wasteful, never wrong, because a cell is a legal way to hold any value and both ends read
+				// this one column. The FIELD-store shape (`p.x = 5` where a parameter is named `x`) is excluded
+				// exactly, by `rebindsANameAt`; see there for the golden it moved.
+				// ⭐ **AND THE TUPLE-ASSIGNMENT SPELLING OF THE SAME WRITE** (`(p, _) = f()`), which carries no `=`
+				// of its own and so is invisible to the shape above. Without it a by-reference parameter could be
+				// rebound by `p = f()` and not by `(p, _) = f()` — one operation, two answers decided by spelling.
+				// See `tupleAssignRebindsANameAt` for why the enclosing `(` is free here.
+				if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'rebindsAName'
+					let target = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
+					if target < byRefParamNames.count() 'ofOwnParameter'
+						try reassignedDirect.set(target, value: true) otherwise panic("scanBodyFacts: reassignedDirect.set OOB at {target} despite target < byRefParamNames.count()")
+						statesByRef = true
+					end 'ofOwnParameter'
+				end 'rebindsAName'
 
-			if detectFieldStores and kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldSep'
-				let idx = self.consumedParamAfterColon(q, paramNames: paramNames)
-				if idx < paramNames.count() 'isParam'
-					let feedPos = self.paramTypeParamPositionAt(typeParamPositions, index: idx)
-					if feedPos < self.enclosingTypeParams.count() 'typeParamField'
-						// ⭐ **A TYPE-PARAMETER-typed store is a FEED, not a plain consume (P1.6-A/B2).**
-						// `Self{value: v}` on `type Box uses T` stores `v` into `T`, whose managed-ness the shared
-						// body cannot see (it is opaque here). P1.6-A EXCLUDED it (the box borrowed, the caller kept
-						// the +1); B2 records WHICH type parameter it feeds instead, so the CONCRETE call site — which
-						// knows the instance's argument at that position — consumes it iff that argument OWNS managed
-						// heap (`Box with String`) and borrows it otherwise (`Box with Point`, byte-identical to A).
-						// The sink is the CONSTRUCTED VALUE: the store lands in a field of the `Self` this call
-						// RETURNS, so the caller's value owns it and this frame must not be enrolled its owner.
-						try feeds.set(idx, value: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue)) otherwise panic("scanBodyFacts: feeds.set OOB at {idx} despite idx < paramNames.count()")
+				// ⭐⭐ **PBR-2's FORWARDING EDGE: this parameter handed on as a bare argument.** The parameter's bit and
+				// the callee's NAME are recorded together; whether the edge is LIVE is settled whole-program by
+				// `ProgramSignatures.closeByRefForwarding`, which is the only party that can see what the callee does.
+				if self.bareCallArgumentAt(q, braceStack: braceStack) 'handedOn'
+					let forwarded = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
+					if forwarded < byRefParamNames.count() 'ofOwnParameter'
+						try reassignedForwarded.set(forwarded, value: true) otherwise panic("scanBodyFacts: reassignedForwarded.set OOB at {forwarded} despite forwarded < byRefParamNames.count()")
+						noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
+						statesByRef = true
+					end 'ofOwnParameter'
+				end 'handedOn'
+
+				if detectFieldStores and kind == TokenKind.colon and self.braceStackInnermostIsBrace(braceStack) 'fieldSep'
+					let idx = self.consumedParamAfterColon(q, paramNames: paramNames)
+					if idx < paramNames.count() 'isParam'
+						let feedPos = self.paramTypeParamPositionAt(typeParamPositions, index: idx)
+						if feedPos < self.enclosingTypeParams.count() 'typeParamField'
+							// ⭐ **A TYPE-PARAMETER-typed store is a FEED, not a plain consume (P1.6-A/B2).**
+							// `Self{value: v}` on `type Box uses T` stores `v` into `T`, whose managed-ness the shared
+							// body cannot see (it is opaque here). P1.6-A EXCLUDED it (the box borrowed, the caller kept
+							// the +1); B2 records WHICH type parameter it feeds instead, so the CONCRETE call site — which
+							// knows the instance's argument at that position — consumes it iff that argument OWNS managed
+							// heap (`Box with String`) and borrows it otherwise (`Box with Point`, byte-identical to A).
+							// The sink is the CONSTRUCTED VALUE: the store lands in a field of the `Self` this call
+							// RETURNS, so the caller's value owns it and this frame must not be enrolled its owner.
+							try feeds.set(idx, value: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue)) otherwise panic("scanBodyFacts: feeds.set OOB at {idx} despite idx < paramNames.count()")
+							any = true
+						end 'typeParamField' else 'plainField'
+							// A NON-type-parameter field store (a monomorphic `Self{value: v}` into an `Integer` field,
+							// or a direct `String`/struct field) — the callee OWNS it whatever the concrete type, so the
+							// plain consume bit is set. A scalar argument makes it inert at the call site anyway.
+							try consumed.set(idx, value: true) otherwise panic("scanBodyFacts: consumed.set OOB at {idx} despite idx < paramNames.count()")
+							any = true
+						end 'plainField'
+					end 'isParam'
+				end 'fieldSep'
+
+				// ⭐ **`items.push(item)` — AN OPAQUE-`T` `Array` MUTATOR IS A CALLEE-STORAGE FEED (P1.7 slice
+				// 3b-iii, W10).** A generic method that pushes/sets/inserts a type-parameter argument into an
+				// `Array` moves that argument into that array, whose element the array OWNS (its `__managed_decref` walk
+				// destroys it exactly once). The shared body cannot see the element's managed-ness — it is opaque
+				// here — so the parameter is recorded as a FEED of the type parameter it fills, and the CONCRETE call
+				// site consumes it iff that instance's argument owns managed heap (`Container with String`) and
+				// borrows it otherwise (`Container with SmallInt`, byte-identical). Only a BARE type-parameter
+				// argument is fed — a concrete element (a monomorphic `Array with String` field) already moves in at
+				// the array call.
+				//
+				// An array MUTATOR call (`markOpaqueArrayMutatorFeeds`, receiver-blind) and a bare-field REASSIGNMENT
+				// `self.saved = item` (`markOpaqueFieldReassignFeed`, P1.7 Finding A) are the two opaque-`T`
+				// callee-storage shapes.
+				//
+				// ⚠ **THE REASSIGNMENT IS STILL `self`-HEADED, AND NOT BECAUSE IMPLICIT SELF CANNOT SPELL IT**
+				// (this said *"a bare `saved = item` is a local assignment"* — corrected at review; a bare field name
+				// on the left of an `=` inside an instance method IS a store through the receiver, routed to
+				// `parseSelfFieldAssignment` at the `binding.isSelfField` arm of the assignment parse). It is
+				// `self`-headed because the SWEEP cannot tell the two apart: `self . <ident> =` is self-identifying,
+				// while a bare `<ident> =` needs the enclosing type's FIELD NAMES, which are not merged into
+				// `self.signatures` when this runs — and marking a local assignment as a feed would enrol a parameter
+				// owned that nothing moves. So the implicit spelling records no feed. MEASURED, on this tip and on
+				// `cad4cf30d` alike, that is a FALSE REJECT and not a memory-safety hole: `emitOpaqueFieldReassign`
+				// demands an owned value at the store and refuses the un-fed parameter cleanly (E2015), where the
+				// `self.`-spelled twin compiles and runs. Widening it needs a sweep-time opaque-field roster — filed,
+				// not built here.
+				//
+				// ⚡ Gated on `genericScope` because a feed needs a type-parameter-typed parameter and outside a
+				// generic type there is none (`paramIsTypeParamTyped` is false for every index when
+				// `enclosingTypeParams` is empty) — so the whole probe is skipped for every function on a
+				// generics-free program, which the `self`-headed predecessor paid for at every `self` token.
+				if genericScope 'maybeOpaqueFeed'
+					if self.markOpaqueArrayMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedArray'
 						any = true
-					end 'typeParamField' else 'plainField'
-						// A NON-type-parameter field store (a monomorphic `Self{value: v}` into an `Integer` field,
-						// or a direct `String`/struct field) — the callee OWNS it whatever the concrete type, so the
-						// plain consume bit is set. A scalar argument makes it inert at the call site anyway.
-						try consumed.set(idx, value: true) otherwise panic("scanBodyFacts: consumed.set OOB at {idx} despite idx < paramNames.count()")
+					end 'fedArray'
+					if kind == TokenKind.self and self.markOpaqueFieldReassignFeed(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedField'
 						any = true
-					end 'plainField'
-				end 'isParam'
-			end 'fieldSep'
-
-			// ⭐ **`items.push(item)` — AN OPAQUE-`T` `Array` MUTATOR IS A CALLEE-STORAGE FEED (P1.7 slice
-			// 3b-iii, W10).** A generic method that pushes/sets/inserts a type-parameter argument into an
-			// `Array` moves that argument into that array, whose element the array OWNS (its `__managed_decref` walk
-			// destroys it exactly once). The shared body cannot see the element's managed-ness — it is opaque
-			// here — so the parameter is recorded as a FEED of the type parameter it fills, and the CONCRETE call
-			// site consumes it iff that instance's argument owns managed heap (`Container with String`) and
-			// borrows it otherwise (`Container with SmallInt`, byte-identical). Only a BARE type-parameter
-			// argument is fed — a concrete element (a monomorphic `Array with String` field) already moves in at
-			// the array call.
-			//
-			// An array MUTATOR call (`markOpaqueArrayMutatorFeeds`, receiver-blind) and a bare-field REASSIGNMENT
-			// `self.saved = item` (`markOpaqueFieldReassignFeed`, P1.7 Finding A) are the two opaque-`T`
-			// callee-storage shapes.
-			//
-			// ⚠ **THE REASSIGNMENT IS STILL `self`-HEADED, AND NOT BECAUSE IMPLICIT SELF CANNOT SPELL IT**
-			// (this said *"a bare `saved = item` is a local assignment"* — corrected at review; a bare field name
-			// on the left of an `=` inside an instance method IS a store through the receiver, routed to
-			// `parseSelfFieldAssignment` at the `binding.isSelfField` arm of the assignment parse). It is
-			// `self`-headed because the SWEEP cannot tell the two apart: `self . <ident> =` is self-identifying,
-			// while a bare `<ident> =` needs the enclosing type's FIELD NAMES, which are not merged into
-			// `self.signatures` when this runs — and marking a local assignment as a feed would enrol a parameter
-			// owned that nothing moves. So the implicit spelling records no feed. MEASURED, on this tip and on
-			// `cad4cf30d` alike, that is a FALSE REJECT and not a memory-safety hole: `emitOpaqueFieldReassign`
-			// demands an owned value at the store and refuses the un-fed parameter cleanly (E2015), where the
-			// `self.`-spelled twin compiles and runs. Widening it needs a sweep-time opaque-field roster — filed,
-			// not built here.
-			//
-			// ⚡ Gated on `genericScope` because a feed needs a type-parameter-typed parameter and outside a
-			// generic type there is none (`paramIsTypeParamTyped` is false for every index when
-			// `enclosingTypeParams` is empty) — so the whole probe is skipped for every function on a
-			// generics-free program, which the `self`-headed predecessor paid for at every `self` token.
-			if genericScope 'maybeOpaqueFeed'
-				if self.markOpaqueArrayMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedArray'
-					any = true
-				end 'fedArray'
-				if kind == TokenKind.self and self.markOpaqueFieldReassignFeed(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: feeds) 'fedField'
-					any = true
-				end 'fedField'
-			end 'maybeOpaqueFeed'
+					end 'fedField'
+				end 'maybeOpaqueFeed'
+			end 'aBodyWithParametersToWatch'
 
 			blockDepth = self.blockDepthAfter(q, depth: blockDepth)
 
@@ -12766,15 +12786,28 @@ export type Parser
 			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(byRefParamNames, direct: reassignedDirect, forwarded: reassignedForwarded, forwardCalls: forwardCalls, bareName: funcBareName, callability: self.declarationCallability()), takesReceiver: takesReceiver))
 		end 'takesOrForwardsAByRefParam'
 
-		// ⭐ **THE SHADOWING FILTER RUNS ONLY FOR A BODY THAT RETURNED A BARE NAME**, which is a handful of
-		// functions in a program and none at all in most — so the second pass it costs is not paid by the
-		// bodies that merely return a call, and is not paid at all by the overwhelming majority that return
-		// neither. See `returnedNamesNotBoundHere` for what it decides and which way it errs.
-		let unshadowed = self.returnedNamesNotBoundHere(returnedNames, returnedHeads: returnedHeads, bodyStart: bodyStart, paramNames: byRefParamNames) if returnedNames.count() > 0 else returnedNames
-		let globalAliasInfo = GlobalAliasReturnInfo.create(unshadowed, returnCalls: returnCalls, bareName: funcBareName, callability: self.declarationCallability(), declFilePath: self.filePath)
-		if globalAliasInfo.statesAnything() 'mayHandBackAGlobalsRecord'
-			globalAliasReturns.push(GlobalAliasReturnEntry.create(funcName, info: globalAliasInfo, takesReceiver: takesReceiver))
-		end 'mayHandBackAGlobalsRecord'
+		// ⚡ **NOTHING IS BUILT FOR A BODY THAT STATES NOTHING** — the predicate is asked of the raw COLUMNS,
+		// ahead of the record, because building the record to ask it cost a `GlobalAliasReturnInfo` and a
+		// `DeclCallability` per swept declaration to discover that neither was wanted.
+		if GlobalAliasReturnInfo.statesAnything(returnedNames, returnCalls: returnCalls) 'returnedANameOrACall'
+			// ⭐ **THE SHADOWING FILTER RUNS ONLY FOR A BODY THAT RETURNED A BARE NAME** — not for one that
+			// merely returns a call, and not at all for one that returns neither. See
+			// `returnedNamesNotBoundHere` for what it decides and which way it errs.
+			//
+			// ⚠ **THIS USED TO SAY *"a handful of functions in a program and none at all in most"*, AND THAT
+			// WAS NEVER MEASURED.** `return EmptySourceText` and `return SomeConstant` are ordinary, so the
+			// population is bodies-returning-an-unbound-name, not accessors-returning-a-global — the same
+			// over-estimate `sawGlobalNameReturn` makes, one tier down. What IS measured is the price: a
+			// SECOND O(tokens) walk of the body plus two arrays, per such body. It stands because the
+			// alternative — carrying the names bound so far through the first walk — costs a per-body set and
+			// an insert per binder, which is more than one allocation-free re-walk.
+			let unshadowed = self.returnedNamesNotBoundHere(returnedNames, returnedHeads: returnedHeads, bodyStart: bodyStart, paramNames: byRefParamNames) if returnedNames.count() > 0 else returnedNames
+			// Asked a second time because the FILTER can empty the name column: a body whose only `return` named
+			// a local of its own states nothing after all, and must not reach the map.
+			if GlobalAliasReturnInfo.statesAnything(unshadowed, returnCalls: returnCalls) 'mayHandBackAGlobalsRecord'
+				globalAliasReturns.push(GlobalAliasReturnEntry.create(funcName, info: GlobalAliasReturnInfo.create(unshadowed, returnCalls: returnCalls, bareName: funcBareName, callability: self.declarationCallability(), declFilePath: self.filePath), takesReceiver: takesReceiver))
+			end 'mayHandBackAGlobalsRecord'
+		end 'returnedANameOrACall'
 	end 'scanBodyFacts'
 
 	// ⭐⭐ **W117's SEED AND EDGE, READ OFF ONE `return` STATEMENT.** Exactly four shapes are recognised, and
@@ -12904,6 +12937,23 @@ export type Parser
 		end 'fill'
 		return feeds
 	end 'initialTypeParamFeeds'
+
+	// The per-parameter BIT column `scanBodyFacts` starts from — `initialTypeParamFeeds`' twin, and the ONE
+	// spelling of "one `false` per name in this list" for all three of them (the consume column and the two
+	// by-reference ones, which used to write the same fill loop twice between them). ⚡ The SHARED empty array
+	// when the name list is empty: a column with no slots can never be `set`, because every writer is gated on
+	// an index below the very count that is zero.
+	function initialBitColumn(count ParamCount) returns BoolArray
+		if count == 0 'noSlotsToTrack'
+			return sharedEmptyBoolColumn
+		end 'noSlotsToTrack'
+
+		var bits = BoolArray.create()
+		for _ in 0 upto count 'fill'
+			bits.push(false)
+		end 'fill'
+		return bits
+	end 'initialBitColumn'
 
 	// ⭐⭐ **ONE SITE'S CONTRIBUTION TO THE WHOLE-PROGRAM LAYOUT-DESCRIPTOR-NEED FIXPOINT (P1.6-B1, W23c)** —
 	// every method declared between `site.bodyStart` and the body's `end`, with its direct-need seed and the

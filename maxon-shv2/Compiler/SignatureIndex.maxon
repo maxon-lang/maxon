@@ -3245,8 +3245,13 @@ export type GlobalAliasReturnInfo
 	// Is there anything to record at all? A body that returns neither a bare name nor a call states nothing
 	// and is not recorded — the "absence is the answer" default the whole registry rests on, and what keeps
 	// the map empty for a program with no top-level aggregate at all.
-	export function statesAnything() returns bool
-		return self.returnedNames.count() > 0 or self.returnCalls.count() > 0
+	//
+	// ⚡ **OVER THE TWO COLUMNS RATHER THAN OVER A BUILT `Self`, SO THE ANSWER IS AVAILABLE *BEFORE* THE
+	// RECORD EXISTS.** The sweep asks it of the raw columns and builds nothing for a body that states nothing,
+	// which is most of them; asked of a `Self` it would have cost a record and a `DeclCallability` per swept
+	// declaration to discover that neither was wanted.
+	export static function statesAnything(returnedNames ByteArrayArray, returnCalls ForwardCallArray) returns bool
+		return returnedNames.count() > 0 or returnCalls.count() > 0
 	end 'statesAnything'
 end 'GlobalAliasReturnInfo'
 
@@ -9375,6 +9380,17 @@ export type ProgramSignatures
 
 		// W117's raw material rides the same loop and the same key for the by-reference columns' reason: it is
 		// another per-declaration fact a CALL SITE reads about a callee it cannot see.
+		//
+		// ⚡ **THE DECLARING FILE IS FOLDED HERE, ONCE, RATHER THAN INSIDE THE LOOP** — see
+		// `GlobalAliasReturnInfo.declFilePath` for why the file has to ride the hash at all. Every entry in this
+		// array was swept by ONE `Parser` off ONE file, so `entry.info.declFilePath` is `filePath` for all of
+		// them; folding it per entry meant a `String.toByteArray()` — a `managed.slice` COPY plus a
+		// `ByteArray.init` — per DECLARATION, for a fact that changes per FILE. The hash still distinguishes two
+		// files stating identical bodies, which is the whole reason the file rides.
+		if globalAliasReturns.count() > 0 'thisFileStatesOne'
+			self.hash = mixBytes(mix(self.hash, value: DeclShapeGlobalAliasReturn), bytes: filePath.toString().toByteArray())
+		end 'thisFileStatesOne'
+
 		for entry in globalAliasReturns 'eachGlobalAliasReturn'
 			self.recordGlobalAliasReturn(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
 		end 'eachGlobalAliasReturn'
@@ -10172,8 +10188,9 @@ export type ProgramSignatures
 		self.funcGlobalAliasReturns.upsert(name, value: info)
 		self.sawGlobalNameReturn = self.sawGlobalNameReturn or info.returnedNames.count() > 0
 
+		// The declaring FILE is NOT folded here — `foldFile` folds it once for the whole file, because that is
+		// the granularity the fact has. See there.
 		var state = mixBytes(mix(self.hash, value: DeclShapeGlobalAliasReturn), bytes: name)
-		state = mixBytes(state, bytes: info.declFilePath.toString().toByteArray())
 		for returned in info.returnedNames 'eachName'
 			state = mixBytes(state, bytes: returned)
 		end 'eachName'
@@ -10232,6 +10249,23 @@ export type ProgramSignatures
 			return
 		end 'noReturnedNameCanSeedIt'
 
+		// ⚡⚡ **AND THE SAME GATE ASKED EXACTLY, WHICH THE ONE ABOVE CANNOT BE.** `sawGlobalNameReturn` is
+		// raised at the SWEEP, where no name can be resolved, so it says only *"some body returned a bare
+		// name"* — true of nearly every program, because `return EmptySourceText` and `return SomeConstant`
+		// are ordinary. Here every declaration is folded and every initializer evaluated, so the real
+		// question — does any of those names DENOTE a `let`-declared stored global? — has an answer, and a
+		// `false` means reachability would run from an empty seed set and mark nothing. Skipping it skips
+		// the node space, both edge columns, the CSR build and the BFS.
+		//
+		// ⚠ **MEASURED, and it is why this test exists rather than the sweep gate alone**: this closure is
+		// asked lazily, and its FIRST asker is `Parser.beginFunction` — so its whole cost was billed to
+		// `phase:parse`, which is where the ladder read it (+5,496 allocations at rung 0, +11,278 at rung 5,
+		// the entire `phase:parse` movement of `W117`). Attributed by a probe that made nothing ask it:
+		// `phase:parse` fell back to the merge base's count to the allocation.
+		if not self.anyRecordedReturnNamesAnImmutableGlobal() 'noSeedResolvesToOne'
+			return
+		end 'noSeedResolvesToOne'
+
 		var nodes = DeclNodeSpace.create()
 		for (_, info) in self.funcGlobalAliasReturns 'eachRecorded'
 			let node = nodes.nodeFor(info.bareName, callability: info.callability)
@@ -10265,6 +10299,19 @@ export type ProgramSignatures
 			end 'marked'
 		end 'publishKeys'
 	end 'closeGlobalAliasReturns'
+
+	// ⚡ **IS THERE A SEED AT ALL?** — the closure's exact precondition, over the SAME per-declaration test the
+	// seed loop uses, so the two cannot come to disagree about what a seed is. It walks and resolves nothing
+	// the seed loop would not have resolved anyway; what it buys is the right to stop before the graph exists.
+	function anyRecordedReturnNamesAnImmutableGlobal() returns bool
+		for (_, info) in self.funcGlobalAliasReturns 'eachRecorded'
+			if self.returnsAnImmutableGlobalDirectly(info) 'namesOneItself'
+				return true
+			end 'namesOneItself'
+		end 'eachRecorded'
+
+		return false
+	end 'anyRecordedReturnNamesAnImmutableGlobal'
 
 	// Does this body return a name that DENOTES an immutable stored global, read from its own file? The
 	// closure's seed test, asked once per recorded declaration.
