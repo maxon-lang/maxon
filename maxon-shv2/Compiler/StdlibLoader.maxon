@@ -1585,6 +1585,46 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// as `Map`/`Array`/`String` are) and `SetIterator`, which no other module declares; and it has no
 	// top-level binding, so the `S2h` reachability term has nothing of its to keep or drop.
 	try listWhitelistedModule(stdlibDir, relative: "Set.maxon", into: listed)
+	// ⭐⭐ **`stdlib/CharacterSet.maxon` PLUS `stdlib/helpers/string/unicodeCategory.maxon` — THE OBLIGATION
+	// THE ENTRY ABOVE NAMED, DISCHARGED (W115).** `Set.maxon`'s entry records that `CharacterSet` OWNS a
+	// `Set with Character` and that three synthesized `__cs_*` bodies build, drop and probe it. The corpus
+	// declares the same eleven presets, the same `from` and the same `contains` in 137 lines of Maxon, and
+	// with the parser's `CharacterSet` interceptions gone (`parseQualifiedCall`, `dispatchStructMethod`,
+	// `parseTypeReference`) every one of them is now an ordinary declared static on an ordinary declared
+	// struct.
+	//
+	// ⚠ **THE `__cs_*` RUNTIME IS STILL IN THE TREE, UNREACHED, AND ITS DELETION IS OWED AS ITS OWN RUNG** —
+	// `W90`/`W105`'s split, deliberately repeated. `W90` retired `Set` and left `SetRuntime.maxon` standing;
+	// `W105` deleted it separately and its acceptance was BYTE-IDENTITY rather than a green suite, because a
+	// green suite says nothing broke while only byte-identity says nothing was LIVE. Deleting 511 lines in
+	// the rung that changes behaviour would make both unattributable.
+	//
+	// ⚠ **IT IS ONE CONE IN TWO LINES, AND THE SECOND IS NOT OPTIONAL.** `CharacterSet.contains` classifies a
+	// codepoint through `unicodeGeneralCategory` (`stdlib/CharacterSet.maxon:129`), which only
+	// `helpers/string/unicodeCategory.maxon` declares — listing the type alone is **`E3004 call to undefined
+	// function 'unicodeGeneralCategory'`**, measured. ⇒ **that module's standing *"inert if listed"*
+	// classification is REFUTED**: it was inert only while nothing the compiler compiled could call it, and
+	// this line is what gives it its caller. Order-independent like every other entry.
+	//
+	// ⚠ **THE COLLISION RULE, CLEARED — each claim checked against the tree rather than against this list:**
+	//   • the cone's one FREE function is `unicodeGeneralCategory`, declared nowhere else in `stdlib/` and not
+	//     claimed by `Parser.parseCallNamed`'s bare-name chain;
+	//   • its TYPE names are `CharacterSet` and `CharSet` — both compiler-owned, and admitted from the CORPUS
+	//     by `recordStruct`'s provenance bit exactly as `Set`/`Map`/`String` are — plus the file-private
+	//     ranged aliases `CategoryBitmask`, `GeneralCategory`, which no other module declares;
+	//   • it CONSUMES `Set`, `Character` and `Codepoint`, all listed or builtin above, so it is a second
+	//     reader of three declarations and not a second declaration of any;
+	//   • `unicodeCategory.maxon`'s forty top-level `let`s are FILE-PRIVATE scalars and only `UCD_SUPP_COUNT`
+	//     has a reader, so the `S2h` reachability term drops the rest exactly as it drops any unread global.
+	//
+	// ⭐⭐ **AND IT IS NOT INERT — THE DIFFERING-DECLARATIONS CONTROL PASSES, WHICH `W63`/`W86`/`W112` COULD
+	// NOT SAY.** Measured on this tree, one module sabotaged at a time: `contains`'s final `return false` →
+	// `return true` moves `[hello] true false` to `[] true true`; `unicodeGeneralCategory`'s BMP arm →
+	// `return 0` moves it to `[  hello  ] false false`; and an undefined call planted in that body is
+	// ANALYZED and blamed on THIS FILE. Against the unlisted tree all three left the answer — and the
+	// executable's byte count — unmoved, which is what a listed-but-inert module looks like.
+	try listWhitelistedModule(stdlibDir, relative: "helpers/string/unicodeCategory.maxon", into: listed)
+	try listWhitelistedModule(stdlibDir, relative: "CharacterSet.maxon", into: listed)
 	// ⭐⭐⭐ **`stdlib/Array.maxon` AND ITS SIX SORT HELPERS — THE ENTRY THIS WHOLE LIST WAS BUILT TOWARD, AND
 	// THE LARGEST ONE IT WILL EVER TAKE.** Every entry above adds a capability or replaces an authority for
 	// something peripheral. This one replaces the authority for the container the COMPILER ITSELF is built

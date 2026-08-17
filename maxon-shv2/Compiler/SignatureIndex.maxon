@@ -6367,6 +6367,16 @@ typealias ManagedTopLevelNameSet = Set with ByteArray
 // SET keyed by the label rather than a walk of the arena: the access door holds a label and nothing else.
 typealias LazyStaticSlotSet = Set with ByteArray
 
+// The functions each lazy slot's initializer calls, keyed by that same label. Keyed by LABEL rather than by
+// arena index for `LazyStaticSlotSet`'s reason, and read by the ONE site that holds a label and a
+// reachability worklist at once (`StdlibSource.markLazyStaticInitCallees`).
+typealias LazyStaticInitCalleeMap = Map with (ByteArray, ByteArrayArray)
+
+// The answer for a label with no lazy initializer call — which is every label in almost every program, and
+// the answer given once per `globalAddr` op of every reached function. Shared for `sharedEmptyTypeParamNames`'
+// reason: a fresh empty array per miss would be an allocation per OP.
+let sharedEmptyLazyStaticInitCallees = ByteArrayArray.create()
+
 // ⭐ **DOES AN ACCESS TO A GLOBAL SLOT HAVE TO RUN AN INITIALIZER FIRST?** A union rather than an
 // empty-bytes sentinel, because "this global is eager" is an ANSWER — it is what nearly every global is —
 // and not a missing callee.
@@ -8460,6 +8470,11 @@ export type ProgramSignatures
 	// so the key and the slot are created in one act) and read by the parser's access door. See
 	// `lazyStaticInitCalleeFor`.
 	export var lazyStaticSlots as LazyStaticSlotSet
+	// ⭐⭐ **WHAT EACH LAZY SLOT'S INITIALIZER CALLS, BY LABEL** — filled by the SAME walk, for the same
+	// reason: the label is minted there and the outcome is settled by then, so the key and its callees are
+	// recorded in one act. It exists because those callees are NOT program roots (`globalInitCallees`) and
+	// have to be credited at the ACCESS instead — see `lazyStaticInitCalleesOf`.
+	export var lazyStaticInitCallees as LazyStaticInitCalleeMap
 	// ⭐ **HAS EVERY FILE BEEN FOLDED IN YET?** False while `queryProgramSignatures` is still sweeping
 	// files into this index, true from the moment the last one lands. It is the index's own answer to
 	// "can an absence be trusted?" — during the sweep a name that is genuinely declared reads as
@@ -8663,7 +8678,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -12022,6 +12037,14 @@ export type ProgramSignatures
 			stored = stored + 1
 			if self.declSlotIsLazy(decl) 'filledOnFirstAccess'
 				self.lazyStaticSlots.insert(decl.dataLabel)
+				// ⭐ **THE CALLEES ARE RECORDED HERE BECAUSE THIS IS THE ONE WALK THAT HOLDS BOTH HALVES.** The
+				// label has just been minted and the outcome is settled (`evaluateInitializers` runs its whole
+				// DFS before calling this), so asking anywhere else would mean either a second arena walk or a
+				// memo that can be asked too early.
+				match self.declInitializerCall(decl) 'initializer'
+					none then break 'initializer'
+					calls(names) then self.lazyStaticInitCallees.upsert(decl.dataLabel, value: names)
+				end 'initializer'
 			end 'filledOnFirstAccess'
 		end 'each'
 		self.storedGlobalCount = stored
@@ -12747,19 +12770,47 @@ export type ProgramSignatures
 	//
 	// ⭐ **IT TAKES NO `LiveGlobalLabelSet`, AND NEEDING NONE IS WHAT BREAKS THE ORDERING CYCLE.** The walk
 	// this feeds runs BEFORE `liveGlobalLabels`, which runs before `installManagedGlobalInit`; a query here
-	// that depended on liveness would close the loop. It does not have to: a declaration whose initializer
-	// calls contributes storage whatever names it (`contributesStorage`, one arm above), so the filter that
-	// walk is computing cannot change this answer.
+	// that depended on liveness would close the loop. It does not have to: an EAGER declaration whose
+	// initializer calls contributes storage whatever names it (`contributesStorage`, one arm above), so the
+	// filter that walk is computing cannot change this answer.
+	//
+	// ⛔⛔ **AND THAT IS WHY IT ASKS `declScopeInitializerCall` RATHER THAN `declInitializerCall` (W115).**
+	// The sentence above is true of a file-scope global and FALSE of a lazy static, whose storage
+	// `contributesStorage` decides by liveness alone — *"its initializer runs only from an access, so no
+	// access means no run to preserve"*. Rooting one here says the opposite: it runs unconditionally, beside
+	// `main`. That went unmeasured while no LISTED module declared a lazy static, and `stdlib/CharacterSet.maxon`
+	// declares ELEVEN, each building a `Set with Character`. MEASURED with them rooted, on a program whose
+	// whole text is `var flag = true`: `Set.create`/`Set.insert` and the `Array` cone behind them reached in
+	// EVERY compile, `scanRuntimeUsage` turned the heap on, and the image came out with
+	// `data { __slab_cursor@0  __slab_end@8  __mm_alloc_count@16 }` and `panic at Array.maxon:146…` at
+	// `.rdata` byte 0 — the identical pair of symptoms W17 repaired for the witness seed
+	// (`StdlibSource.conformersMintedWithoutTheirOwnMethods`), reached by a second road, and five
+	// `static-variables/data-section-*` pins plus
+	// `stdlib-whitelist.a-listed-modules-literals-cannot-reach-the-rdata-image` read it red.
+	//
+	// ⇒ **A LAZY STATIC'S CALLEES ARE CREDITED AT THE ACCESS INSTEAD** — `lazyStaticInitCalleesOf`, read by
+	// `StdlibSource.markLazyStaticInitCallees` off the `globalAddr` that IS the call to its `__lazy_init$`.
+	// That is the true call graph rather than an approximation of it, and it needs no liveness: the walk
+	// asking it is the walk liveness would have been derived from.
 	export function globalInitCallees() returns ByteArrayArray
 		var callees = ByteArrayArray.create()
 		for i in 0 upto self.decls.count() 'each'
-			match self.declInitializerCall(self.declAt(i)) 'initializer'
+			match self.declScopeInitializerCall(self.declAt(i)) 'initializer'
 				none then break 'initializer'
 				calls(names) then callees.append(names)
 			end 'initializer'
 		end 'each'
 		return callees
 	end 'globalInitCallees'
+
+	// ⭐ **WHAT THE LAZY SLOT `label` NAMES CALLS, or nothing when `label` is eager, unknown, or initialized
+	// by no call.** The half of the root set `globalInitCallees` deliberately does not carry; see there.
+	// Answering with the SHARED EMPTY for the overwhelmingly common miss keeps this allocation-free at the
+	// one call site that asks it — once per `globalAddr` op of every reached function.
+	export function lazyStaticInitCalleesOf(label ByteArray) returns ByteArrayArray
+		return try self.lazyStaticInitCallees.get(label) otherwise sharedEmptyLazyStaticInitCallees
+	end 'lazyStaticInitCalleesOf'
+
 
 	// EVERY LIVE top-level global in the program, in ARENA (declaration) order, with the label and value
 	// its `.data` slot carries — the door the backend's data-section layout asks through.

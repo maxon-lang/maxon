@@ -23319,31 +23319,16 @@ export type Parser
 			if byteRecord != ValueTypeTag.unresolved 'builtinByteRecord'
 				return maxonTypeOfTag(byteRecord, nameId: UnnamedTypeId)
 			end 'builtinByteRecord'
-			// ⭐⭐ **`CharacterSet` NAMES THE COMPILER'S OWN LAYOUT, WHICH IS REGISTERED UNDER THE RESERVED
-			// SPELLING — AND THE CONSEQUENCE THAT USED TO FOLLOW FROM THAT WAS NEVER FORCED (W17).**
-			// `CharacterSetTypeName`'s header records it as settled: *"a `CharacterSet` cannot cross a function
-			// boundary, because a parameter or return type would have to NAME it"*. That is true of a lookup
-			// through the ordinary struct registry, where `containsStruct("CharacterSet")` is FALSE by design;
-			// it is not true of the language. **The reservation exists to stop a USER declaration contesting
-			// the bucket, and `isCompilerOwnedTypeName` already does that on its own** — so resolving the
-			// user-facing spelling to the reserved layout takes nothing away from it and is the door the
-			// reservation was protecting all along.
-			//
-			// ⚠ **IT HAD TO STOP BEING TRUE HERE, BECAUSE `stdlib/String.maxon` NAMES IT AT FOUR PARAMETERS**
-			// — `trim`/`trimStart`/`trimEnd` and the two private scans all take `chars CharacterSet`. Listing
-			// that module without this reported **`E3011 Unknown type 'CharacterSet'`, five times**, for a type
-			// the compiler ships.
-			//
-			// ⚠ **AND IT IS WHAT KEEPS `stdlib/CharacterSet.maxon` OFF THE WHITELIST, DELIBERATELY.** Listing
-			// the corpus module would land ITS layout under the BARE name while this one keeps `__CharacterSet`
-			// — *"one concept has two layouts under two keys"*, which is the hazard `SignatureIndex.recordStruct`'s
-			// header names as the listing rung's question to settle. Settled the other way: ONE layout, the
-			// compiler's, reachable under the name the corpus writes. (That module also needs `static let`
-			// fields with initializers, which shv2's parser does not have — so nothing is lost by not listing
-			// it, and the two facts are independent.)
-			if name.equals(CharacterSetBuiltinName) 'characterSetBuiltin'
-				return MaxonType.structRef(self.artifact.typeNames.intern(CharacterSetTypeName))
-			end 'characterSetBuiltin'
+			// ⭐⭐ **`CharacterSet` HAD AN ARM HERE, AND W115 DELETED IT: THE BARE NAME NOW FALLS THROUGH TO THE
+			// ORDINARY STRUCT REGISTRY, BECAUSE `stdlib/CharacterSet.maxon` IS WHAT PUTS IT THERE.** The arm
+			// answered `structRef(__CharacterSet)` — the reserved spelling the compiler registered its own
+			// layout under — and W17's header called that *"one layout, the compiler's, reachable under the
+			// name the corpus writes"*, recording that it was also what kept the corpus module OFF the
+			// whitelist: two layouts under two keys was the hazard. Listing the module settles it the other
+			// way round, and the arm had to go WITH the listing rather than after it — left in place, every
+			// `chars CharacterSet` parameter in `stdlib/String.maxon` kept resolving to `__CharacterSet` while
+			// the corpus statics returned the declared `CharacterSet`, which is **`E3005 expected
+			// 'CharacterSet', got '__CharacterSet'`** on `"  x  ".trim()`.
 			// The type's own name inside its own body means what `Self` means — for an `enum Toggle`'s
 			// `function flip() returns Toggle` exactly as for a `type Point`'s `returns Point`. Both
 			// spellings are legal Maxon and they must not resolve differently, because a struct's own name
@@ -47534,16 +47519,14 @@ export type Parser
 		// `parseTypeReference`, which is why this second hook exists at all (`recordTypeNameUse`).
 		self.recordTypeNameUse(typeTok.value)
 
-		// `CharacterSet.letters()` / `CharacterSet.from(…)` — the compiler-owned type's statics (P1.8 Slice
-		// D). Intercepted before every alias rewrite below, because `CharacterSet` has no base struct: its
-		// statics BUILD a box out of the set runtime, they do not name a user method.
-		if typeTok.value.equals(CharacterSetBuiltinName) 'characterSetStatic'
-			return try self.parseCharacterSetStaticCall(func, typeTok: typeTok)
-		end 'characterSetStatic'
-
+		// ⭐ **`CharacterSet.letters()` WAS INTERCEPTED HERE UNTIL W115, AND IS NOW AN ORDINARY MANGLED
+		// STATIC.** The interception's stated premise — *"`CharacterSet` has no base struct: its statics BUILD
+		// a box out of the set runtime, they do not name a user method"* — was true only while no file
+		// declared the type. `stdlib/CharacterSet.maxon` is listed, so all twelve (the eleven presets and
+		// `from`) are declared statics on a declared struct and mangle exactly as `Point.create` does.
 		// `__ManagedFile.openRead(path)` — the compiler-owned handle type's statics (R4.1). Intercepted here
-		// for `CharacterSet`'s reason: the type has a registered LAYOUT but no `type` declaration and no user
-		// methods, so the mangled `__ManagedFile.openRead` below would name a callee no file declares.
+		// because the type has a registered LAYOUT but no `type` declaration and no user methods, so the
+		// mangled `__ManagedFile.openRead` below would name a callee no file declares.
 		if typeTok.value.equals(ManagedFileTypeName) 'managedFileStatic'
 			return try self.parseManagedFileStaticCall(func, typeTok: typeTok)
 		end 'managedFileStatic'
@@ -48239,12 +48222,10 @@ export type Parser
 			return try self.dispatchStringIndexMethod(recv)
 		end 'stringIndexMethod'
 
-		// A `CharacterSet` RECEIVER (`ws.contains(c)`, P1.8 Slice D) takes its own membership test, for the
-		// reason the `StringIndex` arm above does.
-		if self.isCharacterSetType(recv.tag, nameId: recv.nameId) 'characterSetMethod'
-			return try self.dispatchCharacterSetMethod(func, recv: recv)
-		end 'characterSetMethod'
-
+		// ⭐ **`ws.contains(c)` HAD AN ARM HERE UNTIL W115.** It is deliberately NOT the `StringIndex` arm's
+		// case above: that one keeps a declared accessor off the struct path because the call it would emit
+		// sits on a hot byte-position read. `CharacterSet.contains` has no such argument — it is a real call
+		// either way — so with the corpus declaring it there is nothing left for an arm here to buy.
 		// A CONSTRAINED TYPE-PARAMETER RECEIVER (P1.7a slice 2a) — `self.item.digest()` where `item` is a `T`
 		// and `T` is constrained `where T is Digest`. The concrete type is unknown in the shared body, so it
 		// dispatches through the runtime WITNESS, not a direct call.
@@ -50071,59 +50052,6 @@ export type Parser
 		panic("{drift}")
 	end 'dispatchCharacterMethod'
 
-	// ============================================================================================
-	// `CharacterSet` (P1.8 Slice D) — the compiler-owned type, its statics, and its membership test
-	// ============================================================================================
-
-	// ⭐ **`CharacterSet.<accessor>()` / `CharacterSet.from(chars)` — the type's statics.** The eleven
-	// predefined sets are DATA (`CharacterSetRuntime.characterSetPresets`), so this dispatcher is one table
-	// walk and one bespoke arm rather than twelve near-identical ones.
-	//
-	// ⚠ **A PREDEFINED SET IS BUILT FRESH AT EVERY CALL, WHERE THE REFERENCE CACHES ONE** (`static let
-	// cachedWhitespaces`, `stdlib/CharacterSet.maxon:31-61`). The values are immutable and structurally
-	// equal, so nothing observable differs; what differs is COST — a `Set with Character` of at most seven
-	// members per call.
-	//
-	// ⚠⚠ **THE REASON THIS PARAGRAPH USED TO GIVE EXPIRED AT spec-port `lazy-static`.** It said shv2 *"has
-	// no module-level `static let` of a HEAP value to cache one in (a top-level managed `let` borrows a
-	// literal's own record and may not name another global)"*. It has one now: `static var ws =
-	// CharacterSet.whitespacesAndNewlines()` compiles, gets its own `.data` slot, is built on first access
-	// and is dropped after `main` — which is `specs/lazy-static.md`'s own `charset-cache` case. So the
-	// cache is EXPRESSIBLE, and what keeps it undone is only that nobody has done it: it is a
-	// constant-factor optimization whose blast radius is every corpus trim's emitted code, which makes it
-	// its own rung and not a spec port's business. A wrong answer is not on the table either way.
-	function parseCharacterSetStaticCall(func IrFunction, typeTok Token) returns ValueId throws ParseError
-		try self.consume(TokenKind.dot)
-
-		// ⚠ **`from` IS A KEYWORD, NOT AN IDENTIFIER** — it opens a `Set from […]` construction — so the
-		// twelfth static cannot be read by the `consume(TokenKind.identifier)` the eleven accessors were. All
-		// twelve are taken through `consumeNameToken` instead (D8's rule: after a `.`, a keyword IS a name),
-		// and then matched on their NAME (`FromMethod`, A3g) — so the refusal below names that same constant
-		// instead of a second copy of the word. (`String.from` tested it too until W55 retired that static;
-		// what keeps `FromMethod` a shared constant is `CharacterSetRuntime`, which reads it for the same
-		// spelling.)
-		//
-		// ⛔ **`consumeNameToken` AND NOT A BARE VALUE TEST (review, A3g)**: a LITERAL carries its content in
-		// `.value` too, so `CharacterSet."from"(…)` matched
-		// this arm and reached `parseCharacterSetFrom` where the base commit had refused it at E2010. The
-		// predicate behind this consume (`tokenCanBeAName`) excludes exactly the literal kinds.
-		let methodTok = try self.consumeNameToken(NamePosition.declaration)
-		if methodTok.value.equals(FromMethod) 'fromStatic'
-			return try self.parseCharacterSetFrom(func, range: SourceRange.between(typeTok, last: methodTok))
-		end 'fromStatic'
-
-		let range = SourceRange.between(typeTok, last: methodTok)
-
-		for preset in characterSetPresets() 'eachPreset'
-			if methodTok.value.equals(preset.method) 'match'
-				try self.consumeEmptyArgList()
-				return try self.emitPredefinedCharacterSet(preset, anchor: methodTok, range: range)
-			end 'match'
-		end 'eachPreset'
-
-		throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` static '{String.from(methodTok.value)}' — shv2 provides the eleven predefined sets and `{String.from(FromMethod)}(chars)`", line: methodTok.line, column: methodTok.column)
-	end 'parseCharacterSetStaticCall'
-
 	// ⭐ **THE NINE `__ManagedFile` STATICS — the surface BOTH references declare, complete at R4.2.** A name
 	// outside it is REFUSED BY NAME here rather than left to fall through: falling through would mangle
 	// `__ManagedFile.seek` into a callee no file declares and surface as E3004 against a name the author did
@@ -50564,42 +50492,28 @@ export type Parser
 		return displayNameOfAggregate(tag, aggregate: self.aggregateNameOf(tag, nameId: nameId))
 	end 'displayTypeNameOf'
 
-	// ⭐ **BUILD ONE PREDEFINED SET: its explicit members into a fresh `Set with Character`, then the box.**
-	// Each member is a `Character` LITERAL the parser mints from the preset's bytes — the same immortal
-	// `.rdata` record a source `'é'` mints — and `moveManagedValueInto` promotes it to an owned copy on the
-	// way in, exactly as a source `insert` does. So a predefined set's members are owned by the set and
-	// released by `__cs_decref` → whatever drops that set (`CharacterSetRuntime.characterMemberSetDropCallee`),
-	// with nothing aliased to `.rdata`.
-	function emitPredefinedCharacterSet(preset CharacterSetPreset, anchor Token, range SourceRange) returns ValueId throws ParseError
-		let chars = try self.emitCharacterMemberSet(preset.members, anchor: anchor, range: range)
-		return self.emitCharacterSetBox(chars, categoryMask: preset.categoryMask, argBareLocal: false, range: range)
-	end 'emitPredefinedCharacterSet'
-
-	// A fresh `Set with Character` seeded from a preset's byte sequences. Each member is a `Character`
-	// LITERAL the parser mints; the corpus `Set.insert` DECLARES its parameter, so the ordinary call machinery
-	// decides the move and no parse-time promotion happens here (see `emitCharacterMemberInsert`).
-	function emitCharacterMemberSet(members ByteArrayArray, anchor Token, range SourceRange) returns ValueId throws ParseError
-		let chars = try self.emitEmptyCharacterMemberSet(anchor, range: range)
-		for bytes in members 'eachMember'
-			try self.emitCharacterMemberInsert(chars, member: self.emitCharacterLiteral(bytes, range: range), anchor: anchor, range: range)
-		end 'eachMember'
-		return chars
-	end 'emitCharacterMemberSet'
-
-	// `CharSet from ['x', 'y', 'z']` — the SOURCE form of a member set. The cursor sits on the `[`. Each
-	// element is a `Character` by being written as a character literal (A5m-ab; it used to have to ADOPT the
-	// type here, because a one-byte literal was an int) and joins the set exactly as a preset's minted literal
-	// does, so the two producers cannot disagree about who owns a member.
+	// `CharSet from ['x', 'y', 'z']` — the SOURCE form of a `Set with Character`, and since W115 the ONLY
+	// form: the eleven predefined sets used to be seeded here too, from byte sequences the compiler held as
+	// data, and they are now `stdlib/CharacterSet.maxon`'s own `static let`s. The cursor sits on the `[`.
+	// Each element is a `Character` by being written as a character literal (A5m-ab; it used to have to ADOPT
+	// the type here, because a one-byte literal was an int).
+	//
+	// The create and the insert are `emitSetCreate`/`emitSetInsert` directly — the corpus `Set`'s own doors,
+	// which is what enrols the fresh set as a pending temporary (a `let s = CharSet from ['x']` that never
+	// reaches an owner is still dropped at scope exit) and what makes the insert a VOID mutator the set owns
+	// its member from. Until W115 each had a one-line `…CharacterMember…` wrapper, and the pairing those
+	// wrappers bought — one spelling of the member set's INSTANCE across two producers — is bought by there
+	// being one producer.
 	function parseCharacterMemberSetLiteral(func IrFunction, anchor Token, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftBracket)
-		let chars = try self.emitEmptyCharacterMemberSet(anchor, range: range)
+		let chars = try self.emitSetCreate(self.signatures.setInstanceForCharacter(), anchor: anchor, range: range)
 		while not self.at(TokenKind.rightBracket) 'eachMember'
 			let memberTok = self.current()
 			let member = try self.parseExpression(func, block: self.currentBlock)
 			if self.tagOf(member) != ValueTypeTag.character 'notACharacter'
 				throw ParseError.builtinOperandType(String.from(CharacterMemberSetAliasName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(member)), line: memberTok.line, column: memberTok.column)
 			end 'notACharacter'
-			try self.emitCharacterMemberInsert(chars, member: member, anchor: anchor, range: range)
+			try self.emitSetInsert(chars, member: member, anchor: anchor, range: range)
 			if not self.at(TokenKind.rightBracket) 'moreMembers'
 				try self.consume(TokenKind.comma)
 			end 'moreMembers'
@@ -50607,103 +50521,6 @@ export type Parser
 		try self.consume(TokenKind.rightBracket)
 		return chars
 	end 'parseCharacterMemberSetLiteral'
-
-	// ⭐ **THE ONE DOOR AN EMPTY `Set with Character` COMES THROUGH**, so the preset seeds and a source
-	// `CharSet from […]` cannot disagree about which instance a member set is.
-	//
-	// It IS enrolled as a pending temporary, exactly as `IntSet.create()`'s result is: a `let s = CharSet from
-	// ['x']` that never reaches a box must still be dropped at scope exit. The box's `moveManagedValueInto`
-	// de-lists it again when one does take ownership, so it is dropped exactly once either way. The enrolment
-	// is `emitSetCreate`'s, because the two representations reach it by different routes.
-	function emitEmptyCharacterMemberSet(anchor Token, range SourceRange) returns ValueId throws ParseError
-		return try self.emitSetCreate(self.signatures.setInstanceForCharacter(), anchor: anchor, range: range)
-	end 'emitEmptyCharacterMemberSet'
-
-	// One member into a member set. The insert is a VOID mutator; the set OWNS the member from here. Its pair
-	// with the door above is what keeps the member set's INSTANCE — the fact both the create and the insert
-	// are keyed on — spelled in one place per act rather than at each of the two producers.
-	function emitCharacterMemberInsert(chars ValueId, member ValueId, anchor Token, range SourceRange) throws ParseError
-		try self.emitSetInsert(chars, member: member, anchor: anchor, range: range)
-	end 'emitCharacterMemberInsert'
-
-	// ⭐ **THE ONE DOOR A `CharacterSet` BOX IS BORN THROUGH** — `__cs_make(chars, categoryMask)`, whose
-	// result is an OWNED box tracked so an unbound one drops at statement end and a bound one at scope exit,
-	// through `__cs_decref` (`managedNameDropCallee`'s `CharacterSet` arm).
-	// The member set is STORED in: the box holds exactly ONE reference to it, so an owned temporary is
-	// de-listed from the statement's pending drops and a value a live binding keeps is CO-OWNED (the binding
-	// stays readable and releases its own reference at scope exit — the 2026-08-12 ruling) — the SAME
-	// `moveManagedValueInto` a set key and an array element take, so a member set that reaches a box is never
-	// released more times than it was referenced.
-	function emitCharacterSetBox(chars ValueId, categoryMask ParsedInt, argBareLocal bool, range SourceRange) returns ValueId
-		let owned = self.moveManagedValueInto(chars, argBareLocal: argBareLocal, isString: false, range: range)
-		let mask = self.emitLiteral(categoryMask, valueType: MaxonType.integer, range: range)
-		return self.emitOwnedRuntimeResult(CharSetMakeName, args: pairArgs(owned, second: mask), resultTag: ValueTypeTag.structRef, resultNameId: self.characterSetNameId(), range: range)
-	end 'emitCharacterSetBox'
-
-	// `CharacterSet.from(chars)` — a set of EXPLICIT members and nothing else, so its category mask is zero
-	// (`stdlib/CharacterSet.maxon:119-121`), which is what makes `contains` skip the codepoint decode and the
-	// table read entirely.
-	//
-	function parseCharacterSetFrom(func IrFunction, range SourceRange) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let argTok = self.current()
-		let argStart = self.pos
-		let chars = try self.parseExpression(func, block: self.currentBlock)
-		if not self.valueIsCharacterMemberSet(chars) 'notACharacterSet'
-			throw ParseError.builtinOperandType("{String.from(CharacterSetBuiltinName)}.{String.from(FromMethod)}", required: String.from(CharacterMemberSetDisplayName), got: typeTagName(self.tagOf(chars)), line: argTok.line, column: argTok.column)
-		end 'notACharacterSet'
-		let bareLocal = self.rhsWasBareLocalReference(argStart)
-		try self.consume(TokenKind.rightParen)
-		return self.emitCharacterSetBox(chars, categoryMask: CharSetNoCategories, argBareLocal: bareLocal, range: range)
-	end 'parseCharacterSetFrom'
-
-	// Is `value` a `Set with Character` — the one argument `CharacterSet.from` accepts? Asked of the VALUE's
-	// columns, since the argument is an expression bound to no name.
-	function valueIsCharacterMemberSet(value ValueId) returns bool
-		if self.tagOf(value) != ValueTypeTag.genericInstance 'notAnInstance'
-			return false
-		end 'notAnInstance'
-		return self.valueNameId(value) == self.signatures.setInstanceForCharacter()
-	end 'valueIsCharacterMemberSet'
-
-	// ⭐ **`cs.contains(c)` — the type's one instance method.** The argument must be a `Character`, which
-	// `cs.contains('x')` satisfies by writing one (A5m-ab; the literal used to have to ADOPT the type here).
-	// The set BORROWS the character for the probe, so its owned temp drops at statement end as any other
-	// borrowed argument's does.
-	function dispatchCharacterSetMethod(func IrFunction, recv MethodReceiver) returns ValueId throws ParseError
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.between(recv.anchor, last: methodTok)
-		// ⚠ **ONE MEMBER, SO THE NAME IS RENDERED FROM ITS OWN CONSTANT AND NOT A ONE-ELEMENT ROSTER (A2q).**
-		// The roster shape buys two things — a message joined from the arms' constants, and a GATE that makes
-		// an unadvertised arm unreachable — and only the first of them is worth anything against a single
-		// `equals` whose refusal is the next line. A roster here would be an allocation, a memo field and a
-		// linear scan to restate an `if`, and the second member is what should introduce it.
-		if not methodTok.value.equals(ContainsMethod) 'unknownMethod'
-			throw ParseError.unsupported("`{String.from(CharacterSetBuiltinName)}` method '{String.from(methodTok.value)}' — shv2 provides `{String.from(ContainsMethod)}`; the reference's set algebra (`union`, `intersection`, `inverted`) has no consumer in the corpus", line: methodTok.line, column: methodTok.column)
-		end 'unknownMethod'
-
-		let character = try self.parseTaggedArg(func, methodName: methodTok.value, required: ValueTypeTag.character)
-
-		return self.emitRuntimeCall(CharSetContainsName, args: pairArgs(recv.value, second: character), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
-	end 'dispatchCharacterSetMethod'
-
-	// The compiler-owned `CharacterSet` name, adopted into THIS FILE's interner — which is what a value's
-	// name column holds (`mintValue`), so it must be the local id and not the whole-program one. Interning is
-	// idempotent, and it happens only in a file that actually builds one.
-	function characterSetNameId() returns TypeNameId
-		return self.artifact.typeNames.intern(CharacterSetTypeName)
-	end 'characterSetNameId'
-
-	// ⭐ **IS THIS THE `CharacterSet` TYPE?** A TAG cannot answer it — every struct box is `structRef` — so
-	// it is the interned NAME behind the tag, exactly as `isStringIndexType` asks, and it takes the pair
-	// rather than a value for that function's reason: its askers read the two different records a type can
-	// live in (a BINDING's declared type, and a VALUE's columns).
-	function isCharacterSetType(tag ValueTypeTag, nameId TypeNameId) returns bool
-		if not tagIsStructRef(tag) 'notAStructBox'
-			return false
-		end 'notAStructBox'
-		return self.internedName(nameId).equals(CharacterSetTypeName)
-	end 'isCharacterSetType'
 
 	// ⭐ **A `StringIndex`'S BUILTIN METHODS (P1.8 slice B2)** — `charIndex()` and `bytePos()`, the corpus's
 	// own two accessors (`stdlib/String.maxon:925-931`). Its own dispatcher rather than the struct path, for
@@ -50913,36 +50730,6 @@ export type Parser
 		try self.consume(TokenKind.leftParen)
 		try self.consume(TokenKind.rightParen)
 	end 'consumeEmptyArgList'
-
-	// `( expr )` — the single argument of a one-argument BUILTIN method, required to be of one TAG. One home
-	// for the paren pair and the type check, so a new method cannot arrive with its own idea of what a typed
-	// argument is.
-	//
-	// ⚠ **ITS `String` CALLERS ARE ALL GONE, AND IT IS DOWN TO ONE — a `Character` for a `CharacterSet`'s
-	// `contains`.** It served `contains`, `split` and the two searches until waves 3-5 retired them, and
-	// `append` until wave 8. It is kept as a shared home rather than inlined into its last caller because
-	// the `required` TAG is a parameter and the next typed one-argument member is a push, not a rewrite —
-	// which is exactly how it came to be shared in the first place (it was three functions before wave 2).
-	//
-	// ⚠ **IT WAS THREE FUNCTIONS UNTIL W49 WAVE 2 — `parseStringArg` over a `requireStringArgValue`, plus a
-	// transcribed `requireCharacterArgValue` whose caller spelled the parens itself.** The split existed for
-	// `replace`, which took TWO String arguments inside ONE paren pair and so needed the value half alone;
-	// `replace`/`replaceFirst` retired onto `stdlib/String.maxon` and took that caller with them, at which
-	// point the only thing separating the three was the tag. It is a parameter now.
-	//
-	// The blame token is the ARGUMENT's own first token, not the method's, which is why it is read before the
-	// expression is parsed. A `requireStringIndexValue` stayed apart from it — a `StringIndex` is not
-	// identified by a tag at all — until `slice`, its only caller, retired at W49 wave 4.
-	function parseTaggedArg(func IrFunction, methodName ByteArray, required ValueTypeTag) returns ValueId throws ParseError
-		try self.consume(TokenKind.leftParen)
-		let argTok = self.current()
-		let arg = try self.parseExpression(func, block: self.currentBlock)
-		if self.tagOf(arg) != required 'argTagMismatch'
-			throw ParseError.builtinOperandType(String.from(methodName), required: typeTagName(required), got: typeTagName(self.tagOf(arg)), line: argTok.line, column: argTok.column)
-		end 'argTagMismatch'
-		try self.consume(TokenKind.rightParen)
-		return arg
-	end 'parseTaggedArg'
 
 	// ⚠⚠ **`parseStringAppend` STOOD HERE AND WENT WITH `String.append` (W49 wave 8), AND IT WAS THE LAST
 	// `String` CALLER OF `noteReceiverWrite`.** Its whole job was the receiver-write refusal — the corpus body
@@ -58771,19 +58558,22 @@ export type Parser
 	// this refusal would come to reject a name the authority accepts — and it would do it by asserting the
 	// name is undeclared, which is the very false statement this guard exists to remove.
 	//
-	// ⚠⚠ **ONE RESERVED NAME THE CASCADE CANNOT ANSWER FOR IS WHY THE `isCompilerOwnedTypeName` GATE IS
-	// HERE, AND THE GATE IS WRITTEN OVER THE WHOLE LIST RATHER THAN OVER THAT NAME.** The cascade answers
-	// `ExitCode` by its own arm, `HashValue`/`Codepoint` through `isSynthesizedIntAliasName`, `Ordering` and
-	// `ArrayError` because `createEnumRegistry` seeds them, and `CharSet` because `registerCharacterSetType`
-	// folds it into `genericAliases`; `String` and `Character` never arrive here at all, because
-	// `parseTypeReference` settles both syntactically and neither ever wears a `named` tag. It answers
-	// `CharacterSet` NOWHERE — the layout is registered under the
-	// RESERVED spelling `__CharacterSet` (`CharacterSetTypeName`) exactly so a user `type CharacterSet`
-	// cannot contest its bucket, while the user-facing door is the bare name (`CharacterSetBuiltinName`), so
-	// `containsStruct("CharacterSet")` is FALSE and the cascade raises `notDeclared` for a type the compiler
-	// SHIPS. MEASURED: without this gate, `function hasIt(s CharacterSet, …)` + `s.contains(c)` reported
-	// **`E3011: Unknown type 'CharacterSet'`** — a falsehood, and a more confident one than the `int` it
-	// replaced, which at least named `CharacterSet` as a member-carrying builtin in the same sentence.
+	// ⚠⚠ **THE `isCompilerOwnedTypeName` GATE IS HERE FOR A NAME THE CASCADE CANNOT ANSWER FOR, AND IT IS
+	// WRITTEN OVER THE WHOLE LIST RATHER THAN OVER ONE NAME.** The cascade answers `ExitCode` by its own arm,
+	// `HashValue`/`Codepoint` through `isSynthesizedIntAliasName`, `Ordering` and `ArrayError` because
+	// `createEnumRegistry` seeds them, and `CharSet` because `registerCharacterSetType` folds it into
+	// `genericAliases`; `String` and `Character` never arrive here at all, because `parseTypeReference`
+	// settles both syntactically and neither ever wears a `named` tag.
+	//
+	// ⚠ **`CharacterSet` WAS THE MEASURED CASE AND IT IS NO LONGER ONE (W115).** It answered NOWHERE while
+	// its layout lived under the RESERVED spelling `__CharacterSet` and `containsStruct("CharacterSet")` was
+	// FALSE, and without this gate `function hasIt(s CharacterSet, …)` + `s.contains(c)` reported
+	// **`E3011: Unknown type 'CharacterSet'`** for a type the compiler shipped. `stdlib/CharacterSet.maxon`
+	// is listed now, so `recordStruct` files the corpus layout under the BARE name and the cascade answers it
+	// like any other declared struct. ⇒ **the gate is no longer load-bearing for THIS name, and it stays for
+	// the LIST**: `isCompilerOwnedTypeName` still carries names no registry cascade reaches, and writing the
+	// gate as the list rather than as a count is what kept it correct across the two rungs that moved a name
+	// off it. Deleting it needs a measurement per remaining name, not this paragraph's expiry.
 	//
 	// ⇒ **A NAME THE COMPILER RESERVES IS NEVER THE USER'S UNDECLARED NAME**, so this gate cannot swallow a
 	// genuine typo: `requireTypeNameNotCompilerOwned` refuses any user declaration that would bind a name on

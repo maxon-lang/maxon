@@ -549,10 +549,15 @@ end 'main'
 error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-tuple-field.test:11:2: Unsupported: the constant written for field 'pair' of the `Meta` backing, which is declared `__Tuple2.int.int` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
 ```
 
-### Error: a field typed `CharacterSet`
+### Error: a field typed by a LISTED STDLIB record
 
-A compiler-owned record whose DECLARED name is not the name a program writes, so the identity check refuses
-it whichever way the constant is spelled.
+⚠ **THIS CASE USED TO PIN THE OPPOSITE SENTENCE, AND W115 IS WHY.** It read *"a compiler-owned record whose
+DECLARED name is not the name a program writes, so the identity check refuses it whichever way the constant
+is spelled"* — true while `CharacterSet` named the compiler's own layout under the reserved spelling
+`__CharacterSet`, which no written constant could ever match. `stdlib/CharacterSet.maxon` is listed now, so
+the bare name IS a declared record, the identity check ADMITS it, and the descent goes one level further
+before refusing — landing on exactly the sentence its `Array` sibling below gets, at the same line:column.
+That is the rung's whole thesis stated as a diagnostic: a retired builtin stops having a second rule.
 
 <!-- test: error.nested-struct-backing-characterset-field -->
 ```maxon
@@ -572,7 +577,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-characterset-field.test:10:2: Unsupported: the constant written for field 'chars' of the `Meta` backing, which is declared `__CharacterSet` — a backing field takes an INT literal for an integer field, a `true`/`false` for a `bool` field, an int or float literal for a float field, `<ThatEnum>.<case>` of THAT enum for a field of a declared enum, and a nested constant of THAT type (a literal or a factory call) for a field of a declared `type`
+error E2015: specs/fragments/enum-nested-struct-backing/error.nested-struct-backing-characterset-field.test:10:2: Unsupported: field 'chars' of the `CharacterSet` backing, which case 'quick' of `enum Task` writes no value for — a struct backing supplies one constant PER CASE for every field, defaults included, because reading one field selects it from every case
 ```
 
 ### Error: a field typed by a BARE generic, whose name a constant can match

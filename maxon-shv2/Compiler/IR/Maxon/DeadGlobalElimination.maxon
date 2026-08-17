@@ -151,27 +151,47 @@ export function liveGlobalLabels(module MaxonModule, storedGlobals StoredGlobalC
 	return live
 end 'liveGlobalLabels'
 
-// The `.data` label one `MaxonOp` names, if any. ONE variant carries one — `globalAddr` — and it carries
-// it for a read and a write alike, which is the whole of this pass's bidirectionality.
+// The `.data` label one `MaxonOp` names, if any — the payload-carrying answer `maxonOpNamesGlobalLabel`'s
+// two readers ask for once they know there is one. Payload-free `none` keeps the common answer a scalar,
+// which is `TypeResolution.denotedNamedType`'s measured argument: this is asked once per op of every
+// reachable function, and a heap-boxed union per ask would be a term that grows with the PROGRAM.
+export union MaxonOpGlobalLabel
+	none
+	label(name ByteArray)
+end 'MaxonOpGlobalLabel'
+
+// ⭐ **THE `.data` LABEL ONE `MaxonOp` NAMES — ONE TABLE, TWO READERS.** ONE variant carries a label —
+// `globalAddr` — and it carries it for a read and a write alike, which is the whole of this pass's
+// bidirectionality. `StdlibSource.markLazyStaticInitCallees` is the second reader (a `globalAddr` on a LAZY
+// static's slot IS the call to its `__lazy_init$`), and it reads this rather than re-matching the union for
+// `markMaxonCalleeEdge`'s stated reason: an under-approximation at a second site is not a compile error,
+// it is a body that is never lowered and then reached.
 //
 // The arms RANGE over the whole union in declaration order, ending at the current last variant, so a
 // variant appended past it FAILS TO COMPILE here rather than being silently swallowed — the band-append
 // invariant working in the reviewer's favour (MaxonDialect's header), exactly as
 // `StdlibSource.markMaxonCalleeEdge` and `DeadFunctionElimination.markCalleeOf` rely on it. A new
 // variant that names a `.data` label must be added as its own arm.
-function noteGlobalLabel(op MaxonOp, live LiveGlobalLabelSet)
+export function maxonOpNamesGlobalLabel(op MaxonOp) returns MaxonOpGlobalLabel
 	match op 'op'
 		// `call` … `branch`: calls, literals, arithmetic, comparisons, branches and returns.
-		call to branch then break 'op'
-		globalAddr(_, label) then live.insert(label)
+		call to branch then return MaxonOpGlobalLabel.none
+		globalAddr(_, label) then return MaxonOpGlobalLabel.label(label)
 		// `loadIndirect` … `witnessTryDispatch`: the load and the store that FOLLOW a `globalAddr` take the
 		// address as a VALUE — the label is on the op above and nowhere else — and no later variant names
 		// a data label at all.
-		loadIndirect to witnessTryDispatch then break 'op'
+		loadIndirect to witnessTryDispatch then return MaxonOpGlobalLabel.none
 		// A rendered panic's message is a VALUE, not a data label — it is `panicAbort` that names one, and
 		// that is an `.rdata` blob the Std tier interns, never a `.data` global.
-		panicAbortValue then break 'op'
+		panicAbortValue then return MaxonOpGlobalLabel.none
 		// The error-flag encode's operand is a VALUE and its result is one; it names no data label at all.
-		errorFlagEncode then break 'op'
+		errorFlagEncode then return MaxonOpGlobalLabel.none
 	end 'op'
+end 'maxonOpNamesGlobalLabel'
+
+function noteGlobalLabel(op MaxonOp, live LiveGlobalLabelSet)
+	match maxonOpNamesGlobalLabel(op) 'named'
+		none then break 'named'
+		label(name) then live.insert(name)
+	end 'named'
 end 'noteGlobalLabel'

@@ -71,11 +71,14 @@ type name denotes anything:
   assumed:** widen the query to fire on every `named` and it reports
   `E3011: Unknown type 'Integer'` about a perfectly declared alias — and it is the ONLY case of 2540
   that goes red, so it is the single thing standing between this arm and a new false rejection.
-* **it is the SIXTH compiler-owned name, `CharacterSet`** ⇒ the existing refusal also stands. The
-  cascade genuinely says `notDeclared` for it — its layout is registered under `__CharacterSet`, not
-  under the name a source writes — so this is the one place the cascade's answer may not be read as
-  "the program declares no such type". `isCompilerOwnedTypeName` is the gate, and
-  `compiler-reserved-base-type-is-nameable-at-a-parameter` below is what stops it being deleted.
+* **it is the SIXTH compiler-owned name, `CharacterSet`** ⇒ the existing refusal also stands, and
+  ⚠ **since `W115` it no longer stands for the reason this bullet used to give.** The cascade used to
+  say `notDeclared` for it, because its layout was registered under `__CharacterSet` rather than under
+  the name a source writes — so this was the one place the cascade's answer could not be read as "the
+  program declares no such type". `stdlib/CharacterSet.maxon` is listed now, the corpus layout is filed
+  under the BARE name, and the cascade answers it like any other declared struct.
+  `isCompilerOwnedTypeName` remains the gate for the names that still have no cascade arm; it is simply
+  no longer this name that measures it.
 * **it denotes nothing** ⇒ the door reports **E3011 with `unknownTypeMessage`** — the authority's own
   code and the authority's own words — positioned at the base (or, for a method call, the member).
   Not a sentence of its own: `ParseError.unknownTypeName`, the one arm every positioned undeclared
@@ -256,9 +259,14 @@ reservation exists to stop a USER DECLARATION binding the name, and `isCompilerO
 that on its own — so `Parser.parseTypeReference` now resolves the user-facing spelling to the reserved
 layout, which takes nothing away from the reservation and is the door it was protecting all along.
 
-⇒ ONE layout, the compiler's, reachable under the name the corpus writes. `stdlib/CharacterSet.maxon` stays
-OFF the whitelist deliberately: listing it would land a SECOND layout under the bare name, which is the
-*"one concept has two layouts under two keys"* hazard `SignatureIndex.recordStruct`'s header names.
+⇒ ONE layout, reachable under the name the corpus writes — and ⭐ **`W115` settled WHOSE, which is the half
+this paragraph deferred.** It read *"one layout, the COMPILER's … `stdlib/CharacterSet.maxon` stays OFF the
+whitelist deliberately: listing it would land a SECOND layout under the bare name"*, naming the *"one concept
+has two layouts under two keys"* hazard `SignatureIndex.recordStruct`'s header calls the listing rung's
+question. That rung listed the module and settled it the other way: the CORPUS's layout is the only one under
+the bare name, `Parser.parseTypeReference`'s `__CharacterSet` arm is deleted, and the reservation keeps doing
+the one job it was ever for — refusing a USER declaration of the name. The case below is unchanged and still
+passes, because what it pins is that the name is NAMEABLE at a parameter, not which layout answers it.
 
 ⚠ The OTHER half of `undeclaredBaseTypeNameOf` is unaffected and keeps its own witness — widen the
 `denotedNamedType` ask to fire on every `named` and `self-field-struct-typed`'s
