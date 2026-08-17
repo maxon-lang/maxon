@@ -748,6 +748,33 @@ end 'main'
 0
 ```
 
+<!-- test: error.declare-character-error-enum -->
+### `CharacterError` is a declaration the compiler owns
+The two cases above rest on `asciiValue()` throwing `CharacterError.notAscii`, and the ordinal that reaches
+the failure edge is the COMPILER's: `Runtime/GraphemeRuntime.buildCharAscii` returns `notAscii`'s position as
+`__char_ascii`'s error flag, while `stdlib/Character.maxon:15-17` declares the position it encodes. shv2 has
+no namespace, so a user `enum CharacterError` lands in the same registry bucket — and the array family's
+`error.declare-array-error-enum` measured what that costs before its own reservation existed: the program
+compiled and the runtime's ordinal 0 routed into whichever case the user happened to write first, with no
+diagnostic anywhere. MEASURED here the same way at W135's review — this exact program compiled clean. Refused
+now, exactly as `ArrayError`, `StringError`, `MapError` and `IterationError` are; a REFERENCE to the name in a
+`throws` clause stays legal, which is the whole reason the name is bare.
+```maxon
+enum CharacterError
+	somethingElse
+	another
+end 'CharacterError'
+
+function main() returns ExitCode
+	let c = 'x'
+	let val = try c.asciiValue() otherwise 0
+	return val
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'CharacterError', which the compiler owns — its one meaning comes from the compiler itself or from the stdlib module that declares it, and shv2 has no namespace to tell a user declaration of the name apart from that one
+```
+
 <!-- disabled-test: error.otherwise-out-of-range -->
 <!-- A SYNTHESIZED RANGED ALIAS CARRIES NO RANGE — re-measured 2026-08-05 (A5m-ab), and the marker
      that stood here was wrong. `Character.asciiValue()` now EXISTS and its five sibling cases are

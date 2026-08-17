@@ -996,6 +996,18 @@ end 'resolveType'
 // before the move: `type StringIndex  var a as int  end` COMPILED, and `specs-shv2/string-index.md`'s
 // `error.a-user-may-not-declare-the-string-index-type` is that program.
 //
+// ⛔⛔ **`CharacterError` JOINS AT W135's REVIEW, AND IT IS THE ONE THAT SHOWS THE MEMBERSHIP TEST IS NOT
+// "IS IT SEEDED?".** Every paragraph above reaches this list through a SEED — a bare name
+// `createEnumRegistry` writes, which a user declaration could displace. This name is seeded by nothing:
+// `stdlib/Character.maxon:15-17` is its only declaration. It belongs anyway, because the property the list
+// actually buys is *one program holds ONE numbering of one enum*, and a seed is merely the commonest way to
+// end up with two. Here the second numbering comes from the RUNTIME:
+// `Runtime/GraphemeRuntime.buildCharAscii` returns `notAscii`'s ordinal as `__char_ascii`'s error flag, so a
+// user `enum CharacterError` displacing the corpus one in `upsertDeclaredEnum` leaves the runtime emitting 0
+// into whichever case that user wrote first — `IterationError`'s stake, arrived at from the other direction.
+// MEASURED: that program compiled clean before this entry, and `specs-shv2/character-type.md`'s
+// `error.declare-character-error-enum` is it.
+//
 // ⭐⭐ **AND TWO OF THESE NAMES ARE NO LONGER SEEDED AT ALL — THEY ARE READ FROM THE CORPUS (W3).**
 // `Ordering` and `IterationError` are DECLARED by `stdlib/Interfaces.maxon`, which the loader now lists, so
 // what they hold is the corpus's own layout rather than a transcription of it (`Project.createEnumRegistry`,
@@ -1005,7 +1017,7 @@ end 'resolveType'
 // not over whether one exists. `HashValue` is the same shape one registry over: `stdlib/Interfaces.maxon:6`
 // declares the ranged alias and its bounds are now the program's, while the name stays reserved here.
 export function isCompilerOwnedTypeName(name ByteArray) returns bool
-	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(StringErrorTypeName) or name.equals(MapErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName) or name.equals(StringIndexTypeName)
+	return name.equals(ExitCodeBuiltinName) or name.equals(HashValueTypeName) or name.equals(CodepointTypeName) or name.equals(OrderingTypeName) or name.equals(CharacterSetBuiltinName) or name.equals(CharacterMemberSetAliasName) or name.equals(ArrayErrorTypeName) or name.equals(StringErrorTypeName) or name.equals(MapErrorTypeName) or name.equals(IterationErrorTypeName) or name.equals(CharacterErrorTypeName) or name.equals(StringConformerName) or name.equals(CharacterConformerName) or name.equals(StringIndexTypeName)
 end 'isCompilerOwnedTypeName'
 
 // The name a `named` type denotes, ERASED to a concrete `MaxonType` — or `notDeclared` when it
