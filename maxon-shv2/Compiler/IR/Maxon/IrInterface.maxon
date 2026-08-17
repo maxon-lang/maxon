@@ -321,10 +321,13 @@ let FormattedStringableInterfaceName = b"FormattedStringable"
 // `Hashable`/`Equatable`/`Comparable` are EXPORTED, the other protocol names are not, and the three consumers
 // are the reason: the comparison-operator lowerings pick their PROTOCOL by name (`==`/`!=` is Equatable's,
 // `<`/`>`/`<=`/`>=` is Comparable's) and then read everything else off the synthesized interface
-// (`requireBuiltinInterface`); and the `Set` runtime threads a key's `Hashable`/`Equatable` witness tables by
-// name (`LowerMaxonToStd.withKeyWitnessArgs` materializes `rdataAddr(__witness_<key>.Hashable)`), whose label
-// must be the one the builtin-conformance table registers under. Each reads THIS spelling instead of keeping
-// its own — the deleted `SetRuntime` used to keep a second copy of two of them.
+// (`requireBuiltinInterface`); and a witness table is MATERIALIZED by name
+// (`LowerMaxonToStd.materializeWitnessTableAddr` builds `rdataAddr(__witness_<conformer>.Hashable)`), whose
+// label must be the one the builtin-conformance table registers under. Each reads THIS spelling instead of
+// keeping its own — the deleted `SetRuntime` used to keep a second copy of two of them.
+// ⚠ The third consumer was a compiler-owned runtime callee that threaded a container KEY's two tables as
+// hidden arguments (`withKeyWitnessArgs`); that whole route retired at W105 and W129, and the surviving
+// reader is the `where T is I` dictionary parameter, which names the same three spellings.
 export let HashableInterfaceName = b"Hashable"
 export let EquatableInterfaceName = b"Equatable"
 export let ComparableInterfaceName = b"Comparable"

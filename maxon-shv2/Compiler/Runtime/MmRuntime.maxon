@@ -435,19 +435,14 @@ export function sixI64Params() returns StdTypeArray
 	return types
 end 'sixI64Params'
 
-// ⭐ **`count` i64 PARAMETERS, FOR AN ENTRY WHOSE ARITY IS DERIVED RATHER THAN WRITTEN (found at review).**
-// The named ladder above is right for an entry whose arity IS a source fact — `__mm_alloc` takes two
-// because it takes two. It is wrong for one whose arity is a SUM the threading computes
-// (the retired `__cs_contains`: two explicit arguments, a layout descriptor, and one
-// witness table per key constraint), because there the count and the list are two statements of one number
-// paired by hand — and the hand pairing is what silently survives a change to either summand.
-export function i64Params(count ParamCount) returns StdTypeArray
-	var types = StdTypeArray.create()
-	while types.count() < count 'eachParam'
-		types.push(StdType.i64)
-	end 'eachParam'
-	return types
-end 'i64Params'
+// ⚠ **`i64Params(count)` STOOD HERE AND WENT AT W129's REVIEW, WITH ITS ONLY CALLER.** The named ladder
+// above is right for an entry whose arity IS a source fact — `__mm_alloc` takes two because it takes two.
+// It was wrong for one whose arity was a SUM the threading computed (`__cs_contains`: two explicit
+// arguments, a layout descriptor, and one witness table per key constraint), because there the count and
+// the list are two statements of one number paired by hand, and the hand pairing is what silently survives
+// a change to either summand. **NO ENTRY POINT HAS A DERIVED ARITY TODAY** — the last one that did went
+// with the `__cs_*` runtime (W129) — so the ladder is complete, and a future derived-arity entry brings the
+// deriving helper back rather than writing a count beside a list.
 
 // Emit the `param` ops an entry block owes. A Std function's parameters are materialized once, at
 // entry, by the op whose `role` is `param` — the backend turns each into the move that captures the

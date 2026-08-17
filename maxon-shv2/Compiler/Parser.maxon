@@ -3413,7 +3413,8 @@ end 'keywordNamesAPrimitiveType'
 // `TypeResolution.maxon:10597-10616` admits). It names no ROSTER of the statics that DO exist either: that
 // set is `stdlib/Builtins.maxon`'s to state, and a list here would be a second copy of it, stale the first
 // time that module grows one. E2015 is the code its siblings already use for an unknown member on a
-// compiler-owned type — `parseCharacterSetStaticCall`'s unknown `CharacterSet` static, and the *"'int' has
+// compiler-owned type — `requireCompilerOwnedStaticIsResolvable`'s unknown static (the retired
+// `parseCharacterSetStaticCall` was the first to raise it, on a `CharacterSet` one), and the *"'int' has
 // no method named 'make'"* of a builtin-conformance dispatch. `String` is a third such sibling, and W55
 // retiring its statics to `stdlib/String.maxon` did not change that: what moved is only WHICH tier knows the
 // surface, so the refusal moved to `requireCompilerOwnedStaticIsResolvable` — same code, same shape of
@@ -5037,28 +5038,26 @@ export let SingleByteGraphemesFieldName = b"singleByteGraphemesFlag"
 // synthesized one — two implementations of one table, which
 // `stdlib-whitelist.the-corpus-segmenter-agrees-with-the-synthesized-one` is the differential over.
 
-// ⭐⭐ **THE CORPUS SEGMENTER'S ENTRY POINTS — WHAT `String.count()` AND `for c in s` NOW CALL, AND THE END OF
-// THE "TWO IMPLEMENTATIONS OF ONE TABLE" THE BLOCK ABOVE FILED.** These are ordinary declarations in
-// `stdlib/helpers/string/grapheme.maxon`, reached by an ordinary Maxon-tier call — the SAME call a user's own
-// `countGraphemes(s)` emits — so reachability, ownership and dead-function elimination are the ordinary rules
-// and this door needs no mechanism of its own. The differential named above is what it is now measured by:
-// the two sides of it are one body.
+// ⭐⭐ **THE CORPUS SEGMENTER ENTRY POINT `for c in s` NAMES, AND THE END OF THE "TWO IMPLEMENTATIONS OF ONE
+// TABLE" THE BLOCK ABOVE FILED.** It is an ordinary declaration in `stdlib/helpers/string/grapheme.maxon`,
+// reached by an ordinary Maxon-tier call — the SAME call a user's own `findGraphemeEnd(s, pos: i)` emits —
+// so reachability, ownership and dead-function elimination are the ordinary rules and this door needs no
+// mechanism of its own. The differential named above is what it is now measured by: the two sides of it are
+// one body.
 //
 // ⚠ **THE SPELLING IS THE CORPUS'S AND MUST STAY THAT WAY.** A call whose callee names no declaration is an
 // ordinary `E3004`, so a renamed corpus function fails loudly here rather than silently routing nowhere —
 // which is exactly what the retired bare-name builtins could not do.
-export let CorpusCountGraphemes = b"countGraphemes"
+//
+// ⚠⚠ **THREE SIBLINGS STOOD HERE AND WENT AT W129's REVIEW, AND WHY THEY WENT IS THE FACT TO KEEP.**
+// `CorpusCountGraphemes`, `CorpusUtf8DecodeAt` and `CorpusUtf8ByteLengthAt` were spelled here because the
+// deleted reachability seed (`StdlibSource.markCorpusCalleesOfSynthesizedRuntime`, W129) rooted them for
+// SYNTHESIZED Std bodies whose calls are not edges of the Maxon call graph. **No Std body names a corpus
+// callee any more** — `String.count()` and the `.codepoints()`/`.utf16()` walks are corpus bodies calling
+// corpus bodies, which is an ordinary edge — so the constants had no reader and the compiler cannot emit
+// those three names at all. This one survives because `parseForStatement` still emits it from USER code,
+// where the edge is ordinary and the reachability walk finds it.
 export let CorpusFindGraphemeEnd = b"findGraphemeEnd"
-
-// `utf8DecodeAt(s, pos:)` — the codepoint at a byte position. Reached from `__cs_contains`, which classifies
-// a `Character` by its FIRST codepoint and holds that Character's own record, so it passes the record and 0
-// rather than the buffer address the retired `__utf8_cp_at` took.
-export let CorpusUtf8DecodeAt = b"utf8DecodeAt"
-
-// `utf8ByteLengthAt(s, pos:)` — the sequence width at a byte position, which is what advances the
-// `.codepoints()` and `.utf16()` walks. Its twin above decodes; this one steps, and the two MUST agree on a
-// truncated sequence or a walk steps into bytes it declined to decode (`utf8WidthFits`).
-export let CorpusUtf8ByteLengthAt = b"utf8ByteLengthAt"
 
 // ⭐⭐ **`addressableBytes()` — THE ONE CORPUS MEMBER THE STREAM-WRITE FOLD MATCHES BY NAME (W49 wave 7).**
 // `stdlib/Print.maxon:10` is `__Builtins.writeStdout(value.addressableBytes())`, and that member retired
@@ -5328,37 +5327,22 @@ let ElementTransformArity = 1 as ParamCount
 // and it is what `emitMapLiteralUpsert` builds a desugared `[k: v]` literal's call from.
 let UpsertMethod = b"upsert"
 
-// ⭐⭐ **`from` — A METHOD NAME THAT IS ALSO A KEYWORD, AND THE CONSTANT THAT MAKES THAT STOP MATTERING
-// (A3g).** `CharacterSet.from(chars)` is spelled `from`, which the lexer classifies as `TokenKind.from`
-// because the same word opens a `Set from […]`. It was therefore recognized by KIND, so the only spelling a
-// roster over it could have been derived from was `TokenKind.from`'s `rawValue` — a DISPLAY string whose job
-// is *"Expected identifier but got 'from'"*, free to gain punctuation the day a message reads better with
-// it. (`String.from(bytes)` was the second such door until W55 retired it to `stdlib/String.maxon:119`.)
+// ⚠⚠ **`FromMethod = b"from"` STOOD HERE (A3g) AND IS DELETED (W129 review): ITS ONE READER —
+// `parseCharacterSetFrom`'s argument reject — WENT AT W115, AND THE CONSTANT OUTLIVED IT.** The RULE it was
+// found by is what belongs here, because it binds every constant in this block and not just that one:
 //
-// ⭐ **A KEYWORD TOKEN CARRIES ITS OWN SOURCE BYTES**: `Lexer.scanIdentifier` emits `value: identBytes`
-// whatever kind it then classified them as (ONE emit for both, `Lexer.maxon:1141-1142`), so a `from`
-// keyword's `value` IS `b"from"`. That is what lets a refusal name the very constant its arm matches on,
-// with nothing left to keep in step — and it is equally what lets `parseQualifiedCall` mangle `String.from`
-// into a callee, since `consumeNameToken` hands the ordinary path those same bytes.
-//
-// ⛔ **BUT `value.equals(FromMethod)` IS NOT BY ITSELF THE KIND TEST, AND THE DIFFERENCE WAS A SILENT
-// LANGUAGE CHANGE (review, A3g).** A LITERAL carries text in `.value` too, and it carries the CONTENT with
-// the quotes stripped (`Lexer.emitStringLit`), so `"from"`, `'from'` and `b"from"` all answer that test
-// while `TokenKind.from` answers only for the keyword. The `from`-door therefore takes its method name
-// through `consumeNameToken` FIRST — `tokenCanBeAName` admits an identifier or a keyword and excludes
-// exactly the literal kinds — and only then matches on the name. Within that set the equivalence is exact and
+// ⛔ **`token.value.equals(<MethodName>)` IS NOT BY ITSELF A KIND TEST, AND THE DIFFERENCE WAS A SILENT
+// LANGUAGE CHANGE.** A LITERAL carries text in `.value` too, and it carries the CONTENT with the quotes
+// stripped (`Lexer.emitStringLit`), so `"from"`, `'from'` and `b"from"` all answer that test while
+// `TokenKind.from` answers only for the keyword. ⇒ **A name-matching door takes its method name through
+// `consumeNameToken` FIRST** — `tokenCanBeAName` admits an identifier or a keyword and excludes exactly the
+// literal kinds — and only then matches on the name. Within that set the equivalence is exact and
 // structural: the only scanner that emits a non-literal token carrying text is `scanIdentifier`, whose kind
 // is `classifyIdentifier(identBytes)` of the very bytes it stores, so `value == b"from"` and
-// `kind == TokenKind.from` cannot come apart. (`scanDirective`'s tokens all carry a leading `#`.)
-//
-// ⚠ **IT IS A CONSOLIDATION, NOT A MINT, AND THAT WAS FOUND BY LOOKING (A3g).** The spelling already existed
-// as `CharacterSetRuntime.CharSetFromMethod`, sitting among the ELEVEN preset-accessor names although it is
-// not an accessor — and invisible from the then-separate `String` door, which is how a roster over `from`
-// could look underivable while a constant for it was two files away. Adding a second would have been the very
-// one-fact-written-twice this row exists to delete, so the `CharSet` twin is GONE and its one reader
-// (`parseCharacterSetFrom`'s argument reject) names this. Same move, same reason, as `count`/`append`/
-// `isEmpty`/`clone` and the `Set` family above.
-let FromMethod = b"from"
+// `kind == TokenKind.from` cannot come apart. (`scanDirective`'s tokens all carry a leading `#`.) That is
+// also why a keyword token can be matched by NAME at all: `Lexer.scanIdentifier` emits `value: identBytes`
+// whatever kind it then classified them as, so a refusal can name the very constant its arm matches on
+// rather than `TokenKind`'s `rawValue`, which is a DISPLAY string free to gain punctuation.
 
 // The label `slice`'s SECOND argument gives its end index: `arr.slice(1, endIndex: 4)`,
 // `s.slice(start, endIndex: idx)`. One label, both containers — `SliceMethod`'s reason.
@@ -48962,7 +48946,7 @@ export type Parser
 			return
 		end 'cloneable'
 
-		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `Set`, `Map`, `List` or `Vector` field, or any other generic instance that is not an `Array` (each needs a per-instance cloner, a later slice); an OS handle (`__ManagedFile`/`__ManagedDirectory`), which cannot be duplicated at all; a `CharacterSet`; a value held at an interface type; or an array of managed arrays. String, struct, boxed-union, enum and trivial-element `Array` fields ARE supported.", line: memberTok.line, column: memberTok.column)
+		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `Set`, `Map`, `List` or `Vector` field, or any other generic instance that is not an `Array` (each needs a per-instance cloner, a later slice) — including one held INSIDE a struct field, such as a `CharacterSet`, whose member set is a `Set with Character`; an OS handle (`__ManagedFile`/`__ManagedDirectory`), which cannot be duplicated at all; a value held at an interface type; or an array of managed arrays. String, struct, boxed-union, enum and trivial-element `Array` fields ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireStructCloneSupported'
 
 	// ⭐ **THE CONDITIONAL-EXTENSION REFUSAL, AT THE ONE DOOR EVERY STRUCT METHOD CALL PASSES THROUGH.**
@@ -50102,7 +50086,8 @@ export type Parser
 	// ⭐ **THE NINE `__ManagedFile` STATICS — the surface BOTH references declare, complete at R4.2.** A name
 	// outside it is REFUSED BY NAME here rather than left to fall through: falling through would mangle
 	// `__ManagedFile.seek` into a callee no file declares and surface as E3004 against a name the author did
-	// write — the same "reject positioned, do not mangle" argument `parseCharacterSetStaticCall` makes above.
+	// write — the same "reject positioned, do not mangle" argument `requireCompilerOwnedStaticIsResolvable`
+	// makes above (the retired `parseCharacterSetStaticCall` made it first, and its door is the corpus's now).
 	// ⚠ That argument turns on `__ManagedFile` having NO `type` declaration; where one exists, E3004 off the
 	// mangled callee IS the right answer and the interception is the wrong one (W55, `String`).
 	//
@@ -58659,8 +58644,10 @@ export type Parser
 	// ⚠⚠ **THE `isCompilerOwnedTypeName` GATE IS HERE FOR A NAME THE CASCADE CANNOT ANSWER FOR, AND IT IS
 	// WRITTEN OVER THE WHOLE LIST RATHER THAN OVER ONE NAME.** The cascade answers `ExitCode` by its own arm,
 	// `HashValue`/`Codepoint` through `isSynthesizedIntAliasName`, `Ordering` and `ArrayError` because
-	// `createEnumRegistry` seeds them, and `CharSet` because `registerCharacterSetType` folds it into
-	// `genericAliases`; `String` and `Character` never arrive here at all, because `parseTypeReference`
+	// `createEnumRegistry` seeds them, and `CharSet` because `stdlib/CharacterSet.maxon:19`'s own
+	// `typealias CharSet = Set with Character` folds into `genericAliases` like any other declared alias (the
+	// compiler upserted its own copy of that entry until W129 — the seed moved, the reservation did not);
+	// `String` and `Character` never arrive here at all, because `parseTypeReference`
 	// settles both syntactically and neither ever wears a `named` tag.
 	//
 	// ⚠ **`CharacterSet` WAS THE MEASURED CASE AND IT IS NO LONGER ONE (W115).** It answered NOWHERE while
@@ -58682,10 +58669,16 @@ export type Parser
 	// that lives somewhere else, and this file has the rule in so many words one registry over
 	// (`BuiltinConformanceRuntime`: "no count written down, because a count is a copy that goes stale on the
 	// next rung").
-	// The pre-existing refusal then stands unchanged — and it is the RIGHT one, because the type is real and
-	// merely cannot be NAMED at a parameter yet (`CharacterSetTypeName`'s header states why it cannot cross
-	// a function boundary). Pinned by `field-declared-unknown-type`'s
-	// `error.compiler-reserved-base-type-is-not-undeclared`; the guard cannot be removed quietly.
+	// The pre-existing refusal then stands unchanged for the names still on the list, and it is the RIGHT one:
+	// a reserved name is real, so reporting it undeclared would be a false statement.
+	// ⚠ **THE CLAUSE THAT SAID `CharacterSet` "merely cannot be NAMED at a parameter YET" IS RETIRED, AND SO
+	// IS THE PIN THAT WAS CITED FOR IT (W129 review).** The `yet` expired at W17 and the layout it pointed at
+	// (`CharacterSetTypeName`) went at W129 — `field-declared-unknown-type`'s case is
+	// `compiler-reserved-base-type-is-nameable-at-a-parameter` and pins the OPPOSITE, that the name IS
+	// nameable. The `error.compiler-reserved-base-type-is-not-undeclared` this cited pins nothing: **no test
+	// of that name exists**, only an orphaned golden on all four lanes (board row `W111`, which owns the
+	// class sweep). ⇒ this guard's live witness is the `-nameable-` case; treat it as the one to redden
+	// before touching the gate.
 	//
 	// ⚠ **NOTHING IS SUBSTITUTED FOR THE BASE'S TYPE — only the throw is the point.** `resolveTypes` erases a
 	// `named` signature type and the parser deliberately does not (a `named` value's tag carries the alias
@@ -61810,7 +61803,8 @@ export type Parser
 	// ⛔⛔ **`atCharacterSetStaticCall` AND `evalConstCharacterSetStatic` STOOD HERE AND W115'S REVIEW DELETED
 	// THEM, BECAUSE THE RETIREMENT LEFT THEM DEAD IN THE FOLD AND FALSE IN THE REFUSAL.** They claimed
 	// `CharacterSet.<name>(` at a top-level initializer and folded the eleven presets out of
-	// `CharacterSetRuntime.characterSetPresets` — a SECOND transcription of what `stdlib/CharacterSet.maxon`
+	// `characterSetPresets`, in the since-deleted `Runtime/CharacterSetRuntime.maxon` (W129) — a SECOND
+	// transcription of what `stdlib/CharacterSet.maxon`
 	// now declares, consulted at a door the corpus was supposed to own.
 	//
 	// ⭐ **THE FOLD WAS ALREADY UNREACHABLE, MEASURED.** `atConstInitializerCall` is asked FIRST

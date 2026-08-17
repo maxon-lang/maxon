@@ -19,12 +19,17 @@
 // of one table that a differential spec existed only to keep in agreement.
 //
 // The port was written when its premise was true — *"shv2 reads no stdlib"* — and the premise expired
-// without the code noticing. What replaced it is not a mechanism: `String.count()` and `for c in s` emit
-// an ORDINARY Maxon-tier call (`Parser.CorpusCountGraphemes`, `CorpusFindGraphemeEnd`), and the Std bodies
-// that still walk clusters — the trim, the `StringIndex` walks, the views below — name the corpus callee
-// directly. The ONE thing that needed building is the reachability seed those Std bodies require, because
-// they are appended after the pipeline and their call edges do not exist when reachability is computed:
-// `StdlibSource.markCorpusCalleesOfSynthesizedRuntimes`.
+// without the code noticing. What replaced it is not a mechanism: `for c in s` emits an ORDINARY Maxon-tier
+// call (`Parser.CorpusFindGraphemeEnd`) and `String.count()` is a corpus body calling a corpus body, so
+// every edge is one the reachability walk follows for itself.
+//
+// ⚠⚠ **IT DID NEED ONE MECHANISM AND NO LONGER DOES, WHICH IS THE STATE TO KNOW BEFORE ADDING A BODY HERE.**
+// The Std bodies that walked clusters — the trim, the `StringIndex` walks, `__cs_contains` — named a corpus
+// callee from inside a graph no Maxon module contains, so their edges did not exist when reachability was
+// computed and `StdlibSource.markCorpusCalleesOfSynthesizedRuntime` declared them. Every one of those bodies
+// has since retired (W49 waves 3–6, then W129) and that seed is DELETED. ⇒ **No body in this file names a
+// corpus function**, and one that did would need the seed rebuilt — see the paragraph `StdlibSource`
+// keeps where it stood, which records the two things it paid for.
 //
 // ⚠ **THE TWO DIVERGENCES THE PORT DOCUMENTED ARE NOT LOST — ONE WAS NEVER REAL AND THE OTHER MOVED.**
 // The CRLF divergence was against the reference's `computeGraphemeLen` shortcut, which the port declined

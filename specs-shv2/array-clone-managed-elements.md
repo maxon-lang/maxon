@@ -131,8 +131,8 @@ accepted it:
 panic at X64Backend.maxon:1905: resolveCallFixups: call to unknown function '__clone___ManagedFile'
 ```
 
-⇒ The verdict is a REFUSAL and not a gap. There is no `__cs_clone` (the character-set runtime has a decref
-and nothing else), and an OS HANDLE cannot be deep-copied at all: duplicating one would hand two owners a
+⇒ The verdict is a REFUSAL and not a gap. An OS HANDLE cannot be deep-copied at all: duplicating one would
+hand two owners a
 descriptor whose `__mf_destruct` closes once. Both `typeSupportsDeepClone` and `managedNameCloneStrategy` now
 ask one `compilerOwnedAggregateOf`, so the gate refuses exactly what the strategy cannot emit — which is what
 the gate's own header exists to say — and the front end reports a positioned E2015 where the backend used to

@@ -408,7 +408,7 @@ file here — every row is *"at least this"*, and only the `E3001` rows have a k
 |---|---|---|
 | `Set.maxon` | `E3001` only | ⚠ **READY BUT INERT** — `Set` is SYNTHESIZED (26 refs); `W63` listed-built-withdrew and measured it |
 | `Vector.maxon` | `E3001` only | ⚠ **READY BUT INERT** — `Vector` is SYNTHESIZED (45 refs) |
-| `helpers/string/unicodeCategory.maxon` | `E3001` only | ⚠ **READY BUT INERT?** — its one export `unicodeGeneralCategory` is synthesized as `__ucd_cat` (`Runtime/UnicodeCategoryRuntime.maxon:133`); its only stdlib consumer is `CharacterSet.maxon`, itself unlisted |
+| `helpers/string/unicodeCategory.maxon` | ✅ **LISTED AND LIVE** | ✅ **DONE — this row's "inert?" reading was refuted by §1 below and is now settled by code.** `W115` listed BOTH this module and `CharacterSet.maxon` (`StdlibLoader.whitelistedStdlibModules`) and `W129` deleted the `__ucd_cat` synthesis it was said to be shadowed by, so `unicodeGeneralCategory` is the ONE implementation, reached through the surviving raw table loads `__ucd_bmp_at`/`__ucd_supp_at` |
 | `Json.maxon` | `E2015 :281:3` field access through `doc`, a struct-typed field | **⇒ `W66`** — a legal program refused, oracle compiles it |
 | `List.maxon` | `E3086 :21:10` field `chain` not initialized, no default | field default / recursive field |
 | `CharacterSet.maxon` | `E2004 :31:33` Undefined constant `CharacterSet` | ⚠ **MOVED** from `E2010 :31:9` — `CharacterSet` is a compiler-owned builtin type name (it appears in `E2015`'s own member-carrying list) |
@@ -554,9 +554,13 @@ nothing to do with the injection and everything to do with the copy's PATH. ⇒ 
 | **Candidate listing** | `Testing` | — it is ready NOW, and it is a rung of its own (`W81`) |
 | **Ordinary compiler gap** | `PrimitiveExtensions` | ✅ yes — `extension int` is a parser feature |
 | **Synthesized-twin chains** | `Set` · `Vector` · `List` · (`Map`, already listed and inert) | ⛔ no |
-| **Inert-if-listed** | `unicodeCategory` | ⛔ no — its one export is synthesized as `__ucd_cat` |
-| **Convergence** (compiler-owned name) | `CharacterSet` | ⛔ no |
+| **Inert-if-listed** | ~~`unicodeCategory`~~ — **CLASS NOW EMPTY** | ✅ cleared: listed at `W115`, and the `__ucd_cat` synthesis this row rested on deleted at `W129` |
+| **Convergence** (compiler-owned name) | ~~`CharacterSet`~~ — **CLASS NOW EMPTY** | ✅ cleared: listed at `W115`; the compiler-owned `__CharacterSet` layout and the whole `__cs_*` runtime deleted at `W129`, leaving only the NAME reservation |
 | **Runtime slices** (intrinsics that do not exist) | `Subprocess` · `TcpClient` → `HttpClient` → `httpHelpers` | ⛔ no |
+
+⚠ **THE COUNT BELOW IS DATED 2026-08-13 AND HAS NOT BEEN RE-CENSUSED (noted at W129's review, 2026-08-17).**
+Two of the four workstream classes above have since emptied, so *"four workstreams"* and *"NINE modules"* are
+both high; `PLAN.md` and the memory index carry the live remainder. Re-census before planning off this line.
 
 ⇒ **the remaining bring-up is ONE listing, ONE parser feature, and NINE modules behind four workstreams
 that only direct work moves.** The optimistic reading — *"four ordinary gaps will keep falling out"* —

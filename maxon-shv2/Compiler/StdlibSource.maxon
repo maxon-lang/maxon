@@ -905,17 +905,20 @@ end 'markMaxonCalleeEdge'
 // join that names nothing costs nothing, where a RELOCATION that names nothing is a wrong code pointer.
 // Overloads are covered because `markReachable` credits the whole set.
 //
-// ⚠ **THE FOURTH `ensureWitnessTable` ROUTE — `withWitnessTableArgs`, the `Hashable`/`Equatable` witness a
-// `Set`/`Map` threads — NEEDS NOTHING EXTRA TODAY, AND THAT IS
-// MEASURED RATHER THAN ASSUMED.** Its conformer is the container's KEY, and a USER type there is
+// ⚠ **A CONTAINER'S KEY WITNESS NEEDS NOTHING EXTRA HERE, AND THAT IS MEASURED RATHER THAN ASSUMED.** Its
+// conformer is the container's KEY, and a USER type there is
 // refused: *"E2015: `Set` hashes and compares its keys through their `Hashable`/`Equatable` witnesses, so a
 // key must be one of `int`, `String`, `Character`, `Array` — a 'Point' key is a later slice"*. So every such
 // conformer is a BUILTIN whose impls `BuiltinConformanceRuntime` SYNTHESIZES, and a synthesized body calls no
 // stdlib source, so nothing behind that table can be filed unreachable. The day user-type keys land, the
 // conformer key above already covers them — reaching `Point.create` to put one in a `Set` credits
-// `Point.hash` — which is a third reason to key on the conformer rather than on the three call sites.
-// ⚠ That premise is about the CONTAINER route only because the container route is where it was first
-// needed; it is load-bearing for the CONSTRAINT route too, and this walk's header states it there as P2
+// `Point.hash` — which is a third reason to key on the conformer rather than on the call sites.
+// ⚠ **THE KEY USED TO ARRIVE BY AN `ensureWitnessTable` ROUTE OF ITS OWN** — `withWitnessTableArgs`, hidden
+// trailing arguments into the compiler-owned `__set_*`/`__map_*`/`__cs_contains` entries — and that route is
+// gone (W105, W129): a corpus container's key witness is an ordinary dictionary parameter now, so the
+// premise below arrives at the CONSTRAINT route rather than at a container one. The premise itself is
+// unchanged, and it is
+// load-bearing for the constraint route in its own right, which this walk's header states as P2
 // with the measurement (`Keyed with String` under `where T is Hashable` builds `__witness_String.Hashable`
 // while no `String.<method>` is ever reached). Read it as one premise with two customers, not two.
 //

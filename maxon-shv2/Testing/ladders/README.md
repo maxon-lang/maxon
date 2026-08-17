@@ -395,8 +395,10 @@ cannot express, so every column of a default run reads a Δ0 that means *unreach
 
 - **`data-*` doubles the UNMATCHED body** — the pure scan. All seeds ×2.00 per doubling in time and
   peak RSS: **`__str_trim` is O(n), not O(n²)**. Per CLUSTER at 524,288 bytes: ASCII 102 ns, 2-byte BMP
-  150 ns, supplementary 190 ns — so `__gr_end`'s general scan is ~48 ns over its ASCII fast path and
-  `__ucd_cat`'s **806-entry binary search is ~40 ns over a direct BMP byte load**. Bounded constants.
+  150 ns, supplementary 190 ns — so `__gr_end`'s general scan is ~48 ns over its ASCII fast path and the
+  **806-entry binary search is ~40 ns over a direct BMP byte load**. Bounded constants. ⚠ Measured against
+  the synthesized `__str_trim`/`__gr_end`/`__ucd_cat`, all three since retired onto the corpus (W49 waves
+  3–6, W129); the shapes are the same and the CONSTANTS have not been re-measured at the corpus site.
 - **`edge-*` doubles the MATCHED pad against a fixed body** — the cost of *cutting* rather than of
   *scanning past*. Also ×2.00, and at the same per-cluster cost, because both paths mint a `Character`
   and probe the set.
@@ -418,7 +420,9 @@ function count while `<n>` holds the site count, which is what proved the contro
 **+16 bytes per FUNCTION** and not per site — at 256 sites, `SITES_PER_FN` 1/2/4/8 read 4,920 / 2,872 /
 1,848 / 1,336 bytes, tracking functions and ignoring sites. And `data-trim-supp` is the only mode whose
 seed reaches the supplementary-plane search at all; a ladder of ASCII and 2-byte seeds measures the
-direct table load twice and cannot claim to have measured `__ucd_cat`.
+direct table load twice and cannot claim to have measured the category lookup (it lived in the compiler's
+own `__ucd_cat` when this was written and lives in `stdlib/helpers/string/unicodeCategory.maxon` since W129 —
+the two plane arms, and this argument, are unchanged).
 
 ## Reading one
 

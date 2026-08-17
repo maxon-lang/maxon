@@ -246,9 +246,10 @@ error E3011: <fragment>:6:11: Unknown type 'NoSuchTypeAtAll'
 
 <!-- test: compiler-reserved-base-type-is-nameable-at-a-parameter -->
 ⭐⭐ **A NAME THE COMPILER RESERVES IS NOT AN UNDECLARED NAME — AND, SINCE W17, IT IS NOT AN UNNAMEABLE ONE
-EITHER.** `CharacterSet`'s layout is registered under the RESERVED spelling `__CharacterSet`
-(`SignatureIndex.CharacterSetTypeName`) precisely so a user `type CharacterSet` cannot contest its bucket,
-while the user-facing door is the bare `CharacterSet` (`CharacterSetBuiltinName`). That made
+EITHER.** `CharacterSet`'s layout USED TO BE registered under the RESERVED spelling `__CharacterSet`
+(`SignatureIndex.CharacterSetTypeName`, deleted at W129) precisely so a user `type CharacterSet` could not
+contest its bucket, while the user-facing door was the bare `CharacterSet` (`CharacterSetBuiltinName`, which
+survives as the RESERVATION's key). That made
 `containsStruct("CharacterSet")` FALSE, and this case used to pin the consequence: a parameter declared
 `CharacterSet` was refused, because *"the type is real, it simply cannot be NAMED at a parameter yet"*.
 

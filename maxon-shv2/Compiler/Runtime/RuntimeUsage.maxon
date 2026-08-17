@@ -623,7 +623,7 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	end 'uniondtor'
 	// A `<Enum>.fromRawValue(raw)` lookup (`__enum_from_raw_<Enum>`). It declares NOTHING else — the
 	// synthesized body compares i64 constants and returns, allocating nothing and calling nothing — which puts
-	// it in `__ucd_category`'s company as a family whose body this scan need not see past.
+	// it in the `__ucd_` table loads' company as a family whose body this scan need not see past.
 	if isEnumLookupRuntimeCallee(callee) 'enumfromraw'
 		usage.neededEnumLookups.insert(callee)
 	end 'enumfromraw'
@@ -726,8 +726,12 @@ end 'recordGraphemeUsage'
 // which is exactly the chain now living in `stdlib/helpers/string/grapheme.maxon`. Those are ORDINARY Maxon
 // call edges, so the query spine follows them without being told: what a corpus function needs is found, not
 // declared. What is left here is the residue with no corpus counterpart — the `Character` mint and the three
-// array-filling views — plus the ONE thing a scan of the Maxon module still cannot see, which has moved to
-// `StdlibSource.markCorpusCalleesOfSynthesizedRuntimes`: the edge FROM these Std bodies INTO the corpus.
+// array-filling views.
+// ⚠ **AND THE EDGE *FROM* THESE Std BODIES *INTO* THE CORPUS IS NO LONGER ONE OF THEM.** It was the one thing
+// a scan of the Maxon module could not see, declared by `StdlibSource.markCorpusCalleesOfSynthesizedRuntime`;
+// every body that had such an edge has retired (the last, `__cs_contains`, at W129) and that seed is deleted.
+// A body added here that CALLS a corpus function brings it back — this closure declares runtime-usage BITS
+// and cannot declare a stdlib function's REACHABILITY, which is why the two were never one place.
 function closeGraphemeNeeds(usage RuntimeUsage)
 	// `__char_at` builds a fresh owned inline record: one `__mm_alloc` plus a `__str_copy` blit.
 	if usage.usesCharAt 'mintsCharacters'

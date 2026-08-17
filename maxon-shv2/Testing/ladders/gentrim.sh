@@ -1,4 +1,17 @@
 #!/usr/bin/env bash
+# ⚠⚠ **DATED, AND THE COMPILER-SIDE HALF OF THIS HEADER IS HISTORY — READ IT AS A RECORD, NOT A MAP
+# (corrected at W129's review, 2026-08-17).** Every generated program below still COMPILES AND RUNS and the
+# ladder still measures what a trim costs: `CharacterSet.<preset>()`, `CharSet from […]` and `p.trim(c)` are
+# ordinary corpus calls into `stdlib/CharacterSet.maxon` and `stdlib/String.maxon` (listed at W115). What is
+# gone is every COMPILER-INTERNAL mechanism this header prices — `__str_trim` (W49 wave 4), then
+# `__cs_make`/`__cs_decref`/`__cs_contains`, `__ucd_cat`, `parseCharacterSetStaticCall`,
+# `recordCharacterSetUsage`/`closeCharacterSetNeeds` and `Runtime/CharacterSetRuntime.maxon` entire (W129).
+# ⇒ The `sites-control` measurements below are still SOUND AS DATED READINGS, and the cost they priced at
+# "nothing measurable" is now structurally zero rather than merely small: there is no per-call-op
+# `CharacterSet` arm left to run. The two RAW UCD table loads (`__ucd_bmp_at`/`__ucd_supp_at`) and both
+# checked-in blobs survive, so the plane-crossing seeds below still reach the supplementary search — through
+# `stdlib/helpers/string/unicodeCategory.maxon` rather than through `__ucd_cat`.
+#
 # `CharacterSet`, the Unicode `General_Category` table and the three `String` trims (P1.8 slice D) — and
 # the FOUR different questions they raise, which is why this generator has four families of mode and not
 # one. It is `genstring-grapheme.sh`'s sibling and deliberately its twin in shape; read that file's

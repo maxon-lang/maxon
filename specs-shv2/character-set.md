@@ -16,15 +16,23 @@ those tests red**, which is a coverage hole rather than a passing grade.
 
 Each case names the sabotage that found it.
 
+⚠ **WHERE TO PERFORM THE TWO UCD SABOTAGES HAS MOVED, AND THEIR RED COUNTS ARE DATED (W129).** Both were
+measured against the compiler's own `__ucd_cat` — a synthesized second transcription of the lookup, with its
+own binary search and its own `UcdUnassignedCategory` constant. `W115` listed `stdlib/CharacterSet.maxon` and
+`W129` deleted that transcription, so the ONE implementation is now
+`stdlib/helpers/string/unicodeCategory.maxon:53-75`, reached through the two surviving raw table loads
+(`__ucd_bmp_at`/`__ucd_supp_at`). Sabotage it THERE; the counts below have not been re-measured at the new
+site.
+
 | Sabotage | Reds in the ported corpus alone | With this file | Covered by |
 |---|---|---|---|
 | `__str_trim`'s all-matched arm reopened to the byte length | 2 — both `trim()` | 4 | `trim-start-all-match`, `trim-end-all-match` |
 | a `Set` key argument no longer adopts the set's key type | **0** | 2 | `character-key-insert-contains`, `character-key-remove` |
 | `Character` withdrawn from the `Set` key-type gate | **0** | 3 | `character-set-create` (+ the two above) |
-| `__ucd_cat`'s supplementary-plane search removed | **0** | 2 | `supplementary-plane-category`, `supplementary-plane-trim` |
+| the supplementary-plane binary search removed | **0** | 2 | `supplementary-plane-category`, `supplementary-plane-trim` |
 | a bare-local member set not CO-OWNED when `from` consumes it | **0** | 2 | `member-set-co-owned-by-from`, `one-member-set-fills-two-character-sets` |
 | `availableUnicodeEscapeText`'s UNTRUNCATED window (`available = whole`) | **0** | 1 | `malformed-escape-full-window` |
-| `__ucd_cat`'s `Cn` fall-out (`UcdUnassignedCategory`) reading any other category | **0** | 1 | `supplementary-plane-table-bounds` |
+| the `Cn` fall-out for a codepoint in NO supplementary range reading any other category | **0** | 1 | `supplementary-plane-table-bounds` |
 | `CharSet`/`CharacterSet` withdrawn from `isCompilerOwnedTypeName` | **0** | 2 | `charset-alias-is-compiler-owned`, `characterset-name-is-compiler-owned` |
 | the const evaluator's `CharacterSet.<name>(` arm restored ahead of `atConstInitializerCall` (W115 review) | **0** | 2 | `error.characterset-undeclared-static-at-a-top-level-initializer`, `error.characterset-from-at-a-top-level-initializer` |
 
@@ -190,12 +198,13 @@ end 'main'
 <!-- test: supplementary-plane-table-bounds -->
 ### The sorted table's TOP, and the `Cn` a codepoint in no range falls out to
 `supplementary-plane-category` finds both its codepoints in the table's MIDDLE, so nothing above
-reaches the last entry and nothing at all reaches the `missing` arm — a `__ucd_cat` that answered any
-other category for an unmatched supplementary codepoint left the suite at 2230/0 (measured:
-`UcdUnassignedCategory` 0 ⇒ 2). The three here are, in order: inside the highest range any preset's
-mask covers (U+E0100, `Mn`, entry 803 of 806); one byte past that range's end, so the search falls out
-between two entries; and above EVERY range (U+10FFFF), which is the only input that drives `lo` to the
-table's last index and is therefore what an off-by-one in `suppEntryCount - 1` would read past.
+reaches the last entry and nothing at all reaches the fall-out — a lookup that answered any
+other category for an unmatched supplementary codepoint left the suite at 2230/0 (measured against the
+since-deleted `__ucd_cat`, whose `UcdUnassignedCategory` was moved 0 ⇒ 2; the live implementation is
+`stdlib/helpers/string/unicodeCategory.maxon:53-75`). The three here are, in order: inside the highest range
+any preset's mask covers (U+E0100, `Mn`, entry 803 of 806); one byte past that range's end, so the search
+falls out between two entries; and above EVERY range (U+10FFFF), which is the only input that drives `lo` to
+the table's last index and is therefore what an off-by-one in the search's initial high bound would read past.
 ```maxon
 function main() returns ExitCode
 	let letters = CharacterSet.letters()
@@ -453,14 +462,19 @@ error E2015: <fragment>:2:6: Unsupported: a declaration of the type name 'Charac
 <!-- test: characterset-at-a-struct-field -->
 ### A `CharacterSet` at a struct field
 
-⭐⭐ **THE DESTRUCTOR CASCADE CALLS `__cs_decref`, AND WHAT A CASCADE CALLS IS INVISIBLE TO THE MODULE
-SCAN.** `scanRuntimeUsage` walks the Maxon module and turns on a runtime bit per callee it SEES; a
-`__destruct_<T>` body is synthesized later, so every callee inside one has to be DECLARED instead
-(`MmRuntime.declareDestructorCascadeNeeds`). `CharacterSet` is the one managed type whose drop has its own
-install bit (`usesCharSetDecref`) rather than riding a family bit its own construction already turns on —
-`CharacterSet.whitespaces()` sets `usesCharSetMake` and nothing else — so a set reached ONLY through a
-cascade linked against a `__cs_decref` nothing installed: `panic at X64Backend.maxon: resolveCallFixups:
-call to unknown function '__cs_decref'`, on a program with no diagnostic to its name.
+⭐⭐ **WHAT A DESTRUCTOR CASCADE CALLS IS INVISIBLE TO THE MODULE SCAN.** `scanRuntimeUsage` walks the Maxon
+module and turns on a runtime bit per callee it SEES; a `__destruct_<T>` body is synthesized later, so every
+callee inside one has to be DECLARED instead (`MmRuntime.declareDestructorCascadeNeeds`).
+
+⚠ **THE DEFECT THIS CASE WAS WRITTEN AGAINST IS HISTORY AND THE CLASS IS NOT (W129).** `CharacterSet` used
+to be the one managed type whose drop had its own install bit (`usesCharSetDecref`) rather than riding a
+family bit its own construction already turned on — `CharacterSet.whitespaces()` set `usesCharSetMake` and
+nothing else — so a set reached ONLY through a cascade linked against a `__cs_decref` nothing installed:
+`panic at X64Backend.maxon: resolveCallFixups: call to unknown function '__cs_decref'`, on a program with no
+diagnostic to its name. `W115` made the type corpus-declared and `W129` deleted the `__cs_*` runtime with all
+three of its bits, so the drop here is now an ordinary synthesized cascade. **The case still earns its place:
+it is the struct-field shape the class needs a witness at, and the next per-type install bit reopens it.**
+(The source-side statement of the same fact lives at `MmRuntime.noteDestructorUsage`'s header.)
 ```maxon
 type Trimmer
 	var chars as CharacterSet
@@ -533,7 +547,8 @@ end 'main'
 
 ⭐ **THE TOP-LEVEL DOOR MUST NOT KEEP A ROSTER OF ITS OWN (W115 review).** Until this case, the constant
 evaluator claimed `CharacterSet.<name>(` before `atConstInitializerCall` could and folded the eleven presets
-out of `CharacterSetRuntime.characterSetPresets` — the compiler's own transcription of what
+out of `characterSetPresets`, in the since-deleted `Runtime/CharacterSetRuntime.maxon` (W129) — the
+compiler's own transcription of what
 `stdlib/CharacterSet.maxon` declares. Listing that module made the fold unreachable (the declaration wins at
 `atConstInitializerCall`, which is asked first) and left only its refusal, which went on asserting *"a global
 `CharacterSet` is one of the eleven predefined sets, whose members the compiler holds as data"* — a claim the
