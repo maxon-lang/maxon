@@ -1065,18 +1065,14 @@ end 'seedLazyStaticInitCalleesOfUserCode'
 // MISSING root is `requireUnreachableStdlibStayedDead` — `markCorpusCalleesOfSynthesizedRuntime`'s own
 // standing warning, one function up.
 function markLazyStaticInitCallees(op MaxonOp, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	match maxonOpNamesGlobalLabel(op) 'named'
-		none then break 'named'
-		label(slot) then markLazyStaticCalleesOfSlot(slot, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-	end 'named'
-end 'markLazyStaticInitCallees'
+	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
+		return
+	end 'namesNoSlot'
 
-// The loop the arm above cannot hold, split out so that arm stays one line — `declaredGlobals`' discipline.
-function markLazyStaticCalleesOfSlot(slot ByteArray, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	for callee in signatures.lazyStaticInitCalleesOf(slot) 'eachCallee'
+	for callee in signatures.lazyStaticInitCalleesOf(maxonOpGlobalLabelName(op)) 'eachCallee'
 		markReachable(callee, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'eachCallee'
-end 'markLazyStaticCalleesOfSlot'
+end 'markLazyStaticInitCallees'
 
 // One op. Asks the callee question through `maxonOpCalleeKind`/`maxonOpCalleeName` — the same pair
 // `opNamesStdlibCallee` reads — rather than matching the call forms here, so a new call form is learned by
@@ -1277,14 +1273,16 @@ end 'opNamesStdlibCallee'
 // not hypothetical: it is the difference between `var flag = true` taking the allocation-free short-circuit
 // and taking the full walk.
 function opAccessesALazyStaticRootedInStdlib(op MaxonOp, signatures ProgramSignatures, stdlib FunctionNameSet) returns bool
-	match maxonOpNamesGlobalLabel(op) 'named'
-		none then return false
-		label(slot) then return anyCalleeIsIn(signatures.lazyStaticInitCalleesOf(slot), stdlib: stdlib)
-	end 'named'
+	if not maxonOpNamesAGlobalLabel(op) 'namesNoSlot'
+		return false
+	end 'namesNoSlot'
+
+	return anyCalleeIsIn(signatures.lazyStaticInitCalleesOf(maxonOpGlobalLabelName(op)), stdlib: stdlib)
 end 'opAccessesALazyStaticRootedInStdlib'
 
-// The loop the arm above cannot hold. It reads the set being BUILT rather than `isStdlibFunction`, for
-// `userCodeReachesStdlib`'s stated reason: this runs inside the derivation that publishes it.
+// The loop the caller above keeps out of its one-line answer. It reads the set being BUILT rather than
+// `isStdlibFunction`, for `userCodeReachesStdlib`'s stated reason: this runs inside the derivation that
+// publishes it.
 function anyCalleeIsIn(callees ByteArrayArray, stdlib FunctionNameSet) returns bool
 	for callee in callees 'eachCallee'
 		if stdlib.contains(callee) 'crossesIntoStdlib'

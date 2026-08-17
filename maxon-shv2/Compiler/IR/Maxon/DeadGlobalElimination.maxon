@@ -151,47 +151,64 @@ export function liveGlobalLabels(module MaxonModule, storedGlobals StoredGlobalC
 	return live
 end 'liveGlobalLabels'
 
-// The `.data` label one `MaxonOp` names, if any — the payload-carrying answer `maxonOpNamesGlobalLabel`'s
-// two readers ask for once they know there is one. Payload-free `none` keeps the common answer a scalar,
-// which is `TypeResolution.denotedNamedType`'s measured argument: this is asked once per op of every
-// reachable function, and a heap-boxed union per ask would be a term that grows with the PROGRAM.
-export union MaxonOpGlobalLabel
-	none
-	label(name ByteArray)
-end 'MaxonOpGlobalLabel'
-
-// ⭐ **THE `.data` LABEL ONE `MaxonOp` NAMES — ONE TABLE, TWO READERS.** ONE variant carries a label —
+// ⭐ **DOES THIS `MaxonOp` NAME A `.data` LABEL — ONE TABLE, THREE READERS.** ONE variant carries a label —
 // `globalAddr` — and it carries it for a read and a write alike, which is the whole of this pass's
-// bidirectionality. `StdlibSource.markLazyStaticInitCallees` is the second reader (a `globalAddr` on a LAZY
-// static's slot IS the call to its `__lazy_init$`), and it reads this rather than re-matching the union for
-// `markMaxonCalleeEdge`'s stated reason: an under-approximation at a second site is not a compile error,
-// it is a body that is never lowered and then reached.
+// bidirectionality. `StdlibSource`'s `markLazyStaticInitCallees` and `opAccessesALazyStaticRootedInStdlib`
+// are the other two (a `globalAddr` on a LAZY static's slot IS the call to its `__lazy_init$`), and they
+// read this rather than re-matching the op for `markMaxonCalleeEdge`'s stated reason: an
+// under-approximation at a second site is not a compile error, it is a body that is never lowered and
+// then reached.
 //
-// The arms RANGE over the whole union in declaration order, ending at the current last variant, so a
+// ⭐⭐ **A SCALAR PREDICATE PLUS A NAME GETTER, NOT A UNION — AND THAT IS `maxonOpCalleeKind`'S MEASURED
+// CORRECTION APPLIED A SECOND TIME (W115 optimizer pass).** W115 wrote this as
+// `union MaxonOpGlobalLabel{none, label(ByteArray)}`, whose header claimed *"payload-free `none` keeps the
+// common answer a scalar"*. It does not: a union with ANY payload variant is boxed, so every ask allocated
+// one box — the identical defect `MaxonDialect.maxonOpCalleeKind`'s header records BATCH2 slice 3 measuring
+// and removing, in the identical shape (op classifier, `ByteArray` payload, asked per op). It cost more here
+// because there are three ask sites and two of them are inside walks `queryAllModule`'s stdlib body-demand
+// fixpoint repeats once per round. MEASURED A/B on one tree at one path, allocations exact:
+// `phase:deriveRuntimeNeeds` read **72,145 / 119,171 / 213,225 / 401,334 / 777,543 / 1,529,902** across the
+// six rungs with the union — x1.96 per doubling, DEAD LINEAR IN THE USER'S PROGRAM — and
+// **19,764 / 21,523 / 25,040 / 32,072 / 46,118 / 74,166** with this pair, which is back to the merge base's
+// 72,854 at rung 5. The demand fixpoint's own copy of the cost is not billed to any phase at all (it runs
+// BETWEEN `foldEveryFileIntoAModule` calls, outside the `merge` probe) and was 2.76x larger again:
+// -4,023,436 unbracketed allocations at rung 5 beside this table's -1,455,736.
+//
+// The arms RANGE over the whole `MaxonOp` union in declaration order, ending at the current last variant, so a
 // variant appended past it FAILS TO COMPILE here rather than being silently swallowed — the band-append
 // invariant working in the reviewer's favour (MaxonDialect's header), exactly as
 // `StdlibSource.markMaxonCalleeEdge` and `DeadFunctionElimination.markCalleeOf` rely on it. A new
 // variant that names a `.data` label must be added as its own arm.
-export function maxonOpNamesGlobalLabel(op MaxonOp) returns MaxonOpGlobalLabel
+export function maxonOpNamesAGlobalLabel(op MaxonOp) returns bool
 	match op 'op'
 		// `call` … `branch`: calls, literals, arithmetic, comparisons, branches and returns.
-		call to branch then return MaxonOpGlobalLabel.none
-		globalAddr(_, label) then return MaxonOpGlobalLabel.label(label)
+		call to branch then return false
+		globalAddr then return true
 		// `loadIndirect` … `witnessTryDispatch`: the load and the store that FOLLOW a `globalAddr` take the
 		// address as a VALUE — the label is on the op above and nowhere else — and no later variant names
 		// a data label at all.
-		loadIndirect to witnessTryDispatch then return MaxonOpGlobalLabel.none
+		loadIndirect to witnessTryDispatch then return false
 		// A rendered panic's message is a VALUE, not a data label — it is `panicAbort` that names one, and
 		// that is an `.rdata` blob the Std tier interns, never a `.data` global.
-		panicAbortValue then return MaxonOpGlobalLabel.none
+		panicAbortValue then return false
 		// The error-flag encode's operand is a VALUE and its result is one; it names no data label at all.
-		errorFlagEncode then return MaxonOpGlobalLabel.none
+		errorFlagEncode then return false
 	end 'op'
-end 'maxonOpNamesGlobalLabel'
+end 'maxonOpNamesAGlobalLabel'
+
+// The `.data` label an op names — asked only of an op `maxonOpNamesAGlobalLabel` answered TRUE for, so every
+// other variant panics rather than returning an empty name. An empty `ByteArray` would be a sentinel, and a
+// caller that forgot the gate would silently keep alive "the global named by the empty string". The same
+// shape, and the same floor, as `MaxonDialect.maxonOpCalleeName`.
+export function maxonOpGlobalLabelName(op MaxonOp) returns ByteArray
+	return match op 'op'
+		globalAddr(_, label) gives label
+		default panic("maxonOpGlobalLabelName: asked of an op that names no `.data` label — `maxonOpNamesAGlobalLabel` answers false for it, and every caller gates on that")
+	end 'op'
+end 'maxonOpGlobalLabelName'
 
 function noteGlobalLabel(op MaxonOp, live LiveGlobalLabelSet)
-	match maxonOpNamesGlobalLabel(op) 'named'
-		none then break 'named'
-		label(name) then live.insert(name)
-	end 'named'
+	if maxonOpNamesAGlobalLabel(op) 'namesOne'
+		live.insert(maxonOpGlobalLabelName(op))
+	end 'namesOne'
 end 'noteGlobalLabel'
