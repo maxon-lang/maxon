@@ -4988,8 +4988,15 @@ end 'DeclaredBuiltinErrorEnum'
 // produce a compiler that throws ordinals no handler arm can name.
 export function declaredBuiltinErrorEnum(project Project, typeName ByteArray, installer ByteArray) returns DeclaredBuiltinErrorEnum
 	let layout = try project.enumTypes.get(typeName) otherwise 'notDeclared'
-		// ⚠ Names no module either, for `BuiltinErrorOrdinalCheck.refuse`'s reason directly above: six
-		// families reach this and they are declared across four different files now.
+		// ⚠ Names no module either, for `BuiltinErrorOrdinalCheck.refuse`'s reason directly above: SEVERAL
+		// families reach this and they are declared across several different files. It said "six families
+		// across four different files" and both numbers were stale in the SHRINKING direction — they counted
+		// `StringError` and `MapError`, which left this door at W49 and W105 when the corpus became their only
+		// producer (`Compiler.compileToCodeResult` records both retirements). Counted again it would go stale
+		// again, and in either direction: the set is a consequence of which runtimes still transcribe an
+		// ordinal and which modules the loader lists, neither of which is read from here. The roster that DOES
+		// know is the call block in `Compiler.compileToCodeResult`; this sentence only needs the fact that
+		// makes naming a module wrong, which is that more than one declares one.
 		reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.builtinErrorEnumMismatch, message: "'{String.from(typeName)}' is the error enum {String.from(installer)} throws, and this compile declares no enum of that name — it is declared by a stdlib module, which `StdlibLoader.whitelistedStdlibModules` must list for the runtime's error ordinals to name anything"))
 		return DeclaredBuiltinErrorEnum.notDeclared
 	end 'notDeclared'

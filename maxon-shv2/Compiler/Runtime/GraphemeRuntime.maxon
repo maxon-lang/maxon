@@ -162,13 +162,48 @@ export let StrToBytesName = b"__str_to_bytes"
 // the SUCCESS-vs-FAILURE fork with `if try`, never the error's identity). The clause below is stamped for
 // the ABI's sake only, which is `__gt_process_run`'s arrangement with `RunProcessError`, verbatim. The day a
 // case discriminates `notAscii`, seed the enum in `Project` and add the arm — both, in one edit.
+//
+// ⛔⛔ **SEEDING AND GUARDING ARE TWO DIFFERENT QUESTIONS, AND THE PARAGRAPH ABOVE ANSWERED ONLY ONE — SO
+// THIS FAMILY'S ORDINAL WENT UNWATCHED (W135 review).** "No case discriminates it" is an argument about the
+// DECODE half, and it is sound; it says nothing about the ENCODE half, which is the literal `0` below held
+// against a case position `stdlib/Character.maxon` owns. MEASURED: inserting a case ahead of `notAscii`
+// there moved the declared ordinal to 1 while `buildCharAscii` went on emitting 0, and the compile exited
+// **0 with no diagnostic** — the same silence `BuiltinErrorOrdinalCheck.requireTotal` had just withdrawn
+// from the six families that WERE on `Compiler.compileToCodeResult`'s roster. `RunProcessError`, named
+// above as the identical arrangement, is NOT the identical case and needs no guard: its ordinals name a
+// type no corpus file declares (`GtRuntime`'s own header — that is what makes an `otherwise (e)` decode
+// land on scalars), so it has no second half to drift from, exactly as retired `StringError` has none.
 let CharacterNotAsciiOrdinal = 0 as ParsedInt
 let CharacterNotAsciiFlag = CharacterNotAsciiOrdinal + ErrorFlagOrdinalBias
-let CharacterErrorTypeName = "CharacterError"
+
+// WHO transcribed the ordinal, for the diagnostic — the sibling families' spelling.
+let CharacterErrorOrdinalInstaller = b"the Character runtime"
 
 function characterThrows() returns ThrowsClause
-	return ThrowsClause.throwing(CharacterErrorTypeName)
+	return ThrowsClause.throwing(String.from(CharacterErrorTypeName))
 end 'characterThrows'
+
+// ⭐ **THE ORDINAL DRIFT GUARD FOR `CharacterError`** — the twin of `verifyManagedDirectoryOrdinals`, which
+// carries the whole argument. It is `overDeclared` and not `overSynthesized` for `claimArrayErrorOrdinals`'
+// MEASURED reason: this name is spelled by the CORPUS, so a check against a layout the compiler rebuilt
+// would compare the compiler with itself and agree unconditionally while the program ran on the corpus's
+// order. `notDeclared` returns without a second complaint — `declaredBuiltinErrorEnum` has already reported
+// the missing declaration, and every arm behind it would say the same thing again.
+export function verifyCharacterErrorOrdinals(project Project)
+	match declaredBuiltinErrorEnum(project, typeName: CharacterErrorTypeName, installer: CharacterErrorOrdinalInstaller) 'declaration'
+		notDeclared then return
+		found(declaration) then claimCharacterErrorOrdinals(project, declaration: declaration)
+	end 'declaration'
+end 'verifyCharacterErrorOrdinals'
+
+function claimCharacterErrorOrdinals(project Project, declaration EnumLayout)
+	var characterErrors = BuiltinErrorOrdinalCheck.overDeclared(project, declaration: declaration, installer: CharacterErrorOrdinalInstaller)
+	characterErrors.claim(CharacterNotAsciiCaseName, ordinal: CharacterNotAsciiOrdinal)
+	// ONE case, and `verifyDivisionByZeroOrdinals`' argument applies verbatim: a walk that is already total
+	// is the one shape that makes this call look redundant, which is exactly why it is not — the day a
+	// second case is declared beside `notAscii`, this is what says so rather than exempting it by silence.
+	characterErrors.requireTotal()
+end 'claimCharacterErrorOrdinals'
 
 // The THROWING `Character` runtime callees — one, and `isThrowingGtRuntimeCallee`'s argument for shipping
 // without an install-time drift guard holds here for the same three reasons: there is exactly ONE member,

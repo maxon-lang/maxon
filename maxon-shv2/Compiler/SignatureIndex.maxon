@@ -5727,6 +5727,27 @@ export let EnumLookupErrorTypeName = b"__EnumLookupError"
 // declaration position by `addBuiltinEnumCase`.
 export let EnumLookupNoSuchRawValueCaseName = b"noSuchRawValue"
 
+// ⭐ **THE ERROR `Character.asciiValue()` THROWS ON A CLUSTER THAT IS NOT ONE ASCII BYTE.** The CORPUS
+// declares it (`stdlib/Character.maxon:15-17`), so it cannot wear the `__` prefix — `ArrayError`'s position
+// exactly — and `Runtime/GraphemeRuntime.buildCharAscii` transcribes its ordinal as the literal error flag
+// `__char_ascii` returns on the failure edge. That is the two-halves shape `BuiltinErrorOrdinalCheck` exists
+// for, and it is the criterion `Compiler.compileToCodeResult`'s roster states for itself when it explains why
+// `StringError` and `MapError` LEFT: a family is on the roster exactly while a throwing runtime graph
+// transcribes its ordinals.
+//
+// ⛔ **IT WAS THE ONE FAMILY MEETING THAT CRITERION AND MISSING FROM THAT ROSTER — MEASURED (W135 review).**
+// Inserting a case ahead of `notAscii` in `stdlib/Character.maxon` moved the declared ordinal to 1 while
+// `buildCharAscii` went on emitting 0, and the compile exited **0 with no diagnostic**. No wrong answer was
+// reachable on that tree only because the decode half is unbuilt — `match e` over this enum is E2015, since
+// `runtimeThrowsClause` does not seed it — so the drift was a wire format waiting for a reader, which is
+// precisely what a guard is for rather than an argument that one is unnecessary.
+export let CharacterErrorTypeName = b"CharacterError"
+
+// The single case name. Its ordinal is 0 because it is the enum's first and only case — a fact about the
+// DECLARATION, which is the direction `verifyCharacterErrorOrdinals` reads it in: the corpus states the
+// order and the runtime's literal is held to it, never the reverse.
+export let CharacterNotAsciiCaseName = b"notAscii"
+
 // Its one field, per the spec's "Type Structure". Unexported and immutable: the corpus never reads or writes
 // it — `__ManagedDirectory{_block: 0}` is E3072 (`managed-directory.error-direct-construction`) precisely so
 // the block pointer cannot be forged — and the runtime reaches it through `ManagedDirectoryBlockOffset`.
