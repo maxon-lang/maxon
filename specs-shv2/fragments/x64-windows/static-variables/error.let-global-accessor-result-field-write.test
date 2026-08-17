@@ -1,0 +1,25 @@
+// Test: error.let-global-accessor-result-field-write
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static let shared = Box.make()
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export static function get() returns Box
+		return Box.shared
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	var a = Box.get()
+	a.n = 99
+	return Box.shared.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:20:2: Unsupported: writing through 'a', which aliases a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the write would reach the global's own record and mutate a global declared immutable; read through it instead, or declare the global `var`

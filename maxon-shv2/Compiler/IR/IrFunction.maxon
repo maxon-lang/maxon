@@ -111,6 +111,24 @@ export typealias ValueExistentialInstanceMap = Map with (ValueId, GenericInstanc
 // clause on an interface type allocates one map for the whole compile. Never mutated.
 export let sharedEmptyExistentialInstanceMap = ValueExistentialInstanceMap.create()
 
+// ⭐ **THE VALUES OF ONE FUNCTION THAT MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD (W117)** — see
+// `IrFunction.immutableGlobalAliasValues`. A SET rather than a list for the reason the parser's own mark is
+// one: both populations grow with the function, and a linear scan over one of them at every call argument is
+// the quadratic `Parser.immutableGlobalReads`' header records in full.
+//
+// ⚠ It is the SAME underlying `Set with ValueId` the parser calls a `ValueMarkSet`, and the hand-off at
+// `Parser.publishExistentialInstances` is an assignment rather than a copy. Two names because the two tiers
+// own different questions — the parser's alias covers four of its own mark columns and is not exported —
+// and none of the LOGIC is written twice: nothing here decides what is marked.
+export typealias GlobalAliasValueSet = Set with ValueId
+
+// The initial column for every function, and the answer for one that marks nothing. It is the parser's own
+// shared-empty set that actually rides across for a function it parsed (the parser's marks are copy-on-write
+// off their own anchor), so this exists for the functions the parser never touches — a synthesized body, a
+// Std-phase entry — which must still answer "marks nothing" rather than hold an uninitialized field.
+// Never mutated.
+export let sharedEmptyGlobalAliasValues = GlobalAliasValueSet.create()
+
 // The per-function counter that names lifted NON-CAPTURING closure literals (P1.5-A2a). A count with
 // no meaningful upper bound (a function may hold arbitrarily many closures), so the range is wide by
 // the ranged-type convention rather than pinned to a false ceiling.
@@ -422,6 +440,46 @@ export type IrFunction
 	// the `Array` retirement chain strikes moves onto it.
 	export var storageWrittenParamMask as ParamPositionMask
 
+	// ⭐⭐ **THE PARAMETERS THIS BODY WRITES THROUGH BY *ANY* MEANS (W117) — A FOURTH QUESTION OVER THE SAME
+	// TERRITORY, AND ITS OWN COLUMN FOR THE REASON THE THIRD ONE IS.**
+	//
+	// | question | column |
+	// |---|---|
+	// | "does passing an immutable BINDING here make it an error?" | `writtenParamMask` (E3019) |
+	// | "does this body write the ARRAY storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
+	// | "does this body write a field of a box it did not just build?" | `assignsIntoAnExistingAggregate` (E3064) |
+	// | **"does this body write the record this parameter denotes, at all?"** | **this** (W117) |
+	//
+	// ⛔⛔ **IT EXISTS BECAUSE THE FIRST COLUMN CANNOT BE WIDENED TO ANSWER IT, AND THAT IS MEASURED RATHER
+	// THAN ARGUED.** `function bump(b Box) b.n = 99 end` called as `bump(a)` on a `let a` compiles and prints
+	// `n 99` on shv2 **and on the runnable oracle** — so a direct field store through a parameter is legal for
+	// an immutable BINDING in both compilers, and adding it to E3019's column would refuse a program the
+	// references accept. It is NOT legal through a `let`-declared GLOBAL: **measured on the clean tip,
+	// `let G = Box.make()` + `bump(G)` printed `g 99` on both compilers, silently mutating a global the
+	// program declared immutable.** Same shape, different subject, different answer — which is exactly what a
+	// separate column is for.
+	//
+	// Seeded by the PARSER at every door that writes through a binding — the receiver door
+	// (`Parser.noteReceiverWrite`), the field-store door (`Parser.parseFieldAssignment`) and the self-field
+	// store — and closed under the call graph by the SAME least fixpoint as the two above
+	// (`buildParamMutationSummary`), so `bump` forwarding to a `poke` that writes inherits the bit. Read only
+	// by E3019's call-site check, and only for an argument that ALIASES AN IMMUTABLE GLOBAL: an ordinary
+	// immutable binding is still judged by `writtenParamMask` alone, which is what keeps that diagnostic's
+	// scope byte-identical. Zero for a Std-phase function.
+	export var writesThroughParamMask as ParamPositionMask
+
+	// ⭐⭐ **WHICH OF THIS FUNCTION'S SSA VALUES MAY ALIAS A `let`-DECLARED GLOBAL'S RECORD (W117)** — the
+	// parser's per-value mark, published so the call-site half of the rule can read it. The PARSER decides it
+	// (a global load, an owned promotion of one, a merge that joined one, and the result of a call to a
+	// function the sweep published as returning one); the CALL-SITE check is SemanticCheck's, because only it
+	// holds the whole-program summary of what a callee writes. Exactly the split E3019 already has, one column
+	// over: the receiver half is the parser's and the argument half cannot be.
+	//
+	// ⚡ It is the parser's own set handed over whole (`Parser.publishExistentialInstances`), which is that
+	// side's shared-empty for every function that marked nothing — so the column costs one shared object per
+	// compile rather than one set per function.
+	export var immutableGlobalAliasValues as GlobalAliasValueSet
+
 	// ⭐⭐ **DOES THIS BODY ASSIGN INTO AN AGGREGATE THAT ALREADY EXISTED? — the effect summary's OWN seed, and
 	// a THIRD question over the same territory as the two masks above, which is exactly why it is its own
 	// column and not a reading of theirs.**
@@ -546,7 +604,7 @@ export type IrFunction
 			closureSubCounter: 0,
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
-			storageWrittenParamMask: 0,
+			storageWrittenParamMask: 0, writesThroughParamMask: 0, immutableGlobalAliasValues: sharedEmptyGlobalAliasValues,
 			assignsIntoAnExistingAggregate: false,
 			borrowFacts: sharedEmptyBorrowFacts
 		}
@@ -599,7 +657,7 @@ export type IrFunction
 			closureSubCounter: 0,
 			writtenParamMask: 0,
 			reassignedParamMask: 0,
-			storageWrittenParamMask: 0,
+			storageWrittenParamMask: 0, writesThroughParamMask: 0, immutableGlobalAliasValues: sharedEmptyGlobalAliasValues,
 			assignsIntoAnExistingAggregate: false,
 			borrowFacts: sharedEmptyBorrowFacts
 		}
@@ -646,7 +704,7 @@ export type IrFunction
 			closureSubCounter: src.closureSubCounter,
 			writtenParamMask: src.writtenParamMask,
 			reassignedParamMask: src.reassignedParamMask,
-			storageWrittenParamMask: src.storageWrittenParamMask,
+			storageWrittenParamMask: src.storageWrittenParamMask, writesThroughParamMask: src.writesThroughParamMask, immutableGlobalAliasValues: src.immutableGlobalAliasValues,
 			assignsIntoAnExistingAggregate: src.assignsIntoAnExistingAggregate,
 			borrowFacts: src.borrowFacts
 		}

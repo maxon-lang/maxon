@@ -528,7 +528,7 @@ let DeclShapeOpaqueParams = 89 as ContentHash
 let DeclShapeParamByRef = 90 as ContentHash
 let ByRefBitSet = 91 as ContentHash
 let ByRefBitClear = 92 as ContentHash
-// The three `ForwardCall` shapes and the three `ByRefCallability` answers, as distinct hash marks — a
+// The three `ForwardCall` shapes and the three `DeclCallability` answers, as distinct hash marks — a
 // declaration that MOVES into or out of a type body, and a call that gains or loses a receiver, each change
 // an ABI without changing a parameter name, so both must move the memo key.
 let BareCallShape = 93 as ContentHash
@@ -537,6 +537,14 @@ let SelfCallShape = 95 as ContentHash
 let RootFreeFunctionDecl = 96 as ContentHash
 let RoutableFreeFunctionDecl = 97 as ContentHash
 let MethodDecl = 98 as ContentHash
+
+// ⭐ A function's IMMUTABLE-GLOBAL-RETURN raw material (W117), mixed for `DeclShapeParamConsume`'s reason.
+// A body that starts or stops returning a `let` global — or starts returning what some OTHER function
+// returns — changes what every caller may do with the result while not one byte of any caller moves, so
+// only this hash can carry it. The declaring FILE rides because the same spelling resolves to different
+// declarations from different files (`declFor` probes file-scoped before bare), so two identical bodies in
+// two files genuinely state two different facts.
+let DeclShapeGlobalAliasReturn = 104 as ContentHash
 
 // ⭐ A free function's NAMESPACE-QUALIFIED SPELLING (N1b) — `utils.helper` for a `helper` declared in
 // `utils/`. Its own discriminator for `DeclShapeAlias`'s reason, and load-bearing for a reason NO other
@@ -2793,7 +2801,7 @@ export typealias TypeParamOwnerMap = Map with (TypeParamId, TypeParamOwner)
 //
 // ⚠ **IT USED TO BE READ OFF `ParamConsumeInfo.isInstanceMethod()`, AND THAT WAS A LOSSY KEY.** It happened to
 // be exact while the recognizer saw only `self`-headed stores: `Self{f: p}` feeds were marked for receiverless
-// functions only (`scanBodyParamFacts`'s `detectFieldStores`) and array/field-reassign feeds only under a literal
+// functions only (`scanBodyFacts`'s `detectFieldStores`) and array/field-reassign feeds only under a literal
 // `self` token, so "is there a receiver" and "which sink" agreed by accident. A STATIC that pushes its
 // type-parameter argument into a LOCAL `Array with T` and hands that array to the `Self` it returns feeds
 // callee storage with no receiver at all, and there the accident stops holding — so the fact is recorded
@@ -3015,15 +3023,15 @@ export type ParamReassignInfo
 	// against by name at `TupleElementSeparator`.
 	export let bareName as ByteArray
 	// ⭐⭐ **WHICH CALL SHAPES CAN NAME THIS DECLARATION** — the declaration half of `ForwardCall`'s partition.
-	// See `ByRefCallability` for the three answers and where each comes from.
+	// See `DeclCallability` for the three answers and where each comes from.
 	//
 	// ⚠ **THE BARE DIRECTION IS *NOT* NARROWED, AND MEASURING IT IS WHAT KEPT THIS SOUND.** A BARE call
 	// reaches a method too — `helper(1)` inside a sibling method resolves through implicit `self` (MEASURED:
 	// it returned 2, i.e. `Holder.helper(1)`) — so `bare` widens over EVERY declaration wearing the name,
 	// exactly as this whole mechanism did before. Only the DOTTED directions narrow.
-	export let callability as ByRefCallability
+	export let callability as DeclCallability
 
-	export static function create(paramNames ByteArrayArray, direct BoolArray, forwarded BoolArray, forwardCalls ForwardCallArray, bareName ByteArray, callability ByRefCallability) returns ParamReassignInfo
+	export static function create(paramNames ByteArrayArray, direct BoolArray, forwarded BoolArray, forwardCalls ForwardCallArray, bareName ByteArray, callability DeclCallability) returns ParamReassignInfo
 		return Self{paramNames: paramNames, direct: direct, forwarded: forwarded, forwardCalls: forwardCalls, bareName: bareName, callability: callability}
 	end 'create'
 
@@ -3075,7 +3083,7 @@ end 'ParamReassignInfo'
 //
 //   • **`self.f(…)` / `Self.f(…)`** narrows that once more: the receiver's type is the ENCLOSING TYPE,
 //     statically and syntactically, so the call can name only THAT type's `f`. It is the same fact
-//     `ByRefCallability.methodOf` reads off a declaration, asked at the call.
+//     `DeclCallability.methodOf` reads off a declaration, asked at the call.
 //
 // ⚠ **THE `self.` ARM IS SOUND BECAUSE THE SWEEP ENTERS EACH CONFORMER'S SCOPE, NOT THE INTERFACE'S**, and
 // that was CHECKED rather than assumed: an interface extension's default body is swept once per conformer
@@ -3087,7 +3095,7 @@ end 'ParamReassignInfo'
 // ⚠ **IT DELIBERATELY DOES NOT CARRY THE ASSEMBLED CHAIN.** `resolvesAsNamespaceQualifiedFunction` could
 // answer "is `utils.helper` a route to a free `helper`?" exactly, but asking it would mean assembling the
 // written chain at every recorded edge and holding the bytes until the closure runs. The declaration-side
-// answer (`ByRefCallability`) buys the same soundness for one union case: a free function that HAS a
+// answer (`DeclCallability`) buys the same soundness for one union case: a free function that HAS a
 // namespace is admitted to the receiver-reachable side whether or not this particular chain names it. Wider
 // than the exact question, and wider only across `stdlib`'s own free functions, which are few.
 export union ForwardCall
@@ -3131,7 +3139,7 @@ end 'forwardCallsAreEqual'
 
 // One declaration's callability, folded into the memo hash — the twin of `forwardCallShapeMark` on the
 // declaration side, and a `match` so a fourth answer fails to compile here rather than hashing as a third.
-function foldCallability(state ContentHash, callability ByRefCallability) returns ContentHash
+function foldCallability(state ContentHash, callability DeclCallability) returns ContentHash
 	return match callability 'c'
 		bareCallOnly gives mix(state, value: RootFreeFunctionDecl)
 		bareCallOrDirectoryRoute gives mix(state, value: RoutableFreeFunctionDecl)
@@ -3154,7 +3162,7 @@ end 'forwardCallSelfType'
 // and the three answers are decided from two facts the sweep holds outright, with nothing resolved:
 // whether the declaration sits inside a `type`/`extension` body, and whether its file has a directory
 // namespace.
-export union ByRefCallability
+export union DeclCallability
 	// A free function at the compile ANCHOR. Only a BARE call can name it: it has no qualified spelling
 	// (`namespaceQualifiedName` panics if asked for one), so no dotted call anywhere can reach it. This is
 	// the arm that stops a user program's free `swap` from making `stdlib`'s `Array.swap` by-reference.
@@ -3164,7 +3172,7 @@ export union ByRefCallability
 	// A method of `typeName`: a bare call (implicit `self` reaches a sibling — MEASURED), any
 	// receiver-qualified call, and a `self.`/`Self.`-qualified call inside `typeName`'s own body.
 	methodOf(typeName ByteArray)
-end 'ByRefCallability'
+end 'DeclCallability'
 
 // One bool column read at a position that may be past its end — the shared short-column read the two
 // `ParamReassignInfo` columns are asked through, so "recorded nothing here" has one spelling rather than two.
@@ -3185,6 +3193,79 @@ function anyBitSet(column BoolArray) returns bool
 	end 'each'
 	return false
 end 'anyBitSet'
+
+// ⭐⭐ **MAY A CALL TO THIS FUNCTION HAND BACK A `let`-DECLARED TOP-LEVEL GLOBAL'S OWN RECORD? (W117)** —
+// the whole-program fact that lets the immutability rule be enforced AT THE WRITE (⚖ user, 2026-08-14)
+// rather than at the return. Reading a `let` global and returning it is legal; MUTATING through what came
+// back is the error, and the caller can only know to refuse that if it knows what the callee's return may
+// alias. The callee's body is routinely in another file, so no per-file parse can answer it.
+//
+// ⭐ **IT IS `ParamReassignInfo`'s SHAPE BECAUSE IT IS `ParamReassignInfo`'s PROBLEM** — a per-declaration
+// fact derived from BODIES by the token sweep, whose transitive half no single file can settle, recorded
+// raw here and closed by `ProgramSignatures.closeGlobalAliasReturns` once every file is in. The two even
+// share the node space and the edge shape, which is the point: a second spelling of "close a per-declaration
+// fact under the call graph" would be one concept with two answers.
+//
+// ⭐⭐⭐ **THE SWEEP IS DELIBERATELY NARROW, AND WHAT MAKES THAT SOUND IS A FALLBACK RATHER THAN COVERAGE.**
+// A `return` this scan does not recognise records nothing, so the function's bit stays clear — and a bit
+// that is clear is exactly the condition under which `Parser.ownedFormOfBorrowedValue` keeps the ORIGINAL
+// E2015 refusal at the return. So:
+//
+//   • **UNDER-approximating (missing a seed or an edge) costs a REFUSAL, never a silent acceptance.** The
+//     program is rejected with the message it was rejected with before this rung existed.
+//   • **OVER-approximating (a spurious seed or edge) costs a FALSE REJECT at some later write**, which is
+//     the only real hazard here.
+//
+// ⇒ **EVERY AMBIGUITY RESOLVES TOWARD "NOT A SEED".** That is why the returned name must be a bare
+// statement (`return A`, `return T.member`) and why a name the body BINDS anywhere is dropped outright
+// (`Parser.scanBodyFacts`). A later reader must not "simplify" the narrowness away by widening the scan
+// and deleting the fallback: the narrowness is only safe while the fallback stands.
+export type GlobalAliasReturnInfo
+	// The names this body returns as a whole statement — `A`, or the joined `Box.shared` a static member is
+	// read under (`Parser.parseStaticMemberAccess` looks a static member up under exactly that spelling).
+	// Whether one of them DENOTES an immutable stored global is decided at closure time, because a file that
+	// has not folded yet may be the one that declares it.
+	export let returnedNames as ByteArrayArray
+	// The calls whose result this body returns — `return f(…)` — as the un-resolved shapes the source wrote
+	// (see `ForwardCall`). A function that returns what a marked function returns is marked itself.
+	export let returnCalls as ForwardCallArray
+	// This declaration's own bare name and callability, for `ParamReassignInfo`'s reason and read through the
+	// same `DeclNodeSpace`.
+	export let bareName as ByteArray
+	export let callability as DeclCallability
+	// The file the declaration was swept from — the READER whose scope `returnedNames` must be resolved in.
+	// A name is looked up file-scoped-then-bare (`declFor`), so two files' `A` are two different globals and
+	// the answer is meaningless without the asking file.
+	export let declFilePath as FilePath
+
+	export static function create(returnedNames ByteArrayArray, returnCalls ForwardCallArray, bareName ByteArray, callability DeclCallability, declFilePath FilePath) returns GlobalAliasReturnInfo
+		return Self{returnedNames: returnedNames, returnCalls: returnCalls, bareName: bareName, callability: callability, declFilePath: declFilePath}
+	end 'create'
+
+	// Is there anything to record at all? A body that returns neither a bare name nor a call states nothing
+	// and is not recorded — the "absence is the answer" default the whole registry rests on, and what keeps
+	// the map empty for a program with no top-level aggregate at all.
+	export function statesAnything() returns bool
+		return self.returnedNames.count() > 0 or self.returnCalls.count() > 0
+	end 'statesAnything'
+end 'GlobalAliasReturnInfo'
+
+// `takesReceiver` rides for `ParamConsumeEntry`'s reason (W75) — see there.
+export type GlobalAliasReturnEntry
+	export let name as ByteArray
+	export let info as GlobalAliasReturnInfo
+	export let takesReceiver as bool
+
+	export static function create(name ByteArray, info GlobalAliasReturnInfo, takesReceiver bool) returns GlobalAliasReturnEntry
+		return Self{name: name, info: info, takesReceiver: takesReceiver}
+	end 'create'
+end 'GlobalAliasReturnEntry'
+
+export typealias GlobalAliasReturnEntryArray = Array with GlobalAliasReturnEntry
+export typealias GlobalAliasReturnMap = Map with (ByteArray, GlobalAliasReturnInfo)
+// The registration keys whose function may hand back an immutable global's record — the settled output of
+// `ProgramSignatures.closeGlobalAliasReturns`. A key with no entry answers false.
+export typealias GlobalAliasReturnKeySet = Set with ByteArray
 
 // `takesReceiver` rides for `ParamConsumeEntry`'s reason (W75) — see there.
 export type ParamReassignEntry
@@ -3207,12 +3288,12 @@ export typealias ByRefForwardingMap = Map with (ByteArray, bool)
 export typealias ByRefBareNameSet = Set with ByteArray
 // A bare name -> its dense node in the forwarding graph `closeByRefForwarding` closes. The CSR key space must
 // be dense and 0-based (see `CsrGraph`), and a bare name is neither, so it is interned into one.
-typealias ByRefBareNameIndex = Map with (ByteArray, CsrIndex)
+typealias DeclNodeIndex = Map with (ByteArray, CsrIndex)
 
 // A bare name -> every METHOD node wearing it. A method's node is keyed by its QUALIFIED spelling, so a
 // call that knows only the final segment (`x.swap(…)`) needs this to reach them; a `self.swap(…)` does not,
-// because it knows the type. Built by `ByRefNodeSpace.internMethod` as it mints each method node.
-typealias ByRefMethodNodesByName = Map with (ByteArray, CsrColumn)
+// because it knows the type. Built by `DeclNodeSpace.internMethod` as it mints each method node.
+typealias MethodNodesByName = Map with (ByteArray, CsrColumn)
 
 // ⭐⭐ **THE NODE SPACE `closeByRefForwarding` CLOSES OVER — ONE NODE PER DECLARATION, THREE WAYS TO FIND
 // IT.** A declaration gets exactly one node (that is what makes a mark on it mean one thing); which INDEX
@@ -3225,28 +3306,28 @@ typealias ByRefMethodNodesByName = Map with (ByteArray, CsrColumn)
 // so a mark arriving through the bare node would be invisible to a `self.`-qualified edge asking the
 // qualified one, which is a MISSED by-reference parameter and therefore a wrong ABI. The bare-name reach is
 // served by `methodNodesByName` (an index onto the same node) rather than by a second node.
-type ByRefNodeSpace
+type DeclNodeSpace
 	// Per node, in mint order: the declaration's BARE name (what the published set is keyed by) and whether
 	// any declaration on that node reassigns a parameter of its own (the closure's seed).
 	export let bareNames as ByteArrayArray
 	export let seeds as BoolArray
 	// A free function at the compile ANCHOR, keyed by its bare name. Only a bare call reaches these.
-	export let rootFreeFunctions as ByRefBareNameIndex
+	export let rootFreeFunctions as DeclNodeIndex
 	// A free function with a directory route, keyed by its bare name. A bare call or any dotted call.
-	export let routableFreeFunctions as ByRefBareNameIndex
+	export let routableFreeFunctions as DeclNodeIndex
 	// A method, keyed by its QUALIFIED `Type.name` spelling — which is what makes `Array.swap` and
 	// `Holder.swap` two nodes rather than one.
-	export let methods as ByRefBareNameIndex
-	export let methodNodesByName as ByRefMethodNodesByName
+	export let methods as DeclNodeIndex
+	export let methodNodesByName as MethodNodesByName
 
-	static function create() returns ByRefNodeSpace
-		return Self{bareNames: ByteArrayArray.create(), seeds: BoolArray.create(), rootFreeFunctions: ByRefBareNameIndex.create(), routableFreeFunctions: ByRefBareNameIndex.create(), methods: ByRefBareNameIndex.create(), methodNodesByName: ByRefMethodNodesByName.create()}
+	static function create() returns DeclNodeSpace
+		return Self{bareNames: ByteArrayArray.create(), seeds: BoolArray.create(), rootFreeFunctions: DeclNodeIndex.create(), routableFreeFunctions: DeclNodeIndex.create(), methods: DeclNodeIndex.create(), methodNodesByName: MethodNodesByName.create()}
 	end 'create'
 
 	// ⭐ **THE NODE A DECLARATION OWNS** — minted on first sight, and the one place a `callability` is turned
 	// into an index. The METHOD arm also files the node under its bare name, because that is how a call that
 	// wrote only the final segment finds it.
-	export function nodeFor(bareName ByteArray, callability ByRefCallability) returns CsrIndex
+	export function nodeFor(bareName ByteArray, callability DeclCallability) returns CsrIndex
 		return match callability 'c'
 			bareCallOnly gives self.intern(self.rootFreeFunctions, key: bareName, bareName: bareName)
 			bareCallOrDirectoryRoute gives self.intern(self.routableFreeFunctions, key: bareName, bareName: bareName)
@@ -3271,7 +3352,7 @@ type ByRefNodeSpace
 	// `key`'s dense node in `index`, minting one on first sight. The three columns move together — the name,
 	// its node and its seed bit — because a node with no seed slot would read a bit belonging to a different
 	// declaration, which is the one way a counting-sorted key space can be corrupted silently.
-	function intern(index ByRefBareNameIndex, key ByteArray, bareName ByteArray) returns CsrIndex
+	function intern(index DeclNodeIndex, key ByteArray, bareName ByteArray) returns CsrIndex
 		if let existing = try index.get(key) 'alreadyANode'
 			return existing
 		end 'alreadyANode'
@@ -3327,12 +3408,12 @@ type ByRefNodeSpace
 		self.pushIfPresent(targets, index: self.rootFreeFunctions, key: name)
 	end 'pushBareTargets'
 
-	function pushIfPresent(targets CsrColumn, index ByRefBareNameIndex, key ByteArray)
+	function pushIfPresent(targets CsrColumn, index DeclNodeIndex, key ByteArray)
 		if let node = try index.get(key) 'namesARecordedDeclaration'
 			targets.push(node)
 		end 'namesARecordedDeclaration'
 	end 'pushIfPresent'
-end 'ByRefNodeSpace'
+end 'DeclNodeSpace'
 
 // The shared EMPTY method-node list `targetsOf` walks when no method wears the name — read-only, so one
 // instance serves every miss rather than allocating a column per lookup.
@@ -3765,10 +3846,10 @@ end 'CalleeByRefParams'
 
 // ⭐ **DOES ANY CALL THIS BODY MAKES NAME SOMETHING THAT TAKES A PARAMETER BY REFERENCE?** Asked ONCE per
 // recorded function, after the mark has settled, to publish the per-registration-key answer. It asks
-// `ByRefNodeSpace.targetsOf` — the very function that built the edges — so the query and the graph cannot
+// `DeclNodeSpace.targetsOf` — the very function that built the edges — so the query and the graph cannot
 // come to disagree about which declarations a spelling can name. (It used to be a round's edge test, asked
 // once per function PER ROUND; see `closeByRefForwarding` for what that cost.)
-function forwardsIntoAMarkedNode(forwardCalls ForwardCallArray, nodes ByRefNodeSpace, takesByRef BoolArray) returns bool
+function forwardsIntoAMarkedNode(forwardCalls ForwardCallArray, nodes DeclNodeSpace, takesByRef BoolArray) returns bool
 	for call in forwardCalls 'eachEdge'
 		for node in nodes.targetsOf(call) 'eachTargetItCanName'
 			let marked = try takesByRef.get(node) otherwise panic("forwardsIntoAMarkedNode: takesByRef.get OOB at {node}, which `targetsOf` minted below the node count the graph was built over")
@@ -8140,6 +8221,21 @@ export type ProgramSignatures
 	// READ rather than done per fold — and it must run exactly once, because it is a fixpoint over the whole
 	// recorded set rather than an accumulation.
 	var byRefForwardingClosed as bool
+
+	// ⭐⭐ **W117's THREE FIELDS, THE EXACT TRIPLE PBR-2 KEEPS ONE BLOCK UP AND FOR THE SAME REASONS** — see
+	// `GlobalAliasReturnInfo` for what is recorded and `closeGlobalAliasReturns` for what closes it.
+	var funcGlobalAliasReturns as GlobalAliasReturnMap
+	// ⚡ **HAS ANY RECORDED BODY RETURNED A BARE NAME AT ALL?** — the closure's precondition, raised at the
+	// instant the fact arrives rather than re-derived by a pass over the map. Only a returned NAME can be a
+	// seed (a `return f(…)` merely forwards), and reachability from an empty seed set marks nothing — so a
+	// false here means the graph, its edge columns and the BFS are all skipped, which is every program whose
+	// functions all return computed values. It is `sawParamReassignment`'s twin down to the direction a stale
+	// answer errs in: a stale TRUE builds a graph that marks nothing, a stale FALSE would lose a refusal.
+	var sawGlobalNameReturn as bool
+	// The settled answer, by registration key. Empty until the closure runs.
+	var globalAliasReturnKeys as GlobalAliasReturnKeySet
+	// Has `closeGlobalAliasReturns` run? `byRefForwardingClosed`'s twin, for its reason.
+	var globalAliasReturnsClosed as bool
 	// ⭐ **THE BARE NAMES A *BARE* CALL CAN REACH SOMETHING BY-REFERENCE THROUGH** — the closure's working set,
 	// kept because the PARSER's local-cell prescan needs exactly it. That prescan reads a callee out of TOKENS,
 	// so all it has is what the source wrote before the `(` (`reassign`), never the registration key a method is
@@ -8562,7 +8658,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawCharacterSetProducer: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9066,7 +9162,7 @@ export type ProgramSignatures
 	// machinery `mergeArtifact` uses for the identical job — `TypeNameInterner.foldInto` +
 	// `remapMaxonReturnType`. One mechanism, two callers: a second copy of "reconcile a file's ids
 	// into a bigger table" would be free to disagree with this one about what an id means.
-	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
+	export function foldFile(scanned FuncReturnTypeEntryArray, aliases RangedTypeAliasArray, functionAliases FunctionTypeAliasArray, structs StructLayoutArray, enums EnumLayoutArray, genericAliasEntries GenericAliasEntryArray, innerAliasEntries InnerAliasEntryArray, methodInnerAliasParamEntries MethodInnerAliasParamEntryArray, interfaceSites InterfaceDeclSiteArray, extensionSites ExtensionDeclSiteArray, conformanceSites ConformanceClauseDeclSiteArray, scanSites DescriptorScanSiteArray, bindings TopLevelDeclArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, freeFunctionNames ByteArrayArray, moduleDirectory String, filePath FilePath, fileTypeNames TypeNameInterner, isStdlibSource bool)
 		// ⭐ **THE USER HALF OF THE SHADOW CONTEST (A1s wave 2)** — recorded from the SAME declaration arrays
 		// the registries below are built from, so "what the user declared" and "what the index holds" are one
 		// walk. Every KIND is noted, not just the four nominal ones: the contest is asymmetric on purpose (see
@@ -9276,6 +9372,12 @@ export type ProgramSignatures
 		for entry in paramReassigns 'eachByRef'
 			self.recordParamReassign(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
 		end 'eachByRef'
+
+		// W117's raw material rides the same loop and the same key for the by-reference columns' reason: it is
+		// another per-declaration fact a CALL SITE reads about a callee it cannot see.
+		for entry in globalAliasReturns 'eachGlobalAliasReturn'
+			self.recordGlobalAliasReturn(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
+		end 'eachGlobalAliasReturn'
 
 		for entry in paramDefaults 'eachParamDefault'
 			self.recordParamDefaults(self.sweepRegistrationKey(entry.name, moduleDirectory: moduleDirectory, takesReceiver: entry.takesReceiver), info: entry.info)
@@ -10062,6 +10164,132 @@ export type ProgramSignatures
 		self.hash = state
 	end 'recordParamReassign'
 
+	// Add one function's immutable-global-return raw material to the index AND fold it into the hash — the one
+	// write, for `recordParamReassign`'s reason. A function that states nothing is not recorded, so the common
+	// function costs no map entry and no hash movement. The GATE is raised here, off the returned-NAME column
+	// alone, because only a name can seed the closure.
+	function recordGlobalAliasReturn(name ByteArray, info GlobalAliasReturnInfo)
+		self.funcGlobalAliasReturns.upsert(name, value: info)
+		self.sawGlobalNameReturn = self.sawGlobalNameReturn or info.returnedNames.count() > 0
+
+		var state = mixBytes(mix(self.hash, value: DeclShapeGlobalAliasReturn), bytes: name)
+		state = mixBytes(state, bytes: info.declFilePath.toString().toByteArray())
+		for returned in info.returnedNames 'eachName'
+			state = mixBytes(state, bytes: returned)
+		end 'eachName'
+		state = mixBytes(state, bytes: info.bareName)
+		state = foldCallability(state, callability: info.callability)
+		for call in info.returnCalls 'eachEdge'
+			// The SHAPE rides with the name for `recordParamReassign`'s reason, through the same two folds: the
+			// three call shapes reach different nodes, so two bodies differing only in a receiver state
+			// different things and must not hash alike.
+			state = mixBytes(state, bytes: forwardCallName(call))
+			state = mixBytes(mix(state, value: forwardCallShapeMark(call)), bytes: forwardCallSelfType(call))
+		end 'eachEdge'
+		self.hash = state
+	end 'recordGlobalAliasReturn'
+
+	// ⭐⭐ **MAY A CALL TO `callee` HAND BACK A `let`-DECLARED GLOBAL'S OWN RECORD? (W117)** — the ONE door the
+	// parser asks, at a call site, to decide whether the result must carry the immutable-global mark. A key
+	// with no entry answers false, which is every function in every program that returns no global.
+	export function returnsImmutableGlobalAlias(callee ByteArray) returns bool
+		self.closeGlobalAliasReturns()
+		return self.globalAliasReturnKeys.contains(callee)
+	end 'returnsImmutableGlobalAlias'
+
+	// ⭐ **DOES ANY FUNCTION IN THE PROGRAM RETURN ONE?** The whole-program skip, asked before a call site
+	// spends a hash on the question above — `programTakesAParamByRef`'s twin, and true of very few programs.
+	export function programReturnsAnImmutableGlobalAlias() returns bool
+		self.closeGlobalAliasReturns()
+		return self.globalAliasReturnKeys.count() != 0
+	end 'programReturnsAnImmutableGlobalAlias'
+
+	// ⭐⭐ **CLOSE THE IMMUTABLE-GLOBAL-RETURN RELATION — the fixpoint that turns `get()` returning what
+	// `inner()` returns into "`get()` may hand back a `let` global too", transitively (W117).**
+	//
+	// It is `closeByRefForwarding` in every structural respect and deliberately so — same node space, same
+	// edge shapes, same reachability engine, same run-once-at-first-read discipline, and the same measured
+	// reason for being a single reverse-BFS rather than round-based rescanning (see that function's header for
+	// the 199M-vs-452M numbers). What differs is only the SEED and what the mark is published as.
+	//
+	// ⭐ **THE SEED CANNOT BE DECIDED BY THE SWEEP, AND THAT IS WHY THE RAW NAMES ARE CARRIED.** "Is `A` an
+	// immutable stored global?" needs every file's declarations folded and every initializer evaluated, and
+	// the sweep runs while files are still arriving. Here, both are done.
+	//
+	// ⚠ **A SCALAR `let` IS NOT A SEED, AND THAT FALLS OUT RATHER THAN BEING EXCLUDED**: `DeclKind.stored`
+	// admits only a binding with a `.data` slot, and an inlined scalar constant has no record to alias in the
+	// first place — the whole rule is about a record two names can reach.
+	function closeGlobalAliasReturns()
+		if self.globalAliasReturnsClosed 'alreadySettled'
+			return
+		end 'alreadySettled'
+		self.globalAliasReturnsClosed = true
+
+		// ⚡ **NO SEED, NO GRAPH** — `closeByRefForwarding`'s gate, for its reason and with its direction of
+		// error. A body is recorded merely for returning a CALL, so the map is non-empty on most programs;
+		// what decides whether anything can be marked is whether some body returns a NAME at all.
+		if not self.sawGlobalNameReturn 'noReturnedNameCanSeedIt'
+			return
+		end 'noReturnedNameCanSeedIt'
+
+		var nodes = DeclNodeSpace.create()
+		for (_, info) in self.funcGlobalAliasReturns 'eachRecorded'
+			let node = nodes.nodeFor(info.bareName, callability: info.callability)
+			if self.returnsAnImmutableGlobalDirectly(info) 'namesOneItself'
+				try nodes.seeds.set(node, value: true) otherwise panic("closeGlobalAliasReturns: seeds.set OOB at {node} despite the node having just been interned")
+			end 'namesOneItself'
+		end 'eachRecorded'
+
+		// The return-forwarding edges, REVERSED — a forward `caller -> callee` is recorded as `callee -> caller`,
+		// so a seed's row lists the declarations that return INTO it and the mark propagates back up the chain.
+		var edgeCallee = CsrColumn.create()
+		var edgeForwarder = CsrColumn.create()
+		for (_, info) in self.funcGlobalAliasReturns 'eachForwarder'
+			let forwarder = nodes.nodeFor(info.bareName, callability: info.callability)
+			for call in info.returnCalls 'eachEdge'
+				for callee in nodes.targetsOf(call) 'eachTargetItCanName'
+					edgeCallee.push(callee)
+					edgeForwarder.push(forwarder)
+				end 'eachTargetItCanName'
+			end 'eachEdge'
+		end 'eachForwarder'
+
+		let mayAlias = reverseReachabilityMark(buildCsr(edgeCallee, to: edgeForwarder, nodeCount: nodes.bareNames.count()), seeds: nodes.seeds)
+
+		// ⭐ Published per REGISTRATION KEY and not per node, for `closeByRefForwarding`'s reason: the parser
+		// asks under the key it resolved a call to, and two keys may share a node.
+		for (name, info) in self.funcGlobalAliasReturns 'publishKeys'
+			let marked = try mayAlias.get(nodes.nodeFor(info.bareName, callability: info.callability)) otherwise panic("closeGlobalAliasReturns: mayAlias.get OOB for a node interned before the graph was built")
+			if marked 'marked'
+				self.globalAliasReturnKeys.insert(name)
+			end 'marked'
+		end 'publishKeys'
+	end 'closeGlobalAliasReturns'
+
+	// Does this body return a name that DENOTES an immutable stored global, read from its own file? The
+	// closure's seed test, asked once per recorded declaration.
+	function returnsAnImmutableGlobalDirectly(info GlobalAliasReturnInfo) returns bool
+		for returned in info.returnedNames 'eachName'
+			if self.namesImmutableStoredGlobal(returned, readerFilePath: info.declFilePath) 'animmutableGlobal'
+				return true
+			end 'animmutableGlobal'
+		end 'eachName'
+
+		return false
+	end 'returnsAnImmutableGlobalDirectly'
+
+	// ⭐ **DOES `name`, READ FROM `readerFilePath`, DENOTE A `let`-DECLARED TOP-LEVEL BINDING WITH A RECORD?**
+	// The one place the two halves of that question are joined — the SAME scoped-then-bare probe every other
+	// reader of a top-level name goes through (`declFor`), and the declaration's own `mutable` bit. It answers
+	// about STORAGE rather than about constants, because an inlined `let` materializes a fresh value at each
+	// use and has no shared record for a second name to write through.
+	export function namesImmutableStoredGlobal(name ByteArray, readerFilePath FilePath) returns bool
+		return match self.declFor(name, readerFilePath: readerFilePath, wanted: DeclKind.stored) 'lookup'
+			found(index) gives not self.declAt(index).mutable
+			notFound gives false
+		end 'lookup'
+	end 'namesImmutableStoredGlobal'
+
 	// ⭐⭐ **IS `callee`'s PARAMETER AT `index` PASSED BY REFERENCE?** THE door both ends of the ABI ask, and
 	// the only one — `Parser.bindParameters` for the callee's own parameters and `parseCallArgs` for an
 	// argument. A callee with no recorded entry, or an index past its recorded columns, is BY VALUE: the safe
@@ -10118,7 +10346,7 @@ export type ProgramSignatures
 	// answer is per registration KEY.
 	//
 	// ⭐⭐ **BUT A SPELLING IS NOT THE WHOLE NODE, AND THE REST OF IT IS THE RECEIVER.** Nodes and the rule
-	// that maps a call onto them live in `ByRefNodeSpace`; `targetsOf` is the ONE place the mapping is
+	// that maps a call onto them live in `DeclNodeSpace`; `targetsOf` is the ONE place the mapping is
 	// written, and both the edge build and the per-key publish below spend it. Without that split, `stdlib`'s
 	// `Array.swap` shared a node with a user program's free `swap`, inherited its by-reference-ness and
 	// carried it up to the overloaded `Array.sort`, which E2015 then refused.
@@ -10145,7 +10373,7 @@ export type ProgramSignatures
 
 		// One node per recorded declaration, plus its SEED bit: does it reassign a parameter of its own? Only a
 		// reassignment can seed — a body that merely forwards cannot make itself live.
-		var nodes = ByRefNodeSpace.create()
+		var nodes = DeclNodeSpace.create()
 		for (_, info) in self.funcParamReassigns 'eachRecorded'
 			let node = nodes.nodeFor(info.bareName, callability: info.callability)
 			if info.reassignsAnyParam() 'reassignsItsOwn'
@@ -11531,6 +11759,9 @@ export type ProgramSignatures
 		if let byRef = try self.funcParamReassigns.get(from) 'takesAParameterByReference'
 			self.funcParamReassigns.upsert(to, value: byRef)
 		end 'takesAParameterByReference'
+		if let globalAliasReturn = try self.funcGlobalAliasReturns.get(from) 'mayReturnAGlobalsRecord'
+			self.funcGlobalAliasReturns.upsert(to, value: globalAliasReturn)
+		end 'mayReturnAGlobalsRecord'
 		if let defaults = try self.funcParamDefaults.get(from) 'hasParameterDefaults'
 			self.funcParamDefaults.upsert(to, value: defaults)
 		end 'hasParameterDefaults'
@@ -11548,6 +11779,7 @@ export type ProgramSignatures
 	function clearByNameSweepEntries(name ByteArray)
 		_ = self.funcParamConsumes.remove(name)
 		_ = self.funcParamReassigns.remove(name)
+		_ = self.funcGlobalAliasReturns.remove(name)
 		_ = self.funcParamDefaults.remove(name)
 		_ = self.funcThrows.remove(name)
 	end 'clearByNameSweepEntries'

@@ -1482,11 +1482,16 @@ export type ParamMutationSummary
 	// Two columns and one index rather than two summaries, for the reason the first one is a dense column
 	// and not a map: the name resolution is already paid for.
 	export let storageMasks as ParamPositionMaskArray
+	// ⭐⭐ **THE THIRD COLUMN, ANSWERING THE WIDEST OF THE THREE QUESTIONS (W117)** — "does a call to this
+	// function write the RECORD this parameter denotes, at all?". Same index space and the same fixpoint over
+	// the same edges; the SEED is `IrFunction.writesThroughParamMask`, whose header carries the two
+	// measurements that make it a third column rather than a reading of the other two.
+	export let recordWriteMasks as ParamPositionMaskArray
 	// Function NAME → its index in that column. A call site holds a name; every other consumer holds an index.
 	export let funcIndexByName as FuncIndexByName
 
-	export static function create(masks ParamPositionMaskArray, storageMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName) returns ParamMutationSummary
-		return Self{masks: masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName}
+	export static function create(masks ParamPositionMaskArray, storageMasks ParamPositionMaskArray, recordWriteMasks ParamPositionMaskArray, funcIndexByName FuncIndexByName) returns ParamMutationSummary
+		return Self{masks: masks, storageMasks: storageMasks, recordWriteMasks: recordWriteMasks, funcIndexByName: funcIndexByName}
 	end 'create'
 
 	// Which parameters a call to `callee` writes. `NoParamPositions` for a name the module does not declare —
@@ -1504,6 +1509,14 @@ export type ParamMutationSummary
 	export function storageMaskOf(callee ByteArray) returns ParamPositionMask
 		return self.maskAt(self.storageMasks, callee: callee)
 	end 'storageMaskOf'
+
+	// ⭐ **WHICH PARAMETERS' RECORDS A CALL TO `callee` WRITES BY ANY MEANS (W117)** — read ONLY for an
+	// argument that aliases an immutable global, which is what keeps E3019's scope for an ordinary immutable
+	// binding byte-identical. ⚠ It is a superset of neither of the two above and a subset of neither; see
+	// `IrFunction`'s table, which carries one row per question and now has four.
+	export function recordWriteMaskOf(callee ByteArray) returns ParamPositionMask
+		return self.maskAt(self.recordWriteMasks, callee: callee)
+	end 'recordWriteMaskOf'
 
 	// The one indexed read both columns share. `NoParamPositions` for a name the module does not declare — a
 	// compiler-internal runtime entry, or an undeclared callee `validateCall` has already reported as E3004
@@ -1596,12 +1609,20 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 	// `FunctionNameIndex`'s header describes, made unspellable by taking the array off the index).
 	var masks = ParamPositionMaskArray.create()
 	var storageMasks = ParamPositionMaskArray.create()
+	var recordWriteMasks = ParamPositionMaskArray.create()
 	for func in funcNames.functions 'seed'
 		masks.push(func.writtenParamMask)
 		storageMasks.push(func.storageWrittenParamMask)
+		recordWriteMasks.push(func.writesThroughParamMask)
 	end 'seed'
 
 	propagateParamMasks(masks, edges: edges, byCallee: byCallee)
+	// ⭐ **W117's COLUMN DRAINS THE SAME RELATION A THIRD TIME, WHICH IS NOT A THIRD RELATION.** "A callee that
+	// writes what it was handed makes its caller write what IT was handed" is one statement about one call
+	// graph; the three columns differ only in what they were SEEDED with. It closes over the ARGUMENT edges
+	// rather than the wider storage set because its question is about the argument: does the record this call
+	// site handed over get written?
+	propagateParamMasks(recordWriteMasks, edges: edges, byCallee: byCallee)
 
 	// The CSR over the WIDER set is built HERE and not in `semanticCheck`, because this is its only reader.
 	// A program that recorded no storage-reach edge closes both columns over one relation, so it reuses the
@@ -1615,7 +1636,7 @@ function buildParamMutationSummary(funcNames FunctionNameIndex, edges CallParamE
 	end 'aWiderRelation'
 
 	propagateParamMasks(storageMasks, edges: storageEdges, byCallee: storageByCallee)
-	return ParamMutationSummary.create(masks, storageMasks: storageMasks, funcIndexByName: funcIndexByName)
+	return ParamMutationSummary.create(masks, storageMasks: storageMasks, recordWriteMasks: recordWriteMasks, funcIndexByName: funcIndexByName)
 end 'buildParamMutationSummary'
 
 // ⭐⭐⭐ **THE STORAGE COLUMN'S EDGE SET: the argument-is-a-parameter edges above, PLUS the parser's
@@ -3969,28 +3990,56 @@ end 'reportConditionalExtensionWithheld'
 // `f(a)` (measured: the oracle compiles it and the push takes effect), so a conservative refusal would
 // break agreement on a legal program rather than close a hole. `parameter-mutation.md` pins the acceptance
 // so the gap is visible instead of assumed.
+// ⭐⭐ **AND SINCE W117 IT IS ALSO THE DOOR FOR A `let`-DECLARED GLOBAL'S RECORD, THROUGH THE SAME ONE
+// REPORTER.** An argument that ALIASES an immutable global (the parser's per-value mark, published as
+// `IrFunction.immutableGlobalAliasValues`) is judged against a WIDER mask than an ordinary immutable binding
+// is: `maskOf` for both, plus `recordWriteMaskOf` for the alias.
+//
+// ⛔⛔ **THE WIDENING IS PER-ARGUMENT, NOT PER-CALL, AND THAT IS THE WHOLE OF WHY E3019 DOES NOT MOVE.**
+// MEASURED on both compilers: `let a = Box.make()` handed to a `bump(b Box)` whose body is `b.n = 99`
+// COMPILES and prints `n 99` — a direct field write through a parameter is legal for an immutable BINDING and
+// widening `maskOf` would refuse a program the references accept. The same call is NOT legal when what was
+// handed over is a `let` GLOBAL's record: measured before this rung, `let G = Box.make()` + `bump(G)` printed
+// `g 99` on shv2 AND on the oracle, silently mutating a global the program declared immutable. Same shape,
+// different subject, different answer — so the subject decides which mask applies, one argument at a time.
+//
+// ⚠ **ONE REPORTER, DELIBERATELY.** A second check reading the third column would be a second site deciding
+// what "cannot be written through" means, free to drift from this one and to double-report the arguments they
+// both catch. The sentence is unchanged and stays true of both subjects: it names no immutability, only what
+// may not be passed where.
 function checkImmutableArgToMutatingParam(project Project, func IrFunction, callee ByteArray, sig FuncSignature, args ValueIdArray, argLabels ByteArrayArray, argImmutableNames ByteArrayArray, mutationSummary ParamMutationSummary, callRange SourceRange, filePath FilePath)
 	// ONE name resolution and one dense read — `maskOf` answers `NoParamPositions` for a callee the module
 	// does not declare, so the overwhelming majority of calls leave here after a single hash and an i64
 	// compare, with no membership probe in front of it.
 	let mask = mutationSummary.maskOf(callee)
-	if mask == NoParamPositions 'writesNoParameter'
+	// ⚡ The second read is taken only when this call could possibly need it: a function that marked no value
+	// is every function in nearly every program, and the set is the parser's shared empty one there.
+	let recordWriteMask = mutationSummary.recordWriteMaskOf(callee) if func.immutableGlobalAliasValues.count() > 0 else NoParamPositions
+	if mask == NoParamPositions and recordWriteMask == NoParamPositions 'writesNoParameter'
 		return
 	end 'writesNoParameter'
 
 	for i in 0 upto args.count() 'eachArg'
+		let argId = try args.get(i) otherwise panic("checkImmutableArgToMutatingParam: args.get OOB at {i} below its own count")
+		let aliasesAnImmutableGlobal = func.immutableGlobalAliasValues.contains(argId)
 		let blamed = immutableArgNameAt(argImmutableNames, index: i)
-		if blamed.isEmpty() 'writableArgument'
+		if blamed.isEmpty() and not aliasesAnImmutableGlobal 'writableArgument'
 			continue
 		end 'writableArgument'
 
 		let pos = argSlotPosition(sig.paramNames, argIndex: i, label: try argLabels.get(i) otherwise panic("checkImmutableArgToMutatingParam: argLabels.get OOB at {i} — a call's argument columns are parallel by construction"))
-		if pos >= sig.paramCount() or not maskHasParam(mask, param: pos) 'notAWrittenPosition'
+		let effective = (mask or recordWriteMask) if aliasesAnImmutableGlobal else mask
+		if pos >= sig.paramCount() or not maskHasParam(effective, param: pos) 'notAWrittenPosition'
 			continue
 		end 'notAWrittenPosition'
 
 		let paramName = try sig.paramNames.get(pos) otherwise panic("checkImmutableArgToMutatingParam: paramNames.get OOB at {pos} inside paramCount()")
-		reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(String.from(blamed), paramName: displayParamName(paramName), functionName: String.from(func.name)), line: callRange.line, column: callRange.column, filePath: filePath)
+		// A tainted argument always reaches here with a blame — `Parser.expressionImmutableBlame` falls back to
+		// the shared noun when the expression names no binding — EXCEPT on the synthesized call paths that pass
+		// `NoImmutableArgNames` wholesale. Naming the noun here rather than skipping the report keeps the
+		// diagnostic, and it is the SAME constant that fallback uses, so there is one wording and not two.
+		let subject = blamed if not blamed.isEmpty() else ImmutableGlobalAliasBlame
+		reportPositioned(project, code: ErrorCode.semanticImmutableRefToMutatingParam, message: immutableMutatingCallMessage(String.from(subject), paramName: displayParamName(paramName), functionName: String.from(func.name)), line: callRange.line, column: callRange.column, filePath: filePath)
 		return
 	end 'eachArg'
 end 'checkImmutableArgToMutatingParam'

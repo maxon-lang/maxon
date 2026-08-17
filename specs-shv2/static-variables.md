@@ -1061,15 +1061,17 @@ semantics, deliberately, because the alias is observable — so without this ref
 SOURCE is immutable, and only there: the same binding off a `var` global shares, exactly as it does in the
 reference compiler.
 
-⚠ **THE GUARD IS INTRA-FUNCTION, AND THAT BOUND IS EXACT.** It is a mark on the VALUE the read produced,
-so it reaches every use of that value in that function — the direct binding, a reassignment, and a
-ternary/`match` merge that joins it (all four are pinned below). It does NOT cross a CALL: `g(A)` where
-`g(xs …)` does `var b = xs` still grows `A` (measured: 3), because the callee's parameter is a fresh value
-in a fresh SSA space and whether it may alias an immutable global is a property of every call site, not of
-the callee. Closing that needs the same whole-program call-graph fixpoint the transitive-consume case is
-waiting on, so it is part of the **mutation enforcement** prerequisite the immortality residual already
-names, not a hole this refusal was meant to cover. The reference compiler does not refuse the call form
-either — it shares and then leaks (exit 101) — so shv2 is no looser here, only not yet stricter.
+⚠ **THE REFUSAL IS ON THE WRITE, NOT ON THE BINDING** (⚖ user, 2026-08-14, W117). `var b = A` is legal —
+reading a `let` global and naming the result is what the language means by reading it — and `b.push(9)`
+is the error. The mark rides the VALUE and is CARRIED through the promotion rather than refused at it, so
+it reaches every use in this function (the direct binding, a reassignment, and a ternary/`match` merge
+that joins it — all four are pinned below) and, through a whole-program fact, every caller of a function
+that returns one.
+
+⚠ **THE ONE SHAPE STILL OUTSIDE IT is a callee that ALIASES the parameter before writing** — `g(A)` where
+`g(xs …)` does `var b = xs` then `b.push(9)`. The argument check reads the callee's summary of what IT
+writes, and the callee writes a LOCAL that happens to carry the same record. Closing that needs the taint
+to flow INTO a callee's SSA space, which is a per-call-site fact, not a per-function one.
 ```maxon
 let A = [1, 2]
 
@@ -1080,12 +1082,13 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:5:6: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E3019: <fragment>:6:4: cannot pass 'b' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: error.top-level-let-array-var-reassign-alias -->
 The same refusal through the other door — a REASSIGNMENT of an already-owned `var`, which promotes a
-borrowed value through the identical single-sourced path.
+borrowed value through the identical single-sourced path and so CARRIES the mark through the identical
+one. `b = A` is legal; the push is not.
 ```maxon
 let A = [1, 2]
 
@@ -1097,7 +1100,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:2: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E3019: <fragment>:7:4: cannot pass 'b' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: error.top-level-let-array-ternary-alias -->
@@ -1116,7 +1119,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:6:6: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E3019: <fragment>:7:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: error.top-level-let-array-match-arm-alias -->
@@ -1142,7 +1145,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:6: Unsupported: binding a `let`-declared top-level global to a `var` — an aggregate has no owning COPY in shv2, so the binding would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E3019: <fragment>:16:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
 ```
 
 <!-- test: top-level-array-merge-of-mutable-globals-shares -->
@@ -1193,6 +1196,266 @@ end 'main'
 ```
 ```exitcode
 3
+```
+
+<!-- test: top-level-let-struct-accessor-read-only -->
+⭐ **READING AND RETURNING A `let` GLOBAL IS LEGAL; MUTATING THROUGH THE RESULT IS THE ERROR** (⚖ user,
+2026-08-14). This is the control the whole family was missing: an accessor that hands a `let`-declared
+global's record back to a caller that only READS it compiles and runs. Until W117 shv2 refused the
+RETURN itself, which made the shape unwritable — and it is the shape `stdlib/CharacterSet.maxon`'s
+eleven presets are declared in, so the refusal was the sole thing between the library and its callers.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static let shared = Box.make()
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export static function get() returns Box
+		return Box.shared
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	let a = Box.get()
+	return a.n as ExitCode
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: top-level-var-struct-accessor-write-shares -->
+The same accessor off a `var` global, which is the measurement that says the rule keys on IMMUTABILITY
+and not on returning a global at all: the write goes through and is observable on the global. Both
+compilers do this, and shv2 did it before W117 too — it is the one keyword's difference that proves the
+refusal below is guarding the `let` claim rather than the aliasing.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static var shared = Box.make()
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export static function get() returns Box
+		return Box.shared
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	var a = Box.get()
+	a.n = 99
+	return Box.shared.n as ExitCode
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: error.let-global-accessor-result-field-write -->
+And the write is where it is refused. `Box.get()` may hand the record out; writing a field through what
+it handed back would mutate a global declared `let`, so THAT is the diagnostic, on the write's own line.
+The caller learns this from a whole-program fact — "may this function's return alias an immutable
+global?" — because the accessor's body may be in another file, which is exactly why the refusal could
+not stay at the return.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static let shared = Box.make()
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export static function get() returns Box
+		return Box.shared
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	var a = Box.get()
+	a.n = 99
+	return Box.shared.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:20:2: Unsupported: writing through 'a', which aliases a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the write would reach the global's own record and mutate a global declared immutable; read through it instead, or declare the global `var`
+```
+
+<!-- test: error.let-global-accessor-result-two-hops-of-return -->
+⭐ **THE FACT IS A CLOSURE OVER RETURN-FORWARDING EDGES, NOT A ONE-HOP RULE, AND THIS IS THE CASE THAT
+SAYS SO.** `get()` returns what `inner()` returns, and only `inner()` names the global — so a rule that
+looked one call deep would accept this program and silently mutate `Box.shared`. Every shape the corpus
+writes today is single-hop, which is precisely why the two-hop case is pinned: *"nothing writes it yet"*
+is not a soundness argument.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static let shared = Box.make()
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	static function inner() returns Box
+		return Box.shared
+	end 'inner'
+
+	export static function get() returns Box
+		return Box.inner()
+	end 'get'
+end 'Box'
+
+function main() returns ExitCode
+	var a = Box.get()
+	a.n = 99
+	return Box.shared.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:24:2: Unsupported: writing through 'a', which aliases a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the write would reach the global's own record and mutate a global declared immutable; read through it instead, or declare the global `var`
+```
+
+<!-- test: error.let-global-passed-to-field-writing-callee -->
+⛔ **A `let`-DECLARED GLOBAL HANDED STRAIGHT TO A CALLEE THAT WRITES A FIELD OF IT — MEASURED SILENTLY
+MUTATING THE GLOBAL BEFORE W117, ON BOTH COMPILERS** (`g 99`, where the program declares `G` a `let`).
+Neither of the two masks that existed could see it: E3019's deliberately records no field write, and
+E3070's is scoped to ARRAY fields. The third column is this program.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	export static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+end 'Box'
+
+let G = Box.make()
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	bump(G)
+	return G.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:19:2: cannot pass 'G' to function that mutates parameter 'b' (in main)
+```
+
+<!-- test: error.let-global-accessor-result-to-field-writing-callee -->
+The same write one call away from a RETURNED alias — the shape that forces both halves at once: the
+accessor's whole-program return fact, and the callee's whole-program parameter-write fact. `bump` writes
+nothing of its own; it writes what it was handed.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	static let shared = Box.make()
+
+	static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+
+	export static function get() returns Box
+		return Box.shared
+	end 'get'
+end 'Box'
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	var a = Box.get()
+	bump(a)
+	return Box.shared.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:24:2: cannot pass 'a' to function that mutates parameter 'b' (in main)
+```
+
+<!-- test: error.let-global-to-callee-that-forwards-the-write -->
+⭐ **AND THE PARAMETER HALF IS A CLOSURE TOO.** `bump` writes nothing at all — it forwards its parameter
+to a `poke` that does — so the bit reaches `bump` only through the least fixpoint over the call graph.
+Two hops on the argument side, as the case above is two hops on the return side.
+```maxon
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	export static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+end 'Box'
+
+let G = Box.make()
+
+function poke(c Box)
+	c.n = 99
+end 'poke'
+
+function bump(b Box)
+	poke(b)
+end 'bump'
+
+function main() returns ExitCode
+	bump(G)
+	return G.n as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:23:2: cannot pass 'G' to function that mutates parameter 'b' (in main)
+```
+
+<!-- test: error.let-global-given-out-of-a-closure -->
+⭐ **THE INDIRECT-CALL BOUNDARY, STATED RATHER THAN LEFT SILENT.** A closure has no static callee, so no
+whole-program fact can say what calling one returns — and without that, a tainted value handed out of a
+closure would escape into a call the analysis cannot follow. So a closure keeps the OLD refusal, at the
+`gives`, which is the conservative answer this rung deliberately does not widen. The remedy is the same
+one the message always named.
+
+⚠ **HONEST STATUS: this case is a REGRESSION GUARD, not a red W117 turned green.** The identical refusal
+fired here before the rung, because before it every such return was refused; what the case pins is that
+widening the RETURN did not widen this. It goes red the day a later rung publishes a fact for a closure
+without the analysis to back it. Its positive twin is `top-level-let-struct-accessor-read-only` above —
+the same shape, out of a NAMED function, which now compiles.
+```maxon
+let A = [1, 2]
+
+function main() returns ExitCode
+	let f = function() gives A
+	var b = f()
+	b.push(9)
+	return A.count()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:5:21: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
 ```
 
 <!-- test: error.top-level-array-empty -->
@@ -1712,9 +1975,9 @@ error E3006: <fragment>:3:5: duplicate definition of 'counter'
 The FOURTH door onto the same guard, and the one S5 opened. The three above all reach it as a `var`
 BINDING; this one reaches it as a MERGE that must be OWNED because its other arm gives a fresh record —
 so the borrowed arm is promoted, and for an aggregate a promotion is an INCREF of the same box. That is
-precisely the launder: an incref mints an unmarked SSA name for the marked record, so `pick.push` would
-grow `A` with every other guard intact. Refused inside the promotion, at the door that names itself, so
-the guard covers a door the day the door opens rather than the day someone notices.
+precisely the launder an unmarked incref would perform: the mark is therefore CARRIED across the
+promotion (W117) rather than the promotion being refused, so the phi that joins the two arms carries it
+too and `pick.push` is refused where it happens.
 ```maxon
 typealias Names = Array with String
 
@@ -1734,5 +1997,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:14:15: Unsupported: merging a read of a `let`-declared top-level global into an OWNED result — an aggregate has no owning COPY in shv2, so the merged value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E3019: <fragment>:15:7: cannot pass 'pick' to function that mutates parameter 'self' (in main)
 ```

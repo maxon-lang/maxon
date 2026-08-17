@@ -707,12 +707,11 @@ end 'main'
 ```
 
 <!-- test: error.return-a-let-declared-global -->
-The negative control, and the one thing the widened door must still refuse. A `let`-declared top-level
-global's record cannot be laundered into a mutable alias by RETURNING it either: the caller adopts an
-owned aggregate, binds it to a `var` and writes the immutable global's record with E2013 and E3019 both
-intact. The refusal is the SAME intra-function mark that refuses `var b = A` — one guard, reached through
-whichever door makes a read of an immutable global owned — so the return door cannot drift from the
-binding door, and the message names the door it was reached through rather than a `var` there is none of.
+The negative control, and the one thing the widened door must still refuse — **at the WRITE** (⚖ user,
+2026-08-14, W117). RETURNING a `let`-declared global's record is legal: `expose()` compiles, and a caller
+that only reads what it hands back is a working program. What is refused is `b.push("zz")`, because that
+mutates a global the program declared immutable. The caller can know this only because the return is
+summarised whole-program — `expose`'s body may be in another file — which is the fact this rung added.
 ```maxon
 typealias Names = Array with String
 
@@ -729,5 +728,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:2: Unsupported: returning a read of a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the returned value would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`
+error E3019: <fragment>:12:4: cannot pass 'b' to function that mutates parameter 'self' (in main)
 ```

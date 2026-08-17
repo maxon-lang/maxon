@@ -1971,7 +1971,7 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 // The module-level shared empty CALL-ALIGNED parameter-name list the declaration sweep leaves in hand for a
 // declaration it does not walk the parameters of — a NON-GENERIC instance method, which needs neither the
 // consume scan (its direct field stores are the callee-side refusal's business, `detectFieldStores: false`)
-// nor the opaque-parameter record (it has no `uses` list for a parameter to name). `scanBodyParamFacts` returns
+// nor the opaque-parameter record (it has no `uses` list for a parameter to name). `scanBodyFacts` returns
 // at once on an empty list, which is exactly the "not walked" behaviour, so the one shared array is what
 // makes that single call site able to serve every declaration shape. Never mutated; ONE allocation for the
 // whole compile, the discipline every `sharedEmpty*` here states.
@@ -8945,6 +8945,20 @@ function borrowLaunderRefusal(door BorrowLaunderDoor) returns String
 	return "{borrowLaunderDoorClause(door)} — an aggregate has no owning COPY in shv2, so {borrowLaunderValueNoun(door)} would alias the SAME record and a write through it would mutate a global declared immutable; read it through a `let` binding, or declare the global `var`"
 end 'borrowLaunderRefusal'
 
+// ⭐ **WHAT AN E3019 BLAMES WHEN THE OFFENDING VALUE HAS NO NAME (W117)** — a `let` global's record handed
+// to a mutating callee straight out of the call that produced it (`bump(Box.get())`). It is a NOUN standing
+// in a slot the other two blame sources fill with a binding name; see `expressionImmutableBlame` for why
+// re-deriving the author's own text there is the wrong trade.
+export let ImmutableGlobalAliasBlame = b"a read of a `let`-declared global"
+
+// The sentence for the WRITE the rule above moved to (W117) — the same explanation with the same remedy,
+// worded for the statement that is actually refused. It is a separate sentence rather than a fourth
+// `BorrowLaunderDoor` because the doors describe how a value became OWNED, and this is not that: the value
+// was already owned and legally so, and what is refused is the store through it.
+function immutableGlobalWriteRefusal(blamed String) returns String
+	return "writing through '{blamed}', which aliases a `let`-declared top-level global — an aggregate has no owning COPY in shv2, so the write would reach the global's own record and mutate a global declared immutable; read through it instead, or declare the global `var`"
+end 'immutableGlobalWriteRefusal'
+
 // The sentence for an error type leaving a function that declares no `throws` at all. Each door names the
 // remedy its author can actually reach for: the `try` door can convert the error with an `otherwise`, the
 // `throw` door has no such move and can only declare the clause.
@@ -9745,6 +9759,24 @@ function callAlignedFrom(sourceNames ByteArrayArray) returns ByteArrayArray
 	return paramNames
 end 'callAlignedFrom'
 
+// ⭐ **DOES A TOKEN OF THIS KIND BIND THE NAME THAT FOLLOWS IT? (W117)** — the generous binder test
+// `Parser.returnedNamesNotBoundHere` filters a swept return candidate through; see there for the full
+// argument, including why `(` and `,` are in the list although a call argument is no binder at all. It is a
+// free function beside `noteForwardCall` because, like it, it reads nothing but its argument.
+function kindBindsTheNameAfterIt(kind TokenKind) returns bool
+	return kind == TokenKind.let or kind == TokenKind.var or kind == TokenKind.for or kind == TokenKind.leftParen or kind == TokenKind.comma
+end 'kindBindsTheNameAfterIt'
+
+// Mark every returned candidate whose HEAD segment is `name`. One name can head more than one candidate
+// (`Box.shared` and `Box.other` from two `return`s), so the walk is over all of them rather than a lookup.
+function markBoundHead(returnedHeads ByteArrayArray, bound BoolArray, name ByteArray)
+	for i in 0 upto returnedHeads.count() 'eachCandidate'
+		if (try returnedHeads.get(i) otherwise panic("markBoundHead: returnedHeads.get({i}) OOB below its own count")).equals(name) 'sameHead'
+			try bound.set(i, value: true) otherwise panic("markBoundHead: bound.set({i}) OOB — the two columns are parallel by construction")
+		end 'sameHead'
+	end 'eachCandidate'
+end 'markBoundHead'
+
 // Record a forwarding edge, de-duplicated. The list is per BODY and a body forwards to a handful of names,
 // so a linear membership test beats a set's allocation — the same trade `captureSlotFor` makes one column over.
 //
@@ -10417,6 +10449,24 @@ export type Parser
 	// stayed flat at x1.99. It allocates almost nothing (the list's own geometric growth, +21 allocations at
 	// K = 16,000), so `scale-test` is structurally blind to it and it had to be found by reading.
 	var immutableGlobalReads as ValueMarkSet
+
+	// ⭐⭐ **HAS THE FUNCTION BEING PARSED BEEN PUBLISHED AS ONE WHOSE RETURN MAY ALIAS AN IMMUTABLE GLOBAL
+	// (W117)?** Read at exactly one place — the `returned` door of `ownedFormOfBorrowedValue` — where it
+	// decides between letting a marked value escape (the caller has been told, and will mark what it gets
+	// back) and keeping the ORIGINAL E2015 refusal (the caller has NOT been told, so letting it escape would
+	// launder the record into an untracked alias).
+	//
+	// ⚠ **IT IS THE SWEEP'S ANSWER, NOT THIS PARSE'S**, and that asymmetry is the whole safety argument: the
+	// sweep recognises a deliberately narrow set of `return` shapes (`noteReturnedGlobalOrForward`), and every
+	// shape it does not recognise arrives here as FALSE and is refused exactly as it was before this rung.
+	//
+	// ⭐⭐⭐ **AND IT IS FALSE INSIDE A CLOSURE BODY, WHICH IS THE INDIRECT-CALL BOUNDARY** — stated here rather
+	// than left implicit. A closure has no static callee, so no whole-program fact can say what calling one
+	// returns and no call site can be told to mark its result; a tainted value escaping through a `gives`
+	// would therefore land in a caller that has no idea what it is holding. It is false there because
+	// `parseClosureExpression` saves and clears it with the marks themselves, so the boundary costs no test of
+	// its own and cannot be forgotten at one of the two doors.
+	var enclosingFunctionMayReturnAGlobalAlias as bool
 	// ⭐ **THE MERGE ARMS' E3019 BLAME, CARRIED ONTO THE RESULT PHI** (see `MergeBlameMap`). Written at the
 	// three merges that can join a bare binding reference — the ternary, a `match … gives`, and a
 	// `try … otherwise <expr>` — and read at the one consumer, `expressionImmutableBlame`, whenever the
@@ -11285,6 +11335,7 @@ export type Parser
 			charLiteralOps: sharedEmptyCharLiteralOps,
 			stringBytesViewOps: sharedEmptyStringBytesViewOps,
 			immutableGlobalReads: sharedEmptyImmutableGlobalReads,
+			enclosingFunctionMayReturnAGlobalAlias: false,
 			mergeImmutableBlame: sharedEmptyMergeBlames,
 			rebindableSlotReads: sharedEmptyRebindableSlotReads,
 			constructorFeedParams: sharedEmptyConstructorFeedParams,
@@ -11494,6 +11545,7 @@ export type Parser
 		// parameter into a struct field, so a call site can decide whether an owned argument is moved.
 		var paramConsumes = ParamConsumeEntryArray.create()
 		var paramReassigns = ParamReassignEntryArray.create()
+		var globalAliasReturns = GlobalAliasReturnEntryArray.create()
 		// ⭐ Per-function parameter DEFAULTS (BATCH2 slice 4) — the call-site dual of the return type, from
 		// the SAME token walk. One entry per function that declares at least one default, so a call site can
 		// decide whether an omitted argument is legal and which helper produces it.
@@ -11673,7 +11725,7 @@ export type Parser
 				// read, because reading it moves the cursor past the `function` keyword.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames)
 				continue
 			end 'isFunction'
 
@@ -11695,7 +11747,7 @@ export type Parser
 			// array. It consumes the `type` keyword before it can fail, so the cursor always
 			// advances and this loop cannot spin.
 			if depth == 0 and self.at(TokenKind.type) 'isTypeDecl'
-				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
+				self.recordScannedType(structs, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, innerAliasOut: innerAliases, genericAliasOut: genericAliases, functionAliasOut: functionAliases, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, bindingOut: bindings)
 				continue
 			end 'isTypeDecl'
 
@@ -11705,7 +11757,7 @@ export type Parser
 			// depth 0 it is a declaration and nothing else. `recordScannedEnum` consumes the whole
 			// declaration — cursor past its `end` — so the loop's depth invariant is untouched.
 			if depth == 0 and (self.at(TokenKind.enum) or self.at(TokenKind.union)) 'isEnumDecl'
-				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
+				self.recordScannedEnum(enums, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParams, freeFunctionNameOut: freeFunctionNames, conformanceSiteOut: conformanceSites, isUnion: self.at(TokenKind.union))
 				continue
 			end 'isEnumDecl'
 
@@ -11732,7 +11784,7 @@ export type Parser
 		end 'scan'
 		self.pos = resume
 
-		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: aliases, functionAliases: functionAliases, structs: structs, enums: enums, genericAliasEntries: genericAliases, innerAliasEntries: innerAliases, methodInnerAliasParamEntries: methodInnerAliasParams, interfaceSites: interfaceSites, extensionSites: extensionSites, conformanceSites: conformanceSites, scanSites: self.descriptorScanSites, bindings: bindings, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNames, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 
 		// ⭐⭐ **WHAT THIS FILE'S TOKENS SAY THE PROGRAM WILL MATERIALIZE — NOTED, NEVER PERFORMED (ARRO).**
 		// Every one of these instances is one the COMPILER mints because the source names no type for it, so
@@ -12160,7 +12212,7 @@ export type Parser
 	//
 	// The name is `declaredMethodName`'s, not the token's, so a factory inside `type Point` is
 	// recorded under the very key `Point.create(3, y: 4)` will look it up by — see there.
-	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function recordScannedSignature(entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		let nameTok = self.current()
 		// ⚠ Captured NOW, at the name token: the caller has consumed `function` (at `pos - 1`), so its modifier —
 		// if any — is the token before that, and `static` is what marks a receiver-less method. Read after the
@@ -12303,11 +12355,11 @@ export type Parser
 		// ⚠ **THE OPAQUE-`T` FEED SHAPES ARE SCANNED FOR ON BOTH SIDES, and W10 is why.** They used to be probed
 		// only under a literal `self` token, which made them an instance method's business by construction; a
 		// `static` that pushes its type-parameter argument into a LOCAL `Array with T` and hands that array to
-		// the `Self` it returns feeds just as durably, so `scanBodyParamFacts` probes for them whichever kind of
+		// the `Self` it returns feeds just as durably, so `scanBodyFacts` probes for them whichever kind of
 		// declaration it was handed.
 		//
 		// ⚠ **ONE CALL, NOT A BRANCH, AND THE NON-GENERIC INSTANCE METHOD IS COVERED BY ITS EMPTY NAME LIST
-		// RATHER THAN BY A GATE.** `scanBodyParamFacts` returns immediately on an empty `paramNames`, and that is
+		// RATHER THAN BY A GATE.** `scanBodyFacts` returns immediately on an empty `paramNames`, and that is
 		// exactly the declaration shape the walk above declines to read — so the two spellings of "do not scan
 		// this one" have become one.
 		//
@@ -12316,7 +12368,7 @@ export type Parser
 		// much a forwarder as a free function is, and three of `specs/pass-by-reference.md`'s transitive cases
 		// are exactly that program — whereas the consume half deliberately declines to read one. Hence two
 		// lists into one walk rather than a second walk of the same tokens.
-		self.scanBodyParamFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, paramsStart: paramsStart, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
+		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, paramsStart: paramsStart, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
 	end 'recordScannedSignature'
 
 	// ⭐ **THE CALL-ALIGNED PARAMETER NAMES PBR-2's SCAN IS INDEXED BY.** For everything the consume scan
@@ -12326,7 +12378,7 @@ export type Parser
 	// The one shape it has to read for itself is a NON-GENERIC INSTANCE METHOD, which the consume scan skips
 	// (see there). Only the PARAMETER LIST is walked for it, never the body — the body walk is the one both
 	// facts share — and a method with no user parameters is left with an empty list, which ends the walk at
-	// `scanBodyParamFacts`' own guard rather than pushing `__self` alone through it.
+	// `scanBodyFacts`' own guard rather than pushing `__self` alone through it.
 	function byRefScanParamNames(scannedParamNames ByteArrayArray, paramsStart TokenIndex, takesReceiver bool) returns ByteArrayArray
 		if not takesReceiver or scannedParamNames.count() != 0 'alreadyCallAligned'
 			return scannedParamNames
@@ -12519,7 +12571,12 @@ export type Parser
 		return self.paramTypeParamPositionAt(positions, index: index) < self.enclosingTypeParams.count()
 	end 'paramIsTypeParamTyped'
 
-	function scanBodyParamFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, detectFieldStores bool, takesReceiver bool)
+	// ⚠ **IT WAS `scanBodyParamFacts` AND IS NOT ANY MORE, BECAUSE W117 GAVE IT A FACT THAT IS NOT ABOUT
+	// PARAMETERS**: what this body RETURNS. The three facts share this walk rather than getting one each, for
+	// the reason the walk exists at all — it already stands on every token of the body carrying the bracket
+	// and block-depth state a second walk would have to rebuild — so the name says "this body's facts" and the
+	// list of them is the paragraphs below.
+	function scanBodyFacts(funcName ByteArray, funcBareName ByteArray, paramNames ByteArrayArray, byRefParamNames ByteArrayArray, typeParamPositions TypeParamPositionArray, bodyStart TokenIndex, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, detectFieldStores bool, takesReceiver bool)
 		// ⚠ **TWO NAME LISTS, AND THEY ARE NOT THE SAME LIST.** The CONSUME half reads `paramNames`, which the
 		// caller leaves EMPTY for a non-generic instance method (a direct `Self{f: p}` store there is left to the
 		// callee-side borrowed-value refusal — see the call site). The BY-REFERENCE half reads `byRefParamNames`,
@@ -12527,10 +12584,12 @@ export type Parser
 		// parameter into a reassigning one is exactly as much a forwarder as a free function is
 		// (`pass-by-reference.transitive-reassign-through-sibling-methods` is that program). So the walk runs when
 		// EITHER has something to look for.
-		if paramNames.count() == 0 and byRefParamNames.count() == 0 'noParams'
-			return
-		end 'noParams'
-
+		// ⭐ **THE WALK IS UNCONDITIONAL SINCE W117, AND THAT IS A WIDENING WITH A REASON.** It used to return
+		// here whenever neither name list had anything to look for; W117's question — does this body RETURN a
+		// `let` global's record? — has nothing to do with parameters, and the functions that ask it most are
+		// exactly the receiverless zero-parameter accessors this guard skipped (`Box.get()`,
+		// `CharacterSet.whitespaces()`). The added cost is one pass over those bodies' tokens, once, at the
+		// sweep; every function with a parameter or a receiver was already walked.
 		var consumed = BoolArray.create()
 		for _ in 0 upto paramNames.count() 'initBits'
 			consumed.push(false)
@@ -12545,6 +12604,22 @@ export type Parser
 		end 'initByRefBits'
 		var forwardCalls = ForwardCallArray.create()
 		var statesByRef = false
+		// ⭐ **W117's THREE COLUMNS: the names this body RETURNS as a whole statement, their first SEGMENTS, and
+		// the calls whose result it returns.** `returnedHeads` is the head of each name (`Box` of `Box.shared`),
+		// which is what the shadowing filter compares against — a body that binds `Box` returns its own local,
+		// not the global.
+		//
+		// ⚡ **THREE MORE ARRAYS PER SWEPT DECLARATION, ON A SCAN THAT ALREADY BUILDS SIX**, and they are
+		// created outright rather than copy-on-written off a shared empty because the alternatives all cost
+		// more than they save: a COW needs the shape test written twice (once to decide whether to privatise,
+		// once to record), and a reusable per-`Parser` buffer needs a COPY at every body that states something
+		// plus a clear at every body that does not. The recorded POPULATION is already small — a body returning
+		// `a + b`, `self.x` or a bare local states nothing (a local is dropped by the shadowing filter), so
+		// only a body returning a call or an unbound name reaches the map — but the three arrays themselves are
+		// paid per declaration. Flagged for the ladder rather than guessed at.
+		var returnedNames = ByteArrayArray.create()
+		var returnedHeads = ByteArrayArray.create()
+		var returnCalls = ForwardCallArray.create()
 		// The type-parameter FEED map is a fresh array pre-filled with `none` ONLY inside a generic type's
 		// body — a feed requires a type-parameter-typed field, so a top-level function and a non-generic type's
 		// method (all of them on the generics-free corpus) keep the SHARED empty array (⚡ no per-function
@@ -12583,10 +12658,17 @@ export type Parser
 			// of its own and so is invisible to the shape above. Without it a by-reference parameter could be
 			// rebound by `p = f()` and not by `(p, _) = f()` — one operation, two answers decided by spelling.
 			// See `tupleAssignRebindsANameAt` for why the enclosing `(` is free here.
+			// ⭐⭐ **W117's SEED AND EDGE, both read off a `return` statement's own first tokens.** Probed here
+			// rather than in a walk of its own because this walk already stands on every token of the body with
+			// the bracket and block-depth state a second one would have to rebuild.
+			if kind == TokenKind.return 'returnStatement'
+				self.noteReturnedGlobalOrForward(q, returnedNames: returnedNames, returnedHeads: returnedHeads, returnCalls: returnCalls)
+			end 'returnStatement'
+
 			if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'rebindsAName'
 				let target = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
 				if target < byRefParamNames.count() 'ofOwnParameter'
-					try reassignedDirect.set(target, value: true) otherwise panic("scanBodyParamFacts: reassignedDirect.set OOB at {target} despite target < byRefParamNames.count()")
+					try reassignedDirect.set(target, value: true) otherwise panic("scanBodyFacts: reassignedDirect.set OOB at {target} despite target < byRefParamNames.count()")
 					statesByRef = true
 				end 'ofOwnParameter'
 			end 'rebindsAName'
@@ -12597,8 +12679,8 @@ export type Parser
 			if self.bareCallArgumentAt(q, braceStack: braceStack) 'handedOn'
 				let forwarded = self.paramIndexIn(byRefParamNames, name: self.tokenAt(q).value)
 				if forwarded < byRefParamNames.count() 'ofOwnParameter'
-					try reassignedForwarded.set(forwarded, value: true) otherwise panic("scanBodyParamFacts: reassignedForwarded.set OOB at {forwarded} despite forwarded < byRefParamNames.count()")
-					noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyParamFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
+					try reassignedForwarded.set(forwarded, value: true) otherwise panic("scanBodyFacts: reassignedForwarded.set OOB at {forwarded} despite forwarded < byRefParamNames.count()")
+					noteForwardCall(forwardCalls, call: self.forwardCallOpeningAt(try openBrackets.get(openBrackets.count() - 1) otherwise panic("scanBodyFacts: openBrackets is empty inside a call argument — `bareCallArgumentAt` has just established an open `(`")))
 					statesByRef = true
 				end 'ofOwnParameter'
 			end 'handedOn'
@@ -12616,13 +12698,13 @@ export type Parser
 						// heap (`Box with String`) and borrows it otherwise (`Box with Point`, byte-identical to A).
 						// The sink is the CONSTRUCTED VALUE: the store lands in a field of the `Self` this call
 						// RETURNS, so the caller's value owns it and this frame must not be enrolled its owner.
-						try feeds.set(idx, value: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue)) otherwise panic("scanBodyParamFacts: feeds.set OOB at {idx} despite idx < paramNames.count()")
+						try feeds.set(idx, value: TypeParamFeed.feeds(feedPos, sink: FeedSink.constructedValue)) otherwise panic("scanBodyFacts: feeds.set OOB at {idx} despite idx < paramNames.count()")
 						any = true
 					end 'typeParamField' else 'plainField'
 						// A NON-type-parameter field store (a monomorphic `Self{value: v}` into an `Integer` field,
 						// or a direct `String`/struct field) — the callee OWNS it whatever the concrete type, so the
 						// plain consume bit is set. A scalar argument makes it inert at the call site anyway.
-						try consumed.set(idx, value: true) otherwise panic("scanBodyParamFacts: consumed.set OOB at {idx} despite idx < paramNames.count()")
+						try consumed.set(idx, value: true) otherwise panic("scanBodyFacts: consumed.set OOB at {idx} despite idx < paramNames.count()")
 						any = true
 					end 'plainField'
 				end 'isParam'
@@ -12683,7 +12765,116 @@ export type Parser
 		if statesByRef 'takesOrForwardsAByRefParam'
 			paramReassigns.push(ParamReassignEntry.create(funcName, info: ParamReassignInfo.create(byRefParamNames, direct: reassignedDirect, forwarded: reassignedForwarded, forwardCalls: forwardCalls, bareName: funcBareName, callability: self.declarationCallability()), takesReceiver: takesReceiver))
 		end 'takesOrForwardsAByRefParam'
-	end 'scanBodyParamFacts'
+
+		// ⭐ **THE SHADOWING FILTER RUNS ONLY FOR A BODY THAT RETURNED A BARE NAME**, which is a handful of
+		// functions in a program and none at all in most — so the second pass it costs is not paid by the
+		// bodies that merely return a call, and is not paid at all by the overwhelming majority that return
+		// neither. See `returnedNamesNotBoundHere` for what it decides and which way it errs.
+		let unshadowed = self.returnedNamesNotBoundHere(returnedNames, returnedHeads: returnedHeads, bodyStart: bodyStart, paramNames: byRefParamNames) if returnedNames.count() > 0 else returnedNames
+		let globalAliasInfo = GlobalAliasReturnInfo.create(unshadowed, returnCalls: returnCalls, bareName: funcBareName, callability: self.declarationCallability(), declFilePath: self.filePath)
+		if globalAliasInfo.statesAnything() 'mayHandBackAGlobalsRecord'
+			globalAliasReturns.push(GlobalAliasReturnEntry.create(funcName, info: globalAliasInfo, takesReceiver: takesReceiver))
+		end 'mayHandBackAGlobalsRecord'
+	end 'scanBodyFacts'
+
+	// ⭐⭐ **W117's SEED AND EDGE, READ OFF ONE `return` STATEMENT.** Exactly four shapes are recognised, and
+	// the statement must be nothing BUT the shape — a trailing `newline` for a name, an opening `(` for a call:
+	//
+	//   • `return <name>`            — a seed candidate, the name as written;
+	//   • `return <Type>.<member>`   — a seed candidate under the JOINED spelling, which is the key a static
+	//                                  member is looked up under (`parseStaticMemberAccess`);
+	//   • `return <name>(…)`         — a forwarding edge, bare;
+	//   • `return <recv>.<name>(…)`  — a forwarding edge through a receiver, or through `self` inside a type.
+	//
+	// ⚠⚠ **ANYTHING ELSE RECORDS NOTHING, AND THAT IS SOUND BECAUSE OF THE FALLBACK RATHER THAN BECAUSE THE
+	// LIST IS COMPLETE.** A `return` this does not recognise leaves the function's bit clear, and a clear bit
+	// is precisely the condition under which `ownedFormOfBorrowedValue` keeps the ORIGINAL E2015 refusal at the
+	// return — so a missed shape costs a REFUSAL, never a silent acceptance. The hazard runs the other way:
+	// recording a shape whose value is not really the global's record would taint a caller's value and refuse a
+	// write on a legal program. ⇒ **Every ambiguity resolves toward recording NOTHING**, which is why the
+	// statement-shape test is exact rather than "a `return` mentioning a name somewhere".
+	//
+	// The edge reuses `forwardCallOpeningAt` — the one place a call's tokens are turned into a `ForwardCall` —
+	// so a return-forward and a parameter-forward cannot come to disagree about which declarations a spelling
+	// can name.
+	function noteReturnedGlobalOrForward(returnIndex TokenIndex, returnedNames ByteArrayArray, returnedHeads ByteArrayArray, returnCalls ForwardCallArray)
+		let head = (returnIndex + 1) as TokenIndex
+		if not tokenCanBeAName(self.tokenAt(head)) 'notANameAtAll'
+			return
+		end 'notANameAtAll'
+
+		if self.kindAt((head + 1) as TokenIndex) == TokenKind.leftParen 'returnsABareCall'
+			noteForwardCall(returnCalls, call: self.forwardCallOpeningAt((head + 1) as TokenIndex))
+			return
+		end 'returnsABareCall'
+
+		if self.kindAt((head + 1) as TokenIndex) == TokenKind.newline 'returnsABareName'
+			returnedNames.push(self.tokenAt(head).value)
+			returnedHeads.push(self.tokenAt(head).value)
+			return
+		end 'returnsABareName'
+
+		if self.kindAt((head + 1) as TokenIndex) != TokenKind.dot or not tokenCanBeAName(self.tokenAt((head + 2) as TokenIndex)) 'notADottedShape'
+			return
+		end 'notADottedShape'
+
+		if self.kindAt((head + 3) as TokenIndex) == TokenKind.leftParen 'returnsADottedCall'
+			noteForwardCall(returnCalls, call: self.forwardCallOpeningAt((head + 3) as TokenIndex))
+			return
+		end 'returnsADottedCall'
+
+		if self.kindAt((head + 3) as TokenIndex) == TokenKind.newline 'returnsAStaticMember'
+			returnedNames.push(qualifiedMethodName(self.tokenAt(head).value, methodName: self.tokenAt((head + 2) as TokenIndex).value))
+			returnedHeads.push(self.tokenAt(head).value)
+		end 'returnsAStaticMember'
+	end 'noteReturnedGlobalOrForward'
+
+	// ⭐⭐ **DROP EVERY RETURNED NAME THIS BODY BINDS ITSELF (W117).** `function f() returns Names  let A = …
+	//  return A  end` returns its own LOCAL, and the sweep — which has no scope — would otherwise file it as a
+	// return of the global `A` and taint every caller's result. The real parse resolves a local first
+	// (`parseVariableReference` asks `scope.contains` before any top-level probe), so this is what keeps the
+	// swept fact agreeing with what the body will actually mean.
+	//
+	// ⚠ **THE BINDER TEST IS DELIBERATELY GENEROUS, AND THE DIRECTION IS THE POINT.** A name is treated as
+	// bound when it follows `let`, `var`, `for`, `(` or `,` — which catches every binder form the language has
+	// (a declaration, a loop variable, a caught-error binder, a `match` payload, a destructuring name) and also
+	// catches plain call ARGUMENTS, which are not binders at all. That over-inclusion drops a seed, and a
+	// dropped seed falls back to the E2015 refusal at the return: the answer the compiler gave before this rung
+	// existed. Under-inclusion would be the costly direction — a spurious seed refuses a write on a legal
+	// program — so the test errs the way it does on purpose. Do not narrow it without moving that argument too.
+	function returnedNamesNotBoundHere(returnedNames ByteArrayArray, returnedHeads ByteArrayArray, bodyStart TokenIndex, paramNames ByteArrayArray) returns ByteArrayArray
+		// A PARAMETER shadows exactly as a local does, and it is known without walking anything.
+		var bound = BoolArray.create()
+		for candidateHead in returnedHeads 'eachHead'
+			bound.push(self.paramIndexIn(paramNames, name: candidateHead) < paramNames.count())
+		end 'eachHead'
+
+		var depth = 0 as BlockDepth
+		var q = bodyStart
+		while self.kindAt(q) != TokenKind.eof 'walk'
+			if depth == 0 and self.closesBlockAt(q) 'bodyEnds'
+				break
+			end 'bodyEnds'
+
+			if q > bodyStart and tokenCanBeAName(self.tokenAt(q)) and kindBindsTheNameAfterIt(self.kindAt((q - 1) as TokenIndex)) 'aBinderPosition'
+				markBoundHead(returnedHeads, bound: bound, name: self.tokenAt(q).value)
+			end 'aBinderPosition'
+
+			depth = self.blockDepthAfter(q, depth: depth)
+			q = q + 1
+		end 'walk'
+
+		var kept = ByteArrayArray.create()
+		for i in 0 upto returnedNames.count() 'eachCandidate'
+			let shadowed = try bound.get(i) otherwise panic("returnedNamesNotBoundHere: bound.get({i}) OOB — the two columns are parallel by construction")
+			if shadowed 'shadowed'
+				continue
+			end 'shadowed'
+			kept.push(try returnedNames.get(i) otherwise panic("returnedNamesNotBoundHere: returnedNames.get({i}) OOB below its own count"))
+		end 'eachCandidate'
+
+		return kept
+	end 'returnedNamesNotBoundHere'
 
 	// ⭐⭐ **WHICH CALL SHAPES CAN NAME THE DECLARATION THE SWEEP IS STANDING ON (PBR-2)** — decided here
 	// because this is where both its inputs are. `enclosingType` says "a method" (the same test
@@ -12692,15 +12883,15 @@ export type Parser
 	// (the same test `recordScannedSignature` publishes a namespace-qualified spelling on). Neither survives
 	// past this scan, and neither is derivable from the registration name: a root-level free function and a
 	// method in a namespace-free program are both spelled bare.
-	function declarationCallability() returns ByRefCallability
+	function declarationCallability() returns DeclCallability
 		if not self.enclosingType.isEmpty() 'aMethod'
-			return ByRefCallability.methodOf(self.enclosingType)
+			return DeclCallability.methodOf(self.enclosingType)
 		end 'aMethod'
 
-		return ByRefCallability.bareCallOrDirectoryRoute if not self.namespace.isEmpty() else ByRefCallability.bareCallOnly
+		return DeclCallability.bareCallOrDirectoryRoute if not self.namespace.isEmpty() else DeclCallability.bareCallOnly
 	end 'declarationCallability'
 
-	// The type-parameter-feed array `scanBodyParamFacts` starts from: the SHARED empty array outside a generic
+	// The type-parameter-feed array `scanBodyFacts` starts from: the SHARED empty array outside a generic
 	// type (no feed is possible, ⚡ no allocation), or a fresh `count`-long array pre-filled with `none` inside
 	// one (which the feed branch then `set`s). Single-assignment, so it needs no cross-block `var`.
 	function initialTypeParamFeeds(count ParamCount, genericScope bool) returns TypeParamFeedArray
@@ -12735,7 +12926,7 @@ export type Parser
 	// records a POSITION and this walks it once the index is whole. That is also what makes the answer
 	// independent of declaration order, which a descriptor parameter must be.
 	//
-	// The same framework `scanBodyParamFacts` uses (`opensBlockAt` / `closesBlockAt`) delimits each method body;
+	// The same framework `scanBodyFacts` uses (`opensBlockAt` / `closesBlockAt`) delimits each method body;
 	// a named `function <ident>` opens one (a closure is `function(` — no name, no `end`). Peek-only: the
 	// cursor is positioned from the site and the `Parser` this runs on parses nothing.
 	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap)
@@ -13918,7 +14109,7 @@ export type Parser
 		while self.kindAt(q) != TokenKind.eof 'walk'
 			let kind = self.kindAt(q)
 			// `<receiver>.push/set/insert(param)` is a DIRECT feed wherever its receiver lives (W10) — probed at
-			// every token, exactly as `scanBodyParamFacts` probes it, so the two seedings cannot disagree about what a
+			// every token, exactly as `scanBodyFacts` probes it, so the two seedings cannot disagree about what a
 			// direct feed is.
 			_ = self.markOpaqueArrayMutatorFeeds(q, paramNames: paramNames, typeParamPositions: typeParamPositions, feeds: directFeeds)
 			if kind == TokenKind.self 'selfToken'
@@ -14295,7 +14486,7 @@ export type Parser
 	// `,`, so the walk reads the list as finished and never sees `item`. A short parameter list is a
 	// well-formed one, so nothing downstream notices: what is lost is the per-parameter OWNERSHIP fact those
 	// walks exist to publish. MEASURED (`specs-shv2/param-default-list-walks.md`): with `item` dropped from
-	// `scanBodyParamFacts`' view, a `Box uses T` constructor's type-parameter FEED went unrecorded, the concrete
+	// `scanBodyFacts`' view, a `Box uses T` constructor's type-parameter FEED went unrecorded, the concrete
 	// call site did not consume the `String` it passed, caller and box both owned it — and the program died
 	// with an access violation, against a control identical but for the default that answered 6.
 	//
@@ -14962,7 +15153,7 @@ export type Parser
 	// tell them apart. `depth` here is relative to the body — 0 is directly inside it — and
 	// `blockDepthAfter` is the same opener/closer rule the caller counts with, so a method's `if`
 	// and `while` nest correctly and its `end` cannot be mistaken for the type's.
-	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
+	function recordScannedType(structs StructLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, innerAliasOut InnerAliasEntryArray, genericAliasOut GenericAliasEntryArray, functionAliasOut FunctionTypeAliasArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, bindingOut TopLevelDeclArray)
 		// The DECLARATION keyword, taken before anything moves the cursor — the position
 		// `Queries.foldConformanceClauses` puts a reader back down on. See `ConformanceClauseDeclSite`.
 		let declStart = self.pos
@@ -15123,7 +15314,7 @@ export type Parser
 				// loop does exactly this, for exactly this reason.
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 				continue
 			end 'isMethod'
 
@@ -15419,6 +15610,7 @@ export type Parser
 		var entries = FuncReturnTypeEntryArray.create()
 		var paramConsumes = ParamConsumeEntryArray.create()
 		var paramReassigns = ParamReassignEntryArray.create()
+		var globalAliasReturns = GlobalAliasReturnEntryArray.create()
 		var paramDefaults = ParamDefaultEntryArray.create()
 		var throwsEntries = ThrowsClauseEntryArray.create()
 		var methodInnerAliasParamOut = MethodInnerAliasParamEntryArray.create()
@@ -15610,7 +15802,7 @@ export type Parser
 				end 'theConformerDeclaresItsOwn'
 
 				match verdict 'verdict'
-					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+					satisfied then self.publishOrShadowExtensionMethod(index, shadowed: shadowed, qualifiedMethodName: qualifiedMethodName, entries: entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 					unmet(unmetInterfaceName, bindingName) then self.foldWithheldExtensionMethod(index, conformer: conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName)
 				end 'verdict'
 				// `recordScannedSignature` leaves the cursor at the method BODY's first token, i.e. inside the
@@ -15625,7 +15817,7 @@ export type Parser
 		// there is one place that decides what a scanned signature means. Everything an extension does not
 		// contribute is passed empty; the type-name interner is this reader's own artifact's, exactly as the
 		// per-file sweep passes its own.
-		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
+		index.foldFile(entries, aliases: RangedTypeAliasArray.create(), functionAliases: functionAliasOut, structs: StructLayoutArray.create(), enums: EnumLayoutArray.create(), genericAliasEntries: genericAliasOut, innerAliasEntries: innerAliasOut, methodInnerAliasParamEntries: methodInnerAliasParamOut, interfaceSites: InterfaceDeclSiteArray.create(), extensionSites: ExtensionDeclSiteArray.create(), conformanceSites: ConformanceClauseDeclSiteArray.create(), scanSites: descriptorScanSiteOut, bindings: TopLevelDeclArray.create(), paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, freeFunctionNames: freeFunctionNameOut, moduleDirectory: index.moduleDirectoryOf(self.filePath), filePath: self.filePath, fileTypeNames: self.artifact.typeNames, isStdlibSource: self.isStdlibSource)
 	end 'foldExtensionDeclarationInto'
 
 	// ⭐⭐ **`extension <Name> [where <constraints>]` — THE ONE READER OF THE HEADER, for the three passes that
@@ -15870,13 +16062,13 @@ export type Parser
 	// The published name is noted so `conformerDeclaresOwnMethod` can tell a conformer's own declaration from
 	// an extension's the next time it is asked — see that door for why the distinction is what keeps the
 	// verdict independent of fold order.
-	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
+	function publishOrShadowExtensionMethod(index ProgramSignatures, shadowed bool, qualifiedMethodName ByteArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray)
 		if shadowed 'theConformerDeclaresItsOwn'
-			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
 			return
 		end 'theConformerDeclaresItsOwn'
 
-		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 		// The DECLARING FILE rides along because a SECOND file publishing this same name is what makes the two
 		// an overload set rather than a duplicate (X-contains) — see `ProgramSignatures.contestedExtensionMethods`.
 		index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath)
@@ -15886,7 +16078,7 @@ export type Parser
 	// is what keeps the cursor where a published method's leaves it (see the call site); the filing is what
 	// lets the call site say something better than "no such method".
 	function foldWithheldExtensionMethod(index ProgramSignatures, conformer ByteArray, methodName ByteArray, clause String, unmetInterfaceName ByteArray, bindingName ByteArray)
-		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+		self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
 		index.recordConditionalExtensionSkip(qualifiedMethodName(conformer, methodName: methodName), skip: ConditionalExtensionSkip.create(conformer, methodName: methodName, clause: clause, unmetInterfaceName: unmetInterfaceName, bindingName: bindingName))
 	end 'foldWithheldExtensionMethod'
 
@@ -15911,7 +16103,7 @@ export type Parser
 	// followed by a character literal — byte-for-byte what `enumBodyEndsAt` recognizes as the ENUM's
 	// terminator. Ungated by depth it would close the enum at the first method's `end`, truncating the case
 	// list and leaving the rest of the method's body to be read as top-level declarations.
-	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
+	function recordScannedEnum(enums EnumLayoutArray, entries FuncReturnTypeEntryArray, paramConsumes ParamConsumeEntryArray, paramReassigns ParamReassignEntryArray, globalAliasReturns GlobalAliasReturnEntryArray, paramDefaults ParamDefaultEntryArray, throwsEntries ThrowsClauseEntryArray, methodInnerAliasParamOut MethodInnerAliasParamEntryArray, freeFunctionNameOut ByteArrayArray, conformanceSiteOut ConformanceClauseDeclSiteArray, isUnion bool)
 		// Read BACKWARDS, before the keyword is consumed — see `recordScannedType` for why the sweep cannot
 		// read this modifier forwards. `declStart` is that same position kept for the whole-program clause
 		// re-read (`recordScannedType`'s twin, and `ConformanceClauseDeclSite`).
@@ -15953,7 +16145,7 @@ export type Parser
 				self.pos = self.enumMethodKeywordIndex(self.pos)
 				depth = depth + 1
 				self.advance()
-				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
+				self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 				continue
 			end 'method'
 
@@ -20911,6 +21103,11 @@ export type Parser
 		// function's SSA space, so a mark carried over would name an unrelated value in the next one.
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
+		// ⭐ **W117: WHAT THE SWEEP PUBLISHED ABOUT *THIS* DECLARATION**, read once here rather than at each
+		// `return` — the answer cannot change while one body is parsed, and the door that reads it sits on the
+		// promotion path of every returned aggregate. Gated on the whole-program flag so a program with no
+		// such function pays one bool instead of a hash per declaration.
+		self.enclosingFunctionMayReturnAGlobalAlias = self.signatures.programReturnsAnImmutableGlobalAlias() and self.signatures.returnsImmutableGlobalAlias(name)
 		// The rebindable-slot reads (W41) are per-function for that same reason — see `rebindableSlotReads`.
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
@@ -22266,6 +22463,7 @@ export type Parser
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
+		self.enclosingFunctionMayReturnAGlobalAlias = false
 		// W41's mark crosses the same boundary and for the same reason — see `rebindableSlotReads`.
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
@@ -25878,6 +26076,16 @@ export type Parser
 	// receiver door already marks a parameter receiver unconditionally (`dispatchMethodOnBinding`), so a
 	// second rule here would be this one fact answered twice.
 	function requireWritableInstance(binding VarInfo, nameTok Token) throws ParseError
+		// ⭐⭐ **THE TAINT DOOR (W117), AND IT NEEDS ITS OWN SENTENCE RATHER THAN E2013's.** `p.x = 5` through a
+		// value that aliases a `let`-declared global is refused on the same terms the mutating-METHOD receiver
+		// one over is (`immutableReceiverNameOf`), off the same one predicate — but E2013 renders "cannot
+		// assign to immutable variable: 'a'", which is FALSE of the `var` this most often is and would send the
+		// author to change the wrong keyword. The remedy here is the global's own declaration, so the message
+		// names that.
+		if self.bindingAliasesAnImmutableGlobal(binding) 'aliasesAnImmutableGlobal'
+			throw ParseError.unsupported(immutableGlobalWriteRefusal(String.from(nameTok.value)), line: nameTok.line, column: nameTok.column)
+		end 'aliasesAnImmutableGlobal'
+
 		if not self.bindingStorageIsWritableHere(binding) 'immutableInstance'
 			throw assignToImmutableError(nameTok)
 		end 'immutableInstance'
@@ -26397,6 +26605,12 @@ export type Parser
 	// its body is).
 	function publishExistentialInstances(func IrFunction)
 		func.valueExistentialInstances = self.valueExistentialInstance
+		// ⭐ **W117's per-value marks travel to SemanticCheck the same way, at the same moment, for the same
+		// reason**: they name ids in THIS function's SSA space, so they must be handed over while that space is
+		// still the current one. The call-site half of the rule cannot run in the parser — whether `bump(a)` is
+		// legal depends on `bump`'s BODY, which may be in another file — which is precisely the split E3019
+		// already has. The shared-empty set rides across unchanged for a function that marked nothing.
+		func.immutableGlobalAliasValues = self.immutableGlobalReads
 	end 'publishExistentialInstances'
 
 	// ⭐⭐ **RECORD THE `with` ARGUMENTS AN EXISTENTIAL VALUE'S DECLARED TYPE NAMED (W57)** — see
@@ -31504,32 +31718,43 @@ export type Parser
 		// ⚠ It is gated on the door because a BINDING is not a hand-off: `var q = t` aliases on both compilers
 		// (see `borrowLaunderDoorIsHandOff`), so copying there would break an agreement rather than fix one.
 		//
-		// ⚠ **IT SITS AHEAD OF THE IMMUTABLE-GLOBAL REFUSAL BELOW, AND THAT ORDER IS SOUND RATHER THAN LUCKY.**
-		// That refusal exists because an INCREF would launder a marked record into an unmarked owned alias; a
-		// COPY launders nothing — the fresh record is a different record, and writing it cannot reach the
-		// global — which is the same reason the `byteRecord` arm above is already ahead of it. So a marked
-		// TUPLE would be copied rather than refused. It cannot arise today (a top-level global cannot hold a
-		// tuple: `let A = (1, 2)` is E2010 in shv2 AND in the bootstrap oracle), and the day one can, copying
-		// is the answer that keeps the global immutable, not the one that needs a new refusal.
+		// ⚠ **IT SITS AHEAD OF THE IMMUTABLE-GLOBAL ARM BELOW, AND THAT ORDER IS SOUND RATHER THAN LUCKY.**
+		// That arm carries the mark across an INCREF because an incref hands back the SAME record; a COPY
+		// carries nothing — the fresh record is a different record, and writing it cannot reach the global —
+		// which is the same reason the `byteRecord` arm above is already ahead of it. So a marked TUPLE is
+		// copied and comes out UNMARKED, which is the right answer and not a hole. It cannot arise today (a
+		// top-level global cannot hold a tuple: `let A = (1, 2)` is E2010 in shv2 AND in the bootstrap oracle),
+		// and the day one can, copying is what keeps the global immutable.
 		if borrowLaunderDoorIsHandOff(door) and self.valueIsCopyableTuple(value) 'copyableTuple'
 			return self.copyTupleValue(value, range: range)
 		end 'copyableTuple'
 
 		if self.valueIsNonTextAggregate(value) 'aggregate'
-			// The one asker of `immutableGlobalReads`, and the one place the answer changes anything: a
-			// borrowed managed aggregate about to become an owned mutable binding. The mark reaches every use
-			// of the read in THIS function — the direct binding, a reassignment, and a ternary/`match` merge
-			// that joins it (`propagateImmutableGlobalReadToPhi`).
+			// ⭐⭐⭐ **THE MARK IS CARRIED ACROSS THE PROMOTION, NOT REFUSED AT IT (W117, ⚖ user 2026-08-14).**
+			// Reading a `let`-declared top-level global and naming the result is legal; MUTATING through what
+			// comes back is the error. So an incref of a marked record mints a value that is marked too, and
+			// the refusal moved to the doors that write: `requireWritableInstance` (`b.n = 5`),
+			// `immutableReceiverNameOf` (`b.push(9)`) and the call-argument check that reads what those two
+			// publish. Before this, the promotion itself was refused — which made a read-only accessor
+			// unwritable and blocked `stdlib/CharacterSet.maxon`'s eleven presets outright.
 			//
-			// ⚠ **IT STOPS AT A CALL, and that bound is stated rather than hoped for.** `g(A)` whose callee
-			// binds its parameter to a `var` still aliases: the parameter is a fresh value in a fresh SSA
-			// space, and whether it may hold an immutable global's record is a property of every CALL SITE,
-			// not of the callee — so the answer is a whole-program fixpoint, the same one the transitive
-			// -consume case waits on, not something a per-function value mark can ever carry. Recorded in
-			// `specs-shv2/static-variables.md` as part of the mutation-enforcement prerequisite, so the gap
-			// is documented where a reader of the rule will look rather than discovered by a user.
+			// ⚠ **THE `returned` DOOR IS THE ONE THAT CAN STILL REFUSE, AND ONLY WHEN THE CALLER HAS NOT BEEN
+			// TOLD.** A promotion at `binding` or `merged` stays in THIS function's SSA space, where the mark
+			// travels with the value; a `return` hands the record to a frame whose marks are its own, so it is
+			// safe exactly when the whole-program sweep published this function as one whose result must be
+			// marked (`enclosingFunctionMayReturnAGlobalAlias`). When it did not — a `return` shape the sweep
+			// deliberately does not recognise, or a CLOSURE body, which has no static callee for any fact to
+			// be published against — the value would escape into a caller with no idea what it holds, and the
+			// original refusal is what stops it. That fallback is what lets the sweep be narrow: a shape it
+			// misses costs this refusal, never a silent acceptance.
 			if self.immutableGlobalReads.contains(value) 'immutableSource'
-				throw ParseError.unsupported(borrowLaunderRefusal(door), line: range.line, column: range.column)
+				if door == BorrowLaunderDoor.returned and not self.enclosingFunctionMayReturnAGlobalAlias 'escapesUntracked'
+					throw ParseError.unsupported(borrowLaunderRefusal(door), line: range.line, column: range.column)
+				end 'escapesUntracked'
+
+				let owned = self.retainBorrowedAggregate(value, range: range)
+				self.markImmutableGlobalRead(owned)
+				return owned
 			end 'immutableSource'
 
 			return self.retainBorrowedAggregate(value, range: range)
@@ -37077,14 +37302,16 @@ export type Parser
 	// tail IS that set. A borrow out of an OUTER binding is laundered too, and that is balanced rather than
 	// wasteful: the incref is released by the phi's single drop.
 	//
-	// ⛔ **EXCEPT FOR A READ OF AN IMMUTABLE GLOBAL, WHERE LAUNDERING IS THE ONE THING FORBIDDEN — and
-	// omitting this clause NARROWED THE LANGUAGE, measured.** `match w 'k' held(h) gives A nothing gives B`
-	// over a `let`-declared top-level array compiled and answered 1 before this rung and was refused after it:
-	// the arm's managed payload binding `h` put the height above the floor, so the give was sent to
-	// `promoteBorrowedMergeEdge`, whose aggregate arm exists precisely to REFUSE an incref of a record the
-	// language calls immutable. It is not an exemption bolted on to dodge that refusal — it is the predicate
-	// stated correctly: a give read out of MODULE storage borrows from a record that outlives every scope, so
-	// it demonstrably cannot point into anything an arm releases and there is nothing here to launder.
+	// ⛔ **EXCEPT FOR A READ OF AN IMMUTABLE GLOBAL, AND THE CLAUSE IS THE PREDICATE STATED CORRECTLY RATHER
+	// THAN AN EXEMPTION**: a give read out of MODULE storage borrows from a record that outlives every scope,
+	// so it demonstrably cannot point into anything an arm releases and there is nothing here to launder.
+	// ⚠ **THAT — AND ONLY THAT — IS WHY IT SURVIVES W117.** The clause arrived with a second reason attached:
+	// omitting it NARROWED THE LANGUAGE, because `match w 'k' held(h) gives A nothing gives B` over a `let`
+	// array put the height above the floor, sent the give to `promoteBorrowedMergeEdge`, and was REFUSED by an
+	// aggregate arm that then refused every incref of an immutable global's record. That arm no longer refuses
+	// (the rule moved to the write), so the second reason is spent and is recorded here as spent — the first
+	// one is what the clause now rests on, alone. Skipping the promotion does not lose the mark either: the
+	// give reaches the phi unchanged, and `propagateImmutableGlobalReadToPhi` reads the marks off the gives.
 	//
 	// An arm holding NOTHING (the overwhelming majority) settles exactly as before, through
 	// `transferGiveToPhi` — a no-op for a borrowed or scalar give.
@@ -53191,12 +53418,47 @@ export type Parser
 	// asks is `bindingStorageIsWritableHere` and not `bindingStorageIsWritable`: a `var` and a PARAMETER
 	// both answer "writable" to the declaration test and both would destroy the loop's borrow.
 	function immutableReceiverNameOf(binding VarInfo, baseTok Token) returns ByteArray
+		// ⭐⭐ **A VALUE THAT ALIASES A `let`-DECLARED GLOBAL IS NOT WRITABLE, WHATEVER ITS BINDING SAYS
+		// (W117).** Asked FIRST, and ahead of the declaration test, because it is the stronger fact: a `var`
+		// holding the record of a global the program declared immutable may no more be written through than a
+		// `let` may. This function's own header already promises exactly this — "EMPTY when it may be written
+		// through" — so the taint belongs here rather than at each caller.
+		//
+		// ⭐ **AND PUBLISHING THE NAME HERE IS ALSO WHAT REFUSES IT AS A CALL ARGUMENT**, at no extra site:
+		// `parseVariableReference` publishes `lastBareBindingImmutableName` through this very function, so
+		// `bump(b)` carries the blame into the op's `argImmutableNames` column and SemanticCheck's call-site
+		// check finds it against the callee's write summary. One answer, three doors.
+		if self.bindingAliasesAnImmutableGlobal(binding) 'aliasesAnImmutableGlobal'
+			return baseTok.value
+		end 'aliasesAnImmutableGlobal'
+
 		if self.bindingStorageIsWritableHere(binding) 'writable'
 			return EmptySourceText
 		end 'writable'
 
 		return baseTok.value
 	end 'immutableReceiverNameOf'
+
+	// ⭐⭐ **DOES THE VALUE THIS NAME DENOTES MAY-ALIAS A `let`-DECLARED TOP-LEVEL GLOBAL'S RECORD (W117)?**
+	// The ONE home of the taint question the write doors ask, over the mark `markImmutableGlobalRead` maintains
+	// — which by the time a binding exists covers a direct read of the global, an owned promotion of one
+	// (`ownedFormOfBorrowedValue` carries it), a merge that joined one (`propagateImmutableGlobalReadToPhi`)
+	// and the result of a call to a function the sweep published as returning one.
+	//
+	// ⛔⛔ **IT IS DELIBERATELY *NOT* FOLDED INTO `bindingStorageIsWritableHere`, AND THAT IS A DISTINCTION THE
+	// FILE ALREADY DRAWS.** That predicate also feeds the REBIND door (`requireMutableBinding`), and a rebind
+	// writes the NAME, not the record: `var b = A` followed by `b = [7]` points `b` at a fresh array and never
+	// touches `A`. Refusing it would be a false reject on a legal program. See `requireMutableBinding`'s own
+	// header for the name-versus-record split this rests on — "the reassignment `x = 5` gives the NAME a new
+	// value; the field store `p.x = 5` leaves the name alone and writes the RECORD it denotes".
+	//
+	// ⚠ A self-field alias's `boundValue` is 0 and 0 is `self`'s own id (`createSelfField` leaves it so), which
+	// is harmless here for a reason worth stating rather than relying on: ValueId 0 is a PARAMETER, and
+	// `markImmutableGlobalRead`'s only producers are a global load, a promotion of one and a call result — all
+	// of them minted above the parameter block, so 0 is never in the set and the coincidence cannot fire.
+	function bindingAliasesAnImmutableGlobal(binding VarInfo) returns bool
+		return self.immutableGlobalReads.contains(binding.boundValue)
+	end 'bindingAliasesAnImmutableGlobal'
 
 	// ⭐⭐ **MAY THE STORAGE THIS NAME DENOTES BE WRITTEN THROUGH?** — and it is NOT `binding.mutable`,
 	// which answers the narrower "may this NAME be rebound?".
@@ -55138,6 +55400,12 @@ export type Parser
 
 		func.writtenParamMask = func.writtenParamMask or receiverOwner
 		func.storageWrittenParamMask = func.storageWrittenParamMask or receiverStorage
+		// ⭐ **W117's COLUMN TAKES THE UNION OF BOTH**, because it asks the widest of the three questions —
+		// "does this body write the record this parameter denotes, at all?" — and each of the other two is
+		// narrowed away from it in a different direction (see `IrFunction.writesThroughParamMask`). Both
+		// answers are already in hand here, decided about the same receiver at the same instant, so the union
+		// costs nothing and cannot fall out of step with either.
+		func.writesThroughParamMask = func.writesThroughParamMask or receiverOwner or receiverStorage
 	end 'noteReceiverWrite'
 
 	// ⭐ **WHICH OF THE ENCLOSING FUNCTION'S PARAMETERS THIS RECEIVER'S RECORD BELONGS TO** — the bits
@@ -57347,6 +57615,12 @@ export type Parser
 			func.storageWrittenParamMask = func.storageWrittenParamMask or paramMaskOfValue(func, value: receiver)
 		end 'arrayFieldStore'
 
+		// ⭐ **W117's COLUMN IS *NOT* ARRAY-GATED, and that is the difference between the two questions.** E3070
+		// tracks array elements because an array element is the only borrow it can lose; W117 tracks whether a
+		// `let` global's record is written, and `total = total + v` on a scalar field of a global's box writes
+		// it exactly as an array store does. Unconditional for that reason, off the same receiver value.
+		func.writesThroughParamMask = func.writesThroughParamMask or paramMaskOfValue(func, value: receiver)
+
 		let valueStart = self.pos
 		let parsed = try self.parseExpression(func, block: block)
 		// The COERCED value is what the store writes — `count = 3` into a `float` field stores the widened
@@ -57556,6 +57830,15 @@ export type Parser
 		if self.typeIsArrayInstance(fieldType) 'arrayFieldStore'
 			func.storageWrittenParamMask = func.storageWrittenParamMask or self.subjectStorageMask(func, subjectName: subjectName)
 		end 'arrayFieldStore'
+
+		// ⭐⭐ **W117's COLUMN, AND THIS IS THE DOOR NEITHER OF THE OTHER TWO RECORDS AT ALL.** `bump(b Box)`
+		// whose body is `b.n = 99` writes the caller's record and, before this line, was summarised as writing
+		// nothing — so `let G = Box.make()` + `bump(G)` compiled and MUTATED a global the program declared
+		// `let` (measured on both compilers, `g 99`). Neither existing mask could be widened to catch it:
+		// E3019's would refuse `let a = Box.make()` + `bump(a)`, which both references ACCEPT, and E3070's is
+		// scoped to array fields on purpose. Ungated by field type, for the reason the sibling door above
+		// carries: a scalar field of a `let` global's box is as much the global as an array field is.
+		func.writesThroughParamMask = func.writesThroughParamMask or self.subjectStorageMask(func, subjectName: subjectName)
 
 		// Parsed AFTER both rejections, so a refused program emits no op — `emitCheckedGlobalStore`'s
 		// discipline, for its reason. The value's start is captured so `emitFieldWrite` can decide, for a
@@ -60099,6 +60382,7 @@ export type Parser
 		// panic or a wrong answer on a user program, which is how three of them shipped at once.
 		let savedIterationLockedBindings = self.iterationLockedBindings
 		let savedImmutableGlobalReads = self.immutableGlobalReads
+		let savedMayReturnAGlobalAlias = self.enclosingFunctionMayReturnAGlobalAlias
 		let savedMergeImmutableBlame = self.mergeImmutableBlame
 		let savedRebindableSlotReads = self.rebindableSlotReads
 		let savedConstructorFeedParams = self.constructorFeedParams
@@ -60232,6 +60516,7 @@ export type Parser
 		self.stringBytesViewOps = sharedEmptyStringBytesViewOps
 		self.immutableGlobalReads = sharedEmptyImmutableGlobalReads
 		self.mergeImmutableBlame = sharedEmptyMergeBlames
+		self.enclosingFunctionMayReturnAGlobalAlias = false
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
 		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
@@ -60437,6 +60722,7 @@ export type Parser
 		self.stringBytesViewOps = savedStringBytesViewOps
 		self.iterationLockedBindings = savedIterationLockedBindings
 		self.immutableGlobalReads = savedImmutableGlobalReads
+		self.enclosingFunctionMayReturnAGlobalAlias = savedMayReturnAGlobalAlias
 		self.mergeImmutableBlame = savedMergeImmutableBlame
 		self.rebindableSlotReads = savedRebindableSlotReads
 		self.constructorFeedParams = savedConstructorFeedParams
@@ -63895,7 +64181,26 @@ export type Parser
 			return bare
 		end 'blamedByName'
 
-		return self.mergeBlameOf(value)
+		let merged = self.mergeBlameOf(value)
+		if not merged.isEmpty() 'blamedByMerge'
+			return merged
+		end 'blamedByMerge'
+
+		// ⭐⭐ **A THIRD SOURCE, AND IT IS THE ONE WITH NO NAME TO GIVE (W117).** `bump(Box.get())` hands a
+		// `let` global's record straight to a callee that writes it, through an expression that is neither a
+		// bare binding nor a merge — so both tests above answer empty and the call would go unchecked. The
+		// value itself knows, because the call's result was marked where the callee's name was still in hand
+		// (`emitCall`), so the mark is asked directly here.
+		//
+		// ⚠ **THE BLAME IS A NOUN AND NOT A NAME, DELIBERATELY.** There is no binding to point at, and
+		// reconstructing the source text of the expression would be a second renderer of what the author wrote.
+		// The sentence it lands in — "cannot pass '…' to function that mutates parameter 'b'" — is true of the
+		// noun, and the LINE is the call's own.
+		if self.immutableGlobalReads.contains(value) 'aliasesAnImmutableGlobal'
+			return ImmutableGlobalAliasBlame
+		end 'aliasesAnImmutableGlobal'
+
+		return EmptySourceText
 	end 'expressionImmutableBlame'
 
 	// Consume and validate an optional `name:` label on the next argument, returning the
@@ -64017,6 +64322,17 @@ export type Parser
 		// `MaxonType` and not the callee name — and the name is the only thing that still knows the spelling,
 		// the alias having erased it. Every direct, method and static call funnels through this one line.
 		self.markDeclaredSurface(result, declared: self.signatures.declaredReturnSurface(callee))
+		// ⭐⭐ **A CALLEE THAT MAY HAND BACK A `let` GLOBAL'S RECORD MARKS ITS RESULT (W117), HERE FOR THE LINE
+		// ABOVE'S REASON**: this is the one place every direct, method and static call passes with the callee's
+		// NAME still in hand, which is what the whole-program answer is keyed by. From here the value is
+		// indistinguishable from a global read taken in this very function — the same mark, so the same write
+		// doors refuse it and the same merge propagation carries it.
+		//
+		// ⚡ Gated on the whole-program flag first: it is false for every program that declares no such
+		// accessor, which is nearly all of them, and it costs one bool where the second half costs a hash.
+		if self.signatures.programReturnsAnImmutableGlobalAlias() and self.signatures.returnsImmutableGlobalAlias(callee) 'mayAliasAnImmutableGlobal'
+			self.markImmutableGlobalRead(result)
+		end 'mayAliasAnImmutableGlobal'
 		// The CALLER SIDE of consume-by-use (P1.4a wave 2, P1.6-B2): an owned argument at a position the callee
 		// CONSUMES — a plain-field store, or a type-parameter field of a concrete instance whose argument owns
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
@@ -65837,7 +66153,7 @@ export type Parser
 		return index < self.tupleAssignEqualsAt(opener) and tupleAssignTargetRebinds(self.tupleAssignTargetAt(index))
 	end 'tupleAssignRebindsANameAt'
 
-	// ⭐ **THE BRACKET BOOKKEEPING BOTH PEEK-ONLY BODY WALKS KEEP** — `scanBodyParamFacts` (the sweep's, over a
+	// ⭐ **THE BRACKET BOOKKEEPING BOTH PEEK-ONLY BODY WALKS KEEP** — `scanBodyFacts` (the sweep's, over a
 	// whole declaration) and `collectCellLocalNames` (the parse's, over one body, ONCE — never over one
 	// binding's remaining scope, which is the Θ(vars × tokens) shape that header rejects by name). They ask
 	// different questions and need the identical state, and a second copy of a push/pop pair is a second chance
@@ -65969,7 +66285,7 @@ export type Parser
 					mentionedInsideAClosure.insert(name)
 				end 'capturedByThatClosure'
 
-				// The tuple-assignment spelling of the same write, for `scanBodyParamFacts`' reason one door
+				// The tuple-assignment spelling of the same write, for `scanBodyFacts`' reason one door
 				// over: a captured local written ONLY by `(x, _) = f()` would otherwise not be `assigned`, so
 				// the closure below would capture it by value and never see the write.
 				if self.rebindsANameAt(q) or self.tupleAssignRebindsANameAt(q, openBrackets: openBrackets) 'reassigned'
@@ -66008,7 +66324,7 @@ export type Parser
 	end 'argumentIsExactlyANameAt'
 
 	// ⭐ **IS THE TOKEN AT `index` A BARE NAME STANDING ALONE AS A CALL ARGUMENT?** — PBR-2's forwarding probe
-	// (`scanBodyParamFacts`), and the token-level twin of what `argWasBareName` asks of the real parse: an
+	// (`scanBodyFacts`), and the token-level twin of what `argWasBareName` asks of the real parse: an
 	// argument names a binding only if it IS that name and nothing else.
 	//
 	// Four conditions, and the bracket one is what tells an ARGUMENT from a grouping paren's contents or a
