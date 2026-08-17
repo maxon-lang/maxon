@@ -2277,8 +2277,9 @@ end 'materializedParamSites'
 // straight-line — a nested block-opener, or a `return`/`throw`/`break`/`continue` — the sound over-approximation
 // of "an opaque feed parameter could be left live at some exit and DROP through `__drop_type_param`", which
 // needs the layout descriptor: a straight-line body unconditionally consumes its feed, so it never drops.
-// `hasArrayMoveOut` (P1.7 slice 3b-vi-a) records whether the body calls `.pop()`/`.remove()` on ANY receiver:
-// the pre-scan cannot resolve the receiver, so any array move-out in a generic instance body is treated as a
+// `hasContainerMoveOut` (P1.7 slice 3b-vi-a, widened to the chain's `removeFirst` by W134's review) records
+// whether the body calls `.pop()`/`.remove()`/`.removeFirst()` on ANY receiver:
+// the pre-scan cannot resolve the receiver, so any container move-out in a generic instance body is treated as a
 // potential OPAQUE move-out whose owned `typeParameter` result drops through the descriptor-gated
 // `__drop_type_param` — reaching that drop through a field (`self.items.pop()`), a local (`let a = self.items`)
 // or a parameter alike, none of which a receiver-blind token scan can tell apart.
@@ -2311,7 +2312,7 @@ type MethodDescriptorScan
 	export let direct as bool
 	export let callees as ByteArrayArray
 	export let hasControlFlow as bool
-	export let hasArrayMoveOut as bool
+	export let hasContainerMoveOut as bool
 	export let reassignsOpaqueField as bool
 	export let hasArrayCopy as bool
 	export let constructsSelfLiteral as bool
@@ -2324,12 +2325,12 @@ type MethodDescriptorScan
 	// parameter from (W58)? Such a call hands the caller a `+1` the caller ADOPTS, and when the receiver's
 	// instance binds that position to the caller's OWN type parameter the adopted value is opaque and is
 	// released through the descriptor-gated `__drop_type_param`. The receiver is not resolved here, for the
-	// reason `hasArrayMoveOut`'s is not; see `ProgramSignatures.methodNameEverReturnsBareTypeParameter`.
+	// reason `hasContainerMoveOut`'s is not; see `ProgramSignatures.methodNameEverReturnsBareTypeParameter`.
 	export let adoptsOpaqueCallResult as bool
 	// ⭐ Does this region MOVE A VALUE INTO A CONTAINER — a `push`/`set`/`insert` call (W60)? The container
 	// slot is the twin of `buildsRecord`'s record slot: a BORROWED opaque `T` stored there takes its
 	// reference through the descriptor's `retainFunc@64`, released by the container's own element walk. The
-	// receiver is not resolved here, for the reason `hasArrayMoveOut`'s is not; see
+	// receiver is not resolved here, for the reason `hasContainerMoveOut`'s is not; see
 	// `Parser.containerMoveInMutatorCallAt`.
 	export let storesContainerElement as bool
 	// ⭐⭐ **THE CROSS-TYPE CALL EDGES — `Array.<member>` NAMES THIS REGION CALLS THAT THE CORPUS, NOT THE
@@ -2340,8 +2341,8 @@ type MethodDescriptorScan
 	export let corpusContainerCallees as ByteArrayArray
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasArrayMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, corpusContainerCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, corpusContainerCallees: corpusContainerCallees, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, corpusContainerCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, corpusContainerCallees: corpusContainerCallees, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -6513,7 +6514,8 @@ end 'articledTypeTagName'
 // IS an integer to the tag rule (`tagIsIntegral`) — so storing a `Shade` in a `Kind` column was refused as
 // *"this `Map`'s value is an int — got a 'int' value"*, a sentence that argues against itself. That is the
 // exact shape `columnValueTagMatches`' header records from the ranged-alias measurement, and it became
-// reachable the moment a `Map`'s VALUE column could carry an identity (`requireOneWordSlotType`).
+// reachable the moment a `Map`'s VALUE column could carry an identity (the one-word slot gate, spelled
+// `requireOneWordSlotType` until W134 inlined it into `requireListElementType` — the chain is its sole asker).
 //
 // The identity comes from `Parser.declaredColumnIdentity`, and that is what MAKES the name a refusal PRINTS
 // and the name the check COMPARED one string — the subject builders and the comparison call the same door
@@ -13005,14 +13007,14 @@ export type Parser
 				// now said directly — the sink `functionFeedsCalleeStorage` asks for is exactly the feed kind
 				// `bindParameters` enrols, so the reservation and the drop cannot disagree.
 				let dropsFeed = scan.hasControlFlow and self.signatures.functionFeedsCalleeStorage(qualified)
-				// ⭐ A method that MOVES an opaque array element OUT (`.pop()`/`.remove()`) drops the owned
+				// ⭐ A method that MOVES an opaque container element OUT (`.pop()`/`.remove()`/`.removeFirst()`) drops the owned
 				// `typeParameter` result at scope exit through `__drop_type_param`, so it needs the descriptor too
 				// (P1.7 slice 3b-vi-a). `not isStatic` for `dropsFeed`'s reason — a generic constructor cannot
 				// materialize a descriptor it does not receive; a static never moves an element out of a shared-body
 				// opaque array (it has no `self` to reach one and no threaded `T` instance). Over-reserving an unused
 				// descriptor for a move-out that turns out concrete is sound; seeded like a direct `sizeof(T)` so the
 				// fixpoint gives every self-caller a descriptor to forward.
-				let movesOutArrayElement = scan.hasArrayMoveOut and not self.functionDeclIsStatic(q)
+				let movesOutContainerElement = scan.hasContainerMoveOut and not self.functionDeclIsStatic(q)
 				// ⭐ A method that COPIES an opaque array element (`.slice()`/`.clone()`/`.append()`) lowers to an
 				// `__managed_*_opaque(arr, …, descriptor)` wrapper reading `copyFunc@32`, so it needs the descriptor too
 				// (P1.7 slice 3b-vi-b-β). `not isStatic` mirrors the sibling opaque signals — a static generic method
@@ -13123,7 +13125,7 @@ export type Parser
 				// answer that must be wrong is wrong upwards, and `solveDescriptorNeeds`' claim that same-named
 				// methods "share one answer" is made true here rather than assumed.
 				let alreadyContributed = directSeeds.contains(qualified)
-				var directlyNeeded = scan.direct or dropsFeed or movesOutArrayElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or storesBorrowedOpaqueElement
+				var directlyNeeded = scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or storesBorrowedOpaqueElement
 				var edges = self.qualifiedSelfCallees(site.typeName, callees: scan.callees)
 				// ⭐⭐ **THE CROSS-TYPE EDGES (ARRG)** — already qualified, because they name a method of
 				// ANOTHER type. Gated exactly as `adoptsOpaqueResult` is and for its reasons: a NON-generic
@@ -13296,7 +13298,7 @@ export type Parser
 		var direct = false
 		var callees = ByteArrayArray.create()
 		var hasControlFlow = false
-		var hasArrayMoveOut = false
+		var hasContainerMoveOut = false
 		var reassignsOpaqueField = false
 		var hasArrayCopy = false
 		// ⭐ **THE LOCALS THIS BODY BINDS TO A `Self{…}` — a call on one of them is a SELF-CALL** (W43b). See
@@ -13354,8 +13356,8 @@ export type Parser
 			// the body is parsed), so ANY move-out is recorded and the caller decides — over-reserving an unused
 			// descriptor for a concrete-array move-out is sound. READ accessors (`get`/`first`/`last`) BORROW and
 			// drop nothing, so they are not move-outs and are excluded.
-			if kind == TokenKind.identifier and self.arrayMoveOutMethodAt(q) 'arrayMoveOut'
-				hasArrayMoveOut = true
+			if kind == TokenKind.identifier and self.containerMoveOutMethodAt(q) 'arrayMoveOut'
+				hasContainerMoveOut = true
 			end 'arrayMoveOut'
 			// A `.slice()`/`.clone()`/`.append()` array COPY lowers, on an OPAQUE array, to an
 			// `__managed_{slice,clone,append}_opaque(arr, …, descriptor)` wrapper that reads the enclosing instance's
@@ -13480,7 +13482,7 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasArrayMoveOut: hasArrayMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, corpusContainerCallees: corpusContainerCallees, endPos: regionEnd)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, corpusContainerCallees: corpusContainerCallees, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
 
 	// ⭐⭐⭐ **THE ONE EDGE IN THE DESCRIPTOR-NEED FIXPOINT THAT LEAVES THE ENCLOSING TYPE (ARRG).** A `.<m>(`
@@ -13616,7 +13618,7 @@ export type Parser
 	// `Map.init` no descriptor to forward and `requireSelfForDescriptorForwarding` refused the call outright.
 	//
 	// ⛔ **IT IS A BINDING TEST AND DELIBERATELY NOT A RECEIVER-BLIND OVER-APPROXIMATION.** The sibling signals
-	// above (`arrayMoveOutMethodAt`, `arrayCopyMethodAt`) DO ignore the receiver, because over-reserving a
+	// above (`containerMoveOutMethodAt`, `arrayCopyMethodAt`) DO ignore the receiver, because over-reserving a
 	// descriptor there is free. It is not free here: a STATIC that needs one and does not return `Self` is a
 	// hard `E2015` (`staticLayoutNeedsSelfReturn` — a static has no descriptor source), so a receiver-blind
 	// edge from a static whose inner-container method merely SHARES A NAME with a descriptor-needing sibling
@@ -13755,7 +13757,7 @@ export type Parser
 	end 'aliasConstructionFollows'
 
 	// Is the token at `q` a `<receiver> . <method> (` call HEAD — a preceding `.` and a following `(`? The shared
-	// shape of the receiver-blind array-method descriptor signals (`arrayMoveOutMethodAt` / `arrayCopyMethodAt`):
+	// shape of the receiver-blind array-method descriptor signals (`containerMoveOutMethodAt` / `arrayCopyMethodAt`):
 	// it distinguishes an array method from a bare free call `pop(…)` without resolving the receiver, which the
 	// pre-scan (running before the body is parsed) cannot do. Each caller pairs this shape with its own
 	// method-name set.
@@ -13763,25 +13765,39 @@ export type Parser
 		return q != 0 and self.kindAt((q - 1) as TokenIndex) == TokenKind.dot and self.kindAt(q + 1) == TokenKind.leftParen
 	end 'isDotMethodCallHeadAt'
 
-	// Is the identifier at `q` the method name of a `<receiver> . pop/remove (` array MOVE-OUT — the descriptor
-	// signal for an opaque element drop (P1.7 slice 3b-vi-a)? The RECEIVER is deliberately NOT resolved: the
-	// pre-scan cannot tell whether it is `self.<opaque-field>`, a local bound to it, or an opaque array parameter
-	// — every one of which reaches the same descriptor-gated `__drop_type_param` drop — so ANY move-out is
-	// signalled and the caller reserves an (at worst unused, always sound) descriptor. `get`/`first`/`last` BORROW
-	// and drop nothing, so they are not move-outs and are not matched.
-	function arrayMoveOutMethodAt(q TokenIndex) returns bool
+	// Is the identifier at `q` the method name of a `<receiver> . pop/remove/removeFirst (` container MOVE-OUT
+	// — the descriptor signal for an opaque element drop (P1.7 slice 3b-vi-a)? The RECEIVER is deliberately NOT
+	// resolved: the pre-scan cannot tell whether it is `self.<opaque-field>`, a local bound to it, or an opaque
+	// container parameter — every one of which reaches the same descriptor-gated `__drop_type_param` drop — so
+	// ANY move-out is signalled and the caller reserves an (at worst unused, always sound) descriptor.
+	// `get`/`first`/`last`/`value` BORROW and drop nothing, so they are not move-outs and are not matched.
+	//
+	// ⚠⚠ **THIS IS THE MOVE-**OUT** TWIN OF `isContainerMoveInMutator`, AND IT WAS NAMED FOR THE `Array` WHILE
+	// ITS TWIN WAS NAMED FOR THE CONTAINER — WHICH IS EXACTLY HOW W134 SHIPPED A HALF-OPEN DOOR (W134 review).**
+	// That rung admitted an opaque-`T` chain and widened the move-IN roster to the chain's four insertions, and
+	// this set — one fact over, "which methods hand an element OUT across the container boundary" — kept the
+	// two `Array` names it had. `__ManagedList.remove` was covered only by accident, because the `Array` spells
+	// `remove` too; the `List` surface's `removeFirst` was not, so
+	// `let gone = try self.chain.removeFirst()` in a shared generic body — a legal program, and the exact twin
+	// of the `self.arr.pop()` that compiles — reserved no descriptor and was REFUSED by
+	// `requireDescriptorForOpaqueDrops` with a sentence naming three shapes, none of them its own. MEASURED
+	// both ways: refused with `removeFirst` alone in the body, correct (exit 0, nothing leaked) as soon as an
+	// unrelated `EChain.create()` in the same body happened to reserve the descriptor — so the machinery was
+	// whole and only this roster was short. It is named for the CONTAINER now, so the next surface that grows
+	// a move-out is asked about here rather than silently omitted.
+	function containerMoveOutMethodAt(q TokenIndex) returns bool
 		if not self.isDotMethodCallHeadAt(q) 'notMethodCall'
 			return false
 		end 'notMethodCall'
 		let name = self.tokenAt(q).value
-		return name.equals(ArrayPopMethod) or name.equals(RemoveMethod)
-	end 'arrayMoveOutMethodAt'
+		return name.equals(ArrayPopMethod) or name.equals(RemoveMethod) or name.equals(ListRemoveFirstMethod)
+	end 'containerMoveOutMethodAt'
 
 	// Is the identifier at `q` the method name of a `<receiver> . slice/clone/append (` array COPY — the
 	// descriptor signal for an OPAQUE array copy (P1.7 slice 3b-vi-b-β)? A preceding `.` and a following `(`
 	// distinguish the array method from a bare free call; the RECEIVER is deliberately NOT resolved (the pre-scan
 	// runs before the body is parsed), so ANY copy is signalled and the caller reserves an (at worst unused,
-	// always sound) descriptor. Shares `isDotMethodCallHeadAt` with `arrayMoveOutMethodAt`, over the COPY names.
+	// always sound) descriptor. Shares `isDotMethodCallHeadAt` with `containerMoveOutMethodAt`, over the COPY names.
 	//
 	// ⚠ **`clone` STAYED ON THIS LIST AFTER ARRH TOOK IT OFF THE `Array` ROSTER, and the two lists ask different
 	// questions.** A roster says what the SURFACE serves; this says what a body might have to reserve a descriptor
@@ -13833,7 +13849,7 @@ export type Parser
 	// the shared `fieldReassignHeadAt`; here the `<ident>` must additionally be a `typeParameter` field of the
 	// enclosing generic type with a managed instantiation (`isManagedOpaqueTypeParamField`). Only such a
 	// reassignment drops the field's old opaque value through `__drop_type_param`, so it is what reserves the
-	// layout descriptor — the field-STORE twin of `arrayMoveOutMethodAt`'s move-out call. Runs in the real parse
+	// layout descriptor — the field-STORE twin of `containerMoveOutMethodAt`'s move-out call. Runs in the real parse
 	// (`Queries.foldDescriptorNeeds`, after the whole-program sweep), so the layout AND the instance registry the
 	// managed-ness gate reads are complete.
 	function opaqueFieldReassignAt(selfPos TokenIndex) returns bool
@@ -13941,7 +13957,7 @@ export type Parser
 	//
 	// **What makes receiver-blindness SOUND is that the array owns its element wherever the array lives** — the
 	// `__managed_decref` walk destroys each element exactly once whether the array is a field of `self`, a local, or
-	// a parameter — which is the same reason `arrayMoveOutMethodAt` and `arrayCopyMethodAt` (the two descriptor
+	// a parameter — which is the same reason `containerMoveOutMethodAt` and `arrayCopyMethodAt` (the two descriptor
 	// signals right above) resolve no receiver either.
 	//
 	// ⚠ **A NON-ARRAY RECEIVER CAN REACH HERE, and the predecessor's header claimed it could not** (*"no
@@ -18271,7 +18287,7 @@ export type Parser
 		// `Set with Element` and `Map with (Key, Value)` are all built by the compiler, so `structOf` finds
 		// nothing for any of them and the arity is validated against the index's own table instead. Their
 		// KEY/ELEMENT-type restrictions are not checked here: those need the RESOLVED argument type and are
-		// enforced where the container is materialized — `requireOneWordSlotType` for a chain's element, and a
+		// enforced where the container is materialized — `requireListElementType` for a chain's element, and a
 		// declared container's own `where` clause for a hash table's key (`checkWhereConstraints`).
 		//
 		// ⚠ One arm for all three, reading `builtinGenericTypeParamCount` — this used to be a per-builtin arm
@@ -21401,7 +21417,7 @@ export type Parser
 	// (corrected at review, both measured on this tip):
 	//
 	//   • `static shrink(xs ElementArray)` doing `xs.pop()` — a drop of a MOVED-OUT element, no `push` anywhere.
-	//     `movesOutArrayElement` carries `not isStatic`, so the static reserves nothing. On `cad4cf30d` this
+	//     `movesOutContainerElement` carries `not isStatic`, so the static reserves nothing. On `cad4cf30d` this
 	//     ABORTED in `LowerMaxonToStd.appendDropTypeParamDescriptor`; here it is refused with a position.
 	//   • a conditional `items.push(item)` inside an `extension Container` on a generic type — a real opaque array,
 	//     a real move-in, and the RESERVATION side is what is missing: the descriptor-need fixpoint ran for a
@@ -49975,7 +49991,7 @@ export type Parser
 	// entry pair: *"`map`'s transform answers a struct value where the container's element is a struct"*, a
 	// sentence that refutes itself. Widening THAT predicate is still the wrong door — the identity belongs on
 	// this side of it, which is why the hash-table column doors ask `elementTypePreserved` too now that a
-	// `Map`'s VALUE column may carry one (`requireOneWordSlotType`).
+	// `Map`'s VALUE column may carry one (the one-word slot gate, now `requireListElementType`).
 	function elementTransformAnswersElement(returned MaxonType, elementType MaxonType) returns bool
 		return elementTypePreserved(maxonTypeTag(elementType), elementIdentity: self.declaredElementIdentity(elementType), otherTag: maxonTypeTag(returned), otherIdentity: self.declaredElementIdentity(returned))
 	end 'elementTransformAnswersElement'
@@ -52453,7 +52469,7 @@ export type Parser
 	//
 	// ⭐⭐ **THE COLUMN TYPE IS RESOLVED FIRST, AND THE COMPARISON IS `elementTypePreserved` — NOT THE BARE TAG
 	// RULE — BECAUSE A `Map`'s VALUE COLUMN MAY NOW CARRY A NOMINAL IDENTITY.** Both halves were forced by the
-	// same widening (`requireOneWordSlotType`), and each is a wrong answer without the other:
+	// same widening (the one-word slot gate, now `requireListElementType`), and each is a wrong answer without the other:
 	//
 	//   • **RESOLVED**: a `Map with (String, UnaryOp)` records its value argument as `named("UnaryOp")` — the
 	//     declaration SWEEP ran before anything could say what the name denoted — and `tagIsIntegral(named)` is
