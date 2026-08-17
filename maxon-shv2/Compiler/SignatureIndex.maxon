@@ -1704,6 +1704,32 @@ export union ConstStructFieldCheck
 	mismatch(got String, expected String)
 end 'ConstStructFieldCheck'
 
+// ⭐ **A SLOT A TOP-LEVEL STRUCT CONSTRUCTION CANNOT FILL, OR THE ABSENCE OF ONE (W116 review)** — a union
+// rather than a nullable pair, for `ConstScalarLookup`'s reason one door over: "there is none" is the answer
+// for every program in the corpus and not a lookup that failed.
+// ⭐ **WHAT A STRUCT-LITERAL SLOT HOLDS, OR THE ADMISSION THAT THIS TIER CANNOT SAY (W116 review)** — see
+// `ProgramSignatures.constFieldSlotType`, and `ConstStructFieldCheck` for what the second arm buys: a door
+// that cannot resolve a name must DECLINE rather than name a type nobody wrote.
+export union ConstFieldSlotLookup
+	holds(slot MaxonType)
+	unresolvableHere
+end 'ConstFieldSlotLookup'
+
+// The slot a lookup resolved to, or `MapError.keyNotFound` for the tier that could not say — so the one
+// caller reads it with the `try … otherwise` its "then do not judge" answer already wants, rather than a
+// `match` whose second arm would have to invent a type to return.
+export function slotTypeHeld(lookup ConstFieldSlotLookup) returns MaxonType throws MapError
+	match lookup 'lookup'
+		holds(slot) then return slot
+		unresolvableHere then throw MapError.keyNotFound
+	end 'lookup'
+end 'slotTypeHeld'
+
+export union ConstConstructionFieldLookup
+	none
+	existentialField(layout StructLayout, index FieldIndex)
+end 'ConstConstructionFieldLookup'
+
 // The result of asking the evaluator for a constant's value. `failed` is not an error to report — the
 // diagnostic is already recorded on the decl that owns it — it is the instruction to STOP.
 export union ConstEvalOutcome
@@ -11826,8 +11852,13 @@ export type ProgramSignatures
 		end 'node'
 	end 'constFactoryCallResultType'
 
-	// ⭐ **THE DECLARED RETURN, WITH A STILL-BARE `named` SETTLED AS ITS OWN DECLARING FILE MEANS IT (W116)** —
-	// and the FIRST reader of `funcReturnDeclFiles`, the map the sweep fills for exactly this and nothing else.
+	// ⭐ **THE DECLARED RETURN, WITH A STILL-BARE `named` SETTLED AS ITS OWN DECLARING FILE MEANS IT (W116).**
+	//
+	// ⚠ It is the SECOND reader of `funcReturnDeclFiles` and not the first: N3's `contestScopedReturnTypeOf`
+	// spends the same column, through `resolveRecordedGenericAliasTypes`, BEFORE this evaluator runs. The two
+	// are not one rule written twice — that one rescopes a CONTESTED generic alias and declines every other
+	// name, this one asks the whole slot cascade — but they read one column, so a name that pass has already
+	// settled arrives here concrete and the tag guard inside `declaredSlotType` leaves it alone.
 	//
 	// It is a no-op for every callee that was here before: a `returns Self` / `returns Database` factory is
 	// recorded already concrete, which is what lets `recordPointerSlotType` panic on a bare `named` rather than
@@ -12251,6 +12282,74 @@ export type ProgramSignatures
 			characterSetValue(chars, _, _) then return self.containerInitializerCall(chars)
 		end 'state'
 	end 'declInitializerCall'
+
+	// ⭐⭐ **DOES THIS DECLARATION CONSTRUCT A STRUCT WITH AN INTERFACE-TYPED FIELD? (W116 review)** — asked by
+	// the REAL PARSE, which is the FIRST door that can answer it and the first that can report it.
+	//
+	// ⛔ **THE CONSTANT EVALUATOR STRUCTURALLY CANNOT SEE ONE, WHICH IS WHY THE REFUSAL IS NOT THERE.** A
+	// swept field annotated with an interface is a bare `named` until `normalizeSweptInterfaceTypes` re-tags
+	// the COLUMN, and `Queries` runs that AFTER `evaluateInitializers` — `RecordedReturnTypeRule`'s header
+	// states that ordering and why neither half of it is free. So the evaluator's field check compared a
+	// SCALAR against a slot nothing had yet called an interface, `Holder{s: 5}` "agreed", and the box got ONE
+	// store into a TWO-slot field: the witness half stayed whatever `__mm_alloc` left there and the first
+	// dispatch through it was an ACCESS VIOLATION (MEASURED, exit 0xC0000005). By the real parse the column is
+	// re-tagged and `raiseBindingFailure` already has the positioned channel, so nothing new is invented —
+	// the refusal is the BODY path's own sentence, through the one producer both throw it from.
+	//
+	// It answers for the WHOLE arena rather than for the root, because a nested construction fills a box the
+	// same way (`Outer{inner: Inner{…}}` is refused earlier by E3076 today, but nothing about THIS rule may
+	// depend on that staying true).
+	//
+	// ⚠ The outcome is read through `declaredOutcome`, NOT off the argument: the real parse hands this a decl
+	// it has just READ from the tokens, whose own outcome field is the `pending` every freshly-read binding
+	// carries. The settled one lives on the SWEEP's record, which is exactly the distinction
+	// `raiseBindingFailure`'s own `declaredOutcome` call makes two lines above the caller.
+	export function existentialFieldOfConstConstruction(decl TopLevelDecl) returns ConstConstructionFieldLookup
+		let outcome = self.declaredOutcome(decl)
+		match outcome 'state'
+			// Every outcome that builds no box from a layout: unevaluated, failed, a folded scalar, a
+			// materialized record, a container, a `CharacterSet` preset. Named as the same bands
+			// `declInitializerCall` walks, so the two readers of this outcome cannot come to disagree about
+			// which of them carries an arena.
+			pending to arrayValue then return ConstConstructionFieldLookup.none
+			containerValue then return ConstConstructionFieldLookup.none
+			characterSetValue then return ConstConstructionFieldLookup.none
+			factoryValue(calls, _, _) then return self.existentialFieldOfArena(calls)
+		end 'state'
+	end 'existentialFieldOfConstConstruction'
+
+	// The walk of the question above, split out because a `match` arm may not open one.
+	function existentialFieldOfArena(calls ConstFactoryCallArray) returns ConstConstructionFieldLookup
+		for call in calls 'eachNode'
+			match call 'node'
+				call then continue
+				construct(typeName, _) then return self.existentialFieldOfStruct(typeName)
+			end 'node'
+		end 'eachNode'
+
+		return ConstConstructionFieldLookup.none
+	end 'existentialFieldOfArena'
+
+	// The first interface-typed slot of one constructed layout. `structOf` is asked rather than
+	// `constStructLayoutOf` because a MISS here is not this door's to panic on: the same name is resolved
+	// again, with the panic, where the box is actually built (`globalStructConstruct`).
+	function existentialFieldOfStruct(typeName ByteArray) returns ConstConstructionFieldLookup
+		match self.structOf(typeName) 'declared'
+			undeclared then return ConstConstructionFieldLookup.none
+			declared(layout) then return self.existentialFieldOfLayout(layout)
+		end 'declared'
+	end 'existentialFieldOfStruct'
+
+	// The tail of the question above, split out for its sibling's reason.
+	function existentialFieldOfLayout(layout StructLayout) returns ConstConstructionFieldLookup
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if maxonTypeTag(self.fieldTypeOf(layout, index: i, into: self.typeNames)) == ValueTypeTag.interfaceRef 'aFatPointerSlot'
+				return ConstConstructionFieldLookup.existentialField(layout, index: i)
+			end 'aFatPointerSlot'
+		end 'eachField'
+
+		return ConstConstructionFieldLookup.none
+	end 'existentialFieldOfLayout'
 
 	// ⭐ **EVERY FACTORY IN THE TREE AND EVERY DECLARED GENERIC AMONG THEIR ARGUMENTS (W41)** — the calls
 	// `ModuleInit.calledFactoryRecord` emits. The list is built from the SAME arena `globalInitCalls` resolves
@@ -12676,12 +12775,27 @@ export type ProgramSignatures
 	// It is the const twin of `Parser.requireFieldType`, which cannot serve: that one reads a `ValueId` out of
 	// the parser's value columns, and a top-level initializer mints no values at all.
 	//
-	// ⚠⚠ **IT COMPARES THE STORAGE TAG, PLUS THE STRUCT'S NAME WHERE THE TAG IS `structRef` — AND THAT LIMIT
-	// IS MEASURED RATHER THAN CHOSEN.** The tag is what makes the STORE itself right or wrong: a pointer
-	// written into a scalar slot reads back as a number and a number written into a managed slot is a wild
-	// pointer, which is the class `Pair{a: "hi"}` falls in (E3005 on the oracle, MEASURED). `structRef` earns
-	// its second half because a nested node returning the WRONG struct is the same hazard wearing a matching
-	// tag, and both sides' ids are minted in `self.typeNames`.
+	// ⚠⚠ **IT COMPARES THE DENOTED DECLARED TAG, PLUS THE STRUCT'S NAME WHERE THE TAG IS `structRef` — AND
+	// THAT LIMIT IS MEASURED RATHER THAN CHOSEN.** The tag is what makes the STORE itself right or wrong: a
+	// pointer written into a scalar slot reads back as a number and a number written into a managed slot is a
+	// wild pointer, which is the class `Pair{a: "hi"}` falls in (E3005 on the oracle, MEASURED). `structRef`
+	// earns its second half because a nested node returning the WRONG struct is the same hazard wearing a
+	// matching tag, and both sides' ids are minted in `self.typeNames`.
+	//
+	// ⛔⛔ **IT COMPARED THE *STORAGE WIDTH* AND THAT ADMITTED A SLOT KIND NOTHING MAY FILL** (W116 review).
+	// `slotStorageType` is the width a `storeIndirect` MOVES, and a width is a LOSSY PROJECTION of a type: it
+	// collapses a declared `enum`/`union` to `declaredAggregateSlotWidth()`, so `Paint{c: 7}` against
+	// `let c as Color` "agreed", compiled, and stored a 7 no `Color` names — MEASURED on this tree, and the
+	// runnable oracle refuses the same program (E3005). `constFieldSlotType` below answers with what the
+	// field DECLARES instead, which refuses it, and leaves every width-equal case it already admitted
+	// exactly where it was.
+	//
+	// ⚠ **AND WHERE IT CANNOT RESOLVE THE SLOT, IT DECLINES RATHER THAN GUESSING.** The width's recovery for
+	// an unresolvable name was `integer`, and a rendered mismatch then said the slot held `'int'` for a field
+	// declared `Sized` — a diagnostic naming a type the program does not contain. `unresolvableHere` says so
+	// instead, and the two things that name IS reach it with the positions and the registries this door
+	// lacks: `TypeResolution`'s E3011 for a name no file declares, and
+	// `existentialFieldOfConstConstruction`'s E2015 for the interface case, at the real parse.
 	//
 	// ⛔ **A GENERIC INSTANCE IS DELIBERATELY *NOT* COMPARED BY IDENTITY, and comparing it would REFUSE A
 	// PROGRAM THE ORACLE RUNS.** A top-level array literal is typed by the canonical instance its ELEMENT KIND
@@ -12690,7 +12804,11 @@ export type ProgramSignatures
 	// fold tier's own typing rule and not something this door may overrule; the argument position has never
 	// compared them either.
 	export function constStructFieldCheck(layout StructLayout, index FieldIndex, value ConstFactoryArgumentValue, calls ConstFactoryCallArray, declName ByteArray, elementFilePath FilePath) returns ConstStructFieldCheck
-		let slot = slotStorageType(self, declared: self.fieldTypeOf(layout, index: index, into: self.typeNames), typeNames: self.typeNames, readerFilePath: layout.declFilePath)
+		let lookup = self.constFieldSlotType(layout, index: index)
+		let slot = try slotTypeHeld(lookup) otherwise 'thisTierCannotSay'
+			return ConstStructFieldCheck.agrees
+		end 'thisTierCannotSay'
+
 		let held = self.constFieldValueType(value, calls: calls, declName: declName, elementFilePath: elementFilePath)
 		if maxonTypeTag(slot) == maxonTypeTag(held) and (maxonTypeTag(slot) != ValueTypeTag.structRef or typeNameIdOf(slot) == typeNameIdOf(held)) 'fits'
 			return ConstStructFieldCheck.agrees
@@ -12705,6 +12823,67 @@ export type ProgramSignatures
 
 		return ConstStructFieldCheck.mismatch(maxonTypeName(held, typeNames: self.typeNames), expected: maxonTypeName(slot, typeNames: self.typeNames))
 	end 'constStructFieldCheck'
+
+	// ⭐⭐ **THE TYPE A FIELD'S CONSTANT IS CHECKED AGAINST — WHAT THE FIELD *DECLARES*, resolved through the
+	// ONE cascade (`declaredSlotType`), and deliberately NOT `slotStorageType`'s width (W116 review).** The
+	// two answer different questions and the box needs both: the width is what the `storeIndirect` MOVES and
+	// stays `globalStructConstruct`'s, while what may legally stand in the slot is an IDENTITY question the
+	// width cannot carry — see `constStructFieldCheck`'s header for the two wrong answers that proved it.
+	//
+	// ⚠ **A STILL-BARE `named` COMING BACK OUT OF THE CASCADE IS AN ANSWER, AND WHICH ANSWER IS
+	// `declaredFormOf`'s TO SAY** — the very registry `denotedSlotType` consulted to decide to leave it
+	// alone, asked again rather than guessed at, so this door cannot come to disagree with that one about
+	// what a name is.
+	function constFieldSlotType(layout StructLayout, index FieldIndex) returns ConstFieldSlotLookup
+		let denoted = self.declaredSlotType(self.fieldTypeOf(layout, index: index, into: self.typeNames), into: self.typeNames, slotScopeFilePath: layout.declFilePath)
+		if maxonTypeTag(denoted) != ValueTypeTag.named 'denotesAConcreteType'
+			return ConstFieldSlotLookup.holds(denoted)
+		end 'denotesAConcreteType'
+
+		let name = self.nameOfId(typeNameIdOf(denoted))
+		let form = try self.declaredFormOf(name) otherwise 'noFileDeclaresIt'
+			// A name no registry this tier can see holds. TWO programs land here and neither is this door's
+			// to judge: a field type NO file declares (E3011's subject, reported by `TypeResolution` against
+			// the merged registry — the authority), and an INTERFACE-typed field, whose registry is filled
+			// after the constant evaluator has run. The sweep is the tolerant half, and a verdict invented
+			// here would MASK whichever diagnostic actually names the mistake.
+			return ConstFieldSlotLookup.unresolvableHere
+		end 'noFileDeclaresIt'
+
+		return self.constFieldSlotTypeOfForm(form, name: name, denoted: denoted)
+	end 'constFieldSlotType'
+
+	// The tail of the question above, split out because a `match` arm may not open one.
+	function constFieldSlotTypeOfForm(form TypeDeclKind, name ByteArray, denoted MaxonType) returns ConstFieldSlotLookup
+		match form 'form'
+			// An enum/union name IS its type (`denotedSlotType`'s own words — a payload-free enum's value is
+			// its i64 tag), so it is compared AS the `named` it is and every constant mismatches it by tag.
+			// That is the verdict the body path reaches through `requireFieldType`, in the same E3005.
+			enumType to unionType then return ConstFieldSlotLookup.holds(denoted)
+			// ⛔ **UNREACHABLE WHILE THE CONSTANT EVALUATOR IS THIS DOOR'S ONLY ASKER, AND SAYING SO IS THE
+			// POINT.** `self.interfaces` is filled by `Queries.foldInterfaceDeclarations`, which runs AFTER
+			// `evaluateInitializers` — `RecordedReturnTypeRule.declaredStruct`'s header states that ordering
+			// and why neither position is free — so an interface name is answered by NO form at all here and
+			// takes the `unresolvableHere` arm above. That is exactly why an interface-typed field is refused
+			// at the REAL PARSE instead (`existentialFieldOfConstConstruction`). Should this door ever gain an
+			// asker on the far side of that fold, DECLINING is still the right answer and not a second-best
+			// one: the refusal that names a fat pointer belongs to the door that can see one.
+			interfaceType then return ConstFieldSlotLookup.unresolvableHere
+			// An INTEGER ranged alias, the one alias form the cascade deliberately leaves bare: its NAME
+			// carries the range and the signedness, and the RANGE is checked on its own
+			// (`Parser.requireConstScalarSuitsFieldRange`). A FLOAT one never arrives — `rangedAliasSlotType`
+			// re-tags it — so what this admits is exactly an integer.
+			rangedAlias then return ConstFieldSlotLookup.holds(MaxonType.integer)
+			// A GENERIC alias reaches here only when the cascade DECLINED to re-tag it, which
+			// `slotTypeOfGenericAlias` does for exactly one shape — an instance over an `interface` base, i.e.
+			// an existential wearing an alias's spelling. So it declines for the arm above's reason, and by
+			// the same argument: a slot this door could not resolve is not a slot it may judge.
+			genericAlias then return ConstFieldSlotLookup.unresolvableHere
+			structType then panic("ProgramSignatures.constFieldSlotTypeOfForm: field type '{String.from(name)}' is a declared `type` and still reads `named` — `denotedSlotType`'s `structType` arm re-tags every one of them to `structRef`, so arriving here means that arm did not run for a name the same registry answers for")
+			functionAlias then panic("ProgramSignatures.constFieldSlotTypeOfForm: field type '{String.from(name)}' is a function alias and still reads `named` — `denotedSlotType`'s `functionAlias` arm re-tags every one of them to `function`, unconditionally")
+			tupleAlias then panic("ProgramSignatures.constFieldSlotTypeOfForm: field type '{String.from(name)}' is a tuple alias and still reads `named` — `denotedSlotType`'s `tupleAlias` arm re-tags every one of them to the canonical tuple's `structRef`, unconditionally")
+		end 'form'
+	end 'constFieldSlotTypeOfForm'
 
 	// The type one field VALUE is minted at — a nested node's result, or what the constant folded to. It is
 	// `globalInitValue`'s type half asked on its own, because the check runs at PARSE time where no record may

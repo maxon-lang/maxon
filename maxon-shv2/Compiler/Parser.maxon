@@ -16790,6 +16790,17 @@ export type Parser
 			throw ParseError.duplicateTopLevelDeclaration(String.from(decl.name), line: decl.nameLine, column: decl.nameColumn)
 		end 'redeclared'
 
+		// ⭐⭐ **A STRUCT CONSTRUCTION FILLING AN INTERFACE-TYPED FIELD IS REFUSED HERE, AND HERE IS THE
+		// EARLIEST DOOR THAT CAN (W116 review).** The constant evaluator cannot see such a field at all — the
+		// swept column is still a bare `named` while it runs — so its slot check compared a scalar against a
+		// slot nothing had yet called an interface and admitted a box with an uninitialized witness half.
+		// `ProgramSignatures.existentialFieldOfConstConstruction` carries the measurement; the SENTENCE is the
+		// body path's own, through the one producer both doors throw it from.
+		match self.signatures.existentialFieldOfConstConstruction(decl) 'existentialField'
+			none then break 'existentialField'
+			existentialField(layout, index) then throw self.existentialFieldStoreUnsupported(layout, index: index, line: decl.nameLine, column: decl.nameColumn)
+		end 'existentialField'
+
 		// ⚠ The outcome is bound to a LOCAL before the match, and the match's payload is bound to a
 		// second one before the throw. Neither is style. Matching the CALL directly and throwing the
 		// arm's binding —
@@ -44923,12 +44934,25 @@ export type Parser
 	// in the corpus does.
 	function widenValueIntoExistentialField(layout StructLayout, index FieldIndex, fieldType MaxonType, value ValueId, anchor Token) returns ValueId throws ParseError
 		if self.tagOf(value) != ValueTypeTag.interfaceRef 'aConcreteConformer'
-			throw ParseError.unsupported("storing a value of a CONCRETE type into the interface-typed field '{self.fieldSiteName(layout, index: index)}' — {ExistentialIsFatPointerReason}, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type", line: anchor.line, column: anchor.column)
+			throw self.existentialFieldStoreUnsupported(layout, index: index, line: anchor.line, column: anchor.column)
 		end 'aConcreteConformer'
 
 		try self.requireManagedValueMatches(fieldType, isString: false, value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 		return value
 	end 'widenValueIntoExistentialField'
+
+	// ⭐ **THE ONE SPELLING OF "NOTHING THIS TIER CAN PRODUCE MAY FILL AN INTERFACE-TYPED FIELD" (W116
+	// review)** — raised by the BODY's literal, where the value is a concrete conformer, and by a TOP-LEVEL
+	// struct construction, where there is no value at all because a constant evaluator mints none. The two
+	// doors have different reasons for arriving and the identical reason for being refused, which is the
+	// whole of what the sentence says; written twice it would be one wall described two ways, free to drift
+	// into two.
+	//
+	// It takes a POSITION rather than a token because its second caller has no token to offer: a top-level
+	// binding is refused at its declared NAME, which the decl carries as a line and a column.
+	function existentialFieldStoreUnsupported(layout StructLayout, index FieldIndex, line LineNumber, column ColumnNumber) returns ParseError
+		return ParseError.unsupported("storing a value of a CONCRETE type into the interface-typed field '{self.fieldSiteName(layout, index: index)}' — {ExistentialIsFatPointerReason}, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type", line: line, column: column)
+	end 'existentialFieldStoreUnsupported'
 
 	// The `<Struct>.<field>` label a managed-field type mismatch names.
 	function fieldSiteName(layout StructLayout, index FieldIndex) returns String

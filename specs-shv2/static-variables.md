@@ -491,6 +491,106 @@ end 'main'
 error E3005: <fragment>:7:27: Value 500 is outside the range of 'Percent' (int(0 to 100))
 ```
 
+### The slot a field's constant must suit is the one the field DECLARES, never the width it is STORED at
+
+⛔ **A STORE WIDTH IS A LOSSY PROJECTION OF A TYPE, AND TWO SLOT KINDS PROJECT ONTO A BARE MACHINE WORD.** A
+declared `enum`/`union` field stores its tag in one word and an `interface`-typed field accesses each half of
+its fat pointer as one word, so a check written against the WIDTH sees `int` at both and admits any integer
+constant. Neither admission is a refusal the language makes anywhere else: the same two literals written in a
+method BODY are refused, and the runnable oracle refuses the enum one too.
+
+The two cases below are shv2-worded for the reason the pair above is — the bootstrap says
+`cannot assign a value of type 'int' to field 'c' of 'Paint', which holds 'enum'` for the first and cannot
+express the second at all (it fails the same program with an internal `E9001`, its own defect). The enum
+refusal's CODE agrees; only the sentence does not.
+
+<!-- test: error.static-struct-literal-enum-field -->
+```maxon
+typealias Count = int(0 to u64.max)
+
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+type Paint
+	export let c as Color
+	export let n as Count
+
+	static var one = Paint{c: 7, n: 1}
+
+	export static function get() returns Paint
+		return Paint.one
+	end 'get'
+end 'Paint'
+
+function main() returns ExitCode
+	let p = Paint.get()
+	print("{p.n}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:14:25: cannot assign 'int' to variable 'Paint.c' of type 'Color'
+```
+
+An `interface`-typed field is refused OUTRIGHT rather than by a comparison, and the refusal is the body
+path's own sentence (`Parser.widenValueIntoExistentialField`): the second word of a fat pointer is the
+address of the conformer's witness table, which only a widening SITE can name, and a top-level initializer
+mints no values at all — so no constant this evaluator can produce carries one. Left admitted, the box got
+ONE store into a TWO-slot field and the witness half stayed whatever `__mm_alloc` left there; the first
+dispatch through it was an access violation, MEASURED.
+
+⚠ **IT IS ANCHORED AT THE DECLARED NAME, not at the field value, and that is forced rather than chosen.**
+The constant evaluator cannot see such a field at all: a swept interface annotation is a bare `named` until
+`normalizeSweptInterfaceTypes` re-tags the column, and that runs AFTER the evaluator. The first door that
+sees the re-tagged column and has a positioned diagnostic is the real parse's own binding-failure door, and
+what it holds is the declaration's name. The same program with the value written as a conforming
+`Square.create(4)` is refused identically, in the same words and at the same position — the slot is what
+makes it impossible, not the value.
+
+<!-- test: error.static-struct-literal-interface-field -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+interface Sized
+	function size() returns Integer
+end 'Sized'
+
+type Square implements Sized
+	export let side as Integer
+
+	export static function create(side Integer) returns Self
+		return Self{side: side}
+	end 'create'
+
+	export function size() returns Integer
+		return self.side * self.side
+	end 'size'
+end 'Square'
+
+type Holder
+	export let s as Sized
+	export let tag as Integer
+
+	static var one = Holder{s: 5, tag: 77}
+
+	export static function get() returns Holder
+		return Holder.one
+	end 'get'
+end 'Holder'
+
+function main() returns ExitCode
+	let h = Holder.get()
+	print("{h.s.size()} {h.tag}")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:24:13: Unsupported: storing a value of a CONCRETE type into the interface-typed field 'Holder.s' — a value held at an interface type is a two-word fat pointer `(value, witness)`, and the second word is the address of the conformer's witness table, which only a widening SITE can name. A field store has no callee whose declared parameter types could name it, unlike a call argument. Pass the value to a named function taking the interface as a PARAMETER and store THAT parameter (which arrives already widened), or declare the field at a concrete type
+```
+
 <!-- test: static-factory-initializer -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
