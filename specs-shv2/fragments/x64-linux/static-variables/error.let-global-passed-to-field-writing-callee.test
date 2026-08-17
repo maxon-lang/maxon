@@ -1,0 +1,24 @@
+// Test: error.let-global-passed-to-field-writing-callee
+typealias Count = int(0 to u64.max)
+
+type Box
+	export var n as Count
+
+	export static function make() returns Box
+		return Box{n: 1}
+	end 'make'
+end 'Box'
+
+let G = Box.make()
+
+function bump(b Box)
+	b.n = 99
+end 'bump'
+
+function main() returns ExitCode
+	bump(G)
+	return G.n as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:19:2: cannot pass 'G' to function that mutates parameter 'b' (in main)

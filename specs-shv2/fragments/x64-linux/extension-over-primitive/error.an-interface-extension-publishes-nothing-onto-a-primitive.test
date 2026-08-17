@@ -1,0 +1,26 @@
+// Test: error.an-interface-extension-publishes-nothing-onto-a-primitive
+typealias Integer = int(i64.min to i64.max)
+
+interface Doubler
+	function doubled() returns Integer
+end 'Doubler'
+
+extension int implements Doubler
+	export function doubled() returns Integer
+		return self * 2
+	end 'doubled'
+end 'int'
+
+extension Doubler
+	export function quadrupled() returns Integer
+		return self.doubled() * 2
+	end 'quadrupled'
+end 'Doubler'
+
+function main() returns ExitCode
+	let n = 5
+	return n.quadrupled() as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:22:11: Unsupported: 'int' has no method named 'quadrupled' — a builtin-typed receiver supplies `hash`, `equals`, `compare`, `toString`, `clone`

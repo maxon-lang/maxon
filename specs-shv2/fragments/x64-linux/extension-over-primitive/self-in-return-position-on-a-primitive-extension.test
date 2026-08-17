@@ -1,0 +1,51 @@
+// Test: self-in-return-position-on-a-primitive-extension
+extension int
+	export function twin() returns Self
+		return self + 1
+	end 'twin'
+end 'int'
+
+function main() returns ExitCode
+	let n = 40
+	return n.twin().twin() as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @int.twin {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 1
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 40
+    x64.callDirect int.twin
+    x64.movRegReg rcx, r8
+    x64.callDirect int.twin
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

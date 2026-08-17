@@ -1,0 +1,25 @@
+// Test: error.let-global-alias-carried-by-a-loop
+typealias Names = Array with String
+
+let A = ["a", "b"]
+
+function expose() returns Names
+	return A
+end 'expose'
+
+function grow(xs Names) returns int
+	xs.push("zz")
+	return xs.count()
+end 'grow'
+
+function main() returns ExitCode
+	var b = ["q"]
+	for _ in 0 upto 2 'each'
+		b = expose()
+	end 'each'
+	let n = grow(b)
+	return (A.count() + n) as ExitCode
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:20:10: cannot pass 'b' to function that mutates parameter 'xs' (in main)
