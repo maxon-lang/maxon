@@ -1,0 +1,116 @@
+// Test: terminator-ends-its-own-block
+function classify(x ExitCode) returns ExitCode
+	if x > 5 'big'
+		return 1
+	end 'big'
+	var seen = 0
+	var i = 0
+	while i < 4 'scan'
+		i = i + 1
+		if i == 2 'hit'
+			continue
+		end 'hit'
+		seen = seen + 1
+	end 'scan'
+	return seen
+end 'classify'
+
+function main() returns ExitCode
+	if classify(9) != 1 'earlyReturnLost'
+		return 8
+	end 'earlyReturnLost'
+
+	return classify(0)
+end 'main'
+---
+ExitCode: 3
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc less, __rc_panic#9
+    x64.jmp __rc_chk#10
+  __rc_chk#10:
+    x64.cmpRegImm32 rcx, 255
+    x64.jcc greater, __rc_panic#9
+    x64.jmp __rc_ok#8
+  __rc_panic#9:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#8:
+    x64.cmpRegImm32 rcx, 5
+    x64.jcc greater, big
+    x64.jmp ifcont#2
+  big:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rax, 0
+    x64.jmp whilehdr
+  whilehdr:
+    x64.cmpRegImm32 rax, 4
+    x64.jcc less, scan
+    x64.jmp whileexit
+  scan:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, hit
+    x64.jmp ifcont#7
+  hit:
+    x64.jmp whilehdr
+  ifcont#7:
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.jmp whilehdr
+  whileexit:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic#12
+    x64.jmp __rc_chk#13
+  __rc_chk#13:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic#12
+    x64.jmp __rc_ok#11
+  __rc_panic#12:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok#11:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 9
+    x64.callDirect classify
+    x64.cmpRegImm32 r8, 1
+    x64.jcc notEqual, earlyReturnLost
+    x64.jmp ifcont
+  earlyReturnLost:
+    x64.movRegImm32 r8, 8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rcx, 0
+    x64.callDirect classify
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

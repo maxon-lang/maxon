@@ -1,0 +1,146 @@
+// Test: conformance-clause-order-does-not-change-extensions
+typealias Integer = int(i64.min to i64.max)
+
+interface Tagged uses Tag
+	function tag() returns Tag
+end 'Tagged'
+
+interface Held uses Item
+	function held() returns Item
+end 'Held'
+
+extension Held
+	export function heldPlusOne() returns Item
+		return self.held() + 1
+	end 'heldPlusOne'
+end 'Held'
+
+type MarkerFirst implements Tagged with Integer, Held with Integer
+	export var n as Integer
+
+	export static function of(n Integer) returns Self
+		return MarkerFirst{n: n}
+	end 'of'
+
+	export function tag() returns Integer
+		return self.n
+	end 'tag'
+
+	export function held() returns Integer
+		return self.n
+	end 'held'
+end 'MarkerFirst'
+
+type HeldFirst implements Held with Integer, Tagged with Integer
+	export var n as Integer
+
+	export static function of(n Integer) returns Self
+		return HeldFirst{n: n}
+	end 'of'
+
+	export function tag() returns Integer
+		return self.n
+	end 'tag'
+
+	export function held() returns Integer
+		return self.n
+	end 'held'
+end 'HeldFirst'
+
+function main() returns ExitCode
+	let a = MarkerFirst.of(20)
+	let b = HeldFirst.of(21)
+	return a.heldPlusOne() + b.heldPlusOne()
+end 'main'
+---
+ExitCode: 43
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @MarkerFirst.heldPlusOne {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect MarkerFirst.held
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @HeldFirst.heldPlusOne {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect HeldFirst.held
+    x64.leaRegRegImm32 r8, r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @MarkerFirst.held {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @HeldFirst.held {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 r8, [rcx + 0]
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 48
+    x64.movRegImm32 rax, 20
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 21
+    x64.leaRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], rax
+    x64.callDirect MarkerFirst.heldPlusOne
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect HeldFirst.heldPlusOne
+    x64.leaRegRegReg r8, r12, r8
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

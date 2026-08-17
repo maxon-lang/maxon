@@ -1,0 +1,185 @@
+// Test: escape-into-a-module-level-var
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function churn(seed Integer) returns Integer
+	let v0 = seed + 1
+	let v1 = seed + 2
+	let v2 = seed + 3
+	let v3 = seed + 4
+	let v4 = seed + 5
+	let v5 = seed + 6
+	let v6 = seed + 7
+	let v7 = seed + 8
+	let v8 = seed + 9
+	let v9 = seed + 10
+	let v10 = seed + 11
+	let v11 = seed + 12
+	let v12 = seed + 13
+	let v13 = seed + 14
+	let v14 = seed + 15
+	let v15 = seed + 16
+	return v0 + v1 + v2 + v3 + v4 + v5 + v6 + v7 + v8 + v9 + v10 + v11 + v12 + v13 + v14 + v15
+end 'churn'
+
+var kept = Point.create(0, y: 0)
+
+function stash()
+	let p = Point.create(11, y: 22)
+	kept = p
+end 'stash'
+
+function main() returns ExitCode
+	stash()
+	_ = churn(1000)
+	return kept.x
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __data_kept@0 = i64 0
+  __slab_cursor@8 = i64 0
+  __slab_end@16 = i64 0
+  __mm_alloc_count@24 = i64 0
+}
+
+func @Point.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @churn {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 16
+    x64.leaRegRegImm32 rax, rcx, 1
+    x64.leaRegRegImm32 rdx, rcx, 2
+    x64.leaRegRegImm32 rsi, rcx, 3
+    x64.leaRegRegImm32 rdi, rcx, 4
+    x64.leaRegRegImm32 r8, rcx, 5
+    x64.leaRegRegImm32 r9, rcx, 6
+    x64.leaRegRegImm32 r10, rcx, 7
+    x64.leaRegRegImm32 r11, rcx, 8
+    x64.leaRegRegImm32 rbx, rcx, 9
+    x64.leaRegRegImm32 r12, rcx, 10
+    x64.leaRegRegImm32 r13, rcx, 11
+    x64.leaRegRegImm32 r14, rcx, 12
+    x64.leaRegRegImm32 r15, rcx, 13
+    x64.storeSlotReg slot0, r15
+    x64.leaRegRegImm32 r15, rcx, 14
+    x64.storeSlotReg slot1, r15
+    x64.leaRegRegImm32 r15, rcx, 15
+    x64.leaRegRegImm32 rcx, rcx, 16
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, rsi
+    x64.leaRegRegReg rax, rax, rdi
+    x64.leaRegRegReg rax, rax, r8
+    x64.leaRegRegReg rax, rax, r9
+    x64.leaRegRegReg rax, rax, r10
+    x64.leaRegRegReg rax, rax, r11
+    x64.leaRegRegReg rax, rax, rbx
+    x64.leaRegRegReg rax, rax, r12
+    x64.leaRegRegReg rax, rax, r13
+    x64.leaRegRegReg rax, rax, r14
+    x64.loadRegSlot rdx, slot0
+    x64.leaRegRegReg rax, rax, rdx
+    x64.loadRegSlot rdx, slot1
+    x64.leaRegRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rax, r15
+    x64.leaRegRegReg r8, rax, rcx
+    x64.epilogue 16
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @stash {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 11
+    x64.movRegImm32 rdx, 22
+    x64.callDirect Point.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.leaRegGlobal rax, __data_kept
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.callDirect __mm_decref
+    x64.leaRegGlobal rax, __data_kept
+    x64.storeBaseDispReg.word64 [rax + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect stash
+    x64.movRegImm32 rcx, 1000
+    x64.callDirect churn
+    x64.leaRegGlobal rax, __data_kept
+    x64.loadRegBaseDisp.word64 rax, [rax + 0]
+    x64.loadRegBaseDisp.word64 r8, [rax + 0]
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

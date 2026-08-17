@@ -1,0 +1,117 @@
+// Test: reference-identity-is-never-promoted
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x as Integer
+	export var y as Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	let a = Point.create(1, y: 2)
+	let b = Point.create(1, y: 2)
+	let c = a
+	var score = 0
+	if a is b 'distinctRecordsAreNotIdentical'
+		score = score + 1
+	end 'distinctRecordsAreNotIdentical'
+	if a is c 'anAliasIsIdentical'
+		score = score + 40
+	end 'anAliasIsIdentical'
+	return score + 2
+end 'main'
+---
+ExitCode: 42
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Point.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.callDirect Point.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 2
+    x64.callDirect Point.create
+    x64.movRegImm32 rax, 0
+    x64.cmpRegReg rbx, r8
+    x64.jcc equal, distinctRecordsAreNotIdentical
+    x64.jmp critsplit#8
+  distinctRecordsAreNotIdentical:
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp ifcont#2
+  critsplit#8:
+    x64.jmp ifcont#2
+  ifcont#2:
+    x64.cmpRegReg rbx, rbx
+    x64.jcc equal, anAliasIsIdentical
+    x64.jmp critsplit#9
+  anAliasIsIdentical:
+    x64.leaRegRegImm32 rax, rax, 40
+    x64.jmp ifcont#4
+  critsplit#9:
+    x64.jmp ifcont#4
+  ifcont#4:
+    x64.leaRegRegImm32 r12, rax, 2
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r12, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

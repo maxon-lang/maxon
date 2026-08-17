@@ -1,0 +1,48 @@
+// Test: error.the-suppression-may-not-read-a-weaker-index-than-the-report
+typealias ExitCode = int(0 to 125)
+typealias Integer = int(i64.min to i64.max)
+typealias StringArray = Array with String
+
+interface Sizer
+	function size() returns Integer
+end 'Sizer'
+
+extension Array implements Sizer
+	function size() returns Integer
+		return 3
+	end 'size'
+end 'Array'
+
+type Container uses Element where Element is Sizer
+	typealias ElementArray = Array with Element
+
+	export var items as ElementArray
+
+	export static function create() returns Self
+		return Self{ items: ElementArray.create() }
+	end 'create'
+
+	export function push(item Element)
+		self.items.push(item)
+	end 'push'
+
+	export function duplicate() returns Self
+		return Self{ items: self.items.clone() }
+	end 'duplicate'
+end 'Container'
+
+typealias NestedContainer = Container with StringArray
+
+function main() returns ExitCode
+	var sa = StringArray.create()
+	sa.push("a string long enough to force a heap allocation")
+	var nc = NestedContainer.create()
+	nc.push(sa)
+	let dup = nc.duplicate()
+	let n = dup.items.count()
+	return n as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:34:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
