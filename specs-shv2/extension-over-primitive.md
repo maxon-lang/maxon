@@ -170,6 +170,85 @@ end 'main'
 77
 ```
 
+<!-- test: a-declared-hash-agrees-through-a-witness -->
+⭐⭐ **THE TWO ROADS TO ONE DECLARED BODY, PINNED AGAINST EACH OTHER (W133 review).** The case above
+proves the DIRECT call reaches the declaration; it says nothing about the WITNESS. Those are two
+separate mechanisms — the direct call is `Parser.dispatchBuiltinConformanceMethod`'s `declaresCallee`
+peek, while the witness road is a table `BuiltinConformanceRuntime` fills by declining to synthesize an
+impl for a symbol the module already DEFINES. Nothing structural makes the two agree, and if they ever
+came apart the failure would be silent: `n.hash()` answering `77` beside a `where T is Hashable` body
+answering `5`, both compiling, both linking. So the two are compared **in one program**, where a split
+is a differing line rather than two green runs nobody put side by side.
+```maxon
+typealias Integer = int(0 to u32.max)
+
+extension int implements Hashable
+	export function hash() returns HashValue
+		return 77
+	end 'hash'
+end 'int'
+
+type Box uses T where T is Hashable
+	export var a as T
+	export static function create(a T) returns Self
+		return Self{ a: a }
+	end 'create'
+	export function digest() returns HashValue
+		return self.a.hash()
+	end 'digest'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let n = 5
+	let b = IntBox.create(n)
+	print("direct={n.hash()} witness={b.digest()}")
+	return 0
+end 'main'
+```
+```stdout
+direct=77 witness=77
+```
+
+<!-- test: a-declared-conformance-supplies-a-protocol-the-primitive-lacks -->
+⭐⭐ **A DECLARATION DOES NOT MERELY *BEAT* THE SYNTHESIZED SURFACE — IT CAN EXTEND IT (W133 review).**
+`bool` has no intrinsic `Hashable` at all: `IrInterface.isIntrinsicBuiltinConformance` grants it
+`Comparable` and nothing else, so a bare `t.hash()` is **`E2015 'bool' has no method named 'hash' — a
+builtin-typed receiver supplies `compare`, `toString`, `clone``** (measured on this tree). That makes
+this the case where the declared body is not competing with a compiler answer but is the *only* one,
+and it is the sharper test of the witness road: the table cannot be inherited from a synthesized impl,
+because there is none to inherit. Both roads are compared in one program for the case above's reason.
+```maxon
+extension bool implements Hashable
+	export function hash() returns HashValue
+		return 9 if self else 4
+	end 'hash'
+end 'bool'
+
+type Box uses T where T is Hashable
+	export var a as T
+	export static function create(a T) returns Self
+		return Self{ a: a }
+	end 'create'
+	export function digest() returns HashValue
+		return self.a.hash()
+	end 'digest'
+end 'Box'
+
+typealias BoolBox = Box with bool
+
+function main() returns ExitCode
+	let t = true
+	let b = BoolBox.create(t)
+	print("direct={t.hash()} witness={b.digest()}")
+	return 0
+end 'main'
+```
+```stdout
+direct=9 witness=9
+```
+
 <!-- test: a-declared-tostring-beats-the-inline-lowering -->
 ⭐⭐ **THE DIFFERING-DECLARATIONS CONTROL for the INLINE half, and it is the one that can fail
 silently.** `toString` on a primitive receiver is lowered inline and calls no symbol, so a declared body

@@ -147,22 +147,42 @@ let ExitCodeBuiltinName = b"ExitCode"
 // ⚠ Every name is spelled by the CANONICAL constant the compiler already exports for it, never a fresh
 // `b"…"` — `BoolConformerName`'s own header says a second spelling of one of these "is the same fact and so
 // must not become a second constant".
+//
+// ⛔⛔ **AND THE THREE PRIMITIVE ROWS ARE NOW *DELEGATED*, NOT RESTATED (W133 review), BECAUSE THE PARAGRAPH
+// ABOVE STOPPED BEING TRUE OF THIS FUNCTION THE DAY A SECOND name→tag TABLE EXISTED.** Spelling each name
+// through its canonical CONSTANT stops two rows disagreeing about the BYTES `int` is written in; it does
+// nothing about two TABLES disagreeing about which names are in the set at all. W133 added
+// `IrInterface.primitiveTagOfTypeName`, whose `int`/`float`/`bool` rows answered
+// `integer`/`float`/`boolean` — the identical three rows this function already carried, in another file,
+// with nothing forcing them to agree. Two hand-written `equals` chains over one set is this project's
+// signature bug, and the failure mode is not a compile error: a fourth primitive added to one table is a
+// value the OTHER door silently classifies `named`, so the extension door would admit a target whose written
+// type reference resolves to a struct reference no registry holds — which is the very defect W133's
+// `enclosingSelfType` arm exists to close, reintroduced one door over.
+//
+// ⇒ The set is stated ONCE, in `primitiveTagOfTypeName`, and this function adds only the two rows that are
+// genuinely its own (`String`, `ExitCode` — see the two ⚠ paragraphs above for why `Character` is not a
+// third). The delegation runs in this direction because it is the only one that exists: this file already
+// reads `IrInterface`'s constants, so it may read its functions, while `IrInterface` calling back here would
+// be a cycle.
+//
+// The MISS SENTINELS deliberately differ and must not be merged: a tag table's no-answer is `unresolved`,
+// while a door holding a RENDERED TYPE NAME has already established that the name denotes *some* type, so
+// its no-answer is `named` — the positive statement "this is a declared type", which is what every caller
+// here branches on.
 export function builtinTypeNameTag(name ByteArray) returns ValueTypeTag
-	if name.equals(BoolConformerName) 'isBool'
-		return ValueTypeTag.boolean
-	end 'isBool'
-	if name.equals(IntConformerName) 'isInt'
-		return ValueTypeTag.integer
-	end 'isInt'
-	if name.equals(FloatConformerName) 'isFloat'
-		return ValueTypeTag.float
-	end 'isFloat'
+	let primitive = primitiveTagOfTypeName(name)
+	if primitive != ValueTypeTag.unresolved 'aPrimitive'
+		return primitive
+	end 'aPrimitive'
+
 	if name.equals(StringConformerName) 'isString'
 		return ValueTypeTag.string
 	end 'isString'
 	if name.equals(ExitCodeBuiltinName) 'isExitCode'
 		return ValueTypeTag.exitCode
 	end 'isExitCode'
+
 	return ValueTypeTag.named
 end 'builtinTypeNameTag'
 
