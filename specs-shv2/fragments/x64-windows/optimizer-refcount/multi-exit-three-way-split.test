@@ -1,0 +1,104 @@
+// Test: multi-exit-three-way-split
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+union Tag
+	a
+	b
+	c
+end 'Tag'
+
+function main() returns ExitCode
+	@heap let x = Box.create(7)
+	let tag = Tag.b
+	var total = 0
+	if true 'inner'
+		let alias = x
+		match tag 'three'
+			a then total = alias.value
+			b then total = alias.value * 2
+			c then total = alias.value * 3
+		end 'three'
+	end 'inner'
+	return total
+end 'main'
+---
+ExitCode: 14
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rax, 7
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 rdx, 1
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, inner
+    x64.jmp critsplit
+  inner:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#2
+    x64.jmp matchnext#6
+  matcharm#2:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.jmp matchcont
+  matchnext#6:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#3
+    x64.jmp matchnext#7
+  matcharm#3:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rax, rax, 2
+    x64.jmp matchcont
+  matchnext#7:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm#4
+    x64.jmp matchdead
+  matcharm#4:
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.imulRegRegImm32 rax, rax, 3
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg r8, rax
+    x64.jmp ifcont
+  matchdead:
+  critsplit:
+    x64.jmp ifcont
+  ifcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

@@ -275,18 +275,27 @@ end 'main'
 ```stdout
 ```
 
-### Rebinding a Value to Itself Is a No-Op
+### Rebinding a Value to Itself Drops Nothing — but It Still MOVES
 
-Reassigning a binding to the value it already holds rebinds it to itself: nothing is dropped and the
-ownership is unchanged. The `oldValue == value` guard prevents a drop-then-keep (which would decref a
-value still bound).
+Reassigning a binding to the value it already holds emits no refcount traffic: the value and its drop
+are unchanged, so nothing is decref'd and nothing is promoted. The `oldValue == value` guard is what
+prevents a drop-then-keep (which would decref a value still bound).
 
 ⚠ The textual spelling `s = s` **cannot** be used to reach that guard, because it is a compile error —
 `E3067`, see `self-assignment.md`. This case aliases through a second binding instead, which is the
 better pin regardless: the guard compares **value identity** (`ValueId`), not spelling, so `let t = s`
 followed by `s = t` reaches it by the property it actually tests and would keep reaching it if the
-E3067 rule ever became semantic. The surviving read is `t` rather than `s` because `let t = s` MOVES a
-managed binding's ownership to `t` (E3102 on a later `s`).
+E3067 rule ever became semantic.
+
+⭐ **THE SURVIVING READ IS `s`, THE ASSIGNMENT TARGET — "no-op" IS ABOUT THE REFCOUNTS, NEVER ABOUT THE
+OWNERSHIP.** `let t = s` moves the ownership to `t`; `s = t` hands it straight back, so afterwards `s`
+is live again and `t` is moved-from (E3102 on a later `t`). A move does not mint a value — it re-homes
+one — so a hand-back reaches the identity guard while meaning the exact opposite of a no-op, and the
+guard is therefore gated on `not binding.movedFrom`. This is the same rule the door already applied to
+every OTHER bare-local source — measured: `var s = build(1); let t = build(2); s = t; print(t)` has
+always been E3102 — so the source surviving HERE was never a rule, only the elision showing through.
+`/specs/optimizer-refcount.md` pins the same shape one type over (`var b = a; a = b; a.x`) and reads
+the target.
 
 <!-- test: self-assign -->
 ```maxon
@@ -300,7 +309,7 @@ function main() returns ExitCode
 	var s = build(1)
 	let t = s
 	s = t
-	print(t)
+	print(s)
 	return 0
 end 'main'
 ```

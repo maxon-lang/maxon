@@ -25848,16 +25848,28 @@ export type Parser
 	function reassignBindingValue(func IrFunction, binding VarInfo, nameTok Token, value ValueId, rhsWasBareLocal bool) throws ParseError
 		let oldValue = binding.boundValue
 
-		// A SELF-REBIND — the binding is assigned the value it already holds: the value and its ownership
-		// are unchanged, so there is nothing to drop and nothing to reclassify. Guarding here is also what
-		// keeps a loop self-assign — where `oldValue` is a provenance-free phi — from being misread and
-		// re-tracked, and prevents a drop-then-keep (decref'ing a value the binding still holds).
+		// A SELF-REBIND OF A LIVE BINDING — it is assigned the value it already holds AND still owns, so
+		// the value and its ownership are both unchanged: nothing to drop and nothing to reclassify.
+		// Guarding here is also what keeps a loop self-assign — where `oldValue` is a provenance-free phi —
+		// from being misread and re-tracked (the phi carries no owned-heap bit, so the general path would
+		// `promoteBorrowed` it), and prevents a drop-then-keep (decref'ing a value the binding still holds).
 		//
 		// ⚠ **THE TEST IS VALUE IDENTITY, NOT SPELLING, AND THE SPELLING `s = s` NO LONGER REACHES IT** —
-		// it is refused at the door as E3067 (see `rejectDegenerateAssignment`). The shape that arrives
-		// here is an ALIAS handed back, `let t = s` then `s = t`, which is what `var-reassign-drops.md`'s
-		// `self-assign` case pins it with.
-		if oldValue == value 'selfAssign'
+		// it is refused at the door as E3067 (see `rejectDegenerateAssignment`).
+		//
+		// ⭐⭐ **BUT VALUE IDENTITY ALONE IS THE WRONG QUESTION WHEN THE BINDING IS MOVED-FROM — THAT IS
+		// OWNERSHIP BEING HANDED BACK, THE EXACT OPPOSITE OF A NO-OP.** A move does not mint a value, it
+		// re-homes one: `var b = a` gives `b` `a`'s very ValueId, so `a = b` satisfies `oldValue == value`
+		// while meaning *`a` owns it again and `b` must not*. Eliding it left BOTH halves undone — `a`
+		// still poisoned (E3102 on the next read of it) and `b` still live — i.e. a statement with no
+		// effect whatsoever. `specs/optimizer-refcount.md`'s whole-program baseline is the pin.
+		//
+		// The gate sends only that shape down the general path below, which already does the entire job
+		// and adds no refcount traffic (the value genuinely does not change): `moveOnAssign` poisons the
+		// source, `wasOwned` is false so nothing is decref'd, `inOwnedSet` is true so the revived binding
+		// is not re-enrolled, and the revive clears the bit — one box, still exactly one drop, now owed by
+		// this binding instead of the source's.
+		if oldValue == value and not binding.movedFrom 'selfAssign'
 			self.scope.setValue(nameTok.value, value: value)
 			return
 		end 'selfAssign'
