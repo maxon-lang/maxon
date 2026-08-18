@@ -50,7 +50,8 @@
 //     defines a case nothing emits as rot and a registry that tolerates one instance of its own defect
 //     cannot be cited about the next.
 // ⇒ **THE PICKING RULE ABOVE IS UNCHANGED AND STILL MEANS WHAT IT SAYS**: the next entry takes the next
-// FREE number above 70, which is now 77. Nothing here reserves a vacated number, because reserving one
+// FREE number above 70, which is now 82 — 77 went to `managedListNodeNotInThisChain` and 81 to
+// `managedListNodeElementMovedOut`, while 76 and 80 stay vacant for the reason this paragraph gives. Nothing here reserves a vacated number, because reserving one
 // would be this space defending against a claimant that no longer exists — the very thing the paragraph
 // above rejects.
 export enum RuntimeAbort
@@ -109,6 +110,28 @@ export enum RuntimeAbort
 	// markability guard catches the inline `a.remove(b.insertLast(x))`), so reaching here needs two named
 	// chains and a handle carried between them.
 	managedListNodeNotInThisChain = 77
+	// `__list_node_value`: the node's element slot is EMPTY on a chain whose element is MANAGED — the state
+	// `__list_remove_node`/`__list_remove_first` leave behind when they hand the element to the caller and
+	// NULL `value@16` so nobody drops it twice. `__list_node_decref` is built for that state and skips its
+	// drop; every OTHER reader of `value@16` is not, and a managed element read back as `0` is dereferenced
+	// by the first thing that touches it.
+	//
+	// ⚠ **THE COMPILE-TIME MARK CANNOT COVER THIS, WHICH IS WHY IT IS A RUN-TIME ABORT.** `remove` marks the
+	// ARGUMENT's binding moved, and that mark defends one NAME; a node has as many independently-named
+	// handles as a program cares to mint (`head`/`tail`/`next`/`prev`, a field, a call result), and every one
+	// of them but the marked binding reaches the emptied slot unrefused. MEASURED as **exit 139** on
+	// `let h = try chain.head() … ; chain.remove(a); h.value()` — eight lines, no struct, on the pre-`BATCH37`
+	// compiler too through a field copy.
+	//
+	// ⚠ **`element_drop@24` IS WHAT MAKES THE TEST HONEST**: a TRIVIAL element legitimately holds `0`
+	// (`chain.insertLast(0)`), so the emptiness of the slot means nothing on its own. It is the same two-test
+	// pair `emitDropNodeElement` makes, asked in the other order — value first, because it is the one that
+	// answers on every element read of every list loop.
+	//
+	// ⚖ WHAT `n.value()` on an emptied node SHOULD MEAN — refuse the whole aliasing shape at the front end,
+	// or make the read throw — is a semantic question `/specs/managed-list.md` does not answer and this abort
+	// does not decide; like `managedListNodeNotInThisChain` beside it, it only stops the corruption.
+	managedListNodeElementMovedOut = 81
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

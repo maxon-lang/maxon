@@ -1075,3 +1075,121 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: reading-a-node-a-remove-emptied-aborts -->
+⭐⭐ **THE ROSTER ROW THE SURFACE'S GROWTH ADDED, AND IT IS ON THE READ SIDE RATHER THAN THE ARGUMENT
+SIDE.** Every row above asks *"which handles may ARRIVE at `remove`"*; this one asks *"which handles
+SURVIVE it"*, and the answer is *"all of them but the one it marked"*. `remove` empties `value@16` so the
+element it hands out is not dropped twice, and it defends that hole with a per-BINDING move mark on its
+argument. `head`/`tail`/`next`/`prev` mint a SECOND, independently named handle on the same node, so the
+mark defends one name out of however many the program cares to make — MEASURED as **exit 139** before the
+guard, in eight lines with no struct in them.
+
+Which handles alias one node is a run-time fact, so the refusal is a run-time one:
+`__list_node_value` aborts (**81**) on an empty slot whose element is MANAGED. ⚠ It is the CORRUPTION
+that is stopped, not the semantics that are settled — what `n.value()` on an emptied node should mean is
+`/specs/managed-list.md`'s to say.
+```maxon
+typealias StrChain = __ManagedList with String
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	let a = chain.insertLast("the only element, long enough to be a real heap allocation")
+	let h = try chain.head() otherwise 'empty'
+		return 1
+	end 'empty'
+	let got = chain.remove(a)
+	print("removed [{got}] count={chain.count()}\n")
+	print("the second handle reads [{h.value()}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+81
+```
+```stdout
+removed [the only element, long enough to be a real heap allocation] count=0
+```
+
+<!-- test: reinserting-an-emptied-node-puts-it-back-where-the-chain-itself-reads-it -->
+⭐⭐ **AND THE REINSERTIONS CARRY IT INTO THE CHAIN, WHICH IS WHY A STALE HANDLE IS NOT THE WHOLE OF IT.**
+`the-four-node-argument-doors-admit-every-arrival` derives its *"admit everything"* from *"they change
+LINKS and leave `value@16` alone"* — true of what the member DOES, and silent about the STATE the node
+can already be in. A node `remove` emptied is detached, and `reinsertFirst` links a detached node back:
+`count` then says 2, and the chain's OWN walk — not a stale handle — reaches the hole. Same abort, one
+door further in.
+```maxon
+typealias StrChain = __ManagedList with String
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	let a = chain.insertLast("the only element, long enough to be a real heap allocation")
+	let h = try chain.head() otherwise 'empty'
+		return 1
+	end 'empty'
+	let got = chain.remove(a)
+	print("removed [{got}] count={chain.count()}\n")
+	chain.reinsertFirst(h)
+	print("relinked count={chain.count()}\n")
+	let back = try chain.head() otherwise 'empty'
+		return 1
+	end 'empty'
+	print("the chain's own head reads [{back.value()}]\n")
+	return 0
+end 'main'
+```
+```exitcode
+81
+```
+```stdout
+removed [the only element, long enough to be a real heap allocation] count=0
+relinked count=1
+```
+
+<!-- test: an-empty-managed-element-is-not-an-emptied-slot -->
+⭐ **THE POSITIVE CONTROL THE GUARD IS EXACTLY AS TRUSTWORTHY AS.** The test is *"the slot is 0"*, and it
+would be worth nothing — a false abort on ordinary programs — if a managed element could legitimately BE
+0. An empty `String` is a real record, so it is not; measured here rather than assumed, because a guard
+whose predicate is never shown to be quiet is a guard nobody can tell from a bug.
+```maxon
+typealias StrChain = __ManagedList with String
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	let a = chain.insertLast("")
+	var s = ""
+	let b = chain.insertLast(s)
+	print("[{a.value()}][{b.value()}] {chain.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[][] 2
+```
+
+<!-- test: a-trivial-element-of-zero-is-the-element-and-not-a-hole -->
+⭐ **THE OTHER HALF OF THE SAME CONTROL, AND IT IS WHY THE GUARD LOADS `element_drop@24` AT ALL.** A
+trivial element legitimately holds `0`, so an empty slot means nothing on its own — the same two-test
+pair `__list_node_decref` already makes to decide whether there is anything to drop. Without the second
+test this program aborts.
+```maxon
+typealias Small = int(0 to 100)
+typealias SmallChain = __ManagedList with Small
+
+function main() returns ExitCode
+	var chain = SmallChain.create()
+	let a = chain.insertLast(0)
+	let b = chain.insertLast(7)
+	print("{a.value()} {b.value()} {chain.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0 7 2
+```

@@ -188,6 +188,7 @@ export let ListNodeBytes = 40 as ParsedInt
 // `__mm_alloc`/`__mm_free` inside their Std bodies.
 export let ListCreateName = b"__list_create"
 export let ListCountName = b"__list_count"
+
 // `__list_is_empty(list) -> 0|1` — `count == 0`, and a SEPARATE entry rather than a parser-emitted compare
 // against `__list_count` for the reason `MmRuntime.emitConstReturn` states: the Std tier has no `setcc`, so a
 // verdict is a constant-returning block off a fused compare, and that shape belongs beside the field it reads.
@@ -1505,9 +1506,10 @@ function buildListRemoveLast(module StdModule)
 	buildListEndRemove(module, name: ListRemoveLastName, nearEnd: ListTailOffset, farEnd: ListHeadOffset, outward: ListPrevOffset, inward: ListNextOffset)
 end 'buildListRemoveLast'
 
-// One-field-read cursor primitive: `name(record) -> record[offset]`. The three a `for … in list` loop is
-// lowered to are one shape (`__list_head`, `__list_node_value`, `__list_node_next`), so the shape is built
-// once and told which field it reads.
+// One-field-read cursor primitive: `name(record) -> record[offset]`. Two of the three a `for … in list` loop
+// is lowered to are one shape (`__list_head`, `__list_node_next`), so the shape is built once and told which
+// field it reads. ⚠ **`__list_node_value` LEFT THIS SHAPE**: an element slot can be EMPTY where a link word
+// simply reads 0, so that entry is a guard and not a field read — see `buildListNodeValue`.
 function buildListFieldRead(module StdModule, name ByteArray, offset ByteOffset)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1526,9 +1528,60 @@ function buildListHead(module StdModule)
 	buildListFieldRead(module, name: ListHeadName, offset: ListHeadOffset)
 end 'buildListHead'
 
-// `__list_node_value(node) -> value` — the loop's element read. A BORROW: the list still owns it.
+// ⭐⭐ **`__list_node_value(node) -> value` — THE ONE ELEMENT READ, AND THE ONE PLACE THAT REFUSES TO HAND
+// BACK A SLOT A MOVE-OUT EMPTIED.** It is the loop's element read (`for … in list`) and
+// `__ManagedListNode.value()`, and it is a BORROW at the Std tier either way: the node still owns what it
+// holds, and whether the CALLER takes a reference of its own is the parser's answer
+// (`ContainerElementReference`), not this entry's.
+//
+// ⛔⛔ **THE GUARD EXISTS BECAUSE `remove` LEAVES A STATE ONLY `__list_node_decref` IS BUILT FOR.**
+// `__list_remove_node`/`__list_remove_first` hand the element to the caller and NULL `value@16` so nobody
+// drops it twice; the drop path tests for exactly that and skips (`emitDropNodeElement`). Every other
+// reader of `value@16` was written as though the slot always holds an element — so a MANAGED element read
+// back as `0` is dereferenced by the first thing that touches it. MEASURED at **exit 139** on eight lines:
+// `let h = try chain.head() …` beside `chain.remove(a)`, then `h.value()`.
+//
+// ⛔ **AND THE COMPILE-TIME MARK CANNOT BE WIDENED TO COVER IT, WHICH IS WHY THE ANSWER IS HERE.**
+// `dispatchManagedListMethod`'s `remove` arm marks the ARGUMENT's binding moved, and a mark defends one
+// NAME. A node has as many independently-named handles as a program cares to mint — `head`, `tail`,
+// `next`, `prev`, a field, a call result — and every one but the marked binding reaches the emptied slot
+// unrefused; `reinsertFirst` will even link such a node back into a live chain, so the CHAIN'S OWN walk
+// reaches it. Which handles alias one node is a run-time fact, so the refusal is a run-time one.
+//
+// ⚠ **`element_drop@24` IS WHAT MAKES THE TEST HONEST, AND THE ORDER OF THE TWO TESTS IS THE HOT PATH'S.**
+// A TRIVIAL element legitimately holds `0` (`chain.insertLast(0)`), so an empty slot means nothing on its
+// own — it is the same pair `emitDropNodeElement` makes. `value@16` is read FIRST because it is the test
+// that answers on every element read of every list loop, and the drop slot is never loaded on the path
+// where it already holds something.
 function buildListNodeValue(module StdModule)
-	buildListFieldRead(module, name: ListNodeValueName, offset: ListValueOffset)
+	var func = IrFunction.createFromStd(ListNodeValueName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var slotIsEmpty = module.addBlock(func, label: b"empty")
+	var movedOut = module.addBlock(func, label: b"movedout")
+	var held = module.addBlock(func, label: b"held")
+
+	emitParams(module, block: entry, count: 1)
+	let node = 0 as ValueId
+
+	let value = emitLoadField(module, block: entry, record: node, offset: ListValueOffset, ids: ids)
+	let empty = emitConst(module, block: entry, value: 0, ids: ids)
+	let holdsSomething = emitCmp(module, block: entry, a: value, b: empty, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(holdsSomething, thenBlockId: held.id, elseBlockId: slotIsEmpty.id))
+
+	// An empty slot on a TRIVIAL-element chain is the element: `0`. On a managed one it is the hole a
+	// move-out left, and there is no value that can be returned for it.
+	let drop = emitLoadField(module, block: slotIsEmpty, record: node, offset: ListElementDropSlotOffset, ids: ids)
+	let noDrop = emitConst(module, block: slotIsEmpty, value: 0, ids: ids)
+	let isManaged = emitCmp(module, block: slotIsEmpty, a: drop, b: noDrop, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(slotIsEmpty, op: StdOp.condBranch(isManaged, thenBlockId: movedOut.id, elseBlockId: held.id))
+
+	emitRuntimeAbort(module, func: func, block: movedOut, abort: RuntimeAbort.managedListNodeElementMovedOut, ids: ids)
+
+	module.setTerminator(held, op: StdOp.ret(value))
+
+	module.functions.push(func)
 end 'buildListNodeValue'
 
 // `__list_node_next(node) -> nodePtr` — the loop's step; 0 at the tail, so the header's `cursor != 0` exits.
