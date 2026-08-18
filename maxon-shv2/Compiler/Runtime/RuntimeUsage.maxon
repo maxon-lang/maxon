@@ -570,16 +570,28 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// Any `__list_*` call carries the whole list runtime, and the heap under it — the `__managed_*` arm above
 	// over a CHAIN instead of a buffer: `__list_create` and every insertion `__mm_alloc` (the header, then one
 	// node each) and `__list_decref` `__mm_free`s all of them, none of which this Maxon-module scan sees.
-	// ⛔ **A `usesIncref` LINE STOOD HERE AND ITS REASON NAMED A FUNCTION THAT NO LONGER EXISTS.** It was added
-	// for `W138`'s first ruling, where the mint was a synthesized `__list_node_handle` body whose `__mm_incref`
-	// of the retained list this Maxon-module scan could not see. The second ruling deleted that body: the
-	// handle's incref is now emitted by the PARSER (`emitManagedListNodeHandle` → `emitIncref`), so it is an
-	// ordinary `MaxonOp.call` this very scan walks and the `__mm_incref` arm above declares it. Sabotaged at
-	// review — the line removed, `managed-list`/`ownership`/`list`/`for-` all still green — so it was a second
-	// producer of one bit, and the surviving producer is the one that can see the call.
+	// ⛔⛔ **`usesIncref` RIDES HERE AGAIN (`BATCH37`), AND THE REASON IT WAS REMOVED HAS EXPIRED RATHER
+	// THAN BEEN WRONG.** `W138` deleted it correctly: its own justification named a synthesized
+	// `__list_node_handle` body that the second ruling had already deleted, and at that tick EVERY node
+	// handle's `__mm_incref` was emitted by the PARSER — an ordinary `MaxonOp.call` this very scan walks,
+	// declared by the `__mm_incref` arm above. The removal was even sabotage-checked and the suite stayed
+	// green, which was a true measurement of the tree it was taken on.
+	//
+	// ⛔ **`BATCH37` MADE IT FALSE AGAIN: THE FOUR THROWING NAVIGATORS INCREF INSIDE THEIR OWN Std BODIES.**
+	// `__list_head_checked` and its three siblings take the handle's `+1` on their ok path because the parser
+	// structurally cannot (see `Parser.emitManagedListNodeHandle`), and `__list_reinsert_*` increfs a DETACHED
+	// node it adopts — three `__mm_incref` call sites this Maxon-module scan cannot see, exactly like the
+	// `__mm_alloc`s the line below it declares. MEASURED as a compiler PANIC, not a miscompile:
+	// `resolveCallFixups: call to unknown function '__mm_incref'` on `/specs/managed-list.md:core.head-empty-throws`,
+	// a program whose only list operations are `create` and `head`.
+	//
+	// ⇒ **A DELETED PRODUCER IS ONLY DEAD FOR AS LONG AS ITS PREMISE HOLDS**, and the premise here — *"every
+	// list-family incref is visible to this scan"* — is a property of the RUNTIME BODIES, which is why it is
+	// restated beside them rather than left as an inference off the parser's emit.
 	if isListRuntimeCallee(callee) 'list'
 		usage.usesList = true
 		usage.usesHeap = true
+		usage.usesIncref = true
 	end 'list'
 	// The single-value descriptor-gated drop (P1.7 slice 3b-v / Finding A). Decoupled from `usesManagedMemory` so an
 	// array-free bare-field reassign links: it is `__`-prefixed but neither `__mm_`- nor `__managed_`-prefixed, so

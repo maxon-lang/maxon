@@ -5486,18 +5486,38 @@ export let ListLastMethod = b"last"
 export let ListRemoveFirstMethod = b"removeFirst"
 export let ListRemoveLastMethod = b"removeLast"
 
-// The three spellings only the `__ManagedList` surface has (spec-port `ownership`; `/specs/managed-list.md`).
+// The spellings only the `__ManagedList` surface has (spec-port `ownership`; `/specs/managed-list.md`).
 // They live here beside `List`'s pair so the chain's whole vocabulary is read in one place. `create`,
-// `count`, `remove` and `clear` are NOT among them: those are already spelled once above (or in `Parser`'s
-// shared block) and the managed list dispatches on the very same byte strings, which is this block's rule.
+// `count`, `remove`, `clear` and `isEmpty` are NOT among them: those are already spelled once above (or in
+// `Parser`'s shared block) and the managed list dispatches on the very same byte strings, which is this
+// block's rule.
 //
 // ⚠ `value` is a METHOD name, and the three other `b"value"` constants in this compiler are a print
 // PARAMETER name, a `Map.upsert` argument LABEL and a `__ManagedMemory` parameter name — different name
 // spaces, already kept apart here and in `Parser`. This is the first method of that spelling; a second
 // container spelling it would share this constant rather than mint a fifth.
+//
+// ⚠ **`head`/`tail`/`next`/`prev` ARE HERE AND NOT IN `Parser.maxon` FOR `removeFirst`'s REASON, VERBATIM**:
+// `ListRuntime.listAccessorSourceMethodName` has to name all four — they are the surface's four THROWING
+// navigators — and a map cannot name a constant its file cannot see.
+//
+// ⚠ **`next` IS ALSO A `__ManagedDirectory` MEMBER (`ManagedDirectoryNextMethod`), AND THE TWO ARE
+// DELIBERATELY NOT SHARED.** A directory's `next` yields the next ENTRY and throws when the walk is done;
+// a node's yields a node HANDLE. One byte string, two surfaces, two dispatchers — and the shared-constant
+// rule this block states is about a member two surfaces spell to mean THE SAME THING (`get`, `remove`,
+// `insert`), which these do not.
 export let ManagedListInsertFirstMethod = b"insertFirst"
 export let ManagedListInsertLastMethod = b"insertLast"
+export let ManagedListInsertAfterMethod = b"insertAfter"
+export let ManagedListInsertBeforeMethod = b"insertBefore"
+export let ManagedListReinsertFirstMethod = b"reinsertFirst"
+export let ManagedListReinsertLastMethod = b"reinsertLast"
+export let ManagedListHeadMethod = b"head"
+export let ManagedListTailMethod = b"tail"
 export let ManagedListNodeValueMethod = b"value"
+export let ManagedListNodeSetValueMethod = b"setValue"
+export let ManagedListNodeNextMethod = b"next"
+export let ManagedListNodePrevMethod = b"prev"
 
 // The one member a per-node refcount buys and an unrefcounted node could not have: unlink WITHOUT freeing,
 // so the caller's handle keeps the node and its element alive (`/specs/managed-list.md:core.detach`).

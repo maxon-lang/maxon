@@ -1,16 +1,21 @@
-// Test: a-handle-into-a-chain-of-managed-elements
-typealias StringChain = __ManagedList with String
-typealias StringNode = __ManagedListNode with String
+// Test: a-navigators-handle-outlives-the-chain-it-came-from
+typealias StrChain = __ManagedList with String
+typealias StrNode = __ManagedListNode with String
 
-function nodeOfAFreshStringChain() returns StringNode
-	var chain = StringChain.create()
-	chain.insertLast("alpha")
-	return chain.insertLast("a heap string long enough not to be inline")
-end 'nodeOfAFreshStringChain'
+function headOfAFreshChain() returns StrNode throws ArrayError
+	var chain = StrChain.create()
+	chain.insertLast("the element the handle keeps alive, on the heap")
+	chain.insertLast("an element nothing keeps alive, on the heap")
+	return try chain.head()
+end 'headOfAFreshChain'
 
 function main() returns ExitCode
-	let node = nodeOfAFreshStringChain()
-	print("{node.value()}\n")
+	for _ in 0 upto 8 'each'
+		let node = try headOfAFreshChain() otherwise 'empty'
+			return 1
+		end 'empty'
+		print("{node.value()}\n")
+	end 'each'
 	return 0
 end 'main'
 ---
@@ -22,7 +27,7 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
-func @nodeOfAFreshStringChain {
+func @headOfAFreshChain {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
@@ -79,11 +84,30 @@ func @nodeOfAFreshStringChain {
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r14
     x64.callDirect __list_append
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_head_checked
     x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
+    x64.movRegReg r13, r10
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
     x64.movRegReg rcx, rbx
     x64.callDirect __list_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r13
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_decref
+    x64.movRegImm32 r10, 0
     x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
@@ -105,12 +129,34 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 72
-    x64.callDirect nodeOfAFreshStringChain
-    x64.storeSlotReg slot0, r8
+    x64.movRegImm32 rax, 0
+    x64.jmp forhdr
+  forhdr:
+    x64.storeSlotReg slot0, rax
+    x64.cmpRegImm32 rax, 8
+    x64.jcc less, each
+    x64.jmp forexit
+  each:
+    x64.callDirect headOfAFreshChain
+    x64.storeSlotReg slot1, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
     x64.movRegReg rcx, r8
     x64.callDirect __list_node_value
     x64.movRegReg rbx, r8
-    x64.storeSlotReg slot1, rbx
+    x64.storeSlotReg slot2, rbx
     x64.movRegReg rcx, rbx
     x64.callDirect __mm_incref
     x64.loadRegBaseDisp.word64 r12, [rbx + 0]
@@ -119,11 +165,11 @@ func @main {
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
-    x64.storeSlotReg slot2, rax
+    x64.storeSlotReg slot3, rax
     x64.leaRegRegImm32 rcx, rax, 49
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot4, r8
     x64.leaRegRegImm32 r15, r8, 48
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
@@ -135,9 +181,9 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot3
+    x64.loadRegSlot rbx, slot4
     x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rax, slot3
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm rax, -3
     x64.storeBaseDispReg.word64 [rbx + 16], rax
@@ -147,12 +193,17 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
-    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rcx, slot2
     x64.callDirect __str_decref
-    x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rcx, slot0
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __list_node_decref
-    x64.movRegReg r8, rbx
+    x64.jmp forstep
+  forstep:
+    x64.loadRegSlot rax, slot0
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.jmp forhdr
+  forexit:
+    x64.movRegImm32 r8, 0
     x64.epilogue 72
     x64.popReg r15
     x64.popReg r14

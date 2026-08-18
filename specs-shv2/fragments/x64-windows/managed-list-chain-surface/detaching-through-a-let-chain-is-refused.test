@@ -1,0 +1,22 @@
+// Test: detaching-through-a-let-chain-is-refused
+typealias StrChain = __ManagedList with String
+
+function build() returns StrChain
+	var c = StrChain.create()
+	c.insertLast("one, long enough to be a real heap allocation")
+	c.insertLast("two, long enough to be a real heap allocation")
+	return c
+end 'build'
+
+function main() returns ExitCode
+	let chain = build()
+	let n = try chain.head() otherwise 'empty'
+		return 1
+	end 'empty'
+	chain.detach(n)
+	print("{chain.count()} {n.value()}\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3019: <fragment>:16:8: cannot pass 'chain' to function that mutates parameter 'self' (in main)

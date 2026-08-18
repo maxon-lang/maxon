@@ -1,18 +1,14 @@
-// Test: a-handle-into-a-chain-of-trivial-elements
-typealias Small = int(0 to 255)
-typealias IntChain = __ManagedList with Small
-typealias IntNode = __ManagedListNode with Small
-
-function nodeOfAFreshChain() returns IntNode
-	var chain = IntChain.create()
-	chain.insertLast(1)
-	return chain.insertLast(64)
-end 'nodeOfAFreshChain'
+// Test: core.create-empty
+typealias Integer = int(i64.min to i64.max)
+typealias IntManagedList = __ManagedList with Integer
 
 function main() returns ExitCode
-	let node = nodeOfAFreshChain()
-	print("{node.value()}\n")
-	return 0
+	let list = IntManagedList.create()
+	if list.isEmpty() 'check'
+		print("{list.count()}\n")
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ---
 ExitCode: 0
@@ -21,35 +17,6 @@ data {
   __slab_cursor@0 = i64 0
   __slab_end@8 = i64 0
   __mm_alloc_count@16 = i64 0
-}
-
-func @nodeOfAFreshChain {
-  entry:
-    x64.pushReg rbp
-    x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
-    x64.movRegImm32 rcx, 0
-    x64.callDirect __list_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 1
-    x64.movRegReg rcx, rbx
-    x64.callDirect __list_append
-    x64.movRegImm32 rdx, 64
-    x64.movRegReg rcx, rbx
-    x64.callDirect __list_append
-    x64.movRegReg r12, r8
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __list_decref
-    x64.movRegReg r8, r12
-    x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
-    x64.popReg rbp
-    x64.ret
 }
 
 func @main {
@@ -62,19 +29,27 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 72
-    x64.callDirect nodeOfAFreshChain
-    x64.storeSlotReg slot0, r8
-    x64.movRegReg rcx, r8
-    x64.callDirect __list_node_value
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __list_create
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 20
+    x64.storeSlotReg slot0, rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_is_empty
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, check
+    x64.jmp ifcont
+  check:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_count
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
     x64.storeSlotReg slot1, r12
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __uint_to_string
+    x64.callDirect __int_to_string
     x64.movRegReg rbx, r8
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
@@ -112,7 +87,20 @@ func @main {
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __list_node_decref
+    x64.callDirect __list_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 rbx, 1
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __list_decref
     x64.movRegReg r8, rbx
     x64.epilogue 72
     x64.popReg r15

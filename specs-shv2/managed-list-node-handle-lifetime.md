@@ -645,6 +645,280 @@ end 'main'
 0
 ```
 
+<!-- test: removing-a-handle-a-navigator-hands-back-is-refused -->
+⭐⭐ **THE ROSTER RE-RUN AGAINST A SURFACE FOUR TIMES ITS SIZE (`BATCH37`).** The refusal above was
+written when TWO doors minted a handle; there are eight now, and *"an insertion on this same chain, handed
+in inline"* is a sentence about the two that existed. `n.next()` mints from a NODE — no chain value is in
+scope at that door to stamp — so the identity test cannot admit it and it is refused. That is the SAFE
+direction and it is also an over-refusal: this particular handle is as unnameable as an inline insertion's.
+It is cased rather than quietly relaxed, because relaxing it means teaching the mint door to guess a chain,
+which is exactly how an exemption gets widened by a caller.
+```maxon
+typealias StrChain = __ManagedList with String
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	let a = chain.insertLast("first element, long enough to be a real heap allocation")
+	let b = chain.insertLast("second element, long enough to be a real heap allocation")
+	let got = chain.remove(try a.next() otherwise 'atEnd'
+		return 1
+	end 'atEnd')
+	print("[{got}] [{b.value()}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:8:18: Unsupported: `__ManagedList.remove` takes the element OUT of the node, so its handle must be one this statement can mark as moved — a name (`remove(n)`) or an insertion on this same chain, handed in inline. A handle arriving any other way — out of a field, an element, a call result, a merge — would go on answering `value()` from the emptied slot with nothing left to refuse the read; bind it to a name first, or use `detach`, which leaves the element where it is
+```
+
+<!-- test: removing-a-handle-this-chains-own-navigator-hands-back-inline -->
+The other half of the row above, and the reason the test is IDENTITY rather than "which door minted it".
+`chain.tail()` and `chain.insertAfter(…)` both mint from THIS chain, so both carry its stamp and both are
+admitted — the handle exists only as this argument and no second expression can name it. Two new mint
+doors joining the one exemption, measured rather than assumed.
+```maxon
+typealias StrChain = __ManagedList with String
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	let a = chain.insertLast("the element that stays behind, on the heap")
+	let spliced = chain.remove(chain.insertAfter(a, value: "an element spliced in and taken straight out"))
+	print("[{spliced}]\n")
+	let last = chain.remove(try chain.tail() otherwise 'empty'
+		return 1
+	end 'empty')
+	print("[{last}] {chain.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[an element spliced in and taken straight out]
+[the element that stays behind, on the heap] 0
+```
+
+<!-- test: the-four-node-argument-doors-admit-every-arrival -->
+⭐⭐ **THE ROSTER'S ANSWER FOR THE FOUR NEW NODE-ARGUMENT DOORS, AND IT IS "ALL OF THEM" — DERIVED, NOT
+PROBED.** `remove` needs a roster because it EMPTIES `value@16`, so a handle that survives the call would
+read an emptied slot. `insertAfter`, `insertBefore`, `reinsertFirst` and `reinsertLast` change LINKS and
+leave `value@16` exactly where it is, so every handle they are handed goes on answering `value()`,
+`next()` and `prev()` afterwards and there is nothing for a later read to be refused about — which is
+`detach`'s position, stated once for all five.
+
+This runs every arrival the refusal above enumerates, through the reinsertion: a FIELD, a CALL RESULT, a
+borrowed PARAMETER, an inline NAVIGATOR result and an inline INSERTION result. A guard copied here from
+`remove` would refuse the first four.
+```maxon
+typealias StrChain = __ManagedList with String
+typealias StrNode = __ManagedListNode with String
+
+type Keeper
+	export var node as StrNode
+
+	export static function create(n StrNode) returns Self
+		return Self{node: n}
+	end 'create'
+
+	export function held() returns StrNode
+		return self.node
+	end 'held'
+
+	export function read() returns String
+		return self.node.value()
+	end 'read'
+end 'Keeper'
+
+function moveToBack(c StrChain, n StrNode)
+	c.reinsertLast(n)
+end 'moveToBack'
+
+function headOf(c StrChain) returns String
+	let h = try c.head() otherwise 'empty'
+		return "<empty>"
+	end 'empty'
+	return h.value()
+end 'headOf'
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	let n1 = chain.insertLast("one, long enough to be a real heap allocation")
+	let n2 = chain.insertLast("two, long enough to be a real heap allocation")
+	let k = Keeper.create(n2)
+	chain.reinsertFirst(k.node)
+	print("field: {headOf(chain)} / {k.read()}\n")
+	chain.reinsertLast(k.held())
+	print("call result: {headOf(chain)} / {k.read()}\n")
+	moveToBack(chain, n: n1)
+	print("parameter: {headOf(chain)} / {n1.value()}\n")
+	chain.reinsertFirst(try chain.tail() otherwise 'empty'
+		return 1
+	end 'empty')
+	print("navigator: {headOf(chain)}\n")
+	chain.reinsertLast(chain.insertFirst("three, long enough to be a real heap allocation"))
+	print("insertion: {headOf(chain)} {chain.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+field: two, long enough to be a real heap allocation / two, long enough to be a real heap allocation
+call result: one, long enough to be a real heap allocation / two, long enough to be a real heap allocation
+parameter: two, long enough to be a real heap allocation / one, long enough to be a real heap allocation
+navigator: one, long enough to be a real heap allocation
+insertion: one, long enough to be a real heap allocation 3
+```
+
+<!-- test: a-navigators-handle-outlives-the-chain-it-came-from -->
+`head()` mints a handle exactly as an insertion does, and it hands back a node that ALREADY has owners —
+so its `+1` is taken inside the runtime entry, on the ok path, where the parser structurally cannot emit
+one: an incref at the mint door would sit before the `try` fork and run on the ERROR edge too. This is
+`a-handle-returned-out-of-the-function-that-made-the-chain` through the new door: the chain dies at the
+`return` and only the handle leaves.
+```maxon
+typealias StrChain = __ManagedList with String
+typealias StrNode = __ManagedListNode with String
+
+function headOfAFreshChain() returns StrNode throws ArrayError
+	var chain = StrChain.create()
+	chain.insertLast("the element the handle keeps alive, on the heap")
+	chain.insertLast("an element nothing keeps alive, on the heap")
+	return try chain.head()
+end 'headOfAFreshChain'
+
+function main() returns ExitCode
+	for _ in 0 upto 8 'each'
+		let node = try headOfAFreshChain() otherwise 'empty'
+			return 1
+		end 'empty'
+		print("{node.value()}\n")
+	end 'each'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+the element the handle keeps alive, on the heap
+the element the handle keeps alive, on the heap
+the element the handle keeps alive, on the heap
+the element the handle keeps alive, on the heap
+the element the handle keeps alive, on the heap
+the element the handle keeps alive, on the heap
+the element the handle keeps alive, on the heap
+the element the handle keeps alive, on the heap
+```
+
+<!-- test: a-navigators-handle-in-a-field-walks-the-chain -->
+⭐ **`stdlib/List.maxon:158-175`'s `ListIterator`, whole.** A handle from `head()` stored in a FIELD, a
+`next()` handle REASSIGNED over it on every step, and a read through the field after the chain has been
+cleared. Each of the three is a separate obligation — the mint's reference, the reassignment releasing the
+one it replaced, and the surviving node outliving the chain — and a rung can satisfy any two of them and
+report the right answer.
+```maxon
+typealias StrChain = __ManagedList with String
+typealias StrNode = __ManagedListNode with String
+
+type Cursor
+	export var at as StrNode
+
+	export static function create(n StrNode) returns Self
+		return Self{at: n}
+	end 'create'
+
+	export function step() throws ArrayError
+		self.at = try self.at.next()
+	end 'step'
+end 'Cursor'
+
+function main() returns ExitCode
+	var chain = StrChain.create()
+	chain.insertLast("one, long enough to be a real heap allocation")
+	chain.insertLast("two, long enough to be a real heap allocation")
+	chain.insertLast("three, long enough to be a real heap allocation")
+	var cursor = Cursor.create(try chain.head() otherwise 'empty'
+		return 1
+	end 'empty')
+	print("{cursor.at.value()}\n")
+	try cursor.step() otherwise 'atEnd'
+		return 2
+	end 'atEnd'
+	print("{cursor.at.value()}\n")
+	try cursor.step() otherwise 'atEnd2'
+		return 3
+	end 'atEnd2'
+	print("{cursor.at.value()}\n")
+	chain.clear()
+	print("{cursor.at.value()} {chain.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+one, long enough to be a real heap allocation
+two, long enough to be a real heap allocation
+three, long enough to be a real heap allocation
+three, long enough to be a real heap allocation 0
+```
+
+<!-- test: a-navigator-that-throws-mints-nothing -->
+The error edge of all four navigators, two hundred times over. A mint whose `+1` landed BEFORE the `try`
+fork would incref a result that is not a node on every one of these trips — and would also displace the
+call as the op the `try` rewrite targets, which is a compile-time E3055 rather than a wrong answer. Once
+per trip is invisible; two hundred is not.
+```maxon
+typealias StrChain = __ManagedList with String
+
+function main() returns ExitCode
+	var empty = StrChain.create()
+	var caught = 0
+	for _ in 0 upto 50 'headSpin'
+		let n = try empty.head() otherwise 'noHead'
+			caught = caught + 1
+			continue
+		end 'noHead'
+		print("{n.value()}\n")
+	end 'headSpin'
+	for _ in 0 upto 50 'tailSpin'
+		let n = try empty.tail() otherwise 'noTail'
+			caught = caught + 1
+			continue
+		end 'noTail'
+		print("{n.value()}\n")
+	end 'tailSpin'
+	var one = StrChain.create()
+	let solo = one.insertFirst("the only node there is, on the heap")
+	for _ in 0 upto 50 'nextSpin'
+		let n = try solo.next() otherwise 'atEnd'
+			caught = caught + 1
+			continue
+		end 'atEnd'
+		print("{n.value()}\n")
+	end 'nextSpin'
+	for _ in 0 upto 50 'prevSpin'
+		let n = try solo.prev() otherwise 'atStart'
+			caught = caught + 1
+			continue
+		end 'atStart'
+		print("{n.value()}\n")
+	end 'prevSpin'
+	print("{caught} {solo.value()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+200 the only node there is, on the heap
+```
+
 <!-- test: removing-a-node-of-another-chain-aborts -->
 ⭐⭐ **THE LAST NET, AND THE ONE THE FRONT END CANNOT STAND IN FRONT OF.** Two chains of one element type
 share a `__ManagedListNode` type, so a handle carried between two NAMED chains type-checks at the call and

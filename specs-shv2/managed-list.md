@@ -112,8 +112,7 @@ Get the previous node. Throws `__ManagedListError.endOfList` if at the beginning
 
 ## Tests
 
-<!-- disabled-test: core.create-empty -->
-<!-- W137 — `__ManagedList.isEmpty` (the missing chain surface) -->
+<!-- test: core.create-empty -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -232,8 +231,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: core.insert-after -->
-<!-- W137 — `__ManagedList.insertAfter` (the missing chain surface) -->
+<!-- test: core.insert-after -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -274,8 +272,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: core.insert-before -->
-<!-- W137 — `__ManagedList.insertBefore` (the missing chain surface) -->
+<!-- test: core.insert-before -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -430,8 +427,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: node.next-prev -->
-<!-- W137 — `__ManagedListNode.next`/`prev` (the missing node surface) -->
+<!-- test: node.next-prev -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -475,8 +471,7 @@ end 'main'
 20
 ```
 
-<!-- disabled-test: node.set-value -->
-<!-- W137 — `__ManagedListNode.setValue` (the missing node surface) -->
+<!-- test: node.set-value -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -504,8 +499,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: node.set-value-old-survives -->
-<!-- W137 — `__ManagedListNode.setValue` (the missing node surface) -->
+<!-- test: node.set-value-old-survives -->
 ```maxon
 typealias StringManagedList = __ManagedList with String
 
@@ -527,8 +521,7 @@ hello world!!!!!!!!!!!!!!
 replacement!!!!!!!!!!!!!!
 ```
 
-<!-- disabled-test: core.clear -->
-<!-- W137 — `__ManagedList.isEmpty` (the missing chain surface) -->
+<!-- test: core.clear -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -560,8 +553,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: core.head-empty-throws -->
-<!-- W137 — `__ManagedList.head`, one of that row's three THROWING accessors -->
+<!-- test: core.head-empty-throws -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -584,8 +576,7 @@ end 'main'
 caught
 ```
 
-<!-- disabled-test: core.tail-empty-throws -->
-<!-- W137 — `__ManagedList.tail`, one of that row's three THROWING accessors -->
+<!-- test: core.tail-empty-throws -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -608,8 +599,7 @@ end 'main'
 caught
 ```
 
-<!-- disabled-test: node.next-end-throws -->
-<!-- W137 — `__ManagedList.head` + `__ManagedListNode.next` -->
+<!-- test: node.next-end-throws -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -640,8 +630,7 @@ end 'main'
 caught
 ```
 
-<!-- disabled-test: node.prev-begin-throws -->
-<!-- W137 — `__ManagedList.head` + `__ManagedListNode.prev` -->
+<!-- test: node.prev-begin-throws -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -672,8 +661,7 @@ end 'main'
 caught
 ```
 
-<!-- disabled-test: core.reinsert-first -->
-<!-- `__ManagedList.reinsertFirst` — a chain method NO rung names, W137 included. Reported to the coordinator as a gap in that row's roster -->
+<!-- test: core.reinsert-first -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -714,8 +702,7 @@ end 'main'
 20
 ```
 
-<!-- disabled-test: core.reinsert-last -->
-<!-- `__ManagedList.reinsertLast` — a chain method NO rung names, W137 included. Reported to the coordinator as a gap in that row's roster -->
+<!-- test: core.reinsert-last -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -756,8 +743,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: core.remove-head -->
-<!-- W137 — `__ManagedList.head` -->
+<!-- test: core.remove-head -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -792,8 +778,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: core.remove-tail -->
-<!-- W137 — `__ManagedList.tail` -->
+<!-- test: core.remove-tail -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
@@ -828,8 +813,7 @@ end 'main'
 20
 ```
 
-<!-- disabled-test: core.remove-all -->
-<!-- W137 — `__ManagedList.isEmpty` -->
+<!-- test: core.remove-all -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntManagedList = __ManagedList with Integer
