@@ -1,0 +1,808 @@
+---
+feature: list
+status: experimental
+keywords: [list, linked list, doubly linked, collection, prepend, append]
+category: collections
+---
+# List
+
+## Documentation
+
+A `List` is a doubly linked list collection. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
+
+Internally, List is backed by a `__ManagedList` — a doubly linked list of nodes that supports O(1) insertion and removal at both ends.
+
+### Creating a List
+
+Use the `List from` syntax with an array literal:
+
+```maxon
+var list = List from [1, 2, 3]
+```
+
+Or create an empty list with an explicit type:
+
+```text
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+var empty = IntList.create()
+```
+
+### Methods
+
+#### count() returns Count
+
+Get the number of elements.
+
+#### isEmpty() returns bool
+
+Check if the list is empty.
+
+#### first() returns Element throws ArrayError
+
+Get the first element. Throws if empty.
+
+#### last() returns Element throws ArrayError
+
+Get the last element. Throws if empty.
+
+#### get(index Index) returns Element throws ArrayError
+
+Get element at index (0-based, front to back). Throws if out of bounds.
+
+#### prepend(value Element)
+
+Add an element to the front of the list. O(1).
+
+#### append(value Element)
+
+Add an element to the back of the list. O(1).
+
+#### insert(at Index, value Element) throws ArrayError
+
+Insert an element at the given index. O(n). Valid range is `[0, count]` —
+passing `count` appends at the end. An index greater than `count` is out of
+bounds and throws `ArrayError.indexOutOfBounds`.
+
+#### removeFirst() returns Element throws ArrayError
+
+Remove and return the first element. Throws if empty. O(1).
+
+#### removeLast() returns Element throws ArrayError
+
+Remove and return the last element. Throws if empty. O(1).
+
+#### remove(at Index) returns Element throws ArrayError
+
+Remove and return the element at the given index. Throws if out of bounds. O(n).
+
+#### clear()
+
+Remove all elements from the list.
+
+### Iteration
+
+List implements `Iterable`, so it can be used with for-in loops:
+
+```text
+for item in list 'loop'
+    print("{item}\n")
+end 'loop'
+```
+
+Elements are iterated front to back. Iteration uses a cached cursor on the underlying managed list for O(n) total traversal (O(1) per element).
+
+## Tests
+
+<!-- test: basic.creation -->
+```maxon
+function main() returns ExitCode
+	let list = List from [10, 20, 30]
+	return list.count()
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: basic.empty -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	if list.isEmpty() 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: basic.first-last -->
+```maxon
+function main() returns ExitCode
+	let list = List from [10, 20, 30]
+	let f = try list.first() otherwise 0
+	let l = try list.last() otherwise 0
+	print("{f}\n")
+	print("{l}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+30
+```
+
+<!-- test: basic.first-empty -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	let f = try list.first() otherwise 99
+	return f
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: basic.last-empty -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	let l = try list.last() otherwise 99
+	return l
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: prepend.single -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	list.prepend(42)
+	let f = try list.first() otherwise 0
+	return f
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: prepend.multiple -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	list.prepend(3)
+	list.prepend(2)
+	list.prepend(1)
+	let f = try list.first() otherwise 0
+	let l = try list.last() otherwise 0
+	print("{f}\n")
+	print("{l}\n")
+	print("{list.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+3
+3
+```
+
+<!-- test: append.single -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	list.append(42)
+	let f = try list.first() otherwise 0
+	return f
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: append.multiple -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	list.append(1)
+	list.append(2)
+	list.append(3)
+	let f = try list.first() otherwise 0
+	let l = try list.last() otherwise 0
+	print("{f}\n")
+	print("{l}\n")
+	print("{list.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+3
+3
+```
+
+<!-- test: get.valid -->
+```maxon
+function main() returns ExitCode
+	let list = List from [10, 20, 30, 40]
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
+	let v3 = try list.get(3) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	print("{v3}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+20
+30
+40
+```
+
+<!-- test: get.out-of-bounds -->
+```maxon
+function main() returns ExitCode
+	let list = List from [10, 20, 30]
+	let v = try list.get(5) otherwise 99
+	return v
+end 'main'
+```
+```exitcode
+99
+```
+
+<!-- test: insert.at-beginning -->
+```maxon
+function main() returns ExitCode
+	var list = List from [20, 30]
+	try list.insert(0, value: 10) otherwise 'err'
+		return 1
+	end 'err'
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+20
+30
+```
+
+<!-- test: insert.at-middle -->
+```maxon
+function main() returns ExitCode
+	var list = List from [10, 30]
+	try list.insert(1, value: 20) otherwise 'err'
+		return 1
+	end 'err'
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+20
+30
+```
+
+<!-- test: insert.at-end -->
+```maxon
+function main() returns ExitCode
+	var list = List from [10, 20]
+	try list.insert(2, value: 30) otherwise 'err'
+		return 1
+	end 'err'
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+20
+30
+```
+
+<!-- test: insert.out-of-bounds -->
+
+An index past `count` is out of bounds and throws `ArrayError.indexOutOfBounds`.
+Regression: `insert` previously took the append branch for any `at >= count`,
+silently clamping an out-of-bounds index to the tail (growing the list) instead
+of throwing. Only `at == count` may append; `at > count` must throw and leave
+the list unchanged.
+
+```maxon
+function main() returns ExitCode
+	var list = List from [10]
+	try list.insert(5, value: 99) otherwise 'oob'
+		print("threw\n")
+		print("{list.count()}\n")
+		return 0
+	end 'oob'
+	print("no throw\n")
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+threw
+1
+```
+
+<!-- test: remove-first -->
+```maxon
+function main() returns ExitCode
+	var list = List from [10, 20, 30]
+	let removed = try list.removeFirst() otherwise 0
+	print("{removed}\n")
+	print("{list.count()}\n")
+	let f = try list.first() otherwise 0
+	print("{f}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+2
+20
+```
+
+<!-- test: remove-last -->
+```maxon
+function main() returns ExitCode
+	var list = List from [10, 20, 30]
+	let removed = try list.removeLast() otherwise 0
+	print("{removed}\n")
+	print("{list.count()}\n")
+	let l = try list.last() otherwise 0
+	print("{l}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+30
+2
+20
+```
+
+<!-- test: remove.at-index -->
+```maxon
+function main() returns ExitCode
+	var list = List from [10, 20, 30, 40]
+	let removed = try list.remove(1) otherwise 0
+	print("{removed}\n")
+	print("{list.count()}\n")
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	let v2 = try list.get(2) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+20
+3
+10
+30
+40
+```
+
+<!-- test: iteration.for-in -->
+```maxon
+function main() returns ExitCode
+	let list = List from [10, 20, 30]
+	for item in list 'loop'
+		print("{item}\n")
+	end 'loop'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+10
+20
+30
+```
+
+<!-- test: iteration.large-list -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	for i in 1 to 100 'build'
+		list.append(i)
+	end 'build'
+	var sum = 0
+	for item in list 'loop'
+		sum = sum + item
+	end 'loop'
+	return sum - 5050
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: iteration.two-loops -->
+```maxon
+function main() returns ExitCode
+	let list = List from [1, 2, 3]
+	var sum1 = 0
+	for item in list 'loop1'
+		sum1 = sum1 + item
+	end 'loop1'
+	var sum2 = 0
+	for item in list 'loop2'
+		sum2 = sum2 + item
+	end 'loop2'
+	if sum1 == sum2 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: mixed-operations -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	list.append(2)
+	list.append(3)
+	list.prepend(1)
+	list.append(4)
+	let removed1 = try list.removeFirst() otherwise 0
+	let removed2 = try list.removeLast() otherwise 0
+	print("{removed1}\n")
+	print("{removed2}\n")
+	print("{list.count()}\n")
+	let v0 = try list.get(0) otherwise 0
+	let v1 = try list.get(1) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+4
+2
+2
+3
+```
+
+<!-- test: strings -->
+```maxon
+typealias StringList = List with String
+
+function main() returns ExitCode
+	var list = StringList.create()
+	list.append("hello")
+	list.append("world")
+	let f = try list.first() otherwise "none"
+	let l = try list.last() otherwise "none"
+	print("{f}\n")
+	print("{l}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello
+world
+```
+
+<!-- test: clear -->
+```maxon
+function main() returns ExitCode
+	var list = List from [1, 2, 3]
+	list.clear()
+	if list.isEmpty() 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: memory.remove-frees-strings -->
+```maxon
+typealias StringList = List with String
+
+function testRemove()
+	var list = StringList.create()
+	list.append("hello world!!!!!!!!!!!!!!")
+	list.append("goodbye world!!!!!!!!!!!!!")
+	let removed = try list.removeFirst() otherwise "none"
+	print("{removed}\n")
+	print("{list.count()}\n")
+end 'testRemove'
+
+function main() returns ExitCode
+	testRemove()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
+1
+```
+
+<!-- test: memory.remove-returns-string -->
+```maxon
+typealias StringList = List with String
+
+function testRemove() returns String
+	var list = StringList.create()
+	list.append("hello world!!!!!!!!!!!!!!")
+	list.append("goodbye world!!!!!!!!!!!!!")
+	return try list.removeFirst() otherwise "none"
+end 'testRemove'
+
+function main() returns ExitCode
+	let removed = testRemove()
+	print("{removed}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
+```
+
+<!-- test: memory.clear-frees-strings -->
+```maxon
+typealias StringList = List with String
+
+function testClear()
+	var list = StringList.create()
+	list.append("alpha string!!!!!!!!!!!!!!!")
+	list.append("beta string!!!!!!!!!!!!!!!!")
+	list.append("gamma string!!!!!!!!!!!!!!!")
+	list.clear()
+	print("{list.count()}\n")
+end 'testClear'
+
+function main() returns ExitCode
+	testClear()
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: memory.clear-passed-list -->
+```maxon
+typealias StringList = List with String
+
+function clearList(list StringList)
+	list.clear()
+end 'clearList'
+
+function main() returns ExitCode
+	var list = StringList.create()
+	list.append("alpha string!!!!!!!!!!!!!!!")
+	list.append("beta string!!!!!!!!!!!!!!!!")
+	list.append("gamma string!!!!!!!!!!!!!!!")
+	clearList(list)
+	print("{list.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: memory.value-survives-clear-and-return -->
+### Borrow conflict: first then clear in function
+Getting a value from a list and then clearing it is a borrow conflict, even in a helper function.
+```maxon
+typealias StringList = List with String
+
+function clearList(list StringList) returns String
+	let val = try list.first() otherwise "none"
+	list.clear()
+	return val
+end 'clearList'
+
+function main() returns ExitCode
+	var list = StringList.create()
+	list.append("hello world!!!!!!!!!!!!!!")
+	let result = clearList(list)
+	print("{result}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/list/memory.value-survives-clear-and-return.test:6:7: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 5)
+```
+
+<!-- test: memory.value-survives-clear-error -->
+### Borrow conflict: indirect mutation via helper function
+Passing a borrowed-from list to a function that clears it is a borrow conflict.
+```maxon
+typealias StringList = List with String
+
+function clearList(list StringList)
+	list.clear()
+end 'clearList'
+
+function main() returns ExitCode
+	var list = StringList.create()
+	list.append("hello world!!!!!!!!!!!!!!")
+	let val = try list.first() otherwise "none"
+	clearList(list)
+	print("{val}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/list/memory.value-survives-clear-error.test:12:2: cannot mutate 'list' via 'clearList' while it is borrowed by 'val' (borrowed at line 11)
+```
+
+<!-- test: memory.value-survives-clear -->
+### Borrow conflict: first then clear
+Getting a value from a list and then clearing it is a borrow conflict.
+```maxon
+typealias StringList = List with String
+
+function main() returns ExitCode
+	var list = StringList.create()
+	list.append("hello world!!!!!!!!!!!!!!")
+	let val = try list.first() otherwise "none"
+	list.clear()
+	print("{val}\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/list/memory.value-survives-clear.test:8:7: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 7)
+```
+
+<!-- test: memory.get-in-loop-no-over-release -->
+### Repeated get() in a loop does not over-release the walked node
+`List.get(i)` inlines `List.walkTo`, whose loop-carried `current` node is both
+released inside the inlined body and returned on the exit path. The refcount
+inserter must not add a *second* release on the loop's continue/error edges, or
+the walked node is double-freed (the self-hosted `rewriteUnresolvedOpsPerFunction`
+over-release). Summing every element via `get(i)` in a loop must complete cleanly.
+```maxon
+typealias N = int(0 to u64.max)
+typealias NList = List with N
+
+function walkSum(list NList, n N) returns N
+	var sum = 0
+	var i = 0
+	while i < n 'loop'
+		let v = try list.get(i) otherwise panic("oob")
+		sum = sum + v
+		i = i + 1
+	end 'loop'
+	return sum
+end 'walkSum'
+
+function main() returns ExitCode
+	var list = NList.create()
+	var k = 0
+	while k < 12 'build'
+		list.append(k * 10)
+		k = k + 1
+	end 'build'
+	let s = walkSum(list, n: list.count())
+	print("sum={s}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+sum=660
+```

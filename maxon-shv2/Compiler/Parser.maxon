@@ -5276,6 +5276,14 @@ let ArrayResizeMethod = b"resize"
 // second `b"clear"` beside the first.
 let ClearMethod = b"clear"
 
+// ⚠ **`isEmpty` IS BACK, AND IT IS NOT THE CONSTANT ARR4 DELETED.** That one was the `Array`'s, retired with
+// `__managed_is_empty` because `stdlib/Array.maxon:162` serves the spelling from the corpus and *"no other
+// surface ever served it"* — a sentence about the surfaces of that day. A `List` is SYNTHESIZED
+// (`ListRuntime`'s header carries the measurement), so its `isEmpty` has no corpus body to come from, and the
+// `__ManagedList` roster already names `isEmpty` among its own later slices. It is therefore UNPREFIXED from
+// its first day, on the block below's rule: a method NAME is a token spelling, not a container's property.
+let IsEmptyMethod = b"isEmpty"
+
 // The whole-array copy methods (P1.7 slice 4). `slice` is THROWING (bounds/inverted-range → `ArrayError`) and
 // returns a NEW independent array; `clone` returns a NEW independent array (non-throwing); `append` mutates the
 // receiver, borrowing and preserving its argument. TRIVIAL elements only — a managed element needs a deep-clone
@@ -6448,14 +6456,21 @@ end 'surfaceRosterProvider'
 // E3019 off the declaration rather than off a hand-written roster.
 
 // ⭐ **WHICH `List` METHODS WRITE THEIR RECEIVER** — the fourth half of the one immutable-receiver rule, here
-// with its three siblings for their stated reason. `append`/`prepend` link a fresh node and bump the count;
-// `removeFirst` unlinks one and FREES it. `get`/`first`/`count` only read.
+// with its three siblings for their stated reason. `append`/`prepend`/`insert` link a fresh node and bump the
+// count; `removeFirst`/`removeLast`/`remove` unlink one and FREE it, and `clear` frees every one of them.
+// `get`/`first`/`last`/`count`/`isEmpty` only read.
 //
 // ⚠ **THIS WHOLE SET IS ALSO WHAT INVALIDATES AN OUTSTANDING `first()` BORROW** (E3070) — `dispatchListMethod`
-// hands `noteBorrowSubjectWrite` the answer below, not a `removeFirst` special case. `removeFirst` is merely
-// the one that frees the borrowed node outright; the other two write the record the borrow was taken off.
+// hands `noteBorrowSubjectWrite` the answer below, not a `removeFirst` special case. The removals and `clear`
+// free the borrowed node outright; the insertions write the record the borrow was taken off.
+//
+// ⚠ **IT IS DELIBERATELY NOT `managedListMethodFreesANode`'s NARROWER SHAPE, and the reason that predicate
+// gives for being narrow is exactly why this one is not.** A `__ManagedList` borrow is a NODE handle, and an
+// insertion cannot dangle one because chain nodes never move. A `List` borrow is an ELEMENT — handed out by
+// `first`/`last`/`get` through `emitContainerElementAccessor` — and E3070's subject is the STORAGE, so the
+// conservative "any write ends every borrow of this list" is the answer here.
 function listMethodMutatesReceiver(name ByteArray) returns bool
-	return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(ListRemoveFirstMethod)
+	return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(InsertMethod) or name.equals(ListRemoveFirstMethod) or name.equals(ListRemoveLastMethod) or name.equals(RemoveMethod) or name.equals(ClearMethod)
 end 'listMethodMutatesReceiver'
 
 // ⭐ **WHICH `__ManagedList` METHODS WRITE THEIR RECEIVER** — the same rule one surface over, and NOT the
@@ -13785,12 +13800,20 @@ export type Parser
 	// unrelated `EChain.create()` in the same body happened to reserve the descriptor — so the machinery was
 	// whole and only this roster was short. It is named for the CONTAINER now, so the next surface that grows
 	// a move-out is asked about here rather than silently omitted.
+	//
+	// ⭐ **`removeLast` IS THAT NEXT SURFACE, AND IT ARRIVED AS PREDICTED** (spec-port `list`). It hands an
+	// element out across the container boundary exactly as `removeFirst` does, so a
+	// `let gone = try self.chain.removeLast()` in a shared generic body reserves its descriptor here. ⚠ `remove`
+	// needs no second entry: the `List` dispatcher matches the very same `RemoveMethod` constant the `Array` and
+	// the `__ManagedList` do — one byte string, one arm — which is this file's method-name rule paying off
+	// rather than the coincidence the paragraph above had to call it when only the `Array` spelled it.
+	// `get`/`first`/`last`/`isEmpty`/`count` BORROW or read and drop nothing, so they stay off the list.
 	function containerMoveOutMethodAt(q TokenIndex) returns bool
 		if not self.isDotMethodCallHeadAt(q) 'notMethodCall'
 			return false
 		end 'notMethodCall'
 		let name = self.tokenAt(q).value
-		return name.equals(ArrayPopMethod) or name.equals(RemoveMethod) or name.equals(ListRemoveFirstMethod)
+		return name.equals(ArrayPopMethod) or name.equals(RemoveMethod) or name.equals(ListRemoveFirstMethod) or name.equals(ListRemoveLastMethod)
 	end 'containerMoveOutMethodAt'
 
 	// Is the identifier at `q` the method name of a `<receiver> . slice/clone/append (` array COPY — the
@@ -14080,11 +14103,22 @@ export type Parser
 		return name.equals(ArrayPushMethod) or name.equals(ArraySetMethod) or name.equals(InsertMethod) or self.isChainMoveInMutator(name)
 	end 'isContainerMoveInMutator'
 
-	// The chain's four insertions, split out because they are the ones whose receiver is a `List`/`__ManagedList`
-	// and because the two SURFACES spell the same act differently — `append`/`prepend` link an element the caller
-	// never sees again, `insertFirst`/`insertLast` link it and hand back the node handle. What both surfaces
-	// share is the only thing this asks: the chain becomes the element's sole owner, released once by
-	// `element_drop@24` (`ListRuntime.maxon`), exactly as an array slot is by `element_destroy@40`.
+	// The chain's four END insertions, split out because they are the ones whose receiver is a
+	// `List`/`__ManagedList` and because the two SURFACES spell the same act differently — `append`/`prepend`
+	// link an element the caller never sees again, `insertFirst`/`insertLast` link it and hand back the node
+	// handle. What both surfaces share is the only thing this asks: the chain becomes the element's sole owner,
+	// released once by `element_drop@24` (`ListRuntime.maxon`), exactly as an array slot is by
+	// `element_destroy@40`.
+	//
+	// ⚠ **`List.insert` IS A FIFTH CHAIN MOVE-IN AND IS DELIBERATELY NOT NAMED HERE (spec-port `list`)** — it
+	// is covered by the caller's own `InsertMethod` arm, which it matches on the very same constant. ⭐ **But
+	// it is covered for a DIFFERENT REASON than the one the header above states for that arm**, and the
+	// difference is worth writing down: that paragraph justifies `insert`'s presence as an over-approximation
+	// for a CORPUS-SERVED `Array.insert` whose body takes ownership out of sight. `List.insert` is
+	// compiler-emitted, and its ownership is not an approximation at all — `parseArraySet` calls
+	// `moveElementIntoContainer` at the parse, so the chain provably becomes the owner and the descriptor is
+	// provably owed. ⇒ The shared arm is EXACT for this spelling and over-approximate for the other; a name
+	// added here would be a second claim about one byte string, which is what the caller's block refuses.
 	function isChainMoveInMutator(name ByteArray) returns bool
 		return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(ManagedListInsertFirstMethod) or name.equals(ManagedListInsertLastMethod)
 	end 'isChainMoveInMutator'
@@ -48266,7 +48300,7 @@ export type Parser
 		// reference into a node the list owns, so E3070 has an outstanding borrow to invalidate when
 		// `removeFirst` frees that node — the same reason the `Array` arm carries one and a `Set` does not.
 		if self.signatures.isListInstanceAt(recv.tag, nameId: recv.nameId) 'listMethod'
-			return try self.dispatchListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner)
+			return try self.dispatchListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName))
 		end 'listMethod'
 
 		// A `__ManagedList` RECEIVER (`ml.insertFirst(x)`, `ml.remove(node)`, `ml.clear()`) is the SAME chain
@@ -52852,24 +52886,43 @@ export type Parser
 	end 'requireListElementType'
 
 	// ⭐ **DISPATCH A BUILTIN `List` METHOD** — cursor on the method NAME, `list` the (borrowed) receiver
-	// record. `count` returns the element count; `append`/`prepend` are VOID mutators (refused in value
-	// position by `requireVoidMethodIsStatement`) that return the receiver — what the statement still denotes,
-	// like `emitArrayVoidCall`; `first`/`get`/`removeFirst` are THROWING accessors emitted as ordinary calls
-	// the enclosing `try` rewrites (`rewriteLastCallToTryCall`), exactly as every throwing `Array` accessor is.
+	// record. Four shapes, and every arm is one of them:
 	//
-	// ⚠ **THE OWNERSHIP SPLIT IS THE `Array`'s, ASKED THROUGH THE `Array`'s OWN DOORS.** `append`/`prepend`
-	// MOVE a managed element in (the list becomes its sole owner) via `parseContainerElementArg`;
-	// `first`/`get` hand back a BORROW and `removeFirst` a value MOVED OUT, both through
-	// `emitContainerElementAccessor`'s `owned` flag. Not one of those doors needed a `List` arm — see that
-	// function's header for why they were container doors all along.
-	function dispatchListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
+	//   • **READS** — `count`/`isEmpty`, plain runtime calls that cannot fail.
+	//   • **NON-THROWING VOID MUTATORS** — `append`/`prepend`/`clear`, refused in value position by
+	//     `requireVoidMethodIsStatement` and returning the receiver, which is what the statement still
+	//     denotes (`emitArrayVoidCall`'s rule).
+	//   • **THROWING ACCESSORS** — `first`/`last`/`get`/`removeFirst`/`removeLast`/`remove`, emitted as
+	//     ordinary calls the enclosing `try` rewrites (`rewriteLastCallToTryCall`), exactly as every throwing
+	//     `Array` accessor is.
+	//   • **THE ONE THROWING VOID MUTATOR** — `insert`, which is neither of the two above and is therefore
+	//     `parseArraySet`'s shape rather than a fourth argument parse (see its arm).
+	//
+	// ⚠ **THE OWNERSHIP SPLIT IS THE `Array`'s, ASKED THROUGH THE `Array`'s OWN DOORS.** `append`/`prepend`/
+	// `insert` MOVE a managed element in (the list becomes its owner) via `parseContainerElementArg`;
+	// `first`/`last`/`get` hand back a BORROW and `removeFirst`/`removeLast`/`remove` a value MOVED OUT, both
+	// through `emitContainerElementAccessor`'s `owned` flag. Not one of those doors needed a `List` arm — see
+	// that function's header for why they were container doors all along.
+	function dispatchListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(list)
 
-		// `receiverStorage: NoParamPositions` for the reason the `String`, `Set` and `Map` dispatchers state: a
-		// list write cannot free an ARRAY element, which is the only borrow E3070 tracks.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: listMethodMutatesReceiver(methodTok.value))
+		// ⛔⛔ **THIS PASSED `receiverStorage: NoParamPositions` UNTIL spec-port `list`, ON A PREMISE THAT HAD
+		// STOPPED HOLDING, AND IT WAS A USE-AFTER-FREE.** The line read *"a list write cannot free an ARRAY
+		// element, which is the only borrow E3070 tracks"* — copied from the `String`/`Set`/`Map` dispatchers,
+		// where it is TRUE because those surfaces hand out no borrow at all. A `List` does:
+		// `first`/`last`/`get` mint one through `emitContainerElementAccessor` exactly as an `Array`'s do, and
+		// `removeFirst`/`removeLast`/`remove`/`clear` free the node that borrow points into.
+		//
+		// The same-body half was always closed (`noteBorrowSubjectWrite` below settles a container write at the
+		// parse), so nothing was red. The CROSS-FUNCTION half was open, because `BorrowCheck.mutationSiteWrites`
+		// reads the STORAGE column for every call site and this door never set a bit in it. MEASURED on the
+		// existing surface, before this rung added anything: `let val = try list.first() …` then `eat(list)`
+		// where `eat` calls `list.removeFirst()` compiled clean and ran to **0xC0000005**.
+		// `list.md:memory.value-survives-clear-error` is that program with `clear`, and the E3070 it pins is
+		// what this argument buys.
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: listMethodMutatesReceiver(methodTok.value))
 
 		// ⭐ A write through the receiver invalidates every borrow outstanding on it — `removeFirst` FREES the
 		// node whose element a `first()` borrow still names, so the E3070 door is taken with the same answer
@@ -52881,20 +52934,37 @@ export type Parser
 			return self.emitRuntimeCall(ListCountName, args: singletonArgs(list), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
 		end 'count'
 
-		if methodTok.value.equals(ArrayFirstMethod) 'first'
+		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
 			try self.consumeEmptyArgList()
-			return self.emitContainerElementAccessor(func, callee: ListFirstName, container: list, args: singletonArgs(list), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
-		end 'first'
+			return self.emitRuntimeCall(ListIsEmptyName, args: singletonArgs(list), resultTag: ValueTypeTag.boolean, resultNameId: UnnamedTypeId, range: range)
+		end 'isEmpty'
 
-		if methodTok.value.equals(GetMethod) 'get'
+		// ⭐ **THE FOUR END ACCESSORS, TWO ARMS.** Each PAIR differs only in which end the runtime reads, so
+		// each is one arm — the `insertAtAnEnd` arrangement below, twice. What separates the two arms is the
+		// `owned` flag, and that is the ownership split `emitContainerElementAccessor` is built on: `first`/
+		// `last` look at an element the list KEEPS (a borrow, and the E3070 mint), `removeFirst`/`removeLast`
+		// take one OUT (the caller becomes an owner). Deriving that from a shared name table would be the one
+		// thing this dispatch must not get wrong — a borrow tracked as owned is a double free.
+		if methodTok.value.equals(ArrayFirstMethod) or methodTok.value.equals(ListLastMethod) 'borrowAtAnEnd'
+			try self.consumeEmptyArgList()
+			let callee = ListFirstName if methodTok.value.equals(ArrayFirstMethod) else ListLastName
+			return self.emitContainerElementAccessor(func, callee: callee, container: list, args: singletonArgs(list), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
+		end 'borrowAtAnEnd'
+
+		if methodTok.value.equals(ListRemoveFirstMethod) or methodTok.value.equals(ListRemoveLastMethod) 'removeAtAnEnd'
+			try self.consumeEmptyArgList()
+			let callee = ListRemoveFirstName if methodTok.value.equals(ListRemoveFirstMethod) else ListRemoveLastName
+			return self.emitContainerElementAccessor(func, callee: callee, container: list, args: singletonArgs(list), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
+		end 'removeAtAnEnd'
+
+		// The two INDEXED accessors, sharing the argument parse the same way the end pairs share theirs and
+		// splitting on the same flag: `get` LOOKS AT the element at an index, `remove` TAKES IT OUT.
+		if methodTok.value.equals(GetMethod) or methodTok.value.equals(RemoveMethod) 'elementAtAnIndex'
+			let movesOut = methodTok.value.equals(RemoveMethod)
 			let index = try self.parseArrayOneArg(func)
-			return self.emitContainerElementAccessor(func, callee: ListGetName, container: list, args: pairArgs(list, second: index), giid: giid, owned: false, borrowSubjectName: borrowSubjectName, range: range)
-		end 'get'
-
-		if methodTok.value.equals(ListRemoveFirstMethod) 'removeFirst'
-			try self.consumeEmptyArgList()
-			return self.emitContainerElementAccessor(func, callee: ListRemoveFirstName, container: list, args: singletonArgs(list), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
-		end 'removeFirst'
+			let callee = ListRemoveAtName if movesOut else ListGetName
+			return self.emitContainerElementAccessor(func, callee: callee, container: list, args: pairArgs(list, second: index), giid: giid, owned: movesOut, borrowSubjectName: borrowSubjectName, range: range)
+		end 'elementAtAnIndex'
 
 		// The two insertions are non-throwing VOID mutators, so a value-position call is refused — from INSIDE
 		// the arm the name matched, which is the shared check's whole scoping (`requireVoidMethodIsStatement`).
@@ -52913,8 +52983,39 @@ export type Parser
 			return list
 		end 'insertAtAnEnd'
 
-		throw ParseError.unsupported("`List` method '{String.from(methodTok.value)}' — shv2 provides create/append/prepend/get/first/removeFirst/count and `for … in`; last/isEmpty/insert/remove/removeLast/clear/clone are later slices", line: methodTok.line, column: methodTok.column)
+		// ⭐ **`insert(at, value:)` IS A THROWING VOID MUTATOR WITH TWO ARGUMENTS — the `Array`'s `set` shape,
+		// which is why it is that function's parse and not a fourth one here.** `( index , value: X )`, the
+		// value type-checked and MOVED in, the call emitted last so the enclosing `try` rewrites it, and the
+		// result tagged `void` — which `parseArraySet`'s own ⭐⭐ block explains is the ONLY thing that refuses
+		// `let x = try list.insert(…) otherwise …`, because a `try` target is parsed with `resultUsed: false`
+		// and the void-statement guard cannot see it. That header records `insert` as this shape's original
+		// second caller, on an `Array` that has since taken it to the corpus.
+		if methodTok.value.equals(InsertMethod) 'insert'
+			return try self.parseArraySet(func, arr: list, giid: giid, callee: ListInsertName, methodTok: methodTok, secondArgLabelled: true, range: range)
+		end 'insert'
+
+		if methodTok.value.equals(ClearMethod) 'clear'
+			return try self.emitChainClear(list, resultUsed: resultUsed, methodTok: methodTok, range: range)
+		end 'clear'
+
+		throw ParseError.unsupported("`List` method '{String.from(methodTok.value)}' — shv2 provides create/append/prepend/insert/get/first/last/removeFirst/removeLast/remove/clear/count/isEmpty and `for … in`; clone is a later slice", line: methodTok.line, column: methodTok.column)
 	end 'dispatchListMethod'
+
+	// ⭐ **`clear()` ON EITHER CHAIN SURFACE** — the void-statement guard, the empty argument list, and the ONE
+	// runtime entry, which is `__list_clear` for both because the two surfaces are one structure (that entry's
+	// own header states it, and `__list_decref`'s last owner calls the same walk). The receiver is handed back
+	// as what the statement still denotes, exactly as `emitArrayVoidCall` does.
+	//
+	// ⚠ The borrow-subject write is recorded by the CALLER and not here: the two dispatchers ask a different
+	// QUESTION of it — `List` asks `listMethodMutatesReceiver` and `__ManagedList` the narrower
+	// `managedListMethodFreesANode` — and both record before this runs, so the write's token is the closing `)`
+	// (`containerWriteToken`) on both doors rather than one of each.
+	function emitChainClear(list ValueId, resultUsed bool, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+		try self.consumeEmptyArgList()
+		_ = self.emitRuntimeCall(ListClearName, args: singletonArgs(list), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return list
+	end 'emitChainClear'
 
 	// ⭐⭐ **DISPATCH A `__ManagedList` METHOD** — the node-handle surface over the SAME chain
 	// `dispatchListMethod` serves (`SignatureIndex.ManagedListBuiltinBaseName`), so every emit below is a
@@ -52950,8 +53051,25 @@ export type Parser
 		// hoisted `noteBorrowSubjectWrite` could not be in two places at once.
 		let freesANode = managedListMethodFreesANode(methodTok.value)
 
-		// `receiverStorage: NoParamPositions` for the reason the `String`, `Set`, `Map` and `List` dispatchers
-		// state: a chain write cannot free an ARRAY element, which is the only borrow E3070 tracks there.
+		// ⛔⛔ **`receiverStorage: NoParamPositions` IS A KNOWN OPEN DEFECT HERE, NOT A REASON — AND THIS IS THE
+		// LAST CALL SITE THAT PASSES IT.** It carried the `String`/`Set`/`Map` sentence (*"a chain write cannot
+		// free an ARRAY element, which is the only borrow E3070 tracks"*), which is true of those three because
+		// they hand out no borrow at all, and FALSE of both chain surfaces: this one mints a NODE handle borrow
+		// (`emitManagedListNodeHandle`) and `dispatchListMethod` mints an ELEMENT borrow. That door was corrected
+		// at spec-port `list` after the same premise was measured as a use-after-free; this one was left, on the
+		// coordinator's ruling of 2026-08-18, to be fixed in its own commit.
+		//
+		// ⚠ **MEASURED, and it is a live use-after-free**: `let node = chain.insertLast("<heap string>")` then
+		// `wipe(chain)` — where `wipe` calls `chain.clear()` — compiles clean and runs to **0xC0000005**. The
+		// same-body spelling (`chain.clear()` written inline) is correctly refused, because a container write is
+		// settled at the parse; only the CROSS-FUNCTION half is open, `BorrowCheck.mutationSiteWrites` reading
+		// the storage column no chain method sets.
+		//
+		// ⇒ **THE CURE IS NOT `dispatchListMethod`'s, COPIED.** This surface must thread the NARROWER
+		// `managedListMethodFreesANode` answer (already computed below as `freesANode`) and not `mutates`, for
+		// that predicate's own stated reason: an insertion cannot dangle a node handle, and passing the wider
+		// set would refuse `let a = ml.insertLast(x)` + `ml.insertLast(y)` + a read of `a` —
+		// `/specs/managed-list.md:core.insert-first-multiple`, a legal program.
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: mutates)
 
 		if methodTok.value.equals(CountMethod) 'count'
@@ -52976,12 +53094,13 @@ export type Parser
 			return self.emitContainerElementAccessor(func, callee: ListRemoveNodeName, container: list, args: pairArgs(list, second: node), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
 
+		// The write is recorded BEFORE the argument list is consumed — where it used to be recorded after — so
+		// this door and the `List` one derive the same `containerWriteToken` for the same source text. With no
+		// arguments to evaluate the two answers differ by one token index and by nothing else; see
+		// `emitChainClear`, which is the rest of this arm and is shared with that door.
 		if methodTok.value.equals(ClearMethod) 'clear'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			try self.consumeEmptyArgList()
 			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
-			_ = self.emitRuntimeCall(ListClearName, args: singletonArgs(list), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-			return list
+			return try self.emitChainClear(list, resultUsed: resultUsed, methodTok: methodTok, range: range)
 		end 'clear'
 
 		throw ParseError.unsupported("`{String.from(ManagedListBuiltinBaseName)}` method '{String.from(methodTok.value)}' — shv2 provides {String.from(CreateMethod)}/{String.from(ManagedListInsertFirstMethod)}/{String.from(ManagedListInsertLastMethod)}/{String.from(RemoveMethod)}/{String.from(ClearMethod)}/{String.from(CountMethod)}, and `{String.from(ManagedListNodeValueMethod)}()` on the node handle; head/tail/next/prev/insertAfter/insertBefore/detach/setValue/isEmpty are later slices", line: methodTok.line, column: methodTok.column)
@@ -55536,8 +55655,12 @@ export type Parser
 	//
 	// ⚠ **IT SETS E3019's COLUMN ONLY. `receiverStorageMask` below is unchanged and still answers for
 	// E3070**, which is the same independence `IrFunction`'s table already records for a `String` receiver
-	// that is a parameter: a String write frees no ARRAY element, and an array element is the only borrow
-	// E3070 tracks. `borrow-liveness:method-writing-a-string-or-set-field-is-not-a-conflict` is the case
+	// that is a parameter: a `String` write frees no CONTAINER element, and a container element is the only
+	// borrow E3070 tracks. (It read *"no ARRAY element, and an array element is the only borrow E3070
+	// tracks"* until spec-port `list` — true when the `Array` was the only surface handing out element
+	// borrows, and false once a `List` did through the same `emitContainerElementAccessor`. The claim this
+	// arm actually needs is unaffected: a `String` is not a container in either reading.)
+	// `borrow-liveness:method-writing-a-string-or-set-field-is-not-a-conflict` is the case
 	// that fails the instant the two are fused, and it was watched green before, during and after this arm.
 	function receiverOwnerMask(func IrFunction, binding VarInfo, baseTok Token) returns ParamPositionMask throws ParseError
 		if binding.isSelfField 'ownedByTheTypeNotTheCaller'
@@ -56876,14 +56999,23 @@ export type Parser
 		return self.kindAt(index) == TokenKind.comma and self.kindAt(index + 1) == TokenKind.identifier and self.kindAt(index + 2) == TokenKind.colon
 	end 'atArgLabel'
 
-	// `set` — `( index , value: X )`: the index positional, the value labelled `value:` on every surface but the
-	// buffer (see `consumeArrayArgLabel`). Emits the `__managed_set`/`__managed_mem_set` call and returns its result. The
-	// value argument is parsed AFTER the index so the call is the last op the enclosing `try` rewrites.
+	// ⭐ **`( index , value: X )` — THE INDEXED ELEMENT STORE, whichever member spells it**: the index
+	// positional, the value labelled `value:` on every surface but the buffer (see `consumeArrayArgLabel`).
+	// Emits the `__managed_set` / `__managed_mem_set` / `__list_insert` call and returns its result. The value
+	// argument is parsed AFTER the index so the call is the last op the enclosing `try` rewrites.
 	//
-	// ⚠ **IT USED TO SERVE `insert` TOO, ON A `throwing` FLAG, AND ARR1 TOOK BOTH AWAY.** `insert` left the
-	// `Array` roster and is served from `stdlib/Array.maxon`, which was the flag's only `false` — every
-	// remaining spelling of this shape (`Vector.set`, the buffer's `set`) throws, so a parameter with one value
-	// is a branch nothing can reach.
+	// ⚠ **IT USED TO SERVE `insert` TOO, ON A `throwing` FLAG, AND ARR1 TOOK BOTH AWAY.** The `Array`'s
+	// `insert` left the roster and is served from `stdlib/Array.maxon`, which was the flag's only `false` — and
+	// **`List.insert` brought the shape's third spelling back at spec-port `list` WITHOUT bringing the flag
+	// back, because it THROWS** (`[0, count]`, `ArrayError.indexOutOfBounds` past it). So the three live
+	// spellings are `Vector.set`, the buffer's `set` and `List.insert`, all throwing, and a parameter with one
+	// value is still a branch nothing can reach.
+	//
+	// ⚠ **EVERY SPELLING OWES THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT.** `moveElementIntoContainer`
+	// below runs BEFORE the call is emitted, so a callee that refuses owns the element and must destroy it —
+	// `ManagedMemoryRuntime.emitDestroyRejectedElement`, which every entry reached through here calls from its
+	// reject block. Shipping a fourth spelling without it is a leak, measured twice now (R4.6 on `__managed_set`,
+	// and again on `__list_insert` in the review of spec-port `list`).
 	function parseArraySet(func IrFunction, arr ValueId, giid GenericInstanceId, callee ByteArray, methodTok Token, secondArgLabelled bool, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let index = try self.parseExpression(func, block: self.currentBlock)
@@ -57663,13 +57795,23 @@ export type Parser
 		// caller's `let b` an E3019 for a method that assigns its own field is the very ruling
 		// `self-keyword.md:self-with-params` pins (see `IrFunction`'s table).
 		//
-		// ⚠ **GATED ON THE FIELD BEING AN ARRAY, which is E3070's SCOPE and the SAME line the String and Set
-		// dispatchers draw** (`noteReceiverWrite`'s two `receiverStorage: NoParamPositions` call sites): only an
-		// ARRAY write can free an array element, and an array element is the only thing E3070 tracks. Ungated,
-		// `total = total + v` marked its whole receiver written, and a caller holding `let s = try
-		// b.items.get(0) otherwise ""` was refused `b.add(42)` — a legal program the oracle compiles and runs
-		// (measured: it prints `44 42`). The field type is read through the one accessor the type check below
-		// already asks.
+		// ⚠ **GATED ON THE FIELD BEING AN ARRAY, which is the SAME line the `String` and `Set` dispatchers draw**
+		// (`noteReceiverWrite`'s one remaining `receiverStorage: NoParamPositions` call site, in
+		// `dispatchManagedListMethod`): a `String` or `Set` write frees no container element, so a scalar or
+		// text field store is not a conflict. Ungated, `total = total + v` marked its whole receiver written,
+		// and a caller holding `let s = try b.items.get(0) otherwise ""` was refused `b.add(42)` — a legal
+		// program the oracle compiles and runs (measured: it prints `44 42`). The field type is read through the
+		// one accessor the type check below already asks.
+		//
+		// ⛔⛔ **BUT "AN ARRAY ELEMENT IS THE ONLY THING E3070 TRACKS" IS FALSE, AND THIS GATE IS A MEASURED
+		// USE-AFTER-FREE BECAUSE OF IT (spec-port `list`, 2026-08-18).** A `List` hands out element borrows
+		// through the very same `emitContainerElementAccessor`, and a `List`-typed struct field is legal — so
+		// `let s = try b.items.first() otherwise "none"` across a `b.reset()` that REBINDS `items` reaches this
+		// gate, is waved through as "not an array", and shv2 runs to **0xC0000005** where the oracle prints the
+		// string. ⇒ **The right predicate is "does this field's type hand out borrows E3070 tracks", which is
+		// the container question and not the `Array` one.** Left as it stands on the coordinator's ruling of
+		// 2026-08-18: it is the same family as `dispatchManagedListMethod`'s open storage-mask hole and the two
+		// are to be ruled on and fixed together, in their own commit.
 		if self.typeIsArrayInstance(self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)) 'arrayFieldStore'
 			func.storageWrittenParamMask = func.storageWrittenParamMask or paramMaskOfValue(func, value: receiver)
 		end 'arrayFieldStore'
@@ -63981,11 +64123,17 @@ export type Parser
 	//
 	// Three gates, and each one is the difference between an edge and a wrong answer:
 	//
-	//   • **THE RECEIVER MUST BE AN ARRAY.** E3070 tracks array elements and nothing else, so a `String` or
-	//     `Set` field write must record NOTHING here — the same line `noteReceiverWrite`'s two
-	//     `receiverStorage: NoParamPositions` call sites draw and `emitCheckedSelfFieldStore`'s own
-	//     `typeIsArrayInstance` gate draws, for the measured reason those record:
-	//     `borrow-liveness.method-writing-a-string-or-set-field-is-not-a-conflict` is a legal program.
+	//   • **THE RECEIVER MUST BE AN ARRAY.** A `String` or `Set` field write frees no container element and so
+	//     must record NOTHING here — the same line `noteReceiverWrite`'s one remaining
+	//     `receiverStorage: NoParamPositions` call site (`dispatchManagedListMethod`) draws and
+	//     `emitCheckedSelfFieldStore`'s own `typeIsArrayInstance` gate draws, for the measured reason those
+	//     record: `borrow-liveness.method-writing-a-string-or-set-field-is-not-a-conflict` is a legal program.
+	//     ⛔ **This bullet used to justify itself with "E3070 tracks array elements and nothing else", which is
+	//     FALSE since a `List` handed out element borrows through the same accessor** — see
+	//     `emitCheckedSelfFieldStore`'s gate for the measured use-after-free the identical claim left open
+	//     there, and for the ruling that the two are fixed together. The gate here is narrower in a way that
+	//     matters less: it only DECLINES to record a reach edge for a `List` receiver whose storage belongs to
+	//     a parameter, which the receiver's own argument edge already covers when the receiver IS a parameter.
 	//   • **THE STORAGE MUST REACH A PARAMETER.** A local, a temporary and a top-level `var` reach no
 	//     caller — `subjectStorageMask` is the one derivation that answers this, shared with the roster
 	//     door, so the two cannot come to disagree about which storages a receiver stands for.

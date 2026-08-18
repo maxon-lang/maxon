@@ -2140,6 +2140,23 @@ export function emitIndexOutOfRange(module StdModule, block IrBlock, index Value
 	return emitBin(module, block: block, a: negative, b: atOrOver, opcode: StdBinOpcode.bitOr, ids: ids)
 end 'emitIndexOutOfRange'
 
+// ⭐ **THE INSERT-POSITION TWIN OF THE TEST ABOVE, AND THE ONE THING IT CHANGES IS THE CLOSED END.** An
+// ELEMENT index addresses `[0, length)`; an INSERTION POSITION addresses `[0, length]`, because
+// one-past-the-end IS the append — `/specs/list.md:insert` states it outright (*"Valid range is `[0, count]` —
+// passing `count` appends at the end"*) and `insert.out-of-bounds` pins the other side (`at > count` throws
+// and leaves the container unchanged).
+//
+// ⚠ It sits HERE, beside its half-open twin, rather than in its one caller (`ListRuntime.__list_insert`), for
+// exactly the reason that twin is exported to the same file: the NEGATIVE guard is the same guard, and
+// `emitIsNegative` is the single home of "reject a negative index" (see its header for the signed-compare
+// hazard it closes). A private copy in the list runtime would be that guard written down a second time, in
+// the file least likely to hear about a change to it.
+export function emitInsertPositionOutOfRange(module StdModule, block IrBlock, position ValueId, length ValueId, ids ValueMinter) returns ValueId
+	let negative = emitIsNegative(module, block: block, value: position, ids: ids)
+	let pastEnd = emitCmp(module, block: block, a: position, b: length, pred: StdCmpPred.gt, ids: ids)
+	return emitBin(module, block: block, a: negative, b: pastEnd, opcode: StdBinOpcode.bitOr, ids: ids)
+end 'emitInsertPositionOutOfRange'
+
 // The `slice(start, end)` RANGE-violated boolean (0/1) — `end > length OR start > end OR start < 0 OR end < 0`,
 // the ONE home of the slice bounds rule shared by `__managed_slice` (trivial, COW) and `__managed_slice_managed`
 // (deep-clone). See `buildManagedSlice`'s header for WHY each disjunct is present (the negative guards are what stop
@@ -2754,7 +2771,7 @@ function buildManagedSet(module StdModule)
 	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: length, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: store.id))
 
-	var afterReject = emitDestroyRejectedElement(module, func: func, cur: oob, record: arr, value: value, ids: ids)
+	var afterReject = emitDestroyRejectedElement(module, func: func, cur: oob, record: arr, value: value, destroyOffset: ManagedRecordElementDestroyOffset, ids: ids)
 	emitOobReturn(module, block: afterReject, ids: ids)
 
 	// Detach BEFORE the buffer pointer is loaded (`__managed_cow_detach` trap 1), and after the bounds check, so a
@@ -2812,15 +2829,27 @@ end 'emitElementStoreAndOkReturn'
 // `Array.set` (P1.7 slice 3a) that R4.6 fixes because `__managed_mem_set` would otherwise ship the identical
 // leak on the day it was written, and two spellings of one ownership contract is what this file refuses.
 //
+// ⭐⭐ **AND IT IS NOT AN `Array`'s RULE — IT IS EVERY MOVE-IN CONTAINER'S, WHICH IS WHY THE DESTRUCTOR'S
+// OFFSET IS THE CALLER'S TO NAME (spec-port `list`).** The contract this enforces belongs to
+// `Parser.parseArraySet`, the shape parser, and every entry reached through it owes it. `__list_insert` is
+// the third, and its per-element destructor lives at `ListRecord.element_drop@24` rather than at
+// `ManagedRecord.element_destroy@40` — one `ByteOffset`, and the ONLY thing about a chain that differs here.
+//
+// ⚠ **MEASURED on the tree that added `List.insert` with this call MISSING**: `try list.insert(5, value:
+// "<heap string>")` on a one-element list printed `rejected` and exited **101**, while the identical program
+// over a `List with Int` exited 0 — the same managed/trivial control pair R4.6 measured one container over,
+// on a defect shipped by the same omission. A private copy of these three blocks inside `ListRuntime` would
+// have been the fourth transcription of one ownership contract; the offset parameter is the whole difference.
+//
 // The null guard is `emitElementDestructorCall`'s stated precondition ("the caller has already loaded
 // `destroy` and confirmed it non-null"), honoured at a second call site rather than assumed away.
 // Threads `cur` and returns the continuation block.
-function emitDestroyRejectedElement(module StdModule, func IrFunction, cur IrBlock, record ValueId, value ValueId, ids ValueMinter) returns IrBlock
+export function emitDestroyRejectedElement(module StdModule, func IrFunction, cur IrBlock, record ValueId, value ValueId, destroyOffset ByteOffset, ids ValueMinter) returns IrBlock
 	var checkNull = module.addBlock(func, label: b"rejchk")
 	var drop = module.addBlock(func, label: b"rejdrop")
 	let cont = module.addBlock(func, label: b"rejcont")
 
-	let dtor = emitLoadField(module, block: cur, record: record, offset: ManagedRecordElementDestroyOffset, ids: ids)
+	let dtor = emitLoadField(module, block: cur, record: record, offset: destroyOffset, ids: ids)
 	let zeroDtor = emitConst(module, block: cur, value: 0, ids: ids)
 	let hasDtor = emitCmp(module, block: cur, a: dtor, b: zeroDtor, pred: StdCmpPred.ne, ids: ids)
 	module.setTerminator(cur, op: StdOp.condBranch(hasDtor, thenBlockId: checkNull.id, elseBlockId: cont.id))
@@ -3690,7 +3719,7 @@ function buildManagedMemSet(module StdModule)
 
 	emitBufferAccessGuard(module, func: func, block: entry, checkHigh: checkHigh, bad: bad, ok: store, arr: arr, offset: index, isWrite: true, addressesBytes: false, ids: ids)
 
-	var afterReject = emitDestroyRejectedElement(module, func: func, cur: bad, record: arr, value: value, ids: ids)
+	var afterReject = emitDestroyRejectedElement(module, func: func, cur: bad, record: arr, value: value, destroyOffset: ManagedRecordElementDestroyOffset, ids: ids)
 	emitMemoryThrow(module, block: afterReject, flag: MemoryIndexOutOfBoundsFlag, ids: ids)
 
 	emitElementStoreAndOkReturn(module, func: func, store: store, arr: arr, index: index, value: value, ids: ids)

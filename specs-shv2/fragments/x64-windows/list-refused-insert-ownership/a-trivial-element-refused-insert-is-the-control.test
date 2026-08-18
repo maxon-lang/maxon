@@ -1,0 +1,69 @@
+// Test: a-trivial-element-refused-insert-is-the-control
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+function main() returns ExitCode
+	var list = IntList.create()
+	list.append(10)
+	try list.insert(5, value: 20) otherwise 'oob'
+		print("rejected\n")
+	end 'oob'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __list_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_append
+    x64.movRegImm32 rdx, 5
+    x64.movRegImm32 rax, 20
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_insert
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.leaRegRdata rcx, [rip + __str_rec_1]
+    x64.callDirect print
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

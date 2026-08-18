@@ -5446,12 +5446,22 @@ export let InsertMethod = b"insert"
 // exist to prevent, one rename away from a second `b"byteAt"` beside the first.
 export let ByteAtMethod = b"byteAt"
 
-// The two spellings only a `List` has. They live in THIS block rather than in `Parser.maxon` for the reason
-// the eight above them do: `ListRuntime.listAccessorSourceMethodName` has to name `removeFirst`, and a map
-// cannot name a constant its file cannot see. `prepend` sits beside it so the pair a list adds to the
-// language is read in one place; `append`/`get`/`first`/`count`/`create` are already shared above.
+// The four spellings only a `List` has. They live in THIS block rather than in `Parser.maxon` for the reason
+// the eight above them do: `ListRuntime.listAccessorSourceMethodName` has to name `removeFirst`, `removeLast`
+// and `last`, and a map cannot name a constant its file cannot see. `prepend` sits beside them so the
+// vocabulary a list adds to the language is read in one place; `append`/`get`/`first`/`count`/`create` are
+// already shared above, and so are `insert`/`remove` — a `List` dispatches on the very same byte strings an
+// `Array` and a `Map` do, which is this block's standing rule.
+//
+// ⚠ **`last` IS `List`-PREFIXED THOUGH `first` ABOVE IS `Array`-PREFIXED, and the asymmetry is real rather
+// than an oversight**: `Array.first` is still a compiler-dispatched member and `Array.last` is a CORPUS one
+// (`stdlib/Array.maxon`), so no `Array` dispatch matches `b"last"` and there is no second surface for an
+// unprefixed constant to serve yet. A second one that spelled it would take this constant rather than mint a
+// fifth, exactly as `ClearMethod` was un-prefixed the day the chain spelled it.
 export let ListPrependMethod = b"prepend"
+export let ListLastMethod = b"last"
 export let ListRemoveFirstMethod = b"removeFirst"
+export let ListRemoveLastMethod = b"removeLast"
 
 // The three spellings only the `__ManagedList` surface has (spec-port `ownership`; `/specs/managed-list.md`).
 // They live here beside `List`'s pair so the chain's whole vocabulary is read in one place. `create`,

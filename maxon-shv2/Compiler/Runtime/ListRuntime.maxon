@@ -117,6 +117,10 @@ let ListNodeNoDestructor = 0 as ParsedInt
 // `__mm_alloc`/`__mm_free` inside their Std bodies.
 export let ListCreateName = b"__list_create"
 export let ListCountName = b"__list_count"
+// `__list_is_empty(list) -> 0|1` — `count == 0`, and a SEPARATE entry rather than a parser-emitted compare
+// against `__list_count` for the reason `MmRuntime.emitConstReturn` states: the Std tier has no `setcc`, so a
+// verdict is a constant-returning block off a fused compare, and that shape belongs beside the field it reads.
+export let ListIsEmptyName = b"__list_is_empty"
 export let ListAppendName = b"__list_append"
 export let ListPrependName = b"__list_prepend"
 export let ListDecrefName = b"__list_decref"
@@ -135,11 +139,19 @@ export let ListRemoveNodeName = b"__list_remove_node"
 // to "what does this list own".
 export let ListClearName = b"__list_clear"
 
-// The THROWING accessors — `first`/`get`/`removeFirst`, each `ArrayError.indexOutOfBounds` on an empty list
-// or an out-of-range index, which is the clause `stdlib/List.maxon:44,73,112` declares for them.
+// The THROWING members — six ACCESSORS and one MUTATOR, each raising `ArrayError.indexOutOfBounds` on an
+// empty list, an out-of-range index or an out-of-range insert position, which is the clause
+// `stdlib/List.maxon:44,52,73,92,112,120,128` declares for every one of them.
+//
+// ⚠ **`insert` IS THE ONE THROWING VOID**, so it ok-returns the ABI's placeholder rather than an element
+// (`MmRuntime.emitVoidOkReturn`); `__managed_set_length` and `__managed_mem_grow` are the same shape.
 export let ListFirstName = b"__list_first"
+export let ListLastName = b"__list_last"
 export let ListGetName = b"__list_get"
 export let ListRemoveFirstName = b"__list_remove_first"
+export let ListRemoveLastName = b"__list_remove_last"
+export let ListRemoveAtName = b"__list_remove_at"
+export let ListInsertName = b"__list_insert"
 
 // ⭐ **THE THREE CURSOR PRIMITIVES A `for item in list` LOOP IS LOWERED TO**, and they are NON-THROWING for
 // `ManagedGetUncheckedName`'s reason: a loop has no `try` to attach and no fallback value to supply, and the
@@ -157,6 +169,17 @@ export let ListFromName = b"__list_from"
 // Kept out of the public name set so no parser path dispatches to it.
 let ListNodeAllocName = b"__list_node_alloc"
 
+// ⭐ **`__list_node_at(list, index) -> nodePtr` — THE ONE HEAD-TO-INDEX WALK, ALSO INTERNAL.** Three entries
+// need it (`get` reads the node's value, `remove` unlinks it, an interior `insert` splices in front of it),
+// and `stdlib/List.maxon` has the same single home for the same reason — its `walkTo` is what `get`, `remove`
+// and `insert` all call. Three copies of an O(n) chain walk is three places for "how far do I step" to drift.
+//
+// ⚠ **IT BOUNDS-CHECKS NOTHING AND CANNOT: it has no failure exit.** Every caller checks first (`get` and
+// `remove` through `emitIndexOutOfRange`, `insert` through `emitInsertPositionOutOfRange` plus its two
+// end arms), and that check IS the guarantee that `index` hops from a non-empty head land on real nodes —
+// the licence `buildListGet` used to state for the walk it held inline.
+let ListNodeAtName = b"__list_node_at"
+
 // The `__list_` prefix identifying EVERY list runtime entry point — the one test `recordCallUsage` reads to
 // set `usesList` (and `usesHeap`).
 let ListRuntimePrefix = b"__list_"
@@ -172,7 +195,7 @@ end 'isListRuntimeCallee'
 // primitives — cannot fail, and typing a non-throwing callee's clause as `throwing` is exactly what makes
 // `try` REQUIRED on a call that cannot fail (E3055), so this must stay narrower than `isListRuntimeCallee`.
 export function isThrowingListRuntimeCallee(callee ByteArray) returns bool
-	return callee.equals(ListFirstName) or callee.equals(ListGetName) or callee.equals(ListRemoveFirstName)
+	return callee.equals(ListFirstName) or callee.equals(ListLastName) or callee.equals(ListGetName) or callee.equals(ListRemoveFirstName) or callee.equals(ListRemoveLastName) or callee.equals(ListRemoveAtName) or callee.equals(ListInsertName)
 end 'isThrowingListRuntimeCallee'
 
 // ⭐ **WHAT THE AUTHOR ACTUALLY WROTE** — this family's arm of `GtRuntime.runtimeCalleeSourceMethod`, so
@@ -189,9 +212,23 @@ export function listAccessorSourceMethodName(callee ByteArray) returns ByteArray
 	if callee.equals(ListGetName) 'get'
 		return GetMethod
 	end 'get'
+	if callee.equals(ListLastName) 'last'
+		return ListLastMethod
+	end 'last'
 	if callee.equals(ListRemoveFirstName) 'removeFirst'
 		return ListRemoveFirstMethod
 	end 'removeFirst'
+	if callee.equals(ListRemoveLastName) 'removeLast'
+		return ListRemoveLastMethod
+	end 'removeLast'
+	// `remove` and `insert` are the two whose emitted name is NOT their spelling with a prefix — the entry
+	// says WHERE it acts (`_at`) where the author says WHAT it does — which is exactly the gap this map is for.
+	if callee.equals(ListRemoveAtName) 'remove'
+		return RemoveMethod
+	end 'remove'
+	if callee.equals(ListInsertName) 'insert'
+		return InsertMethod
+	end 'insert'
 	panic("listAccessorSourceMethodName: no source-method arm for '{String.from(callee)}'. EITHER it is not a throwing `List` accessor — this map is asked ONLY behind `isThrowingListRuntimeCallee` — OR that predicate gained a name and this map did not, in which case add an arm answering the parser's own method constant. `installListRuntime`'s drift guard asks this for every throwing `__list_` builder it installs, so the second case fails at INSTALL and never in front of a user")
 end 'listAccessorSourceMethodName'
 
@@ -208,12 +245,18 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 
 	buildListCreate(module)
 	buildListNodeAlloc(module)
+	buildListNodeAt(module)
 	buildListCount(module)
+	buildListIsEmpty(module)
 	buildListAppend(module)
 	buildListPrepend(module)
+	buildListInsert(module)
 	buildListFirst(module)
+	buildListLast(module)
 	buildListGet(module)
 	buildListRemoveFirst(module)
+	buildListRemoveLast(module)
+	buildListRemoveAt(module)
 	buildListRemoveNode(module)
 	buildListClear(module)
 	buildListHead(module)
@@ -305,6 +348,46 @@ function buildListCount(module StdModule)
 	module.functions.push(func)
 end 'buildListCount'
 
+// `__list_is_empty(list) -> 0|1` — `count == 0`, answered as a constant per arm because the Std tier has no
+// `setcc` (`MmRuntime.emitConstReturn` is the shape and carries the reason).
+//
+// ⚠ It reads `count@16` rather than testing `head@0` against 0, though the two agree by construction: the
+// count is the field every other entry maintains and the one `__list_clear` zeroes, so a predicate reading a
+// second field would be a second definition of "empty" that nothing holds to the first.
+function buildListIsEmpty(module StdModule)
+	var func = IrFunction.createFromStd(ListIsEmptyName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var empty = module.addBlock(func, label: b"empty")
+	var populated = module.addBlock(func, label: b"populated")
+
+	emitParams(module, block: entry, count: 1)
+	let list = 0 as ValueId
+
+	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: count, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: empty.id, elseBlockId: populated.id))
+
+	emitConstReturn(module, block: empty, value: BoolTrueValue, ids: ids)
+	emitConstReturn(module, block: populated, value: BoolFalseValue, ids: ids)
+
+	module.functions.push(func)
+end 'buildListIsEmpty'
+
+// ⭐ **ONE MORE ELEMENT, OR ONE FEWER — the count read-modify-write every linking and unlinking entry ends
+// with.** It was written out longhand at THREE sites before spec-port `list` (`emitListPublishEnd`,
+// `__list_remove_first` and `__list_remove_node`), which is one fact — *"`count@16` is the live element
+// count and every structural change adjusts it by one"* — transcribed once per operation. Homing it is what
+// let the two entries that rung ADDED (`__list_remove_last`, which shares the removal shape, and the
+// interior arm of `__list_insert`, which shares nothing else) inherit the fact rather than restate it.
+function emitListCountDelta(module StdModule, block IrBlock, list ValueId, opcode StdBinOpcode, ids ValueMinter)
+	let count = emitLoadField(module, block: block, record: list, offset: ListCountOffset, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	emitStoreField(module, block: block, record: list, offset: ListCountOffset, value: emitBin(module, block: block, a: count, b: one, opcode: opcode, ids: ids))
+end 'emitListCountDelta'
+
 // Publish `node` as the list end named by `endOffset` (`tail@8` for an append, `head@0` for a prepend) and
 // bump the count — the tail the two insertions share, so "this end is now `node`, and there is one more
 // element" is written once. Terminates `block` by RETURNING THE NODE.
@@ -316,9 +399,7 @@ end 'buildListCount'
 // which costs a register the caller never reads.
 function emitListPublishEnd(module StdModule, block IrBlock, list ValueId, node ValueId, endOffset ByteOffset, ids ValueMinter)
 	emitStoreField(module, block: block, record: list, offset: endOffset, value: node)
-	let count = emitLoadField(module, block: block, record: list, offset: ListCountOffset, ids: ids)
-	let one = emitConst(module, block: block, value: 1, ids: ids)
-	emitStoreField(module, block: block, record: list, offset: ListCountOffset, value: emitBin(module, block: block, a: count, b: one, opcode: StdBinOpcode.add, ids: ids))
+	emitListCountDelta(module, block: block, list: list, opcode: StdBinOpcode.add, ids: ids)
 	module.setTerminator(block, op: StdOp.ret(node))
 end 'emitListPublishEnd'
 
@@ -376,6 +457,95 @@ end 'buildListAppend'
 function buildListPrepend(module StdModule)
 	buildListEndInsert(module, name: ListPrependName, nearEnd: ListHeadOffset, farEnd: ListTailOffset, outward: ListNextOffset, inward: ListPrevOffset)
 end 'buildListPrepend'
+
+// ⭐⭐ **`__list_insert(list, index, value)` — LINK AT A POSITION. THROWING and VOID.** The valid range is
+// `[0, count]` INCLUSIVE, and `stdlib/List.maxon:88-109` states why: *"`count` appends at the end. An index
+// past `count` is out of bounds and throws `ArrayError.indexOutOfBounds` rather than silently clamping to the
+// tail"*. `/specs/list.md:insert.out-of-bounds` is that sentence as a program, and its prose records the
+// regression it exists to pin — an `at >= count` that took the append branch and GREW the list.
+//
+// ⭐ **THE TWO ENDS ARE `__list_prepend`/`__list_append`, CALLED.** Position 0 and position `count` ARE those
+// operations, and open-coding either here would be a second copy of the empty-list adoption
+// `buildListEndInsert` handles — which is the one case a hand-written splice gets wrong. Their node result is
+// discarded: this surface hands nothing back.
+//
+// ⚠ **THE INTERIOR SPLICE NEEDS NO EMPTY-LIST ARM AND NO NULL TEST, and the two end arms are what guarantee
+// it.** Reaching the splice means `0 < index < count`, so the list has at least two nodes, the node AT
+// `index` exists, and it has a predecessor. That is also why the walk is `__list_node_at`'s unchecked one.
+//
+// ⚠ **`value` IS MOVED IN**, exactly as it is at either end — the parser's `parseContainerElementArg` has
+// already taken the reference, and the node is minted here by the same `__list_node_alloc`.
+function buildListInsert(module StdModule)
+	var func = IrFunction.createFromStd(ListInsertName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var oob = module.addBlock(func, label: b"oob")
+	var inRange = module.addBlock(func, label: b"inrange")
+	var atFront = module.addBlock(func, label: b"front")
+	var afterFront = module.addBlock(func, label: b"notfront")
+	var atBack = module.addBlock(func, label: b"back")
+	var interior = module.addBlock(func, label: b"interior")
+	var linked = module.addBlock(func, label: b"linked")
+
+	emitParams(module, block: entry, count: 3)
+	let list = 0 as ValueId
+	let index = 1 as ValueId
+	let value = 2 as ValueId
+
+	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
+	let outOfRange = emitInsertPositionOutOfRange(module, block: entry, position: index, length: count, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: inRange.id))
+
+	// ⛔⛔ **THE REFUSAL STILL OWNS THE ELEMENT IT WAS HANDED, AND SHIPPING THIS ARM WITHOUT THE DESTROY WAS
+	// A LEAK (found in review of spec-port `list`).** `parseArraySet` calls `moveElementIntoContainer` BEFORE
+	// this call is emitted, so from that point the callee owns the value and the caller's scope-exit drop is
+	// suppressed; on this arm no node is ever linked, so nothing else would ever drop it. Exactly
+	// `__managed_set`'s R4.6 defect, in the entry that reached the same parser shape three containers later —
+	// which is why the cure is that entry's `emitDestroyRejectedElement`, called, and not a copy of it.
+	//
+	// ⚠ **THE SPEC'S OWN FOUR `insert` CASES CANNOT CATCH IT**: all four use `int` elements, where
+	// `moveElementIntoContainer` takes its trivial arm and the callee owns nothing. `list-refused-insert-
+	// ownership.md` carries the managed case, that trivial CONTROL, and the success path that would catch an
+	// over-drop in the other direction.
+	var afterReject = emitDestroyRejectedElement(module, func: func, cur: oob, record: list, value: value, destroyOffset: ListElementDropOffset, ids: ids)
+	emitOobReturn(module, block: afterReject, ids: ids)
+
+	let front = emitConst(module, block: inRange, value: 0, ids: ids)
+	let isFront = emitCmp(module, block: inRange, a: index, b: front, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(inRange, op: StdOp.condBranch(isFront, thenBlockId: atFront.id, elseBlockId: afterFront.id))
+
+	let prepended = ids.mint()
+	module.appendOp(atFront, op: StdOp.call(prepended, callee: ListPrependName, args: twoArgs(list, second: value)))
+	module.setTerminator(atFront, op: StdOp.branch(linked.id))
+
+	let isBack = emitCmp(module, block: afterFront, a: index, b: count, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(afterFront, op: StdOp.condBranch(isBack, thenBlockId: atBack.id, elseBlockId: interior.id))
+
+	let appended = ids.mint()
+	module.appendOp(atBack, op: StdOp.call(appended, callee: ListAppendName, args: twoArgs(list, second: value)))
+	module.setTerminator(atBack, op: StdOp.branch(linked.id))
+
+	// Splice the new node in FRONT of the one currently at `index`, so that node ends up at `index + 1` and
+	// the new one answers to `index` — which is what "insert at" means and what `insert.at-middle` reads back.
+	let displaced = ids.mint()
+	module.appendOp(interior, op: StdOp.call(displaced, callee: ListNodeAtName, args: twoArgs(list, second: index)))
+	let node = ids.mint()
+	module.appendOp(interior, op: StdOp.call(node, callee: ListNodeAllocName, args: argsOf(value)))
+	let predecessor = emitLoadField(module, block: interior, record: displaced, offset: ListPrevOffset, ids: ids)
+	emitStoreField(module, block: interior, record: node, offset: ListPrevOffset, value: predecessor)
+	emitStoreField(module, block: interior, record: node, offset: ListNextOffset, value: displaced)
+	emitStoreField(module, block: interior, record: predecessor, offset: ListNextOffset, value: node)
+	emitStoreField(module, block: interior, record: displaced, offset: ListPrevOffset, value: node)
+	// Neither end field moved, so this arm owes only the count — which the two end arms got from
+	// `emitListPublishEnd` inside the entry they called.
+	emitListCountDelta(module, block: interior, list: list, opcode: StdBinOpcode.add, ids: ids)
+	module.setTerminator(interior, op: StdOp.branch(linked.id))
+
+	emitVoidOkReturn(module, block: linked, ids: ids)
+
+	module.functions.push(func)
+end 'buildListInsert'
 
 // ⭐ **`__list_remove_node(list, node) -> value` — UNLINK AN ARBITRARY NODE AND HAND ITS ELEMENT OUT.** O(1),
 // which is the complexity `/specs/managed-list.md` states for node-level removal, and the whole reason a
@@ -438,9 +608,7 @@ function buildListRemoveNode(module StdModule)
 	emitStoreField(module, block: newTail, record: list, offset: ListTailOffset, value: prev)
 	module.setTerminator(newTail, op: StdOp.branch(release.id))
 
-	let count = emitLoadField(module, block: release, record: list, offset: ListCountOffset, ids: ids)
-	let one = emitConst(module, block: release, value: 1, ids: ids)
-	emitStoreField(module, block: release, record: list, offset: ListCountOffset, value: emitBin(module, block: release, a: count, b: one, opcode: StdBinOpcode.sub, ids: ids))
+	emitListCountDelta(module, block: release, list: list, opcode: StdBinOpcode.sub, ids: ids)
 	let freed = ids.mint()
 	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(node)))
 	module.setTerminator(release, op: StdOp.ret(value))
@@ -507,11 +675,15 @@ function buildListClear(module StdModule)
 	module.functions.push(func)
 end 'buildListClear'
 
-// `__list_first(list) -> (value, flag)` — the head element, throwing `indexOutOfBounds` on an empty list.
+// ⭐ **ONE END ACCESSOR, BUILT TWICE UNDER TWO ORIENTATIONS** — the READ side of `buildListEndInsert`'s
+// arrangement, and for the same reason: `first` and `last` are the same three steps (load the end node, throw
+// `indexOutOfBounds` if there is none, hand out its `value@16`) differing only in WHICH end field they read.
+// One `ByteOffset` is the whole difference, so a second copy would be this function with `Head` spelled `Tail`.
+//
 // The result is a BORROW: the list keeps the element and its own `__list_decref` walk destroys it, exactly as
 // `__managed_first` yields.
-function buildListFirst(module StdModule)
-	var func = IrFunction.createFromStd(ListFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+function buildListEndAccessor(module StdModule, name ByteArray, endOffset ByteOffset)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
@@ -521,29 +693,37 @@ function buildListFirst(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let list = 0 as ValueId
 
-	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
+	let node = emitLoadField(module, block: entry, record: list, offset: endOffset, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: node, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: load.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
 
-	emitOkReturn(module, block: load, value: emitLoadField(module, block: load, record: head, offset: ListValueOffset, ids: ids), ids: ids)
+	emitOkReturn(module, block: load, value: emitLoadField(module, block: load, record: node, offset: ListValueOffset, ids: ids), ids: ids)
 
 	module.functions.push(func)
+end 'buildListEndAccessor'
+
+// `__list_first(list) -> (value, flag)` — the HEAD element, throwing `indexOutOfBounds` on an empty list.
+function buildListFirst(module StdModule)
+	buildListEndAccessor(module, name: ListFirstName, endOffset: ListHeadOffset)
 end 'buildListFirst'
 
-// `__list_get(list, index) -> (value, flag)` — the element at `index`, walking from the head. O(n), which is
-// the complexity `/specs/list.md` states for indexed access. Throws `indexOutOfBounds` for a negative index
-// or one at/past `count`; the walk itself needs no null test, because that bounds check is exactly the
-// guarantee that `index` hops from a non-empty head land on real nodes.
-function buildListGet(module StdModule)
-	var func = IrFunction.createFromStd(ListGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+// `__list_last(list) -> (value, flag)` — the TAIL element. O(1) because the header carries `tail@8`; the
+// chain is doubly linked precisely so this costs one field read rather than a walk.
+function buildListLast(module StdModule)
+	buildListEndAccessor(module, name: ListLastName, endOffset: ListTailOffset)
+end 'buildListLast'
+
+// ⭐ **`__list_node_at(list, index) -> nodePtr` — THE HEAD-TO-INDEX WALK, ONCE.** O(n), which is the
+// complexity `/specs/list.md` states for indexed access. See its name's declaration for why it bounds-checks
+// nothing and why three entries share it rather than each carrying a walk.
+function buildListNodeAt(module StdModule)
+	var func = IrFunction.createFromStd(ListNodeAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
 	var ids = ValueMinter.create(2)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var oob = module.addBlock(func, label: b"oob")
-	var start = module.addBlock(func, label: b"start")
 	var header = module.addBlock(func, label: b"walk")
 	var advance = module.addBlock(func, label: b"advance")
 	var found = module.addBlock(func, label: b"found")
@@ -552,19 +732,13 @@ function buildListGet(module StdModule)
 	let list = 0 as ValueId
 	let index = 1 as ValueId
 
-	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
-	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: count, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: start.id))
+	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
+	let firstOrdinal = emitConst(module, block: entry, value: 0, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(head, second: firstOrdinal)))
 
-	emitOobReturn(module, block: oob, ids: ids)
-
-	let head = emitLoadField(module, block: start, record: list, offset: ListHeadOffset, ids: ids)
-	let firstOrdinal = emitConst(module, block: start, value: 0, ids: ids)
-	module.setTerminator(start, op: StdOp.branch(header.id))
-	start.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(head, second: firstOrdinal)))
-
-	// header(node, i): `i == index` is the arrival test — the bounds check above guarantees it fires before
-	// `node` can reach the chain's end.
+	// header(node, i): `i == index` is the arrival test — the CALLER's bounds check guarantees it fires
+	// before `node` can reach the chain's end, which is why the walk itself needs no null test.
 	let node = ids.mint()
 	header.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
 	let ordinal = ids.mint()
@@ -578,64 +752,151 @@ function buildListGet(module StdModule)
 	module.setTerminator(advance, op: StdOp.branch(header.id))
 	advance.branchEdges.push(BranchEdge.create(header.id, argIds: twoArgs(next, second: nextOrdinal)))
 
+	module.setTerminator(found, op: StdOp.ret(node))
+
+	module.functions.push(func)
+end 'buildListNodeAt'
+
+// ⭐ **THE SHARED HEAD OF THE TWO INDEXED ENTRIES (`get`, `remove`): bounds-check `index` against `count`,
+// throw `indexOutOfBounds` if it is negative or at/past the end, and otherwise WALK to the node.** Both then
+// do exactly one thing with the node, and both would otherwise spell these five steps out.
+//
+// The caller supplies `found` — the block the in-range path continues in — and terminates it; this returns
+// the node it holds. Passing the block in rather than handing one back keeps the whole result a `ValueId`.
+function emitListCheckedNodeAt(module StdModule, func IrFunction, entry IrBlock, found IrBlock, list ValueId, index ValueId, ids ValueMinter) returns ValueId
+	var oob = module.addBlock(func, label: b"oob")
+
+	let count = emitLoadField(module, block: entry, record: list, offset: ListCountOffset, ids: ids)
+	let outOfRange = emitIndexOutOfRange(module, block: entry, index: index, length: count, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(outOfRange, thenBlockId: oob.id, elseBlockId: found.id))
+
+	emitOobReturn(module, block: oob, ids: ids)
+
+	let node = ids.mint()
+	module.appendOp(found, op: StdOp.call(node, callee: ListNodeAtName, args: twoArgs(list, second: index)))
+	return node
+end 'emitListCheckedNodeAt'
+
+// `__list_get(list, index) -> (value, flag)` — the element at `index`. A BORROW, like `first`/`last`: the
+// list keeps the element. Throws `indexOutOfBounds` for a negative index or one at/past `count`.
+function buildListGet(module StdModule)
+	var func = IrFunction.createFromStd(ListGetName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var found = module.addBlock(func, label: b"found")
+	emitParams(module, block: entry, count: 2)
+	let list = 0 as ValueId
+	let index = 1 as ValueId
+
+	let node = emitListCheckedNodeAt(module, func: func, entry: entry, found: found, list: list, index: index, ids: ids)
 	emitOkReturn(module, block: found, value: emitLoadField(module, block: found, record: node, offset: ListValueOffset, ids: ids), ids: ids)
 
 	module.functions.push(func)
 end 'buildListGet'
 
-// `__list_remove_first(list) -> (value, flag)` — unlink the head node, free it, and hand its element out.
-// O(1). Throws `indexOutOfBounds` on an empty list.
+// ⭐ **`__list_remove_at(list, index) -> (value, flag)` — unlink the node at `index`, free it and hand its
+// element out MOVED.** O(n) for the walk, O(1) for the unlink, which is the complexity `/specs/list.md`
+// states. Throws `indexOutOfBounds` exactly as `get` does — same check, same walk, one shared head.
+//
+// ⚠ **THE UNLINK IS `__list_remove_node`'s, CALLED**, not a second copy of it: "detach an ARBITRARY node from
+// this chain and hand its value out" is one operation, and the only thing an index adds is which node. That is
+// `stdlib/List.maxon:128-131`'s own shape (`walkTo` then `chain.remove(node)`), and it is what keeps the
+// move-out rule — the element is NOT dropped, because the caller becomes its sole owner — written down once.
+function buildListRemoveAt(module StdModule)
+	var func = IrFunction.createFromStd(ListRemoveAtName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var found = module.addBlock(func, label: b"found")
+	emitParams(module, block: entry, count: 2)
+	let list = 0 as ValueId
+	let index = 1 as ValueId
+
+	let node = emitListCheckedNodeAt(module, func: func, entry: entry, found: found, list: list, index: index, ids: ids)
+	let value = ids.mint()
+	module.appendOp(found, op: StdOp.call(value, callee: ListRemoveNodeName, args: twoArgs(list, second: node)))
+	emitOkReturn(module, block: found, value: value, ids: ids)
+
+	module.functions.push(func)
+end 'buildListRemoveAt'
+
+// ⭐ **ONE END-REMOVAL, BUILT TWICE UNDER TWO ORIENTATIONS** — `buildListEndInsert`'s arrangement inverted,
+// down to the same four `ByteOffset` parameters meaning the same four things. `removeFirst` and `removeLast`
+// are the same five steps (take the end node or throw, read its value and its INWARD neighbour, make that
+// neighbour the new end — or empty the FAR end too when there was none — decrement, free), differing only in
+// which end they take from and which way the links point.
+//
+// `nearEnd` is the end this removal takes from, `farEnd` the one an emptied list must also clear, `outward`
+// the removed node's link toward the interior, and `inward` the new end node's link back toward `nearEnd`.
+// The names are `buildListEndInsert`'s and mean what they mean there: for the HEAD end, `outward` is `next`
+// and `inward` is `prev`.
 //
 // ⚠ **THE ELEMENT IS MOVED OUT, NOT DROPPED.** The caller becomes its sole owner (the parser marks the result
 // OWNED), which is the exact mirror of `__managed_pop` nulling the slot it hands out: the node is freed WITHOUT
 // consulting `element_drop@24`, so nothing destroys a value that now has an owner elsewhere.
-function buildListRemoveFirst(module StdModule)
-	var func = IrFunction.createFromStd(ListRemoveFirstName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
+//
+// ⚠ **IT IS NOT `__list_remove_node` WITH AN END PICKED OUT**, for that entry's own stated reason read
+// backwards: this one KNOWS its node is at `nearEnd` and writes that header field outright, where the
+// arbitrary-node unlink must ask each side whether it exists. What it does not know — and what
+// `__list_remove_node` does — is that the node is in the list at all, which is why this one throws.
+function buildListEndRemove(module StdModule, name ByteArray, nearEnd ByteOffset, farEnd ByteOffset, outward ByteOffset, inward ByteOffset)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0, throwsTypeName: arrayErrorThrows())
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var oob = module.addBlock(func, label: b"oob")
 	var take = module.addBlock(func, label: b"take")
-	var detachNext = module.addBlock(func, label: b"detach")
+	var detachNeighbour = module.addBlock(func, label: b"detach")
 	var emptied = module.addBlock(func, label: b"emptied")
 	var release = module.addBlock(func, label: b"release")
 
 	emitParams(module, block: entry, count: 1)
 	let list = 0 as ValueId
 
-	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
+	let node = emitLoadField(module, block: entry, record: list, offset: nearEnd, ids: ids)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
-	let isEmpty = emitCmp(module, block: entry, a: head, b: zero, pred: StdCmpPred.eq, ids: ids)
+	let isEmpty = emitCmp(module, block: entry, a: node, b: zero, pred: StdCmpPred.eq, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isEmpty, thenBlockId: oob.id, elseBlockId: take.id))
 
 	emitOobReturn(module, block: oob, ids: ids)
 
-	let value = emitLoadField(module, block: take, record: head, offset: ListValueOffset, ids: ids)
-	let next = emitLoadField(module, block: take, record: head, offset: ListNextOffset, ids: ids)
-	emitStoreField(module, block: take, record: list, offset: ListHeadOffset, value: next)
-	let nullNext = emitConst(module, block: take, value: 0, ids: ids)
-	let hasNext = emitCmp(module, block: take, a: next, b: nullNext, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(take, op: StdOp.condBranch(hasNext, thenBlockId: detachNext.id, elseBlockId: emptied.id))
+	let value = emitLoadField(module, block: take, record: node, offset: ListValueOffset, ids: ids)
+	let neighbour = emitLoadField(module, block: take, record: node, offset: outward, ids: ids)
+	emitStoreField(module, block: take, record: list, offset: nearEnd, value: neighbour)
+	let noNeighbour = emitConst(module, block: take, value: 0, ids: ids)
+	let hasNeighbour = emitCmp(module, block: take, a: neighbour, b: noNeighbour, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(take, op: StdOp.condBranch(hasNeighbour, thenBlockId: detachNeighbour.id, elseBlockId: emptied.id))
 
-	// The new head has no predecessor.
-	let noPrev = emitConst(module, block: detachNext, value: 0, ids: ids)
-	emitStoreField(module, block: detachNext, record: next, offset: ListPrevOffset, value: noPrev)
-	module.setTerminator(detachNext, op: StdOp.branch(release.id))
+	// The new end node has nothing beyond it.
+	let noLink = emitConst(module, block: detachNeighbour, value: 0, ids: ids)
+	emitStoreField(module, block: detachNeighbour, record: neighbour, offset: inward, value: noLink)
+	module.setTerminator(detachNeighbour, op: StdOp.branch(release.id))
 
-	// The list is now empty, so its TAIL must stop naming the node about to be freed.
-	let noTail = emitConst(module, block: emptied, value: 0, ids: ids)
-	emitStoreField(module, block: emptied, record: list, offset: ListTailOffset, value: noTail)
+	// The list is now empty, so its FAR end must stop naming the node about to be freed.
+	let noFarEnd = emitConst(module, block: emptied, value: 0, ids: ids)
+	emitStoreField(module, block: emptied, record: list, offset: farEnd, value: noFarEnd)
 	module.setTerminator(emptied, op: StdOp.branch(release.id))
 
-	let count = emitLoadField(module, block: release, record: list, offset: ListCountOffset, ids: ids)
-	let one = emitConst(module, block: release, value: 1, ids: ids)
-	emitStoreField(module, block: release, record: list, offset: ListCountOffset, value: emitBin(module, block: release, a: count, b: one, opcode: StdBinOpcode.sub, ids: ids))
+	emitListCountDelta(module, block: release, list: list, opcode: StdBinOpcode.sub, ids: ids)
 	let freed = ids.mint()
-	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(head)))
+	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(node)))
 	emitOkReturn(module, block: release, value: value, ids: ids)
 
 	module.functions.push(func)
+end 'buildListEndRemove'
+
+// `__list_remove_first(list) -> (value, flag)` — unlink the HEAD node, free it, and hand its element out.
+// O(1). Throws `indexOutOfBounds` on an empty list.
+function buildListRemoveFirst(module StdModule)
+	buildListEndRemove(module, name: ListRemoveFirstName, nearEnd: ListHeadOffset, farEnd: ListTailOffset, outward: ListNextOffset, inward: ListPrevOffset)
 end 'buildListRemoveFirst'
+
+// `__list_remove_last(list) -> (value, flag)` — unlink the TAIL node. O(1), which is what the doubly linked
+// chain buys: `prev@8` gives the new tail without a walk, and it is the complexity `/specs/list.md` states.
+function buildListRemoveLast(module StdModule)
+	buildListEndRemove(module, name: ListRemoveLastName, nearEnd: ListTailOffset, farEnd: ListHeadOffset, outward: ListPrevOffset, inward: ListNextOffset)
+end 'buildListRemoveLast'
 
 // One-field-read cursor primitive: `name(record) -> record[offset]`. The three a `for … in list` loop is
 // lowered to are one shape (`__list_head`, `__list_node_value`, `__list_node_next`), so the shape is built
