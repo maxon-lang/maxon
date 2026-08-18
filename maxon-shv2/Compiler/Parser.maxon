@@ -34911,10 +34911,33 @@ export type Parser
 	// (measured `0xC0000005`, and `stdlib/Array.maxon` writes the bare spelling throughout). The receiver
 	// answers it: `self` stands for every self-field storage of the enclosing receiver, which is the rule
 	// `noteReceiverBorrowSubjects` already held for the CALL-ARGUMENT door and now holds for both.
-	function noteBorrowSubjectWrite(func IrFunction, receiver ValueId, subjectName ByteArray, display ByteArray, anchor Token, mutatesSubject bool)
+	//
+	// ⭐⭐⭐ **E3070 HAS TWO HALVES AND THEY ARE RECORDED HERE, OFF ONE FLAG — WHICH IS THE FIX FOR A WHOLE
+	// FAMILY OF USE-AFTER-FREES.** The SAME-BODY half is the site pushed below; the CROSS-FUNCTION half is
+	// `storageWrittenParamMask`, which `BorrowCheck.mutationSiteWrites` reads at every call site to ask
+	// *"does handing this borrowed container to that callee reach a write of it?"*. The storage column used
+	// to be set by `noteReceiverWrite` instead, off **E3019's** `mutatesReceiver` answer — so the two halves
+	// of one question read two different flags, and any surface whose two answers differ got one half and
+	// not the other. `__ManagedList` is exactly that surface (`managedListMethodFreesANode` is narrower than
+	// `managedListMethodMutatesReceiver`), and the gap was a MEASURED 0xC0000005: `let node =
+	// chain.insertLast(s)` + `wipe(chain)` whose body is `chain.clear()` + `node.value()` compiled clean and
+	// faulted. Recorded here, a surface cannot set the cross-function half without the same-body half,
+	// because there is only one call and only one answer.
+	//
+	// ⚠ **THE COLUMN IS RECORDED BEFORE THE `borrows.count()` GATE, AND THAT ORDER IS LOAD-BEARING.** The
+	// gate above asks whether THIS body holds a borrow; the storage column is about the body's CALLERS,
+	// which hold theirs somewhere this function cannot see. Below the gate it would be set only for a
+	// function that happened to borrow something itself.
+	//
+	// The mask is passed rather than re-derived: it is `subjectStorageMask(subjectName)`, which every caller
+	// already computed for `noteReceiverWrite`'s W117 union, and computing it twice per mutating call would
+	// pay a scope lookup on the hot statement path for an answer already in hand.
+	function noteBorrowSubjectWrite(func IrFunction, receiver ValueId, subjectName ByteArray, receiverStorage ParamPositionMask, display ByteArray, anchor Token, mutatesSubject bool)
 		if not mutatesSubject 'notAWrite'
 			return
 		end 'notAWrite'
+
+		func.storageWrittenParamMask = func.storageWrittenParamMask or receiverStorage
 
 		if not self.functionHoldsABorrow(func) 'nothingBorrowedYet'
 			return
@@ -48306,9 +48329,11 @@ export type Parser
 		// A `__ManagedList` RECEIVER (`ml.insertFirst(x)`, `ml.remove(node)`, `ml.clear()`) is the SAME chain
 		// under the surface that hands out node handles, so it carries the borrow subject for the `List`
 		// arm's reason and one of its own: an insertion's NODE is a reference into the list, and E3070 is
-		// what stops it being read after a `remove`/`clear` frees it.
+		// what stops it being read after a `remove`/`clear` frees it. ⭐ It carries the STORAGE mask for that
+		// same reason, and the arm went without one until W-BORROW — see `dispatchManagedListMethod`, where
+		// the omission was a measured 0xC0000005 across a call.
 		if self.signatures.isManagedListInstanceAt(recv.tag, nameId: recv.nameId) 'managedListMethod'
-			return try self.dispatchManagedListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner)
+			return try self.dispatchManagedListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName))
 		end 'managedListMethod'
 
 		// A NODE-HANDLE RECEIVER (`node.value()`) — its own dispatcher because a node is not a container:
@@ -52907,6 +52932,11 @@ export type Parser
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(list)
+		// ⭐ **ONE ANSWER, READ ONCE, HANDED TO BOTH DOORS.** A `List`'s E3019 set and its E3070 set COINCIDE —
+		// see `listMethodMutatesReceiver`, whose header argues that against the narrower shape `__ManagedList`
+		// needs — so the two calls below take the same local rather than two calls of the same predicate that
+		// could later be edited apart.
+		let mutates = listMethodMutatesReceiver(methodTok.value)
 
 		// ⛔⛔ **THIS PASSED `receiverStorage: NoParamPositions` UNTIL spec-port `list`, ON A PREMISE THAT HAD
 		// STOPPED HOLDING, AND IT WAS A USE-AFTER-FREE.** The line read *"a list write cannot free an ARRAY
@@ -52922,12 +52952,13 @@ export type Parser
 		// where `eat` calls `list.removeFirst()` compiled clean and ran to **0xC0000005**.
 		// `list.md:memory.value-survives-clear-error` is that program with `clear`, and the E3070 it pins is
 		// what this argument buys.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: listMethodMutatesReceiver(methodTok.value))
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
 
 		// ⭐ A write through the receiver invalidates every borrow outstanding on it — `removeFirst` FREES the
 		// node whose element a `first()` borrow still names, so the E3070 door is taken with the same answer
-		// the immutable-binding rule above just read.
-		self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: listMethodMutatesReceiver(methodTok.value))
+		// the immutable-binding rule above just read. BOTH of E3070's halves are recorded by this one call:
+		// the same-body site, and the storage column a CALLER's borrow reads across the call.
+		self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
 
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
@@ -53039,7 +53070,7 @@ export type Parser
 	// (`/specs/ownership.md:managed-list-remove-decref`). Recorded after, the same rule does exactly the
 	// right thing in both directions: a handle whose last use IS the argument is dead at the write and the
 	// call is legal, and a handle read AGAIN afterwards is live at the write and the read is refused.
-	function dispatchManagedListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask) returns ValueId throws ParseError
+	function dispatchManagedListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(list)
@@ -53051,26 +53082,22 @@ export type Parser
 		// hoisted `noteBorrowSubjectWrite` could not be in two places at once.
 		let freesANode = managedListMethodFreesANode(methodTok.value)
 
-		// ⛔⛔ **`receiverStorage: NoParamPositions` IS A KNOWN OPEN DEFECT HERE, NOT A REASON — AND THIS IS THE
-		// LAST CALL SITE THAT PASSES IT.** It carried the `String`/`Set`/`Map` sentence (*"a chain write cannot
-		// free an ARRAY element, which is the only borrow E3070 tracks"*), which is true of those three because
-		// they hand out no borrow at all, and FALSE of both chain surfaces: this one mints a NODE handle borrow
-		// (`emitManagedListNodeHandle`) and `dispatchListMethod` mints an ELEMENT borrow. That door was corrected
-		// at spec-port `list` after the same premise was measured as a use-after-free; this one was left, on the
-		// coordinator's ruling of 2026-08-18, to be fixed in its own commit.
+		// ⛔⛔ **THIS PASSED `receiverStorage: NoParamPositions` UNTIL W-BORROW, AND IT WAS A USE-AFTER-FREE.**
+		// It carried the `String`/`Set`/`Map` sentence (*"a chain write cannot free an ARRAY element, which is
+		// the only borrow E3070 tracks"*), which is true of those three because they hand out no borrow at all,
+		// and FALSE of both chain surfaces: this one mints a NODE handle borrow (`emitManagedListNodeHandle`)
+		// and `dispatchListMethod` mints an ELEMENT borrow. MEASURED: `let node = chain.insertLast("<heap
+		// string>")` then `wipe(chain)` — where `wipe` calls `chain.clear()` — compiled clean and ran to
+		// **0xC0000005**, where the bootstrap oracle refuses it.
 		//
-		// ⚠ **MEASURED, and it is a live use-after-free**: `let node = chain.insertLast("<heap string>")` then
-		// `wipe(chain)` — where `wipe` calls `chain.clear()` — compiles clean and runs to **0xC0000005**. The
-		// same-body spelling (`chain.clear()` written inline) is correctly refused, because a container write is
-		// settled at the parse; only the CROSS-FUNCTION half is open, `BorrowCheck.mutationSiteWrites` reading
-		// the storage column no chain method sets.
-		//
-		// ⇒ **THE CURE IS NOT `dispatchListMethod`'s, COPIED.** This surface must thread the NARROWER
-		// `managedListMethodFreesANode` answer (already computed below as `freesANode`) and not `mutates`, for
-		// that predicate's own stated reason: an insertion cannot dangle a node handle, and passing the wider
-		// set would refuse `let a = ml.insertLast(x)` + `ml.insertLast(y)` + a read of `a` —
-		// `/specs/managed-list.md:core.insert-first-multiple`, a legal program.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: NoParamPositions, methodTok: methodTok, mutatesReceiver: mutates)
+		// ⇒ **AND THE CURE WAS NOT `dispatchListMethod`'s, COPIED — IT IS THAT THE STORAGE COLUMN BELONGS TO
+		// E3070's OWN FLAG.** This surface's two answers DIFFER (`freesANode` ⊊ `mutates`), so passing the
+		// wider one would refuse `let a = ml.insertLast(x)` + `ml.insertLast(y)` + a read of `a` —
+		// `/specs/managed-list.md:core.insert-first-multiple`, a legal program. The column is therefore
+		// recorded by `noteBorrowSubjectWrite` below, which the `remove` and `clear` arms already call with
+		// `freesANode` and the two insertions correctly do not call at all. What this line still hands over is
+		// E3019's and W117's answer, which IS the wider set: an insertion does write a `let` receiver's record.
+		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
 
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
@@ -53087,7 +53114,7 @@ export type Parser
 
 		if methodTok.value.equals(RemoveMethod) 'remove'
 			let node = try self.parseManagedListNodeArg(func, giid: giid)
-			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
+			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
 			// The element is MOVED OUT — the caller owns it, and a statement-position `remove` drops it at
 			// the statement's end like every other unbound owned temporary. Emitted through the ONE element
 			// accessor, so its ownership, its result type and its buffer-surface mark are the array's answers.
@@ -53099,7 +53126,7 @@ export type Parser
 		// arguments to evaluate the two answers differ by one token index and by nothing else; see
 		// `emitChainClear`, which is the rest of this arm and is shared with that door.
 		if methodTok.value.equals(ClearMethod) 'clear'
-			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
+			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
 			return try self.emitChainClear(list, resultUsed: resultUsed, methodTok: methodTok, range: range)
 		end 'clear'
 
@@ -53432,7 +53459,7 @@ export type Parser
 		let mutates = vectorMethodMutatesReceiver(methodTok.value)
 
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
-		self.noteBorrowSubjectWrite(func, receiver: vec, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
+		self.noteBorrowSubjectWrite(func, receiver: vec, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
 
 		if methodTok.value.equals(CountMethod) 'count'
 			try self.consumeEmptyArgList()
@@ -55038,7 +55065,7 @@ export type Parser
 		// ⭐ E3070's container door — the SAME `mutatesReceiver` answer, read once, asked of the SAME receiver at
 		// the same instant. The rule above refuses a write through an immutable binding; this one records the
 		// write it permits, against the borrows still outstanding on that storage (`noteBorrowSubjectWrite`).
-		self.noteBorrowSubjectWrite(func, receiver: arr, subjectName: borrowSubjectName, display: methodTok.value, anchor: methodTok, mutatesSubject: mutatesReceiver)
+		self.noteBorrowSubjectWrite(func, receiver: arr, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: mutatesReceiver)
 
 		// ⭐⭐ **`.managed` IS AN IDENTITY AT EVERY ELEMENT TYPE (R4.1, ungated by R4.4).**
 		// `stdlib/Array.maxon:106` declares `export var managed as ElementMemory` — `__ManagedMemory with
@@ -55560,13 +55587,18 @@ export type Parser
 	// built by re-reading the LOWERED callee names (`__managed_push`, `__managed_append`, `__list_append`) would be
 	// precisely that second list, three tiers away from the one the parser already consults.
 	//
-	// ⭐⭐ **IT RECORDS TWO MASKS, BECAUSE ONE WRITE ANSWERS TWO QUESTIONS AND shv2 ANSWERS THEM
-	// DIFFERENTLY** — see `IrFunction`'s table, which is where the pair is defined. `receiverOwner` is
-	// E3019's ("does passing an immutable binding here make it an error?", NO for a self-field write, the
-	// ruling `self-keyword.md:self-with-params` pins); `receiverStorage` is E3070's ("does this body write
-	// what this parameter points at?", YES for the same write). Both are decided about the SAME receiver at
-	// the SAME instant off the SAME `mutatesReceiver` answer, which is why they are recorded together rather
-	// than by two passes that would then have to agree for ever.
+	// ⭐⭐ **IT ANSWERS E3019 AND W117, AND IT DELIBERATELY NO LONGER ANSWERS E3070** — see `IrFunction`'s
+	// table, which is where the columns are defined. `receiverOwner` is E3019's ("does passing an immutable
+	// binding here make it an error?", NO for a self-field write, the ruling `self-keyword.md:self-with-params`
+	// pins); `receiverStorage` is which parameter's record this receiver denotes, which W117's union below
+	// needs and which E3019 must not read.
+	//
+	// ⛔⛔ **THE E3070 COLUMN USED TO BE SET HERE, OFF `mutatesReceiver`, AND THAT WAS THE ROOT OF A WHOLE
+	// FAMILY OF USE-AFTER-FREES.** E3070's two halves — the same-body site and the cross-function
+	// `storageWrittenParamMask` — were then recorded at two doors off two different flags, so a surface whose
+	// *"writes the receiver"* and *"invalidates an outstanding borrow"* answers DIFFER got one half and not
+	// the other. Both halves now live at `noteBorrowSubjectWrite`, which every caller of this function
+	// already calls with the E3070 answer; its header carries the measurement.
 	function noteReceiverWrite(func IrFunction, immutableReceiverName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask, methodTok Token, mutatesReceiver bool) throws ParseError
 		if not mutatesReceiver 'readOnlyMethod'
 			return
@@ -55577,12 +55609,13 @@ export type Parser
 		end 'immutableReceiver'
 
 		func.writtenParamMask = func.writtenParamMask or receiverOwner
-		func.storageWrittenParamMask = func.storageWrittenParamMask or receiverStorage
 		// ⭐ **W117's COLUMN TAKES THE UNION OF BOTH**, because it asks the widest of the three questions —
 		// "does this body write the record this parameter denotes, at all?" — and each of the other two is
 		// narrowed away from it in a different direction (see `IrFunction.writesThroughParamMask`). Both
 		// answers are already in hand here, decided about the same receiver at the same instant, so the union
-		// costs nothing and cannot fall out of step with either.
+		// costs nothing and cannot fall out of step with either. ⚠ It is keyed on `mutatesReceiver` and NOT on
+		// the narrower E3070 answer: `ml.insertLast(x)` frees no node but does write the record, which is
+		// exactly the question this column asks.
 		func.writesThroughParamMask = func.writesThroughParamMask or receiverOwner or receiverStorage
 	end 'noteReceiverWrite'
 
@@ -55655,11 +55688,12 @@ export type Parser
 	//
 	// ⚠ **IT SETS E3019's COLUMN ONLY. `receiverStorageMask` below is unchanged and still answers for
 	// E3070**, which is the same independence `IrFunction`'s table already records for a `String` receiver
-	// that is a parameter: a `String` write frees no CONTAINER element, and a container element is the only
-	// borrow E3070 tracks. (It read *"no ARRAY element, and an array element is the only borrow E3070
-	// tracks"* until spec-port `list` — true when the `Array` was the only surface handing out element
-	// borrows, and false once a `List` did through the same `emitContainerElementAccessor`. The claim this
-	// arm actually needs is unaffected: a `String` is not a container in either reading.)
+	// that is a parameter: every borrow E3070 tracks is a reference INTO A CONTAINER — an element, a chain
+	// node handle, a cursor — and a `String` write frees none of them because a `String` is not a container
+	// and hands out no such reference. (It read *"no ARRAY element, and an array element is the only borrow
+	// E3070 tracks"* until spec-port `list` — true when the `Array` was the only surface handing out element
+	// borrows, and false once a `List`, a `__ManagedList` and a `Vector` each did. The claim this arm
+	// actually needs is unaffected: a `String` is not a container in any reading.)
 	// `borrow-liveness:method-writing-a-string-or-set-field-is-not-a-conflict` is the case
 	// that fails the instant the two are fused, and it was watched green before, during and after this arm.
 	function receiverOwnerMask(func IrFunction, binding VarInfo, baseTok Token) returns ParamPositionMask throws ParseError
@@ -55746,8 +55780,8 @@ export type Parser
 		return self.receiverStorageMask(func, binding: self.borrowSubjectBindingOf(subjectName))
 	end 'subjectStorageMask'
 
-	// Is this DECLARED type an `Array` instance? Asked by the self-field store door, which holds a
-	// `MaxonType` rather than a value.
+	// Is this DECLARED type an `Array` instance? Asked by `arrayManagedFieldAt`, the `x.managed` ROUTING
+	// question, which holds a declared `MaxonType` rather than a value.
 	//
 	// ⚠ **THE TAG TEST IS NOT OPTIONAL, AND LEAVING IT OUT IS A WRONG ANSWER RATHER THAN A LOOSE ONE.**
 	// `TypeNameId` and `GenericInstanceId` share a numeric space, so `isArrayInstance` asked of a name that
@@ -55755,9 +55789,50 @@ export type Parser
 	// store marked the whole receiver written, and `b.add(42)` was refused while `b.items` was borrowed, a
 	// program the oracle compiles and runs (it prints `44 42`). It is the same two-part test
 	// `parseFieldChainCall` makes of a receiver's VALUE, asked here of a type.
+	//
+	// ⛔ **IT WAS THE TWO STORE DOORS' E3070 GATE UNTIL W-BORROW, AND THAT WAS A USE-AFTER-FREE** — see
+	// `typeOwnsBorrowableStorage` below, which is the question those doors were actually asking.
 	function typeIsArrayInstance(t MaxonType) returns bool
 		return self.signatures.isArrayInstanceAt(maxonTypeTag(t), nameId: typeNameIdOf(t))
 	end 'typeIsArrayInstance'
+
+	// ⭐⭐⭐ **CAN DROPPING A RECORD OF THIS TYPE FREE STORAGE AN E3070 BORROW POINTS INTO? — THE ONE HOME OF
+	// THE GATE ON BOTH FIELD-STORE DOORS (W-BORROW).** `emitCheckedSelfFieldStore` (`items = <fresh>`) and
+	// `parseFieldAssignment` (`b.items = <fresh>`) both DROP the record the field held, so what they can
+	// invalidate is every borrow into anything that record transitively owns — which is a question about the
+	// FIELD'S TYPE and has exactly two wrong answers, both of which shv2 has now shipped:
+	//
+	//   • **`typeIsArrayInstance`, which is TOO NARROW and was a measured 0xC0000005 twice.** A `List` field
+	//     dropped under a live `first()` borrow, and a nested STRUCT field whose drop cascades to the `Array`
+	//     inside it. "An array element is the only borrow E3070 tracks" was true only while the `Array` was
+	//     the only surface handing one out, and a store does not free an ELEMENT in any case.
+	//   • **bare `typeIsManaged`, which is TOO WIDE and is a measured false rejection.** A `String` field
+	//     store — `name = "another tag"` inside a method — was refused *"cannot mutate 'b' via 'retag'"*
+	//     while `b.items` was borrowed, on a program the runnable oracle compiles and runs (`44 another tag
+	//     entirely`). It also contradicts a committed case one door over:
+	//     `borrow-liveness:method-writing-a-string-or-set-field-is-not-a-conflict` states this very fact for
+	//     the METHOD door, and one fact may not have two answers.
+	//
+	// ⇒ **EVERY BORROW E3070 TRACKS IS A REFERENCE INTO A CONTAINER** — an element (`Array`, `List`,
+	// `Vector`, through `emitContainerElementAccessor`), a chain NODE handle (`emitManagedListNodeHandle`) or
+	// a CURSOR (`createCursor`). So the question is *"is this type, or does it own, a container"*, and the
+	// two managed types that are neither are `String` and `Character`: each owns a BYTE BUFFER and nothing
+	// else, and no door in the language mints a tracked borrow into one (`s.byteAt(i)` copies a word, and
+	// `arrayManagedFieldAt` will not route `.managed` off a non-instance binding, so no cursor can be taken
+	// on either). Every other managed type is an aggregate or a container and is admitted.
+	//
+	// ⚠ **THE CARVE-OUT IS THE DANGEROUS DIRECTION AND IS DELIBERATELY THE SHORTEST POSSIBLE ONE.** A type
+	// wrongly EXCLUDED here is a use-after-free; a type wrongly included is only a refusal. These two are
+	// excluded on the same claim `IrFunction`'s mask table already makes about a `String` RECEIVER — a
+	// String write frees no container element — and nothing else is.
+	function typeOwnsBorrowableStorage(t MaxonType) returns bool
+		if not self.signatures.typeIsManaged(t, from: self.artifact.typeNames) 'ownsNoHeapAtAll'
+			return false
+		end 'ownsNoHeapAtAll'
+
+		let tag = maxonTypeTag(t)
+		return tag != ValueTypeTag.string and tag != ValueTypeTag.character
+	end 'typeOwnsBorrowableStorage'
 
 	// ⭐ **THE DENSE-GROWTH GATE for `resize` (E3106).** `__managed_resize` lengthens by publishing a longer
 	// `length@8` over slots `__managed_grow` left ZEROED, and a zero is an ELEMENT only while the element lives
@@ -57795,31 +57870,35 @@ export type Parser
 		// caller's `let b` an E3019 for a method that assigns its own field is the very ruling
 		// `self-keyword.md:self-with-params` pins (see `IrFunction`'s table).
 		//
-		// ⚠ **GATED ON THE FIELD BEING AN ARRAY, which is the SAME line the `String` and `Set` dispatchers draw**
-		// (`noteReceiverWrite`'s one remaining `receiverStorage: NoParamPositions` call site, in
-		// `dispatchManagedListMethod`): a `String` or `Set` write frees no container element, so a scalar or
-		// text field store is not a conflict. Ungated, `total = total + v` marked its whole receiver written,
-		// and a caller holding `let s = try b.items.get(0) otherwise ""` was refused `b.add(42)` — a legal
-		// program the oracle compiles and runs (measured: it prints `44 42`). The field type is read through the
-		// one accessor the type check below already asks.
+		// ⛔⛔ **THIS GATE WAS `typeIsArrayInstance` AND IT WAS A MEASURED USE-AFTER-FREE, TWICE OVER
+		// (W-BORROW).** The line read *"gated on the field being an ARRAY, because an array element is the only
+		// borrow E3070 tracks"* — and the store does not free an ELEMENT, it drops the RECORD, so what it can
+		// invalidate is every borrow into anything that record transitively owns. Two shapes measured on the
+		// tip, both compiling clean and faulting **0xC0000005** where the bootstrap oracle prints the value:
 		//
-		// ⛔⛔ **BUT "AN ARRAY ELEMENT IS THE ONLY THING E3070 TRACKS" IS FALSE, AND THIS GATE IS A MEASURED
-		// USE-AFTER-FREE BECAUSE OF IT (spec-port `list`, 2026-08-18).** A `List` hands out element borrows
-		// through the very same `emitContainerElementAccessor`, and a `List`-typed struct field is legal — so
-		// `let s = try b.items.first() otherwise "none"` across a `b.reset()` that REBINDS `items` reaches this
-		// gate, is waved through as "not an array", and shv2 runs to **0xC0000005** where the oracle prints the
-		// string. ⇒ **The right predicate is "does this field's type hand out borrows E3070 tracks", which is
-		// the container question and not the `Array` one.** Left as it stands on the coordinator's ruling of
-		// 2026-08-18: it is the same family as `dispatchManagedListMethod`'s open storage-mask hole and the two
-		// are to be ruled on and fixed together, in their own commit.
-		if self.typeIsArrayInstance(self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)) 'arrayFieldStore'
+		//   • a `List`-typed field — `let s = try b.items.first() otherwise "none"` across a `b.reset()` whose
+		//     body is `items = StringList.create()`. A `List` hands out element borrows through the very same
+		//     `emitContainerElementAccessor` an `Array` does, so "not an array" was never the question.
+		//   • a nested STRUCT field — `let s = try b.inner.items.get(0) otherwise "none"` across a `b.reset()`
+		//     whose body is `inner = Inner.create()`. Dropping `inner` cascades to the `Array` IT owns, and
+		//     that array's element is a borrow of the most canonical kind.
+		//
+		// ⇒ **THE QUESTION IS "CAN DROPPING THIS FIELD'S RECORD FREE ANYTHING A TRACKED BORROW POINTS INTO",
+		// AND `typeOwnsBorrowableStorage` IS ITS ONE HOME** — shared with the sibling store door
+		// (`parseFieldAssignment`), which had the identical hole. That predicate's header carries both widths
+		// this gate has been measured wrong at, in both directions. A TRIVIAL field frees nothing at all,
+		// which is what the original narrowing was actually for: ungated, `total = total + v` marked its whole
+		// receiver written and a caller holding `let s = try b.items.get(0) otherwise ""` was refused
+		// `b.add(42)` (`borrow-liveness:method-writing-a-non-array-field-is-not-a-conflict`). The field type is
+		// read through the one accessor the type check below already asks.
+		if self.typeOwnsBorrowableStorage(self.signatures.fieldTypeOf(layout, index: index, into: self.artifact.typeNames)) 'freesBorrowableStorage'
 			func.storageWrittenParamMask = func.storageWrittenParamMask or paramMaskOfValue(func, value: receiver)
-		end 'arrayFieldStore'
+		end 'freesBorrowableStorage'
 
-		// ⭐ **W117's COLUMN IS *NOT* ARRAY-GATED, and that is the difference between the two questions.** E3070
-		// tracks array elements because an array element is the only borrow it can lose; W117 tracks whether a
+		// ⭐ **W117's COLUMN IS NOT GATED AT ALL, and that is the difference between the two questions.** E3070's
+		// column is gated because a store that frees NOTHING cannot invalidate a borrow; W117 tracks whether a
 		// `let` global's record is written, and `total = total + v` on a scalar field of a global's box writes
-		// it exactly as an array store does. Unconditional for that reason, off the same receiver value.
+		// it exactly as a managed store does. Unconditional for that reason, off the same receiver value.
 		func.writesThroughParamMask = func.writesThroughParamMask or paramMaskOfValue(func, value: receiver)
 
 		let valueStart = self.pos
@@ -58008,36 +58087,40 @@ export type Parser
 		// guard (`method-writing-a-non-array-field-is-not-a-conflict`).
 		//
 		// Both seeds are keyed on ONE subject derivation and ONE field-type read, bound here rather than
-		// spelled at each — the two gates differ, the facts they gate on do not.
-		let fieldType = self.signatures.fieldTypeOf(step.layout, index: index, into: self.artifact.typeNames)
-		let subjectName = self.borrowSubjectNameAt(baseIndex)
-
-		// ⛔ **THE NOTE'S GATE IS MANAGED-NESS, AND DELIBERATELY NOT THE `typeIsArrayInstance` ONE BESIDE
-		// IT.** `b.inner = other` frees a nested STRUCT and cascades to the arrays that struct owns, and a
-		// borrow taken through `b.inner.items.get(0)` carries this very same subject `b` — so array-gating
-		// the note would close the false rejection above by opening a real use-after-free. A scalar field
-		// frees nothing at all, which is the whole of what this gate excludes.
-		if self.functionHoldsABorrow(func) and self.signatures.typeIsManaged(fieldType, from: self.artifact.typeNames) 'mayConflictWithABorrow'
-			self.noteBorrowSubjectRebind(func, subjectName: subjectName, anchor: step.baseTok)
-		end 'mayConflictWithABorrow'
-
-		// ⚠ **THE MASK'S GATE IS NARROWER — THE FIELD BEING AN ARRAY, which is E3070's SCOPE** and the same
-		// line the sibling store draws: this column is read across a CALL (`BorrowCheck.mutationSiteWrites`),
-		// where the only borrow that survives into another function's summary is an array element's.
+		// spelled at each — and since W-BORROW they are keyed on ONE GATE as well.
+		//
+		// ⛔ **ONE GATE FOR BOTH SEEDS, AND THE MASK'S HALF OF IT USED TO BE `typeIsArrayInstance` — WHICH WAS A
+		// USE-AFTER-FREE (W-BORROW).** `b.inner = other` frees a nested STRUCT and cascades to the arrays that
+		// struct owns, and a borrow taken through `b.inner.items.get(0)` carries this very same subject `b`; a
+		// `List`-typed field frees the nodes a `first()` borrow names. MEASURED: `let s = try b.items.first()
+		// otherwise "none"` + `wipe(b)` whose body is `b.items = StringList.create()` compiled clean and ran to
+		// **0xC0000005**. The two seeds are the SAME-BODY and CROSS-FUNCTION halves of one rule and had drifted
+		// to two different gates; `typeOwnsBorrowableStorage` is the one question both were asking, and its
+		// header carries the two widths this has been measured wrong at. A scalar field frees nothing at all
+		// and a `String` field frees no container, which is the whole of what it excludes.
+		//
 		// `writtenParamMask` (E3019) deliberately stays untouched beside both — the row `IrFunction`'s table
 		// already carries for the field-chain write whose base is a parameter: **no / yes**. Setting E3019's
 		// column here would make `let state = …` + `clearAll(state)` an error, which is the very program
 		// `array-managed-field-reassign:reassign-empty-array-field` pins at exit 0.
-		if self.typeIsArrayInstance(fieldType) 'arrayFieldStore'
+		let fieldType = self.signatures.fieldTypeOf(step.layout, index: index, into: self.artifact.typeNames)
+		let subjectName = self.borrowSubjectNameAt(baseIndex)
+		let storeFreesBorrowableStorage = self.typeOwnsBorrowableStorage(fieldType)
+
+		if self.functionHoldsABorrow(func) and storeFreesBorrowableStorage 'mayConflictWithABorrow'
+			self.noteBorrowSubjectRebind(func, subjectName: subjectName, anchor: step.baseTok)
+		end 'mayConflictWithABorrow'
+
+		if storeFreesBorrowableStorage 'freesBorrowableStorage'
 			func.storageWrittenParamMask = func.storageWrittenParamMask or self.subjectStorageMask(func, subjectName: subjectName)
-		end 'arrayFieldStore'
+		end 'freesBorrowableStorage'
 
 		// ⭐⭐ **W117's COLUMN, AND THIS IS THE DOOR NEITHER OF THE OTHER TWO RECORDS AT ALL.** `bump(b Box)`
 		// whose body is `b.n = 99` writes the caller's record and, before this line, was summarised as writing
 		// nothing — so `let G = Box.make()` + `bump(G)` compiled and MUTATED a global the program declared
 		// `let` (measured on both compilers, `g 99`). Neither existing mask could be widened to catch it:
 		// E3019's would refuse `let a = Box.make()` + `bump(a)`, which both references ACCEPT, and E3070's is
-		// scoped to array fields on purpose. Ungated by field type, for the reason the sibling door above
+		// scoped to fields whose drop frees something, on purpose. Ungated by field type, for the reason the sibling door above
 		// carries: a scalar field of a `let` global's box is as much the global as an array field is.
 		func.writesThroughParamMask = func.writesThroughParamMask or self.subjectStorageMask(func, subjectName: subjectName)
 
@@ -64123,17 +64206,23 @@ export type Parser
 	//
 	// Three gates, and each one is the difference between an edge and a wrong answer:
 	//
-	//   • **THE RECEIVER MUST BE AN ARRAY.** A `String` or `Set` field write frees no container element and so
-	//     must record NOTHING here — the same line `noteReceiverWrite`'s one remaining
-	//     `receiverStorage: NoParamPositions` call site (`dispatchManagedListMethod`) draws and
-	//     `emitCheckedSelfFieldStore`'s own `typeIsArrayInstance` gate draws, for the measured reason those
-	//     record: `borrow-liveness.method-writing-a-string-or-set-field-is-not-a-conflict` is a legal program.
+	//   • **THE RECEIVER MUST BE AN ARRAY.** A `String` or `Set` receiver write frees no container element and
+	//     so must record NOTHING here: `borrow-liveness.method-writing-a-string-or-set-field-is-not-a-conflict`
+	//     is a legal program, and both of those surfaces ARE served by declared callees, so an ungated edge
+	//     would refuse it.
 	//     ⛔ **This bullet used to justify itself with "E3070 tracks array elements and nothing else", which is
-	//     FALSE since a `List` handed out element borrows through the same accessor** — see
-	//     `emitCheckedSelfFieldStore`'s gate for the measured use-after-free the identical claim left open
-	//     there, and for the ruling that the two are fixed together. The gate here is narrower in a way that
-	//     matters less: it only DECLINES to record a reach edge for a `List` receiver whose storage belongs to
-	//     a parameter, which the receiver's own argument edge already covers when the receiver IS a parameter.
+	//     FALSE — a `List`, a `__ManagedList` and a `Vector` all hand out borrows E3070 tracks** (see
+	//     `emitCheckedSelfFieldStore`'s gate for the two use-after-frees the identical claim left open at the
+	//     STORE doors, both fixed at W-BORROW). ⭐ **The right reason it is nonetheless the `Array` and only the
+	//     `Array` is a fact about WHICH RECEIVERS CAN REACH THIS DOOR AT ALL, and it is checkable.** This edge
+	//     exists for a DECLARED callee, and of the four borrow-handing containers only an `Array` has any:
+	//     `dispatchMethodOnBinding`'s arms intercept a `List`, a `__ManagedList`, a `Vector`, a cursor and a
+	//     node handle BEFORE the declared-method path, and each dispatcher ends by refusing every name it does
+	//     not serve (measured: `list.clone()` is E2015 from `dispatchListMethod`, not a corpus call). Their
+	//     writes reach a caller by the DIRECT column instead — `noteBorrowSubjectWrite`'s `receiverStorage`,
+	//     which is the same `subjectStorageMask` derivation this door uses and which covers the field-chain
+	//     spelling `b.items.clear()` that has no argument edge (measured: refused E3070 through a callee).
+	//     ⇒ A container that ever moves onto the corpus must widen this gate with the same move.
 	//   • **THE STORAGE MUST REACH A PARAMETER.** A local, a temporary and a top-level `var` reach no
 	//     caller — `subjectStorageMask` is the one derivation that answers this, shared with the roster
 	//     door, so the two cannot come to disagree about which storages a receiver stands for.

@@ -1,0 +1,17 @@
+// Test: a-callee-clearing-a-managed-list-frees-a-node-handle
+typealias StringChain = __ManagedList with String
+
+function wipe(chain StringChain)
+	chain.clear()
+end 'wipe'
+
+function main() returns ExitCode
+	var chain = StringChain.create()
+	let node = chain.insertLast("alpha string long enough for heap allocation")
+	wipe(chain)
+	print("[{node.value()}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:11:2: cannot mutate 'chain' via 'wipe' while it is borrowed by 'node' (borrowed at line 10)

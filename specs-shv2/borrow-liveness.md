@@ -1761,3 +1761,237 @@ end 'main'
 ```maxoncstderr
 error E3070: specs/fragments/borrow-liveness/error.a-try-merge-keeps-every-link-of-a-composed-chain.test:19:10: cannot mutate 'p' via 'clear' while it is borrowed by 's' (borrowed at line 18)
 ```
+
+<!-- test: a-callee-clearing-a-managed-list-frees-a-node-handle -->
+### A callee that clears a `__ManagedList` frees the node a handle still names
+E3070 has **two halves** — the same-body site and the cross-function `storageWrittenParamMask` — and
+until W-BORROW they were recorded at two doors off two different flags. `dispatchManagedListMethod`
+is the one surface whose two answers DIFFER (`managedListMethodFreesANode` is narrower than
+`managedListMethodMutatesReceiver`), so it got E3019's answer for E3070 as well and set no storage
+bit at all. The same program written inline is correctly refused; only across a call was it open.
+
+⚠ **MEASURED on `df0fbfd3bf`: this compiled clean and ran to `0xC0000005`.** The bootstrap oracle
+refuses it. Both halves are now recorded by the one `noteBorrowSubjectWrite` call, off the one flag.
+```maxon
+typealias StringChain = __ManagedList with String
+
+function wipe(chain StringChain)
+	chain.clear()
+end 'wipe'
+
+function main() returns ExitCode
+	var chain = StringChain.create()
+	let node = chain.insertLast("alpha string long enough for heap allocation")
+	wipe(chain)
+	print("[{node.value()}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/a-callee-clearing-a-managed-list-frees-a-node-handle.test:11:2: cannot mutate 'chain' via 'wipe' while it is borrowed by 'node' (borrowed at line 10)
+```
+
+<!-- test: a-callee-inserting-into-a-managed-list-keeps-every-handle -->
+### The over-rejection guard for it: an INSERTION frees no node, so a handle survives one
+The width guard for the case above, and the reason its cure could not be a copy of the `List` door's.
+A chain's nodes are individually allocated and never move, so an insertion rewrites two link words and
+dangles nothing — only `remove` and `clear` free a node. Threading the wider "writes the receiver"
+answer into the storage column would refuse this program, which is not merely legal but the normal way
+a program builds a list it holds handles into (`/specs/managed-list.md:core.insert-first-multiple` is
+its same-body twin).
+
+⚠ The exit code is pinned, not just the output: a node read back out of freed memory is a wrong answer
+this file has measured before, and a stdout-only case never checks that the run succeeded.
+```maxon
+typealias StringChain = __ManagedList with String
+
+function grow(chain StringChain)
+	_ = chain.insertLast("beta string long enough for heap allocation")
+end 'grow'
+
+function main() returns ExitCode
+	var chain = StringChain.create()
+	let node = chain.insertLast("alpha string long enough for heap allocation")
+	grow(chain)
+	print("[{node.value()}] {chain.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation] 2
+```
+
+<!-- test: a-method-rebinding-a-list-field-frees-the-borrowed-element -->
+### A method that REBINDS a `List` field frees the element a caller borrowed out of it
+`emitCheckedSelfFieldStore`'s E3070 seed was gated on `typeIsArrayInstance`, under the sentence *"an
+array element is the only borrow E3070 tracks"*. A `List` hands out element borrows through the very
+same `emitContainerElementAccessor` an `Array` does, and a `List`-typed struct field is legal — so
+this store was waved through as "not an array".
+
+⚠ **MEASURED on `df0fbfd3bf`: compiled clean, ran to `0xC0000005`**, where the oracle prints the
+string. The gate is now `typeOwnsBorrowableStorage`, which asks what the store can FREE rather than
+what the field is named after.
+```maxon
+typealias StringList = List with String
+
+type Bag
+	export var items as StringList
+
+	export static function create() returns Self
+		return Self { items: StringList.create() }
+	end 'create'
+
+	export function reset()
+		items = StringList.create()
+	end 'reset'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.append("alpha string long enough for heap allocation")
+	let s = try b.items.first() otherwise "none"
+	b.reset()
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/a-method-rebinding-a-list-field-frees-the-borrowed-element.test:20:4: cannot mutate 'b' via 'reset' while it is borrowed by 's' (borrowed at line 19)
+```
+
+<!-- test: a-field-store-in-a-callee-freeing-its-parameters-list -->
+### … and the same store one indirection out, through the field-chain door
+The `List` twin of `a-field-store-in-a-callee-freeing-its-parameters-array` above, and it needs its own
+case because it is a DIFFERENT door: that store is `items = <fresh>` inside a method
+(`emitCheckedSelfFieldStore`), this one is `b.items = <fresh>` through a parameter
+(`parseFieldAssignment`). Both carried the same `typeIsArrayInstance` gate and both were open; neither
+was reachable from the other's fix.
+
+⚠ **MEASURED on `df0fbfd3bf`: compiled clean, ran to `0xC0000005`.**
+```maxon
+typealias StringList = List with String
+
+type Bag
+	export var items as StringList
+
+	export static function create() returns Self
+		return Self { items: StringList.create() }
+	end 'create'
+end 'Bag'
+
+function wipe(b Bag)
+	b.items = StringList.create()
+end 'wipe'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.append("alpha string long enough for heap allocation")
+	let s = try b.items.first() otherwise "none"
+	wipe(b)
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/a-field-store-in-a-callee-freeing-its-parameters-list.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```
+
+<!-- test: a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it -->
+### A store does not free an ELEMENT — it drops the RECORD, and the drop cascades
+The `Array`-keyed gate was wrong a second way, and this shape has nothing to do with `List`: the field
+here is a plain STRUCT. Dropping `inner` releases the `Array` that struct owns, freeing the element a
+caller borrowed through `b.inner.items.get(0)` — and that borrow's subject is the chain base `b`,
+which is exactly what the call to `b.reset()` is checked against. `a-scalar-field-store-is-not-a-conflict`
+records this same cascade as the reason the SAME-BODY seed was already gated on managed-ness rather
+than array-ness; the cross-function seed beside it was not, and the two halves of one rule disagreeing
+is what this case pins shut.
+
+⚠ **MEASURED on `df0fbfd3bf`: compiled clean, ran to `0xC0000005`.**
+```maxon
+typealias StringArray = Array with String
+
+type Inner
+	export var items as StringArray
+
+	export static function create() returns Self
+		return Self { items: StringArray.create() }
+	end 'create'
+end 'Inner'
+
+type Bag
+	export var inner as Inner
+
+	export static function create() returns Self
+		return Self { inner: Inner.create() }
+	end 'create'
+
+	export function reset()
+		inner = Inner.create()
+	end 'reset'
+end 'Bag'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.inner.items.push("alpha string long enough for heap allocation")
+	let s = try b.inner.items.get(0) otherwise "none"
+	b.reset()
+	print("[{s}]\n")
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3070: specs/fragments/borrow-liveness/a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it.test:28:4: cannot mutate 'b' via 'reset' while it is borrowed by 's' (borrowed at line 27)
+```
+
+<!-- test: a-string-field-store-is-not-a-conflict -->
+### The over-rejection guard for the three above: storing a `String` field frees no container
+The store doors' gate is *"can dropping this record free storage a tracked borrow points into"*, and
+the plausible spelling of that — bare managed-ness — is a **measured false rejection**, which is why
+`typeOwnsBorrowableStorage` carves out the two managed types that are not aggregates. Every borrow
+E3070 tracks is a reference INTO A CONTAINER (an element, a chain node, a cursor); a `String` owns a
+byte buffer and hands out no such reference, so replacing one can invalidate nothing.
+
+⚠ It is the same fact `method-writing-a-string-or-set-field-is-not-a-conflict` already pins for the
+METHOD door — one fact may not have two answers depending on which door asks. Written with a `String`
+store gated at bare managed-ness, `b.retag()` was refused *"cannot mutate 'b' via 'retag'"* on a
+program the runnable oracle compiles and runs (`44 another tag entirely`). Both store doors are
+exercised: `retag` is the self-field spelling, `rename` the field-chain one through a parameter.
+```maxon
+typealias StringArray = Array with String
+
+type Bag
+	export var items as StringArray
+	export var name as String
+
+	export static function create() returns Self
+		return Self { items: StringArray.create(), name: "tag" }
+	end 'create'
+
+	export function retag()
+		name = "another tag entirely"
+	end 'retag'
+end 'Bag'
+
+function rename(b Bag)
+	b.name = "a third tag entirely"
+end 'rename'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.push("alpha string long enough for heap allocation")
+	let s = try b.items.get(0) otherwise ""
+	b.retag()
+	rename(b)
+	print("{s.byteLength()} {b.name}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+44 a third tag entirely
+```

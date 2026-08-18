@@ -372,14 +372,24 @@ export type IrFunction
 	// | the write | `writtenParamMask` | `storageWrittenParamMask` | why |
 	// |---|---|---|---|
 	// | self-field alias (`items.clear()`) or self-field store (`items = …`) | no | **yes** | the ruling below |
-	// | field-chain array whose base is a parameter (`bag.items.clear()`) | no | **yes** | E3019 records no field write, by the same ruling |
-	// | `String` receiver that is a parameter | **yes** | no | a String write frees no ARRAY element |
+	// | field-chain container whose base is a parameter (`bag.items.clear()`) | no | **yes** | E3019 records no field write, by the same ruling |
+	// | `String` receiver that is a parameter | **yes** | no | a String is not a container and hands out no borrow |
 	// | `Set` receiver that is a parameter | **yes** | no | likewise |
+	// | `__ManagedList` INSERTION (`ml.insertLast(x)`) | **yes** | no | it writes the record but frees no node |
 	//
-	// The last two are E3070's SCOPE and not an omission: an array element is the only borrow it tracks, so
-	// recording a `String`/`Set` write would refuse `b.wipe()` while `b.items` is borrowed for a `wipe` that
-	// only appends to `b.name`. ⚠ **Do not "simplify" E3019's call-site check to read the storage column** —
-	// it would silently stop diagnosing those two rows, with no compile error anywhere.
+	// The last three are E3070's SCOPE and not an omission: every borrow it tracks is a reference INTO a
+	// container — an element, a chain node handle, a cursor — so recording a `String`/`Set` write would refuse
+	// `b.wipe()` while `b.items` is borrowed for a `wipe` that only appends to `b.name`, and recording an
+	// insertion would refuse `let a = ml.insertLast(x)` + `ml.insertLast(y)` + a read of `a`
+	// (`/specs/managed-list.md:core.insert-first-multiple`). ⚠ **Do not "simplify" E3019's call-site check to
+	// read the storage column** — it would silently stop diagnosing those rows, with no compile error anywhere.
+	//
+	// ⛔⛔ **AND THE THIRD ROW IS WHY THE STORAGE COLUMN IS NO LONGER SEEDED WHERE E3019's IS.** Both used to
+	// be set by `Parser.noteReceiverWrite` off ONE flag — *"does this method write its receiver"* — so a
+	// surface whose two answers differ got E3019's answer for E3070 as well. `__ManagedList` is that surface,
+	// and the gap was a measured 0xC0000005 across a call. The storage column is now seeded by
+	// `Parser.noteBorrowSubjectWrite`, which is E3070's OWN door and already takes E3070's own answer, so the
+	// same-body half and the cross-function half cannot come apart again.
 	//
 	// ⭐⭐ **THE FIRST ROW HAS AN EXCEPTION AS OF W49 WAVE 8, AND IT IS THE ONE SELF-FIELD THAT IS NOT A
 	// FIELD OF ANYTHING**: the inline `managed` of a fused builtin wrapper (`String`, `Character`, `Array`,
@@ -419,17 +429,29 @@ export type IrFunction
 	// the call-site check reads. Zero for a Std-phase function: the tier that reads it is upstream.
 	export var writtenParamMask as ParamPositionMask
 
-	// ⭐ **THE PARAMETERS WHOSE ARRAY STORAGE THIS BODY WRITES (E3070's half)** — bit `i` set iff the body
-	// writes an ARRAY reachable through parameter `i`, a field of its own receiver included. It is NOT a
-	// superset of `writtenParamMask` above and not a subset either; the table there enumerates all four
-	// divergences and why each one is the answer it is.
+	// ⭐ **THE PARAMETERS WHOSE BORROWABLE STORAGE THIS BODY FREES (E3070's cross-function half)** — bit `i`
+	// set iff the body performs a write reachable through parameter `i` that can invalidate a borrow, a field
+	// of its own receiver included. It is NOT a superset of `writtenParamMask` above and not a subset either;
+	// the table there enumerates every divergence and why each one is the answer it is.
 	//
-	// Seeded by the PARSER at the same two doors — `Parser.noteReceiverWrite`, which already decides whether
-	// a receiver may be written at all, and `Parser.emitCheckedSelfFieldStore`, the one self-field store —
-	// and closed under the call graph by the SAME least fixpoint (`buildParamMutationSummary`), so `wipe()`
-	// calling a `reset()` that clears the field inherits the bit. Read only by
-	// `BorrowCheck.mutationSiteWrites`, to answer "does handing this borrowed array — as an argument or as a
-	// RECEIVER — reach a write of it?". Zero for a Std-phase function.
+	// ⚠ **"ARRAY STORAGE" IS WHAT THIS SENTENCE SAID, AND THE WORD WAS A USE-AFTER-FREE THREE TIMES OVER
+	// (W-BORROW).** Two of shv2's write doors gated themselves on the field or receiver being an `Array`
+	// INSTANCE, which was true of the language only while the `Array` was the sole surface handing out
+	// borrows. It is not: a `List` and a `Vector` mint element borrows through the same
+	// `emitContainerElementAccessor`, a `__ManagedList` mints a node handle, a buffer mints a cursor — and a
+	// STORE does not free an element at all, it drops the whole RECORD and cascades into everything that
+	// record owns, so a nested struct field's store frees the array inside it.
+	//
+	// Seeded by the PARSER at three doors, each asking the question at its own honest width:
+	//   • `Parser.noteBorrowSubjectWrite` — a write THROUGH a container, gated on the per-surface answer to
+	//     *"does this method invalidate an outstanding borrow"* (`managedListMethodFreesANode` and its three
+	//     siblings). E3070's same-body half is recorded by the same call, off the same flag.
+	//   • `Parser.emitCheckedSelfFieldStore` and `Parser.parseFieldAssignment` — a store that REPLACES a
+	//     field, gated on the field type being MANAGED, because the drop cascades.
+	// Closed under the call graph by the least fixpoint (`buildParamMutationSummary`), so `wipe()` calling a
+	// `reset()` that clears the field inherits the bit. Read only by `BorrowCheck.mutationSiteWrites`, to
+	// answer "does handing this borrowed container — as an argument or as a RECEIVER — reach a write of it?".
+	// Zero for a Std-phase function.
 	//
 	// ⚠⚠ **IT IS CLOSED OVER A WIDER EDGE SET THAN THE MASK ABOVE, AND THIS COMMENT SAID "THE SAME EDGES"
 	// UNTIL ARR4 MEASURED A USE-AFTER-FREE THROUGH THE DIFFERENCE.** The two doors above are the roster's;
@@ -446,7 +468,7 @@ export type IrFunction
 	// | question | column |
 	// |---|---|
 	// | "does passing an immutable BINDING here make it an error?" | `writtenParamMask` (E3019) |
-	// | "does this body write the ARRAY storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
+	// | "does this body FREE borrowable storage this parameter points at?" | `storageWrittenParamMask` (E3070) |
 	// | "does this body write a field of a box it did not just build?" | `assignsIntoAnExistingAggregate` (E3064) |
 	// | **"does this body write the record this parameter denotes, at all?"** | **this** (W117) |
 	//
@@ -491,15 +513,15 @@ export type IrFunction
 	// | "does this body write a field of a box it did not just build?" | **this** (E3064) |
 	//
 	// ⛔⛔ **IT EXISTS BECAUSE READING E3070's COLUMN INSTEAD WAS A MEASURED FALSE REJECTION.** The effect
-	// summary first seeded off the two masks above; both are deliberately narrowed to ARRAY-instance fields
-	// (see the four-row divergence table), so `self.n = self.n + 1` on an INT field set neither, a method
-	// doing exactly that was classified effect-free, and `(_, _) = c.bump()` — a legal program the bootstrap
-	// compiles — was refused E3064. That is a fact recorded for one consumer reused as the floor for another,
-	// where the first one's deliberate narrowing is the second one's hole.
+	// summary first seeded off the two masks above; both decline a field store that frees nothing (see the
+	// divergence table), so `self.n = self.n + 1` on an INT field set neither, a method doing exactly that was
+	// classified effect-free, and `(_, _) = c.bump()` — a legal program the bootstrap compiles — was refused
+	// E3064. That is a fact recorded for one consumer reused as the floor for another, where the first one's
+	// deliberate narrowing is the second one's hole.
 	//
-	// ⛔ **AND WIDENING E3070's COLUMN WOULD HAVE BEEN THE WRONG CURE**: its narrowing is its SCOPE (an array
-	// element is the only borrow it tracks), and a `String`/`Set` row added to it refuses `b.wipe()` while
-	// `b.items` is borrowed — a legal program, one pass over. Three questions, three columns.
+	// ⛔ **AND WIDENING E3070's COLUMN WOULD HAVE BEEN THE WRONG CURE**: its narrowing is its SCOPE (every
+	// borrow it tracks is a reference into a container), and a `String`/`Set` row added to it refuses
+	// `b.wipe()` while `b.items` is borrowed — a legal program, one pass over. Three questions, three columns.
 	//
 	// ⚠ **IT IS SET AT `Parser.emitFieldWrite` AND `Parser.writeBackPayload`, the two ASSIGNMENT emitters, and
 	// deliberately NOT at `emitFieldStore`** — the raw store, which is also how a FRESH box is filled
