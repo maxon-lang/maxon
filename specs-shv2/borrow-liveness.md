@@ -1821,13 +1821,19 @@ end 'main'
 ```
 
 <!-- test: a-callee-inserting-into-a-managed-list-keeps-every-handle -->
-### The over-rejection guard for it: an INSERTION frees no node, so a handle survives one
-The width guard for the case above, and the reason its cure could not be a copy of the `List` door's.
-A chain's nodes are individually allocated and never move, so an insertion rewrites two link words and
-dangles nothing — only `remove` and `clear` free a node. Threading the wider "writes the receiver"
-answer into the storage column would refuse this program, which is not merely legal but the normal way
-a program builds a list it holds handles into (`/specs/managed-list.md:core.insert-first-multiple` is
-its same-body twin).
+### An INSERTION in a callee disturbs no handle the caller holds
+⚠ **THIS CASE'S ORIGINAL RATIONALE WAS WITHDRAWN BY THE `W138` RULING, AND THE CASE OUTLIVED IT.** It
+was written as the *width guard* for the case above — the argument being that a chain's nodes are
+individually allocated and never move, so an insertion rewrites two link words and dangles nothing,
+where *"only `remove` and `clear` free a node"*. **That last clause is no longer true of anything**:
+nodes are refcounted, a handle is a second owner, and neither `remove` nor `clear` frees a node a
+handle still names — which is why the case above is now a running program rather than a refusal.
+
+So it guards something narrower and still worth pinning: that a **cross-function** insertion leaves
+every outstanding handle readable, which is the normal way a program builds a list it holds handles
+into (`/specs/managed-list.md:core.insert-first-multiple` is its same-body twin). What made it a
+*width* guard is gone; what makes it a *composition* case — a callee mutating a chain the caller holds
+handles into — is not.
 
 ⚠ The exit code is pinned, not just the output: a node read back out of freed memory is a wrong answer
 this file has measured before, and a stdout-only case never checks that the run succeeded.
