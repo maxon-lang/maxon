@@ -53149,6 +53149,29 @@ export type Parser
 		return self.emitRuntimeCall(callee, args: singletonArgs(list), resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
 	end 'emitChainReader'
 
+	// ⭐ **A VOID CHAIN MEMBER TAKING ONE NODE HANDLE — `detach`, `reinsertFirst`, `reinsertLast`.** All
+	// three are the same four steps in the same order: refuse a value-position call BEFORE the argument list
+	// is consumed (`requireVoidMethodIsStatement`'s ⇒ rule), parse and type-check the handle, emit, and hand
+	// the RECEIVER back as what the statement still denotes. Written once because a fourth such member
+	// would otherwise be a fourth chance to put the void guard in the wrong place.
+	//
+	// ⚠ **THE RESULT TAG IS AN ARGUMENT AND NOT A CONSTANT `void`, because two of the three entries DO
+	// return a value.** `__list_detach_node` shares `remove`'s graph and hands the element back for the
+	// parser to discard; the reinsertions return nothing. Typing a value-returning entry `void` at the Maxon
+	// tier is the mismatch `parseArraySet`'s tag note records as a wrong answer, and the SURFACE is kept void
+	// by the guard rather than by the tag — `dispatchListMethod`'s `insertAtAnEnd` makes the same split.
+	//
+	// ⚠ **NONE OF THE THREE MARKS THE ARGUMENT'S BINDING, WHERE `remove` DOES AND MUST.** They change a
+	// node's LINKS and leave `value@16` where it is, so the handle goes on answering `value()` afterwards —
+	// see the `reinsertAtAnEnd` arm for the roster this makes unnecessary.
+	function emitChainNodeMutator(func IrFunction, list ValueId, giid GenericInstanceId, callee ByteArray, resultTag ValueTypeTag, resultUsed bool, methodTok Token, range SourceRange) returns ValueId throws ParseError
+		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+		let node = try self.parseManagedListNodeArg(func, giid: giid, subject: methodTok.value)
+		_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: node), resultTag: resultTag, resultNameId: UnnamedTypeId, range: range)
+
+		return list
+	end 'emitChainNodeMutator'
+
 	function emitChainClear(list ValueId, resultUsed bool, methodTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 		try self.consumeEmptyArgList()
@@ -53264,11 +53287,8 @@ export type Parser
 		// refused about. `detach` is unmarked for the same reason and states it; `remove` is the ONE member
 		// on this surface that empties the slot.
 		if methodTok.value.equals(ManagedListReinsertFirstMethod) or methodTok.value.equals(ManagedListReinsertLastMethod) 'reinsertAtAnEnd'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			let node = try self.parseManagedListNodeArg(func, giid: giid, subject: methodTok.value)
 			let callee = ListReinsertFirstName if methodTok.value.equals(ManagedListReinsertFirstMethod) else ListReinsertLastName
-			_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: node), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-			return list
+			return try self.emitChainNodeMutator(func, list: list, giid: giid, callee: callee, resultTag: ValueTypeTag.void, resultUsed: resultUsed, methodTok: methodTok, range: range)
 		end 'reinsertAtAnEnd'
 
 		if methodTok.value.equals(RemoveMethod) 'remove'
@@ -53329,10 +53349,7 @@ export type Parser
 		// because a node is refcounted. The runtime hands back the element like its `remove` twin and it is
 		// discarded here — see `buildListDetachNode`.
 		if methodTok.value.equals(ManagedListDetachMethod) 'detach'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			let target = try self.parseManagedListNodeArg(func, giid: giid, subject: methodTok.value)
-			_ = self.emitRuntimeCall(ListDetachNodeName, args: pairArgs(list, second: target), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-			return list
+			return try self.emitChainNodeMutator(func, list: list, giid: giid, callee: ListDetachNodeName, resultTag: ValueTypeTag.integer, resultUsed: resultUsed, methodTok: methodTok, range: range)
 		end 'detach'
 
 		// ⚠ **NO BORROW-SUBJECT WRITE IS RECORDED HERE, WHERE THE `List` DOOR RECORDS ONE.** That door hands
