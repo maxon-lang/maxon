@@ -2863,19 +2863,68 @@ public static partial class MaxonToStandardConversion {
     return _resultModule!.TypeDefs.TryGetValue(type.Name, out var canonical) ? canonical : type;
   }
 
-  private static bool HasManagedElementType(string typeName, IrStructType resolved) {
+  /// The Element type parameters BOUND to a managed container name, in the order the destructor
+  /// decision consults them: the alias's own binding first (may be resolved directly), then the
+  /// resolved struct's. An UNBOUND parameter — still a type variable — is not a candidate: it
+  /// names no element, so it cannot decide whether a destructor must decref what it holds.
+  ///
+  /// Read by HasManagedElementType, which asks whether any candidate is heap-allocated, and by
+  /// RequireElementBearingListName, which asks whether there is a candidate AT ALL. Those two
+  /// questions must be asked of the SAME candidates: a name the refusal admits but this lookup
+  /// cannot bind is exactly the W154 defect — a silent primitive clear that leaks every element.
+  private static IEnumerable<IrType> BoundElementTypes(string typeName, IrStructType resolved) {
     var typeAliasSources = _resultModule!.TypeAliasSources;
 
-    // First try the type's own TypeParams (may be resolved directly)
     if (typeAliasSources.TryGetValue(typeName, out var aliasInfo)
         && aliasInfo.TypeParams != null
         && aliasInfo.TypeParams.TryGetValue("Element", out var aliasElemType)
-        && aliasElemType is not IrTypeParameterType) {
-      if (ResolveCanonicalType(aliasElemType).IsHeapAllocated) return true;
-    }
+        && aliasElemType is not IrTypeParameterType)
+      yield return aliasElemType;
+
     if (resolved.TypeParams.TryGetValue("Element", out var selfElemType)
-        && selfElemType is not IrTypeParameterType) {
-      if (ResolveCanonicalType(selfElemType).IsHeapAllocated) return true;
+        && selfElemType is not IrTypeParameterType)
+      yield return selfElemType;
+  }
+
+  /// Refuses a managed-list allocation whose type name cannot decide the list's destructor.
+  ///
+  /// The destructor is chosen from the name the ALLOCATION is tagged with, so a name that has
+  /// lost its element is not a cosmetic defect — it is a leak the run reports as exit 101 and
+  /// nothing else explains. Three ways the name can arrive unusable, each a pass having dropped
+  /// the element-bearing spelling between the parser and here, and each silent without this:
+  ///   - Element still unbound (the bare `__ManagedList`, or an alias no pass substituted):
+  ///     HasManagedElementType reads false, maxon_managed_list_clear frees the nodes and every
+  ///     element leaks — the W154 defect itself. The bare spelling is named by its own arm, ahead
+  ///     of the general one that also covers it, because it is the only name the compiler mints
+  ///     for itself and so is the one case whose message can say exactly what went wrong;
+  ///   - no TypeDefs entry: RegisterTypeForDestructor returns early, EmitAlloc stores a NULL
+  ///     destructor and the nodes leak alongside the elements — strictly worse;
+  ///   - not a __ManagedList at all: the generic struct-field destructor runs over a chain
+  ///     header, reading its head/tail/count words as if they were fields.
+  private static void RequireElementBearingListName(string typeName) {
+    var reason =
+      typeName == BareManagedListTypeName
+        ? "it is the un-parameterized builtin spelling, which binds no Element"
+      : !_resultModule!.TypeDefs.TryGetValue(typeName, out var typeDef) || typeDef is not IrStructType structType
+        ? "no type definition resolves it, so its allocation would carry no destructor at all"
+      : !TypeAliasInfo.IsManagedListType(typeName, _resultModule!.TypeAliasSources)
+        ? "it does not name a __ManagedList, so a chain header would get a struct destructor"
+      : !BoundElementTypes(typeName, ResolveStructType(structType, _resultModule!.TypeDefs)).Any()
+        ? "its Element is still an unbound type parameter"
+      : null;
+
+    if (reason != null)
+      throw new InvalidOperationException(
+        $"managed_list_create reached lowering with the type name '{typeName}', from which this "
+        + $"list's destructor cannot be chosen: {reason}. The element-bearing spelling was dropped "
+        + "between the parser and here.");
+  }
+
+  private static bool HasManagedElementType(string typeName, IrStructType resolved) {
+    var typeAliasSources = _resultModule!.TypeAliasSources;
+
+    foreach (var elemType in BoundElementTypes(typeName, resolved)) {
+      if (ResolveCanonicalType(elemType).IsHeapAllocated) return true;
     }
 
     // Fall back: find the managed memory alias's element type from alias sources

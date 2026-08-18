@@ -51,14 +51,9 @@ public static partial class MaxonToStandardConversion {
 
     // The allocation is tagged with the concrete alias (e.g. "TokenManagedList",
     // "__ManagedList_Point"), because that is what selects this list's destructor and only an
-    // element-bearing name can decide between maxon_managed_list_clear and _clear_managed. The bare
-    // spelling carries no Element, so it would silently pick the primitive clear and leak every
-    // element the list holds — the defect this refusal exists to make unreachable rather than quiet.
-    if (op.Result.TypeName == BareManagedListTypeName)
-      throw new InvalidOperationException(
-        "managed_list_create reached lowering with the element-less type name "
-        + $"'{BareManagedListTypeName}' — its element type was dropped between the parser and here, "
-        + "and the list's destructor cannot be chosen without it");
+    // element-bearing name can decide between maxon_managed_list_clear and _clear_managed.
+    RequireElementBearingListName(op.Result.TypeName);
+
     var managedListPtr = EmitAlloc(block, ManagedListDataSize, op.Result.TypeName, scopeName: _currentFuncName);
 
     // Zero-initialize head, tail, count, cursor
