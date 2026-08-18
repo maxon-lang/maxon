@@ -737,6 +737,9 @@ end 'AsyncSpawnSite'
 // `asyncCall` op index ⇒ that spawn's quotable text and position. See `Project.asyncSpawnSites`.
 export typealias AsyncSpawnSiteMap = Map with (OpIndex, AsyncSpawnSite)
 
+// ⭐ `__mm_alloc` call op index ⇒ the mm-trace TAG that box carries. See `Project.allocTagSites`.
+export typealias AllocTagSiteMap = Map with (OpIndex, MmTag)
+
 // A list of BINDINGS, held by reference (VarInfo is a heap `type`). Scope keeps the
 // bindings a frame displaced in one; the parser keeps its mutable bindings in one.
 // Both need the binding OBJECT rather than its name — see Scope's header for why a
@@ -6260,6 +6263,13 @@ export type Project
 	// project is loaded and read once, by `installGtRuntime`. A per-BUILD switch rather than a per-file one, so
 	// it lives here beside `target` rather than on any artifact.
 	export var asyncTrace as bool
+	// ⭐ Whether this build emits the DebugStream producer (`--debugstream`). Set by the driver right after
+	// the project is loaded, exactly as `asyncTrace` is, and a per-BUILD switch for the same reason — it
+	// belongs beside `target`, not on any artifact. It is read at TWO seams and nowhere else: the LOWERING,
+	// which appends an allocation's trace tag to its `__mm_alloc` call, and `buildCarriesDebugStream`, which
+	// is where every later part — the `.data` slots, the producer install, the module flag the runtime
+	// builders read, and through it the entry stub's `__ds_init`/`__ds_shutdown` — takes its one answer from.
+	export var debugStream as bool
 	// ⭐ The SOURCE TEXT of every `async <call>` spawn, keyed by its `asyncCall` op index — what E3073 quotes
 	// back at the author (`'async heavyCompute(5)'`). SPARSE, unlike `opRanges`: only spawn sites have an
 	// entry, so it is a map rather than a parallel array.
@@ -6273,6 +6283,26 @@ export type Project
 	// the column its author wrote it) and carried here. Folded from the per-file artifact by `mergeArtifact`
 	// with the same op offset `opRanges` uses. Cold path only.
 	export var asyncSpawnSites as AsyncSpawnSiteMap
+	// ⭐⭐ **THE mm-trace TAG FOR A BOX THE PARSER MINTS THAT IS NOT ANY DECLARED TYPE'S** — an interpolated
+	// part's scratch byte run, a closure's captured environment, and the one-slot cell a reassigned
+	// by-reference parameter is promoted into. Keyed by the `__mm_alloc` call's own op index, SPARSE like
+	// `asyncSpawnSites` (only those three sites have an entry), folded from the per-file artifact by
+	// `mergeArtifact` with the same op offset.
+	//
+	// ⛔⛔ **IT IS A SIDE CHANNEL BECAUSE A TRACE TAG IS NOT A TYPE, AND THE FIRST ATTEMPT PROVED IT THE
+	// HARD WAY.** The tag was briefly carried in the value's `nameId` — the slot `valueNameIds` holds and
+	// the TYPE CHECKER reads — on the argument that every reader of that column is gated on the value's
+	// tag. It is not: a promoted parameter cell then WAS of type `ParameterCell` for argument checking
+	// (`expected 'Node', got 'ParameterCell'`, nine cases) and its real type stopped being visible to
+	// field access (E2015, one more). A debugging LABEL and a semantic FACT may not share a slot; this
+	// table is read by exactly one function (`LowerMaxonToStd.allocTagIndexOf`) and by nothing else in the
+	// compiler.
+	//
+	// ⚠ **RECORDED UNCONDITIONALLY, never under `--debugstream`.** A parser artifact is CACHED across
+	// builds and keyed on the file's content, not the build's flags — so a parser that recorded only when
+	// traced would serve one build's artifact to the other. It costs one map entry per closure, per
+	// interpolated part and per promoted parameter, and is READ only by a traced build.
+	export var allocTagSites as AllocTagSiteMap
 	// (funcIndex, ValueId) -> Maxon OpIndex for every op-defined value in the
 	// whole-program Maxon module (see ValueOrigin). Folded from the per-file artifact
 	// tables by `mergeArtifact`, in the same source-path order the module merges. A
@@ -6358,7 +6388,9 @@ export type Project
 			typeNames: TypeNameInterner.create(),
 			opRanges: SourceRangeTable.create(),
 			asyncTrace: false,
+			debugStream: false,
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
+			allocTagSites: AllocTagSiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			rootPath: rootPath,
 			target: target,

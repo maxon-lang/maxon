@@ -71,6 +71,16 @@ export let EmitIrFlag = "--emit-ir"
 // per-BUILD, so a program that does not ask is byte-for-byte what it was before the flag existed — the trace
 // CALLS are not emitted at all rather than being branched over at run time (see `GtRuntime.GtTraceEmitName`).
 export let AsyncTraceFlag = "--async-trace"
+
+// ⭐ `--debugstream` — emit the DebugStream PRODUCER: the shared-memory ring `maxon monitor` decodes,
+// plus the mm_alloc / mm_incref / mm_decref / mm_free events the memory manager writes into it. EXPORTED
+// because the spec harness passes it per case, for an mm-trace fragment — exactly as `--async-trace` is.
+//
+// ⚠⚠ **OPT-IN AND PER-BUILD, AND THAT IS A CORRECTNESS PROPERTY RATHER THAN A COURTESY.** With the flag
+// off NOT ONE instruction of this changes: the box header does not grow, `__mm_alloc`'s arity does not
+// change, no event site is branched over. Thousands of committed `.test` fragment goldens depend on it.
+// See `DebugStreamRuntime`'s header for the two-level gating rule this is the compile-time half of.
+export let DebugStreamFlag = "--debugstream"
 export let EmitIrRuntimeFlagPrefix = "--emit-ir-runtime="
 
 // `--metrics=<path>`, exported for the same reason and now with TWO harnesses emitting it: the scale
@@ -184,6 +194,11 @@ function runBuild(args MaxonArgs) returns ExitCode
 		unrecognized(spec) then return reportUnknownTarget(spec)
 	end 'targetSel'
 
+	if args.debugStream and not debugStreamSupports(target) 'unsupportedDebugStream'
+		printError("error: {DebugStreamFlag} is not implemented for {targetToString(target)}. The DebugStream producer opens a NAMED shared segment (OpenFileMappingA / MapViewOfFile), reads an activation environment variable and stamps a millisecond stopwatch (GetTickCount64) — three host primitives shv2 has only on x64-windows, whose Std ops (`osOpenNamedSegment`, `osMapNamedSegment`, `osTickCountMs`) refuse every other lowering. Build for x64-windows, or implement those three for this target.\n")
+		return 1
+	end 'unsupportedDebugStream'
+
 	let lockExit = acquireBuildTreeLock(inputPaths, outputOverride: args.outputOverride)
 	if lockExit != 0 'busyTree'
 		return lockExit
@@ -239,6 +254,18 @@ end 'runBuild'
 // A root with no `stdlib/` above it takes no lock regardless: `acquireTreeLock` answers that itself
 // (`maxon-shv2 build /tmp/scratch.maxon` has nothing shared to guard), which is why there is no
 // separate scratch-path arm here.
+// ⛔ **`--debugstream` IS REFUSED ON A TARGET IT IS NOT BUILT FOR, RATHER THAN SILENTLY EMITTING
+// NOTHING.** The whole failure mode of an instrument is an EMPTY answer that reads as "the program did
+// none of that" — the reference records exactly that costing it a day when the monitor died before
+// spawning the child — so a target with no producer must say so at the command line, loudly, before
+// anything is compiled. It is refused HERE, beside the other flag refusals, rather than as a diagnostic:
+// there is no source span to hang it on, because nothing in the PROGRAM asked for this. The three Std
+// ops' own lowerings panic on any other target, but that is a backstop for a compiler bug that got past
+// this gate, never the user-facing rejection.
+function debugStreamSupports(target Target) returns bool
+	return target.cpu == CpuArch.x64 and target.os == Os.windows
+end 'debugStreamSupports'
+
 function acquireBuildTreeLock(inputPaths MaxonSourcePathArray, outputOverride String) returns ExitCode
 	if not outputOverride.isEmpty() 'callerOwnsTheOutput'
 		return 0
@@ -263,7 +290,7 @@ end 'acquireBuildTreeLock'
 // forgets — the lock would then survive its holder and be broken 60 s later as abandoned, which is
 // correct behaviour covering for a bug.
 function compileAndReport(inputPaths MaxonSourcePathArray, target Target, args MaxonArgs) returns ExitCode
-	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace) otherwise (e) 'compileErr'
+	let outputPath = try compile(inputPaths, target: target, outputOverride: args.outputOverride, emitIr: args.emitIr, metricsPath: args.metricsPath, runtimeIrNames: args.runtimeIrNames, asyncTrace: args.asyncTrace, debugStream: args.debugStream) otherwise (e) 'compileErr'
 		reportCompileError(e)
 		return 1
 	end 'compileErr'
@@ -839,6 +866,8 @@ export type MaxonArgs
 	export let emitIr as bool
 	// Whether this build emits the green-thread async trace (`--async-trace`). See `AsyncTraceFlag`.
 	export let asyncTrace as bool
+	// Whether this build emits the DebugStream producer (`--debugstream`). See `DebugStreamFlag`.
+	export let debugStream as bool
 	// `--emit-ir-runtime=<name>,<name>` (build only): the compiler-EMITTED functions the IR sidecar
 	// must ALSO render. EMPTY is the ordinary build and is the literal count of names given, not a
 	// sentinel. It IMPLIES `--emit-ir` (see `parse`), because a list of functions to print is a
@@ -941,6 +970,7 @@ export type MaxonArgs
 		var outputOverride = ""
 		var emitIr = false
 		var asyncTrace = false
+		var debugStream = false
 		var runtimeIrNames = RuntimeFunctionNameArray.create()
 		var filter = ""
 		var updateRequired = false
@@ -978,7 +1008,9 @@ export type MaxonArgs
 				emitIr = true
 			end 'emitIrFlag' else if arg == AsyncTraceFlag 'asyncTraceFlag'
 				asyncTrace = true
-			end 'asyncTraceFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
+			end 'asyncTraceFlag' else if arg == DebugStreamFlag 'debugStreamFlag'
+				debugStream = true
+			end 'debugStreamFlag' else if arg.startsWith(EmitIrRuntimeFlagPrefix) 'emitIrRuntimeFlag'
 				// ⚠ It cannot be swallowed by the arm above even though it shares its prefix: that one
 				// tests `==`, and this one is the only arm that tests this prefix.
 				// ⚠ **THE CHECK IS ON THE PARSED NAMES, NOT ON THE RAW VALUE, and that is the whole
@@ -1083,7 +1115,7 @@ export type MaxonArgs
 			i = i + 1
 		end 'each'
 
-		return Self{command: command, paths: paths, outputOverride: outputOverride, emitIr: emitIr, asyncTrace: asyncTrace, runtimeIrNames: runtimeIrNames, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
+		return Self{command: command, paths: paths, outputOverride: outputOverride, emitIr: emitIr, asyncTrace: asyncTrace, debugStream: debugStream, runtimeIrNames: runtimeIrNames, filter: filter, updateRequired: updateRequired, workers: workers, workerPersistent: workerPersistent, compilerPath: compilerPath, metricsPath: metricsPath, emitCorpus: emitCorpus, rungs: rungs, repeat: repeat, perType: perType, note: note, resultJson: resultJson, targetSpec: targetSpec, badOption: badOption}
 	end 'parse'
 end 'MaxonArgs'
 

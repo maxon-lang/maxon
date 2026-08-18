@@ -140,6 +140,9 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// A frame address is a constant of the FRAME, not of the program: its value is not known until the
 		// allocator has sized the slot area, so it is no more foldable than a global's address.
 		stackRecordAddr gives StdConstInfo.notConst
+		// O3: a section HANDLE, a mapped ADDRESS and a millisecond stopwatch reading are OS answers, never
+		// compile-time constants.
+		osOpenNamedSegment to osTickCountMs gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -241,6 +244,9 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		osWriteStderr gives FoldResult.unchanged
 		// It reads no value operand at all, so there is nothing to fold into an immediate.
 		stackRecordAddr gives FoldResult.unchanged
+		// O3: a name POINTER, a scratch BUFFER, a handle and a byte count the caller computed — none has an
+		// immediate form to fold into, and the tick read has no operand at all.
+		osOpenNamedSegment to osTickCountMs gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

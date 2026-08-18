@@ -2278,7 +2278,7 @@ function emitPackedWindowCopy(module StdModule, cur IrBlock, exit IrBlock, srcBu
 	let byteLen = emitElementByteLen(module, block: cur, count: sliceLen, es: es, ids: ids)
 	let bufferDtor = emitConst(module, block: cur, value: TrivialElementDestroy, ids: ids)
 	let newBuf = ids.mint()
-	module.appendOp(cur, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(byteLen, second: bufferDtor)))
+	emitMmAllocCall(module, block: cur, result: newBuf, size: byteLen, destructor: bufferDtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 	emitStoreField(module, block: cur, record: newRec, offset: ManagedRecordBufferOffset, value: newBuf)
 	emitStoreField(module, block: cur, record: newRec, offset: ManagedRecordLengthOffset, value: sliceLen)
 	emitStoreField(module, block: cur, record: newRec, offset: ManagedRecordCapacityOffset, value: sliceLen)
@@ -2603,7 +2603,7 @@ function emitReallocateToCapacity(module StdModule, func IrFunction, cur IrBlock
 	// invariant, for free.
 	let zeroDtor = emitConst(module, block: alloc, value: 0, ids: ids)
 	let newBuf = ids.mint()
-	module.appendOp(alloc, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(newBytes, second: zeroDtor)))
+	emitMmAllocCall(module, block: alloc, result: newBuf, size: newBytes, destructor: zeroDtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 	let oldBuf = emitLoadField(module, block: alloc, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let oldLen = emitLoadField(module, block: alloc, record: arr, offset: ManagedRecordLengthOffset, ids: ids)
 	let oldBytes = emitElementByteLen(module, block: alloc, count: oldLen, es: es, ids: ids)
@@ -2653,7 +2653,7 @@ function buildManagedCreate(module StdModule)
 	let recordSize = emitConst(module, block: ok, value: ManagedRecordBytes as ParsedInt, ids: ids)
 	let recordDtor = emitConst(module, block: ok, value: TrivialElementDestroy, ids: ids)
 	let record = ids.mint()
-	module.appendOp(ok, op: StdOp.call(record, callee: MmAllocName, args: twoArgs(recordSize, second: recordDtor)))
+	emitMmAllocCall(module, block: ok, result: record, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.ArrayRecord), ids: ids)
 	emitStoreField(module, block: ok, record: record, offset: ManagedRecordElementSizeOffset, value: elementSize)
 	emitStoreField(module, block: ok, record: record, offset: ManagedRecordElementDestroyOffset, value: elementDestroy)
 	module.setTerminator(ok, op: StdOp.ret(record))
@@ -3990,7 +3990,7 @@ function buildManagedCursorCreate(module StdModule)
 	let recordSize = emitConst(module, block: build, value: CursorRecordBytes, ids: ids)
 	let recordDtor = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
 	let cursor = ids.mint()
-	module.appendOp(build, op: StdOp.call(cursor, callee: MmAllocName, args: twoArgs(recordSize, second: recordDtor)))
+	emitMmAllocCall(module, block: build, result: cursor, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.CursorRecord), ids: ids)
 	// The retain the header argues for, balanced 1:1 by `__managed_cursor_decref`. `position@8` is left at the
 	// zero `__mm_alloc` supplies.
 	module.appendOp(build, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(arr)))
@@ -4026,7 +4026,7 @@ function buildManagedCursorDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let cursor = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: cursor, lastOwner: release, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: cursor, lastOwner: release, ids: ids)
 
 	let source = emitLoadField(module, block: release, record: cursor, offset: CursorSourceOffset, ids: ids)
 	module.appendOp(release, op: StdOp.call(ids.mint(), callee: ManagedDecrefName, args: argsOf(source)))
@@ -4226,7 +4226,7 @@ function buildManagedDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
 	// release: destroy the live managed elements `[0, length)` before the buffer goes (the shared gate skips a
 	// trivial-element array). An array that never allocated a buffer has length 0, so the walk is empty and

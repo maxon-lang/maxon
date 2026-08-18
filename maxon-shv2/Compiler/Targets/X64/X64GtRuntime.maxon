@@ -326,7 +326,7 @@ let ShimDoneLabel = 1 as BlockId
 // puts every one in rcx/rdx/r8/r9 and there is nothing on the stack to copy. Each such arm carries its
 // argument count so the claim can be checked against MSDN without reading the emitter.
 //
-// ⚠ **THE SEVEN NON-ZERO COUNTS ARE NOT SPELLED HERE.** They are the SAME constants
+// ⚠ **THE EIGHT NON-ZERO COUNTS ARE NOT SPELLED HERE.** They are the SAME constants
 // `StdToX64Conversion.stdOpOutgoingArgBytes` reserves the GT frame with, so the copy and the reservation
 // cannot disagree about how many words the kernel reads — the property those constants' own headers exist
 // to hold. This function maps slots to them; it does not restate them.
@@ -353,6 +353,9 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		CreateFileA gives CreateFileStackArgWords
 		CreateThread gives CreateThreadStackArgWords
 		ReadFile gives ReadFileStackArgWords
+		// O3. FIVE arguments, so one word on the stack — derived from the same constant
+		// `stdOpOutgoingArgBytes` reserves the frame with, never restated here.
+		MapViewOfFile gives MapViewOfFileStackArgWords
 
 		// ⚠ FIVE arguments, so ONE lands on the stack — and this arm is why the enum is worth being exhaustive
 		// over. It sat in the old `return 0` fallthrough, where the answer was WRONG but harmless because the
@@ -397,6 +400,10 @@ function gtShimStackArgWordsOf(slot IatSlot) returns StackSize
 		GetFileAttributesA gives 0  // 1: lpFileName
 		GetCommandLineA gives 0  // 0
 		GetModuleFileNameA gives 0  // 3: hModule, lpFilename, nSize
+		// O3. Its fourth sibling `MapViewOfFile` takes five and is stated with the other non-zero counts above.
+		GetEnvironmentVariableA gives 0  // 3: lpName, lpBuffer, nSize
+		OpenFileMappingA gives 0  // 3: dwDesiredAccess, bInheritHandle, lpName
+		GetTickCount64 gives 0  // 0
 	end 'k'
 end 'gtShimStackArgWordsOf'
 

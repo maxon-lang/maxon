@@ -217,10 +217,50 @@ export type GlobalDataTable
 	export var pendingRdataRelocs as PendingRdataRelocArray
 	// Every  slot holding a distance to ANOTHER  blob — see PendingRdataSelfRelReloc.
 	export var pendingRdataSelfRelRelocs as PendingRdataSelfRelRelocArray
+	// ⭐ **THE `.symtab` IMAGE — the FOURTH emitted section this table renders**, beside `.rdata`, `.data`
+	// and the string fixups. EMPTY for every ordinary build, and the section is then omitted entirely by
+	// the PE writer, so a normal program's binary is byte-for-byte what it was before this field existed.
+	//
+	// Its one payload today is the DebugStream `MXDS_TAGS` name blob, which `maxon monitor` finds by
+	// scanning the executable (see `DebugStreamRuntime`). It is a whole IMAGE rather than a registry of
+	// payloads because nothing REFERENCES it: no relocation points into `.symtab` — the consumer parses
+	// the file — so there are no offsets to hand out and nothing for a label to name.
+	export var symdataImage as ByteArray
+	// ⭐ **THE DEBUGSTREAM TAG TABLE — `names[i]` is the type name wire tag `i` resolves to.** It lives
+	// here rather than beside its format because this is the object every writer and the one reader
+	// already hold: the LOWERING that interns a user type's name has it as `self.globalData`, the runtime
+	// installs have it threaded, and the backend renders the blob out of it. Seeded with the fixed roster
+	// (`mmTagRosterNames`) so a runtime chunk's tag is a compile-time constant and needs no interning.
+	//
+	// ⚠ Seeded UNCONDITIONALLY, even for a build with `--debugstream` off. It is ten strings, and making
+	// the seeding conditional would put a flag test into this constructor — which every compile runs — to
+	// save them. Nothing renders the blob unless the flag is on, and `userTagIndex` refuses to grow the
+	// table in an untraced build, so the cost stops here.
+	export var debugStreamTagNames as StringArray
+	var debugStreamTagIndex as MmTagIndexMap
 
 	export static function create() returns GlobalDataTable
-		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create()}
+		let tagNames = mmTagRosterNames()
+		var tagIndex = MmTagIndexMap.create()
+		for name in tagNames 'seedTagIndex'
+			tagIndex.upsert(name, value: tagIndex.count())
+		end 'seedTagIndex'
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0, nameIndex: GlobalNameIndexMap.create(), valueDedup: GlobalDedupMap.create(), dataSection: DataSectionEntryArray.create(), dataIndex: DataSectionIndexMap.create(), rdataOffsets: RdataOffsetMap.create(), rdataSizeSoFar: 0, stringBufferFixups: StringBufferFixupArray.create(), pendingRdataRelocs: PendingRdataRelocArray.create(), pendingRdataSelfRelRelocs: PendingRdataSelfRelRelocArray.create(), symdataImage: ByteArray.create(), debugStreamTagNames: tagNames, debugStreamTagIndex: tagIndex}
 	end 'create'
+
+	// The wire tag index for `name`, minting one on first sight. Dedup is what keeps the blob proportional
+	// to the DISTINCT types a program allocates rather than to its allocation SITES.
+	//
+	// ⚠ Reached only through `userTagIndex`, which is what keeps an untraced build from growing a table
+	// it will not render. The 16-bit bound is checked once, where the blob is written.
+	export function internDebugStreamTag(name String) returns ParsedInt
+		return try self.debugStreamTagIndex.get(name) otherwise 'fresh'
+			let minted = self.debugStreamTagNames.count()
+			self.debugStreamTagIndex.upsert(name, value: minted)
+			self.debugStreamTagNames.push(name)
+			return minted as ParsedInt
+		end 'fresh'
+	end 'internDebugStreamTag'
 
 	// ⭐ REGISTER a read-only constant payload, returning the label that names it — the `.rdata`
 	// twin of the `.data` half below, and the door P1.0d.4's float constants come through.

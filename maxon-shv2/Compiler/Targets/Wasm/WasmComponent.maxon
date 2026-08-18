@@ -49,26 +49,32 @@ export function findFileUpward(candidateSegments StringArrayArray) returns FileP
 	return FilePath from ""
 end 'findFileUpward'
 
-// Order the `.exe` and extensionless candidate paths for a vendored host tool by the HOST os: the
-// binary that can actually exec here must come first. The vendor tree ships BOTH a Windows
-// `<tool>.exe` AND an extensionless native binary `<tool>` side-by-side, so a fixed order is wrong on
-// one host — on Windows the extensionless name resolves to the non-Windows binary (not absent), and
-// exec'ing it faults. Gate on `detectHostTarget()` (resolved per host at the compiler's own build) so
-// each host runs its own binary. `tool` is the vendor subdir, which equals the tool's basename (e.g.
-// "wasm-tools" → `vendor/wasm-tools/wasm-tools`).
-export function hostWasmToolCandidates(tool String) returns StringArrayArray
-	var candidates = StringArrayArray.create()
+// The directory every vendored tool lives under, relative to the checkout root.
+let VendorDirSegment = "vendor"
 
+// ⭐⭐ **THE HOST-ORDERED `.exe` / EXTENSIONLESS PAIR FOR ONE BINARY, over an arbitrary directory and
+// stem.** Order the two candidate spellings by the HOST os: the binary that can actually exec here must
+// come first. The vendor tree ships BOTH a Windows `<tool>.exe` AND an extensionless native binary
+// `<tool>` side-by-side, so a fixed order is wrong on one host — on Windows the extensionless name
+// resolves to the non-Windows binary (not absent), and exec'ing it faults. Gate on `detectHostTarget()`
+// (resolved per host at the compiler's own build) so each host runs its own binary.
+//
+// ⚠ **THAT ORDERING RULE IS THE WHOLE CONTENT OF THIS FUNCTION, AND IT IS WHAT A SECOND COPY WOULD COME
+// TO DISAGREE ABOUT.** A caller that ordered the pair the other way on Windows would exec a Mach-O and
+// fault, with nothing in either copy to say the two had drifted. Exported and parameterized on the
+// DIRECTORY so a lookup outside `vendor/` — the spec runner's `bin/maxon` mm-trace monitor — asks this
+// one rule rather than restating its two halves.
+export function hostBinaryCandidates(dirSegments StringArray, stem String) returns StringArrayArray
 	var exe = StringArray.create()
-	exe.push("vendor")
-	exe.push(tool)
-	exe.push("{tool}.exe")
-
 	var noExt = StringArray.create()
-	noExt.push("vendor")
-	noExt.push(tool)
-	noExt.push(tool)
+	for segment in dirSegments 'eachSegment'
+		exe.push(segment)
+		noExt.push(segment)
+	end 'eachSegment'
+	exe.push("{stem}.exe")
+	noExt.push(stem)
 
+	var candidates = StringArrayArray.create()
 	if detectHostTarget().os == Os.windows 'winHost'
 		candidates.push(exe)
 		candidates.push(noExt)
@@ -78,6 +84,16 @@ export function hostWasmToolCandidates(tool String) returns StringArrayArray
 	end 'nativeHost'
 
 	return candidates
+end 'hostBinaryCandidates'
+
+// A vendored tool's candidates: `vendor/<tool>/<tool>[.exe]`. `tool` is the vendor subdir, which equals
+// the tool's basename (e.g. "wasm-tools" → `vendor/wasm-tools/wasm-tools`).
+export function hostWasmToolCandidates(tool String) returns StringArrayArray
+	var dir = StringArray.create()
+	dir.push(VendorDirSegment)
+	dir.push(tool)
+
+	return hostBinaryCandidates(dir, stem: tool)
 end 'hostWasmToolCandidates'
 
 // Find the vendored `wasm-tools` (used to wrap the emitted core module into a WASI Preview2

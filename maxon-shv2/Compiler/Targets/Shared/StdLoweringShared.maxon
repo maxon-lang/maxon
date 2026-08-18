@@ -625,6 +625,10 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osWriteStderr(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// A promoted record's address is a POINTER, so its result is a GPR — `globalAddr`'s class exactly.
 		stackRecordAddr(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// O3: a HANDLE, a mapped ADDRESS and a tick COUNT are all machine words.
+		osOpenNamedSegment(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osMapNamedSegment(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osTickCountMs(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 	end 'result'
 end 'recordOpResultClass'
 

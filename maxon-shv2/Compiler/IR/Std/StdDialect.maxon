@@ -1596,6 +1596,54 @@ export union StdOp
 	// `promoteStackRecords` therefore does nothing on that target, and `StdToWasm`'s arms panic rather than
 	// guess.
 	stackRecordAddr(resultId ValueId, slot SpillSlot) = StdOpMeta{category: StdOpCategory.memory, role: OpRole.plain, isPure: true, isUnsupportedInInlineBody: true, isMemory: false, isStore: false, isCall: false, clobbersFlags: false, isCmp: false}
+	// --- The DebugStream PRODUCER's three host primitives (Workstream O3) ---
+	//
+	// ⭐ **APPENDED AT THE VERY END OF THE UNION, per the band-append invariant** `witnessTryCall` states above:
+	// every stale full-tail range arm (`… to stackRecordAddr`) fails to compile until it is consciously
+	// extended, which is the mechanism that finds every site obliged to classify or lower a new op. Their
+	// `category: system` places them logically in the OS band, independent of this tail position.
+	//
+	// ⭐ **THEY EXIST BECAUSE THE PRODUCER IS EMITTED CODE AND THE CONSUMER IS ANOTHER PROCESS.** `maxon
+	// monitor` creates a named shared segment, hands its NAME to the target through the `MAXON_DEBUGSTREAM`
+	// environment variable, and decodes the ring the target writes into it. Everything above that substrate —
+	// the segment header, the schema handshake, the ring cursors, the entry packing — is builder-built Std in
+	// `DebugStreamRuntime.maxon`, exactly as the FILETIME arithmetic above stays out of `osReadWallClock`.
+	// These three are the irreducible host calls underneath it.
+	//
+	// ⚠ **ALL THREE ARE x64-WINDOWS ONLY, AND THE GATE IS THE DRIVER'S** (`--debugstream` is refused on any
+	// other target, naming the gap). The panic arms in the arm64 and wasm lowerings are the backstop for a
+	// compiler bug that got one past that refusal, never the user-facing rejection — `osReadWallClock`'s
+	// arrangement exactly.
+
+	// `osOpenNamedSegment(result, namePtr, bufPtr, bufLen) -> HANDLE (0 when there is no segment to open)`.
+	// `GetEnvironmentVariableA(namePtr, bufPtr, bufLen)` then `OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE,
+	// bufPtr)` — the env lookup and the open are ONE op because the buffer between them is pure scratch that
+	// no Std value ever needs to read, and splitting them would put a `.data`-addressed C string into the IR
+	// for no consumer.
+	//
+	// ⭐ **IT IS BRANCH-FREE, AND THAT IS WHY THE ENV VAR BEING UNSET NEEDS NO ARM.** `__slab_alloc` hands
+	// back ZEROED memory (the allocator's zeroing contract), so an absent variable leaves `bufPtr` naming the
+	// EMPTY string — and `OpenFileMappingA("")` fails and returns NULL, which is the same answer "no monitor
+	// is listening" gets by every other route. One value out, one test at the caller.
+	osOpenNamedSegment(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osMapNamedSegment(result, handle, size) -> base address (0 on failure)`. `MapViewOfFile(handle,
+	// FILE_MAP_ALL_ACCESS, 0, 0, size)`. A NULL handle maps nothing and returns NULL, so the failed-open case
+	// above flows through here untested for the same reason it flowed into it — see `osOpenNamedSegment`.
+	//
+	// ⚠ `size` is the WHOLE segment length and it is the CONSUMER's number, not this producer's: the monitor
+	// creates the section that long, and a `MapViewOfFile` longer than the section returns NULL. One
+	// definition (`DebugStreamRuntime.DsSharedMemoryBytes`) is what keeps a silent "the trace never appeared"
+	// from being the failure mode of a disagreement.
+	osMapNamedSegment(resultId ValueId, handleId ValueId, sizeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osTickCountMs(result) -> milliseconds since boot`. `GetTickCount64()`.
+	//
+	// ⭐ **THE SAME COUNTER THE CONSUMER SEEDS THE SEGMENT WITH**, which is the whole of why it is this
+	// primitive and not `osReadClock`'s QPC: the monitor writes `Environment.TickCount64` — GetTickCount64 —
+	// into the header's `start_timestamp`, and every entry carries `now - start` as a millisecond delta. Two
+	// different clocks either end would make that subtraction meaningless, and nothing would report it.
+	osTickCountMs(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1780,6 +1828,11 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		// A promoted record's address reads NOTHING — its `slot` is a frame index, not a value, exactly as
 		// `globalAddr`'s `label` is a name. Its `resultId` is a def.
 		stackRecordAddr then break 'u'
+		// O3: the segment open reads three pointers/counts, the map reads a handle and a size, and the tick
+		// read has no operand at all.
+		osOpenNamedSegment(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		osMapNamedSegment(_, handle, size) then insertUsePair(referenced, a: handle, b: size)
+		osTickCountMs then break 'u'
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1943,6 +1996,10 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osWriteStderr(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		// A promoted record's address is a def like `globalAddr`'s.
 		stackRecordAddr(resultId, _) gives DefinedValueLookup.defines(resultId)
+		// O3: each of the three defines the OS answer it captures from RAX.
+		osOpenNamedSegment(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		osMapNamedSegment(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osTickCountMs(resultId) gives DefinedValueLookup.defines(resultId)
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -2122,6 +2179,11 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		// Reports no use (its `slot` is a frame index), so it rewrites nothing and is handed back unchanged —
 		// the mirror of `globalAddr`/`rdataAddr`/`funcAddr`.
 		stackRecordAddr gives op
+		// O3: the two operand-carrying primitives remap theirs; the tick read has none, so it is handed back
+		// unchanged like `stackRecordAddr` above.
+		osOpenNamedSegment(resultId, namePtr, bufPtr, bufLen) gives StdOp.osOpenNamedSegment(resultId, namePtrId: remappedValue(namePtr, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), bufLenId: remappedValue(bufLen, subst: subst))
+		osMapNamedSegment(resultId, handle, size) gives StdOp.osMapNamedSegment(resultId, handleId: remappedValue(handle, subst: subst), sizeId: remappedValue(size, subst: subst))
+		osTickCountMs gives op
 	end 'r'
 end 'remapStdOpUses'
 

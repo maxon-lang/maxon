@@ -25820,7 +25820,7 @@ export type Parser
 	// The ABI is unaffected: which parameters are addresses is `IrFunction.reassignedParamMask`'s answer, and
 	// the lowering reads that rather than a tag.
 	function allocateCell(declared MaxonType, range SourceRange) returns ValueId
-		return self.emitBoxAlloc(self.emitLiteral(CellPayloadBytes, valueType: MaxonType.integer, range: range), resultTag: maxonTypeTag(declared), resultNameId: typeNameIdOf(declared), range: range)
+		return self.emitBoxAlloc(self.emitLiteral(CellPayloadBytes, valueType: MaxonType.integer, range: range), resultTag: maxonTypeTag(declared), resultNameId: typeNameIdOf(declared), range: range, tag: MmTag.ParameterCell)
 	end 'allocateCell'
 
 	// Move `value` into a freshly allocated cell and hand the cell back — the shared body of the two things
@@ -30838,13 +30838,33 @@ export type Parser
 	// it is computed; and enrolling the result as an owned temp is the caller's decision too (a struct
 	// box is not tracked, a union and an interpolation String are), so `trackOwnedTemp` stays at the
 	// call site rather than hiding in here.
-	function emitBoxAlloc(size ValueId, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange) returns ValueId
+	// ⭐ `tag` is the mm-trace label for a box that is NOT any declared type's — `MmTag.Untagged` for every
+	// box whose type the LOWERING can name from `resultTag`/`resultNameId`, which is the common case. It is
+	// recorded against the `__mm_alloc` call op immediately below, and read by nothing but
+	// `LowerMaxonToStd.allocTagIndexOf`. See `Project.allocTagSites` for why it travels beside the type
+	// rather than in it.
+	function emitBoxAlloc(size ValueId, resultTag ValueTypeTag, resultNameId TypeNameId, range SourceRange, tag MmTag = MmTag.Untagged) returns ValueId
 		let destructor = self.emitLiteral(TrivialDestructor, valueType: MaxonType.integer, range: range)
 		var allocArgs = ValueIdArray.create()
 		allocArgs.push(size)
 		allocArgs.push(destructor)
+		// ⚠ IMMEDIATELY BEFORE the call is emitted, and it must be: the recorder keys on "the op the very
+		// next append creates", which is exactly the index `emitRuntimeCall` reads for the same op. An
+		// intervening emit would tag a literal instead of the allocation.
+		self.recordAllocTag(tag)
 		return self.emitRuntimeCall(MmAllocName, args: allocArgs, resultTag: resultTag, resultNameId: resultNameId, range: range)
 	end 'emitBoxAlloc'
+
+	// Record a box's mm-trace tag on the artifact, unless it has none to record. `Untagged` is the ordinary
+	// answer and writing it would fill the sparse table with the entry its absence already means.
+	function recordAllocTag(tag MmTag)
+		match tag 'tag'
+			Untagged then return
+			StringRecord to ParameterCell then break 'tag'
+		end 'tag'
+
+		self.artifact.recordAllocTagSite(tag)
+	end 'recordAllocTag'
 
 	// ⭐ **TRACK AN OWNED HEAP TEMPORARY.** The one door `emitStringInterp` reaches ownership through:
 	// it records the value's provenance (so `parseBinding` knows the binding owns a drop) AND enrolls it in
@@ -44805,7 +44825,7 @@ export type Parser
 	// budget. A `named` integer alias is already i64, so the value needs no widening at this rung.
 	function materializeScratchPart(exprVal ValueId, converter ByteArray, scratchBytes ParsedInt, partBufs ValueIdArray, partLens ValueIdArray, scratchIds ValueIdArray, range SourceRange)
 		let scratchSize = self.emitLiteral(scratchBytes, valueType: MaxonType.integer, range: range)
-		let scratch = self.emitBoxAlloc(scratchSize, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		let scratch = self.emitBoxAlloc(scratchSize, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range, tag: MmTag.InterpolationScratch)
 
 		var convArgs = ValueIdArray.create()
 		convArgs.push(exprVal)
@@ -61577,7 +61597,7 @@ export type Parser
 	function buildClosureEnv(closureValue ValueId, captureCount EnvSlotIndex, capturedValues ValueIdArray, capturedTypes MaxonTypeArray, anchor Token)
 		let range = SourceRange.ofToken(anchor)
 		let size = self.emitLiteral((captureCount * EnvSlotBytes) as ParsedInt, valueType: MaxonType.integer, range: range)
-		let env = self.emitBoxAlloc(size, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+		let env = self.emitBoxAlloc(size, resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range, tag: MmTag.ClosureEnv)
 
 		for i in 0 upto captureCount 'storeEach'
 			let capValue = try capturedValues.get(i) otherwise panic("buildClosureEnv: capturedValues.get OOB at {i} — filled in lockstep with captureNames")

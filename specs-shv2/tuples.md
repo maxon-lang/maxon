@@ -197,7 +197,7 @@ end 'main'
 ```
 
 <!-- disabled-test: small-tuple-return-allocates-nothing -->
-<!-- needs the TWO-REGISTER VALUE-TUPLE ABI, which is the FOLLOW-ON rung. This is the only case in the file that asserts ALLOCATION (an `mm-trace` block); every other tuple case asserts an exit code, which heap-allocated tuples satisfy — v1 ships tuples heap-always and passes them. shv2 has NO multi-register or hidden-pointer return path on any target (one GPR, R8/x0, every aggregate a heap pointer), so the register-pair return is a new calling convention on x64 + arm64 + wasm, not a pass. -->
+<!-- needs the TWO-REGISTER VALUE-TUPLE ABI, which is the FOLLOW-ON rung. shv2 has NO multi-register or hidden-pointer return path on any target (one GPR, R8/x0, every aggregate a heap pointer), so the register-pair return is a new calling convention on x64 + arm64 + wasm, not a pass. Every other tuple case asserts an exit code, which heap-allocated tuples satisfy — v1 ships tuples heap-always and passes them. ⚠ The mm-trace half is NO LONGER a blocker: capture mode landed with `/spec-port mm-trace`, and `for-in-over-map-allocates-no-tuple` below carries a live ```mm-trace golden. That golden records one heap `__Tuple2` per iteration, which is this same ABI gap seen from the other side. -->
 <!-- MmTrace -->
 A returned tuple of exactly two primitive fields totalling <= 16 bytes is a VALUE: it comes back
 in two registers rather than a heap record, so the call allocates nothing. The only allocation
@@ -371,18 +371,30 @@ end 'main'
 
 <!-- test: for-in-over-map-allocates-no-tuple -->
 <!-- needs `Map`, which is the FOLLOW-ON rung: `MapIterator.current()` returns a genuine tuple, so Map is sequenced AFTER tuples and cannot be unlocked here. Not a tuple gap. -->
-⛔⛔ **THE ALLOCATION PROPERTY THIS CASE IS NAMED FOR IS PINNED BY NOTHING, AND WAS PINNED BY NOTHING FROM
-THE DAY IT WAS PORTED.** It arrived carrying a `<!-- MmTrace -->` directive and an ```mm-trace block
+⛔⛔ **THE ALLOCATION PROPERTY THIS CASE IS NAMED FOR WAS PINNED BY NOTHING FROM THE DAY IT WAS PORTED,
+AND IS PINNED AGAIN NOW.** It arrived carrying a `<!-- MmTrace -->` directive and an ```mm-trace block
 listing every allocation the Map machinery makes, and its own prose said *"the golden is the pin"* — but
-shv2's `SpecParser` has an arm for neither, so both were walked past in silence. The case has been ACTIVE
-and PASSING the whole time, on its ```exitcode block alone. Found and removed 2026-08-06 (BATCH29/A3a) by
-`SpecParser.isUnimplementedFenceOpen`, which now refuses an unreadable fence instead of skipping it.
+shv2's `SpecParser` had an arm for neither, so both were walked past in silence. The case was ACTIVE and
+PASSING on its ```exitcode block alone. The dropped block was removed 2026-08-06 (BATCH29/A3a) by
+`SpecParser.isUnimplementedFenceOpen`, which refuses an unreadable fence instead of skipping it; the
+directive stayed, and pinned nothing, until mm-trace capture mode landed.
 
-⇒ **What this case checks today is the ANSWER (`60`), not the allocation.** A per-iteration tuple record
-coming back — by the value-return gate ceasing to cover `current()`, or by the loop's item binding ceasing
-to be recognised as non-escaping — would still compute 60 and this case would stay green. Restoring the
-pin needs an `mm-trace` arm in shv2's spec parser AND the runner's monitor capture behind it; that is a
-rung, not a marker flip, and the sibling `small-tuple-return-allocates-nothing` above is shelved on it.
+⇒ **The mm-trace arm and the runner's monitor capture now exist** (`/spec-port mm-trace`: an
+`<!-- MmTrace -->` case is built with `--debugstream`, run under `maxon monitor --filter=mm`, and its
+decoded trace compared against the ```mm-trace golden below). The directive is live and the block is
+minted from what this compiler actually allocates.
+
+⛔⛔ **AND WHAT IT RECORDS IS THAT THE PROPERTY DOES NOT HOLD: ONE 16-byte `__Tuple2` RECORD IS ALLOCATED
+AND FREED PER ITERATION.** The golden shows three, for a three-entry map. That is not a regression this
+port introduced — it is the SAME missing mechanism the sibling `small-tuple-return-allocates-nothing` is
+shelved on, stated in its shelve note: shv2 has no multi-register or hidden-pointer return path on any
+target, so `current()` cannot hand its `(key, value)` pair back in registers and every tuple is a heap
+record. The case still passes: its ```exitcode block asserts the answer, and the golden now asserts the
+allocation behaviour AS IT IS rather than asserting nothing at all.
+
+⇒ **The block is therefore a LEDGER, not a green light.** When the two-register value-tuple ABI lands,
+the three `__Tuple2` lines disappear from it and the case's name becomes true; until then the golden is
+what makes the gap visible on every run instead of only in a shelve note.
 
 A `for` loop over a Map allocates NO tuple record per iteration. The iterator's `current()`
 returns its `(key, value)` pair in two registers, and the loop's item binding does not escape,
@@ -406,6 +418,71 @@ end 'main'
 ```
 ```exitcode
 60
+```
+```mm-trace
+mm_alloc ArrayRecord #1 size=48
+mm_alloc ArrayRecord #2 size=48
+mm_alloc ArrayRecord #3 size=48
+mm_alloc ArrayRecord #4 size=48
+mm_alloc Map #5 size=48
+mm_alloc ArrayRecord #6 size=48
+mm_decref ArrayRecord #1 rc=0
+mm_free ArrayRecord #1
+mm_alloc ElementBuffer #7 size=128
+mm_alloc ArrayRecord #8 size=48
+mm_decref ArrayRecord #2 rc=0
+mm_free ArrayRecord #2
+mm_alloc ElementBuffer #9 size=128
+mm_alloc ArrayRecord #10 size=48
+mm_decref ArrayRecord #3 rc=0
+mm_free ArrayRecord #3
+mm_alloc ElementBuffer #11 size=16
+mm_alloc ArrayRecord #12 size=48
+mm_decref ArrayRecord #4 rc=0
+mm_free ArrayRecord #4
+mm_alloc ElementBuffer #13 size=64
+mm_incref ArrayRecord #6 rc=2
+mm_incref ArrayRecord #8 rc=2
+mm_incref ArrayRecord #10 rc=2
+mm_alloc MapIterator #14 size=40
+mm_incref ArrayRecord #6 rc=3
+mm_incref ArrayRecord #8 rc=3
+mm_incref ArrayRecord #10 rc=3
+mm_decref ArrayRecord #10 rc=2
+mm_decref ArrayRecord #8 rc=2
+mm_decref ArrayRecord #6 rc=2
+mm_alloc __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #15 size=16
+mm_decref __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #15 rc=0
+mm_free __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #15
+mm_alloc __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #16 size=16
+mm_decref __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #16 rc=0
+mm_free __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #16
+mm_alloc __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #17 size=16
+mm_decref __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #17 rc=0
+mm_free __Tuple2.T38ee35d378b734f4.Taebb70a7666c1b3c #17
+mm_decref MapIterator #14 rc=0
+mm_decref ArrayRecord #6 rc=1
+mm_decref ArrayRecord #8 rc=1
+mm_decref ArrayRecord #10 rc=1
+mm_free MapIterator #14
+mm_decref Map #5 rc=0
+mm_decref ArrayRecord #6 rc=0
+mm_decref ElementBuffer #7 rc=0
+mm_free ElementBuffer #7
+mm_free ArrayRecord #6
+mm_decref ArrayRecord #8 rc=0
+mm_decref ElementBuffer #9 rc=0
+mm_free ElementBuffer #9
+mm_free ArrayRecord #8
+mm_decref ArrayRecord #10 rc=0
+mm_decref ElementBuffer #11 rc=0
+mm_free ElementBuffer #11
+mm_free ArrayRecord #10
+mm_decref ArrayRecord #12 rc=0
+mm_decref ElementBuffer #13 rc=0
+mm_free ElementBuffer #13
+mm_free ArrayRecord #12
+mm_free Map #5
 ```
 <!-- test: destructure-match-result-then-compare -->
 Destructuring `let (a, b) = match X { … gives (x, y) }` binds the elements of a

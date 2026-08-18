@@ -1075,7 +1075,7 @@ function buildStrDecref(module StdModule)
 
 	// entry + lower: the shared refcount check. `rc == 0` (the last owner) branches to `release`, where a
 	// String does the one thing the generic decref structurally cannot — release a detached buffer first.
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
 	// release + baseJoin: the last owner asks the shared pair which separate allocation this record owes a
 	// release to and pays it, BEFORE the record itself dies — the whole reason this cannot simply call
@@ -1129,7 +1129,7 @@ export function emitAllocOwnedInlineString(module StdModule, block IrBlock, ids 
 	// spelled as a bare 0 (`__strix_make` is the third reader of it).
 	let zeroDtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let newRec = ids.mint()
-	module.appendOp(block, op: StdOp.call(newRec, callee: MmAllocName, args: twoArgs(allocSize, second: zeroDtor)))
+	emitMmAllocCall(module, block: block, result: newRec, size: allocSize, destructor: zeroDtor, tag: mmTagIndex(MmTag.StringRecord), ids: ids)
 
 	emitStoreField(module, block: block, record: newRec, offset: StringBufferOffset, value: emitInlineStringBuffer(module, block: block, ids: ids, record: newRec))
 	emitStoreField(module, block: block, record: newRec, offset: StringLengthOffset, value: byteLen)
@@ -1371,7 +1371,7 @@ function buildMmToCString(module StdModule)
 	let withNul = emitBin(module, block: copyIt, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
 	let zeroDtor = emitConst(module, block: copyIt, value: TrivialDestructor, ids: ids)
 	let fresh = ids.mint()
-	module.appendOp(copyIt, op: StdOp.call(fresh, callee: MmAllocName, args: twoArgs(withNul, second: zeroDtor)))
+	emitMmAllocCall(module, block: copyIt, result: fresh, size: withNul, destructor: zeroDtor, tag: mmTagIndex(MmTag.CString), ids: ids)
 	let copied = ids.mint()
 	module.appendOp(copyIt, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(fresh, second: buf, third: len)))
 	module.setTerminator(copyIt, op: StdOp.ret(fresh))

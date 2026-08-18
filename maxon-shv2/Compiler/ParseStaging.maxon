@@ -207,6 +207,10 @@ export type FileParseArtifact
 	// exactly as `opRanges` and `valueOrigins` are folded. See `Project.asyncSpawnSites` for why the text has
 	// to be captured here rather than recovered downstream.
 	export var asyncSpawnSites as AsyncSpawnSiteMap
+	// The mm-trace tag of each compiler-minted box this file allocates that is not any declared type's.
+	// `mergeArtifact` folds it into `project.allocTagSites` with the merge's op offset, exactly as
+	// `asyncSpawnSites` is. See `Project.allocTagSites` for why it is a side channel and not a type.
+	export var allocTagSites as AllocTagSiteMap
 	// (funcIndex, ValueId) -> Maxon OpIndex for every value an op DEFINES in this file
 	// (see ValueOrigin). Recorded inside the emit choke points below in the same
 	// op/value lockstep `opRanges` uses, and folded into `project.valueOrigins` by
@@ -344,6 +348,7 @@ export type FileParseArtifact
 			module: MaxonModule.create(),
 			opRanges: SourceRangeTable.create(),
 			asyncSpawnSites: AsyncSpawnSiteMap.create(),
+			allocTagSites: AllocTagSiteMap.create(),
 			valueOrigins: ValueOriginTable.create(),
 			funcReturnTypes: FuncReturnTypeEntryArray.create(),
 			funcSignatures: FuncSignatureEntryArray.create(),
@@ -407,6 +412,13 @@ export type FileParseArtifact
 	export function recordAsyncSpawnSite(site AsyncSpawnSite)
 		self.asyncSpawnSites.upsert(self.module.opCount(), value: site)
 	end 'recordAsyncSpawnSite'
+
+	// Record the mm-trace TAG of the box the op `emitOp` is about to append allocates — the same
+	// read-it-through-here contract `recordAsyncSpawnSite` states, and for its reason: the tag lands on the
+	// op the very next append creates, so the two cannot be wired to different ops by a later edit.
+	export function recordAllocTagSite(tag MmTag)
+		self.allocTagSites.upsert(self.module.opCount(), value: tag)
+	end 'recordAllocTagSite'
 
 	// THE emit choke point for a Maxon block terminator. Same op/span lockstep as
 	// `emitOp`; separate only because a terminator is stored on the block rather
@@ -668,6 +680,7 @@ export function mergeArtifact(project Project, target MaxonModule, artifact File
 	target.merge(artifact.module)
 	project.opRanges.appendFrom(artifact.opRanges)
 	commitAsyncSpawnTexts(project, artifact: artifact, opOffset: opOffset)
+	commitAllocTagSites(project, artifact: artifact, opOffset: opOffset)
 	project.valueOrigins.appendFrom(artifact.valueOrigins, funcOffset: funcOffset, opOffset: opOffset)
 	commitFuncReturnTypes(project, artifact: artifact)
 	commitFuncSignatures(project, artifact: artifact)
@@ -1425,6 +1438,15 @@ function commitAsyncSpawnTexts(project Project, artifact FileParseArtifact, opOf
 		project.asyncSpawnSites.upsert(opIndex + opOffset, value: site)
 	end 'each'
 end 'commitAsyncSpawnTexts'
+
+// Fold this file's mm-trace alloc tags onto the whole-program table, RE-KEYED by the merge's op offset —
+// `commitAsyncSpawnTexts`' twin, for its stated reason: without the offset every file after the first would
+// tag the wrong allocation.
+function commitAllocTagSites(project Project, artifact FileParseArtifact, opOffset OpIndex)
+	for (opIndex, tag) in artifact.allocTagSites 'each'
+		project.allocTagSites.upsert(opIndex + opOffset, value: tag)
+	end 'each'
+end 'commitAllocTagSites'
 
 // Append this file's recorded discarded-result sites to the whole-program list — the twin of the door and
 // transform commits above, and dedup-free for their reason: each entry is a distinct SITE with its own position.

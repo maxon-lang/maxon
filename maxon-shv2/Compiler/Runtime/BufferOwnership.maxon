@@ -335,7 +335,7 @@ export function buildMmCowDetach(module StdModule)
 	let askBytes = emitElementByteLen(module, block: baseJoin, count: askElements, es: es, ids: ids)
 	let bufferDtor = emitConst(module, block: baseJoin, value: TrivialElementDestroy, ids: ids)
 	let newBuf = ids.mint()
-	module.appendOp(baseJoin, op: StdOp.call(newBuf, callee: MmAllocName, args: twoArgs(askBytes, second: bufferDtor)))
+	emitMmAllocCall(module, block: baseJoin, result: newBuf, size: askBytes, destructor: bufferDtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 	let oldBuf = emitLoadField(module, block: baseJoin, record: record, offset: ManagedRecordBufferOffset, ids: ids)
 	var afterCopy = emitForwardCopy(module, func: func, cur: baseJoin, dest: newBuf, src: oldBuf, byteCount: liveBytes, ids: ids)
 

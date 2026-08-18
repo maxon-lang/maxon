@@ -262,6 +262,28 @@ export enum IatSlot
 	// exactly what the rest of this lane will then hand to `CreateFileA`, so the round trip holds. A `W`
 	// entry point here alone would be the lone wide producer feeding narrow consumers.
 	GetModuleFileNameA
+	// ⭐ **THE FOUR DEBUGSTREAM IMPORTS (Workstream O3).** APPENDED AFTER `GetModuleFileNameA` for the reason
+	// every entry above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is
+	// unchanged — a reorder would silently repoint every prior import. kernel32 again, so `Kernel32DirEntries`
+	// stays 1; that constant counts import DIRECTORY entries (DLLs), not imports.
+	//
+	// They are emitted ONLY into a `--debugstream` build, and an import nothing references still costs its
+	// Hint/Name entry and its thunk — which is why the whole family is gated at the install rather than being
+	// unconditional vocabulary. See `DebugStreamRuntime`.
+	//
+	// `GetEnvironmentVariableA` reads `MAXON_DEBUGSTREAM`, whose VALUE names the segment `OpenFileMappingA`
+	// then opens and `MapViewOfFile` maps; `CloseHandle` (already a slot since P1.5) drops the section handle
+	// once the view exists. `GetTickCount64` is the millisecond stopwatch every ring entry's timestamp delta
+	// is measured against — the SAME counter `maxon monitor` seeds the segment header with.
+	//
+	// ⚠ The `A` variant of `GetEnvironmentVariableA`, inheriting `CreateFileA`'s stated LIMITATION unchanged
+	// and inheriting it CONSISTENTLY: the value comes back in the system ANSI codepage, and it is handed
+	// straight to `OpenFileMappingA`, which reads it in the same one. The monitor names its segments
+	// `maxon_ds_<pid>_<hex>`, which is ASCII in every codepage.
+	GetEnvironmentVariableA
+	OpenFileMappingA
+	MapViewOfFile
+	GetTickCount64
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer
@@ -272,10 +294,33 @@ export function iatSlotIndex(slot IatSlot) returns RelocSlotIndex
 	return slot.ordinal as RelocSlotIndex
 end 'iatSlotIndex'
 
-// kernel32 import names in slot (declaration) order.
-function kernel32ImportNames() returns StringArray
+// ⭐ **DOES THIS SLOT BELONG TO THE DEBUGSTREAM BAND?** The four O3 imports are emitted ONLY into a
+// `--debugstream` build — an import nothing references still costs its IAT thunk, its import-lookup entry
+// and its Hint/Name record, and four of those in EVERY binary in the language is not a price a debug
+// instrument may charge a program that is not being traced. That is the same rule the `.data` slots, the
+// box header and the event sites follow (`DebugStreamRuntime`'s header states it once).
+//
+// ⚠ **THEY ARE THE TRAILING BAND, AND THAT IS WHAT MAKES OMITTING THEM SAFE.** An `iatCall` records a
+// slot INDEX; dropping entries off the END leaves every earlier index exactly where it was, while dropping
+// one from the middle would silently repoint every import after it. This is a TOTAL match rather than an
+// `ordinal >=` test precisely so that a future import appended past this band fails to compile here
+// instead of quietly joining it.
+function isDebugStreamImport(slot IatSlot) returns bool
+	return match slot 'band'
+		GetEnvironmentVariableA to GetTickCount64 gives true
+		ExitProcess to GetModuleFileNameA gives false
+	end 'band'
+end 'isDebugStreamImport'
+
+// kernel32 import names in slot (declaration) order, stopping before the DebugStream band on a build that
+// carries no producer — see `isDebugStreamImport`.
+function kernel32ImportNames(debugStream bool) returns StringArray
 	var names = StringArray.create()
 	for slot in IatSlot.allCases 'each'
+		if isDebugStreamImport(slot) and not debugStream 'untracedBuild'
+			continue
+		end 'untracedBuild'
+
 		names.push(slot.name)
 	end 'each'
 	return names
@@ -340,11 +385,11 @@ end 'dllNameField'
 // Build the `.idata` import section: a single kernel32 DLL run importing the
 // IatSlot names. Layout: IAT [thunks + null], ILT [identical], import directory
 // [kernel32 + null], Hint/Name table, DLL-name string.
-function buildImportSection(idataRva Rva) returns ImportSection
+function buildImportSection(idataRva Rva, debugStream bool) returns ImportSection
 	var data = ByteArray.create()
 	data.reserve(256)
 
-	let names = kernel32ImportNames()
+	let names = kernel32ImportNames(debugStream)
 	let count = names.count()
 
 	let thunkTableBytes = (count + 1) * PointerSize
@@ -708,7 +753,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	// .idata
 	let idataRva = dataRva + dataSizeVirtual
-	let idata = buildImportSection(idataRva)
+	let idata = buildImportSection(idataRva, debugStream: codeResult.stdModule.debugStream)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
 	let idataSizeVirtual = alignUp(idataSize, alignment: SectionAlignment)

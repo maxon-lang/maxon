@@ -475,7 +475,7 @@ function buildListCreate(module StdModule)
 	let recordSize = emitConst(module, block: entry, value: ListRecordBytes as ParsedInt, ids: ids)
 	let recordDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
 	let record = ids.mint()
-	module.appendOp(entry, op: StdOp.call(record, callee: MmAllocName, args: twoArgs(recordSize, second: recordDtor)))
+	emitMmAllocCall(module, block: entry, result: record, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.ListRecord), ids: ids)
 	emitStoreField(module, block: entry, record: record, offset: ListElementDropOffset, value: elementDrop)
 	module.setTerminator(entry, op: StdOp.ret(record))
 
@@ -506,7 +506,7 @@ function buildListNodeAlloc(module StdModule)
 	let nodeSize = emitConst(module, block: entry, value: ListNodeBytes, ids: ids)
 	let nodeDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
 	let node = ids.mint()
-	module.appendOp(entry, op: StdOp.call(node, callee: MmAllocName, args: twoArgs(nodeSize, second: nodeDtor)))
+	emitMmAllocCall(module, block: entry, result: node, size: nodeSize, destructor: nodeDtor, tag: mmTagIndex(MmTag.ListNode), ids: ids)
 	emitStoreField(module, block: entry, record: node, offset: ListValueOffset, value: value)
 	emitStoreField(module, block: entry, record: node, offset: ListElementDropSlotOffset, value: emitLoadField(module, block: entry, record: list, offset: ListElementDropOffset, ids: ids))
 	module.setTerminator(entry, op: StdOp.ret(node))
@@ -1612,7 +1612,7 @@ function buildListNodeDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let node = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: node, lastOwner: release, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: node, lastOwner: release, ids: ids)
 
 	var freeNode = emitDropNodeElement(module, func: func, cur: release, node: node, ids: ids)
 	module.appendOp(freeNode, op: StdOp.call(ids.mint(), callee: MmFreeName, args: argsOf(node)))
@@ -1728,7 +1728,7 @@ function buildListDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
 
 	let cleared = ids.mint()
 	module.appendOp(release, op: StdOp.call(cleared, callee: ListClearName, args: argsOf(record)))

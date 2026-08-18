@@ -57,6 +57,34 @@ let HeaderSizeOffset = 8 as ByteOffset
 let HeaderRefcountOffset = 16 as ByteOffset
 let HeaderBytes = 24
 
+// ⭐⭐ **THE `--debugstream` PREFIX WORD — `(alloc_id << 16 | tag_index)`, AND IT SITS *BELOW* THE HEADER
+// ON PURPOSE (Workstream O3).** `mm_incref`/`mm_decref`/`mm_free` know only a POINTER, so the id and the
+// type tag an mm-trace event needs must live in the box; `__mm_alloc` is the one place that knows both.
+//
+// ⚠ **PUTTING IT BELOW THE THREE EXISTING FIELDS RATHER THAN AMONG THEM IS THE WHOLE OF WHY THIS IS A
+// SMALL CHANGE.** `ptr - HeaderBytes` still addresses `destructor`/`size`/`refcount` at exactly the
+// offsets they have always had, so `emitHeaderBase` and every reader that goes through it — including
+// `StringRuntime` and `ManagedMemoryRuntime`, which reach the refcount through this file's exported
+// builders — are untouched. Only `__mm_alloc` (which computes the total and the payload offset) and
+// `emitPackedIdAddr` below know the word exists.
+//
+// ⚠⚠ **IT IS PRESENT ONLY UNDER `--debugstream`.** A normal build's box is 24 bytes of header exactly as
+// before, which is half of the compile-time gating rule (`DebugStreamRuntime`'s header states the other
+// half): 8 bytes on EVERY allocation in the language is not a price a debug instrument may charge a
+// program that is not being traced.
+let DebugStreamPackedIdBytes = 8
+
+// The bytes `__mm_alloc` prepends to the payload — the header, plus the DebugStream word when this build
+// carries one. ONE derivation, read by the allocation itself and by `emitPackedIdAddr`, so the two cannot
+// disagree about where the payload starts.
+function boxPrefixBytes(debugStream bool) returns ParsedInt
+	// ⚠ THE PARENTHESES ARE LOAD-BEARING. `a + b if c else d` binds as `a + (b if c else d)`, so the
+	// unparenthesized form returned `HeaderBytes + HeaderBytes` on an UNTRACED build — a 48-byte prefix
+	// where every box has always had 24. It compiled, it linked, and it was found only by the
+	// byte-identical check against a control build.
+	return (HeaderBytes + DebugStreamPackedIdBytes) if debugStream else HeaderBytes
+end 'boxPrefixBytes'
+
 // The arena a single `osAllocPages` request commits. 64 KiB is Windows' allocation granularity, so
 // a smaller request would round up to it anyway and simply waste the difference.
 let ArenaBytes = 0x10000
@@ -876,20 +904,59 @@ end 'buildSlabAlloc'
 // therefore deferred to P1.2, where `__destruct_String` is a real consumer with a real reason to
 // be right: a String that does not free its buffer leaks, and the leak gate below says so.
 function buildMmAlloc(module StdModule)
-	var func = IrFunction.createFromStd(MmAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
-	var ids = ValueMinter.create(2)
+	// ⚠ **THE ARITY IS THE FLAG'S, AND THAT IS WHY EVERY CALL SITE GOES THROUGH `emitMmAllocCall`.** A
+	// `--debugstream` build takes a THIRD argument — the allocation's tag index — because a tag cannot be
+	// recovered from a pointer later and this is the only moment it is known. A normal build takes two, as
+	// it always has, so its emitted call sites are byte-identical.
+	let paramCount = 3 if module.debugStream else 2
+	let paramTypes = threeI64Params() if module.debugStream else twoI64Params()
+	var func = IrFunction.createFromStd(MmAllocName, returnType: StdReturnType.value(StdType.i64), paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
+	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry")
-	emitParams(module, block: entry, count: 2)
+	emitParams(module, block: entry, count: paramCount)
 	let size = 0 as ValueId
 	let destructor = 1 as ValueId
+	let tagIndex = 2 as ValueId
 
 	let headerConst = ids.mint()
-	module.appendOp(entry, op: StdOp.const(headerConst, value: HeaderBytes, valueType: StdType.i64))
+	module.appendOp(entry, op: StdOp.const(headerConst, value: boxPrefixBytes(module.debugStream), valueType: StdType.i64))
 	let total = ids.mint()
 	module.appendOp(entry, op: StdOp.binOp(total, lhs: size, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	let base = ids.mint()
-	module.appendOp(entry, op: StdOp.call(base, callee: SlabAllocName, args: argsOf(total)))
+	let allocation = ids.mint()
+	module.appendOp(entry, op: StdOp.call(allocation, callee: SlabAllocName, args: argsOf(total)))
+
+	// The DebugStream prefix word, when this build has one: `(alloc_id << 16) | tag_index`, stamped once
+	// here and read back by every later event on this box. `alloc_id` PRE-increments a monotonic counter,
+	// so the first allocation is #1 and a zero packed id can only ever mean "never stamped".
+	// ⚠⚠ **`payloadOffset` REUSES `headerConst` WHEN THE BUILD IS UNTRACED, AND THAT IS NOT A
+	// MICRO-OPTIMISATION — IT IS THE BYTE-IDENTICAL RULE.** With no prefix word the two distances are the
+	// same number, and minting a SECOND `const HeaderBytes` for the payload offset is one more op in
+	// `__mm_alloc`: the register allocator then makes different choices and every heap program's `.text`
+	// moves, against thousands of committed fragment goldens. (Measured on this rung's first
+	// byte-identical check: identical printed IR, 1084 differing bytes in the linked image.) Under the flag
+	// the two genuinely differ — the total includes the prefix word, the payload offset does not — so the
+	// second constant is minted there and only there.
+	var payloadOffset = headerConst
+	var base = allocation
+	var packedId = 0 as ValueId
+	if module.debugStream 'stampPackedId'
+		let counterAddr = ids.mint()
+		module.appendOp(entry, op: StdOp.globalAddr(counterAddr, label: DsAllocIdLabel))
+		let previous = ids.mint()
+		module.appendOp(entry, op: StdOp.loadIndirect(previous, addrId: counterAddr, offset: 0, valueType: StdType.i64))
+		let one = emitConst(module, block: entry, value: 1, ids: ids)
+		let allocId = emitBin(module, block: entry, a: previous, b: one, opcode: StdBinOpcode.add, ids: ids)
+		module.appendOp(entry, op: StdOp.storeIndirect(counterAddr, offset: 0, valueId: allocId, valueType: StdType.i64))
+		let shift = emitConst(module, block: entry, value: DsMmPackedIdShift, ids: ids)
+		let shifted = emitBin(module, block: entry, a: allocId, b: shift, opcode: StdBinOpcode.shl, ids: ids)
+		packedId = emitBin(module, block: entry, a: shifted, b: tagIndex, opcode: StdBinOpcode.bitOr, ids: ids)
+		module.appendOp(entry, op: StdOp.storeIndirect(allocation, offset: 0, valueId: packedId, valueType: StdType.i64))
+
+		let prefix = emitConst(module, block: entry, value: DebugStreamPackedIdBytes, ids: ids)
+		base = emitBin(module, block: entry, a: allocation, b: prefix, opcode: StdBinOpcode.add, ids: ids)
+		payloadOffset = emitConst(module, block: entry, value: HeaderBytes, ids: ids)
+	end 'stampPackedId'
 
 	module.appendOp(entry, op: StdOp.storeIndirect(base, offset: HeaderDestructorOffset, valueId: destructor, valueType: StdType.i64))
 	module.appendOp(entry, op: StdOp.storeIndirect(base, offset: HeaderSizeOffset, valueId: size, valueType: StdType.i64))
@@ -911,11 +978,115 @@ function buildMmAlloc(module StdModule)
 	module.appendOp(entry, op: StdOp.storeIndirect(countAddr, offset: 0, valueId: raised, valueType: StdType.i64))
 
 	let payload = ids.mint()
-	module.appendOp(entry, op: StdOp.binOp(payload, lhs: base, rhs: headerConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
-	module.setTerminator(entry, op: StdOp.ret(payload))
+	module.appendOp(entry, op: StdOp.binOp(payload, lhs: base, rhs: payloadOffset, opcode: StdBinOpcode.add, operandType: StdType.i64))
+
+	var out = emitMmAllocEvent(module, func: func, block: entry, packedId: packedId, size: size, ids: ids)
+	module.setTerminator(out, op: StdOp.ret(payload))
 
 	module.functions.push(func)
 end 'buildMmAlloc'
+
+// ⭐ **THE ONE `__mm_alloc` CALL EMISSION, AND THE ONE PLACE ITS FLAG-DEPENDENT ARITY IS KNOWN.** Every
+// heap box the compiler builds — a String record, an array record, its element buffer, a list node, a
+// user struct — comes through here, so `__mm_alloc(size, destructor[, tag])` is spelled in exactly one
+// place. `Parser.emitBoxAlloc`'s header already argued the point for the three call sites it consolidated
+// ("an added or reordered alloc argument that reached three of those call sites and missed the fourth
+// would corrupt that box silently"); `--debugstream` is that added argument, and it reaches fifteen.
+//
+// The TAG names what the box IS. A runtime chunk knows that statically and passes a fixed roster case; a
+// USER allocation's is interned from its own result type at the lowering (see `LowerMaxonToStd`'s
+// `__mm_alloc` arm), which is the only tier that can see it.
+export function emitMmAllocCall(module StdModule, block IrBlock, result ValueId, size ValueId, destructor ValueId, tag ParsedInt, ids ValueMinter)
+	if not module.debugStream 'untracedBuild'
+		module.appendOp(block, op: StdOp.call(result, callee: MmAllocName, args: twoArgs(size, second: destructor)))
+		return
+	end 'untracedBuild'
+
+	let tagIndex = emitConst(module, block: block, value: tag, ids: ids)
+	module.appendOp(block, op: StdOp.call(result, callee: MmAllocName, args: threeArgs(size, second: destructor, third: tagIndex)))
+end 'emitMmAllocCall'
+
+// ⭐ **THE `--debugstream` PREFIX WORD'S ADDRESS — `ptr - (HeaderBytes + DebugStreamPackedIdBytes)`.**
+// The one place the word's position is expressed, exactly as `emitHeaderBase` is for the header itself,
+// and asked ONLY by the three event emitters below. See `DebugStreamPackedIdBytes` for why it sits below
+// the header rather than among its fields.
+function emitLoadPackedId(module StdModule, block IrBlock, ptr ValueId, ids ValueMinter) returns ValueId
+	let prefixConst = emitConst(module, block: block, value: boxPrefixBytes(true), ids: ids)
+	let packedIdAddr = emitBin(module, block: block, a: ptr, b: prefixConst, opcode: StdBinOpcode.sub, ids: ids)
+	return emitLoadField(module, block: block, record: packedIdAddr, offset: 0, ids: ids)
+end 'emitLoadPackedId'
+
+// ⭐⭐ **THE FOUR EVENT EMITTERS, AND EVERY ONE OF THEM ASKS `module.debugStream` ITSELF.**
+//
+// ⚠⚠ **THAT GATE IS NOT REDUNDANT WITH `emitMmEvent`'S — `emitMmEvent` HAS NONE, DELIBERATELY.** The
+// arguments these pass cost OPS to compute (a refcount load, a packed-id load, a plus-one), and those ops
+// would be emitted before a gate inside `emitMmEvent` could decline them — which is not a cosmetic
+// difference: a `globalAddr __ds_base` emitted into an untraced build names a `.data` slot that build
+// never laid out, and the backend PANICS at the relocation. (Measured, on the first byte-identical check
+// of this rung: `buildMmAlloc` called `emitMmEvent` directly and every heap program failed to link.) So
+// the compile-time gate lives at each of the four, where the arguments are built.
+//
+// ⭐ **AND THE `owners - 1` CONVENTION IS TRANSLATED HERE.**
+//
+// shv2 stores `owners - 1` in the refcount word — a box is born at 0 meaning ONE owner
+// (`emitRefcountCheckToLastOwner` argues why). That convention is PRIVATE to this file, and the wire's
+// `rc=` field is not: the monitor's reader, and the reference this format is shared with, both mean OWNER
+// COUNT by it. So the translation happens once, here, rather than leaking a shv2 storage detail into a
+// trace that three compilers' readers compare.
+//
+// ⚠ **DECREF IS THE SUBTLE ONE, AND ITS EXPRESSION IS UNIFORM ONLY BECAUSE OF AN IDENTITY.** On the
+// SHARED path the stored count goes `n -> n-1`, so owners go `n+1 -> n`; on the LAST-OWNER path the count
+// is never touched and owners go `1 -> 0`. Both are `owners_after == stored_BEFORE` — the shared case by
+// arithmetic, the last-owner case because the stored value is 0 there. That identity is why the event is
+// emitted ONCE, in the block before the branch, instead of once per arm.
+//
+// The alloc event, with the requested USER size as its value — never the total, so the number in the
+// trace is the one the caller asked for and stays comparable across a header that grows. It is the one
+// emitter that takes the packed id as a VALUE rather than reading it back out of the box: `__mm_alloc` has
+// just computed it, and re-loading what is already in a register would be the only place in this family
+// where the box is read for something the caller knows.
+function emitMmAllocEvent(module StdModule, func IrFunction, block IrBlock, packedId ValueId, size ValueId, ids ValueMinter) returns IrBlock
+	if not module.debugStream 'untracedBuild'
+		return block
+	end 'untracedBuild'
+
+	return emitMmEvent(module, func: func, block: block, eventType: DsEvMmAlloc, packedId: packedId, value: size, ids: ids)
+end 'emitMmAllocEvent'
+
+function emitMmDecrefEvent(module StdModule, func IrFunction, block IrBlock, ptr ValueId, ids ValueMinter) returns IrBlock
+	if not module.debugStream 'untracedBuild'
+		return block
+	end 'untracedBuild'
+
+	let ownersAfter = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
+	let packedId = emitLoadPackedId(module, block: block, ptr: ptr, ids: ids)
+	return emitMmEvent(module, func: func, block: block, eventType: DsEvMmDecref, packedId: packedId, value: ownersAfter, ids: ids)
+end 'emitMmDecrefEvent'
+
+// Called AFTER the increment, so the stored count is already the new one and owners are it plus one.
+function emitMmIncrefEvent(module StdModule, func IrFunction, block IrBlock, ptr ValueId, ids ValueMinter) returns IrBlock
+	if not module.debugStream 'untracedBuild'
+		return block
+	end 'untracedBuild'
+
+	let stored = emitLoadRefcount(module, block: block, ptr: ptr, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let ownersAfter = emitBin(module, block: block, a: stored, b: one, opcode: StdBinOpcode.add, ids: ids)
+	let packedId = emitLoadPackedId(module, block: block, ptr: ptr, ids: ids)
+	return emitMmEvent(module, func: func, block: block, eventType: DsEvMmIncref, packedId: packedId, value: ownersAfter, ids: ids)
+end 'emitMmIncrefEvent'
+
+// A free carries no value: the box has no size to report that the alloc did not already, and no refcount
+// left to report at all. The wire's value slot is unused for this event and the monitor never reads it.
+function emitMmFreeEvent(module StdModule, func IrFunction, block IrBlock, ptr ValueId, ids ValueMinter) returns IrBlock
+	if not module.debugStream 'untracedBuild'
+		return block
+	end 'untracedBuild'
+
+	let packedId = emitLoadPackedId(module, block: block, ptr: ptr, ids: ids)
+	let unused = emitConst(module, block: block, value: 0, ids: ids)
+	return emitMmEvent(module, func: func, block: block, eventType: DsEvMmFree, packedId: packedId, value: unused, ids: ids)
+end 'emitMmFreeEvent'
 
 // ⭐ **`__mm_incref(ptr)` — ONE MORE OWNER. IT IS BACK, WITH THE CONSUMER ITS ABSENCE WAS WAITING FOR.**
 //
@@ -945,7 +1116,8 @@ function buildMmIncref(module StdModule)
 	let ptr = 0 as ValueId
 
 	emitAdjustRefcount(module, block: entry, ptr: ptr, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(entry, op: StdOp.retVoid)
+	var out = emitMmIncrefEvent(module, func: func, block: entry, ptr: ptr, ids: ids)
+	module.setTerminator(out, op: StdOp.retVoid)
 
 	module.functions.push(func)
 end 'buildMmIncref'
@@ -973,7 +1145,8 @@ function buildMmRetain(module StdModule)
 	let ptr = 0 as ValueId
 
 	emitAdjustRefcount(module, block: entry, ptr: ptr, opcode: StdBinOpcode.add, ids: ids)
-	module.setTerminator(entry, op: StdOp.ret(ptr))
+	var out = emitMmIncrefEvent(module, func: func, block: entry, ptr: ptr, ids: ids)
+	module.setTerminator(out, op: StdOp.ret(ptr))
 
 	module.functions.push(func)
 end 'buildMmRetain'
@@ -1064,13 +1237,22 @@ end 'emitIsSharedAllocation'
 // and `__mm_free` do the same unlocked RMW on `__mm_alloc_count`, and they become `LOCK`-prefixed on
 // the same day for the same reason: a counter that loses an update reports a leak that did not
 // happen, or hides one that did.
-export function emitRefcountCheckToLastOwner(module StdModule, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
+// ⚠ **THE `mm_decref` EVENT IS EMITTED HERE, IN `entry`, BEFORE THE BRANCH — ONCE, NOT ONCE PER ARM.**
+// See `emitMmDecrefEvent` for the identity that makes one emission correct for both paths. Emitting it
+// before the branch also means the caller's `lastOwner` block is untouched by this function, which every
+// one of its nine callers relies on: they append their own reclaim ops into it.
+//
+// ⚠ `func` is needed only because the event SPLITS `entry` into new blocks; with `--debugstream` off it
+// is unread and not one op is emitted.
+export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, entry IrBlock, lower IrBlock, record ValueId, lastOwner IrBlock, ids ValueMinter)
+	var cur = emitMmDecrefEvent(module, func: func, block: entry, ptr: record, ids: ids)
+
 	// The test is `emitIsSharedAllocation` with its arms swapped, so "0 means one owner" is asserted in one
 	// place and read here rather than restated. `lower` reloads the count instead of threading it out of
 	// `entry`, which costs two ops on a path only a SHARED box takes — and under move-only ownership a
 	// RECORD is never shared, so at this rung that path belongs to array element buffers under a view.
-	let shared = emitIsSharedAllocation(module, block: entry, ptr: record, ids: ids)
-	module.setTerminator(entry, op: StdOp.condBranch(shared, thenBlockId: lower.id, elseBlockId: lastOwner.id))
+	let shared = emitIsSharedAllocation(module, block: cur, ptr: record, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(shared, thenBlockId: lower.id, elseBlockId: lastOwner.id))
 
 	emitAdjustRefcount(module, block: lower, ptr: record, opcode: StdBinOpcode.sub, ids: ids)
 	module.setTerminator(lower, op: StdOp.retVoid)
@@ -1090,7 +1272,7 @@ function buildMmDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let ptr = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: ptr, lastOwner: release, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: ptr, lastOwner: release, ids: ids)
 
 	let freed = ids.mint()
 	module.appendOp(release, op: StdOp.call(freed, callee: MmFreeName, args: argsOf(ptr)))
@@ -1137,10 +1319,15 @@ function buildMmFree(module StdModule)
 	var func = IrFunction.createFromStd(MmFreeName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
-	var entry = module.addBlock(func, label: b"entry")
+	var start = module.addBlock(func, label: b"entry")
 
-	emitParams(module, block: entry, count: 1)
+	emitParams(module, block: start, count: 1)
 	let ptr = 0 as ValueId
+
+	// The `mm_free` event BEFORE the poison, so the trace reports the death of the box while its header is
+	// still the one that identifies it. (The poison covers the payload only, but reporting a free after the
+	// reclaim would say it in the wrong order for no gain.)
+	var entry = emitMmFreeEvent(module, func: func, block: start, ptr: ptr, ids: ids)
 
 	// Drop the live count — the one number the leak gate reads.
 	let countAddr = ids.mint()
@@ -1601,7 +1788,7 @@ function synthesizeUnionDestructor(module StdModule, layout EnumLayout, project 
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
 	let tag = ids.mint()
 	module.appendOp(drop, op: StdOp.loadIndirect(tag, addrId: box, offset: UnionTagOffset, valueType: StdType.i64))
@@ -1836,7 +2023,7 @@ function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drop
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
 	var cur = drop
 	for spec in drops 'eachDrop'
@@ -2090,7 +2277,7 @@ function synthesizeStructCloner(module StdModule, layout StructLayout, project P
 	let size = emitConst(module, block: entry, value: layout.sizeBytes() as ParsedInt, ids: ids)
 	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
 	let newBox = ids.mint()
-	module.appendOp(entry, op: StdOp.call(newBox, callee: MmAllocName, args: twoArgs(size, second: zeroDtor)))
+	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: String.from(layout.name), debugStream: module.debugStream), ids: ids)
 	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
 
 	for i in 0 upto layout.fieldCount() 'eachField'
@@ -2123,7 +2310,7 @@ function synthesizeUnionCloner(module StdModule, layout EnumLayout, project Proj
 	let size = emitConst(module, block: entry, value: layout.boxSizeBytes() as ParsedInt, ids: ids)
 	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
 	let newBox = ids.mint()
-	module.appendOp(entry, op: StdOp.call(newBox, callee: MmAllocName, args: twoArgs(size, second: zeroDtor)))
+	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: String.from(layout.name), debugStream: module.debugStream), ids: ids)
 	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
 
 	let tag = emitLoadField(module, block: cur, record: newBox, offset: UnionTagOffset, ids: ids)

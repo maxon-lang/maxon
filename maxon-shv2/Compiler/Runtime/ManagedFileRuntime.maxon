@@ -339,7 +339,7 @@ end 'emitPathToCString'
 export function emitRawAlloc(module StdModule, block IrBlock, byteCount ValueId, ids ValueMinter) returns ValueId
 	let dtor = emitConst(module, block: block, value: TrivialDestructor, ids: ids)
 	let ptr = ids.mint()
-	module.appendOp(block, op: StdOp.call(ptr, callee: MmAllocName, args: twoArgs(byteCount, second: dtor)))
+	emitMmAllocCall(module, block: block, result: ptr, size: byteCount, destructor: dtor, tag: mmTagIndex(MmTag.ElementBuffer), ids: ids)
 	return ptr
 end 'emitRawAlloc'
 
@@ -622,7 +622,7 @@ function buildManagedFileDestruct(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let box = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
 	module.appendOp(drop, op: StdOp.call(ids.mint(), callee: ManagedFileCloseName, args: argsOf(box)))
 	emitRawFree(module, block: drop, ptr: box, ids: ids)

@@ -478,6 +478,7 @@ type StdToArm64Lowering
 			osWriteStderr gives 0
 			// A frame address computes an address; it calls nothing and so passes no outgoing argument.
 			stackRecordAddr gives 0
+			osOpenNamedSegment to osTickCountMs gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -631,6 +632,10 @@ type StdToArm64Lowering
 			// `arm64LeaGlobal`. arm64 has no per-function slot base (`Arm64Backend.arm64SlotDisplacement`), so
 			// the encoder resolves it from the slot alone, exactly as it does a spill.
 			stackRecordAddr(resultId, slot) then self.emit(dstRef, op: TargetOp.leaRegSlot(TargetVReg.virtual(resultId), slot: slot))
+			// ⛔ O3: the DebugStream producer is x64-windows only and `--debugstream` is REFUSED at the
+			// command line on every other target (`Main.debugStreamSupports`), so this is a backstop for a
+			// compiler bug that got one past that gate, never the user-facing rejection.
+			osOpenNamedSegment to osTickCountMs then panic("lowerStdToArm64: the DebugStream host primitives are x64-windows only — `--debugstream` is refused at the command line on every other target")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -679,6 +684,7 @@ type StdToArm64Lowering
 			osExecutablePath then panic("lowerStdToArm64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op; also x64-windows only)")
 			osWriteStderr then panic("lowerStdToArm64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
 			stackRecordAddr then panic("lowerStdToArm64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
+			osOpenNamedSegment to osTickCountMs then panic("lowerStdToArm64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops; they are also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

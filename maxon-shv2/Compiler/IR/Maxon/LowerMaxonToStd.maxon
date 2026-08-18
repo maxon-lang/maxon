@@ -817,6 +817,19 @@ type MaxonToStdLowering
 	// `valueTags`, from `IrFunction.valueNameIds`. For a `genericInstance`-tagged receiver at a `sizeof(T)`
 	// call site it carries the `GenericInstanceId`, which `materializeLayoutArg` resolves to a descriptor.
 	var valueNameIds as TypeNameIdArray
+	// ⭐ Whether this build carries the DebugStream producer (`--debugstream`). Read at exactly ONE seam
+	// here — the `__mm_alloc` arm below, which appends the allocation's TRACE TAG. This is the only tier
+	// that can supply it: the parser writes the call before a type name is interned whole-program, and no
+	// later tier can recover the box's type from a pointer.
+	let debugStream as bool
+	// ⭐ The mm-trace tag of each compiler-minted box that is not any declared type's, keyed by the
+	// `__mm_alloc` call's own op index (`project.allocTagSites`). Read by `allocTagIndexOf` and by nothing
+	// else — see `Project.allocTagSites` for why a trace label may not ride in the type slot.
+	let allocTagSites as AllocTagSiteMap
+	// The whole-program Maxon op index of the op being lowered. Published by the block walk, exactly as
+	// `rangeSites` is and for the same reason: an op's SIDE TABLES are keyed by its index, and the walk is
+	// the only thing that knows it.
+	var currentMaxonOpIndex as OpIndex
 	// The per-value EXISTENTIAL-INSTANCE column of the function CURRENTLY being lowered — re-pointed per
 	// function like `valueTags`, from `IrFunction.valueExistentialInstances`. `witnessFormalType` reads the
 	// RECEIVER's entry to resolve an associated formal at the SITE that declared it (W59).
@@ -895,7 +908,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1075,6 +1088,10 @@ type MaxonToStdLowering
 					self.rangeSites.recordAt(srcBlock.id, maxonOpPos: maxonOpPos, stdOpPos: dstBlock.opRefs.count())
 					let opIdx = try srcBlock.opRefs.get(maxonOpPos) otherwise panic("lowerMaxonToStd: opRefs.get OOB at {maxonOpPos} despite the upto bound")
 					let hlOp = try self.maxonModule.ops.get(opIdx) otherwise panic("lowerMaxonToStd: opIdx from srcBlock.opRefs not in maxonModule.ops")
+					// The op's own index, for the SIDE TABLES keyed by it. Set here rather than threaded through
+					// `lowerOp`'s callees because the depth is arbitrary — the one reader today
+					// (`allocTagIndexOf`) sits four frames down.
+					self.currentMaxonOpIndex = opIdx
 					self.lowerOp(hlOp, dstBlock: dstBlock)
 				end 'eachOp'
 
@@ -2322,6 +2339,64 @@ type MaxonToStdLowering
 		end 'slot'
 	end 'lowerCall'
 
+	// Emit `__mm_alloc(size, destructor[, tag])`. With `--debugstream` off this is the two-argument call it
+	// has always been, byte for byte; with it on the interned tag index is appended as a third argument.
+	// See the `allocTag` arm for why this tier is the one that can name it.
+	function appendMmAllocTag(result ValueId, args ValueIdArray, dstBlock IrBlock)
+		if not self.debugStream 'untracedBuild'
+			self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: args))
+			return
+		end 'untracedBuild'
+
+		let tagIndex = self.allocTagIndexOf(result)
+		let tagValue = self.mintStdValueId()
+		self.stdModule.appendOp(dstBlock, op: StdOp.const(tagValue, value: tagIndex, valueType: StdType.i64))
+		var tagged = ValueIdArray.create()
+		tagged.append(args)
+		tagged.push(tagValue)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: MmAllocName, args: tagged))
+	end 'appendMmAllocTag'
+
+	// ⭐⭐ **THE TRACE TAG A PARSER-ALLOCATED BOX CARRIES.** Two sources, asked in this order:
+	//
+	//   1. **THE SIDE TABLE**, for a box that is not any declared type's — an interpolation scratch run, a
+	//      closure environment, a promoted parameter cell. The parser recorded the tag against this very
+	//      `__mm_alloc` op (`Project.allocTagSites`); nothing else in the compiler reads that table, and the
+	//      value's TYPE is untouched by it. That separation is the whole point — see the table's own note
+	//      for what happened when the tag rode in the type slot instead.
+	//   2. **THE RESULT'S OWN TYPE**, for every box that has one:
+	//      • a `string` result is the fused String RECORD. It has no name id — `MaxonType.string` is its
+	//        own arm rather than a `named` one — so it takes the roster's `StringRecord`, the same spelling
+	//        `StringRuntime`'s own allocations carry. Two producers of one record, one tag.
+	//      • a `named` or `structRef` result is a BOXED UNION or a STRUCT RECORD, and its interned type
+	//        name is exactly what a reader of the trace wants. BOTH tags, because the two spellings are one
+	//        question here: a `type Point` box is `structRef` and a `union Shape` box is `named`, and both
+	//        carry the layout's interned name in the same column.
+	//      • anything else takes `Untagged`, which the monitor prints as `tag=0`. A `genericInstance` box
+	//        is the deliberate one: its name id is a `GenericInstanceId`, not a type-name id, so reading it
+	//        through `typeNames` would print a DIFFERENT type's name. Printing none is better than printing
+	//        the wrong one.
+	function allocTagIndexOf(result ValueId) returns ParsedInt
+		let recorded = try self.allocTagSites.get(self.currentMaxonOpIndex) otherwise 'noRecordedTag'
+			return self.allocTagFromResultType(result)
+		end 'noRecordedTag'
+		return mmTagIndex(recorded)
+	end 'allocTagIndexOf'
+
+	function allocTagFromResultType(result ValueId) returns ParsedInt
+		if self.valueTagOf(result) == ValueTypeTag.string 'stringRecord'
+			return mmTagIndex(MmTag.StringRecord)
+		end 'stringRecord'
+
+		if self.valueTagOf(result) != ValueTypeTag.named and self.valueTagOf(result) != ValueTypeTag.structRef 'noTypeNameToRead'
+			return mmTagIndex(MmTag.Untagged)
+		end 'noTypeNameToRead'
+
+		let nameId = try self.valueNameIds.get(result) otherwise return mmTagIndex(MmTag.Untagged)
+		let name = try self.typeNames.nameOf(nameId) otherwise return mmTagIndex(MmTag.Untagged)
+		return userTagIndex(self.globalData, name: String.from(name), debugStream: true)
+	end 'allocTagFromResultType'
+
 	// ⭐⭐ **A DIRECT CALL WHOSE CALLEE RETURNS AN INTERFACE DEFINES TWO VALUES, SO IT IS A `tryCall`
 	// (P1.7a slice 2, the return ABI).** The callee wrote the witness half into the secondary return register
 	// (`functionUsesSecondaryReturnSlot` — the callee's own view of this same fact), and `StdOp.tryCall` is
@@ -2384,6 +2459,19 @@ type MaxonToStdLowering
 		// each arrive with ONE argument (the opaque value) and take the descriptor in front of it. ONE arm
 		// because the prepend is one act: the block is chosen off the VALUE's own type parameter either way,
 		// and two arms is where the drop's block and the retain's would come to be read differently.
+		// ⭐ **AN `__mm_alloc` GETS ITS TRACE TAG HERE** (Workstream O3). The parser and `ModuleInit` both
+		// write a two-argument `__mm_alloc(size, destructor)` — a struct record, a boxed union, an
+		// interpolation scratch buffer — and none of them can name a USER type's tag, because the
+		// whole-program type-name interner does not exist at their tier. It does here, so the append
+		// happens once for all three producers.
+		//
+		// ⚠ The tag has TWO sources and `allocTagIndexOf` owns the order between them — the parser's
+		// side table for a box that is not any declared type's, the result's own type for every box that
+		// has one. Neither is decided at this arm; see that function.
+		if callee.equals(MmAllocName) 'allocTag'
+			self.appendMmAllocTag(result, args: args, dstBlock: dstBlock)
+			return
+		end 'allocTag'
 		if callee.equals(DropTypeParamName) or callee.equals(RetainTypeParamName) 'typeParamOwnership'
 			self.appendTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return

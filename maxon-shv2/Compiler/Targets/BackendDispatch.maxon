@@ -165,7 +165,10 @@ function buildX64Backend(stdModule StdModule, target Target, globalData GlobalDa
 	recordPhase(project, phase: CompilePhase.prologueEpilogue, probe: prologueProbe)
 
 	let runtimeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.runtimeAugment)
-	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals)
+	// The stub's two producer calls ride the module's own armed flag (`buildCarriesDebugStream`, set at the
+	// install seam), never a second spelling of that conjunction: a stub calling a `__ds_init` the module
+	// never installed does not link.
+	augmentWithRuntime(targetModule, target: target, checkLeaks: usage.usesHeap, initGlobals: usage.usesManagedGlobals, debugStream: stdModule.debugStream)
 	recordPhase(project, phase: CompilePhase.runtimeAugment, probe: runtimeProbe)
 
 	let encodeProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.encode)
@@ -281,9 +284,12 @@ end 'refuseDuplicateChunkName'
 // `initGlobals` is `RuntimeUsage.usesManagedGlobals` — whether the program declares a managed top-level
 // `var`, and so carries `__module_init`/`__maxon_global_cleanup` (P1.7 slice 2a). A program with none
 // carries neither call and its emitted stub is byte-identical to before that rung.
-export function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool)
+export function augmentWithRuntime(module TargetModule, target Target, checkLeaks bool, initGlobals bool, debugStream bool)
 	match target.os 'os'
-		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals)
+		windows then prependEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals, debugStream: debugStream)
+		// ⛔ The Linux stub takes no `debugStream`: the producer's three host primitives are x64-windows
+		// only and `--debugstream` is REFUSED at the command line on every other target (see
+		// `Main.debugStreamSupports`), so this arm can never be reached with the flag on.
 		linux then prependLinuxEntryStub(module, checkLeaks: checkLeaks, initGlobals: initGlobals)
 		macos then panic("augmentWithRuntime: there is no x64-macOS backend — `buildBackend` dispatches macOS to the arm64 backend, whose entry stub is a hand-assembled chunk (Arm64Backend.buildArm64Backend), not a module function")
 		wasi then panic("augmentWithRuntime: wasm32-wasi does not use the x64 backend — the wasm backend synthesizes its own $run entry (buildWasmCoreModule), so this module-level pass is never reached for it")
@@ -313,7 +319,7 @@ end 'augmentWithRuntime'
 // at: `main`'s saved rbp points here, and a walk that arrives with no frame to read stops
 // one frame short of the `in mrt_start` every backtrace in the corpus expects. Its own
 // saved rbp is whatever the loader left, and the walk's `.text` bound is what discards it.
-function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool)
+function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool, debugStream bool)
 	var func = IrFunction.createFromStd(EntryPointName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
 	var block = module.addBlock(func, label: b"entry")
 
@@ -321,6 +327,11 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	module.appendOp(block, op: framePointerSetupOp())
 	module.appendOp(block, op: TargetOp.prologue(EntryStubFrameBytes))
 	module.appendOp(block, op: TargetOp.callDirect(RuntimeInitName))
+	// ⭐ **THE PRODUCER ATTACHES BEFORE `__module_init`, WHICH IS THE FIRST THING THAT CAN ALLOCATE.** An
+	// eager managed global's box is a real allocation and belongs in the trace; attaching after it would
+	// silently drop exactly the allocations a program makes before `main`. It takes no argument, returns
+	// nothing and has no live value to preserve across it, so it is a bare call — `__module_init`'s shape.
+	appendDebugStreamCall(module, block: block, debugStream: debugStream, callee: DsInitName)
 	appendModuleInitCall(module, block: block, initGlobals: initGlobals)
 	module.appendOp(block, op: TargetOp.callDirect(UserEntryName.toByteArray()))
 	appendGlobalCleanupGate(module, block: block, initGlobals: initGlobals)
@@ -338,6 +349,12 @@ function prependEntryStub(module TargetModule, checkLeaks bool, initGlobals bool
 	// The argument goes in RCX and the result comes back in R8: `__mm_leak_check` is an ordinary
 	// Maxon-ABI function (arg 0 = rcx, primary return = r8), not a Win64 import.
 	appendLeakGate(module, block: block, checkLeaks: checkLeaks)
+
+	// ⚠ AFTER the leak gate, and it must be: `__ds_shutdown` clears the segment's producer-alive flag,
+	// and the leak check is the last thing that can still free a box — so the trace's final events happen
+	// above this line. It preserves nothing because there is nothing to preserve: R8 holds the exit code
+	// and this call, like `__ds_init`, is a bare void one that never touches it.
+	appendDebugStreamCall(module, block: block, debugStream: debugStream, callee: DsShutdownName)
 
 	module.appendOp(block, op: TargetOp.movReg32Reg32(x64PhysReg(X64Register.rcx), srcReg: x64PhysReg(X64Register.r8)))
 	module.appendOp(block, op: TargetOp.iatCall(iatSlotIndex(IatSlot.ExitProcess)))
@@ -366,6 +383,15 @@ end 'appendLeakGate'
 // stubs, and the FIRST thing after the runtime init so a global is live for the whole of user code.
 // `__module_init` takes no argument and returns nothing; there is no live value to preserve across it
 // (`main` has not run), so it is a bare call. Emitted only for a program that has one (`initGlobals`).
+// The producer's two bare calls — attach and detach — emitted only into a `--debugstream` build. One
+// function for both because they are one shape and one gate: a stub built without the flag is
+// byte-identical to what it was before this file learned the flag existed.
+function appendDebugStreamCall(module TargetModule, block IrBlock, debugStream bool, callee ByteArray)
+	if debugStream 'tracedBuild'
+		module.appendOp(block, op: TargetOp.callDirect(callee))
+	end 'tracedBuild'
+end 'appendDebugStreamCall'
+
 function appendModuleInitCall(module TargetModule, block IrBlock, initGlobals bool)
 	if initGlobals 'moduleInit'
 		module.appendOp(block, op: TargetOp.callDirect(ModuleInitName))

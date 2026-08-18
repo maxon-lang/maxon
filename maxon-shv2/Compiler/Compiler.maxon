@@ -33,7 +33,7 @@
 // Every phase timed below and in the passes/backend is a disjoint sub-interval of the
 // wall time measured here, so they sum to at most the total, and whatever they leave
 // over is printed as `unattributed` rather than absorbed — see CompileTimings.
-export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false) returns FilePath throws CompileError
+export function compile(inputPaths MaxonSourcePathArray, target Target, outputOverride String = "", emitIr bool = false, metricsPath String = "", runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool = false, debugStream bool = false) returns FilePath throws CompileError
 	// Every trace event this compile emits is attributed to this unit. Derived from the project ROOT
 	// — through the same `commonAncestorOf` the project itself is rooted at below, rather than from a
 	// second reading of the command line — so the pre-project `load` bracket and everything after it
@@ -56,7 +56,7 @@ export function compile(inputPaths MaxonSourcePathArray, target Target, outputOv
 	// `verifyWarmRebuild` drives `compileToCodeResult` directly and so does not pass through here. It needs
 	// no drain of its own for the reason this function's header already gives for the TOTAL: it is the only
 	// other whole-build entry, and a throw out of it ends the process with nothing left to mis-nest.
-	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, unit: unit) otherwise (e) 'compileFailed'
+	return try compileMeasured(inputPaths, target: target, outputOverride: outputOverride, emitIr: emitIr, metricsPath: metricsPath, runtimeIrNames: runtimeIrNames, asyncTrace: asyncTrace, debugStream: debugStream, unit: unit) otherwise (e) 'compileFailed'
 		closeOpenPhaseSpans(unit)
 		throw e
 	end 'compileFailed'
@@ -65,13 +65,14 @@ end 'compile'
 // The build itself, from the whole-compile probe to the timing report — everything `compile` measures. It
 // is a separate function for the single reason its caller states: one failure path to hang the trace-span
 // drain on, rather than one per `try` in this body.
-function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, unit TraceUnit) returns FilePath throws CompileError
+function compileMeasured(inputPaths MaxonSourcePathArray, target Target, outputOverride String, emitIr bool, metricsPath String, runtimeIrNames RuntimeFunctionNameArray, asyncTrace bool, debugStream bool, unit TraceUnit) returns FilePath throws CompileError
 	let whole = PhaseProbe.begin(compilePhaseName(CompilePhase.load), unit: unit)
 
 	// Loading starts the instant the compile does, so `whole` is also the `load` phase's
 	// probe — a second set of reads here would sample the same instant.
 	var project = try loadProject(inputPaths, target: target)
 	project.asyncTrace = asyncTrace
+	project.debugStream = debugStream
 	recordPhase(project, phase: CompilePhase.load, probe: whole)
 
 	// ⭐ RESOLVED BEFORE THE PIPELINE, AND THAT ORDER IS THE WHOLE POINT: the previous build's
@@ -615,6 +616,14 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 			declaredGlobals.push(entry)
 		end 'each'
 	end 'clockGlobals'
+	// The DebugStream producer's six `.data` slots ride the FLAG rather than a usage bit — nothing in a
+	// program can ask for a trace, so `--debugstream` is the only thing that can. The condition is asked of
+	// `buildCarriesDebugStream`, which is where the four parts that must agree about it read it from.
+	if buildCarriesDebugStream(project, usage: usage) 'debugStreamGlobals'
+		for entry in debugStreamRuntimeGlobals() 'each'
+			declaredGlobals.push(entry)
+		end 'each'
+	end 'debugStreamGlobals'
 	project.globalData.layOut(declaredGlobals)
 	recordPhase(project, phase: CompilePhase.layOutGlobals, probe: layoutProbe)
 
@@ -656,6 +665,15 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// ONE bracket over every install below, not one per installer: each is a slice of a single runtime
 	// floor gated on its own usage bit, and the question a reader has is what CARRYING THE RUNTIME cost
 	// this program (see `CompilePhase.installRuntime`).
+	// ⭐ **ARM THE MODULE BEFORE THE FIRST INSTALL.** Every runtime builder below asks the module whether
+	// this build carries the DebugStream producer (see `IrModule.debugStream`), so it is set once here — at
+	// the seam where lowering has finished and nothing has been installed yet — rather than threaded
+	// through forty signatures that could each forget it. It is the FULL condition and not the bare flag,
+	// so the field means what its own header says: a heapless traced build installs no producer, and a
+	// module claiming one it does not have is what would put a `globalAddr __ds_base` into a build whose
+	// `.data` never laid that slot out.
+	pipeline.stdModule.debugStream = buildCarriesDebugStream(project, usage: usage)
+
 	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
 
 	// AFTER the pipeline: the runtime is already lowered Std, so it must not be re-lowered, and it
@@ -839,6 +857,20 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// module CALLS. See `Runtime/EnumLookupRuntime.maxon` for why this one member of the enum reflection
 	// surface is a function while its four siblings expand in the parser.
 	installEnumLookupHelpers(pipeline.stdModule, project: project, needed: usage.neededEnumLookups)
+
+	// ⭐⭐ **THE DEBUGSTREAM PRODUCER, INSTALLED LAST OF EVERYTHING, BECAUSE IT RENDERS THE TAG BLOB.**
+	// `MXDS_TAGS` is the table the monitor resolves a 16-bit tag index against, and it is written ONCE, from
+	// whatever `globalData` holds at that moment — so every site that can intern a name must have run
+	// first. Two do, and they are far apart: the lowering's `__mm_alloc` arm (a user box's own type name)
+	// and the synthesized CLONERS just above (a `__clone_<T>` allocating a fresh box of the same type). An
+	// install placed with the MM family, where it reads naturally, would render the blob before the cloners
+	// existed and every cloned box would decode as `tag=<n>` against a table that had no such entry.
+	//
+	// ⚠ Gated on the module's own armed flag — `buildCarriesDebugStream`, set above — rather than on a
+	// second spelling of the same conjunction.
+	if pipeline.stdModule.debugStream 'installDebugStream'
+		installDebugStreamRuntime(pipeline.stdModule, globalData: project.globalData)
+	end 'installDebugStream'
 
 	recordPhase(project, phase: CompilePhase.synthesizeBodies, probe: synthesizeProbe)
 

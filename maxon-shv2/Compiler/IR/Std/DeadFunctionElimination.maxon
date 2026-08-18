@@ -239,6 +239,13 @@ function seedRoots(globalData GlobalDataTable, project Project, index FunctionNa
 	try markCompilerOwnedRoot(GlobalCleanupName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(MmLeakCheckName, project: project, index: index, reached: reached, worklist: worklist)
 	try markCompilerOwnedRoot(GtEnqueueName, project: project, index: index, reached: reached, worklist: worklist)
+	// ⭐ **THE DEBUGSTREAM PRODUCER'S TWO ENTRY-STUB CALLEES (O3).** `__ds_init` and `__ds_shutdown` are
+	// called from `mrt_start` and from nowhere else — exactly `__mm_leak_check`'s position — so nothing in
+	// the Std module reaches them and the prune would drop both, leaving the stub calling functions that
+	// were never laid out. Rooting an ABSENT name is a no-op (`markCompilerOwnedRoot` returns when the
+	// module defines none), so an untraced build is unaffected: it installs neither and roots neither.
+	try markCompilerOwnedRoot(DsInitName, project: project, index: index, reached: reached, worklist: worklist)
+	try markCompilerOwnedRoot(DsShutdownName, project: project, index: index, reached: reached, worklist: worklist)
 
 	for reloc in globalData.pendingRdataRelocs 'eachRdataSlot'
 		markLiveFunction(reloc.funcName, byName: index.byName, reached: reached, worklist: worklist)
@@ -347,6 +354,8 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		osWriteStderr then break 'op'
 		// A promoted record's address names a frame slot, not a function — it keeps nothing live.
 		stackRecordAddr then break 'op'
+		// O3: the three DebugStream host primitives call Win32 IMPORTS, so none keeps a Maxon function live.
+		osOpenNamedSegment to osTickCountMs then break 'op'
 	end 'op'
 end 'markCalleeOf'
 

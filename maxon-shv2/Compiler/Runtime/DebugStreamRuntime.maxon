@@ -1,0 +1,822 @@
+// Runtime/DebugStreamRuntime.maxon — the DebugStream PRODUCER (Workstream O3).
+//
+// ⭐⭐ **THE SPLIT IS THE WHOLE DESIGN, AND IT IS NOT SHV2'S TO CHOOSE.** `maxon monitor` — the C#
+// bootstrap's `DebugStreamMonitor` / `DebugStreamDecoder` — is the CONSUMER: it creates the shared
+// segment, spawns the target with `MAXON_DEBUGSTREAM` naming it, and decodes and prints every event.
+// This file is the PRODUCER, and there is no decoder anywhere in shv2. Two processes, one wire format,
+// and the format is FROZEN: every constant below is read off the reference
+// (`maxon-sharp/Compiler/MLIR/Runtime/RuntimeEmitter.cs`) rather than chosen here, because a producer
+// that disagrees with its consumer about a shift does not fail to build — it makes the trace LIE.
+//
+// ⭐ **WHAT IT IS FOR.** `specs-shv2/mm-trace.md` asserts a program's ALLOCATION BEHAVIOUR: not what it
+// computed, but how many records it allocated and what its refcount column did. No exit code can say
+// that. A `StringBuilder` that pays one `ByteArray` per `append` computes exactly the right answer, and
+// the only instrument that can see the regression is a trace of the memory manager itself.
+//
+// ⭐ **THE GATING RULE, FROM COMMIT 1 (PLAN.md's O3 box).** Two levels, and both are load-bearing:
+//   • **COMPILE TIME — `--debugstream` off implies ZERO INSTRUCTIONS.** Not a branch that is never
+//     taken: no call, no store, no header word. A normal build's emitted code is byte-identical to what
+//     it was before this file existed, which is what keeps the suite's committed `.test` fragment
+//     goldens from drifting. Every emitter below is a no-op when `debugStream` is false, exactly as
+//     `GtRuntime.emitGtTraceLine` is when the build is untraced, so each call site reads as an
+//     unconditional statement and the gating lives in one place.
+//   • **RUN TIME — `__ds_base == 0` implies an INLINE BAIL BEFORE ANY CALL.** A `--debugstream` binary
+//     run with no monitor attached pays one load and one branch per event site, never a call. The
+//     reference pays two CALLs before its runtime-off check; that wart is not reproduced.
+//
+// ⭐ **THE RING PROTOCOL, IN THREE MOMENTS — because two of them are one moment in the obvious design,
+// and that design fabricates events.**
+//   1. RESERVE (`__ds_reserve`, under the ring lock). Claim the bytes, write the entry HEADER with the
+//      commit bit CLEAR, advance `write_cursor`, drop the lock. The entry is now VISIBLE to the
+//      monitor. Its payload is still whatever the ring last held there.
+//   2. PAYLOAD (the caller, outside the lock).
+//   3. COMMIT (`__ds_commit`). Set the commit bit. The entry is now READABLE, and only now.
+// The monitor decodes nothing — and advances past nothing — that does not carry the commit bit. Before
+// that bit existed the reference measured 0 events decoded, 283221 dropped and 5290 abandoned, every
+// number of it a fiction. `emitDsEntry` below is the ONLY caller of `__ds_reserve` and it always pairs
+// the reserve with a commit, so the pairing is the only shape a call site can have rather than a
+// convention each one is trusted to follow.
+//
+// ⚠⚠ **THE LOCK IS A CRITICAL_SECTION, NOT THE REFERENCE'S TICKET SPINLOCK, AND THAT IS A DIVERGENCE
+// WITH A REASON.** A ticket lock is `atomic_xadd` twice, and the Std tier has NO ATOMIC OP AT ALL — not
+// one, in the whole dialect. shv2 already owns a real OS mutex (`osLockInit`/`osLockEnter`/`osLockLeave`,
+// the IOCP substrate's `__io_lock`), which serializes the critical section exactly as the ticket lock
+// does and needs no vocabulary this tier does not have. Reproducing the reference's spin would mean
+// adding atomics to the IR for one debug-only producer, which is the "a COPY needs a reason exactly as
+// much as a DIVERGENCE does" rule pointing the other way.
+//
+// ⚠ **THE FLAG ALONE DOES NOT DECIDE WHETHER A BUILD CARRIES THIS: `buildCarriesDebugStream` DOES**, and
+// it is `--debugstream` AND `usesHeap`. Four parts must agree about that answer and they are in three
+// files, so it is asked rather than re-spelled — see that function for the reason `usesHeap` is half of
+// it and for what a drift between the four would cost.
+
+// ============================================================================
+// The wire contract. FROZEN — see the header. Every constant is the reference's.
+// ============================================================================
+
+// `"MXDBSTR\0"` — the segment's first word, written by the monitor when it creates the segment and
+// checked here before this producer writes a byte. It is what tells a DebugStream ring from somebody
+// else's shared memory that happens to be named the same thing.
+let DsMagic = 0x4D58444253545200
+
+// ⭐⭐ **THE WIRE SCHEMA VERSION — the one number the two ends must agree on, and the only thing between
+// a mismatch and a trace that LIES.** v2 introduced the entry COMMIT BIT, which was not an additive
+// change: under v1 the flags byte was always zero and "below `write_cursor`" MEANT readable, so the two
+// schemas disagree about what an entry with flags == 0 IS. Neither end can tell the other's schema by
+// looking at the ring, so each ANNOUNCES its version and refuses to speak across a mismatch. Bump this
+// only in lockstep with the reference's `DsVersion`.
+let DsSchemaVersion = 2
+
+// The segment's three regions. The monitor CREATES the section exactly `DsSharedMemoryBytes` long and
+// this producer MAPS it exactly that long, in two different languages — and a `MapViewOfFile` longer
+// than the section returns NULL, so a disagreement here does not fail to build: the trace simply never
+// appears. ONE definition, derived from the three parts rather than written out.
+//
+// ⚠ `DsTagReserveBytes` is a region NOTHING WRITES: it held v1's in-band tag table, and the interned
+// names now live in the executable's own `.symtab` (see the MXDS_TAGS blob below). It stays part of the
+// layout because both processes must agree on the mapping LENGTH, and shrinking it buys nothing.
+let DsHeaderBytes = 128
+let DsRingBytes = 2097152
+let DsTagReserveBytes = 65536
+export let DsSharedMemoryBytes = DsHeaderBytes + DsRingBytes + DsTagReserveBytes
+
+// Segment-header field offsets, from the base of the mapping.
+let DsOffMagic = 0 as ByteOffset
+// The MONITOR's schema version, written when it creates the segment.
+let DsOffVersion = 8 as ByteOffset
+let DsOffBufferSize = 16 as ByteOffset
+let DsOffWriteCursor = 24 as ByteOffset
+let DsOffReadCursor = 32 as ByteOffset
+let DsOffFlags = 40 as ByteOffset
+let DsOffStartTimestamp = 56 as ByteOffset
+let DsOffTotalEvents = 64 as ByteOffset
+let DsOffDroppedEvents = 72 as ByteOffset
+let DsOffPeakUsed = 96 as ByteOffset
+// ⭐ The PRODUCER's schema version. `DsOffVersion` above is the MONITOR's — the two travel in opposite
+// directions, because it takes both for each end to check the other. A producer too old to know this slot
+// exists leaves it at zero, and "wrote entries but never announced a version" is precisely the signature
+// of one.
+let DsOffProducerVersion = 104 as ByteOffset
+
+// Header flags bit 0 — a producer is attached and writing.
+let DsFlagProducerAlive = 1
+
+// ============================================================================
+// Entry header: ONE packed u64.
+//   [0:7]   event_type
+//   [8:15]  flags        — bit 0 is THE COMMIT BIT
+//   [16:31] entry_size   (total bytes, header included, 8-byte aligned)
+//   [32:63] timestamp_delta (ms since the header's start_timestamp)
+// ============================================================================
+let DsEntryFlagsShift = 8
+let DsEntrySizeShift = 16
+let DsEntryTimestampShift = 32
+
+// ⭐⭐ **THE COMMIT BIT, ALREADY POSITIONED INSIDE THE PACKED HEADER WORD.** An entry below
+// `write_cursor` is PRESENT; only an entry carrying this bit is READABLE. See the ring-protocol note in
+// this file's header for what happens without it.
+let DsEntryCommittedBit = 256
+
+// A PADDING entry fills the ring's tail when the next real entry would straddle the wrap. It is written
+// ENTIRELY inside `__ds_reserve`, has no payload and no second writer — so it is BORN COMMITTED: nothing
+// would ever come back to set its bit, and a monitor that refuses to advance past an uncommitted entry
+// would stall on it forever. These are the low 16 bits of its header, event_type | flags.
+//
+// Its event_type is the reference's, exactly like the mm codes below — named rather than left a literal
+// beside four named siblings, because it is the same kind of wire fact they are.
+let DsEvPadding = 255
+let DsPaddingHeaderTypeAndFlags = DsEvPadding + DsEntryCommittedBit
+
+// ============================================================================
+// The mm event family. Codes 0x01-0x04; every one is 24 bytes with the same shape.
+// ============================================================================
+export let DsEvMmAlloc = 1
+export let DsEvMmFree = 2
+export let DsEvMmIncref = 3
+export let DsEvMmDecref = 4
+
+// Offsets from the START of the entry, so the header's 8 bytes are included and an emitter writes
+// straight through the pointer `__ds_reserve` handed back.
+let DsMmOffAllocId = 8 as ByteOffset
+// `tag_index(2) | scope_len(2) | value(4)` — one word. `value` is the allocation SIZE for `mm_alloc` and
+// the new OWNER COUNT for the refcount family; `scope_len` is 0 (this producer emits no scope names).
+let DsMmOffPacked = 16 as ByteOffset
+let DsMmValueShift = 32
+
+// Header + alloc_id(8) + packed word(8). Already 8-byte aligned, so nothing rounds it.
+let DsMmEntryBytes = 24
+
+// ⭐ **THE `packed_id` THE MM RUNTIME CARRIES IN EVERY BOX HEADER: `alloc_id << 16 | tag_index`.**
+// `mm_incref`/`mm_decref`/`mm_free` know only a POINTER — there is no tag and no id to be had at those
+// call sites — so both facts are stamped into the box by `__mm_alloc` and read back out here. The mask is
+// what bounds a tag index to the 16 bits the wire gives it.
+export let DsMmPackedIdShift = 16
+export let DsMmTagIndexMask = 65535
+
+// ============================================================================
+// The MXDS_TAGS name blob — how a 16-bit tag index becomes a TYPE NAME.
+// ============================================================================
+//
+// ⭐ **IT TRAVELS IN THE EXECUTABLE, NOT IN THE RING.** The monitor scans the PE's `.symtab` section for
+// this magic and decodes the packed table behind it, so no name is ever built at run time and an event
+// stays 24 fixed bytes. shv2's PE writer already emits a `.symtab` whenever `CodeResult.symdata` is
+// non-empty; filling that array is the whole of the producer's side.
+//
+// Format: `[magic(10)][count:u16][len0:u16][name0]…[lenN:u16][nameN]`, little-endian.
+// ⚠ **INDEX 0 MEANS "NO NAME"** — the monitor's own rule (`ResolveInternedName`), which is why
+// `MmTag.Untagged` occupies it and why its blob entry is written EMPTY rather than with its case name.
+let DsTagBlobMagic = b"MXDS_TAGS\0"
+
+// The width of EVERY count and length field in the blob — `writeWord`'s width, named here because it is
+// what the MONITOR steps by when it parses the table back out of the executable. It is stated for the
+// refusal message and for the reader; the bytes themselves come from `writeWord`, so there is no second
+// splitting loop to drift from it.
+let DsNameBlobFieldBytes = 2
+let DsNameBlobFieldMax = 65535
+
+// ============================================================================
+// The FIXED tag roster — every allocation the RUNTIME ITSELF makes.
+// ============================================================================
+//
+// ⭐ **`.ordinal` IS THE WIRE INDEX AND `.name` IS THE DISPLAYED NAME, so a tag is ONE fact.** A separate
+// display table beside the enum would be the second copy this project keeps finding drifted; here a case
+// added in the wrong place moves an index the blob is generated from, so both ends move together.
+//
+// ⚠ **APPEND ONLY, AND `Untagged` STAYS AT ZERO.** The blob is generated from this order, so a reorder
+// re-points every tag in the trace — and index 0 is the monitor's "no name", not a case like the others.
+//
+// ⚠ **THE NAMES DESCRIBE THE BOX, NOT THE SURFACE TYPE, AND THAT IS DELIBERATE.** A runtime chunk
+// allocating an array's element buffer does not know the element type — nothing at that tier does — so
+// `ElementBuffer` is the honest answer where `ByteArray` would be a guess. USER type names are not in
+// this roster at all: they are interned dynamically off the allocation's own result type (see
+// `userTagIndex` and `LowerMaxonToStd`'s `__mm_alloc` arm), which is where `StringBuilder`
+// comes from.
+export enum MmTag
+	Untagged
+	StringRecord
+	ArrayRecord
+	ElementBuffer
+	CString
+	ListRecord
+	ListNode
+	CursorRecord
+	FileBox
+	DirectoryBox
+	// ⭐ **THE THREE BOXES THE LOWERING CANNOT NAME FROM A TYPE, so the PARSER names them** — through the
+	// `Project.allocTagSites` SIDE TABLE, keyed by the `__mm_alloc` op, never through the value's type (see
+	// that field for what happened when the label rode in the type slot). Each is a compiler-minted heap
+	// record with no user type behind it: the byte run an interpolated part is rendered into, the
+	// environment a closure's captures live in, and the one-slot cell a reassigned by-reference parameter is
+	// promoted into. All three arrive at the lowering tagged `integer` with no name id, which is why an
+	// INDEX-0 `Untagged` was what a trace used to show for them — an allocation the instrument could not
+	// name.
+	InterpolationScratch
+	ClosureEnv
+	ParameterCell
+end 'MmTag'
+
+// The wire index of a fixed roster tag — the ordinal, named once so no call site spells `.ordinal` at a
+// place where the reader would have to know that the ordinal IS the index.
+export function mmTagIndex(tag MmTag) returns ParsedInt
+	return tag.ordinal as ParsedInt
+end 'mmTagIndex'
+
+// ============================================================================
+// The tag table's FORMAT — the roster, the blob, and the one door a user name comes through.
+// ============================================================================
+
+export typealias MmTagIndexMap = Map with (String, MachineWord)
+
+// ⭐ **THE COMPILE-TIME TAG TABLE LIVES ON `GlobalDataTable`, NOT HERE, and that is deliberate.** It is
+// the tree's one shared, aliased, mutable carrier of "what goes into the emitted sections" — the same
+// object `.rdata` payloads and the `.data` layout are registered into — so it is already reachable both
+// from the LOWERING that interns a user type's name and from the BACKEND that renders the blob. A second
+// carrier threaded alongside it would be a second thing every one of those sites had to be given.
+//
+// What lives here is the FORMAT: the roster the table is seeded with, and the bytes it renders to.
+
+// The names the table starts with, in wire order. Index 0 is the monitor's "no name" and carries an EMPTY
+// entry rather than the `Untagged` case's own spelling — which would otherwise print as a type name for
+// an allocation that has none. The rule is the CONSUMER's (`ResolveInternedName` skips index 0), asked
+// here rather than restated as a second convention.
+export function mmTagRosterNames() returns StringArray
+	var names = StringArray.create()
+	for tag in MmTag.allCases 'each'
+		names.push("" if tag == MmTag.Untagged else tag.name)
+	end 'each'
+	return names
+end 'mmTagRosterNames'
+
+// ⭐ The `.symtab` payload: the magic, the count, then each name length-prefixed. Asked once, by
+// `installDebugStreamRuntime`, after every interning site has run.
+//
+// ⚠ **THE FIELDS ARE `writeWord`, WHICH IS ALREADY THE TREE'S ONE 2-BYTE LITTLE-ENDIAN WRITER** (the PE
+// writer's section-table and COFF-symbol fields are the same primitive). A second byte-splitting loop here
+// would be that fact written twice, and the failure mode of a drift between them is not a build error: it
+// would slide the monitor's parse one byte and turn every name after the first into garbage.
+export function debugStreamTagBlob(names StringArray) returns ByteArray
+	var blob = ByteArray.create()
+	blob.append(DsTagBlobMagic)
+	appendNameBlobField(blob, value: names.count(), what: "the name count")
+	for name in names 'each'
+		let bytes = name.toByteArray()
+		appendNameBlobField(blob, value: bytes.count(), what: "the UTF-8 length of name '{name}'")
+		blob.append(bytes)
+	end 'each'
+	return blob
+end 'debugStreamTagBlob'
+
+// ⭐ The tag index for a USER type's box. `Untagged` when this build carries no producer, so an untraced
+// build never grows a table it will not render — and the ONE door a dynamic name comes through, so
+// "which spelling does a type get in the trace" is answered in a single place.
+export function userTagIndex(globalData GlobalDataTable, name String, debugStream bool) returns ParsedInt
+	if not debugStream 'untracedBuild'
+		return mmTagIndex(MmTag.Untagged)
+	end 'untracedBuild'
+
+	return globalData.internDebugStreamTag(name)
+end 'userTagIndex'
+
+// One blob field. BOTH fields in the format — the table's count and each name's length — are the same
+// 2-byte little-endian word, so they are written by the same call and cannot come to disagree about width.
+//
+// ⚠ **AND IT IS THE ONE BOUND CHECK, WHICH IS WHY THE INTERNER HAS NONE.** A count that will not fit is
+// exactly a tag index that will not fit, so a second test beside the minter would be the same fact written
+// twice. It REFUSES rather than truncating: `writeWord` would silently keep the low two bytes, which does
+// not lose one name — it desynchronises the blob and renames every allocation after the offender.
+function appendNameBlobField(blob ByteArray, value ElementCount, what String)
+	if value > DsNameBlobFieldMax 'doesNotFit'
+		panic("DebugStream tag blob: {what} is {value}, which does not fit its {DsNameBlobFieldBytes}-byte MXDS_TAGS field (max {DsNameBlobFieldMax})")
+	end 'doesNotFit'
+
+	writeWord(blob, value: value)
+end 'appendNameBlobField'
+
+// ============================================================================
+// The emitted entry points and their `.data` slots.
+// ============================================================================
+
+// ⚠ **THE `__ds_` PREFIX IS THE FAMILY'S ONLY MARKING, AND THERE IS DELIBERATELY NO `isDebugStreamRuntimeCallee`
+// PREDICATE TO GO WITH IT.** Every other runtime family has one (`isRuntimeCallee`, `isGtRuntimeCallee`,
+// `isClockRuntimeCallee`) because a program's SOURCE can reach that family and the usage scan must notice.
+// Nothing in a program can ask for a trace — `--debugstream` is the only thing that installs this family,
+// and its two entry points are called from the entry stub alone — so a predicate here would be vocabulary
+// with no consumer, which is the rule `MmRuntime`'s header opens with. The `__` prefix still does its own
+// job: no user name can collide, and `isCompilerInternalCallee` routes past the user-function checks.
+//
+// ⚠ NOT `__mm_`-prefixed, so `isRuntimeCallee`'s heap test is unaffected — this family allocates nothing
+// through the MM layer, and a program that carries it is one the flag already decided about.
+
+export let DsInitName = b"__ds_init"
+export let DsShutdownName = b"__ds_shutdown"
+let DsReserveName = b"__ds_reserve"
+let DsCommitName = b"__ds_commit"
+let DsEmitMmName = b"__ds_emit_mm"
+
+// The mapped segment's base, or 0 when no monitor is attached. ⭐ **IT IS THE RUN-TIME GATE, AND IT IS
+// WRITTEN LAST BY `__ds_init` ON PURPOSE**: every bail on the way through init simply leaves it at its
+// `.data` zero, so there is no "un-arm" path to get wrong and a partially-initialised producer cannot
+// exist.
+let DsBaseLabel = b"__ds_base"
+let DsBufSizeLabel = b"__ds_buf_size"
+// `buf_size - 1`, cached so the ring's modulo is one AND.
+let DsBufMaskLabel = b"__ds_buf_mask"
+let DsStartTsLabel = b"__ds_start_ts"
+// A POINTER to the slab-allocated CRITICAL_SECTION, exactly as `GtRuntime`'s `__io_lock` is a pointer to
+// its own: `InitializeCriticalSection` needs a valid region to initialize in place, and a `.data` slot is
+// one machine word.
+let DsLockLabel = b"__ds_lock"
+// The monotonic allocation id `__mm_alloc` stamps into each box header. Starts at 0 and pre-increments,
+// so the first allocation is #1 and a zero packed id can only mean "never stamped".
+export let DsAllocIdLabel = b"__mm_alloc_id"
+
+// The bytes `__ds_init` asks `__slab_alloc` for: the CRITICAL_SECTION (5 words, matching `GtRuntime`'s
+// own reading of the structure) and the scratch buffer `GetEnvironmentVariableA` writes the segment name
+// into. Both are one-shot and never reclaimed — the same arrangement `__io_lock`'s region has, and the
+// bump allocator has no free list to return them to.
+let DsCriticalSectionBytes = 40
+// The monitor names its segments `maxon_ds_<pid>_<8 hex>`; 512 bytes is two orders of magnitude of head
+// room and one slab bump.
+let DsEnvBufferBytes = 512
+
+// The `.data` slots the producer owns, laid out only for a `--debugstream` build — so every other
+// program's `.data` image is unchanged. Ordinary i64 slots in every respect, exactly like MmRuntime's
+// `runtimeGlobals()` and GtRuntime's `gtRuntimeGlobals()`.
+export function debugStreamRuntimeGlobals() returns DataSectionEntryArray
+	var out = DataSectionEntryArray.create()
+	out.push(DataSectionEntry.create(String.from(DsBaseLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(DsBufSizeLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(DsBufMaskLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(DsStartTsLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(DsLockLabel), valueType: StdType.i64, value: 0))
+	out.push(DataSectionEntry.create(String.from(DsAllocIdLabel), valueType: StdType.i64, value: 0))
+	return out
+end 'debugStreamRuntimeGlobals'
+
+// The activation environment variable, whose VALUE names the ring segment. Stated ONCE: the monitor sets
+// this exact variable, and a drift that left the producer looking at the wrong name would not fail to
+// build — the trace would simply never appear.
+let DsActivationEnvVar = "MAXON_DEBUGSTREAM"
+let DsEnvNameRdataPrefix = "__ds_env_"
+
+// ⭐⭐ **DOES THIS BUILD CARRY THE PRODUCER? ONE ANSWER, FOR EVERY PART THAT MUST AGREE.** Four things ride
+// this decision and they are in three files: the six `.data` slots, this install, the module flag every
+// runtime builder reads, and the entry stub's `__ds_init`/`__ds_shutdown` calls. Spelled per site, the
+// conjunction would be one fact written four times — and the failure mode of a drift is not a wrong
+// number: a stub that calls an `__ds_init` nothing installed fails to link, and slots laid out for a
+// producer that was never built are `.data` a program pays for and never touches.
+//
+// ⚠ **`usesHeap` IS HALF OF IT, AND NOT A SHORTCUT.** Every event this producer emits is an MM event, so a
+// program with no allocator has none to emit — and the init path itself needs `__slab_alloc` for its two
+// scratch regions. A `--debugstream` build of a heapless program therefore carries nothing and traces
+// nothing, which is the correct answer rather than an omission.
+export function buildCarriesDebugStream(project Project, usage RuntimeUsage) returns bool
+	return project.debugStream and usage.usesHeap
+end 'buildCarriesDebugStream'
+
+// Install the producer into the lowered Std module. Appended AFTER the pipeline like every other runtime
+// install, so it is never re-optimized, and already-lowered Std so it still flows through the whole
+// backend. Every interning site has finished writing `globalData`'s tag table by the time this runs — the
+// blob it renders is what the monitor reads names out of.
+export function installDebugStreamRuntime(module StdModule, globalData GlobalDataTable)
+	let envNameLabel = globalData.registerRdataConstant(DsEnvNameRdataPrefix, bytes: cString(DsActivationEnvVar))
+	globalData.symdataImage = debugStreamTagBlob(globalData.debugStreamTagNames)
+
+	buildDsInit(module, envNameLabel: envNameLabel.toByteArray())
+	buildDsShutdown(module)
+	buildDsReserve(module)
+	buildDsCommit(module)
+	buildDsEmitMm(module)
+end 'installDebugStreamRuntime'
+
+// A NUL-terminated C string's bytes. `GetEnvironmentVariableA` and `OpenFileMappingA` both take one, and
+// the terminator is the whole difference from `String.toByteArray()`.
+function cString(text String) returns ByteArray
+	var bytes = text.toByteArray()
+	bytes.push(0)
+	return bytes
+end 'cString'
+
+// ============================================================================
+// `__ds_init()` — attach, or stay dark.
+// ============================================================================
+//
+// ⭐ **THE HANDSHAKE IS TWO VERSIONS TRAVELLING IN OPPOSITE DIRECTIONS, AND THE ORDER OF THE TWO STEPS IS
+// ARGUED RATHER THAN INCIDENTAL.** This producer ANNOUNCES its schema (`DsOffProducerVersion`) BEFORE it
+// checks the monitor's (`DsOffVersion`), because a producer that refuses an incompatible monitor and says
+// nothing is indistinguishable, to that monitor, from a binary built without `--debugstream` at all: both
+// are an empty ring. Announcing first means a reader of any version can always see what this binary
+// speaks, so the mismatch is loud from whichever side notices it. It is safe to write there and nowhere
+// earlier because the magic check above is what established that this segment is a DebugStream ring and
+// not somebody else's shared memory.
+//
+// ⚠ **A MISMATCHED MONITOR GETS SILENCE, NOT AN APPROXIMATION.** A v1 monitor treats "below write_cursor"
+// as readable, so writing v2 entries into it hands it our UNCOMMITTED payloads — reintroducing, silently,
+// the exact torn read the commit bit closes. An empty trace is a visibly missing instrument; a wrong one
+// is not.
+function buildDsInit(module StdModule, envNameLabel ByteArray)
+	var func = IrFunction.createFromStd(DsInitName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var checkMagic = module.addBlock(func, label: b"checkMagic")
+	var checkVersion = module.addBlock(func, label: b"checkVersion")
+	var attach = module.addBlock(func, label: b"attach")
+	var dark = module.addBlock(func, label: b"dark")
+
+	// The two one-shot scratch regions. `__slab_alloc` hands back ZEROED memory (the allocator's zeroing
+	// contract), which is what lets the env lookup below need no "was it set?" branch: an absent variable
+	// leaves the buffer naming the EMPTY string, and `OpenFileMappingA("")` fails exactly as a missing
+	// segment does.
+	let lockSize = emitConst(module, block: entry, value: DsCriticalSectionBytes, ids: ids)
+	let lock = ids.mint()
+	module.appendOp(entry, op: StdOp.call(lock, callee: SlabAllocName, args: argsOf(lockSize)))
+	module.appendOp(entry, op: StdOp.osLockInit(lock))
+	let lockAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(lockAddr, label: DsLockLabel))
+	module.appendOp(entry, op: StdOp.storeIndirect(lockAddr, offset: 0, valueId: lock, valueType: StdType.i64))
+
+	let envBufSize = emitConst(module, block: entry, value: DsEnvBufferBytes, ids: ids)
+	let envBuf = ids.mint()
+	module.appendOp(entry, op: StdOp.call(envBuf, callee: SlabAllocName, args: argsOf(envBufSize)))
+	let envName = ids.mint()
+	module.appendOp(entry, op: StdOp.rdataAddr(envName, label: envNameLabel))
+	let handle = ids.mint()
+	module.appendOp(entry, op: StdOp.osOpenNamedSegment(handle, namePtrId: envName, bufPtrId: envBuf, bufLenId: envBufSize))
+	let segmentBytes = emitConst(module, block: entry, value: DsSharedMemoryBytes, ids: ids)
+	let base = ids.mint()
+	module.appendOp(entry, op: StdOp.osMapNamedSegment(base, handleId: handle, sizeId: segmentBytes))
+	// The section handle has done its job the moment the view exists; the VIEW keeps the pages alive.
+	// Closing a NULL handle is a harmless FALSE, which is why the failed-open path needs no arm here.
+	module.appendOp(entry, op: StdOp.osCloseHandle(handle))
+	let mapped = emitCmp(module, block: entry, a: base, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(mapped, thenBlockId: checkMagic.id, elseBlockId: dark.id))
+
+	// `base` is defined in `entry`, which dominates every block below it, so it is read directly rather
+	// than threaded as a block argument — ordinary SSA.
+	let magic = emitLoadField(module, block: checkMagic, record: base, offset: DsOffMagic, ids: ids)
+	let expectedMagic = emitConst(module, block: checkMagic, value: DsMagic, ids: ids)
+	let magicOk = emitCmp(module, block: checkMagic, a: magic, b: expectedMagic, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkMagic, op: StdOp.condBranch(magicOk, thenBlockId: checkVersion.id, elseBlockId: dark.id))
+
+	let ourVersion = emitConst(module, block: checkVersion, value: DsSchemaVersion, ids: ids)
+	module.appendOp(checkVersion, op: StdOp.storeIndirect(base, offset: DsOffProducerVersion, valueId: ourVersion, valueType: StdType.i64))
+	let monitorVersion = emitLoadField(module, block: checkVersion, record: base, offset: DsOffVersion, ids: ids)
+	let versionOk = emitCmp(module, block: checkVersion, a: monitorVersion, b: ourVersion, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(checkVersion, op: StdOp.condBranch(versionOk, thenBlockId: attach.id, elseBlockId: dark.id))
+
+	let bufSize = emitLoadField(module, block: attach, record: base, offset: DsOffBufferSize, ids: ids)
+	emitStoreGlobalWord(module, block: attach, label: DsBufSizeLabel, value: bufSize, ids: ids)
+	let one = emitConst(module, block: attach, value: 1, ids: ids)
+	let bufMask = emitBin(module, block: attach, a: bufSize, b: one, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreGlobalWord(module, block: attach, label: DsBufMaskLabel, value: bufMask, ids: ids)
+	let startTs = emitLoadField(module, block: attach, record: base, offset: DsOffStartTimestamp, ids: ids)
+	emitStoreGlobalWord(module, block: attach, label: DsStartTsLabel, value: startTs, ids: ids)
+	let alive = emitConst(module, block: attach, value: DsFlagProducerAlive, ids: ids)
+	module.appendOp(attach, op: StdOp.storeIndirect(base, offset: DsOffFlags, valueId: alive, valueType: StdType.i64))
+	// ⭐ ARMED LAST. Every store above must be in place before any event site's `__ds_base != 0` test can
+	// succeed, and this is the store that makes it succeed.
+	emitStoreGlobalWord(module, block: attach, label: DsBaseLabel, value: base, ids: ids)
+	module.setTerminator(attach, op: StdOp.retVoid)
+
+	// Nothing to un-do: `__ds_base` is still its `.data` zero, so the producer is dark by construction.
+	module.setTerminator(dark, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildDsInit'
+
+// `__ds_shutdown()` — clear `producer_alive`.
+//
+// ⚠ It does NOT clear the announced version, and does not unmap. The version is a fact about the BINARY
+// rather than about its liveness, and a monitor draining the ring of a producer that has already exited
+// still needs to know how to parse what it left. The view is dropped by process exit, which is the only
+// thing that happens after this call.
+function buildDsShutdown(module StdModule)
+	var func = IrFunction.createFromStd(DsShutdownName, returnType: StdReturnType.void, paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var clear = module.addBlock(func, label: b"clear")
+	var done = module.addBlock(func, label: b"done")
+
+	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
+	let attached = emitCmp(module, block: entry, a: base, b: emitConst(module, block: entry, value: 0, ids: ids), pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(attached, thenBlockId: clear.id, elseBlockId: done.id))
+
+	let zero = emitConst(module, block: clear, value: 0, ids: ids)
+	module.appendOp(clear, op: StdOp.storeIndirect(base, offset: DsOffFlags, valueId: zero, valueType: StdType.i64))
+	module.setTerminator(clear, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildDsShutdown'
+
+
+// A `.data` machine word, loaded / stored. `MmRuntime`'s existing readers hoist the `globalAddr` across a
+// load-then-store PAIR and are deliberately left as they are; these two are for the single accesses below,
+// where a hoist would only widen a live range. `globalAddr` is `isPure: true` and freely rematerializable,
+// so the allocator is free to fold two of them back together.
+function emitLoadGlobalWord(module StdModule, block IrBlock, label ByteArray, ids ValueMinter) returns ValueId
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+	let value = ids.mint()
+	module.appendOp(block, op: StdOp.loadIndirect(value, addrId: addr, offset: 0, valueType: StdType.i64))
+	return value
+end 'emitLoadGlobalWord'
+
+function emitStoreGlobalWord(module StdModule, block IrBlock, label ByteArray, value ValueId, ids ValueMinter)
+	let addr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(addr, label: label))
+	module.appendOp(block, op: StdOp.storeIndirect(addr, offset: 0, valueId: value, valueType: StdType.i64))
+end 'emitStoreGlobalWord'
+
+// `[base + offset] += 1` — the two ring counters the monitor's closing summary reads (`total_events`,
+// `dropped_events`). Both increments happen under the ring lock, which is why a plain read-modify-write is
+// the whole of it: this is `MmRuntime`'s own argument for its unlocked `__mm_alloc_count`, one level
+// stronger, because here the mutual exclusion is explicit rather than a property of the rung.
+function emitBumpSegmentCounter(module StdModule, block IrBlock, base ValueId, offset ByteOffset, ids ValueMinter)
+	let current = emitLoadField(module, block: block, record: base, offset: offset, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let raised = emitBin(module, block: block, a: current, b: one, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(block, op: StdOp.storeIndirect(base, offset: offset, valueId: raised, valueType: StdType.i64))
+end 'emitBumpSegmentCounter'
+
+// The address of ring offset `pos`: `base + DsHeaderBytes + pos`. The ring's bytes start immediately after
+// the 128-byte segment header, and that relationship is spelled here rather than at each of the two
+// writers — a padding entry and a real one address the ring the same way.
+function emitRingSlotAddr(module StdModule, block IrBlock, base ValueId, pos ValueId, ids ValueMinter) returns ValueId
+	let headerBytes = emitConst(module, block: block, value: DsHeaderBytes, ids: ids)
+	let ringBase = emitBin(module, block: block, a: base, b: headerBytes, opcode: StdBinOpcode.add, ids: ids)
+	return emitBin(module, block: block, a: ringBase, b: pos, opcode: StdBinOpcode.add, ids: ids)
+end 'emitRingSlotAddr'
+
+// `value << shift` — one field of a packed word, positioned. Four sites pack a field into an entry header
+// or an mm payload and every one of them is this.
+function emitShiftedField(module StdModule, block IrBlock, value ValueId, shift ParsedInt, ids ValueMinter) returns ValueId
+	let amount = emitConst(module, block: block, value: shift, ids: ids)
+	return emitBin(module, block: block, a: value, b: amount, opcode: StdBinOpcode.shl, ids: ids)
+end 'emitShiftedField'
+
+// `write_cursor & buf_mask` — the ring OFFSET the absolute cursor names. The mask is `buf_size - 1` and
+// the buffer is a power of two, which is what makes the modulo one AND.
+function emitRingPos(module StdModule, block IrBlock, base ValueId, ids ValueMinter) returns ValueId
+	let cursor = emitLoadField(module, block: block, record: base, offset: DsOffWriteCursor, ids: ids)
+	let mask = emitLoadGlobalWord(module, block: block, label: DsBufMaskLabel, ids: ids)
+	return emitBin(module, block: block, a: cursor, b: mask, opcode: StdBinOpcode.bitAnd, ids: ids)
+end 'emitRingPos'
+
+// `(write_cursor - read_cursor) + entrySize <= buf_size` — is there room? Asked TWICE by `__ds_reserve`
+// (before and after a wrap's padding), off freshly re-read cursors both times, so the two cannot come to
+// disagree about what "room" means. `fits` and `dropped` are the caller's blocks.
+function emitSpaceCheck(module StdModule, block IrBlock, base ValueId, entrySize ValueId, fits IrBlock, dropped IrBlock, ids ValueMinter)
+	let cursor = emitLoadField(module, block: block, record: base, offset: DsOffWriteCursor, ids: ids)
+	let reader = emitLoadField(module, block: block, record: base, offset: DsOffReadCursor, ids: ids)
+	let used = emitBin(module, block: block, a: cursor, b: reader, opcode: StdBinOpcode.sub, ids: ids)
+	let needed = emitBin(module, block: block, a: used, b: entrySize, opcode: StdBinOpcode.add, ids: ids)
+	let bufSize = emitLoadGlobalWord(module, block: block, label: DsBufSizeLabel, ids: ids)
+	let roomy = emitCmp(module, block: block, a: needed, b: bufSize, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(roomy, thenBlockId: fits.id, elseBlockId: dropped.id))
+end 'emitSpaceCheck'
+
+// ============================================================================
+// `__ds_reserve(eventType, entrySize) -> entry pointer, or 0 when the ring is full`
+// ============================================================================
+//
+// ⭐ **THE ENTRY IS NOT READABLE WHEN THIS RETURNS.** The header goes down with the commit bit CLEAR, the
+// cursor advances and the ring lock is released — all before the caller has written a byte of payload.
+// Publishing the cursor is what makes the entry VISIBLE; setting the commit bit, in `__ds_commit`, is what
+// makes it READABLE. The two are deliberately different moments, because the payload must be written
+// outside the lock.
+//
+// ⚠ **THERE IS NO DETACHED PATH HERE, AND THAT IS THE GATING RULE DOING ITS JOB.** The caller has already
+// tested `__ds_base` inline (see `emitMmEvent`), so a `--debugstream` binary with no monitor attached
+// never reaches this function and never pays a call. The reference's `__ds_reserve` re-asks that question
+// after two CALLs have already happened; this one does not have to.
+//
+// ⚠ **EVERY BLOCK BELOW RE-READS `write_cursor` FROM THE SEGMENT HEADER RATHER THAN THREADING IT.** That
+// is not a workaround for the Std tier having no block arguments — it is CORRECT, for the reason their
+// absence is survivable here: the whole function runs under the ring lock, so the header word cannot
+// change underneath it, and a re-read and a thread are the same value by construction. It is also what
+// lets the padding path publish its own advance through the ordinary cursor store instead of a second one.
+function buildDsReserve(module StdModule)
+	var func = IrFunction.createFromStd(DsReserveName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var raisePeak = module.addBlock(func, label: b"raisePeak")
+	var checkSpace = module.addBlock(func, label: b"checkSpace")
+	var checkWrap = module.addBlock(func, label: b"checkWrap")
+	var pad = module.addBlock(func, label: b"pad")
+	var recheck = module.addBlock(func, label: b"recheck")
+	var place = module.addBlock(func, label: b"place")
+	var full = module.addBlock(func, label: b"full")
+
+	emitParams(module, block: entry, count: 2)
+	let eventType = 0 as ValueId
+	let entrySize = 1 as ValueId
+
+	let base = emitLoadGlobalWord(module, block: entry, label: DsBaseLabel, ids: ids)
+	let lock = emitLoadGlobalWord(module, block: entry, label: DsLockLabel, ids: ids)
+	module.appendOp(entry, op: StdOp.osLockEnter(lock))
+
+	// PEAK first, because it is a fact about how full the ring GOT rather than about this entry: an event
+	// that is about to be dropped still pushed the high-water mark to where it is.
+	let cursor = emitLoadField(module, block: entry, record: base, offset: DsOffWriteCursor, ids: ids)
+	let reader = emitLoadField(module, block: entry, record: base, offset: DsOffReadCursor, ids: ids)
+	let used = emitBin(module, block: entry, a: cursor, b: reader, opcode: StdBinOpcode.sub, ids: ids)
+	let peak = emitLoadField(module, block: entry, record: base, offset: DsOffPeakUsed, ids: ids)
+	let higher = emitCmp(module, block: entry, a: used, b: peak, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(higher, thenBlockId: raisePeak.id, elseBlockId: checkSpace.id))
+
+	module.appendOp(raisePeak, op: StdOp.storeIndirect(base, offset: DsOffPeakUsed, valueId: used, valueType: StdType.i64))
+	module.setTerminator(raisePeak, op: StdOp.branch(checkSpace.id))
+
+	emitSpaceCheck(module, block: checkSpace, base: base, entrySize: entrySize, fits: checkWrap, dropped: full, ids: ids)
+
+	// Would this entry straddle the ring's wrap? `pos = cursor & mask`; if `pos + entry_size` runs past the
+	// ring's end, the tail is filled with a padding entry and the real one starts at ring offset 0.
+	let bufSize = emitLoadGlobalWord(module, block: checkWrap, label: DsBufSizeLabel, ids: ids)
+	let pos = emitRingPos(module, block: checkWrap, base: base, ids: ids)
+	let posEnd = emitBin(module, block: checkWrap, a: pos, b: entrySize, opcode: StdBinOpcode.add, ids: ids)
+	let noWrap = emitCmp(module, block: checkWrap, a: posEnd, b: bufSize, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(checkWrap, op: StdOp.condBranch(noWrap, thenBlockId: place.id, elseBlockId: pad.id))
+
+	// ⭐ THE PADDING ENTRY IS BORN COMMITTED — see `DsPaddingHeaderTypeAndFlags`. Its size is the distance
+	// to the end of the ring, so the entry after it starts at ring offset 0.
+	let padBufSize = emitLoadGlobalWord(module, block: pad, label: DsBufSizeLabel, ids: ids)
+	let padPos = emitRingPos(module, block: pad, base: base, ids: ids)
+	let padSize = emitBin(module, block: pad, a: padBufSize, b: padPos, opcode: StdBinOpcode.sub, ids: ids)
+	let padAddr = emitRingSlotAddr(module, block: pad, base: base, pos: padPos, ids: ids)
+	let padSizeField = emitShiftedField(module, block: pad, value: padSize, shift: DsEntrySizeShift, ids: ids)
+	let padTypeAndFlags = emitConst(module, block: pad, value: DsPaddingHeaderTypeAndFlags, ids: ids)
+	let padHeader = emitBin(module, block: pad, a: padSizeField, b: padTypeAndFlags, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.appendOp(pad, op: StdOp.storeIndirect(padAddr, offset: 0, valueId: padHeader, valueType: StdType.i64))
+	let padCursor = emitLoadField(module, block: pad, record: base, offset: DsOffWriteCursor, ids: ids)
+	let paddedCursor = emitBin(module, block: pad, a: padCursor, b: padSize, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(pad, op: StdOp.storeIndirect(base, offset: DsOffWriteCursor, valueId: paddedCursor, valueType: StdType.i64))
+	module.setTerminator(pad, op: StdOp.branch(recheck.id))
+
+	// ⚠ The space check is asked AGAIN after padding, and it is not the same question: the padding entry
+	// consumed ring bytes of its own, so a reservation that fitted before it may not fit after. Skipping
+	// this is how a producer overwrites entries the monitor has not read.
+	emitSpaceCheck(module, block: recheck, base: base, entrySize: entrySize, fits: place, dropped: full, ids: ids)
+
+	// PLACE: write the entry header UNCOMMITTED, then publish it by advancing the cursor.
+	let placeCursor = emitLoadField(module, block: place, record: base, offset: DsOffWriteCursor, ids: ids)
+	let placePos = emitRingPos(module, block: place, base: base, ids: ids)
+	let dataPtr = emitRingSlotAddr(module, block: place, base: base, pos: placePos, ids: ids)
+
+	let now = ids.mint()
+	module.appendOp(place, op: StdOp.osTickCountMs(now))
+	let startTs = emitLoadGlobalWord(module, block: place, label: DsStartTsLabel, ids: ids)
+	let delta = emitBin(module, block: place, a: now, b: startTs, opcode: StdBinOpcode.sub, ids: ids)
+
+	// ⭐ `flags` IS ZERO AND THAT IS NOT FILLER — it is the entry's UNCOMMITTED state, and it falls out for
+	// free because `event_type` is a byte and `entry_size` starts at bit 16.
+	let sizeField = emitShiftedField(module, block: place, value: entrySize, shift: DsEntrySizeShift, ids: ids)
+	let timeField = emitShiftedField(module, block: place, value: delta, shift: DsEntryTimestampShift, ids: ids)
+	let typeAndSize = emitBin(module, block: place, a: eventType, b: sizeField, opcode: StdBinOpcode.bitOr, ids: ids)
+	let header = emitBin(module, block: place, a: typeAndSize, b: timeField, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.appendOp(place, op: StdOp.storeIndirect(dataPtr, offset: 0, valueId: header, valueType: StdType.i64))
+
+	// ⭐ THE RING'S ONE PUBLISH POINT. It orders every store above it — this entry's header, and any
+	// padding entry written on the way — ahead of the cursor that makes them reachable. On x64 a plain
+	// store IS a release store (TSO), which is what makes this correct with no barrier op at this tier; a
+	// target whose stores may be reordered would owe one, and `--debugstream` is refused on every such
+	// target today.
+	let published = emitBin(module, block: place, a: placeCursor, b: entrySize, opcode: StdBinOpcode.add, ids: ids)
+	module.appendOp(place, op: StdOp.storeIndirect(base, offset: DsOffWriteCursor, valueId: published, valueType: StdType.i64))
+	emitBumpSegmentCounter(module, block: place, base: base, offset: DsOffTotalEvents, ids: ids)
+	module.appendOp(place, op: StdOp.osLockLeave(lock))
+	module.setTerminator(place, op: StdOp.ret(dataPtr))
+
+	// DROPPED. Both space checks reach here, and both reach it HOLDING the lock — which is why the release
+	// follows from the CONTROL PATH rather than from a re-derived test. The reference records that getting
+	// this wrong is not a lost event but a HANG: every later producer waits on a lock nobody released.
+	emitBumpSegmentCounter(module, block: full, base: base, offset: DsOffDroppedEvents, ids: ids)
+	module.appendOp(full, op: StdOp.osLockLeave(lock))
+	emitConstReturn(module, block: full, value: 0, ids: ids)
+
+	module.functions.push(func)
+end 'buildDsReserve'
+
+// ============================================================================
+// `__ds_commit(entryPtr)` — the entry is now READABLE.
+// ============================================================================
+//
+// The read-modify-write of the header word needs no atomic: `__ds_reserve` handed this entry to exactly
+// one caller, that caller is the only thing that ever writes the entry again, and the monitor only reads
+// it — so nothing can race the OR.
+//
+// What it DOES need is release ordering, so the payload writes are visible to the monitor before the bit
+// that claims they are there. On x64 that is a plain store; see `__ds_reserve`'s publish point for why
+// this tier has no barrier op and what would owe one.
+function buildDsCommit(module StdModule)
+	var func = IrFunction.createFromStd(DsCommitName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let entryPtr = 0 as ValueId
+
+	let header = emitLoadField(module, block: entry, record: entryPtr, offset: 0, ids: ids)
+	let bit = emitConst(module, block: entry, value: DsEntryCommittedBit, ids: ids)
+	let committed = emitBin(module, block: entry, a: header, b: bit, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.appendOp(entry, op: StdOp.storeIndirect(entryPtr, offset: 0, valueId: committed, valueType: StdType.i64))
+	module.setTerminator(entry, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildDsCommit'
+
+// ============================================================================
+// `__ds_emit_mm(eventType, packedId, value)` — the ONE mm event body.
+// ============================================================================
+//
+// ⭐ **ONE EMITTER FOR ALL FOUR MM EVENTS, BECAUSE THEY ARE ONE ENTRY SHAPE.** `mm_alloc`, `mm_free`,
+// `mm_incref` and `mm_decref` are 24 bytes each, carrying an alloc id, a tag index and a 32-bit value — an
+// allocation SIZE for the alloc, the new OWNER COUNT for the refcount pair, and unused (0) for the free.
+// The reference splits them into three functions sharing one payload writer; splitting them here would be
+// three bodies differing in one immediate.
+//
+// ⭐ **IT IS THE ONLY CALLER OF `__ds_reserve`, AND IT ALWAYS COMMITS.** A producer therefore cannot
+// publish an entry and forget to commit it: the pairing is the only shape a call site can have. A missed
+// commit does not lose one event — an uncommitted entry is never skipped while its producer lives, so the
+// monitor STALLS ON IT FOREVER.
+function buildDsEmitMm(module StdModule)
+	var func = IrFunction.createFromStd(DsEmitMmName, returnType: StdReturnType.void, paramCount: 3, paramTypes: threeI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(3)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var write = module.addBlock(func, label: b"write")
+	var done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: 3)
+	let eventType = 0 as ValueId
+	let packedId = 1 as ValueId
+	let value = 2 as ValueId
+
+	let entryBytes = emitConst(module, block: entry, value: DsMmEntryBytes, ids: ids)
+	let entryPtr = ids.mint()
+	module.appendOp(entry, op: StdOp.call(entryPtr, callee: DsReserveName, args: twoArgs(eventType, second: entryBytes)))
+	// 0 means the ring was FULL. The entry was never reserved, so there is nothing to commit — this is a
+	// DROPPED event, counted in the segment header, not a deferred one.
+	let noEntry = emitConst(module, block: entry, value: 0, ids: ids)
+	let reserved = emitCmp(module, block: entry, a: entryPtr, b: noEntry, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(reserved, thenBlockId: write.id, elseBlockId: done.id))
+
+	// The payload, written OUTSIDE the ring lock — which is the whole reason the commit bit exists.
+	let shift = emitConst(module, block: write, value: DsMmPackedIdShift, ids: ids)
+	let allocId = emitBin(module, block: write, a: packedId, b: shift, opcode: StdBinOpcode.shrLogical, ids: ids)
+	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsMmOffAllocId, valueId: allocId, valueType: StdType.i64))
+
+	let tagMask = emitConst(module, block: write, value: DsMmTagIndexMask, ids: ids)
+	let tagIndex = emitBin(module, block: write, a: packedId, b: tagMask, opcode: StdBinOpcode.bitAnd, ids: ids)
+	// `scope_len` (bits 16..31) stays zero: this producer emits no scope names, so the slot has nothing to
+	// carry and the monitor's mm formatter never reads it.
+	let valueField = emitShiftedField(module, block: write, value: value, shift: DsMmValueShift, ids: ids)
+	let packed = emitBin(module, block: write, a: tagIndex, b: valueField, opcode: StdBinOpcode.bitOr, ids: ids)
+	module.appendOp(write, op: StdOp.storeIndirect(entryPtr, offset: DsMmOffPacked, valueId: packed, valueType: StdType.i64))
+
+	let committed = ids.mint()
+	module.appendOp(write, op: StdOp.call(committed, callee: DsCommitName, args: argsOf(entryPtr)))
+	module.setTerminator(write, op: StdOp.branch(done.id))
+
+	module.setTerminator(done, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildDsEmitMm'
+
+// ============================================================================
+// The CALL-SITE emitter — the one door the MM runtime reaches this producer through.
+// ============================================================================
+//
+// ⭐ **WHERE THE RUN-TIME HALF OF THE GATING RULE LIVES: the inline `__ds_base == 0` bail, BEFORE any
+// call.**
+// One load and one branch is the whole cost of an unattached `--debugstream` binary at an event site.
+// Because the bail is here, `__ds_reserve` needs no detached path of its own.
+//
+// ⚠⚠ **IT HAS NO COMPILE-TIME GATE OF ITS OWN, AND MUST NOT.** Its four callers — `MmRuntime`'s event
+// emitters — each build their arguments out of OPS (a refcount load, a packed-id load, a plus-one), and
+// those ops would already be in the block by the time a gate here could decline them. An emitted
+// `globalAddr __ds_base` in an untraced build names a `.data` slot that build never laid out, and the
+// backend panics at the relocation rather than quietly emitting dead code. So the gate lives at each
+// caller, where the arguments are built, and reaching here means the build is traced.
+//
+// It SPLITS `block` — the caller continues in the block this returns, exactly as `emitFillRange` does.
+export function emitMmEvent(module StdModule, func IrFunction, block IrBlock, eventType ParsedInt, packedId ValueId, value ValueId, ids ValueMinter) returns IrBlock
+	var emit = module.addBlock(func, label: b"dsEmit")
+	let resume = module.addBlock(func, label: b"dsResume")
+
+	let base = emitLoadGlobalWord(module, block: block, label: DsBaseLabel, ids: ids)
+	let detached = emitConst(module, block: block, value: 0, ids: ids)
+	let attached = emitCmp(module, block: block, a: base, b: detached, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(block, op: StdOp.condBranch(attached, thenBlockId: emit.id, elseBlockId: resume.id))
+
+	let typeConst = emitConst(module, block: emit, value: eventType, ids: ids)
+	let emitted = ids.mint()
+	module.appendOp(emit, op: StdOp.call(emitted, callee: DsEmitMmName, args: threeArgs(typeConst, second: packedId, third: value)))
+	module.setTerminator(emit, op: StdOp.branch(resume.id))
+
+	return resume
+end 'emitMmEvent'

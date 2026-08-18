@@ -194,6 +194,12 @@ let FileShareRead = 0x1  // dwShareMode for a read-only open
 // scanner happens to hold a write handle on the path — an intermittent failure that depends on what else is
 // running on the box. The bootstrap's sync worker makes the same choice and says so.
 let FileShareReadWrite = 0x3  // dwShareMode for a write open: FILE_SHARE_READ | FILE_SHARE_WRITE
+
+// FILE_MAP_ALL_ACCESS — the access both `OpenFileMappingA` and `MapViewOfFile` take for the DebugStream
+// ring. It is SECTION_ALL_ACCESS minus its standard-rights bits (0xF001F), and it must be ALL_ACCESS
+// rather than FILE_MAP_WRITE because the producer READS the segment header (magic, versions, cursors) as
+// well as writing it — a write-only view would fault on the first magic check.
+let FileMapAllAccess = 0xF001F
 let OpenExisting = 3  // dwCreationDisposition — connect to the already-created named pipe
 
 // R4.2: `openWrite` CREATES OR TRUNCATES. `specs/managed-file.md` documents it as "Opens a file for writing
@@ -267,6 +273,11 @@ export let CreateNamedPipeStackArgWords = 4 as MachineWord  // args 5-8: nOutBuf
 export let CreateFileStackArgWords = 3 as MachineWord  // args 5-7: dwCreationDisposition, dwFlagsAndAttributes, hTemplateFile
 export let CreateThreadStackArgWords = 2 as MachineWord  // args 5-6: dwCreationFlags, lpThreadId
 export let ReadFileStackArgWords = 1 as MachineWord  // arg 5: lpOverlapped
+// O3: the DebugStream producer's one import that overflows the register file. Stated in this band with its
+// five siblings rather than beside the lowering, for the band's own reason — the SAME constant sizes the
+// frame reservation and the syscall shim's copy, so the two cannot disagree about the one word the kernel
+// reads off the stack.
+export let MapViewOfFileStackArgWords = 1 as MachineWord  // arg 5: dwNumberOfBytesToMap
 
 // ⚠ **NOT RESERVED BY `stdOpOutgoingArgBytes`, AND DELIBERATELY STATED ANYWAY (7a).** Unlike its five
 // neighbours above, `GetQueuedCompletionStatus` is never emitted as an `iatCall`: the completion loop is
@@ -826,6 +837,16 @@ type StdToX64Lowering
 			osWriteStderr gives win64OutgoingArgBytes(WriteFileOutgoingSlots)
 			// A frame address is a `lea`; it calls nothing and so passes no outgoing argument.
 			stackRecordAddr gives 0
+			// O3: `GetEnvironmentVariableA` (3 arguments) then `OpenFileMappingA` (3) are register-only, and
+			// the tick read takes none at all.
+			osOpenNamedSegment gives 0
+			osTickCountMs gives 0
+			// ⚠⚠ **`MapViewOfFile` TAKES FIVE, SO ITS `dwNumberOfBytesToMap` IS A REAL OUTGOING STACK
+			// ARGUMENT AND THE FRAME MUST RESERVE THE SLOT.** `lowerOsMapNamedSegment` writes it at
+			// `win64OutgoingArgDisp(0)`; reserving nothing puts `spillSlotBaseDisp`'s SPILL SLOT 0 at that
+			// exact displacement, so the store lands on a spilled value — the silent stack corruption this
+			// band's own header exists to prevent.
+			osMapNamedSegment gives win64OutgoingArgBytes(MapViewOfFileStackArgWords)
 			// The ONLY subprocess op with outgoing stack args: CreateProcessA passes its last six of ten arguments
 			// on the stack (see `win64OutgoingArgDisp`). The other four subprocess ops are ≤4-argument, register-only.
 			osProcessSpawn gives win64OutgoingArgBytes(CreateProcessOutgoingSlots)
@@ -1066,6 +1087,7 @@ type StdToX64Lowering
 				osWriteStderr then break 'term'
 				// A frame address is a value-producing body op, never a terminator.
 				stackRecordAddr then break 'term'
+				osOpenNamedSegment to osTickCountMs then break 'term'
 			end 'term'
 		end 'eachBlock'
 	end 'computeFusedCmps'
@@ -1145,6 +1167,7 @@ type StdToX64Lowering
 				osWriteStderr then break 'isTheCompare'
 				// A frame address, not the compare — the scan stops.
 				stackRecordAddr then break 'isTheCompare'
+				osOpenNamedSegment to osTickCountMs then break 'isTheCompare'
 			end 'isTheCompare'
 			return
 		end 'scanBackward'
@@ -1282,6 +1305,9 @@ type StdToX64Lowering
 			osWriteFile(resultId, handleId, bufId, lenId, bytesOutPtrId) then self.lowerOsWriteFile(resultId, handleId: handleId, bufId: bufId, lenId: lenId, bytesOutPtrId: bytesOutPtrId, dstBlock: dstBlock)
 			// The `__Builtins` WALL clock: read the host's calendar into the caller's out-param word.
 			osReadWallClock(ftPtrId) then self.lowerOsReadWallClock(ftPtrId, dstBlock: dstBlock)
+			osOpenNamedSegment(resultId, namePtrId, bufPtrId, bufLenId) then self.lowerOsOpenNamedSegment(resultId, namePtrId: namePtrId, bufPtrId: bufPtrId, bufLenId: bufLenId, dstBlock: dstBlock)
+			osMapNamedSegment(resultId, handleId, sizeId) then self.lowerOsMapNamedSegment(resultId, handleId: handleId, sizeId: sizeId, dstBlock: dstBlock)
+			osTickCountMs(resultId) then self.lowerOsTickCountMs(resultId, dstBlock: dstBlock)
 			// R4.1: open a file for reading; the raw handle lands in `resultId`.
 			osFileOpenRead(resultId, pathPtrId) then self.lowerOsFileOpenRead(resultId, pathPtrId: pathPtrId, dstBlock: dstBlock)
 			// R4.1: close the handle. `CloseHandle`'s BOOL is discarded, so nothing is captured from RAX.
@@ -1363,6 +1389,7 @@ type StdToX64Lowering
 			osExecutablePath then panic("lowerStdToX64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op)")
 			osWriteStderr then panic("lowerStdToX64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
 			stackRecordAddr then panic("lowerStdToX64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
+			osOpenNamedSegment to osTickCountMs then panic("lowerStdToX64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 
@@ -2587,6 +2614,64 @@ type StdToX64Lowering
 		self.emitCaptureRax(dstBlock, resultId: resultId)
 	end 'lowerOsStdinHandle'
 
+	// ⭐ **`GetEnvironmentVariableA(name, buf, len)` then `OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, buf)`
+	// — the DebugStream producer's attach, in one op** (Workstream O3). The env value is pure scratch that
+	// no Std value ever reads, which is the whole reason the two calls are one op rather than two: splitting
+	// them would put a buffer pointer into the IR for no consumer.
+	//
+	// ⭐ **IT IS BRANCH-FREE, AND THE UNSET CASE FALLS OUT.** `__slab_alloc` hands back ZEROED memory, so a
+	// variable that is not set leaves `buf` naming the EMPTY string — and `OpenFileMappingA("")` fails and
+	// returns NULL, which is the same answer "no monitor is listening" gets by every other route. One value
+	// out, one test at the caller. (`GetEnvironmentVariableA`'s own return, the character count, is
+	// therefore discarded: it can say nothing the empty buffer does not.)
+	//
+	// ⚠ `bufPtr` is live ACROSS the first `iatCall` and needs no hand-holding: it is a VIRTUAL operand of
+	// this op, so the allocator forces it callee-saved exactly as `CreateProcessA`'s `procInfoPtr` is.
+	function lowerOsOpenNamedSegment(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osOpenNamedSegment")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(namePtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rdx), srcReg: TargetVReg.virtual(bufPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufLenId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetEnvironmentVariableA)))
+
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rcx), value: FileMapAllAccess))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.r8), srcReg: TargetVReg.virtual(bufPtrId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.OpenFileMappingA)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsOpenNamedSegment'
+
+	// ⭐ **`MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size)`** — five arguments, four in registers
+	// and the byte count on the stack past the shadow space (the `CreateFileA` stack-arg template).
+	//
+	// A NULL handle maps nothing and returns NULL, so `osOpenNamedSegment`'s failure flows through here
+	// untested for the reason it flowed into it — see that lowering. `size` is the WHOLE segment length,
+	// and it is the CONSUMER's number: a view longer than the section returns NULL, which is why
+	// `DebugStreamRuntime` derives it from the reference's own three parts rather than choosing one.
+	function lowerOsMapNamedSegment(resultId ValueId, handleId ValueId, sizeId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osMapNamedSegment")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.storeBaseDispReg(x64PhysReg(X64Register.rsp), disp: win64OutgoingArgDisp(0), src: TargetVReg.virtual(sizeId), width: X64AccessWidth.word64))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegReg(x64PhysReg(X64Register.rcx), srcReg: TargetVReg.virtual(handleId)))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.rdx), value: FileMapAllAccess))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r8), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.movRegImm32(x64PhysReg(X64Register.r9), value: NullPointer))
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.MapViewOfFile)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsMapNamedSegment'
+
+	// ⭐ **`GetTickCount64()`** — no arguments to marshal, so the `iatCall` IS the whole call and there is
+	// no helper to reach for, exactly as `GetCommandLineA` above states.
+	//
+	// ⚠ **IT IS THIS COUNTER AND NOT `osReadClock`'s QPC, AND THE REASON IS THE OTHER PROCESS.** `maxon
+	// monitor` seeds the segment header's `start_timestamp` with `Environment.TickCount64` — GetTickCount64
+	// — and every ring entry carries `now - start` as a millisecond delta. Two different clocks either end
+	// would make that subtraction meaningless, and nothing would report it.
+	function lowerOsTickCountMs(resultId ValueId, dstBlock IrBlock)
+		self.requireWin64FileIo("osTickCountMs")
+		self.targetModule.appendOp(dstBlock, op: TargetOp.iatCall(iatSlotIndex(IatSlot.GetTickCount64)))
+		self.emitCaptureRax(dstBlock, resultId: resultId)
+	end 'lowerOsTickCountMs'
+
 	// ⭐ **W5: `GetModuleFileNameA(NULL, bufPtr, bufLen)`** — the character count captured, which is what
 	// tells the builder's retry loop "fits" from "truncated".
 	//
@@ -3137,6 +3222,7 @@ type StdToX64Lowering
 			osWriteStderr gives false
 			// Nor is a frame address.
 			stackRecordAddr gives false
+			osOpenNamedSegment to osTickCountMs gives false
 		end 'term'
 	end 'settleFloatEqualityBranch'
 
@@ -3285,6 +3371,7 @@ type StdToX64Lowering
 			osExecutablePath panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osExecutablePath`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			osWriteStderr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is an `osWriteStderr`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 			stackRecordAddr panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a `stackRecordAddr`, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
+			osOpenNamedSegment to osTickCountMs panic("condBranchFieldsOf: the terminator of block ref {blockRef} is a DebugStream host primitive, not a condBranch — only `blockNeedsFloatEqualitySplit` selects the blocks this reads, and it proves one")
 		end 'term'
 	end 'condBranchFieldsOf'
 

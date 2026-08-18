@@ -100,6 +100,11 @@
 //     the same distance apart as their lowercase originals, one case-flip up. Sharing a prefix is
 //     harmless — neither is a prefix OF the other — but it does mean neither may ever be recognized by a
 //     test that stops short of byte 6, which is the shortcut this one pair invites.
+//   • **THE mm-trace FENCE.** "```mm-trace" is in no prefix relation with any other: it differs from
+//     both `maxon` spellings at byte 4 (`m`/`a` — they share the `m` at byte 3 and nothing further),
+//     from "```exitcode", "```stderr" and "```stdout" at byte 3 (`m` vs `e`/`s`), and from every
+//     capitalized fence at byte 3 by the QUALIFIED-vs-PORTABLE rule two bullets up (its byte 3 is
+//     lowercase). Nothing is a prefix of it and it is a prefix of nothing, so its arm's position is free.
 //   • **THE `Required*` FAMILY**, which is the one group the capitalization rule does not separate from
 //     the qualified fences, because it is capitalized at byte 3 as well: "```RequiredData",
 //     "```RequiredRdata" and "```RequiredRuntime" all differ from "```Maxoncstderr:", "```Stderr:" and
@@ -111,8 +116,8 @@
 let FrontmatterFence = "---"
 let StatusKey = "status:"
 let TestsHeading = "## Tests"
-let SectionHeadingPrefix = "## "
-let TestMarker = "<!-- test:"
+export let SectionHeadingPrefix = "## "
+export let TestMarker = "<!-- test:"
 
 // The ONE heading that ENDS the active-test region. Every OTHER `## ` heading is an
 // ordinary section heading INSIDE `## Tests`, and the region continues across it:
@@ -135,7 +140,7 @@ let RegionEndHeadings = ["## Deferred"]
 // "<!-- test:"), so the two match orders are independent and neither can swallow
 // the other. Both are still tested explicitly, in one place, so that stays true
 // if either literal is ever edited.
-let DisabledTestMarker = "<!-- disabled-test:"
+export let DisabledTestMarker = "<!-- disabled-test:"
 
 // The per-target gate — a marker that may sit on any comment line between a test's
 // `<!-- test: NAME -->` (or `<!-- disabled-test: NAME -->`) and its first ```maxon block. It restricts
@@ -206,13 +211,31 @@ let ArgsMarker = "<!-- Args:"
 // stay independent and none can swallow another.
 let AsyncTraceMarker = "<!-- AsyncTrace"
 
+// ⭐ **THE SECOND VALUELESS MARKER — `<!-- MmTrace -->`.** It says a case asserts the program's MEMORY
+// MANAGEMENT: the allocations it makes, the refcount transitions they go through and the frees that end
+// them. Like `<!-- AsyncTrace -->` it changes how the program is BUILT (`--debugstream`, which emits the
+// DebugStream producer) and how its output is COMPARED (the run happens under `maxon monitor --filter=mm`
+// and both sides go through `normalizeMmTrace`), and neither is a value.
+//
+// ⚠ **THE MODE IS ENTERED BY EITHER THE MARKER OR THE BLOCK**, which is the reference's rule
+// (`TestRunner.cs`, `fragment.MmTrace`) and the one the spec's own prose states. The marker alone is the
+// AUTHORING state: write it, run `--update-required`, and the harness mints the ` ```mm-trace ` block from
+// what the program actually did. So a marker with no block is not an error — it is a request.
+//
+// ⚠ It carries no payload, so it must not go through `markerValue` — see `AsyncTraceMarker` for why an
+// empty answer being indistinguishable from a missing one is the failure that arrangement prevents.
+//
+// It is not a superstring or substring of any other marker ("<!-- MmTrace" first differs from every one of
+// them at the character after "<!-- "), so the marker checks stay independent and none can swallow another.
+let MmTraceMarker = "<!-- MmTrace"
+
 // What separates two arguments in an `<!-- Args: … -->` payload, and what quotes one that must survive
 // the split intact. See `parseProgramArgs` for why the quote is not decoration.
 let ArgSeparator = " "
 let ArgQuote = "\""
 
 let TestMarkerNameSep = ": "
-let TestMarkerEnd = " -->"
+export let TestMarkerEnd = " -->"
 let SourceFence = "```maxon"
 let ExitCodeFence = "```exitcode"
 let CompilerErrorFence = "```maxoncstderr"
@@ -294,6 +317,17 @@ let TargetStdoutFencePrefix = "```Stdout:"
 let TargetCompilerErrorFencePrefix = "```Maxoncstderr:"
 let TargetStderrFencePrefix = "```Stderr:"
 
+// ⭐ **THE DECODED MEMORY-MANAGEMENT EVENT TRACE — what `maxon monitor --filter=mm` printed, normalized.**
+// One `mm_<verb> <Tag> #<id>[ size=N | rc=N]` line per event, in emission order, with the monitor's
+// timestamp prefix and depth indent stripped and the allocation ids densely renumbered from 1 by first
+// appearance (see `SpecTestRunner.normalizeMmTrace` for why every one of those steps is needed to make the
+// text stable across runs and machines).
+//
+// ⚠ **IT IS ITSELF A RESULT CHECK.** A case carrying one needs no ```exitcode / ```stdout / ```stderr
+// block to be a test — it is asserting the program's ALLOCATION BEHAVIOUR, which no other block can state
+// — so `pinsAnyResult` counts it.
+export let MmTraceFence = "```mm-trace"
+
 // ⭐ A LINKED SECTION'S BYTES, as typed values — `i64 42` / `i8 1` / `f64 3.14`, one per line. Not
 // what the compiler thinks it laid out, but what the linked binary actually contains, read back out
 // of the image (`SpecTestRunner.checkRequiredSections`).
@@ -354,7 +388,7 @@ let RequiredRuntimeFence = "```RequiredRuntime"
 // The three-backtick delimiter. Markdown spells OPEN and CLOSE the same way, so one name serves both
 // readers: `readFence` looking for the end of a block, and the terminating arm in `scanTestFromMarker`
 // looking at the start of one it has no reader for.
-let FenceDelimiter = "```"
+export let FenceDelimiter = "```"
 
 // The one TAGGED fence a test region may open without claiming anything. A bare `FenceDelimiter` block
 // and a ```text one are PROSE — a quoted panic message, an illustrated diagnostic — and 200 of them are
@@ -543,6 +577,24 @@ export typealias TargetKeyArray = Array with String
 // marker-less test names — so it is not a sentinel. Named for its PURPOSE, as `TargetKeyArray` is.
 export typealias ProgramArgArray = Array with String
 
+// ⭐⭐ **WHETHER A CASE ASSERTS ITS MEMORY-MANAGEMENT TRACE, AND WHAT IT EXPECTS — THREE STATES IN ONE
+// FIELD.** A case can be in mm-trace MODE with no golden yet (the authoring state: a bare
+// `<!-- MmTrace -->` marker, which `--update-required` turns into a block), or in mode WITH one, or not in
+// mode at all. Two fields — a bool and a String — would need "" to mean "no block", and an EMPTY trace is
+// a legitimate expectation: it is exactly what a program that allocates nothing must produce. A sentinel
+// there would make that case unwritable, which is the shape `SpecStdout.unpinned` exists to avoid one
+// stream over.
+export union SpecMmTrace
+	// Not an mm-trace case: built and run exactly as any other.
+	off
+	// In mm-trace mode with no golden. The program is built with `--debugstream` and run under the
+	// monitor, and the trace is compared against NOTHING — so the case fails unless it allocates nothing,
+	// and `--update-required` mints the block that makes it a real assertion.
+	unpinned
+	// In mm-trace mode with a golden, normalized and compared line for line.
+	pinned(trace String)
+end 'SpecMmTrace'
+
 // One active test: its name, its ```maxon source VERBATIM, and its expectation.
 export type SpecTest
 	export let name as String
@@ -584,11 +636,22 @@ export type SpecTest
 	// one fact in two places.
 	export let asyncTrace as bool
 
+	// Whether this case asserts its MEMORY-MANAGEMENT trace, and what it expects (see `SpecMmTrace`). It
+	// sits beside `asyncTrace` for that field's stated reason and it is the same kind of fact: it changes
+	// how the program is BUILT (`--debugstream`) and how its output is COMPARED (under `maxon monitor`,
+	// through `normalizeMmTrace`), rather than what the run must produce.
+	//
+	// ⚠ The EXPECTATION rides here too, unlike `asyncTrace`'s, because an mm-trace block IS the
+	// assertion — there is no other slot on `SpecExpectation` it could land in, and putting the mode on
+	// the test and the golden on the expectation would be the one fact in two places this file's
+	// `asyncTrace` note already refuses.
+	export let mmTrace as SpecMmTrace
+
 	// The split is derived HERE, from the very source that will be compiled, so a test can never
 	// exist with a file list that disagrees with its text.
-	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool) returns SpecTest
+	export static function create(name String, source String, expectation SpecExpectation, targets TargetKeyArray, runtimeNames RuntimeFunctionNameArray, programArgs ProgramArgArray, asyncTrace bool, mmTrace SpecMmTrace) returns SpecTest
 		let sections = splitSourceSections(name, source: source)
-		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace}
+		return Self{name: name, source: source, expectation: expectation, sourceFiles: sections.files, stdlibOverlays: sections.stdlibOverlays, targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace}
 	end 'create'
 
 	// True when this test's block declares `// --- file:` sections — i.e. it compiles as a
@@ -895,6 +958,9 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	var runtimeNames = RuntimeFunctionNameArray.create()
 	var programArgs = ProgramArgArray.create()
 	var asyncTrace = false
+	// Starts `off`; the MARKER raises it to `unpinned` and the BLOCK to `pinned`. A case carrying both
+	// ends `pinned` whichever order they appear in, because the block never lowers the mode.
+	var mmTrace = SpecMmTrace.off
 	var i = markerIndex + 1
 
 	while i < lineCount 'blocks'
@@ -943,6 +1009,18 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			i = i + 1
 			continue
 		end 'asyncTraceMarker'
+
+		// The other valueless flag marker, consumed identically — including on a DISABLED case, so shelving
+		// an mm-trace case does not leave its marker to fall through as unread prose. It only raises the
+		// mode: a `pinned` set by a block earlier in the case must not be lowered back to `unpinned`.
+		if line.contains(MmTraceMarker) 'mmTraceMarker'
+			match mmTrace 'raise'
+				off then mmTrace = SpecMmTrace.unpinned
+				unpinned to pinned then break 'raise'
+			end 'raise'
+			i = i + 1
+			continue
+		end 'mmTraceMarker'
 
 		// ⛔⛔ **A PROSE SENTENCE THAT HAPPENS TO BEGIN WITH A FENCE PREFIX IS NOT A FENCE, AND EVERY ARM
 		// BELOW MATCHES BY PREFIX.** `` ```RequiredRuntime block, one name per line: `` — a real line in
@@ -1026,6 +1104,16 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			continue
 		end 'runtimeBlock'
 
+		// The mm-trace golden. It is a result check in its own right (see `MmTraceFence`), and it puts the
+		// case into mm-trace mode on its own — the `<!-- MmTrace -->` marker beside it is then a second
+		// statement of one fact rather than a requirement.
+		if line.startsWith(MmTraceFence) 'mmTraceBlock'
+			let block = readFence(lines, openIndex: i)
+			mmTrace = SpecMmTrace.pinned(block.text)
+			i = block.nextIndex
+			continue
+		end 'mmTraceBlock'
+
 		if line.startsWith(ExitCodeFence) 'exitCodeBlock'
 			let block = readFence(lines, openIndex: i)
 			let parsed = try int.fromString(block.text.trim()) otherwise 'badExitCode'
@@ -1094,7 +1182,15 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 			panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries a {RequiredDataFence}/{RequiredRdataFence}/{RequiredRuntimeFence} block. A case that never links produces no image to read a section out of and no IR to render a body into, so that block cannot fail and pins nothing. Drop it, or split the pin into a case that compiles")
 		end 'pinsOnARejectedCase'
 
-		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace))
+		// ⛔ An mm-trace block on a REJECTED case is refused for the reason the section pins beside it are:
+		// a compile that fails produces no binary, so there is no program to run under the monitor and no
+		// trace the block could ever be compared against. It would pin nothing while reading as coverage.
+		match mmTrace 'mmTraceOnARejectedCase'
+			off then break 'mmTraceOnARejectedCase'
+			unpinned to pinned then panic("SpecParser: {specPath.toString()}: test '{name}' expects a COMPILE ERROR (a ```maxoncstderr block) and also carries an mm-trace block or `{MmTraceMarker} -->` marker. A case that never links produces no program to run under the monitor, so that block cannot fail and pins nothing. Drop it, or split the trace into a case that compiles")
+		end 'mmTraceOnARejectedCase'
+
+		tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.compilerError(compilerError.resolved()), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace))
 		return i
 	end 'rejected'
 
@@ -1104,11 +1200,11 @@ function scanTestFromMarker(lines StringArray, markerIndex LineIndex, markerLine
 	// types, each naming ITS stream; everything above the constructor is already shared.
 	let resolvedStdout = SpecStdout.pinned(stdout.resolved()) if stdout.isPinned() else SpecStdout.unpinned
 	let resolvedStderr = SpecStderr.pinned(stderr.resolved()) if stderr.isPinned() else SpecStderr.unpinned
-	if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins) 'pinsNothing'
+	if not pinsAnyResult(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins, mmTrace: mmTrace) 'pinsNothing'
 		panic("SpecParser: {specPath.toString()}: test '{name}' has a ```maxon block but no result block — add an ```exitcode, ```stdout, ```stderr, ```maxoncstderr, ```RequiredData or ```RequiredRdata block, or shelve the case as `<!-- disabled-test: {name} -->`. A case with nothing to check is not a test, and running it would report PASS for a program nothing looked at. (A target-qualified block — `{TargetStdoutFencePrefix}<target>` and its two twins — counts only on the target it NAMES, so a case whose only result block names another target has none here)")
 	end 'pinsNothing'
 
-	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace))
+	tests.push(SpecTest.create(name, source: source, expectation: SpecExpectation.run(exitCode, stderr: resolvedStderr, stdout: resolvedStdout, sectionPins: sectionPins), targets: targets, runtimeNames: runtimeNames, programArgs: programArgs, asyncTrace: asyncTrace, mmTrace: mmTrace))
 
 	return i
 end 'scanTestFromMarker'
@@ -1216,7 +1312,14 @@ end 'refuseVacuousDirective'
 // Does this case assert ANYTHING about the run? The push condition, and the one place the four halves of
 // a run expectation are asked as a group — a fifth half added to `SpecExpectation.run` without a clause
 // here would be a result block that still counts as no result.
-function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray) returns bool
+function pinsAnyResult(exitCode SpecExitCode, stderr SpecStderr, stdout SpecStdout, sectionPins SpecSectionPinArray, mmTrace SpecMmTrace) returns bool
+	// An mm-trace GOLDEN is a result check; the bare MARKER is not — it is a request for one, and a case
+	// carrying only that has nothing to compare until `--update-required` has run. Both are mm-trace mode,
+	// and only one of them is an assertion, which is the distinction the three-state field exists to make.
+	match mmTrace 'trace'
+		off to unpinned then break 'trace'
+		pinned then return true
+	end 'trace'
 	match exitCode 'exit'
 		unpinned then break 'exit'
 		pinned then return true

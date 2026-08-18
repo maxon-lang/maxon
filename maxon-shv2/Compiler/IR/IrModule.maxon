@@ -39,6 +39,27 @@ export type IrModule uses Op
 	// Blocks created outside the parser (e.g. by later passes) keep the
 	// BlockSourceInfo.empty() sentinel.
 	export var blockSourceInfo as BlockSourceInfoArray = BlockSourceInfoArray.create()
+	// ⭐⭐ **WHETHER THE CODE THIS MODULE EMITS CARRIES THE DEBUGSTREAM PRODUCER (`--debugstream`,
+	// Workstream O3), AND IT IS A FIELD RATHER THAN A PARAMETER FOR ONE REASON: A BUILDER THAT FORGETS TO
+	// THREAD IT EMITS A SILENTLY INCOMPLETE TRACE.** Every runtime builder that allocates or refcounts must
+	// know it — the MM family, the String, array, list, file and directory runtimes, the synthesized
+	// destructor and cloner cascades — which is some forty functions across seven files. Threaded as an
+	// argument, the failure mode of a NEW one that does not pass it along is not a compile error: it is an
+	// allocation that never appears in the trace, which is exactly the lie this whole instrument exists to
+	// prevent. Asked of the module, there is nothing to forget.
+	//
+	// It is also the honest place for it. This is not per-call-site information: it is a property of the
+	// WHOLE emitted module, set once by the driver from `buildCarriesDebugStream` before any runtime is
+	// installed, and true or false of every function in it alike. ⚠ It is the FULL condition — the flag AND
+	// `usesHeap` — not the bare flag, so a module that says it carries the producer is one that does: a
+	// build claiming otherwise would put a `globalAddr __ds_base` into an image whose `.data` never laid
+	// that slot out, which the backend answers with a relocation panic.
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and an ordinary build is
+	// byte-identical — which is the compile-time half of the gating rule (`DebugStreamRuntime`'s header).
+	// The Maxon and Target modules carry the field too and neither reads it today; that is the price of one
+	// generic container, and it is a bool.
+	export var debugStream as bool = false
 
 	export static function create() returns Self
 		return Self{}
