@@ -597,7 +597,7 @@ function buildListIsEmpty(module StdModule)
 end 'buildListIsEmpty'
 
 // ⭐ **ONE MORE ELEMENT, OR ONE FEWER — the count read-modify-write every linking and unlinking entry ends
-// with.** It was written out longhand at THREE sites before spec-port `list` (`emitListPublishEnd`,
+// with.** It was written out longhand at THREE sites before spec-port `list` (the end-insertion publish,
 // `__list_remove_first` and the arbitrary-node unlink), which is one fact — *"`count@16` is the live element
 // count and every structural change adjusts it by one"* — transcribed once per operation. Homing it is what
 // let the entries that rung ADDED (`__list_remove_last`, which shares the removal shape, and the interior arm
@@ -911,7 +911,7 @@ function buildListInsert(module StdModule)
 	// Splice the new node in FRONT of the one currently at `index`, so that node ends up at `index + 1` and
 	// the new one answers to `index` — which is what "insert at" means and what `insert.at-middle` reads back.
 	//
-	// ⛔⛔ **THIS ARM IS THE ONE PLACE A NODE IS LINKED WITHOUT `emitListPublishEnd`, SO IT OWES BY HAND THE
+	// ⛔⛔ **THIS ARM IS THE ONE PLACE A NODE IS LINKED WITHOUT `emitListLinkAtEnd`, SO IT OWES BY HAND THE
 	// TWO THINGS THAT HELPER DOES — AND SHIPPING IT WITHOUT EITHER WAS A WRONG ANSWER THE TWO BRANCHES THAT
 	// MET HERE COULD NOT SEE.** `__list_insert` was written against ONE-OWNER nodes, where a node carried no
 	// `owner@32` and no `element_drop@24` of its own; `W138` gave nodes both and put every other insertion
@@ -929,7 +929,7 @@ function buildListInsert(module StdModule)
 	emitStoreField(module, block: interior, record: predecessor, offset: ListNextOffset, value: node)
 	emitStoreField(module, block: interior, record: displaced, offset: ListPrevOffset, value: node)
 	// Neither end field moved, so this arm owes only the count — which the two end arms got from
-	// `emitListPublishEnd` inside the entry they called. The claim is recorded AFTER the links, which is that
+	// `emitListLinkPublished` inside the entry they called. The claim is recorded AFTER the links, which is that
 	// helper's own ordering discipline (v1's reinsert trap).
 	emitListLinkPublished(module, block: interior, list: list, node: node, ids: ids)
 	module.setTerminator(interior, op: StdOp.branch(linked.id))
@@ -1085,7 +1085,7 @@ end 'buildListRemoveNode'
 // differ in one line, and a second seven-block copy of the relink is exactly the shape that comes to
 // disagree with its twin about which end of the chain it repaired.
 //
-// ⚠ It returns the value like its twin and the parser discards it — `emitListPublishEnd`'s argument, one
+// ⚠ It returns the value like its twin and the parser discards it — `buildListEndInsert`'s answer, one
 // operation over: the alternative was a second graph whose only difference was a `retVoid`.
 function buildListDetachNode(module StdModule)
 	buildListUnlinkNode(module, name: ListDetachNodeName, movesElementOut: false)
