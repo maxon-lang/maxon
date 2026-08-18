@@ -6457,18 +6457,19 @@ end 'surfaceRosterProvider'
 
 // ⭐ **WHICH `List` METHODS WRITE THEIR RECEIVER** — the fourth half of the one immutable-receiver rule, here
 // with its three siblings for their stated reason. `append`/`prepend`/`insert` link a fresh node and bump the
-// count; `removeFirst`/`removeLast`/`remove` unlink one and FREE it, and `clear` frees every one of them.
-// `get`/`first`/`last`/`count`/`isEmpty` only read.
+// count; `removeFirst`/`removeLast`/`remove` unlink one and take its ELEMENT out, and `clear` lets go of every
+// node there is. `get`/`first`/`last`/`count`/`isEmpty` only read.
 //
 // ⚠ **THIS WHOLE SET IS ALSO WHAT INVALIDATES AN OUTSTANDING `first()` BORROW** (E3070) — `dispatchListMethod`
-// hands `noteBorrowSubjectWrite` the answer below, not a `removeFirst` special case. The removals and `clear`
-// free the borrowed node outright; the insertions write the record the borrow was taken off.
+// hands `noteBorrowSubjectWrite` the answer below, not a `removeFirst` special case. The removals hand the
+// borrowed ELEMENT to a new owner and `clear` releases the node holding it; the insertions write the record
+// the borrow was taken off.
 //
-// ⚠ **IT IS DELIBERATELY NOT `managedListMethodFreesANode`'s NARROWER SHAPE, and the reason that predicate
-// gives for being narrow is exactly why this one is not.** A `__ManagedList` borrow is a NODE handle, and an
-// insertion cannot dangle one because chain nodes never move. A `List` borrow is an ELEMENT — handed out by
-// `first`/`last`/`get` through `emitContainerElementAccessor` — and E3070's subject is the STORAGE, so the
-// conservative "any write ends every borrow of this list" is the answer here.
+// ⚠ **IT IS DELIBERATELY WIDER THAN THE `__ManagedList` SURFACE'S ANSWER, AND THE DIFFERENCE IS WHAT EACH
+// SURFACE HANDS OUT.** A `__ManagedList` borrow is a node HANDLE, which since `W138` is a second OWNER of a
+// refcounted node and therefore cannot be dangled by anything on that surface at all. A `List` borrow is an
+// ELEMENT — handed out by `first`/`last`/`get` through `emitContainerElementAccessor` — and E3070's subject is
+// the STORAGE, so the conservative "any write ends every borrow of this list" is the answer here.
 function listMethodMutatesReceiver(name ByteArray) returns bool
 	return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(InsertMethod) or name.equals(ListRemoveFirstMethod) or name.equals(ListRemoveLastMethod) or name.equals(RemoveMethod) or name.equals(ClearMethod)
 end 'listMethodMutatesReceiver'
@@ -6478,33 +6479,22 @@ end 'listMethodMutatesReceiver'
 // `prepend`), so one function over both name sets would answer about methods its caller's container does
 // not have. `count` only reads; the other four all link, unlink or free nodes.
 //
-// ⚠ **UNLIKE ITS THREE SIBLINGS, THIS IS NOT ALSO THE E3070 ANSWER — see the predicate below.**
+// ⚠ **UNLIKE ITS THREE SIBLINGS, THIS IS NOT ALSO AN E3070 ANSWER, AND THERE IS NO NARROWER PREDICATE
+// BESIDE IT ANY MORE — see the block below for what was there and why it went.**
 function managedListMethodMutatesReceiver(name ByteArray) returns bool
 	return name.equals(ManagedListInsertFirstMethod) or name.equals(ManagedListInsertLastMethod) or name.equals(RemoveMethod) or name.equals(ClearMethod)
 end 'managedListMethodMutatesReceiver'
 
-// ⭐⭐ **WHICH `__ManagedList` METHODS INVALIDATE AN OUTSTANDING NODE HANDLE — AND IT IS A NARROWER SET THAN
-// "WRITES THE RECEIVER", WHICH IS THE ONE PLACE THIS CONTAINER GENUINELY DIFFERS FROM AN `Array`.**
+// ⭐⭐ **NOTHING A `__ManagedList` METHOD DOES CAN DANGLE A NODE HANDLE ANY MORE, WHICH IS WHY
+// `managedListMethodFreesANode` IS GONE.** ⚖ USER RULING 2026-08-17 (the SECOND one on `W138`): nodes are
+// REFCOUNTED and a handle is a second owner. `remove` and `clear` drop the CHAIN's reference; the node
+// itself dies only when its last owner does, so a handle read after either is a legitimate read of a
+// legitimate node — which is what `/specs/managed-list.md`'s `core.detach` has always asserted.
 //
-// An array's borrow is invalidated by any write because a `push` may REALLOCATE the element buffer and move
-// every element with it — the pointer an outstanding `get` handed out then names freed memory. A CHAIN's
-// nodes are individually `__mm_alloc`ed and never move: an insertion allocates a new node and rewrites two
-// link words, so every existing handle still names the node it named before. What can dangle a handle is a
-// FREE, and exactly two methods free nodes (`__list_remove_node`, `__list_clear`) — plus the list's own
-// teardown, which cannot happen while a binding of it is live.
-//
-// ⇒ Answering `mutatesReceiver` here would refuse `let a = ml.insertLast(x)` + `ml.insertLast(y)` + a read of
-// `a`, which is not merely legal but the NORMAL way a program builds a list it holds handles into
-// (`/specs/managed-list.md:core.insert-first-multiple`). The immutable-receiver rule (E3019) still uses the
-// wider set, and correctly: an insertion does write a `let` receiver's record.
-//
-// ⚠ **IT IS STILL CONSERVATIVE, AND KNOWINGLY SO.** E3070's subject is the STORAGE, not the individual
-// borrow, so `ml.remove(a)` also kills a handle `b` on a DIFFERENT node that the removal cannot touch. That
-// over-refusal is the sound direction (shv2 does not retain), and narrowing it means teaching the borrow
-// set which borrow a write frees — a different mechanism from this one.
-function managedListMethodFreesANode(name ByteArray) returns bool
-	return name.equals(RemoveMethod) or name.equals(ClearMethod)
-end 'managedListMethodFreesANode'
+// ⛔ **THE PREDICATE WAS ALSO KNOWN-CONSERVATIVE AND ITS OVER-REFUSAL COST A CANONICAL CASE**: E3070's
+// subject is the STORAGE, so `ml.remove(a)` refused a later read of a handle `b` on a different node, which
+// is `/specs/managed-list.md:core.remove` exactly — green now, and green because the mechanism it needed
+// was withdrawn rather than because the check was narrowed.
 
 // `typeTagName` with its English indefinite article — *"an int"*, *"a String"*, *"a Character"*. It exists
 // because this file's container-column refusals compose that phrase and a bare `"a {typeTagName(t)}"` reads
@@ -10349,6 +10339,21 @@ export type Parser
 	// function and most functions are small. So the column is simpler (mirrors `valueOwnsHeap`), marginally
 	// cheaper, and honest — the sparse-is-cheaper premise did not survive the instrument.
 	var valuePromiseMarks as BoolArray
+	// ⭐⭐ **WHICH `__ManagedList` A `__ManagedListNode` HANDLE VALUE WAS MINTED OFF — the column
+	// `__ManagedList.remove` reads to decide whether it may admit a handle no binding owns.** Same lockstep as
+	// `valuePromiseMarks` (pushed in `mintValue`/`recordValueType`, written by the ONE mint door
+	// `emitManagedListNodeHandle`, recreated per function and swapped across a closure body).
+	//
+	// ⚠ **"NOT A MINT" IS THE VALUE'S OWN ID, WHICH IS WHY THIS NEEDS NO SENTINEL.** A handle is minted
+	// AFTER the list value it comes off, so a mint's entry always names a DIFFERENT value than itself — the
+	// seed is therefore unforgeable rather than a reserved number some future ValueId could collide with.
+	//
+	// ⛔ **IT EXISTS BECAUSE A GUARD PHRASED AS *"is this an unnamed temporary?"* ADMITTED EVERY CALL
+	// RESULT.** `remove`'s markability refusal has to let ONE unmarkable spelling through — the insertion it
+	// was handed inline — and the first cut asked `pendingTempsContain`, which is true of `k.held()` as well:
+	// a call handing back a FIELD's handle, MEASURED at exit 139. The exemption now asks the question its own
+	// diagnostic claims to ask, by identity.
+	var nodeHandleMintedFrom as ValueIdArray
 	// ⭐⭐ **WHICH VALUES ARE MERGES WHOSE DECLARED RANGED ALIAS NOTHING PROVED (G14)** — the column that
 	// stops a phi's DECLARED type being read as a statement about its RANGE. Same lockstep as
 	// `valuePromiseMarks`: pushed `false` in `mintValue`/`recordValueType`, set `true` by `mintPhi` for
@@ -11363,6 +11368,7 @@ export type Parser
 			valueOwnsHeap: BoolArray.create(),
 			valueOwnsHeapAlone: BoolArray.create(),
 			valuePromiseMarks: BoolArray.create(),
+			nodeHandleMintedFrom: ValueIdArray.create(),
 			phiAliasUnprovenMarks: BoolArray.create(),
 			valueIsCapturingClosure: BoolArray.create(),
 			valueClosureEnv: ValueIdArray.create(),
@@ -21230,6 +21236,7 @@ export type Parser
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
+		self.nodeHandleMintedFrom = ValueIdArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -22605,6 +22612,7 @@ export type Parser
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
+		self.nodeHandleMintedFrom = ValueIdArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -25681,7 +25689,7 @@ export type Parser
 		// recomputation genuinely finds no hole left.
 		if binding.payloadSlotVacated 'holeFilled'
 			binding.payloadSlotVacated = false
-			self.setScrutineePartiallyMoved(binding.payloadScrutBox, value: self.boxHasVacatedPayloadSlot(binding.payloadScrutBox))
+			self.setBindingPartiallyMoved(binding.payloadScrutBox, value: self.boxHasVacatedPayloadSlot(binding.payloadScrutBox))
 		end 'holeFilled'
 	end 'writeBackPayload'
 
@@ -31104,14 +31112,16 @@ export type Parser
 	// precisely the owned values NO binding owns (`pendingTempsContain`), which is the question being asked —
 	// so a non-temporary source is a silent, correct no-op and every caller may ask unconditionally.
 	//
-	// ⚠ **SEVEN CALLERS, AND THIS SAID FIVE WHILE THERE WERE SEVEN (recounted at review).** They are: the
-	// `for … in` SOURCE and, separately, the per-trip ELEMENT an `Iterable` cursor's `current()` mints; the
-	// temporary `match` scrutinee; the box a member BORROW was taken off (`dispatchMethodOnBase`); the
-	// container an ARRAY element borrow was taken out of and the container a `__ManagedList` node HANDLE
-	// points into; and the callee-storage escaping feed argument. All one fact — *"something outlives this
-	// statement and points into this record"* — and an eighth copy of the two-line remove-and-enrol is how one
-	// of them would come to do only half of it. ⚠ A COUNT in a header is a claim like any other: keep it true
-	// or do not write it, because a reader who trusts a stale one stops looking for the sites it omits.
+	// ⚠ **SIX CALLERS.** They are: the `for … in` SOURCE and, separately, the per-trip ELEMENT an `Iterable`
+	// cursor's `current()` mints; the temporary `match` scrutinee; the box a member BORROW was taken off
+	// (`dispatchMethodOnBase`); the container an ARRAY element borrow was taken out of; and the
+	// callee-storage escaping feed argument. All one fact — *"something outlives this statement and points
+	// into this record"* — and a seventh copy of the two-line remove-and-enrol is how one of them would come
+	// to do only half of it. ⚠ A COUNT in a header is a claim like any other: keep it true or do not write
+	// it, because a reader who trusts a stale one stops looking for the sites it omits. It said FIVE while
+	// there were seven (recounted at review), and the seventh — the container a `__ManagedList` node HANDLE
+	// pointed into — is gone at `W138`: a handle RETAINS its list now, which outlives the scope this
+	// promotion could only reach the end of.
 	// `name` is inert (the binding is never installed in a `Scope`, so no source line can name it) and each
 	// caller states its own, so a dump of `ownedBindings` still says WHY each nameless entry is there.
 	function giveTemporaryScopeLifetime(value ValueId, name ByteArray)
@@ -34918,11 +34928,20 @@ export type Parser
 	// *"does handing this borrowed container to that callee reach a write of it?"*. The storage column used
 	// to be set by `noteReceiverWrite` instead, off **E3019's** `mutatesReceiver` answer — so the two halves
 	// of one question read two different flags, and any surface whose two answers differ got one half and
-	// not the other. `__ManagedList` is exactly that surface (`managedListMethodFreesANode` is narrower than
+	// not the other. `__ManagedList` was exactly that surface (`managedListMethodFreesANode` was narrower than
 	// `managedListMethodMutatesReceiver`), and the gap was a MEASURED 0xC0000005: `let node =
 	// chain.insertLast(s)` + `wipe(chain)` whose body is `chain.clear()` + `node.value()` compiled clean and
 	// faulted. Recorded here, a surface cannot set the cross-function half without the same-body half,
 	// because there is only one call and only one answer.
+	//
+	// ⚖ **THAT MOTIVATING SURFACE IS NOW THE STARKEST CASE OF THE SAME POINT, NOT A RETRACTION OF IT.** USER
+	// RULING 2026-08-17 made a `__ManagedList` node handle a SECOND OWNER of a refcounted node, so nothing on
+	// that surface can dangle a handle: its E3070 answer went from *narrower* to **EMPTY**, while its E3019
+	// answer is unchanged and non-empty. `dispatchManagedListMethod` therefore does not call this function at
+	// all — which is only expressible BECAUSE the two halves come off one flag at one door. Under the old
+	// arrangement the storage column would still be set from E3019's answer and the surface would over-refuse
+	// `a-returned-handle-survives-a-clear`. The program above runs correctly there now; that case is kept and
+	// running (`borrow-liveness:a-callee-clearing-a-managed-list-frees-a-node-handle`).
 	//
 	// ⚠ **THE COLUMN IS RECORDED BEFORE THE `borrows.count()` GATE, AND THAT ORDER IS LOAD-BEARING.** The
 	// gate above asks whether THIS body holds a borrow; the storage column is about the body's CALLERS,
@@ -36607,7 +36626,7 @@ export type Parser
 						// moment a write-back could put the payload back (`writeBackPayload`), so the merge-level
 						// bit is read off the arm's EXIT state instead — by the next arm's `beginFreshArm`, and
 						// for the last arm by the single read after the loop.
-						self.setScrutineePartiallyMoved(scrut, value: true)
+						self.setBindingPartiallyMoved(scrut, value: true)
 					end 'consumed'
 				end 'openArmBindings'
 
@@ -36742,10 +36761,10 @@ export type Parser
 		// consume would be lost. Reading the STATE rather than latching a bit at the bind is what lets a
 		// write-back un-consume the scrutinee (`writeBackPayload` — `mutable-enums`): the question is what
 		// the arm LEFT BEHIND, not what it did on the way.
-		scrutConsumed = scrutConsumed or self.scrutineeIsPartiallyMoved(scrut)
+		scrutConsumed = scrutConsumed or self.bindingIsPartiallyMoved(scrut)
 
 		if scrutConsumed 'consumeScrut'
-			self.setScrutineePartiallyMoved(scrut, value: true)
+			self.setBindingPartiallyMoved(scrut, value: true)
 		end 'consumeScrut'
 
 		// ⭐ **EMIT THE PLANNED DISPATCH** — after every arm body and the default/dead miss target are in
@@ -36817,11 +36836,11 @@ export type Parser
 	// by a payload-free arm would leave `m` reading LIVE after the outer match, and a later bind would load
 	// the nulled slot — the same SIGSEGV this rewind exists to close, one construct out.)
 	function beginFreshArm(carried VarInfoArray, entryVals ValueIdArray, entryMoveMark MoveMark, scrut ValueId) returns bool
-		let consumedOnThePrecedingPath = self.scrutineeIsPartiallyMoved(scrut)
+		let consumedOnThePrecedingPath = self.bindingIsPartiallyMoved(scrut)
 
 		self.restoreBindings(carried, snapshot: entryVals)
 		self.restoreMoveMark(entryMoveMark)
-		self.setScrutineePartiallyMoved(scrut, value: false)
+		self.setBindingPartiallyMoved(scrut, value: false)
 
 		return consumedOnThePrecedingPath
 	end 'beginFreshArm'
@@ -36838,33 +36857,41 @@ export type Parser
 	// owner — a disagreement invisible at either site read alone. A temporary scrutinee is owned by no
 	// binding, so all three are correctly inert on it: it has no name to re-read, write through or ask.
 
-	// Set the `partiallyMoved` bit of the binding a match scrutinee denotes — `true` where a binding arm
-	// moved a managed payload out (a re-read is then E3102, but the box is still dropped: see
-	// `VarInfo.partiallyMoved`), `false` where a fresh sibling arm rewinds that, or where a write-back has
-	// refilled the last vacated slot (`writeBackPayload`).
-	function setScrutineePartiallyMoved(scrut ValueId, value bool)
-		let index = self.liveOwnerIndexOf(scrut)
-		if self.noLiveOwner(index) 'temporaryScrutinee'
+	// Set the `partiallyMoved` bit of the binding `owner` denotes — `true` where something moved a managed
+	// payload OUT of a box this binding still owns (a re-read is then E3102, but the box is still dropped:
+	// see `VarInfo.partiallyMoved`), `false` where a fresh sibling `match` arm rewinds that, or where a
+	// write-back has refilled the last vacated slot (`writeBackPayload`).
+	//
+	// ⭐⭐ **TWO PRODUCERS, ONE FACT — AND THE SECOND IS WHY THIS IS NO LONGER NAMED FOR SCRUTINEES.** A
+	// binding-match nulls a union's payload slot; `__ManagedList.remove` nulls a NODE's `value@16` when it
+	// hands the element to the caller (`ListRuntime.buildListUnlinkNode`). Both leave a binding owning a box
+	// whose payload is gone, and both want the identical answer: refuse the re-read, keep the drop.
+	//
+	// ⚠ **IT IS INERT ON A VALUE NO BINDING OWNS**, which is exactly right for both: a temporary scrutinee
+	// has no name to re-read, and so does `ml.remove(ml.insertLast(x))`.
+	function setBindingPartiallyMoved(owner ValueId, value bool)
+		let index = self.liveOwnerIndexOf(owner)
+		if self.noLiveOwner(index) 'noBindingToMark'
 			return
-		end 'temporaryScrutinee'
+		end 'noBindingToMark'
 
 		// A `var` bound from `.get(index)`: the flag is written THROUGH the shared `VarInfo` reference (the
 		// `Scope.setValue` idiom `poisonOwningBinding` uses), so every holder observes it.
-		var owned = try self.ownedBindings.get(index) otherwise panic("setScrutineePartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		var owned = try self.ownedBindings.get(index) otherwise panic("setBindingPartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 		owned.partiallyMoved = value
-	end 'setScrutineePartiallyMoved'
+	end 'setBindingPartiallyMoved'
 
-	// Has the binding a match scrutinee denotes had a managed payload moved out of it on the path parsed so
-	// far? The reader half of the pair above.
-	function scrutineeIsPartiallyMoved(scrut ValueId) returns bool
-		let index = self.liveOwnerIndexOf(scrut)
-		if self.noLiveOwner(index) 'temporaryScrutinee'
+	// Has the binding `owner` denotes had a managed payload moved out of it on the path parsed so far? The
+	// reader half of the pair above. Only the `match` machinery asks — `remove` sets and never re-reads.
+	function bindingIsPartiallyMoved(owner ValueId) returns bool
+		let index = self.liveOwnerIndexOf(owner)
+		if self.noLiveOwner(index) 'noBindingToAsk'
 			return false
-		end 'temporaryScrutinee'
+		end 'noBindingToAsk'
 
-		let owned = try self.ownedBindings.get(index) otherwise panic("scrutineeIsPartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
+		let owned = try self.ownedBindings.get(index) otherwise panic("bindingIsPartiallyMoved: ownedBindings.get OOB at {index} — the index came from `liveOwnerIndexOf` and was just bounds-tested")
 		return owned.partiallyMoved
-	end 'scrutineeIsPartiallyMoved'
+	end 'bindingIsPartiallyMoved'
 
 	// ⭐⭐ **MAY A `match` ARM WRITE THROUGH THIS SCRUTINEE'S PAYLOAD BINDINGS (`specs/mutable-enums.md`)?**
 	// True iff a MUTABLE binding is the live owner of the box — `var b = Box.full(10)` yes, `let b` no.
@@ -38855,7 +38882,7 @@ export type Parser
 	//     *"this value owns a reference"* where the null store needs *"nobody else will read these slots"*. The
 	//     gate is `valueIsSoleHeapOwner`; see `OwnedHeapExclusivity` for the six measured programs.
 	// Returns whether ANY managed field was MOVED out — the whole match then consumes the scrutinee
-	// (`setScrutineePartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
+	// (`setBindingPartiallyMoved`). A RETAIN consumes nothing, so it must not set it: nothing left the
 	// box, and marking it moved would make the other owner's later re-read a false E3102.
 	//
 	// ⭐ **`scrutMutable` DECIDES WHETHER THE BINDINGS ACCEPT A WRITE (`specs/mutable-enums.md`).** It is a
@@ -39972,6 +39999,9 @@ export type Parser
 		// The promise mark rides the same lockstep, seeded NOT-a-promise; set by `markValuePromise` on the
 		// one value an `async` spawn produces.
 		self.valuePromiseMarks.push(false)
+		// The node-handle mint rides the same lockstep, seeded NOT-A-MINT — which is the value's OWN id, a
+		// list it can never have been minted off (see the field header).
+		self.nodeHandleMintedFrom.push(id)
 		// The merge-alias mark rides the same lockstep, seeded PROVEN — an ordinary value's declared alias is
 		// one it passed a door to acquire. Only `mintPhi` sets it, because only a merge can name an alias no
 		// door stood in front of (see the field header).
@@ -40084,6 +40114,11 @@ export type Parser
 		self.valueOwnsHeapAlone.push(false)
 		// A parameter is never an async spawn's handle; the slot must exist so the column stays indexable.
 		self.valuePromiseMarks.push(false)
+		// A parameter is never an insertion's fresh mint either — a handle ARRIVES here, it is not made here —
+		// so it takes the NOT-A-MINT seed, its own id, which is the index this push is about to land at.
+		// `remove` therefore refuses a bare parameter handle only if no binding owns it, and `bindParameters`
+		// gives every parameter one.
+		self.nodeHandleMintedFrom.push(self.nodeHandleMintedFrom.count())
 		// A parameter is never a merge, and its declared range IS proved — by the entry guard `guardRangedParams`
 		// stands in front of every caller (A1f). The slot must exist so the column stays indexable.
 		self.phiAliasUnprovenMarks.push(false)
@@ -48327,11 +48362,12 @@ export type Parser
 		end 'listMethod'
 
 		// A `__ManagedList` RECEIVER (`ml.insertFirst(x)`, `ml.remove(node)`, `ml.clear()`) is the SAME chain
-		// under the surface that hands out node handles, so it carries the borrow subject for the `List`
-		// arm's reason and one of its own: an insertion's NODE is a reference into the list, and E3070 is
-		// what stops it being read after a `remove`/`clear` frees it. ⭐ It carries the STORAGE mask for that
-		// same reason, and the arm went without one until W-BORROW — see `dispatchManagedListMethod`, where
-		// the omission was a measured 0xC0000005 across a call.
+		// under the surface that hands out node handles. ⭐ **IT CARRIES THE STORAGE MASK, BUT NOT FOR E3070's
+		// SAKE ANY MORE.** W-BORROW threaded one here because an insertion's NODE was *"a reference into the
+		// list"* that a `remove`/`clear` could free — a measured 0xC0000005 across a call. ⚖ `W138` withdrew
+		// that premise: a handle is a SECOND OWNER of a refcounted node, so nothing on this surface can dangle
+		// one and `dispatchManagedListMethod` records no borrow-subject write at all. The mask that still
+		// arrives is E3019's and W117's, which the two insertions genuinely owe.
 		if self.signatures.isManagedListInstanceAt(recv.tag, nameId: recv.nameId) 'managedListMethod'
 			return try self.dispatchManagedListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName))
 		end 'managedListMethod'
@@ -53037,10 +53073,11 @@ export type Parser
 	// own header states it, and `__list_decref`'s last owner calls the same walk). The receiver is handed back
 	// as what the statement still denotes, exactly as `emitArrayVoidCall` does.
 	//
-	// ⚠ The borrow-subject write is recorded by the CALLER and not here: the two dispatchers ask a different
-	// QUESTION of it — `List` asks `listMethodMutatesReceiver` and `__ManagedList` the narrower
-	// `managedListMethodFreesANode` — and both record before this runs, so the write's token is the closing `)`
-	// (`containerWriteToken`) on both doors rather than one of each.
+	// ⚠ The borrow-subject write is the CALLER's and not this helper's, because only ONE of the two doors owes
+	// one: `List` hands out ELEMENT borrows a `clear` invalidates and records the write through
+	// `listMethodMutatesReceiver` before this runs; `__ManagedList` hands out node HANDLES, which are second
+	// OWNERS since `W138` and cannot be dangled, so it records nothing. Filing it here would give the surface
+	// with nothing to protect the same write as the surface with something to protect.
 	function emitChainClear(list ValueId, resultUsed bool, methodTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
 		try self.consumeEmptyArgList()
@@ -53052,16 +53089,16 @@ export type Parser
 	// `dispatchListMethod` serves (`SignatureIndex.ManagedListBuiltinBaseName`), so every emit below is a
 	// `__list_*` entry and not one new runtime call.
 	//
-	// ⭐⭐ **THE NODE AN INSERTION HANDS BACK IS A BORROW OF THE LIST, AND THAT IS WHAT MAKES THIS SURFACE
-	// SOUND WITHOUT REFCOUNTING NODES.** `ListRuntime.maxon`'s header states shv2's node rule — one owner,
-	// reclaimed by a direct `__mm_free` — and argues it from *"shv2 exposes NO node type at all"*, which
-	// this rung changes. The premise moved; the conclusion survives, because the second thing a live handle
-	// could be is not a second OWNER but a DANGLING READ, and shv2 already has the mechanism that refuses
-	// one: `mintPendingBorrow` + E3070, which invalidate every outstanding borrow of a binding at the next
-	// write through it. So `let n = ml.insertFirst(x)` + `ml.clear()` + `n.value()` is **refused at compile
-	// time** rather than reading freed memory — where v1 pays a refcount per node to make the same program
-	// merely *not crash*. Refcounting nodes would buy `detach` (a node deliberately outliving its link),
-	// which shv2 does not provide and no case here asks for.
+	// ⭐⭐ **THE HANDLE AN INSERTION HANDS BACK IS A SECOND OWNER OF THE NODE.** ⚖ USER RULING 2026-08-17
+	// (PLAN `W138`, superseding the ruling taken earlier the same day): refcount the nodes, v1's model. So a
+	// handle may escape into a return, a field or a parameter — which `stdlib/List.maxon` needs — and every
+	// method below drops the CHAIN's reference rather than freeing, so nothing here can dangle one.
+	//
+	// ⛔ **NO METHOD ON THIS SURFACE INVALIDATES A HANDLE ANY MORE, AND THE PREDICATE THAT SAID OTHERWISE IS
+	// GONE** (`managedListMethodFreesANode`'s grave carries the reasoning). Two designs died getting here: a
+	// statement-scoped BORROW, which could not escape at all; and an owned box RETAINING THE LIST, which was a
+	// measured WRONG ANSWER — `clear` frees nodes, so the retain kept nothing alive, and E3070 could not
+	// follow a handle out of the source name it was minted under.
 	//
 	// ⚠ **THE RECEIVER-WRITE IS NOTED AFTER THE ARGUMENTS ARE PARSED, WHICH IS THE ONE ORDERING DIFFERENCE
 	// FROM EVERY OTHER DISPATCHER.** `ml.remove(node)` READS the handle and then WRITES the list, in that
@@ -53075,28 +53112,26 @@ export type Parser
 		let range = SourceRange.ofToken(methodTok)
 		let giid = self.valueNameId(list)
 		let mutates = managedListMethodMutatesReceiver(methodTok.value)
-		// ⭐ **THE E3070 HALF ASKS A NARROWER QUESTION, AND IT IS ASKED HERE SO THE TWO SETS SIT SIDE BY
-		// SIDE** — which is the whole content of `managedListMethodFreesANode`'s header, and it can only be
-		// read against `mutates` where both are written. Only the RECORDING of the write stays inside the
-		// arms: `remove` must record its write AFTER its argument is read (see the header above), and one
-		// hoisted `noteBorrowSubjectWrite` could not be in two places at once.
-		let freesANode = managedListMethodFreesANode(methodTok.value)
 
-		// ⛔⛔ **THIS PASSED `receiverStorage: NoParamPositions` UNTIL W-BORROW, AND IT WAS A USE-AFTER-FREE.**
-		// It carried the `String`/`Set`/`Map` sentence (*"a chain write cannot free an ARRAY element, which is
-		// the only borrow E3070 tracks"*), which is true of those three because they hand out no borrow at all,
-		// and FALSE of both chain surfaces: this one mints a NODE handle borrow (`emitManagedListNodeHandle`)
-		// and `dispatchListMethod` mints an ELEMENT borrow. MEASURED: `let node = chain.insertLast("<heap
-		// string>")` then `wipe(chain)` — where `wipe` calls `chain.clear()` — compiled clean and ran to
-		// **0xC0000005**, where the bootstrap oracle refuses it.
+		// ⭐⭐ **W-BORROW's ARCHITECTURE, KEPT WHOLE — AND UNDER `W138` IT IS WHAT LEAVES THIS SURFACE WITH
+		// NOTHING TO RECORD.** That rung moved E3070's cross-function half out of this door and onto
+		// `noteBorrowSubjectWrite`, so a surface can no longer set one half of E3070 without the other, and
+		// what `noteReceiverWrite` still takes a storage mask FOR is E3019 and W117 — which the two insertions
+		// genuinely owe, since an insertion does write a `let` receiver's record. That half is unchanged here.
 		//
-		// ⇒ **AND THE CURE WAS NOT `dispatchListMethod`'s, COPIED — IT IS THAT THE STORAGE COLUMN BELONGS TO
-		// E3070's OWN FLAG.** This surface's two answers DIFFER (`freesANode` ⊊ `mutates`), so passing the
-		// wider one would refuse `let a = ml.insertLast(x)` + `ml.insertLast(y)` + a read of `a` —
-		// `/specs/managed-list.md:core.insert-first-multiple`, a legal program. The column is therefore
-		// recorded by `noteBorrowSubjectWrite` below, which the `remove` and `clear` arms already call with
-		// `freesANode` and the two insertions correctly do not call at all. What this line still hands over is
-		// E3019's and W117's answer, which IS the wider set: an insertion does write a `let` receiver's record.
+		// ⚖ **THE E3070 HALF IS NOT PASSED ON, BECAUSE THERE IS NO LONGER A WRITE TO RECORD.** W-BORROW read
+		// this surface's E3070 answer off `managedListMethodFreesANode`, on the premise that `remove`/`clear`
+		// FREE a node an outstanding handle names — measured then as `let node = chain.insertLast("<heap>")` +
+		// `wipe(chain)` at **0xC0000005**. USER RULING 2026-08-17 (option (iii)) made a handle a SECOND OWNER of
+		// a refcounted node: `clear` drops the CHAIN's reference and the node lives, so that program is
+		// memory-safe and RE-MEASURED here at **exit 0 with the right string**. The predicate is deleted, both
+		// `noteBorrowSubjectWrite` calls with it, and `borrow-liveness:a-callee-clearing-a-managed-list-frees-a-
+		// node-handle` is kept as the RUNNING case that records the boundary moving.
+		//
+		// ⚠ **THIS IS NOT THE `List` DOOR's ANSWER, AND THE TWO MUST NOT BE UNIFIED.** `dispatchListMethod`
+		// hands out ELEMENT borrows, which a removal still hands to a new owner and a `clear` still releases;
+		// its `noteBorrowSubjectWrite` stays exactly as W-BORROW landed it. An element borrow is not a node
+		// handle, and no ruling about node lifetime reaches one.
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
 
 		if methodTok.value.equals(CountMethod) 'count'
@@ -53109,50 +53144,115 @@ export type Parser
 		if methodTok.value.equals(ManagedListInsertFirstMethod) or methodTok.value.equals(ManagedListInsertLastMethod) 'insertAtAnEnd'
 			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
 			let callee = ListPrependName if methodTok.value.equals(ManagedListInsertFirstMethod) else ListAppendName
-			return self.emitManagedListNodeHandle(func, callee: callee, args: pairArgs(list, second: value), listGiid: giid, container: list, borrowSubjectName: borrowSubjectName, range: range)
+			return self.emitManagedListNodeHandle(callee, args: pairArgs(list, second: value), listGiid: giid, list: list, range: range)
 		end 'insertAtAnEnd'
 
 		if methodTok.value.equals(RemoveMethod) 'remove'
 			let node = try self.parseManagedListNodeArg(func, giid: giid)
-			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
+
+			// ⭐⭐ **`remove` TAKES THE ELEMENT, SO THE ARGUMENT'S OWN HANDLE MAY NOT BE READ AGAIN — AND THIS
+			// IS THE NARROW FACT THAT SURVIVED `managedListMethodFreesANode`.** Deleting that predicate was
+			// right: nothing on this surface FREES a node any more. But `remove` still NULLS the node's
+			// `value@16` when it moves the element out, so `n.value()` after `chain.remove(n)` reads an
+			// emptied slot — MEASURED as **exit 139**, a segfault, on a `String` element, where the pre-rung
+			// compiler refused the same program outright. A trivial element merely printed `0`, which is how
+			// it survived a whole pass unnoticed.
+			//
+			// ⭐ **IT IS PER-BINDING, WHICH IS THE WHOLE DIFFERENCE FROM THE E3070 IT REPLACES.** That refusal
+			// keyed on the STORAGE, so `ml.remove(a)` also killed a handle `b` on a node the removal cannot
+			// touch — the over-refusal that disabled canonical `core.remove`. This marks the ARGUMENT's
+			// binding and nothing else, so siblings stay readable and that case stays green; it is the
+			// regression test for the narrowing.
+			//
+			// ⚠ **`detach` DELIBERATELY DOES NOT REACH THIS.** It leaves the element in the node, so its
+			// handle goes on answering `value()` — which is what `core.detach` asserts.
+			//
+			// ⛔⛔ **AND THE MARK HAS TO LAND, OR THE CALL IS REFUSED — BECAUSE A MARK THAT MISSES IS SILENT.**
+			// `setBindingPartiallyMoved` is keyed to the BINDING that owns the handle, so it is INERT on a
+			// handle read out of a struct FIELD, an array element, or any other expression no live binding
+			// owns — and every one of those is namable a second time, which is the whole difference from an
+			// unnamed temporary. MEASURED at review: `chain.remove(k.node)` then `k.read()` over a `String`
+			// ran to **exit 139**, where the pre-rung compiler refused the same program at the drop router.
+			// The escape is the same shape the E3070 half had — a mark filed against a name the value has
+			// since left — so it is closed at the door rather than by widening the mark.
+			//
+			// ⚠ **THE ONE UNMARKABLE SPELLING THAT IS SAFE IS THIS CHAIN'S OWN INSERTION, HANDED IN INLINE** —
+			// `ml.remove(ml.insertLast(x))`, where the handle exists only as this argument and no second
+			// expression can name it. It is admitted by IDENTITY (`nodeHandleMintedFrom`, stamped by the one
+			// mint door) and not by shape.
+			//
+			// ⛔⛔ **IT ASKED `pendingTempsContain` FIRST, AND THAT ADMITTED EVERY CALL RESULT — `k.held()`
+			// INCLUDED, MEASURED AT EXIT 139 BY THE COORDINATOR ON THIS BRANCH.** A method handing back a
+			// field's handle is an unnamed owned temporary too, so the predicate was strictly wider than the
+			// sentence it was defending — the same defect this refusal exists to close, one level up. ⚠ The
+			// stamp also carries WHICH chain, so `a.remove(b.insertLast(x))` is refused here rather than left
+			// to `__list_remove_node`'s cross-chain abort.
+			let mintedOnThisChain = (try self.nodeHandleMintedFrom.get(node) otherwise panic("dispatchManagedListMethod: v{node} has no node-handle mint slot — every SSA value must be minted through mintValue, which seeds the column")) == list
+
+			if self.noLiveOwner(self.liveOwnerIndexOf(node)) and not mintedOnThisChain 'unmarkableHandle'
+				throw ParseError.unsupported("`{String.from(ManagedListBuiltinBaseName)}.{String.from(RemoveMethod)}` takes the element OUT of the node, so its handle must be one this statement can mark as moved — a name (`{String.from(RemoveMethod)}(n)`) or an insertion on this same chain, handed in inline. A handle arriving any other way — out of a field, an element, a call result, a merge — would go on answering `{String.from(ManagedListNodeValueMethod)}()` from the emptied slot with nothing left to refuse the read; bind it to a name first, or use `{String.from(ManagedListDetachMethod)}`, which leaves the element where it is", line: methodTok.line, column: methodTok.column)
+			end 'unmarkableHandle'
+
+			self.setBindingPartiallyMoved(node, value: true)
 			// The element is MOVED OUT — the caller owns it, and a statement-position `remove` drops it at
 			// the statement's end like every other unbound owned temporary. Emitted through the ONE element
 			// accessor, so its ownership, its result type and its buffer-surface mark are the array's answers.
 			return self.emitContainerElementAccessor(func, callee: ListRemoveNodeName, container: list, args: pairArgs(list, second: node), giid: giid, owned: true, borrowSubjectName: borrowSubjectName, range: range)
 		end 'remove'
 
-		// The write is recorded BEFORE the argument list is consumed — where it used to be recorded after — so
-		// this door and the `List` one derive the same `containerWriteToken` for the same source text. With no
-		// arguments to evaluate the two answers differ by one token index and by nothing else; see
-		// `emitChainClear`, which is the rest of this arm and is shared with that door.
+		// ⭐ **`detach(node)` — THE MEMBER THE SECOND RULING UNLOCKED.** Void and statement-position, like
+		// `clear`; the chain lets go of the node while the caller's handle keeps it, which is only meaningful
+		// because a node is refcounted. The runtime hands back the element like its `remove` twin and it is
+		// discarded here — see `buildListDetachNode`.
+		if methodTok.value.equals(ManagedListDetachMethod) 'detach'
+			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
+			let target = try self.parseManagedListNodeArg(func, giid: giid)
+			_ = self.emitRuntimeCall(ListDetachNodeName, args: pairArgs(list, second: target), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
+			return list
+		end 'detach'
+
+		// ⚠ **NO BORROW-SUBJECT WRITE IS RECORDED HERE, WHERE THE `List` DOOR RECORDS ONE.** That door hands
+		// out ELEMENT borrows (`first`/`last`/`get`) that a `clear` frees; this one hands out node HANDLES, which
+		// are OWNERS since `W138` and cannot be dangled by anything on this surface — see
+		// `dispatchManagedListMethod`'s header for the predicate that used to be asked here and why it is gone.
 		if methodTok.value.equals(ClearMethod) 'clear'
-			self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: freesANode)
 			return try self.emitChainClear(list, resultUsed: resultUsed, methodTok: methodTok, range: range)
 		end 'clear'
 
-		throw ParseError.unsupported("`{String.from(ManagedListBuiltinBaseName)}` method '{String.from(methodTok.value)}' — shv2 provides {String.from(CreateMethod)}/{String.from(ManagedListInsertFirstMethod)}/{String.from(ManagedListInsertLastMethod)}/{String.from(RemoveMethod)}/{String.from(ClearMethod)}/{String.from(CountMethod)}, and `{String.from(ManagedListNodeValueMethod)}()` on the node handle; head/tail/next/prev/insertAfter/insertBefore/detach/setValue/isEmpty are later slices", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("`{String.from(ManagedListBuiltinBaseName)}` method '{String.from(methodTok.value)}' — shv2 provides {String.from(CreateMethod)}/{String.from(ManagedListInsertFirstMethod)}/{String.from(ManagedListInsertLastMethod)}/{String.from(RemoveMethod)}/{String.from(ClearMethod)}/{String.from(CountMethod)}, /{String.from(ManagedListDetachMethod)}, and `{String.from(ManagedListNodeValueMethod)}()` on the node handle; head/tail/next/prev/insertAfter/insertBefore/setValue/isEmpty are later slices", line: methodTok.line, column: methodTok.column)
 	end 'dispatchManagedListMethod'
 
-	// ⭐ **EMIT AN INSERTION AND TYPE ITS RESULT AS A NODE HANDLE.** The runtime hands back the node it just
-	// linked (`ListRuntime.emitListPublishEnd`); this is where that machine word becomes a value of
-	// `__ManagedListNode with <element>` and a BORROW of the list.
+	// ⭐⭐ **THE ONE PLACE A `__ManagedListNode` VALUE IS MINTED — AND IT MINTS AN OWNED SECOND OWNER OF THE
+	// NODE.** ⚖ USER RULING 2026-08-17 (the second on `W138`, superseding the first): nodes are REFCOUNTED,
+	// and a handle is a reference like any other. So the result is enrolled as a sole-owned temp and drops at
+	// scope exit through `genericInstanceBoxDropCallee` → `__list_node_decref`, which is what lets a handle
+	// outlive the chain in a return, a field or a parameter — the three positions `stdlib/List.maxon` needs.
 	//
-	// ⚠ **THE BORROW IS MINTED FOR EVERY ELEMENT TYPE, where the element accessor mints one only for a
-	// MANAGED element.** The two are not the same question: a borrowed ELEMENT of a trivial-element list is
-	// an inline word that no mutation can dangle, while a NODE is a pointer into the chain whatever it
-	// holds — `remove`/`clear` free it either way. So the gate that is right one door over would be a
-	// use-after-free here.
-	function emitManagedListNodeHandle(func IrFunction, callee ByteArray, args ValueIdArray, listGiid GenericInstanceId, container ValueId, borrowSubjectName ByteArray, range SourceRange) returns ValueId
-		let nodeGiid = self.signatures.managedListNodeInstanceFor(listGiid)
-		let node = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: nodeGiid, range: range)
+	// ⭐ **THE INCREF GOES THROUGH `emitIncref` AND NOT THROUGH A SECOND SPELLING OF IT.** That door is where
+	// *"after this line the allocation has two owners"* is recorded (`markValueCoOwnsHeap`) and where the
+	// retain is kept off a block-form `try`'s handler edge (`emitOwnershipRuntimeCall`); a raw
+	// `emitRuntimeCall(MmIncrefName, …)` here would be a sixth producer of `__mm_incref` that the door's own
+	// roster does not name, which is the shape that comes to miss whatever the door gains next.
+	//
+	// ⭐ **THE `+1` IS THE CALLEE'S TO PRODUCE, NEVER THIS DOOR'S — v1's `callReturnRc1`, and the rule that
+	// keeps `W137` from double-counting.** An insertion's `+1` is the node's own fresh `__mm_alloc` (the chain
+	// takes a SECOND reference in `emitListClaimsNode`); `W137`'s `head`/`tail`/`next`/`prev` hand back a node
+	// that already exists, so those entries must incref before returning. Either way this helper is the same
+	// two lines, and a mint that forgot its `+1` would be a use-after-free rather than a leak.
+	//
+	// ⛔ **NO BORROW IS MINTED, AND THE MISSING `mintPendingBorrow` IS THE POINT.** The first ruling's handle
+	// was a borrow of the chain plus a retain of the chain, and it was measured WRONG: `clear` frees nodes,
+	// the retain did not keep one alive, and E3070 could not follow a handle out of the name it was minted
+	// under — so a handle in a struct field read `0x3F3F3F3F3F3F3F3F` at exit 0. A refcounted node needs no
+	// refusal because there is nothing to refuse: see `managedListMethodFreesANode`'s grave.
+	function emitManagedListNodeHandle(callee ByteArray, args ValueIdArray, listGiid GenericInstanceId, list ValueId, range SourceRange) returns ValueId
+		let node = self.emitRuntimeCall(callee, args: args, resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.managedListNodeInstanceFor(listGiid), range: range)
+		self.emitIncref(node, range: range)
+		self.trackOwnedTemp(node, exclusivity: OwnedHeapExclusivity.coOwned)
 
-		// The list is held to the scope's end for `emitContainerElementAccessor`'s measured reason, applied
-		// to a handle instead of an element: the node this points at lives inside a record that must not be
-		// freed at the end of the statement that produced it.
-		self.giveTemporaryScopeLifetime(container, name: BorrowSourceBindingName)
-		if not borrowSubjectName.isEmpty() 'borrowsANamedSourcesNode'
-			self.mintPendingBorrow(func, subjectName: borrowSubjectName, borrowValue: node, range: range)
-		end 'borrowsANamedSourcesNode'
+		// ⭐ **THE PROVENANCE STAMP `remove`'s ONE EXEMPTION IS KEYED TO** — see `nodeHandleMintedFrom`. It is
+		// written HERE, at the only door that mints a handle, so the exemption cannot be widened by a caller.
+		try self.nodeHandleMintedFrom.set(node, value: list) otherwise panic("emitManagedListNodeHandle: v{node} has no node-handle mint slot — every SSA value must be minted through mintValue, which seeds the column")
 
 		return node
 	end 'emitManagedListNodeHandle'
@@ -53162,9 +53262,14 @@ export type Parser
 	// list's handles carry, so a handle from a list of another element type is refused by comparing gids
 	// rather than by unpacking either type.
 	//
-	// ⚠ The handle is NOT moved in and nothing is poisoned: it is a borrow the list already owns the subject
-	// of, so there is no ownership to transfer. What ends its usefulness is the WRITE this argument
-	// authorizes, and that is E3070's job (see `dispatchManagedListMethod`'s ordering note).
+	// ⚠ **THE HANDLE IS NOT MOVED IN AND NOTHING IS POISONED, EVEN THOUGH IT IS OWNED.** `remove` unlinks the
+	// node and drops the CHAIN's reference; the caller's own reference is untouched, which is what lets the
+	// handle outlive its own removal and makes its later scope-exit drop correct — the node stays ALIVE, and a
+	// second `remove` of it is a no-op (`ListRuntime.buildListUnlinkNode`'s `owner@32` gate).
+	//
+	// ⚠ **WHAT DOES END THE HANDLE'S USEFULNESS IS THE ELEMENT LEAVING IT**, and that is the caller's
+	// business rather than this parse: `remove` empties `value@16`, so `dispatchManagedListMethod`'s `remove`
+	// arm marks the argument's binding moved (E3102 on a re-read) and REFUSES a handle it cannot mark.
 	function parseManagedListNodeArg(func IrFunction, giid GenericInstanceId) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
 		let argTok = self.current()
@@ -53186,10 +53291,22 @@ export type Parser
 	// ⚠ **THE ELEMENT BORROW IS ANONYMOUS (`EmptySourceText`), and that is a residual rather than a
 	// decision that costs nothing.** E3070's subject is a STORAGE name, and the storage this element lives
 	// in is the LIST — which this dispatcher cannot name: it holds the node, whose own binding is not
-	// storage anything writes through. So `let v = node.value()` + `ml.clear()` + a read of `v` is not
-	// refused, exactly as an element borrowed out of any anonymous receiver is not. The HANDLE itself is
-	// tracked (that is where the hazard actually lives — `n.value()` after a `remove` is refused), and
-	// closing the remaining half needs a value→subject map the parser does not have.
+	// storage anything writes through. Closing it needs a `ValueId` → SUBJECT NAME derivation the parser does
+	// not have: `borrowSubjectNameAt` reads a TOKEN INDEX, and `nodeHandleMintedFrom` — the one value→chain
+	// map there is — answers with a VALUE, which is not the currency a subject is spelled in.
+	//
+	// ⛔⛔ **IT IS REACHABLE, AND THE SPELLING IS A DISCARDED `remove` (`W147`). MEASURED — exit 139:**
+	//
+	//     let n = chain.insertLast("<heap string>") ;  let v = n.value() ;  _ = chain.remove(n)
+	//     print("[{v}]")                                                    // -> 0xC0000005
+	//
+	// ⚠ **AND THE MECHANISM IS THE MOVE-OUT, NOT THE NODE's LIFETIME — WHICH IS WHY THREE PROBES MISSED IT.**
+	// `remove` hands the ELEMENT to the caller; discarded with `_ =`, that unbound temporary drops it at the
+	// statement's end, and `v` — borrowed out of the node under NO subject — still names it. BIND the result
+	// and the same program is correct, because the binding then owns what `v` aliases. Probes built on
+	// `clear` cannot reach it at all: `clear` moves no element out, and a live handle keeps its node alive.
+	// ⇒ **A NEGATIVE PROBE HERE NEEDS THIS POSITIVE CONTROL FIRST**; three `clear`-shaped ones all read
+	// exit 0 and said nothing.
 	function dispatchManagedListNodeMethod(func IrFunction, node ValueId, giid GenericInstanceId) returns ValueId throws ParseError
 		let methodTok = try self.consume(TokenKind.identifier)
 
@@ -60659,6 +60776,7 @@ export type Parser
 		let savedValueOwnsHeap = self.valueOwnsHeap
 		let savedValueOwnsHeapAlone = self.valueOwnsHeapAlone
 		let savedValuePromiseMarks = self.valuePromiseMarks
+		let savedNodeHandleMintedFrom = self.nodeHandleMintedFrom
 		let savedPhiAliasUnprovenMarks = self.phiAliasUnprovenMarks
 		let savedOwnedBindings = self.ownedBindings
 		let savedUnusedCandidates = self.unusedCandidates
@@ -60849,6 +60967,7 @@ export type Parser
 		self.valueOwnsHeap = BoolArray.create()
 		self.valueOwnsHeapAlone = BoolArray.create()
 		self.valuePromiseMarks = BoolArray.create()
+		self.nodeHandleMintedFrom = ValueIdArray.create()
 		self.phiAliasUnprovenMarks = BoolArray.create()
 		self.valueIsCapturingClosure = BoolArray.create()
 		self.valueClosureEnv = ValueIdArray.create()
@@ -61049,6 +61168,7 @@ export type Parser
 		self.valueOwnsHeap = savedValueOwnsHeap
 		self.valueOwnsHeapAlone = savedValueOwnsHeapAlone
 		self.valuePromiseMarks = savedValuePromiseMarks
+		self.nodeHandleMintedFrom = savedNodeHandleMintedFrom
 		self.phiAliasUnprovenMarks = savedPhiAliasUnprovenMarks
 		self.ownedBindings = savedOwnedBindings
 		self.unusedCandidates = savedUnusedCandidates

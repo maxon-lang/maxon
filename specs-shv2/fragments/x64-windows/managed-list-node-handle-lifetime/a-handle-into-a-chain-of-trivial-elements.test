@@ -1,21 +1,17 @@
-// Test: managed-list-remove-decref
-typealias Integer = int(i64.min to i64.max)
+// Test: a-handle-into-a-chain-of-trivial-elements
+typealias Small = int(0 to 255)
+typealias IntChain = __ManagedList with Small
+typealias IntNode = __ManagedListNode with Small
 
-type Item
-	export var value as Integer
-
-	static function create(value Integer) returns Self
-		return Self{value: value}
-	end 'create'
-end 'Item'
-
-typealias ItemManagedList = __ManagedList with Item
+function nodeOfAFreshChain() returns IntNode
+	var chain = IntChain.create()
+	chain.insertLast(1)
+	return chain.insertLast(64)
+end 'nodeOfAFreshChain'
 
 function main() returns ExitCode
-	var managedList = ItemManagedList.create()
-	let node = managedList.insertFirst(Item.create(50))
-	managedList.remove(node)
-	print("{managedList.count()}\n")
+	let node = nodeOfAFreshChain()
+	print("{node.value()}\n")
 	return 0
 end 'main'
 ---
@@ -27,18 +23,35 @@ data {
   __mm_alloc_count@16 = i64 0
 }
 
-func @Item.create {
+func @nodeOfAFreshChain {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
-    x64.movRegReg rbx, rcx
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __mm_alloc
-    x64.storeBaseDispReg.word64 [r8 + 0], rbx
-    x64.epilogue 40
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rcx, 0
+    x64.callDirect __list_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_append
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.callDirect __list_node_decref
+    x64.movRegImm32 rdx, 64
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_append
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -54,45 +67,29 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 72
-    x64.leaRegFunc rcx, [rip + __mm_decref]
-    x64.callDirect __list_create
-    x64.movRegReg rbx, r8
-    x64.storeSlotReg slot0, rbx
-    x64.movRegImm32 rcx, 50
-    x64.callDirect Item.create
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect __list_prepend
-    x64.movRegReg r12, r8
-    x64.storeSlotReg slot1, r12
-    x64.movRegReg rcx, r12
-    x64.callDirect __mm_incref
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r12
-    x64.callDirect __list_remove_node
+    x64.callDirect nodeOfAFreshChain
+    x64.storeSlotReg slot0, r8
     x64.movRegReg rcx, r8
-    x64.callDirect __mm_decref
-    x64.movRegReg rcx, rbx
-    x64.callDirect __list_count
+    x64.callDirect __list_node_value
     x64.movRegReg rbx, r8
-    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r12, r8
-    x64.storeSlotReg slot2, r12
+    x64.storeSlotReg slot1, r12
     x64.movRegReg rcx, rbx
     x64.movRegReg rdx, r12
-    x64.callDirect __int_to_string
+    x64.callDirect __uint_to_string
     x64.movRegReg rbx, r8
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, rbx, r14
-    x64.storeSlotReg slot3, rax
+    x64.storeSlotReg slot2, rax
     x64.leaRegRegImm32 rcx, rax, 49
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot4, r8
+    x64.storeSlotReg slot3, r8
     x64.leaRegRegImm32 r15, r8, 48
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r12
@@ -104,25 +101,23 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot4
+    x64.loadRegSlot rbx, slot3
     x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot3
+    x64.loadRegSlot rax, slot2
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm rax, -3
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.loadRegSlot rcx, slot2
+    x64.loadRegSlot rcx, slot1
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
-    x64.loadRegSlot rcx, slot1
-    x64.callDirect __list_node_decref
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __list_decref
+    x64.callDirect __list_node_decref
     x64.movRegReg r8, rbx
     x64.epilogue 72
     x64.popReg r15

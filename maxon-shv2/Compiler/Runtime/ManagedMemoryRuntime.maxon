@@ -4007,6 +4007,14 @@ end 'buildManagedCursorCreate'
 // its own release has to free the external element buffer and walk its managed elements — which a generic
 // `__mm_decref` cannot reach. ⚠ It is never NULL: the only producer stores it before the cursor can escape,
 // and the refusal path above produces no cursor at all, so there is nothing for a null guard to catch.
+//
+// ⚠ **THIS BODY WAS BRIEFLY `MmRuntime.buildRetainedSlotBoxDecref`, SHARED WITH `__list_node_decref` — AND
+// THE DEDUP IS FOLDED BACK RATHER THAN REVERTED ON ITS MERITS.** `W138`'s review lifted the two because they
+// were byte-identical builders in two files, which was correct at that tick. The second `W138` ruling then
+// made a node handle a REFCOUNTED NODE rather than a box retaining a list, so `__list_node_decref` stopped
+// being a one-retained-slot box at all (it drops an ELEMENT through a per-node stamp and frees the node).
+// The helper's remaining caller was this one, which is the thin wrapper the review itself was avoiding.
+// **The cursor is now the only box of this shape in the compiler**; if a second appears, lift it again.
 function buildManagedCursorDecref(module StdModule)
 	var func = IrFunction.createFromStd(ManagedCursorDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)

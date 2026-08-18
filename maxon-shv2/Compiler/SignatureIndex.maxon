@@ -131,10 +131,12 @@ end 'enumBackingDiscriminator'
 // every other file emits while that file's own bytes never move — the staleness `mixEnumCase`'s raw-value
 // line already exists to catch, for the one backing whose value is not in `caseRawValues` at all.
 let EnumBackingFieldSlot = 83 as ContentHash
+
 // The ENUM-CASE form of such a field's value (`Priority.low`), separated from the LITERAL form so
 // `Priority.low` and the bare number `0` cannot fold alike — they are resolved by different rules and one
 // of them moves when `Priority`'s case list is edited.
 let EnumBackingFieldEnumCase = 84 as ContentHash
+
 // The NESTED STRUCT form (`inner: Inner{value: 1}`), separated from the other two for their reason: it holds
 // a type NAME where the enum-case form holds two, and an entry that owns a group must not fold like a leaf
 // that happens to carry the same bytes.
@@ -515,6 +517,7 @@ let DeclShapeOpaqueParams = 89 as ContentHash
 let DeclShapeParamByRef = 90 as ContentHash
 let ByRefBitSet = 91 as ContentHash
 let ByRefBitClear = 92 as ContentHash
+
 // The three `ForwardCall` shapes and the three `DeclCallability` answers, as distinct hash marks — a
 // declaration that MOVES into or out of a type body, and a call that gains or loses a receiver, each change
 // an ABI without changing a parameter name, so both must move the memo key.
@@ -962,7 +965,6 @@ export type ManagedGlobal
 	export function lazyInitCallee() returns ByteArray
 		return lazyStaticInitCallee(self.label)
 	end 'lazyInitCallee'
-
 end 'ManagedGlobal'
 
 // The `__lazy_init$<label>` spelling, written ONCE and read from both sides — `ManagedGlobal.lazyInitCallee`
@@ -3232,6 +3234,7 @@ end 'GlobalAliasReturnEntry'
 
 export typealias GlobalAliasReturnEntryArray = Array with GlobalAliasReturnEntry
 export typealias GlobalAliasReturnMap = Map with (ByteArray, GlobalAliasReturnInfo)
+
 // The registration keys whose function may hand back an immutable global's record — the settled output of
 // `ProgramSignatures.closeGlobalAliasReturns`. A key with no entry answers false.
 export typealias GlobalAliasReturnKeySet = Set with ByteArray
@@ -3249,12 +3252,15 @@ end 'ParamReassignEntry'
 
 export typealias ParamReassignEntryArray = Array with ParamReassignEntry
 export typealias ParamReassignMap = Map with (ByteArray, ParamReassignInfo)
+
 // Function name -> "does any name this body forwards a parameter to take something by reference?" — the
 // settled output of `ProgramSignatures.closeByRefForwarding`. A name with no entry answers false.
 export typealias ByRefForwardingMap = Map with (ByteArray, bool)
+
 // The BARE names (`reassign`, never `Forwarder.reassign`) that take at least one parameter by reference —
 // the closure's answer, and what a forwarding edge is matched against.
 export typealias ByRefBareNameSet = Set with ByteArray
+
 // A bare name -> its dense node in the forwarding graph `closeByRefForwarding` closes. The CSR key space must
 // be dense and 0-based (see `CsrGraph`), and a bare name is neither, so it is interned into one.
 typealias DeclNodeIndex = Map with (ByteArray, CsrIndex)
@@ -4375,10 +4381,27 @@ export let ManagedListBuiltinBaseName = b"__ManagedList"
 export let ManagedListTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **`__ManagedListNode with Element` — A HANDLE ON ONE NODE, AND THE ONE TYPE IN shv2 NO SOURCE CAN
-// CONSTRUCT.** Only an insertion mints a value of it (`__ManagedList.insertFirst`/`insertLast`), and what it
-// denotes is a node the LIST owns — so it is emitted as a BORROW, never as an owned temp, and no binding of
-// it is ever dropped. `genericInstanceBoxDropCallee` panics for it rather than answering, because "what
-// frees this?" has an answer that is not the binding's: the list's `__list_clear` walk.
+// CONSTRUCT.** Only an insertion mints a value of it (`__ManagedList.insertFirst`/`insertLast`).
+//
+// ⭐⭐ **IT IS AN OWNED HANDLE ON A REFCOUNTED NODE — A SECOND OWNER OF THE NODE ITSELF.** ⚖ USER RULING
+// 2026-08-17: refcount the nodes (v1's model, and `/specs/managed-list.md`'s own words — *"__ManagedList
+// owns its nodes via reference counting … handles with refcount-based lifetime"*). A handle IS the node
+// pointer; it is enrolled as a sole-owned temp and released through `__list_node_decref`, which frees the
+// node only when the LAST owner goes — which may be a handle long after the chain is gone.
+//
+// ⛔⛔ **TWO EARLIER RULINGS ARE RECORDED HERE BECAUSE BOTH WERE MEASURED WRONG AND THE SECOND FAILURE IS
+// THE INSTRUCTIVE ONE.** This first said a handle was *"emitted as a BORROW, never as an owned temp, and no
+// binding of it is ever dropped"*, with `genericInstanceBoxDropCallee` panicking rather than answering —
+// which `stdlib/List.maxon` cannot live with, since it needs a handle in a RETURN (`walkTo`, `:60-70`), a
+// FIELD (`ListIterator.node`, `:161`, reassigned at `:173`) and a PARAMETER (`ListIterator.create`,
+// `:163`). It then said a handle was an owned box RETAINING ITS LIST — and that was worse than incomplete,
+// it was a WRONG ANSWER: `clear` frees nodes, so retaining the chain kept nothing alive, and a handle in a
+// struct field read `__mm_free`'s `0x3F` poison at exit 0 with no diagnostic anywhere.
+//
+// ⭐ **THE LESSON THE SECOND FAILURE CARRIES: A PRECEDENT IS A WHOLE MECHANISM, NOT ITS MOST QUOTABLE
+// HALF.** That box was argued from `__ManagedMemoryCursor`, which survives the same escapes — but a cursor
+// pays with the retain AND a LIVE RE-READ of its source on every use. Only the retain was ported, and a
+// node has nothing live to re-read.
 //
 // ⚠ **IT IS PARAMETERIZED BY THE ELEMENT, and that is what makes `node.value()` typed at all.** A node's
 // value slot is one machine word whatever the element is (see the node-format block below), so the WIDTH
@@ -5475,6 +5498,10 @@ export let ListRemoveLastMethod = b"removeLast"
 export let ManagedListInsertFirstMethod = b"insertFirst"
 export let ManagedListInsertLastMethod = b"insertLast"
 export let ManagedListNodeValueMethod = b"value"
+
+// The one member a per-node refcount buys and an unrefcounted node could not have: unlink WITHOUT freeing,
+// so the caller's handle keeps the node and its element alive (`/specs/managed-list.md:core.detach`).
+export let ManagedListDetachMethod = b"detach"
 
 // Its parameter names, the reference's own (`2-Parser.cs:1470-1511`) for the same reason the file's are.
 // ⚠ **`endIndex` IS v1's SPELLING AND THE BOOTSTRAP'S IS `end`** (`LowerMaxonToStd.maxon:1657` vs
@@ -19198,10 +19225,9 @@ export type ProgramSignatures
 		if self.isManagedListInstance(id) 'managedList'
 			return ListRecordBytes as ByteOffset
 		end 'managedList'
-		// ⚠ A NODE HANDLE'S "box" is the 24-byte node the LIST allocated, and no program ever asks this
-		// door to allocate one: nothing constructs a node, and `sizeof` of a node type is unwritable
-		// because the type is unnameable in source. The honest size is the node's own, so that a reader
-		// that does arrive is told the truth rather than an `Array` record's 48.
+		// A node handle IS the node, so its "box" is the node the chain allocated — 40 bytes of `next`, `prev`,
+		// `value`, `element_drop` and `owner`. It briefly answered a separate handle record's 16 while a handle
+		// was a box holding `list`/`node`; that box is gone with the ruling that required it.
 		if self.isManagedListNodeInstance(id) 'managedListNode'
 			return ListNodeBytes as ByteOffset
 		end 'managedListNode'
@@ -21473,12 +21499,6 @@ export type ProgramSignatures
 			return ListDecrefName
 		end 'managedList'
 
-		// ⛔ **A NODE HANDLE IS NEVER DROPPED BY THE BINDING THAT HOLDS IT, so this door has no answer for
-		// one and says so rather than inventing `__mm_decref`.** The list owns every node it links and frees
-		// them in `__list_clear`; a handle is a BORROW into that chain (`ManagedListNodeBuiltinBaseName`),
-		// emitted through the element accessor's `owned: false` path and never enrolled as an owned temp. So
-		// reaching here means a node value was tracked as owned somewhere, which would be a DOUBLE FREE at
-		// the first scope exit — loud here, silent there.
 		// ⭐ **A CURSOR DROPS THROUGH `__managed_cursor_decref` — the one builtin whose box owns a RECORD rather
 		// than a buffer.** It releases the source it retained at creation (through `__managed_decref`, which is
 		// what frees that record's own element buffer and walks its managed elements) and then reclaims the
@@ -21488,9 +21508,20 @@ export type ProgramSignatures
 			return ManagedCursorDecrefName
 		end 'managedMemoryCursor'
 
-		if self.isManagedListNodeInstance(id) 'nodeHandleIsABorrow'
-			panic("ProgramSignatures.genericInstanceBoxDropCallee: a `{String.from(ManagedListNodeBuiltinBaseName)}` handle has no drop — the list owns its nodes and frees them in `{String.from(ListClearName)}`, so a node reaching this door was enrolled as an OWNED value and would be freed twice")
-		end 'nodeHandleIsABorrow'
+		// ⭐⭐ **A NODE HANDLE DROPS THROUGH `__list_node_decref`, WHICH RELEASES THE NODE ITSELF.** ⚖ USER
+		// RULING 2026-08-17: nodes are refcounted and a handle is a second owner (`v1`'s rc=2 invariant,
+		// `runtime.std:5330-5337`). At the last owner that entry calls the node's own stamped `element_drop@24`
+		// and frees it; every unlink — `remove`, `clear`, the teardown walk — merely drops the CHAIN's reference.
+		//
+		// ⛔ **THIS ARM WAS A PANIC WHOSE SENTENCE — *"the list owns its nodes and frees them in `__list_clear`,
+		// so a node reaching this door was enrolled as an OWNED value and would be freed twice"* — IS NOW FALSE
+		// IN BOTH HALVES**, and it is quoted rather than deleted because it was TRUE of the model it guarded and
+		// is exactly what the second ruling reversed. `__list_clear` no longer frees a node, and a node reaching
+		// this door is enrolled as an owned value on purpose. ⚠ It is NOT `__mm_decref`: that frees the payload
+		// and walks nothing, which would leak every managed element a surviving node still holds.
+		if self.isManagedListNodeInstance(id) 'managedListNode'
+			return ListNodeDecrefName
+		end 'managedListNode'
 
 		// ⭐ **THE OMISSION THIS ROUTER USED TO SWALLOW, MADE LOUD** — its two sibling routers
 		// (`builtinGenericTypeParamCount`, `genericInstanceBoxSize`) already panic on a builtin they have no arm

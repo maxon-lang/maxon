@@ -570,6 +570,13 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	// Any `__list_*` call carries the whole list runtime, and the heap under it — the `__managed_*` arm above
 	// over a CHAIN instead of a buffer: `__list_create` and every insertion `__mm_alloc` (the header, then one
 	// node each) and `__list_decref` `__mm_free`s all of them, none of which this Maxon-module scan sees.
+	// ⛔ **A `usesIncref` LINE STOOD HERE AND ITS REASON NAMED A FUNCTION THAT NO LONGER EXISTS.** It was added
+	// for `W138`'s first ruling, where the mint was a synthesized `__list_node_handle` body whose `__mm_incref`
+	// of the retained list this Maxon-module scan could not see. The second ruling deleted that body: the
+	// handle's incref is now emitted by the PARSER (`emitManagedListNodeHandle` → `emitIncref`), so it is an
+	// ordinary `MaxonOp.call` this very scan walks and the `__mm_incref` arm above declares it. Sabotaged at
+	// review — the line removed, `managed-list`/`ownership`/`list`/`for-` all still green — so it was a second
+	// producer of one bit, and the surviving producer is the one that can see the call.
 	if isListRuntimeCallee(callee) 'list'
 		usage.usesList = true
 		usage.usesHeap = true

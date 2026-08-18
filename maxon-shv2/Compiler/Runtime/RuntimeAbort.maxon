@@ -94,6 +94,21 @@ export enum RuntimeAbort
 	// NEGATIVE one, which the signed `StdCmpPred` makes a separate compare. Without the guard the read
 	// returns whatever sits past a 48-byte allocation: a silent wrong answer, not a crash.
 	managedFileStatIndexOutOfRange = 79
+	// `__list_remove_node` / `__list_detach_node`: the node handed in is linked into a DIFFERENT chain than
+	// the receiver. `owner@32` names the chain a node belongs to, and the unlink used to gate on it merely
+	// being non-zero — so `b.remove(nodeOfA)` repaired `b`'s `head`/`tail`/`count` from `a`'s links, MEASURED
+	// as a live chain reading `count = -1` and then **exit 139** on a `String` element (and a silent wrong
+	// answer on an `int` one). Nothing in the type system can catch it: two chains of one element type share
+	// a `__ManagedListNode` type, so the handle checks out at the call.
+	//
+	// ⚠ **IT ABORTS BY NUMBER RATHER THAN THROUGH `osPanic`, FOR THIS FILE'S OWN RECORDED REASON** — a
+	// synthesized runtime function has no source line and no message to bake (see the `stringByteAtOutOfRange`
+	// note above). ⚖ WHAT `list.remove(nodeOfAnother)` SHOULD MEAN — refuse earlier, or deliberately retarget
+	// — is a semantic question `/specs/managed-list.md` does not answer and this abort does not decide; it
+	// only stops the corruption. The front end refuses every spelling it can see (`dispatchManagedListMethod`'s
+	// markability guard catches the inline `a.remove(b.insertLast(x))`), so reaching here needs two named
+	// chains and a handle carried between them.
+	managedListNodeNotInThisChain = 77
 	// `__mm_leak_check`: the live allocation count was not zero at exit — a LEAK, or (a negative count)
 	// an over-release. ⚠ **`Testing/SpecWorkerPool.LeakCheckExitCode` SPELLS 101 TOO, AND FOLDING IT INTO
 	// THIS CASE WOULD BE WRONG.** That constant reads the exit code of a WORKER, and a worker is the shv2

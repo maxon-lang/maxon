@@ -1763,15 +1763,41 @@ error E3070: specs/fragments/borrow-liveness/error.a-try-merge-keeps-every-link-
 ```
 
 <!-- test: a-callee-clearing-a-managed-list-frees-a-node-handle -->
-### A callee that clears a `__ManagedList` frees the node a handle still names
-E3070 has **two halves** — the same-body site and the cross-function `storageWrittenParamMask` — and
-until W-BORROW they were recorded at two doors off two different flags. `dispatchManagedListMethod`
-is the one surface whose two answers DIFFER (`managedListMethodFreesANode` is narrower than
-`managedListMethodMutatesReceiver`), so it got E3019's answer for E3070 as well and set no storage
-bit at all. The same program written inline is correctly refused; only across a call was it open.
+### A callee that clears a `__ManagedList` does NOT free the node a handle still names
 
-⚠ **MEASURED on `df0fbfd3bf`: this compiled clean and ran to `0xC0000005`.** The bootstrap oracle
-refuses it. Both halves are now recorded by the one `noteBorrowSubjectWrite` call, off the one flag.
+⚖ **THIS CASE PINNED E3070 UNTIL `W138`, AND THE ANSWER MOVED BECAUSE THE MEMORY MODEL DID — SO IT IS
+KEPT, RUNNING, RATHER THAN DELETED.** The name is left as it was written: it is the claim the case was
+built on, and a reader who greps for it must land on the record of it being withdrawn rather than on
+nothing at all.
+
+**What it pinned.** E3070 has **two halves** — the same-body site and the cross-function
+`storageWrittenParamMask` — and until W-BORROW they were recorded at two doors off two different flags.
+`dispatchManagedListMethod` was the one surface whose two answers DIFFERED
+(`managedListMethodFreesANode` was narrower than `managedListMethodMutatesReceiver`), so it got E3019's
+answer for E3070 as well and set no storage bit at all. ⚠ **MEASURED on `df0fbfd3bf`: this program
+compiled clean and ran to `0xC0000005`**, and the bootstrap oracle refused it. That measurement was
+correct, and under the one-owner node model so was the refusal: `clear` FREED every node, so a handle
+outliving the call named freed memory.
+
+⚖ **WHAT CHANGED: USER RULING 2026-08-17 (`W138`, option (iii)) — NODES ARE REFCOUNTED AND A HANDLE IS A
+SECOND OWNER.** `clear` now drops the CHAIN's reference and nothing else; a node a handle still holds
+walks out of the walk alive, still carrying its element, and dies with its last owner. **The program is
+memory-safe**, so the E3070 was an over-rejection of a legal program and the predicate the cure read
+(`managedListMethodFreesANode`) is deleted — `dispatchManagedListMethod` now calls
+`noteBorrowSubjectWrite` not at all.
+
+⭐ **AND THE PROGRAM IS EXACTLY THE BOUNDARY WORTH PINNING, WHICH IS WHY IT BECOMES A RUNNING CASE.** It
+is the shape the ruling was taken ON — `managed-list-node-handle-lifetime.md:a-returned-handle-survives-
+a-clear` is its twin with the mint in another function, and calls itself *"THE CASE THE SECOND RULING WAS
+TAKEN FOR"*. Under the SUPERSEDED design (a handle retained its LIST, nodes unrefcounted) this printed
+`0x3F3F3F3F3F3F3F3F` — `__mm_free`'s poison — at exit 0. It now prints the string.
+
+⚠ **W-BORROW's ARCHITECTURE IS UNTOUCHED BY THIS, AND IS WHAT MAKES THE WITHDRAWAL EXPRESSIBLE.** Both
+halves of E3070 still come off one flag at one door; this surface's flag is simply now empty where its
+E3019 flag is not, which is the same "two answers differ" point in its strongest form. Every OTHER case
+in this file is unaffected — an ELEMENT borrow is not a node handle, and the `List`/`Array`/nested-struct
+store-door refusals below all stay red. MEASURED at this merge: `--filter=borrow-liveness` moved this
+case and no other.
 ```maxon
 typealias StringChain = __ManagedList with String
 
@@ -1787,8 +1813,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/a-callee-clearing-a-managed-list-frees-a-node-handle.test:11:2: cannot mutate 'chain' via 'wipe' while it is borrowed by 'node' (borrowed at line 10)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation]
 ```
 
 <!-- test: a-callee-inserting-into-a-managed-list-keeps-every-handle -->
