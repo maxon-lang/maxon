@@ -1187,21 +1187,18 @@ end 'copyDeclaredInterfaces'
 // transitive by P1.7a-existentials slice 1)? A type with no conformance declaration answers false — the E3017
 // case.
 //
-// ⚠ **THE `extends` WALK IS WHY IT TAKES THE INTERFACE REGISTRY.** `implements Derived` where
-// `interface Derived extends Base` IS a conformance to `Base` — see `conformanceSatisfiesInterface`, which
-// owns that rule and states the argument. The set membership below is the fast path (a direct `implements`,
-// which is every conformance in the corpus but the `extends` cases); the walk runs only when it misses.
-function typeDeclaresInterface(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
+// ⚠ **THE `extends` WALK IS WHY IT TAKES THE INTERFACE REGISTRY**, and the walk itself is
+// `IrInterface.declaredInterfacesReach` — the ONE list-level home, shared with
+// `ProgramSignatures.conformersOf`, which decides the same question for interface EXTENSIONS. What is left
+// here is the only thing this door adds: the INDEX lookup, and the rule that a type with no row in it
+// declares nothing. The two used to spell the direct-hit-then-walk orchestration separately and had already
+// drifted on cost; see that function for the measurement.
+//
+// ⭐ Exported for `conformersOf`, which reaches it with `ProgramSignatures.sweptConformanceIndex()` — the
+// same `type -> declared interfaces` relation this is handed, built from `StructLayout.conformsTo`.
+export function typeDeclaresInterface(declared DeclaredConformanceMap, interfaces IrInterfaceMap, typeName ByteArray, interfaceName ByteArray) returns bool
 	if let declaredInterfaces = try declared.get(typeName) 'hasDecl'
-		if declaredInterfaces.contains(interfaceName) 'declaresItDirectly'
-			return true
-		end 'declaresItDirectly'
-
-		for declaredName in declaredInterfaces 'eachDeclared'
-			if conformanceSatisfiesInterface(interfaces, declaredName: declaredName, wanted: interfaceName) 'reachesItByExtends'
-				return true
-			end 'reachesItByExtends'
-		end 'eachDeclared'
+		return declaredInterfacesReach(interfaces, declaredNames: declaredInterfaces, wanted: interfaceName)
 	end 'hasDecl'
 	return false
 end 'typeDeclaresInterface'

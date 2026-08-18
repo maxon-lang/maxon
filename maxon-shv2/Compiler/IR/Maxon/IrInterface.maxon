@@ -1271,6 +1271,47 @@ function conformanceReachesInterface(interfaces IrInterfaceMap, declaredName Byt
 	end 'decl'
 end 'conformanceReachesInterface'
 
+// ⭐⭐ **DOES A WHOLE DECLARED CONFORMANCE SET REACH `wanted`? — THE ONE LIST-LEVEL HOME, above the one
+// pairwise home below it.** `conformanceSatisfiesInterface` answers for a SINGLE declared name; this answers
+// for everything one `implements` clause declared, which is the question every caller actually has. Both
+// sites that ask it — `ConformanceCheck.typeDeclaresInterface` (the E3016/E3017 conformance answer) and
+// `ProgramSignatures.conformersOf` (which types an `extension <Interface>` publishes onto) — reach it here.
+//
+// ⛔ **THEY DID NOT, AND THE TWO HALVES HAD ALREADY DRIFTED APART ON COST BEFORE EITHER WAS WRONG.** The
+// extension side asked a DIRECT name test and so did not walk `extends` at all: `type ArrayIterator
+// implements BidirectionalIterator` got `retreatBy` (declared on the interface its clause names) and not
+// `advanceBy` (declared on that interface's parent) — one of two methods written ten lines apart in
+// `stdlib/Interfaces.maxon`, and a WRONG program rather than a refused one. The conformance side did walk,
+// but allocated a fresh `visited` set per declared name. Two spellings of one orchestration, disagreeing
+// about cost, with the next edit to the rule landing in whichever one the editor opened.
+//
+// ⭐ **ONE `visited` SET FOR THE WHOLE CLAUSE, WHICH IS WHY THE LOOP IS HERE AND NOT AT EITHER CALLER.**
+// `wanted` is fixed across the set, so an ancestor that failed to reach it under one declared name cannot
+// reach it under another — sharing the set is the walk's own pruning applied to the whole question, and it
+// makes the cost one allocation per (type, interface) asked rather than one per name. A DIAMOND
+// (`implements Left, Right` where both `extends Root`) is therefore walked once, by that set and not by a
+// second rule, exactly as `appendInterfaceWitnessSlots` handles its own; a cyclic `extends` chain terminates
+// on the same test.
+//
+// ⚠ **THE DIRECT HIT IS A SET PROBE AND IS ASKED FIRST.** Every conformance in the corpus but the `extends`
+// cases answers there, in O(1) and before the walk allocates anything. That is why the parameter is an
+// `InterfaceNameSet` rather than the raw `StructLayout.conformsTo` array: the fast path is only fast in the
+// set, and `ProgramSignatures.sweptConformanceIndex` is that array already in this shape.
+export function declaredInterfacesReach(interfaces IrInterfaceMap, declaredNames InterfaceNameSet, wanted ByteArray) returns bool
+	if declaredNames.contains(wanted) 'declaresItDirectly'
+		return true
+	end 'declaresItDirectly'
+
+	var visited = InterfaceNameSet.create()
+	for declaredName in declaredNames 'eachDeclared'
+		if conformanceReachesInterface(interfaces, declaredName: declaredName, wanted: wanted, visited: visited) 'reachesItByExtends'
+			return true
+		end 'reachesItByExtends'
+	end 'eachDeclared'
+
+	return false
+end 'declaredInterfacesReach'
+
 // Does any of `iface`'s parents reach `wanted`? The `found` arm's body, split out only because a `match`
 // arm is one expression and this is a loop.
 function interfaceReachesInterface(interfaces IrInterfaceMap, iface IrInterface, wanted ByteArray, visited InterfaceNameSet) returns bool

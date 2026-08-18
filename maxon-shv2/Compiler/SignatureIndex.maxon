@@ -14110,16 +14110,54 @@ export type ProgramSignatures
 		return DeclaredStruct.declared(layout)
 	end 'structOf'
 
-	// ⭐ **EVERY DECLARED `type` WHOSE `implements` CLAUSE NAMES `interfaceName`, IN DECLARATION ORDER** — the
-	// set an `extension <Interface>` declares its methods on. Asked by BOTH halves of the extension
+	// ⭐ **EVERY DECLARED `type` WHOSE `implements` CLAUSE REACHES `interfaceName`, IN DECLARATION ORDER** —
+	// the set an `extension <Interface>` declares its methods on. Asked by BOTH halves of the extension
 	// mechanism, which is why it is here and not at either: `foldExtensionDeclarations` publishes one
 	// SIGNATURE per (conformer, method) and `Parser.parseExtensionDeclaration` emits one BODY per pair, and
 	// the two must walk the identical list in the identical order or a call would type against a signature no
 	// function was emitted for.
 	//
+	// ⭐⭐ **"REACHES", NOT "NAMES" — CONFORMANCE IS TRANSITIVE THROUGH `extends` HERE TOO.** A clause naming a
+	// SUB-interface is a conformance to its parents, so `extension Iterator`'s methods land on
+	// `type ArrayIterator implements BidirectionalIterator` as well as on the types that name `Iterator`
+	// directly. This asked a DIRECT name test, and the corpus paid for it in a shape no refusal could have
+	// caught: `ArrayIterator` had `retreatBy` (declared on the interface its clause names) and not `advanceBy`
+	// (declared on that interface's parent), from one file, ten lines apart.
+	//
+	// ⭐⭐ **AND IT ASKS `ConformanceCheck.typeDeclaresInterface` — THE SAME DOOR E3016/E3017 ASKS — RATHER
+	// THAN A SECOND WALK OF ITS OWN.** "Does this type's `implements` clause reach that interface?" is one
+	// question; it was answered here and there in two places, which had already produced two different costs
+	// for one rule before it produced two different ANSWERS. The index handed over is
+	// `sweptConformanceIndex()`, which is `StructLayout.conformsTo` in set form — the exact column this used
+	// to read off each layout, so nothing about WHICH relation is consulted has changed, only how many
+	// spellings of the lookup exist.
+	//
+	// ⚠ **THAT MEMO'S BUILD POINT IS ALREADY A PINNED INVARIANT AND THIS DOES NOT ADD A PREMISE.**
+	// `Queries.foldConformanceClauses`' own ⚠ names these two together — the W95 re-read must land *"before
+	// the second, because `StructLayout.conformsTo` is the relation the extension fold expands over
+	// (`ProgramSignatures.conformersOf`) and `sweptConformanceIndex` MEMOIZES it on first ask"*. Both readers
+	// were already required to sit after that pass; they are now literally one read of one snapshot, which is
+	// strictly harder to violate than two.
+	//
+	// ⚖ **v1 SEEDS THE RELATION INSTEAD, AND shv2 DELIBERATELY DOES NOT.** There, `validateConformances`
+	// records `X implements <parent>` alongside the declared row so the later lookup is a direct hit
+	// (`TypeResolution.findInterfaceExtensionCallee`: *"transitive entries seeded by `validateConformances` …
+	// are visible without re-walking the interface-extends-interface chain"*). That shape cannot be taken
+	// here: shv2's `conformsTo` is PAIRED BY INDEX with `StructLayout.conformanceBindings`, so a seeded row
+	// would have to invent a binding list for an interface the author wrote no `with` for — and the same
+	// column is read by the E3016 conformance check, by `sweptConformanceIndex` and by the declaration hash.
+	// Widening a stored column to answer a query is exactly the over-grant those readers would each have to be
+	// taught to undo; shv2 owns the relation as a WALK instead, so the query asks it.
+	//
+	// ⚠ **A TYPE IS PUSHED ONCE HOWEVER MANY ROUTES REACH THE INTERFACE**, because the walk is per DECLARED
+	// TYPE and not per clause entry — `type RangeIterator implements Iterator with RangeBound,
+	// BidirectionalIterator` reaches `Iterator` twice and conforms once, which is what keeps the two halves
+	// above from publishing a signature twice and emitting one body.
+	//
 	// ⚠ **A `type` ONLY.** An `enum`/`union` carries the same `conformsTo` column and is deliberately not
 	// walked here: shv2 has no case where an extension method on an enum is reached, and the omission is a
-	// missing method (E3004 at the call) rather than a wrong one.
+	// missing method (E3004 at the call) rather than a wrong one. `sweptConformanceIndex` is keyed off
+	// `structNamesInDeclOrder` too, so the index and this walk agree about that domain by construction.
 	//
 	// A full walk per extension, not an interface⇒conformers index: a program declares a handful of
 	// extensions, this is asked twice per extension per compile, and the index would be built by every
@@ -14127,8 +14165,7 @@ export type ProgramSignatures
 	export function conformersOf(interfaceName ByteArray) returns ByteArrayArray
 		var conformers = ByteArrayArray.create()
 		for name in self.structNamesInDeclOrder 'eachDeclaredType'
-			let layout = try self.structTypes.get(name) otherwise panic("ProgramSignatures.conformersOf: `structNamesInDeclOrder` holds '{String.from(name)}' with no entry in `structTypes` — `recordStruct` writes both in one act")
-			if conformanceListDeclares(layout.conformsTo, interfaceName: interfaceName) 'conforms'
+			if typeDeclaresInterface(self.sweptConformanceIndex(), interfaces: self.interfaces, typeName: name, interfaceName: interfaceName) 'conforms'
 				conformers.push(name)
 			end 'conforms'
 		end 'eachDeclaredType'
@@ -14264,7 +14301,7 @@ export type ProgramSignatures
 		//
 		// ⭐⭐ **AND ARM ORDERING IS THE WEAKER OF THE TWO GUARANTEES — THE STRONGER ONE IS THAT A PRIMITIVE
 		// CANNOT BE AN INTERFACE CONFORMER AT ALL (W133 review), which is worth stating because the
-		// paragraph above would go stale the day someone reorders those arms.** `conformersOf` (`:14206`)
+		// paragraph above would go stale the day someone reorders those arms.** `conformersOf`
 		// builds its list by walking `structNamesInDeclOrder`, so `int` is not in any interface's conformer
 		// set and `conformerAssociatedBindings` is never handed one however the arms are asked. ⇒ the
 		// consequence a reader should expect, MEASURED: an `extension <SomeInterface>` publishes NOTHING onto
