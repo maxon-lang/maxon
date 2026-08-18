@@ -2029,11 +2029,18 @@ public sealed class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos,
 // ManagedList (doubly-linked list) operations
 // ============================================================================
 
-// Creates a new empty managed list data structure
-public sealed class MaxonManagedListCreateOp : MaxonOp {
+/// Creates a new empty managed list data structure.
+///
+/// <paramref name="listTypeName"/> is the ELEMENT-BEARING spelling of the list being created
+/// (`EManagedList`, and `__ManagedList_Point` once monomorphization has bound Element) — never the
+/// bare `__ManagedList`. It is not decoration: the allocation's destructor is chosen from it, and
+/// only an element-bearing name can say whether the destructor must decref each node's value.
+/// A bare name silently selects the primitive `maxon_managed_list_clear` and leaks every element,
+/// so the name is a constructor argument rather than a field a later pass may forget to carry.
+public sealed class MaxonManagedListCreateOp(string listTypeName) : MaxonOp {
   public override MaxonOpKind Kind => MaxonOpKind.ManagedListCreate;
   public override string Mnemonic => "maxon.managed_list_create";
-  public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), "__ManagedList");
+  public MaxonStruct Result { get; } = new MaxonStruct(IrContext.Current.NextId(), listTypeName);
   public override IReadOnlyList<MaxonValue> Results => [Result];
   /// Reads nothing — a leaf op (a literal, a parameter, a var reference, or a jump).
   public override IReadOnlyList<MaxonValue> Operands => [];

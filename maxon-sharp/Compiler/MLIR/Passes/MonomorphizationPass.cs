@@ -2123,6 +2123,7 @@ public static class MonomorphizationPass {
           case MaxonEnumLiteralOp el when sub.TryGetValue(el.EnumTypeName, out _): return true;
           case MaxonEnumConstructOp ec when sub.TryGetValue(ec.EnumTypeName, out _): return true;
           case MaxonEnumTagOp et when sub.TryGetValue(et.EnumTypeName, out _): return true;
+          case MaxonManagedListCreateOp mlc when sub.TryGetValue(mlc.Result.TypeName, out _): return true;
           case MaxonCallOp call when CalleeMentionsSubstitutionAlias(call.Callee, sub): return true;
           case MaxonTryCallOp tryCall when CalleeMentionsSubstitutionAlias(tryCall.Callee, sub): return true;
         }
@@ -2199,6 +2200,9 @@ public static class MonomorphizationPass {
         break;
       case MaxonManagedMemAppendOp ma:
         ma.IsBitPacked = ma.IsBitPacked || sub.IsBitPackedElement(ma.TypeParamName);
+        break;
+      case MaxonManagedListCreateOp mlc:
+        mlc.Result.TypeName = sub.SubstituteName(mlc.Result.TypeName);
         break;
       case MaxonManagedListInsertValueOp ci:
         ci.ValueKind = sub.SubstituteName(ci.ValueKind);
@@ -2508,7 +2512,7 @@ public static class MonomorphizationPass {
         return cloned;
       }
       // ManagedList (doubly-linked list) ops
-      case MaxonManagedListCreateOp: { var c = new MaxonManagedListCreateOp(); valueMap[((MaxonManagedListCreateOp)op).Result.Id] = c.Result; return c; }
+      case MaxonManagedListCreateOp mlc: { var c = new MaxonManagedListCreateOp(sub.SubstituteName(mlc.Result.TypeName)); valueMap[mlc.Result.Id] = c.Result; return c; }
       case MaxonManagedListInsertValueOp ci: { var c = new MaxonManagedListInsertValueOp(mapValue(ci.ManagedList), mapValue(ci.Value), ci.AtHead, sub.SubstituteName(ci.ValueKind)); valueMap[ci.Result.Id] = c.Result; return c; }
       case MaxonManagedListInsertRelativeValueOp cir: { var c = new MaxonManagedListInsertRelativeValueOp(mapValue(cir.ManagedList), mapValue(cir.Target), mapValue(cir.Value), cir.After, sub.SubstituteName(cir.ValueKind)); valueMap[cir.Result.Id] = c.Result; return c; }
       case MaxonManagedListDetachOp cd: return new MaxonManagedListDetachOp(mapValue(cd.ManagedList), mapValue(cd.Node));

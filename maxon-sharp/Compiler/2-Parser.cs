@@ -13593,11 +13593,14 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
     return (false, null);
   }
 
-  /// Emits builtin __ManagedList static method calls.
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListStaticMethod(string methodName) {
+  /// Emits builtin __ManagedList static method calls. <paramref name="listTypeSpelling"/> is the
+  /// name the call site wrote (`EManagedList`, `IntManagedList`, ...) — the element-bearing alias
+  /// the created list's destructor is chosen from.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListStaticMethod(string methodName,
+      string listTypeSpelling) {
     switch (methodName) {
       case "create": {
-        var op = new MaxonManagedListCreateOp();
+        var op = new MaxonManagedListCreateOp(listTypeSpelling);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
@@ -19032,16 +19035,13 @@ public class Parser(List<Token> tokens, IrModule<MaxonOp>? seedModule = null, bo
                 "__ManagedSocket" => TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedFile" => TryEmitBuiltinManagedFileStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 "__ManagedDirectory" => TryEmitBuiltinManagedDirectoryStaticMethod(staticMethodToken.Value, args, staticMethodToken),
-                "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value),
+                "__ManagedList" => TryEmitBuiltinManagedListStaticMethod(staticMethodToken.Value, token.Value),
                 DebugStreamTypeName => TryEmitBuiltinDebugStreamStaticMethod(staticMethodToken.Value, args, staticMethodToken),
                 _ => throw new InvalidOperationException($"Unhandled builtin static type '{resolvedBase}'")
               };
             }
             _managedMemStaticTypeName = null;
             if (result.handled && result.staticResult != null) {
-              // ManagedList.create() needs the alias name for type parameter resolution
-              if (resolvedBase == "__ManagedList" && result.staticResult is MaxonStruct listResult)
-                listResult.TypeName = token.Value;
               return ParseFieldAccessChain(new ExprResult.Direct(result.staticResult), token);
             }
             if (result.handled) {

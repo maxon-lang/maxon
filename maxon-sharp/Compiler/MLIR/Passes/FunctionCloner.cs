@@ -540,7 +540,7 @@ internal class FunctionCloner {
       case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, (IrFunctionType)_typeSubstitution.SubstituteType(fv.FunctionType)); RegisterResult(fv.Result, c.Result); return c; }
 
       // ManagedList (doubly-linked list) ops
-      case MaxonManagedListCreateOp: { var c = new MaxonManagedListCreateOp(); RegisterResult(((MaxonManagedListCreateOp)op).Result, c.Result); return c; }
+      case MaxonManagedListCreateOp mlc: { var c = new MaxonManagedListCreateOp(SubName(mlc.Result.TypeName)); RegisterResult(mlc.Result, c.Result); return c; }
       case MaxonManagedListInsertValueOp ci: { var c = new MaxonManagedListInsertValueOp(MapValue(ci.ManagedList), MapValue(ci.Value), ci.AtHead, SubName(ci.ValueKind)); RegisterResult(ci.Result, c.Result); return c; }
       case MaxonManagedListInsertRelativeValueOp cir: { var c = new MaxonManagedListInsertRelativeValueOp(MapValue(cir.ManagedList), MapValue(cir.Target), MapValue(cir.Value), cir.After, SubName(cir.ValueKind)); RegisterResult(cir.Result, c.Result); return c; }
       case MaxonManagedListDetachOp cd: return new MaxonManagedListDetachOp(MapValue(cd.ManagedList), MapValue(cd.Node));

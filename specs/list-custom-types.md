@@ -189,3 +189,39 @@ end 'main'
 3,4
 5,6
 ```
+
+<!-- test: list-of-structs-every-constructor-frees-elements -->
+### Every List Constructor Frees Its Elements
+`create`, `clone` and the array-literal `init` each build their own backing chain. A chain
+built by any of them owns its elements, so dropping the list must release every struct it
+holds — a chain whose destructor cannot see its element type frees the nodes and leaks the
+values, which the run reports as a leak rather than a wrong answer.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box
+	export var value as Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Box'
+
+typealias BoxList = List with Box
+
+function main() returns ExitCode
+	var built = BoxList.create()
+	built.append(Box.create(1))
+	built.append(Box.create(2))
+	let copied = built.clone()
+	let fromLiteral = List from [Box.create(3), Box.create(4)]
+	print("{built.count()} {copied.count()} {fromLiteral.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 2 2
+```
