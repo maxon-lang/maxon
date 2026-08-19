@@ -16798,9 +16798,13 @@ export type ProgramSignatures
 	// `isListInstance(id) or isManagedListInstance(id)`, because `ListRuntime.maxon`'s *"ONE structure, TWO
 	// surfaces"* meant a door about the STRUCTURE — its `create`, its element gate, its top-level record — had
 	// to admit both identities. Only one identity is the compiler's now: a `List with T` is a declared generic
-	// whose single field IS a `__ManagedList with T`, so the structure and the surface coincide again and the
-	// four doors that asked this ask `isManagedListInstance` outright. Keeping the disjunction would have left
-	// a predicate whose two arms could never disagree — a thin wrapper wearing a rule's name.
+	// whose single field IS a `__ManagedList with T`, so the structure and the surface coincide again and all
+	// SIX doors that asked this ask `isManagedListInstance` outright — four here (`instanceCloneStrategy`,
+	// `opaqueInstanceCreateReadsTheDescriptor`, `containerCreateCall`, `instanceSupportsDeepClone`) and two in
+	// `Parser` (`gateAndEmitContainerCreate`, `requireContainerColumnTypes`), which is the "three call sites in
+	// two files" this predicate's own deleted header counted before `W173` added the fourth and fifth.
+	// Keeping the disjunction would have left a predicate whose two arms could never disagree — a thin wrapper
+	// wearing a rule's name.
 
 	// Is `name` the builtin `__ManagedListNode` type — the base of every node handle.
 	export function isManagedListNodeBaseName(name ByteArray) returns bool
@@ -17732,11 +17736,20 @@ export type ProgramSignatures
 	end 'requireStaticColumnStamp'
 
 	// ⭐ **DOES THIS BUILTIN CONTAINER HAVE A `create()` AT ALL?** The one home of that question, so the body
-	// door and the top-level door refuse the same instances. Exactly one builtin says no — a
-	// `__ManagedListNode` handle, which only an insertion can mint — and it is stated as the exception it is
-	// rather than by enumerating the five that do.
+	// door and the top-level door refuse the same instances. TWO builtins say no, and they say it for one
+	// reason — nothing but another container's own method mints them: a `__ManagedListNode` handle, which only
+	// a `__ManagedList` insertion links, and a `__ManagedMemoryCursor`, which only
+	// `__ManagedMemory.createCursor()` hands out. Stated as the exceptions they are rather than by enumerating
+	// the ones that do.
+	//
+	// ⛔⛔ **THE CURSOR HALF WAS MISSING AND IT WAS A USER-REACHABLE COMPILER PANIC** (found by the W153
+	// review, MEASURED): `typealias Cur = __ManagedMemoryCursor with Int` then `Cur.create()` was ADMITTED here,
+	// and `Parser.requireContainerColumnTypes` — which has no cursor arm because a cursor has no columns to
+	// gate — met its own *"a container admitted there owes an arm here"* panic with a stack trace in front of
+	// the author. `ManagedMemoryCursorBuiltinBaseName`'s header already said *"the SECOND type no source can
+	// construct"*; this predicate is the door that has to know it, and it did not.
 	export function instanceHasBuiltinCreate(id GenericInstanceId) returns bool
-		return not self.isManagedListNodeInstance(id)
+		return not (self.isManagedListNodeInstance(id) or self.isManagedMemoryCursorInstance(id))
 	end 'instanceHasBuiltinCreate'
 
 	// ⭐⭐ **WHOSE CODE BUILDS THIS INSTANCE'S EMPTY RECORD — THE RUNTIME'S, OR THE PROGRAM'S? (W41)** The ONE
@@ -19097,10 +19110,15 @@ export type ProgramSignatures
 	// int-only-array programs' goldens untouched.
 	//
 	// ⚠ **TWO BASES ASK IT, and both ask it about the SAME literal.** An `[<identifier>…]` gives its `Array`
-	// instance; a `List from [<identifier>…]` gives that array AND the `List` built over it, whose element type
-	// is the array's own (`Parser.listInstanceForArrayLiteral` reads it back through `containerElementType`).
-	// One walk, told which base — a second copy under a `List` name would have re-derived the whole measured
-	// asymptotic below, and its `sawX` gate, for a set of names that is identical by construction.
+	// instance; a `List from [<identifier>…]` gives the `List` its members build, whose element type is the one
+	// the FIRST member fixes (`Parser.parseListMemberList` asks `literalColumnTypeFor` for it, the same door
+	// `arrayLiteralInstanceFor` asks) — so the names needed are identical by construction. One walk, told which
+	// base: a second copy under a `List` name would have re-derived the whole measured asymptotic below, and
+	// its `sawX` gate, for the same set.
+	//
+	// ⚠ **THE SENTENCE HERE NAMED `Parser.listInstanceForArrayLiteral` UNTIL THE W153 REVIEW, AND THAT
+	// FUNCTION NO LONGER EXISTS** — `List from […]` stopped building an intermediate `Array` when the
+	// synthesized `List` was retired, so there is no source array whose element type is read back.
 	// ⚠ **CALLED ONCE, AFTER THE LAST FILE FOLDS — NOT PER FILE, and that is a MEASURED asymptotic and not a
 	// tidy-up.** The struct/union tables ACCUMULATE across the sweep, so a walk placed at each
 	// `[<identifier>…]`-bearing file re-walks every type folded so far, at every such file: **O(files × types)**.

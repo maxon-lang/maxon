@@ -590,3 +590,46 @@ end 'main'
 ```exitcode
 1
 ```
+
+<!-- test: error.a-cursor-alias-cannot-be-created -->
+### `Cur.create()` is REFUSED, and it used to PANIC THE COMPILER
+⛔⛔ **FOUND BY THE `W153` REVIEW, MEASURED AS A STACK TRACE IN FRONT OF AN AUTHOR.** A cursor is
+`ManagedMemoryCursorBuiltinBaseName`'s *"SECOND type no source can construct"* — only
+`__ManagedMemory.createCursor()` mints one — but `ProgramSignatures.instanceHasBuiltinCreate` named only
+the node handle as the builtin without a `create`, so this program was ADMITTED at that gate and then met
+`Parser.requireContainerColumnTypes`' *"a container admitted there owes an arm here"* **panic**, which a
+cursor can never satisfy because it has no columns to gate.
+
+⇒ The predicate now names both uncreatable builtins, so the refusal is the one the node handle already
+got: the sentence `containerStaticSurfaceSentence` owns, anchored on the alias the author wrote.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Cur = __ManagedMemoryCursor with Int
+
+function main() returns ExitCode
+	var c = Cur.create()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:10: Unsupported: `__ManagedMemoryCursor` static method 'create' — a cursor has no static surface at all, not even `create()`: one exists only because a `__ManagedMemory` handed it out, and `createCursor()` is what mints one
+```
+
+<!-- test: error.a-cursor-alias-has-no-other-static-either -->
+### The same sentence for a static that was never going to exist
+The second half of the same defect, through the OTHER door: an unknown static reaches
+`containerStaticSurfaceSentence` directly (`parseBuiltinContainerStaticCall`), and that router had no
+cursor arm either — so this program met **its** panic rather than `Cur.create()`'s. Two doors, one missing
+arm apiece, and neither could be reached from the other's fix.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Cur = __ManagedMemoryCursor with Int
+
+function main() returns ExitCode
+	var c = Cur.frobnicate()
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:14: Unsupported: `__ManagedMemoryCursor` static method 'frobnicate' — a cursor has no static surface at all, not even `create()`: one exists only because a `__ManagedMemory` handed it out, and `createCursor()` is what mints one
+```

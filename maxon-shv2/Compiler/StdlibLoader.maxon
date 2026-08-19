@@ -1779,9 +1779,22 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	//
 	// ⛔ **`Compiler/Runtime/ListRuntime.maxon` STAYS STANDING, DELIBERATELY.** It still serves the
 	// `__ManagedList` / `__ManagedListNode` surface this module is written OVER, so most of it is live rather
-	// than orphaned; what the retirement stranded is the `List`-only half (`__list_from`, `__list_get`,
-	// `__list_insert`, `__list_first`/`__list_last`, `__list_remove_at`, `__list_remove_first`/`_last`,
-	// `__list_append`/`__list_prepend`). `W90` left `SetRuntime.maxon` standing for exactly this reason and
+	// than orphaned; what the retirement stranded is the `List`-only half — CENSUSED at the W153 review by
+	// asking which name constant `ListRuntime.maxon` exports has no reader OUTSIDE that file, which is exactly
+	// "nothing can emit a call to it": **`__list_from`, `__list_get`, `__list_insert`, `__list_first`,
+	// `__list_last`, `__list_remove_at`, `__list_remove_first`, `__list_remove_last`, `__list_head`,
+	// `__list_node_next`** — ten, and their builders plus whatever falls out of them
+	// (`buildListFrom`/`Get`/`Insert`/`First`/`Last`/`RemoveAt`/`RemoveFirst`/`RemoveLast`/`Head`/`NodeNext`,
+	// and `buildListEndAccessor`/`buildListEndRemove`, which serve nothing else).
+	//
+	// ⛔ **THE ROSTER HERE FIRST READ `__list_append`/`__list_prepend` AND OMITTED `__list_head`/
+	// `__list_node_next`, AND BOTH HALVES WERE WRONG** — the two insertions are STILL emitted, by
+	// `Parser.dispatchManagedListMethod`'s `insertFirst`/`insertLast` arms, and the two cursor primitives were
+	// stranded by the deletion of the `for … in` node-cursor form rather than by the method surface. A roster
+	// written from what a rung DELETED is not the same list as one derived from what still has a reader.
+	// ⚠ **`isThrowingListRuntimeCallee` and `listAccessorSourceMethodName` still name seven of the ten**, so
+	// the deletion rung must strike them there too or `installListRuntime`'s drift guard will do it for them.
+	// `W90` left `SetRuntime.maxon` standing for exactly this reason and
 	// `W105` deleted it separately, on BYTE-IDENTITY rather than on a green suite — a green suite says nothing
 	// BROKE, and only byte-identity says nothing was LIVE.
 	try listWhitelistedModule(stdlibDir, relative: "List.maxon", into: listed)

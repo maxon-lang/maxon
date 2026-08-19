@@ -5338,7 +5338,7 @@ let IsEmptyMethod = b"isEmpty"
 // reason was that they sat beside a `Set`-only receiver-mutation rule "so adding a method here and
 // forgetting the rule is one edit away rather than two files away" — but that rule named only `insert` and
 // `remove`, so it was no reason at all for the other three. The spellings folded in here, and they are what
-// `emitSetCreate`/`emitSetInsert` still compose a desugared corpus call from (W105 deleted the runtime that
+// `emitContainerLiteralCreate`/`emitContainerLiteralElement` still compose a desugared corpus call from (W105 deleted the runtime that
 // once held the second copy).
 //
 // A rename that reached one copy and not the other was a WRONG ANSWER with no diagnostic: `Array.count`
@@ -51164,7 +51164,8 @@ export type Parser
 	// Each element is a `Character` by being written as a character literal (A5m-ab; it used to have to ADOPT
 	// the type here, because a one-byte literal was an int).
 	//
-	// The create and the insert are `emitSetCreate`/`emitSetInsert` directly — the corpus `Set`'s own doors,
+	// The create and the insert are `emitContainerLiteralCreate`/`emitContainerLiteralElement` under `Set`'s base
+	// name directly — the corpus `Set`'s own doors,
 	// which is what enrols the fresh set as a pending temporary (a `let s = CharSet from ['x']` that never
 	// reaches an owner is still dropped at scope exit) and what makes the insert a VOID mutator the set owns
 	// its member from. Until W115 each had a one-line `…CharacterMember…` wrapper, and the pairing those
@@ -51172,14 +51173,14 @@ export type Parser
 	// being one producer.
 	function parseCharacterMemberSetLiteral(func IrFunction, anchor Token, range SourceRange) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftBracket)
-		let chars = try self.emitSetCreate(self.signatures.setInstanceForCharacter(), anchor: anchor, range: range)
+		let chars = try self.emitContainerLiteralCreate(SetBuiltinBaseName, giid: self.signatures.setInstanceForCharacter(), anchor: anchor, range: range)
 		while not self.at(TokenKind.rightBracket) 'eachMember'
 			let memberTok = self.current()
 			let member = try self.parseExpression(func, block: self.currentBlock)
 			if self.tagOf(member) != ValueTypeTag.character 'notACharacter'
 				throw ParseError.builtinOperandType(String.from(CharacterMemberSetAliasName), required: typeTagName(ValueTypeTag.character), got: typeTagName(self.tagOf(member)), line: memberTok.line, column: memberTok.column)
 			end 'notACharacter'
-			try self.emitSetInsert(chars, member: member, anchor: anchor, range: range)
+			try self.emitContainerLiteralElement(SetBuiltinBaseName, method: InsertMethod, container: chars, value: member, anchor: anchor, range: range)
 			if not self.at(TokenKind.rightBracket) 'moreMembers'
 				try self.consume(TokenKind.comma)
 			end 'moreMembers'
@@ -52556,6 +52557,19 @@ export type Parser
 		if self.signatures.isManagedListNodeInstance(giid) 'nodeHandle'
 			return "`{String.from(ManagedListNodeBuiltinBaseName)}` static method '{String.from(method)}' — a node handle has no static surface at all, not even `{String.from(CreateMethod)}()`: one exists only because a `{String.from(ManagedListBuiltinBaseName)}` insertion linked it, and `insertFirst`/`insertLast` hand back the handle"
 		end 'nodeHandle'
+
+		// ⛔⛔ **A CURSOR IS THE NODE HANDLE'S TWIN AND THIS ROUTER HAD NO ARM FOR IT — a user-reachable
+		// COMPILER PANIC, found by the W153 review.** `ManagedMemoryCursorBuiltinBaseName`'s own header states
+		// the fact (*"the SECOND type no source can construct — only `__ManagedMemory.createCursor()` mints
+		// one"*), and the cursor is on `isBuiltinGenericBaseNameBesidesTheRecord`, so
+		// `typealias Cur = __ManagedMemoryCursor with Int` + `Cur.frobnicate()` reached this panic and
+		// `Cur.create()` reached `requireContainerColumnTypes`' — both MEASURED, both a stack trace in front of
+		// an author. It is the roster-written-twice shape: the cursor joined the builtin roster and the two
+		// "what does this container offer" doors were never told.
+		if self.signatures.isManagedMemoryCursorInstance(giid) 'cursor'
+			return "`{String.from(ManagedMemoryCursorBuiltinBaseName)}` static method '{String.from(method)}' — a cursor has no static surface at all, not even `{String.from(CreateMethod)}()`: one exists only because a `{String.from(ManagedMemoryTypeName)}` handed it out, and `{String.from(ManagedMemoryCreateCursorMethod)}()` is what mints one"
+		end 'cursor'
+
 		panic("Parser.containerStaticSurfaceSentence: generic instance {giid} is not a builtin container — every caller opens with the builtin-base test `requireContainerIsCreatable` makes, and a container admitted there owes a sentence here")
 	end 'containerStaticSurfaceSentence'
 
@@ -52696,9 +52710,15 @@ export type Parser
 	end 'requireGlobalInitCalleeIsVisible'
 
 	// ⭐ **THE ELEMENT/COLUMN GATE ONE CONTAINER'S `create` PASSES.** Its caller has already established that
-	// the instance is a builtin container with a `create`, so this is a TOTAL router over the five that have
+	// the instance is a builtin container with a `create`, so this is a TOTAL router over the THREE that have
 	// one: `Array` alone has no column rule (its element rule is the instance's own) and says so by returning,
-	// and a SIXTH container whose rule someone forgets meets the panic rather than passing ungated.
+	// and a FOURTH container whose rule someone forgets meets the panic rather than passing ungated.
+	//
+	// ⚠ **THE COUNT HERE READ "five" / "a SIXTH" AND WAS WRONG IN BOTH DIRECTIONS BY THE W153 REVIEW.** It
+	// counted the whole builtin roster rather than the arms this router owes, `List` left that roster with the
+	// retirement, and the cursor — counted as having a `create` — was the one whose absent arm reached the
+	// panic below (see `ProgramSignatures.instanceHasBuiltinCreate`). A count written beside a router is a
+	// roster written twice; this one is now the arm count, which is the only number this text can check.
 	function requireContainerColumnTypes(giid GenericInstanceId, aliasTok Token) throws ParseError
 		if self.signatures.isArrayInstance(giid) 'array'
 			return
@@ -52714,11 +52734,9 @@ export type Parser
 		panic("Parser.requireContainerColumnTypes: generic instance {giid} is a builtin container with a `{String.from(CreateMethod)}` and no column rule — `requireContainerIsCreatable` admitted it, and a container admitted there owes an arm here even if that arm is `Array`'s bare return")
 	end 'requireContainerColumnTypes'
 
-	// ⭐⭐ **THE EMPTY SET EVERY MEMBER-BY-MEMBER DOOR STARTS FROM — the builtin op, or the corpus type's own
-	// `create()` (W90).** `emitMapLiteralCreate`'s twin exactly, and it is the one place the two
-	// representations part company, so the retirement question is asked ONCE per step rather than once per
-	// producer. Its callers are the `CharacterSet` member set (a preset's seed and a `CharSet from […]`) and
-	// the corpus arm of `Set from […]`.
+	// ⭐⭐ **THE EMPTY CONTAINER EVERY MEMBER-BY-MEMBER DOOR STARTS FROM — the corpus type's own `create()`.**
+	// Its callers are the `CharacterSet` member set (a preset's seed and a `CharSet from […]`), the corpus arm
+	// of `Set from […]`, a `[k: v]` map literal, and `List from […]`.
 	//
 	// ⭐⭐ **THE RESULT IS ALREADY ENROLLED AS AN OWNED TEMPORARY, SO NO CALLER MAY TRACK IT.** `emitCall`
 	// classifies its result +1 owned by the call machinery itself (`enrolOwnedCallTemp`); a caller that
@@ -52728,31 +52746,49 @@ export type Parser
 	// SECOND ARM.** While a builtin `__set_create` / `__map_create` op existed, a runtime op owned nothing
 	// until `trackOwnedTemp` said so, and the enrolment lived HERE precisely so the two arms could not
 	// disagree. W105 deleted the runtime arm; the conditional half of the rule went with it and the
-	// unconditional half is all that is left. The `Map` twin's caller kept the now-wrong `trackOwnedTemp`
+	// unconditional half is all that is left. The `Map` caller kept the now-wrong `trackOwnedTemp`
 	// and double-dropped every map literal used as a temporary — see the grave at `parseMapLiteralBody`'s
 	// closing brace, which is where that was found and measured.
-	function emitSetCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
+	//
+	// ⛔⛔ **IT TAKES THE BASE NAME BECAUSE THIS WAS THREE FUNCTIONS AND THE THIRD WAS WRITTEN AT W153.**
+	// `emitSetCreate`, `emitMapLiteralCreate` and `emitListCreate` were three bodies identical to the byte
+	// apart from `SetBuiltinBaseName` / `MapBuiltinBaseName` / `ListBuiltinBaseName`, each header calling the
+	// others its "twin" — a fact written three times, where the RETYPE below is the step a fourth copy is free
+	// to omit and the omission is not a compile error but the measured
+	// *"materializeStaticConstructorLayout: layout-needing static callee 'Map.create' returns a structRef"*
+	// panic. Every container the retirement chain lists arrives at this door, so the door takes the name.
+	function emitContainerLiteralCreate(baseName ByteArray, giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
 		var args = ValueIdArray.create()
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
-		let set = try self.emitCall(qualifiedMethodName(SetBuiltinBaseName, methodName: CreateMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
-		// ⭐ **THE RESULT IS THE INSTANCE, AND SAYING SO IS THE CALLER'S JOB** — `emitCall` reads
-		// `constructorInstance` on the CONSUME side alone. See `emitMapLiteralCreate` for the
-		// `materializeStaticConstructorLayout` panic that omitting this step measures.
-		self.retypeGenericAliasConstructorResult(set, gid: giid, aliasName: EmptySourceText)
-		return set
-	end 'emitSetCreate'
+		let container = try self.emitCall(qualifiedMethodName(baseName, methodName: CreateMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
 
-	// ⭐ **ONE MEMBER INTO THE SET — `emitSetCreate`'s twin.** The insert is a VOID mutator; the set OWNS the
-	// member from here, and the declared `Set.insert(element Element)` parameter is what says so. It declares
-	// that parameter POSITIONALLY, so the desugared call spells no label — the half `emitMapLiteralUpsert` had
-	// to spell and this one must not.
-	function emitSetInsert(set ValueId, member ValueId, anchor Token, range SourceRange) throws ParseError
-		var args = pairArgs(set, second: member)
+		// ⭐ **THE RESULT IS THE INSTANCE, AND SAYING SO IS THE CALLER'S JOB — `emitCall` does not do it.**
+		// `constructorInstance` is read by the CONSUME side alone; the type half is this separate step, exactly
+		// as `parseQualifiedCall` does it after its own `parseCallNamed`. Without it `<Base>.create` hands back
+		// the shared body's base `structRef` and the very next lowering step refuses it with the
+		// `materializeStaticConstructorLayout` panic quoted above (measured on `Map`). A literal has no written
+		// alias to carry provenance from, which is what the empty name means here.
+		self.retypeGenericAliasConstructorResult(container, gid: giid, aliasName: EmptySourceText)
+		return container
+	end 'emitContainerLiteralCreate'
+
+	// ⭐ **ONE MEMBER INTO A MEMBER-BY-MEMBER CONTAINER LITERAL — `emitContainerLiteralCreate`'s twin.** The
+	// call is a VOID mutator; the container OWNS the value from here, and the declared parameter
+	// (`Set.insert(element Element)`, `List.append(value Element)`) is what says so. Both declare it
+	// POSITIONALLY, so the desugared call spells no label — the half `emitMapLiteralUpsert` has to spell and
+	// this one must not, which is the one thing that keeps that function separate from this one.
+	//
+	// ⛔ **`emitSetInsert` AND `emitListAppend` WERE THIS FUNCTION TWICE.** They differed in the base name and
+	// the method name and in nothing else — not in the ownership rule, which is the load-bearing part: a
+	// SECOND, parse-time move here is the LEAK `parseSetMemberList`'s `consume: false` note measures, and a
+	// copy is free to add one back.
+	function emitContainerLiteralElement(baseName ByteArray, method ByteArray, container ValueId, value ValueId, anchor Token, range SourceRange) throws ParseError
+		var args = pairArgs(container, second: value)
 		var argLabels = emptyArgLabels(args)
 		var argRanges = uniformArgRanges(args, range: range)
-		_ = try self.emitCall(qualifiedMethodName(SetBuiltinBaseName, methodName: InsertMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(set), mint: CalleeMint.notMinted)
-	end 'emitSetInsert'
+		_ = try self.emitCall(qualifiedMethodName(baseName, methodName: method), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(container), mint: CalleeMint.notMinted)
+	end 'emitContainerLiteralElement'
 
 	// ⚠⚠ **`movedCharacterSetMember` AND `emitSetCreateOp` STOOD HERE AND ARE GONE (W105).** The first was the
 	// OWNERSHIP half of the retirement switch: a SYNTHESIZED table took ownership of a member at the parse,
@@ -52897,7 +52933,7 @@ export type Parser
 	// with the sentence a written `s.insert(x)` of the wrong type already gets.
 	//
 	// ⚠ **`consume: false` AT EVERY MEMBER, AND IT IS NOT AN OVERSIGHT.** The corpus `Set.insert` declares its
-	// parameter, so the ORDINARY call machinery decides the move — see the W105 note above `emitSetCreate` for the leak
+	// parameter, so the ORDINARY call machinery decides the move — see the W105 note above `emitContainerLiteralCreate` for the leak
 	// a second, parse-time move produces. That also makes the fencing-token ordering `parseHashTableColumnArg`
 	// insists on vacuous here: nothing reads `rhsWasBareLocalReference` on this path.
 	function parseSetMemberList(func IrFunction, setTok Token) returns ValueId throws ParseError
@@ -52929,8 +52965,8 @@ export type Parser
 		// `checkWhereConstraints` where the conformance store is complete.
 		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: setTok.line, nameColumn: setTok.column, filePath: self.filePath))
 
-		let set = try self.emitSetCreate(giid, anchor: setTok, range: range)
-		try self.emitSetInsert(set, member: first, anchor: setTok, range: range)
+		let set = try self.emitContainerLiteralCreate(SetBuiltinBaseName, giid: giid, anchor: setTok, range: range)
+		try self.emitContainerLiteralElement(SetBuiltinBaseName, method: InsertMethod, container: set, value: first, anchor: setTok, range: range)
 		self.skipNewlines()
 
 		let declaredType = self.resolvedSlotType(keyType)
@@ -52940,7 +52976,7 @@ export type Parser
 			try self.consume(TokenKind.comma)
 			self.skipNewlines()
 			let member = try self.parseHashTableColumnArg(func, columnType: keyType, declaredType: declaredType, columnSubject: "`{String.from(SetBuiltinBaseName)} with {columnTypeName(declared, identity: identity)}` requires {articledColumnTypeName(declared, identity: identity)} {HashTableKeyColumnNoun}", consume: false)
-			try self.emitSetInsert(set, member: member, anchor: setTok, range: range)
+			try self.emitContainerLiteralElement(SetBuiltinBaseName, method: InsertMethod, container: set, value: member, anchor: setTok, range: range)
 			self.skipNewlines()
 		end 'moreMembers'
 
@@ -53196,31 +53232,22 @@ export type Parser
 	// `specs-shv2/map.md`'s `literal.aggregate-value-column` is that program). That case is what holds the
 	// no-parse-time-move rule down now that the switch it lived in has gone.
 
-	// ⭐ **THE EMPTY MAP A LITERAL STARTS FROM — the corpus type's own `create()` (W41).** It was the one place
-	// the literal's two representations parted company, with `__map_create(keyDrop, valueDrop)` on the other
-	// arm; W105 deleted that runtime and the switch with it. `ConstructorInstance.instance(giid)` is what re-types the
-	// `returns Self` result to THIS instance — the same thing a written `IntIntMap.create()` gets from
-	// `constructorInstanceForBaseName`, so a literal-built map and a hand-built one carry one type.
-	function emitMapLiteralCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
-		var args = ValueIdArray.create()
-		var argLabels = emptyArgLabels(args)
-		var argRanges = uniformArgRanges(args, range: range)
-		let map = try self.emitCall(qualifiedMethodName(MapBuiltinBaseName, methodName: CreateMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
-		// ⭐ **THE RESULT IS THE INSTANCE, AND SAYING SO IS THE CALLER'S JOB — `emitCall` does not do it.**
-		// `constructorInstance` is read by the CONSUME side alone; the type half is this separate step, exactly
-		// as `parseQualifiedCall` does it after its own `parseCallNamed`. Without it `Map.create` hands back
-		// the shared body's base `structRef` and the very next lowering step refuses it:
-		// *"materializeStaticConstructorLayout: layout-needing static callee 'Map.create' returns a structRef,
-		// not a generic instance"* (measured). The literal has no written alias to carry provenance from, which
-		// is what the empty name means here.
-		self.retypeGenericAliasConstructorResult(map, gid: giid, aliasName: EmptySourceText)
-		return map
-	end 'emitMapLiteralCreate'
+	// ⚠ **`emitMapLiteralCreate` STOOD HERE UNTIL THE W153 REVIEW** — the corpus `Map`'s own `create()` (W41),
+	// which was the one place the literal's two representations parted company until W105 deleted the
+	// `__map_create(keyDrop, valueDrop)` arm and the switch with it. It was `emitContainerLiteralCreate` with
+	// `MapBuiltinBaseName` written in, and the `materializeStaticConstructorLayout` panic its body documented
+	// is quoted at that function, which is where it was always the general rule.
 
-	// ⭐ **ONE PAIR INTO THE MAP — `emitMapLiteralCreate`'s twin, and the `value:` LABEL is the half that is
-	// easy to leave off.** `Map.upsert(key Key, value Value)` declares its second parameter labelled, so the
-	// synthesized call must spell it exactly as a written `m.upsert(k, value: v)` does or the argument
-	// matcher answers about a parameter the author never named.
+	// ⭐ **ONE PAIR INTO THE MAP — `emitContainerLiteralElement`'s two-column twin, and the `value:` LABEL is
+	// the half that is easy to leave off.** `Map.upsert(key Key, value Value)` declares its second parameter
+	// labelled, so the synthesized call must spell it exactly as a written `m.upsert(k, value: v)` does or the
+	// argument matcher answers about a parameter the author never named.
+	//
+	// ⚠ **THAT LABEL IS THE WHOLE REASON THIS IS NOT THE SHARED DOOR**, and it is a real difference rather
+	// than a spelling: a `Map` hands its member in as a `(key, value)` PAIR whose second half is named, so the
+	// argument array is a triple and the label column is not empty. Everything else — the void result, the
+	// `receiverConstructorInstance`, the no-parse-time-move rule — is that function's answer and is stated
+	// there once.
 	function emitMapLiteralUpsert(map ValueId, key ValueId, value ValueId, anchor Token, range SourceRange) throws ParseError
 		var args = tripleArgs(map, second: key, third: value)
 		var argLabels = emptyArgLabels(args)
@@ -53265,7 +53292,7 @@ export type Parser
 		// `m.count()` into the corpus body that reads six declared fields — **0xC0000005 on 32 of `map.md`'s
 		// cases**, a green compile every time. Both builtin emitters are deleted at W105, so the wrong half is
 		// no longer spellable.
-		let map = try self.emitMapLiteralCreate(giid, anchor: firstKeyTok, range: range)
+		let map = try self.emitContainerLiteralCreate(MapBuiltinBaseName, giid: giid, anchor: firstKeyTok, range: range)
 		try self.emitMapLiteralUpsert(map, key: firstKey, value: firstValue, anchor: firstKeyTok, range: range)
 
 		self.skipNewlines()
@@ -53293,10 +53320,10 @@ export type Parser
 		// consecutive `x64.callDirect __destruct_Map_int_int` on the same record.
 		//
 		// ⭐ **THE LINE WAS CONDITIONALLY CORRECT UNTIL THIS RUNG, WHICH IS WHY IT SURVIVED THE DELETION.**
-		// `emitMapLiteralCreate` had a `__map_create` arm — a raw runtime op, and a runtime op owns nothing
+		// the map create had a `__map_create` arm — a raw runtime op, and a runtime op owns nothing
 		// until a caller says so. That arm is gone: the create is now an `emitCall`, and `emitCall`
 		// classifies its result +1 owned by itself (`enrolOwnedCallTemp`). Tracking it again enrols one
-		// record TWICE. `emitSetCreate`'s header states exactly this rule and `parseSetMemberList` obeys it
+		// record TWICE. `emitContainerLiteralCreate`'s header states exactly this rule and `parseSetMemberList` obeys it
 		// by returning without tracking — the `Set` twin was correct throughout, and the fork is what let the
 		// two come apart.
 		//
@@ -54007,10 +54034,10 @@ export type Parser
 	//
 	// ⭐ **THE FIRST MEMBER FIXES THE ELEMENT TYPE AND THEREFORE THE INSTANCE**, exactly as the first element of
 	// a `[…]` fixes an array's — through `literalColumnTypeFor`, which is the SAME door
-	// `arrayInstanceForFirstElement` puts the same question to, so the element types this construction admits
+	// `arrayLiteralInstanceFor` puts the same question to, so the element types this construction admits
 	// are unchanged by the rewrite. Every later member is held to that type by the ordinary argument check on
 	// the declared `List.append(value Element)`, which is also what decides the MOVE: the element is the list's
-	// from there, and a second parse-time move would be the leak `emitSetInsert`'s note measures.
+	// from there, and a second parse-time move would be the leak `emitContainerLiteralElement`'s note measures.
 	function parseListFromConstruction(func IrFunction) returns ValueId throws ParseError
 		let listTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.from)
@@ -54049,15 +54076,15 @@ export type Parser
 		// with no `with <Element>` to anchor a diagnostic on — `parseSetMemberList`'s arm, for its reason.
 		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: listTok.line, nameColumn: listTok.column, filePath: self.filePath))
 
-		let list = try self.emitListCreate(giid, anchor: listTok, range: range)
-		try self.emitListAppend(list, value: first, anchor: listTok, range: range)
+		let list = try self.emitContainerLiteralCreate(ListBuiltinBaseName, giid: giid, anchor: listTok, range: range)
+		try self.emitContainerLiteralElement(ListBuiltinBaseName, method: AppendMethod, container: list, value: first, anchor: listTok, range: range)
 		self.skipNewlines()
 
 		while self.at(TokenKind.comma) 'moreMembers'
 			try self.consume(TokenKind.comma)
 			self.skipNewlines()
 			let member = try self.parseExpression(func, block: self.currentBlock)
-			try self.emitListAppend(list, value: member, anchor: listTok, range: range)
+			try self.emitContainerLiteralElement(ListBuiltinBaseName, method: AppendMethod, container: list, value: member, anchor: listTok, range: range)
 			self.skipNewlines()
 		end 'moreMembers'
 
@@ -54065,29 +54092,10 @@ export type Parser
 		return list
 	end 'parseListMemberList'
 
-	// ⭐ **THE EMPTY LIST THE MEMBER-BY-MEMBER DOOR STARTS FROM — the corpus type's own `create()`.**
-	// `emitSetCreate`'s twin, and it carries that function's two obligations: the result is already enrolled as
-	// an owned temporary by `emitCall` itself (`enrolOwnedCallTemp`), so no caller may track it a second time;
-	// and the result must be RETYPED to the instance, because `emitCall` reads `constructorInstance` on the
-	// consume side alone.
-	function emitListCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
-		var args = ValueIdArray.create()
-		var argLabels = emptyArgLabels(args)
-		var argRanges = uniformArgRanges(args, range: range)
-		let list = try self.emitCall(qualifiedMethodName(ListBuiltinBaseName, methodName: CreateMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
-		self.retypeGenericAliasConstructorResult(list, gid: giid, aliasName: EmptySourceText)
-		return list
-	end 'emitListCreate'
-
-	// ⭐ **ONE MEMBER ONTO THE END — `emitListCreate`'s twin, and `emitSetInsert`'s.** The append is a VOID
-	// mutator; the list OWNS the value from here, and the declared `List.append(value Element)` parameter is
-	// what says so. It declares that parameter POSITIONALLY, so the desugared call spells no label.
-	function emitListAppend(list ValueId, value ValueId, anchor Token, range SourceRange) throws ParseError
-		var args = pairArgs(list, second: value)
-		var argLabels = emptyArgLabels(args)
-		var argRanges = uniformArgRanges(args, range: range)
-		_ = try self.emitCall(qualifiedMethodName(ListBuiltinBaseName, methodName: AppendMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(list), mint: CalleeMint.notMinted)
-	end 'emitListAppend'
+	// ⚠ **`emitListCreate` AND `emitListAppend` STOOD HERE UNTIL THE W153 REVIEW.** They were
+	// `emitContainerLiteralCreate` and `emitContainerLiteralElement` with `ListBuiltinBaseName` written in,
+	// which is those two functions' own headers' point: a container that joins the member-by-member door joins
+	// it by naming its base, not by growing a third and fourth copy of the ownership rule.
 
 	// ==========================================================================================
 	// The `Vector` builtin container — a FIXED-SIZE array (see `SignatureIndex.VectorBuiltinBaseName`).
