@@ -4175,12 +4175,18 @@ function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceI
 	if signatures.isArrayInstance(id) 'theManagedRecord'
 		return elementRecordCloneStrategy(signatures, id: id, trivialClone: ManagedCloneName, perElementClone: ManagedCloneManagedName)
 	end 'theManagedRecord'
-	// ⭐ **A CHAIN IS THE SECOND ELEMENT-BEARING RECORD, AND IT ANSWERS UNDER EITHER SURFACE (W173).** Its copy
-	// is `ListRuntime`'s walk for `genericInstanceBoxDropCallee`'s reason one door along: a chain's record, its
-	// nodes and its elements are reachable only from a walk that file writes, so the entry that knows how to
-	// duplicate them is the one that already knows how to tear them down. `isChainInstance` is what makes the
-	// `List` surface and the `__ManagedList` surface one answer — they are one structure.
-	if signatures.isChainInstance(id) 'theChain'
+	// ⭐ **A CHAIN IS THE SECOND ELEMENT-BEARING RECORD (W173).** Its copy is `ListRuntime`'s walk for
+	// `genericInstanceBoxDropCallee`'s reason one door along: a chain's record, its nodes and its elements are
+	// reachable only from a walk that file writes, so the entry that knows how to duplicate them is the one that
+	// already knows how to tear them down.
+	//
+	// ⚠ **THE PREDICATE IS `isManagedListInstance`, NOT THE RETIRED `isChainInstance` (W153).** W173 wrote this
+	// door while a `List with T` WAS the chain record, so admitting both surfaces was correct then. It is not
+	// now: a `List with T` is a DECLARED struct whose single field is a `__ManagedList with T`, so admitting it
+	// here would hand `__list_clone` a struct box to read `element_drop@24` out of. The box clones through the
+	// ordinary per-instance `__clone_<mangled>` below, which walks that one field and reaches the chain by
+	// recursion — one structure, cloned once, through the surface that owns it.
+	if signatures.isManagedListInstance(id) 'theChain'
 		return elementRecordCloneStrategy(signatures, id: id, trivialClone: ListCloneName, perElementClone: ListCloneManagedName)
 	end 'theChain'
 	// ⛔ A base-layout-less instance with no runtime copy of its own (a `Vector`, a cursor) has no field list to
@@ -4392,18 +4398,20 @@ export let MapBuiltinBaseName = b"Map"
 export let HashTableKeyArgPosition = 0 as TypeParamPosition
 export let MapValueArgPosition = 1 as TypeParamPosition
 
-// The name of the builtin `List` generic type (`List with Element`) — the linked-list twin of
-// `SynthesizedArrayRecordSeed`. Like `Array`, `Set` and `Map`, no file declares `type List uses Element` for
-// shv2 to read: `stdlib/List.maxon` writes one, and `ListRuntime.maxon`'s header carries the MEASUREMENT that
-// makes it uncompilable here (a generic type holding a compiler-owned container over its own type parameter
-// erases the element's managed-ness and access-violates at teardown). So every `genericInstance*` query that
-// would read a base `StructLayout` special-cases a `List` instance exactly as it does an `Array` one — its
-// box is the fixed `ListRecordBytes` chain header and it drops through `__list_decref`.
+// ⭐⭐ **THE SPELLING `List` IS COMPOSED FROM — NOT A SYNTHESIZED CONTAINER SINCE W153.** `stdlib/List.maxon`
+// declares `type List uses Element`, so a `List with T` is an ordinary declared generic instance: its box is
+// its own `StructLayout`, its `create()` is the module's own static, and it drops through its own
+// `__destruct_<mangled>` cascade. This constant is what is left — the base name a `List from […]` head is
+// recognized by and the qualified `List.create` / `List.append` callees that construction desugars to are
+// composed from. `SetBuiltinBaseName`'s note records the same demotion one container over.
+//
+// ⚠ **THE PARAGRAPH THIS REPLACES SAID THE MODULE WAS UNCOMPILABLE HERE**, quoting `ListRuntime.maxon`'s
+// measurement that *"a generic type holding a compiler-owned container over its own type parameter erases the
+// element's managed-ness and access-violates at teardown"*. That defect is CLOSED — the `Array` half at P1.7
+// slice 3b and the CHAIN half at W134, both by reading the element's destructor off the enclosing instance's
+// layout descriptor at run time — and the sentence had outlived it, which is the failure mode
+// [[feedback_a_blocker_note_ages_faster_than_the_code]] names.
 export let ListBuiltinBaseName = b"List"
-
-// The single type parameter `List` declares (`List with Element`) — the arity `checkGenericInstance`
-// validates a `List with …` against, the `Array`/`Set` twin.
-export let ListTypeParamCount = 1 as FieldIndex
 
 // ⭐⭐ **`__ManagedList with Element` — THE `List`'s OWN CHAIN, UNDER THE NAME THAT EXPOSES ITS NODES**
 // (spec-port `ownership`; `/specs/managed-list.md`, `/specs/internal-types.md`). `/specs/list.md` writes
@@ -16753,33 +16761,13 @@ export type ProgramSignatures
 		return try args.get(MapValueArgPosition) otherwise panic("ProgramSignatures.mapValueType: `Map` instance {id} has no value type argument — arity (2) was checked at instantiation")
 	end 'mapValueType'
 
-	// --- The `List` builtin generic ---
-	//
-	// The linked-list twin of the `Set` section above, and the SIMPLEST of the four containers: a `List with T`
-	// has one column, no hashing and no comparison, so it needs neither a key-type gate nor witness threading.
-	// Its element TYPE is read through the shared `containerElementType` (the `Array` door — one argument, one
-	// canonicalization), so the only `List`-specific type-level facts are these two predicates, its box size
-	// and its drop callee. See `ListRuntime.maxon`'s header for why it is synthesized rather than read from
-	// `stdlib/List.maxon`.
-
-	// Is `name` the builtin `List` type — the base of every list instance.
-	export function isListBaseName(name ByteArray) returns bool
-		return name.equals(ListBuiltinBaseName)
-	end 'isListBaseName'
-
-	// Is generic instance `id` a `List with T`? (Reads the base NAME, which needs no base struct.)
-	export function isListInstance(id GenericInstanceId) returns bool
-		return self.isListBaseName(self.genericInstanceBaseName(id))
-	end 'isListInstance'
-
-	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `List with T`?** — `isArrayInstanceAt`'s twin, and it exists for
-	// that function's measured reason rather than for symmetry: a `TypeNameId` and a `GenericInstanceId` share
-	// one numeric space, so `isListInstance` handed a plain `named` id can answer TRUE about an instance the
-	// caller never had. Both of this predicate's callers (the receiver dispatch and the `for … in` source
-	// test) hold a value's (tag, nameId) pair, which is exactly the shape that hazard bites.
-	export function isListInstanceAt(tag ValueTypeTag, nameId TypeNameId) returns bool
-		return tag == ValueTypeTag.genericInstance and self.isListInstance(nameId)
-	end 'isListInstanceAt'
+	// ⭐⭐ **THE `List` SECTION THAT STOOD HERE IS GONE (W153), AND ITS ABSENCE IS THE RETIREMENT.** Three
+	// predicates — `isListBaseName`, `isListInstance`, `isListInstanceAt` — answered *"is this the container
+	// the compiler owns?"* off the base NAME, and every one of their readers routed a `List with T` into a
+	// synthesized path a declaration could not reach: the box size, the drop callee, the arity, the receiver
+	// dispatch, `for … in`, and the `create()` gate. `stdlib/List.maxon` declares the type, so all six now ask
+	// the ordinary declared-generic questions and the predicates have no reader left. `Set` and `Map` lost
+	// theirs the same way at W105; what remains of each name is a SPELLING (see `ListBuiltinBaseName`).
 
 	// --- The `__ManagedList` builtin generic and its node handle ---
 	//
@@ -16806,18 +16794,13 @@ export type ProgramSignatures
 		return tag == ValueTypeTag.genericInstance and self.isManagedListInstance(nameId)
 	end 'isManagedListInstanceAt'
 
-	// ⭐⭐ **IS INSTANCE `id` THE CHAIN — under EITHER of its two surfaces?** `ListRuntime.maxon`'s header states
-	// the fact this predicate is: *"ONE structure, TWO surfaces … every `__list_*` entry serves both; the split
-	// is entirely in the parser's two dispatchers"*. So every door that is about the STRUCTURE — its `create`,
-	// its element gate, its top-level record — asks this, and only a door about a SURFACE (which methods exist,
-	// which sentence a missing one gets) asks the two identities apart.
-	//
-	// ⚠ It was spelled `isListInstance(id) or isManagedListInstance(id)` at three call sites in two files, which
-	// is the shape a fourth door joins by writing a fourth copy — and the copy that gets forgotten admits one
-	// surface and refuses the other for a structure that cannot tell them apart.
-	export function isChainInstance(id GenericInstanceId) returns bool
-		return self.isListInstance(id) or self.isManagedListInstance(id)
-	end 'isChainInstance'
+	// ⭐⭐ **`isChainInstance` STOOD HERE AND WENT WITH THE `List` SURFACE (W153).** It read
+	// `isListInstance(id) or isManagedListInstance(id)`, because `ListRuntime.maxon`'s *"ONE structure, TWO
+	// surfaces"* meant a door about the STRUCTURE — its `create`, its element gate, its top-level record — had
+	// to admit both identities. Only one identity is the compiler's now: a `List with T` is a declared generic
+	// whose single field IS a `__ManagedList with T`, so the structure and the surface coincide again and the
+	// four doors that asked this ask `isManagedListInstance` outright. Keeping the disjunction would have left
+	// a predicate whose two arms could never disagree — a thin wrapper wearing a rule's name.
 
 	// Is `name` the builtin `__ManagedListNode` type — the base of every node handle.
 	export function isManagedListNodeBaseName(name ByteArray) returns bool
@@ -16914,7 +16897,7 @@ export type ProgramSignatures
 	// Fusing them would make one of the two sentences false; asking them separately at each door is what the
 	// header above records costing a compiler PANIC.
 	export function opaqueInstanceCreateReadsTheDescriptor(id GenericInstanceId) returns bool
-		return self.instanceCreateBuildsTheManagedRecord(id) or self.isChainInstance(id)
+		return self.instanceCreateBuildsTheManagedRecord(id) or self.isManagedListInstance(id)
 	end 'opaqueInstanceCreateReadsTheDescriptor'
 
 	// ⭐ **DOES THIS (tag, id) PAIR DENOTE A `Vector with N T`?** — `isArrayInstanceAt`'s twin, and it exists
@@ -17949,14 +17932,20 @@ export type ProgramSignatures
 		// DECLARED generics now, so they return through the `declaredGeneric` arm above with no stamps at all —
 		// a declared `create()` builds its own fields from its own declaration.
 
-		// A `List` names none either, and for the `Map`'s reason rather than a shape one: `__list_append` IS the
-		// `(record, value)` pair this description carries, but no top-level form hands a list elements — the
-		// `List from […]` construction is a function body's (`atListFromConstruction`), and the initializer walk
-		// has no list arm — so naming a callee here would be a route nothing takes. See `ContainerElementAdd`.
-		if self.isChainInstance(id) 'chain'
+		// A `__ManagedList` names none either, and for the `Map`'s reason rather than a shape one: `__list_append`
+		// IS the `(record, value)` pair this description carries, but no top-level form hands a chain elements —
+		// the one bracketed chain construction there ever was, `List from […]`, is a function body's
+		// (`atListFromConstruction`) and now desugars to the corpus type's own `create`/`append` besides — so
+		// naming a callee here would be a route nothing takes. See `ContainerElementAdd`.
+		//
+		// ⚠ **A `List` ARM STOOD BESIDE THIS ONE UNTIL W153 AND WENT WITH THE SYNTHESIZED SURFACE.** A
+		// `ListAlias.create()` in a global's initializer is a DECLARED generic's `create()` now, so it returns
+		// through the `declaredGeneric` arm above with no stamps — its `chain` field is built by the module's own
+		// body, which is where the element stamp is decided.
+		if self.isManagedListInstance(id) 'managedList'
 			stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
 			return ContainerCreateCall.create(ListCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
-		end 'chain'
+		end 'managedList'
 
 		if not self.instanceCreateBuildsTheManagedRecord(id) 'notACreatableContainer'
 			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — a DECLARED generic returned one arm above, and every builtin reaching here was admitted through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
@@ -19317,13 +19306,10 @@ export type ProgramSignatures
 			return ManagedRecordBytes as ByteOffset
 		end 'array'
 		// ⚠ A `Set` arm (the fixed 48-byte fused hash-table record) and a `Map` arm (the same record with a
-		// value column appended) stood here until W105. Both are declared generics now, so their box size is
-		// their own base `StructLayout`'s — the fall-through every declared generic takes.
-		// A `List` instance's box is the fixed chain header (`head`/`tail`/`count`/`element_drop`), no base
-		// struct — the `Array` twin above. Its NODES are separate allocations the runtime owns.
-		if self.isListInstance(id) 'list'
-			return ListRecordBytes as ByteOffset
-		end 'list'
+		// value column appended) stood here until W105, and a `List` arm (the fixed chain header) until W153.
+		// All three are declared generics now, so each one's box size is its own base `StructLayout`'s — the
+		// fall-through every declared generic takes. The chain header itself is still fixed and still has no
+		// base struct; it is reached under the `__ManagedList` arm below, which is the type that owns it.
 		// A `Vector` instance's box is an `Array`'s — the SAME fused record, because a fixed-size buffer and a
 		// growable one differ in what may be done to them and not in how the bytes sit (see
 		// `VectorBuiltinBaseName`). It is a separate arm and not a widened `isArrayInstance` because the two
@@ -20481,8 +20467,23 @@ export type ProgramSignatures
 	// ⇒ **The panic is the reason this is a note and not a defect: the coupling is LOUD and immediate.** A
 	// name that belongs in the narrow question but NOT in the synthesized one cannot be added here — it needs
 	// the two rosters separated first, with the shared five lifted into a helper both read.
+	//
+	// ⭐⭐ **`List` LEFT THIS DISJUNCTION AT W153, AND ITS DEPARTURE IS THE WHOLE RETIREMENT.** The two rules
+	// the block above says *"come apart at the next container to be LISTED"* did not have to come apart for
+	// it: `stdlib/List.maxon` DECLARES `type List uses Element`, so shv2 neither synthesizes the record nor
+	// serves the container, and `List` leaves BOTH questions at once — exactly as `Map` (W41) and `Set` (W105)
+	// did. Striking the arm is therefore the entire edit at this door, and it moves five further answers with
+	// it because each DERIVES from this one rather than repeating it: `instanceCreateIsDeclared` flips to
+	// true, `builtinGenericTypeParamCount` reads the declaration's own `uses` list, `genericInstanceBoxSize`
+	// reads the declared `StructLayout`, `genericInstanceBoxDropCallee` emits the instance's own
+	// `__destruct_<mangled>` cascade, and `Parser.requireContainerIsCreatable` stops claiming `List.create()`.
+	//
+	// ⚠ **`__ManagedList` AND `__ManagedListNode` STAY, and that is not a leftover.** They are the
+	// compiler-owned chain `stdlib/List.maxon` is written OVER (`var chain as __ManagedList with Element`),
+	// `/specs/internal-types.md` puts their representation in the compiler, and no corpus file declares
+	// either. The chain runtime they are served by is the same one — see `ListRuntime.maxon`.
 	export function isBuiltinGenericBaseNameBesidesTheRecord(name ByteArray) returns bool
-		return self.isListBaseName(name) or self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
+		return self.isVectorBaseName(name) or self.isManagedListBaseName(name) or self.isManagedListNodeBaseName(name) or self.isManagedMemoryCursorBaseName(name)
 	end 'isBuiltinGenericBaseNameBesidesTheRecord'
 
 	// ⭐ **HOW MANY TYPE ARGUMENTS THE SYNTHESIZED GENERIC `name` TAKES** — the arity `Parser.checkGenericInstance`
@@ -20497,9 +20498,6 @@ export type ProgramSignatures
 		if self.isArrayBaseName(name) 'array'
 			return ArrayTypeParamCount
 		end 'array'
-		if self.isListBaseName(name) 'list'
-			return ListTypeParamCount
-		end 'list'
 		// ⚠ **A `Vector`'s SIZE IS NOT COUNTED HERE, and that is what makes this arm a 1 rather than a 2.**
 		// `Vector with 3 Int` supplies one TYPE argument; the 3 is consumed by `readSizedGenericArgs` before
 		// the argument list is parsed at all, so the `argCount` this is compared against never saw it.
@@ -21690,14 +21688,12 @@ export type ProgramSignatures
 		if self.isArrayInstance(id) 'array'
 			return ManagedDecrefName
 		end 'array'
-		// ⚠ A `Set` arm (`__set_decref`) and a `Map` arm (`__map_decref`) stood here until W105. Both are
-		// declared generics now, so each drops through its own `__destruct_<mangled>` cascade — the very
-		// A `List` drops through `__list_decref` — the same teardown over a CHAIN rather than a buffer: it walks
-		// head→tail destroying each live element through the stamped `element_drop@24`, frees every node, then
-		// frees the record. None of those nodes is reachable from a generic `__mm_decref`.
-		if self.isListInstance(id) 'list'
-			return ListDecrefName
-		end 'list'
+		// ⚠ A `Set` arm (`__set_decref`) and a `Map` arm (`__map_decref`) stood here until W105, and a `List`
+		// arm (`__list_decref`) until W153. All three are declared generics now, so each drops through its own
+		// `__destruct_<mangled>` cascade, which releases the fields the declaration writes — for a `List` that
+		// is the one `chain` field, whose own drop is the `__ManagedList` arm below. The chain teardown that
+		// walks head→tail destroying each element through the stamped `element_drop@24` is therefore reached
+		// through the field rather than through the box, and it is the same single walk it always was.
 		// A `Vector` drops through `__managed_decref` — its record IS an `Array`'s (see `genericInstanceBoxSize`'s
 		// vector arm), so the buffer it must free and the record it must reclaim are the ones that entry knows.
 		if self.isVectorInstance(id) 'vector'
@@ -23135,10 +23131,12 @@ export type ProgramSignatures
 	// arm already distinguishes. Answering it below, in the field walk, is what refused every
 	// `Array with (List with Integer)`: a layout-less instance was read as *"no cloner exists"* when what was
 	// missing was only a FIELD LIST, which a record does not have and does not need. The gate and
-	// `elementRecordCloneStrategy` split on one predicate pair (`isChainInstance` / `containerElementIsManaged`)
-	// so neither can admit what the other cannot emit.
+	// `elementRecordCloneStrategy` split on one predicate pair (`isManagedListInstance` /
+	// `containerElementIsManaged`) so neither can admit what the other cannot emit — and it is the
+	// `__ManagedList` predicate on BOTH sides since `List` was retired (W153), because a declared `List with T`
+	// box HAS a field list and therefore belongs in the walk below.
 	function instanceSupportsDeepClone(id GenericInstanceId, asElement bool, visited ClonerSet) returns bool
-		if not (self.isArrayInstance(id) or self.isChainInstance(id)) 'notAnElementRecord'
+		if not (self.isArrayInstance(id) or self.isManagedListInstance(id)) 'notAnElementRecord'
 			return self.declaredInstanceSupportsDeepClone(id, visited: visited)
 		end 'notAnElementRecord'
 		if not self.containerElementIsManaged(id) 'trivialElement'

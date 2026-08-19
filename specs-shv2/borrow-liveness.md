@@ -1860,15 +1860,22 @@ end 'main'
 ```
 
 <!-- test: a-method-rebinding-a-list-field-frees-the-borrowed-element -->
-### A method that REBINDS a `List` field frees the element a caller borrowed out of it
-`emitCheckedSelfFieldStore`'s E3070 seed was gated on `typeIsArrayInstance`, under the sentence *"an
-array element is the only borrow E3070 tracks"*. A `List` hands out element borrows through the very
-same `emitContainerElementAccessor` an `Array` does, and a `List`-typed struct field is legal — so
-this store was waved through as "not an array".
+### A method that REBINDS a `List` field no longer frees the element a caller holds
+⚖ **RULED 2026-08-18 (W160). THIS CASE AND ITS TWIN BELOW PINNED `E3070`, AND `W153` MOVED WHAT THEY ARE
+ABOUT — NOT WHETHER THE GATE WORKS.** `emitCheckedSelfFieldStore`'s E3070 seed was gated on
+`typeIsArrayInstance`, under the sentence *"an array element is the only borrow E3070 tracks"*, and a
+`List`-typed struct field was waved through as "not an array": **measured on `df0fbfd3bf`, this program
+compiled clean and ran to `0xC0000005`.** The gate became `typeOwnsBorrowableStorage`, which asks what the
+store can FREE rather than what the field is named after, and that gate is UNCHANGED and still name-agnostic
+— `a-field-store-in-a-callee-freeing-its-parameters-array` and
+`a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it` are the cases that hold it.
 
-⚠ **MEASURED on `df0fbfd3bf`: compiled clean, ran to `0xC0000005`**, where the oracle prints the
-string. The gate is now `typeOwnsBorrowableStorage`, which asks what the store can FREE rather than
-what the field is named after.
+⭐ **WHAT MOVED IS THE BORROW, WHICH IS NOW NEVER MINTED.** Retiring the synthesized `List` made
+`first()` corpus-served, so it discharges a real `+1` (`coOwnBorrowedOpaque`) and `s` is an OWNED `String`.
+There is no borrow for the store to conflict with, the use-after-free is structurally absent rather than
+merely undetected, and the program prints the string the oracle prints. **Re-measured at `W153`: exit 0,
+no leak, correct output.** The oracle still refuses — that is the `arr.last()` divergence
+`BorrowCheck.maxon` documents, stated for this family in its header.
 ```maxon
 typealias StringList = List with String
 
@@ -1893,8 +1900,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/a-method-rebinding-a-list-field-frees-the-borrowed-element.test:20:4: cannot mutate 'b' via 'reset' while it is borrowed by 's' (borrowed at line 19)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation]
 ```
 
 <!-- test: a-field-store-in-a-callee-freeing-its-parameters-list -->
@@ -1905,7 +1915,9 @@ case because it is a DIFFERENT door: that store is `items = <fresh>` inside a me
 (`parseFieldAssignment`). Both carried the same `typeIsArrayInstance` gate and both were open; neither
 was reachable from the other's fix.
 
-⚠ **MEASURED on `df0fbfd3bf`: compiled clean, ran to `0xC0000005`.**
+⚠ **MEASURED on `df0fbfd3bf`: compiled clean, ran to `0xC0000005`.** It takes the accepting answer above
+for the same reason and under the same W160 ruling — the `Array` twin directly above is the case that still
+holds this door's gate red.
 ```maxon
 typealias StringList = List with String
 
@@ -1930,8 +1942,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/borrow-liveness/a-field-store-in-a-callee-freeing-its-parameters-list.test:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
+```exitcode
+0
+```
+```stdout
+[alpha string long enough for heap allocation]
 ```
 
 <!-- test: a-method-rebinding-a-nested-struct-field-frees-the-array-inside-it -->

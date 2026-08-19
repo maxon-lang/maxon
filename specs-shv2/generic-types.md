@@ -1592,36 +1592,44 @@ end 'main'
 error E2015: <fragment>:13:2: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
 ```
 
-<!-- test: error.field-read-on-builtin-list-base-a-declaration-also-claims -->
-The `List` twin, and the READ direction — the two builtins are one rule, so a fix that
+<!-- test: error.field-read-on-the-second-builtin-base-a-declaration-also-claims -->
+The SECOND-NAME twin, and the READ direction — the two builtins are one rule, so a fix that
 reached only the one it was measured on would leave the other silently handing out its
-record. This one used to print the list record's live count as if it were the declared
+record. This one used to hand the record's own words back as if they were the declared
 field.
 
-⚠ **THE SUBJECT USED TO BE SPELLED `Set`, AND W90 FALSIFIED THAT SPELLING.** `Set` is no
-longer single-regime: a corpus `stdlib/Set.maxon` is listed, so a user `type Set uses T`
-now CONTESTS a declared type rather than a synthesized record and takes A1s wave 2's
-"a declaration wins" road instead of this gate. `List` is still single-regime —
-`isListBaseName` is a bare name test and `stdlib/List.maxon` is unlisted — so it is the
-base that still asks the question this case exists to pin, which its `Array` write-direction
-twin directly above does not cover.
+⚠ **THE SUBJECT HAS BEEN FALSIFIED TWICE BY THE RETIREMENT CHAIN, WHICH IS WHY THE CASE NAME
+NO LONGER CARRIES A CONTAINER.** It was `Set` until `W90` listed `stdlib/Set.maxon`, and
+`List` until `W153` listed `stdlib/List.maxon`: a listed module makes a user `type Set` /
+`type List` CONTEST a declared type rather than a synthesized record, so it takes A1s
+wave 2's "a declaration wins" road instead of this gate. **Measured at `W153` on the same
+binary, the two answer identically** — `a member access 'add'/'append' on a 'unknown' value`
+— which is that other road, not this one.
+
+⇒ **`Vector` is the subject now, and it is the single-regime base for the same reason `List`
+was**: `stdlib/Vector.maxon` exists and is NOT whitelisted, so `isBuiltinGenericBaseName`
+answers about a record shv2 synthesizes and nothing declares. The `Array` write-direction twin
+directly above does not cover this direction, and `Array` would not carry the second-name half
+of the question at all. **When `Vector` is listed in its turn, this case moves to whatever base
+is still single-regime or it goes** — the roster's other members (`__ManagedList`,
+`__ManagedListNode`, `__ManagedMemoryCursor`) cannot serve, because `E2051` refuses a
+declaration whose name starts with `__` before this gate is ever reached.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
-type List uses T
+type Vector uses T
 	export var value as T
-end 'List'
+end 'Vector'
 
-typealias IntList = List with Int
+typealias IntVec = Vector with 3 Int
 
 function main() returns ExitCode
-	var s = IntList.create()
-	s.append(7)
-	return s.value
+	var v = IntVec.create()
+	return v.value
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:9: Unsupported: a field access on 's': `List` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/List.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+error E2015: <fragment>:12:9: Unsupported: a field access on 'v': `Vector` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Vector.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
 ```
 
 <!-- test: error.sizeof-of-undeclared-generic-base -->

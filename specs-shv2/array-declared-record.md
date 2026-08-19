@@ -1486,14 +1486,28 @@ end 'main'
 error E2015: <fragment>:10:10: Unsupported: `Vector` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `Vector with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
 ```
 
-<!-- test: error.a-conformer-named-for-the-list-is-refused-for-the-same-reason -->
-⭐ **THE SAME REFUSAL AT THE SECOND NAME, BECAUSE THE RULE IS ABOUT THE CLASS AND NOT ABOUT `Vector`.**
-`List` is the other container shv2 still synthesizes under a name a user may write, and its record is a
-chain of 24-byte nodes dropped through `__list_decref` — nothing like the 48-byte managed record. **MEASURED
-before the rule existed:** the identical declaration named `List` compiled, and `l.resize(9)` — a member
-the list roster does not carry, and cannot (`shv2 provides create/append/prepend/get/first/removeFirst/count`)
-— answered **count 9**. Pinning one name would have left the other open, which is the shape a
-`covered-by` roster written twice always takes.
+<!-- test: a-conformer-named-for-the-list-is-admitted-because-the-list-left-the-class -->
+⭐⭐ **THE SECOND NAME LEFT THE CLASS AT `W153`, AND THIS CASE IS NOW THE GUARD ON THAT.** It used to pin
+the refusal above at a second name — `List` was the other container shv2 synthesized under a name a user
+may write, its record a chain of 24-byte nodes dropped through `__list_decref` rather than the 48-byte
+managed record — because pinning one name would have left the other open. **`W153` retired the synthesized
+`List`**, striking it from `isBuiltinGenericBaseNameBesidesTheRecord`, so `requireNameIsNotABuiltinContainerBase`
+correctly no longer answers about it: a user `type List` is an ordinary declaration, exactly like the `Bag`
+further up, and the `BuiltinArrayLiteral` marker gives it the growable surface it asked for. `l.resize(9)`
+then `count()` answers **9**, at exit 9.
+
+⚠ **THE ANSWER THIS CASE PINS IS THE ONE ITS OWN PROSE ONCE CALLED WRONG, AND THE DIFFERENCE IS THE
+RETIREMENT RATHER THAN A CHANGE OF MIND.** *"MEASURED before the rule existed: the identical declaration
+named `List` compiled, and `l.resize(9)` answered count 9"* was a wrong answer while `List with …` was
+already this compiler's own chain instance — the marker put the growable surface under the container's own
+name. Nothing of the compiler's is under that name now, so the same 9 is the declaration's own answer.
+⇒ **Re-add `List` to that roster and this case goes red**, which is the whole of why it is kept.
+
+⛔ **AND A COVERAGE LOSS, STATED RATHER THAN QUIETLY ABSORBED: the class above has ONE user-writable member
+left.** The roster is `Vector`, `__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`, and the three
+`__` names are refused earlier by `E2051` (*"declarations starting with `__` are reserved"*), so no second
+name can demonstrate that the rule is about the CLASS until shv2 synthesizes another container under a
+writable name. The refusal itself stays pinned by the `Vector` case directly above.
 ```maxon
 typealias Num = int(0 to 100)
 
@@ -1515,8 +1529,8 @@ function main() returns ExitCode
 	return l.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: `List` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `List with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `List` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
+```exitcode
+9
 ```
 
 <!-- test: error.a-conformer-named-for-a-container-that-constructs-nothing-still-does-not-take-its-surface -->

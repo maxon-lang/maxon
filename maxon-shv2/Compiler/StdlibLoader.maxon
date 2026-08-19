@@ -1748,6 +1748,44 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	try listWhitelistedModule(stdlibDir, relative: "helpers/sort/driftsort.maxon", into: listed)
 	try listWhitelistedModule(stdlibDir, relative: "Array.maxon", into: listed)
 
+	// ⭐⭐ **W153 — `stdlib/List.maxon`, AND THE ENTRY IS THE SMALLER HALF OF ITS OWN RUNG.** The `Set`(W90) /
+	// `Map`(W41) / `CharacterSet`(W115) chain, one container over: shv2 SYNTHESIZED `List`, so this line on its
+	// own would have been INERT — `BATCH36`'s finding, and the thing `W63`, `W86` and `W112` each built GREEN
+	// and then WITHDREW on. What makes it mean anything is the retirement that landed with it: the base name
+	// left `ProgramSignatures.isBuiltinGenericBaseNameBesidesTheRecord`, and `isListBaseName` /
+	// `isListInstance` / `isListInstanceAt`, `Parser.dispatchListMethod`, the `for … in` node-cursor form and
+	// the `__list_from` construction went with it.
+	//
+	// ⚠ **THE ACCEPTANCE WAS THE DIFFERING-DECLARATIONS CONTROL AND NOT A GREEN SUITE.** With `count()`
+	// rewritten to `return chain.count() + 100`, a program printing `l.count()` over a three-element list
+	// answered **3** before this entry and **103** after it. The positive control was re-run in the same
+	// worktree against `stdlib/Array.maxon` (a reversed `sort()` comparator moving `[10 20 30]` to
+	// `[30 20 10]`), because a negative probe nobody has seen fire proves nothing.
+	//
+	// ⚠ **ITS APPARENT BLOCKER WAS A STALE MEASUREMENT.** `ListRuntime.maxon`'s header said shv2 has *"no
+	// `Iterable`/associated-type machinery, so `stdlib/List.maxon`'s `createIterator`/`ListIterator` pair has
+	// nothing to plug into"*, which reads as a bar to listing. `stdlib/Array.maxon` is listed and live while
+	// declaring `Iterable with (Element, ArrayIter)`: the conformance is CHECKED without being the dispatch
+	// route, and `for … in` reaches a declared iterable through `Parser.materializeIterableIterationSource`.
+	// The sentence was about DISPATCH, never about listability.
+	//
+	// ⚠ **THE COLLISION RULE, CLEARED:** it declares no free function at all — every member is on `List` or on
+	// `ListIterator` — so it can shadow no bare-name builtin. Its three type names are `List` (compiler-owned
+	// as a SPELLING, admitted from the corpus by `recordStruct`'s provenance bit exactly as `Set` / `Map` /
+	// `Array` are), `ListIterator`, which no other listed module declares, and the `ListError` enum. It
+	// consumes `__ManagedList` / `__ManagedListNode`, which stay compiler-owned and are reached the way
+	// `stdlib/Array.maxon` reaches `__ManagedMemory`. It has no top-level binding, so the `S2h` reachability
+	// term has nothing of its to keep or drop, and no imports.
+	//
+	// ⛔ **`Compiler/Runtime/ListRuntime.maxon` STAYS STANDING, DELIBERATELY.** It still serves the
+	// `__ManagedList` / `__ManagedListNode` surface this module is written OVER, so most of it is live rather
+	// than orphaned; what the retirement stranded is the `List`-only half (`__list_from`, `__list_get`,
+	// `__list_insert`, `__list_first`/`__list_last`, `__list_remove_at`, `__list_remove_first`/`_last`,
+	// `__list_append`/`__list_prepend`). `W90` left `SetRuntime.maxon` standing for exactly this reason and
+	// `W105` deleted it separately, on BYTE-IDENTITY rather than on a green suite — a green suite says nothing
+	// BROKE, and only byte-identity says nothing was LIVE.
+	try listWhitelistedModule(stdlibDir, relative: "List.maxon", into: listed)
+
 	//     (n) `stdlib/Range.maxon` — W62 (BATCH36). Its ONLY blocker was `W60`: `RangeIterator implements
 	//     Iterator with RangeBound, BidirectionalIterator`, where `BidirectionalIterator extends Iterator`,
 	//     had `Iterator`'s inherited `current()` checked with NO binding, so a conformance that supplied

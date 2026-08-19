@@ -3804,6 +3804,11 @@ let OpaqueChainCreateNoun = "chain"
 // reaches `literalColumnTypeFor` for the same one question the other two put — which `MaxonType` does this
 // parsed value name? — so it takes a noun here rather than a sentence of its own.
 let SetLiteralSubject = "a set literal"
+
+// The `List from […]` member list's subject (W153) — the FOURTH, added the day that construction stopped
+// building an intermediate array and started reading its own members. It pairs with
+// `ContainerElementColumnNoun` above, because a list's one column is its element exactly as an array's is.
+let ListLiteralSubject = "a list literal"
 let HashTableKeyColumnNoun = "key"
 let HashTableValueColumnNoun = "value"
 
@@ -6482,24 +6487,11 @@ end 'surfaceRosterProvider'
 // `upsert`/`insert`/`remove` each declare `var self`, so the ordinary parameter-mutation rule raises the same
 // E3019 off the declaration rather than off a hand-written roster.
 
-// ⭐ **WHICH `List` METHODS WRITE THEIR RECEIVER** — the fourth half of the one immutable-receiver rule, here
-// with its three siblings for their stated reason. `append`/`prepend`/`insert` link a fresh node and bump the
-// count; `removeFirst`/`removeLast`/`remove` unlink one and take its ELEMENT out, and `clear` lets go of every
-// node there is. `get`/`first`/`last`/`count`/`isEmpty` only read.
-//
-// ⚠ **THIS WHOLE SET IS ALSO WHAT INVALIDATES AN OUTSTANDING `first()` BORROW** (E3070) — `dispatchListMethod`
-// hands `noteBorrowSubjectWrite` the answer below, not a `removeFirst` special case. The removals hand the
-// borrowed ELEMENT to a new owner and `clear` releases the node holding it; the insertions write the record
-// the borrow was taken off.
-//
-// ⚠ **IT IS DELIBERATELY WIDER THAN THE `__ManagedList` SURFACE'S ANSWER, AND THE DIFFERENCE IS WHAT EACH
-// SURFACE HANDS OUT.** A `__ManagedList` borrow is a node HANDLE, which since `W138` is a second OWNER of a
-// refcounted node and therefore cannot be dangled by anything on that surface at all. A `List` borrow is an
-// ELEMENT — handed out by `first`/`last`/`get` through `emitContainerElementAccessor` — and E3070's subject is
-// the STORAGE, so the conservative "any write ends every borrow of this list" is the answer here.
-function listMethodMutatesReceiver(name ByteArray) returns bool
-	return name.equals(AppendMethod) or name.equals(ListPrependMethod) or name.equals(InsertMethod) or name.equals(ListRemoveFirstMethod) or name.equals(ListRemoveLastMethod) or name.equals(RemoveMethod) or name.equals(ClearMethod)
-end 'listMethodMutatesReceiver'
+// ⚠ **A `List` ANSWER STOOD HERE UNTIL W153, AND IT IS GONE WITH THE SURFACE IT DESCRIBED.** It named
+// `append`/`prepend`/`insert`/`removeFirst`/`removeLast`/`remove`/`clear` as the members that write the
+// record, and `dispatchListMethod` handed it to both the E3019 door and the E3070 one. `stdlib/List.maxon`
+// declares those members with `var self`, so the ordinary parameter-mutation rule raises E3019 off the
+// declaration — which is exactly what the `Set`/`Map` note above records for the hash tables.
 
 // ⭐ **WHICH `__ManagedList` METHODS WRITE THEIR RECEIVER** — the same rule one surface over, and NOT the
 // predicate above with two spellings added: the two surfaces name different methods (`insertFirst` vs
@@ -33824,17 +33816,18 @@ export type Parser
 		// borrow for a mutation to invalidate. What it does share with the array form is that its source is
 		// a heap record evaluated once into the preheader.
 		var isString = false
-		// ⭐ **A LIST SOURCE IS THE FOURTH FORM, AND IT IS A CURSOR RATHER THAN A COUNTER.** A chain has no
-		// random access, so the header block-arg that carries an ordinal for the other three carries a NODE
-		// POINTER here: it starts at `__list_head`, the header tests it against 0, the body reads
-		// `__list_node_value` off it and the step advances it with `__list_node_next`. That is exactly the
-		// O(n)-total traversal `/specs/list.md` documents (*"a cached cursor … O(1) per element"*), where a
-		// counter over `get(i)` would have been O(n²) — the one shape this form must not take.
+		// ⭐⭐ **A LIST SOURCE WAS A FOURTH FORM HERE — A NODE CURSOR THE LOOP BUILT — AND IT WENT WITH THE
+		// SYNTHESIZED `List` (W153).** The header's block-arg carried a NODE POINTER seeded from `__list_head`,
+		// tested against 0, read through `__list_node_value` and advanced by `__list_node_next`. A corpus
+		// `List` declares `Iterable with (Element, ListIter)`, so it is rewritten to its own `ListIterator` by
+		// `materializeIterableIterationSource` before this fork is reached and takes the CURSOR form below,
+		// exactly as a corpus `Array` and a corpus `Map` already do.
 		//
-		// ⚠ It answers the ARRAY's way to everything else: it takes the iteration LOCK (a rebind would free the
-		// chain the header is walking) and it RECORDS a borrow subject, because the element it hands the body is
-		// a reference into a node the list still owns.
-		var isList = false
+		// ⭐ **THE COMPLEXITY THE OLD FORM EXISTED TO GUARANTEE IS UNCHANGED, WHICH IS WHY THIS IS NOT A
+		// REGRESSION DRESSED AS A SIMPLIFICATION.** `/specs/list.md`'s *"a cached cursor … O(1) per element"* is
+		// a statement about the traversal holding a NODE between trips, and `ListIterator` holds exactly that
+		// (`var node as ENode`, advanced through `next()`). The shape this must never take — a counter over
+		// `get(i)`, O(n²) — is not what a declared cursor does either.
 		// ⭐⭐ **A CURSOR-PROTOCOL USER TYPE IS THE FIFTH FORM, AND IT IS THE ONLY ONE THE SOURCE WALKS ITSELF**
 		// (conditional extensions). The other four are compiler-owned records whose traversal this function
 		// BUILDS — an ordinal, a byte position, a node pointer. Here the source supplies it: the body reads
@@ -33897,7 +33890,6 @@ export type Parser
 			cursorSurface = try self.cursorIterationSurface(source, forTok: forTok)
 			try self.requireIterableSource(source, cursorSurface: cursorSurface, forTok: forTok)
 			isString = tagIsText(self.tagOf(source))
-			isList = self.signatures.isListInstanceAt(self.tagOf(source), nameId: self.valueNameId(source))
 
 			// ⭐⭐ **THE LOCK IS EVERY COLLECTION FORM'S; ONLY THE BORROW SUBJECT IS THE ARRAY'S.** The
 			// String form shipped without the lock, on the reasoning that a String hands the body a MINTED
@@ -33917,13 +33909,12 @@ export type Parser
 			// was protecting and segfaulted on the one it was not.
 			sourceLock = self.lockIterationSource(sourceStart)
 
-			// The BORROW SUBJECT is every SLOT-BACKED form's — the array's and the list's — and the
+			// The BORROW SUBJECT is the SLOT-BACKED forms' — the array's and the vector's — and the
 			// String form's alone is exempt, for the reason the lock is not: a String's element is
 			// MINTED, so no live reference into the source outlives the read and E3070 has nothing to
 			// track (`attachPendingBorrows` is a no-op on a value that filed no pending borrow).
-			// Recording a subject here would enrol a borrow that does not exist. The list's element IS a
-			// reference into a node the list still owns, so it records one (see the `isList` note above).
-			// A CURSOR is exempt for the String's reason and not the List's, even though its source is a
+			// Recording a subject here would enrol a borrow that does not exist.
+			// A CURSOR is exempt for the String's reason and not the array's, even though its source is a
 			// record: the element the body sees is whatever `current()` RETURNS, so its ownership is that
 			// call's answer (`mintCallResult`) and not a borrow this loop took out of a slot it can name.
 			if not isString and not methodSurfaceExists(cursorSurface) 'slotBorrowConcerns'
@@ -33976,21 +33967,16 @@ export type Parser
 
 		// The preheader is `currentBlock`, not `block`: a short-circuit `and`/`or` inside a bound leaves
 		// control in a fresh merge block, and the entry edge belongs on the block control is actually in.
-		// ⭐ **THE HEADER'S CARRIED POSITION, WHICH IS NOT THE SAME KIND OF THING IN ALL FIVE FORMS.** A RANGE
-		// carries the user's own loop variable, an ARRAY and a STRING a compiler-owned index starting at 0, a
-		// LIST the NODE CURSOR — `__list_head`, which answers 0 on an empty list so the header's first test
-		// exits before the body runs — and a USER CURSOR the last `advance()`'s ERROR FLAG, seeded 0 (no throw
-		// yet) so its first test always enters the body. The cursor takes the zero-literal arm the counted forms
-		// take, and that coincidence of value is not a coincidence of meaning: 0 is "index 0" for one and "no
-		// error" for the other, and both are what the preheader owes its header.
+		// ⭐ **THE HEADER'S CARRIED POSITION, WHICH IS NOT THE SAME KIND OF THING IN ALL FOUR FORMS.** A RANGE
+		// carries the user's own loop variable, an ARRAY and a STRING a compiler-owned index starting at 0, and
+		// a USER CURSOR the last `advance()`'s ERROR FLAG, seeded 0 (no throw yet) so its first test always
+		// enters the body. The cursor takes the zero-literal arm the counted forms take, and that coincidence of
+		// value is not a coincidence of meaning: 0 is "index 0" for one and "no error" for the other, and both
+		// are what the preheader owes its header.
 		var firstIndex = source
-		if isList 'listCursorStartsAtHead'
-			firstIndex = self.emitRuntimeCall(ListHeadName, args: singletonArgs(source), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
-		end 'listCursorStartsAtHead' else 'countedForms'
-			if not isRange 'counterStartsAtZero'
-				firstIndex = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
-			end 'counterStartsAtZero'
-		end 'countedForms'
+		if not isRange 'counterStartsAtZero'
+			firstIndex = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+		end 'counterStartsAtZero'
 		// The carried bindings' PRE-loop values, captured here because the empty-`Iterable` edge below needs
 		// them again at the join and the bindings themselves are rebound as the body is parsed.
 		let entryCarried = self.edgeArgsFor(phiVars, preLoop: true)
@@ -34017,26 +34003,18 @@ export type Parser
 		// bound and goes through `emitCompare`, so `for i in 1 to "x"` is the ordinary comparison type
 		// error; for an array it is `idx < __managed_count(arr)`, both operands compiler-minted integers.
 		//
-		// ⭐ **A LIST'S TEST IS `cursor != 0`, WHICH IS A BOUND OF A DIFFERENT KIND AND NEEDS NO LENGTH READ.**
-		// The chain's own null terminator is the end condition, so the header reads nothing off the record —
-		// and it is still the check that licenses the unchecked `__list_node_value` below it, exactly as the
-		// live length read is for the other two collection forms.
 		self.currentBlock = header
 		var bound = limit
 		var testOp = MaxonCmpOp.le if rangeInclusive else MaxonCmpOp.lt
-		if isList 'listCursorReachedTheEnd'
-			bound = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
-			testOp = MaxonCmpOp.ne
-		end 'listCursorReachedTheEnd'
-		// ⭐ **A USER CURSOR'S TEST IS `flag == 0`** — "the last `advance()` did not throw". It is the List's
-		// test with the sense inverted, and it needs no length read for the same reason: the value the header
-		// carries already IS the end condition. The preheader seeds it 0 (see `firstIndex` below), which is what
-		// makes the FIRST trip unconditional — the do-while this form's header argues for.
+		// ⭐ **A USER CURSOR'S TEST IS `flag == 0`** — "the last `advance()` did not throw" — and it is the one
+		// form that needs no length read, because the value the header carries already IS the end condition.
+		// The preheader seeds it 0 (see `firstIndex` above), which is what makes the FIRST trip unconditional —
+		// the do-while this form's header argues for.
 		if methodSurfaceExists(cursorSurface) 'cursorStillPositioned'
 			bound = self.emitLiteral(0, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
 			testOp = MaxonCmpOp.eq
 		end 'cursorStillPositioned'
-		if not isRange and not isList and not methodSurfaceExists(cursorSurface) 'lengthReadLive'
+		if not isRange and not methodSurfaceExists(cursorSurface) 'lengthReadLive'
 			// ⭐ **THE LENGTH IS RE-READ LIVE IN THE HEADER for a String too** — `length@8` off the record,
 			// the same discipline the array form's live `__managed_count` follows and for the same reason: the
 			// header comparison IS the bounds check that licenses the unchecked read below it.
@@ -34133,15 +34111,17 @@ export type Parser
 			self.markValueOwnsHeap(loopValue, exclusivity: OwnedHeapExclusivity.sole)
 			self.ownedBindings.push(VarInfo.createValueBinding(self.loopVariableOwnerName(nameToks), varType: self.typeOf(loopValue), mutable: false, boundValue: loopValue))
 		end 'ownsTheTripsCharacter'
-		// ⭐ **THE TWO INDEXED-CONTAINER FORMS READ THEIR ELEMENT THROUGH ONE DOOR**, differing only in what the
-		// carried header value MEANS: an ARRAY's is an ordinal into its buffer, a LIST's is the node the value
-		// sits in. Both hand back a BORROW the container still owns, both are the UNCHECKED read the header's
-		// own test licenses, and both mint the same E3070 borrow against `elementBorrowSubject` — so the
-		// ownership, the type and the borrow are `emitContainerElementAccessor`'s one answer, and the fork is
-		// exactly the callee and its arguments.
+		// ⭐ **THE INDEXED-CONTAINER FORM READS ITS ELEMENT THROUGH THE SHARED ACCESSOR**: the carried header
+		// value is an ordinal into the record's buffer, the read hands back a BORROW the container still owns,
+		// it is the UNCHECKED read the header's own test licenses, and it mints the E3070 borrow against
+		// `elementBorrowSubject` — ownership, type and borrow are `emitContainerElementAccessor`'s one answer.
+		//
+		// ⚠ **TWO FORMS SHARED THIS DOOR UNTIL W153**, the second being a `List`'s node cursor, which read
+		// `__list_node_value` off the carried NODE where an array reads `__managed_get_unchecked` off an
+		// ordinal. A corpus `List` is a declared `Iterable` now and reads its element through `current()` like
+		// every other cursor.
 		if not isRange and not isString and not methodSurfaceExists(cursorSurface) 'readElement'
-			let elementArgs = singletonArgs(indexPhi) if isList else pairArgs(source, second: indexPhi)
-			loopValue = self.emitContainerElementAccessor(func, callee: ListNodeValueName if isList else ManagedGetUncheckedName, container: source, args: elementArgs, giid: self.valueNameId(source), reference: ContainerElementReference.borrowed, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(patternTok))
+			loopValue = self.emitContainerElementAccessor(func, callee: ManagedGetUncheckedName, container: source, args: pairArgs(source, second: indexPhi), giid: self.valueNameId(source), reference: ContainerElementReference.borrowed, borrowSubjectName: elementBorrowSubject, range: SourceRange.ofToken(patternTok))
 		end 'readElement'
 		// ⭐⭐ **A CURSOR'S ELEMENT IS WHATEVER `current()` RETURNS, AND ITS OWNERSHIP IS THAT CALL'S ANSWER —
 		// NOT A THIRD RULE HERE.** The other four forms each needed one: an array/list element is a BORROW the
@@ -34228,10 +34208,6 @@ export type Parser
 		// it is read straight rather than carried on a phi. Computing it again here would run the whole
 		// UAX #29 scan a second time per trip.
 		//
-		// ⭐ **A LIST ADVANCES TO THE NEXT NODE**, read off the cursor the HEADER carries — which dominates the
-		// step, so the read is straight, and which the header has already proved non-null. `__list_node_next`
-		// answers 0 at the tail, and that is the value the header tests on the next trip.
-		//
 		// ⭐⭐ **A USER CURSOR ADVANCES BY CALLING `advance()`, AND ITS ERROR FLAG *IS* THE NEXT CARRIED VALUE.**
 		// The step is exactly where that call belongs: every path that continues the loop — the body's
 		// fall-through and every `continue` — lands here, so the cursor moves exactly once per trip however the
@@ -34242,14 +34218,10 @@ export type Parser
 		if methodSurfaceExists(cursorSurface) 'cursorAdvanceStep'
 			nextIndex = try self.emitCursorAdvance(func, cursorSurface: cursorSurface, anchor: forTok)
 		end 'cursorAdvanceStep' else 'builtinSourceStep'
-			if isList 'listNodeStep'
-				nextIndex = self.emitRuntimeCall(ListNodeNextName, args: singletonArgs(indexPhi), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: SourceRange.ofToken(forTok))
-			end 'listNodeStep' else 'countedStep'
-				if not isString 'ordinalStep'
-					let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
-					nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
-				end 'ordinalStep'
-			end 'countedStep'
+			if not isString 'ordinalStep'
+				let one = self.emitLiteral(1, valueType: MaxonType.integer, range: SourceRange.ofToken(forTok))
+				nextIndex = self.emitMachineWordAdd(indexPhi, rhs: one, range: SourceRange.ofToken(forTok))
+			end 'ordinalStep'
 		end 'builtinSourceStep'
 		self.recordBranchEdge(step, targetId: header.id, argIds: self.loopHeaderArgs(nextIndex, carried: self.edgeArgsFor(phiVars, preLoop: false)))
 		self.emitBranch(step, targetId: header.id)
@@ -34609,11 +34581,10 @@ export type Parser
 		if tagIsText(self.tagOf(source)) 'string'
 			return
 		end 'string'
-		// A LIST walks its CHAIN with a node cursor — the one container here whose element read is not a
-		// random-access index, and the reason this function is no longer named for the `Array`.
-		if self.signatures.isListInstanceAt(self.tagOf(source), nameId: self.valueNameId(source)) 'list'
-			return
-		end 'list'
+		// ⚠ A LIST arm stood here until W153, admitting the synthesized chain so `parseForStatement` could
+		// build it a node cursor. A corpus `List` declares `Iterable with (Element, ListIter)`, so it arrives
+		// as the `ListIterator` its own `createIterator()` returned and is admitted by the cursor arm below —
+		// the same route the corpus `Array` and the corpus `Map` take.
 		// A VECTOR iterates exactly as an `Array` does — its record IS an array's, its length is its fixed
 		// size, and `parseForStatement`'s counted form reads both off the record and the element through the
 		// shared accessor, so the loop needed no arm of its own: only this admission.
@@ -48865,13 +48836,9 @@ export type Parser
 		// containers are declared generics now, so `s.insert(e)` and `m.upsert(k, value: v)` fall through to
 		// the ordinary declared-method path — the same one every other `stdlib/` type's members take.
 
-		// A LIST RECEIVER (`list.append(x)`, `try list.first()`, `list.count()`) goes to the list runtime. It
-		// carries the BORROW SUBJECT the two hash-table arms above do not: a list's `first`/`get` hand back a
-		// reference into a node the list owns, so E3070 has an outstanding borrow to invalidate when
-		// `removeFirst` frees that node — the same reason the `Array` arm carries one and a `Set` does not.
-		if self.signatures.isListInstanceAt(recv.tag, nameId: recv.nameId) 'listMethod'
-			return try self.dispatchListMethod(func, list: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName))
-		end 'listMethod'
+		// ⚠ **A LIST ARM STOOD HERE AND WENT WITH ITS RUNTIME SURFACE (W153)**, exactly as the `Set` and `Map`
+		// arms above did at W105. `stdlib/List.maxon` declares the type, so `l.append(x)`, `try l.first()` and
+		// `l.count()` fall through to the ordinary declared-method path.
 
 		// A `__ManagedList` RECEIVER (`ml.insertFirst(x)`, `ml.remove(node)`, `ml.clear()`) is the SAME chain
 		// under the surface that hands out node handles. ⭐ **IT CARRIES THE STORAGE MASK, BUT NOT FOR E3070's
@@ -52569,12 +52536,13 @@ export type Parser
 	end 'emitOwnedContainerCreate'
 
 	// What each container says when the author names a static it does not have. A per-container ROUTER rather
-	// than a name threaded into one template, because the three tails are not the same sentence with a noun
-	// swapped — a `List` points the author at `List from […]`, which the other two have no equivalent of.
+	// than a name threaded into one template, because the tails are not the same sentence with a noun swapped —
+	// a `Vector` points the author at `Vector from […]`, which the chain has no equivalent of.
+	//
+	// ⚠ A `List` arm stood first until W153. `stdlib/List.maxon` declares the type, so a bad static on a `List`
+	// is now the ordinary `E3004 call to undefined function 'List.<method>'` every declared type answers with,
+	// and this router is never reached for one.
 	function containerStaticSurfaceSentence(giid GenericInstanceId, method ByteArray) returns String
-		if self.signatures.isListInstance(giid) 'list'
-			return "`List` static method '{String.from(method)}' — shv2 provides `create()` only; a `List` is otherwise built with `List from […]`"
-		end 'list'
 		if self.signatures.isVectorInstance(giid) 'vector'
 			return "`{String.from(VectorBuiltinBaseName)}` static method '{String.from(method)}' — shv2 provides `create()` only; a vector is otherwise built with `{String.from(VectorBuiltinBaseName)} from […]`"
 		end 'vector'
@@ -52597,9 +52565,9 @@ export type Parser
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
 
-		if self.signatures.isChainInstance(giid) 'chain'
+		if self.signatures.isManagedListInstance(giid) 'managedList'
 			return try self.emitListCreateOp(giid, range: range)
-		end 'chain'
+		end 'managedList'
 		if self.signatures.isVectorInstance(giid) 'vector'
 			return try self.emitVectorCreateOp(giid, range: range)
 		end 'vector'
@@ -52735,10 +52703,10 @@ export type Parser
 		if self.signatures.isArrayInstance(giid) 'array'
 			return
 		end 'array'
-		if self.signatures.isChainInstance(giid) 'chain'
+		if self.signatures.isManagedListInstance(giid) 'managedList'
 			try self.requireListElementType(giid, tok: aliasTok)
 			return
-		end 'chain'
+		end 'managedList'
 		if self.signatures.isVectorInstance(giid) 'vector'
 			try self.requireVectorElementType(giid, tok: aliasTok)
 			return
@@ -53463,125 +53431,18 @@ export type Parser
 		throw ParseError.unsupported("`{String.from(self.signatures.genericInstanceBaseName(giid))}` holds one machine word per {ContainerElementColumnNoun}, so its {ContainerElementColumnNoun} must be a managed type or an integral one — a '{typeTagName(maxonTypeTag(elementType))}' {ContainerElementColumnNoun} does not fit that slot", line: tok.line, column: tok.column)
 	end 'requireListElementType'
 
-	// ⭐ **DISPATCH A BUILTIN `List` METHOD** — cursor on the method NAME, `list` the (borrowed) receiver
-	// record. Four shapes, and every arm is one of them:
+	// ⭐⭐ **`dispatchListMethod` STOOD HERE — THE WHOLE SYNTHESIZED `List` SURFACE — AND W153 DELETED IT.**
+	// It served `count`/`isEmpty`/`append`/`prepend`/`insert`/`get`/`first`/`last`/`removeFirst`/`removeLast`/
+	// `remove`/`clear` off the `__list_*` runtime, and its closing refusal ended *"clone is a later slice"*.
+	// `stdlib/List.maxon` declares every one of those and `clone` besides, so a `List` receiver takes the
+	// ordinary declared-method path — the same one every other `stdlib/` type's members take, and the one
+	// that makes the module's bodies the thing that answers.
 	//
-	//   • **READS** — `count`/`isEmpty`, plain runtime calls that cannot fail.
-	//   • **NON-THROWING VOID MUTATORS** — `append`/`prepend`/`clear`, refused in value position by
-	//     `requireVoidMethodIsStatement` and returning the receiver, which is what the statement still
-	//     denotes (`emitArrayVoidCall`'s rule).
-	//   • **THROWING ACCESSORS** — `first`/`last`/`get`/`removeFirst`/`removeLast`/`remove`, emitted as
-	//     ordinary calls the enclosing `try` rewrites (`rewriteLastCallToTryCall`), exactly as every throwing
-	//     `Array` accessor is.
-	//   • **THE ONE THROWING VOID MUTATOR** — `insert`, which is neither of the two above and is therefore
-	//     `parseArraySet`'s shape rather than a fourth argument parse (see its arm).
-	//
-	// ⚠ **THE OWNERSHIP SPLIT IS THE `Array`'s, ASKED THROUGH THE `Array`'s OWN DOORS.** `append`/`prepend`/
-	// `insert` MOVE a managed element in (the list becomes its owner) via `parseContainerElementArg`;
-	// `first`/`last`/`get` hand back a BORROW and `removeFirst`/`removeLast`/`remove` a value MOVED OUT, both
-	// through `emitContainerElementAccessor`'s `reference` answer. Not one of those doors needed a `List` arm — see
-	// that function's header for why they were container doors all along.
-	function dispatchListMethod(func IrFunction, list ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask) returns ValueId throws ParseError
-		let methodTok = try self.consume(TokenKind.identifier)
-		let range = SourceRange.ofToken(methodTok)
-		let giid = self.valueNameId(list)
-		// ⭐ **ONE ANSWER, READ ONCE, HANDED TO BOTH DOORS.** A `List`'s E3019 set and its E3070 set COINCIDE —
-		// see `listMethodMutatesReceiver`, whose header argues that against the narrower shape `__ManagedList`
-		// needs — so the two calls below take the same local rather than two calls of the same predicate that
-		// could later be edited apart.
-		let mutates = listMethodMutatesReceiver(methodTok.value)
-
-		// ⛔⛔ **THIS PASSED `receiverStorage: NoParamPositions` UNTIL spec-port `list`, ON A PREMISE THAT HAD
-		// STOPPED HOLDING, AND IT WAS A USE-AFTER-FREE.** The line read *"a list write cannot free an ARRAY
-		// element, which is the only borrow E3070 tracks"* — copied from the `String`/`Set`/`Map` dispatchers,
-		// where it is TRUE because those surfaces hand out no borrow at all. A `List` does:
-		// `first`/`last`/`get` mint one through `emitContainerElementAccessor` exactly as an `Array`'s do, and
-		// `removeFirst`/`removeLast`/`remove`/`clear` free the node that borrow points into.
-		//
-		// The same-body half was always closed (`noteBorrowSubjectWrite` below settles a container write at the
-		// parse), so nothing was red. The CROSS-FUNCTION half was open, because `BorrowCheck.mutationSiteWrites`
-		// reads the STORAGE column for every call site and this door never set a bit in it. MEASURED on the
-		// existing surface, before this rung added anything: `let val = try list.first() …` then `eat(list)`
-		// where `eat` calls `list.removeFirst()` compiled clean and ran to **0xC0000005**.
-		// `list.md:memory.value-survives-clear-error` is that program with `clear`, and the E3070 it pins is
-		// what this argument buys.
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
-
-		// ⭐ A write through the receiver invalidates every borrow outstanding on it — `removeFirst` FREES the
-		// node whose element a `first()` borrow still names, so the E3070 door is taken with the same answer
-		// the immutable-binding rule above just read. BOTH of E3070's halves are recorded by this one call:
-		// the same-body site, and the storage column a CALLER's borrow reads across the call.
-		self.noteBorrowSubjectWrite(func, receiver: list, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
-
-		if methodTok.value.equals(CountMethod) 'count'
-			return try self.emitChainReader(list, callee: ListCountName, resultTag: ValueTypeTag.integer, range: range)
-		end 'count'
-
-		if methodTok.value.equals(IsEmptyMethod) 'isEmpty'
-			return try self.emitChainReader(list, callee: ListIsEmptyName, resultTag: ValueTypeTag.boolean, range: range)
-		end 'isEmpty'
-
-		// ⭐ **THE FOUR END ACCESSORS, TWO ARMS.** Each PAIR differs only in which end the runtime reads, so
-		// each is one arm — the `insertAtAnEnd` arrangement below, twice. What separates the two arms is the
-		// `owned` flag, and that is the ownership split `emitContainerElementAccessor` is built on: `first`/
-		// `last` look at an element the list KEEPS (a borrow, and the E3070 mint), `removeFirst`/`removeLast`
-		// take one OUT (the caller becomes an owner). Deriving that from a shared name table would be the one
-		// thing this dispatch must not get wrong — a borrow tracked as owned is a double free.
-		if methodTok.value.equals(ArrayFirstMethod) or methodTok.value.equals(ListLastMethod) 'borrowAtAnEnd'
-			try self.consumeEmptyArgList()
-			let callee = ListFirstName if methodTok.value.equals(ArrayFirstMethod) else ListLastName
-			return self.emitContainerElementAccessor(func, callee: callee, container: list, args: singletonArgs(list), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
-		end 'borrowAtAnEnd'
-
-		if methodTok.value.equals(ListRemoveFirstMethod) or methodTok.value.equals(ListRemoveLastMethod) 'removeAtAnEnd'
-			try self.consumeEmptyArgList()
-			let callee = ListRemoveFirstName if methodTok.value.equals(ListRemoveFirstMethod) else ListRemoveLastName
-			return self.emitContainerElementAccessor(func, callee: callee, container: list, args: singletonArgs(list), giid: giid, reference: ContainerElementReference.movedOut, borrowSubjectName: borrowSubjectName, range: range)
-		end 'removeAtAnEnd'
-
-		// The two INDEXED accessors, sharing the argument parse the same way the end pairs share theirs and
-		// splitting on the same flag: `get` LOOKS AT the element at an index, `remove` TAKES IT OUT.
-		if methodTok.value.equals(GetMethod) or methodTok.value.equals(RemoveMethod) 'elementAtAnIndex'
-			let movesOut = methodTok.value.equals(RemoveMethod)
-			let index = try self.parseArrayOneArg(func)
-			let callee = ListRemoveAtName if movesOut else ListGetName
-			return self.emitContainerElementAccessor(func, callee: callee, container: list, args: pairArgs(list, second: index), giid: giid, reference: ContainerElementReference.movedOut if movesOut else ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
-		end 'elementAtAnIndex'
-
-		// The two insertions are non-throwing VOID mutators, so a value-position call is refused — from INSIDE
-		// the arm the name matched, which is the shared check's whole scoping (`requireVoidMethodIsStatement`).
-		// They differ only in WHICH end the runtime links onto, so they share this arm rather than spelling the
-		// argument parse, the void guard and the receiver hand-back twice.
-		if methodTok.value.equals(AppendMethod) or methodTok.value.equals(ListPrependMethod) 'insertAtAnEnd'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			let value = try self.parseContainerElementArg(func, giid: giid, methodTok: methodTok)
-			let callee = ListAppendName if methodTok.value.equals(AppendMethod) else ListPrependName
-			// ⚠ The runtime RETURNS the node it linked (the `__ManagedList` surface's handle), so the call is
-			// typed `integer` and the value discarded — a `List` has no node type to hand it to. Typing it
-			// `void` here would tell the Maxon tier a value-returning entry yields nothing, which is the
-			// mismatch `parseArraySet`'s own tag note records as a wrong answer in the other
-			// direction. `requireVoidMethodIsStatement` above is what keeps the SURFACE void.
-			_ = self.emitRuntimeCall(callee, args: pairArgs(list, second: value), resultTag: ValueTypeTag.integer, resultNameId: UnnamedTypeId, range: range)
-			return list
-		end 'insertAtAnEnd'
-
-		// ⭐ **`insert(at, value:)` IS A THROWING VOID MUTATOR WITH TWO ARGUMENTS — the `Array`'s `set` shape,
-		// which is why it is that function's parse and not a fourth one here.** `( index , value: X )`, the
-		// value type-checked and MOVED in, the call emitted last so the enclosing `try` rewrites it, and the
-		// result tagged `void` — which `parseArraySet`'s own ⭐⭐ block explains is the ONLY thing that refuses
-		// `let x = try list.insert(…) otherwise …`, because a `try` target is parsed with `resultUsed: false`
-		// and the void-statement guard cannot see it. That header records `insert` as this shape's original
-		// second caller, on an `Array` that has since taken it to the corpus.
-		if methodTok.value.equals(InsertMethod) 'insert'
-			return try self.parseArraySet(func, arr: list, giid: giid, callee: ListInsertName, methodTok: methodTok, secondArgLabelled: true, range: range)
-		end 'insert'
-
-		if methodTok.value.equals(ClearMethod) 'clear'
-			return try self.emitChainClear(list, resultUsed: resultUsed, methodTok: methodTok, range: range)
-		end 'clear'
-
-		throw ParseError.unsupported("`List` method '{String.from(methodTok.value)}' — shv2 provides create/append/prepend/insert/get/first/last/removeFirst/removeLast/remove/clear/count/isEmpty and `for … in`; clone is a later slice", line: methodTok.line, column: methodTok.column)
-	end 'dispatchListMethod'
+	// ⚠ **NONE OF THE OWNERSHIP DOORS IT USED HAD A `List` ARM TO DELETE, WHICH IS WHY THIS IS A DELETION AND
+	// NOT A MIGRATION.** The move-in (`parseContainerElementArg`), the borrow and the move-out
+	// (`emitContainerElementAccessor`) were container doors all along; the corpus declaration reaches them
+	// through the ordinary call machinery, which reads the same `var self` / consuming-parameter facts off
+	// the declaration that raise E3019 and E3070 for `stdlib/Array.maxon`'s members.
 
 	// ⭐ **`clear()` ON EITHER CHAIN SURFACE** — the void-statement guard, the empty argument list, and the ONE
 	// runtime entry, which is `__list_clear` for both because the two surfaces are one structure (that entry's
@@ -54133,14 +53994,23 @@ export type Parser
 		panic("{drift}")
 	end 'dispatchCursorMethod'
 
-	// ⭐ **`List from [a, b, c]` — CONSTRUCT A LIST FROM AN ARRAY LITERAL.** The cursor sits on the `List`
-	// identifier. Parse `from` then the `[…]` through the EXISTING array-literal parser — which infers the
-	// element type and yields an OWNED `Array with <elem>` temporary — then emit `__list_from` over it,
-	// yielding an OWNED `List with <elem>`.
+	// ⭐⭐ **`List from [a, b, c]` — `List.create()` PLUS ONE `List.append` PER MEMBER (W153).** The cursor sits
+	// on the `List` identifier. It is `parseSetMemberList`'s shape one container over, and it is that shape for
+	// that function's reason: `stdlib/List.maxon`'s `InitableFromArrayLiteral` `init` is not exported, so a
+	// desugar naming it would be `E3008: function 'List.init' is not exported` — the identical wall `W41` met
+	// on `Map` and `W90` on `Set`, answered the identical way.
 	//
-	// The array is the caller's owned temporary and drops at statement end; `__list_from` NULLS each slot it
-	// moves an element out of, so that decref walk skips exactly the elements the list now owns. The list
-	// itself drops at scope exit through `genericInstanceBoxDropCallee` → `__list_decref`.
+	// ⚠ **IT USED TO BUILD AN INTERMEDIATE `Array` AND HAND IT TO `__list_from`**, a runtime entry that
+	// CONSUMED the source buffer one machine word per slot, NULLing each slot it moved an element out of. Two
+	// things went with that entry: the packed-element refusal it needed (a `Byte` array strides 1, not 8) and
+	// the whole intermediate record. Reading the members straight is what removes both.
+	//
+	// ⭐ **THE FIRST MEMBER FIXES THE ELEMENT TYPE AND THEREFORE THE INSTANCE**, exactly as the first element of
+	// a `[…]` fixes an array's — through `literalColumnTypeFor`, which is the SAME door
+	// `arrayInstanceForFirstElement` puts the same question to, so the element types this construction admits
+	// are unchanged by the rewrite. Every later member is held to that type by the ordinary argument check on
+	// the declared `List.append(value Element)`, which is also what decides the MOVE: the element is the list's
+	// from there, and a second parse-time move would be the leak `emitSetInsert`'s note measures.
 	function parseListFromConstruction(func IrFunction) returns ValueId throws ParseError
 		let listTok = try self.consume(TokenKind.identifier)
 		try self.consume(TokenKind.from)
@@ -54151,18 +54021,73 @@ export type Parser
 			throw ParseError.unsupported("`List from` requires an array literal `[…]` — `List from <expr>` for another source is a later slice", line: srcTok.line, column: srcTok.column)
 		end 'notArrayLiteral'
 
-		let arr = try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
-		let listGid = self.signatures.builtinInstanceForElement(ListBuiltinBaseName, element: self.signatures.containerElementType(self.valueNameId(arr)))
-		try self.requireListElementType(listGid, tok: listTok)
-		// ⚠ `__list_from` reads the source buffer one machine WORD per slot, so an element that is byte-PACKED
-		// in an array (a `Byte`, whose `element_size@24` is 1) would be read at the wrong stride. The gate above
-		// admits an integral element of any declared range, so this is the one thing it does not already settle.
-		if not self.signatures.arrayElementIsMachineWord(self.valueNameId(arr)) 'packedElement'
-			throw ParseError.unsupported("`List from […]` reads its source array one machine word per element, and this literal's elements are packed narrower — build the list with `create()` and `append` instead", line: listTok.line, column: listTok.column)
-		end 'packedElement'
-
-		return self.emitOwnedRuntimeResult(ListFromName, args: singletonArgs(arr), resultTag: ValueTypeTag.genericInstance, resultNameId: listGid, range: SourceRange.ofToken(listTok))
+		return try self.parseListMemberList(func, listTok: listTok)
 	end 'parseListFromConstruction'
+
+	// ⭐ **`List from [m0, m1, …]` ONTO THE DECLARED `List`** — the cursor sits on the `[`. Split out from the
+	// head parse for `parseSetMemberList`'s reason: the head decides WHICH construction this is, the body
+	// decides what it builds, and the newline skips a bracketed list needs belong with the body.
+	function parseListMemberList(func IrFunction, listTok Token) returns ValueId throws ParseError
+		let range = SourceRange.ofToken(listTok)
+		try self.consume(TokenKind.leftBracket)
+		// A BRACKETED LIST MAY BE WRITTEN OVER SEVERAL LINES — the three skips are `parseArrayLiteral`'s own,
+		// placed where that parser puts them, so a literal that parsed before this rewrite parses after it.
+		self.skipNewlines()
+
+		// An EMPTY literal names no element, so there is no instance to build. `List` has no `[]`-style default
+		// the way an array literal does (a bare `[]` is an `Array with integer`), because nothing here states an
+		// element type — and the alias spelling that DOES state one is what the refusal points at.
+		if self.at(TokenKind.rightBracket) 'noMembers'
+			throw ParseError.unsupported("`{String.from(ListBuiltinBaseName)} from []` states no {ContainerElementColumnNoun} type — an empty list is `<alias>.{String.from(CreateMethod)}()` over a `{String.from(ListBuiltinBaseName)} with <{ContainerElementColumnNoun}>` alias", line: listTok.line, column: listTok.column)
+		end 'noMembers'
+
+		let firstTok = self.current()
+		let first = try self.parseExpression(func, block: self.currentBlock)
+		let giid = self.signatures.builtinInstanceForElement(ListBuiltinBaseName, element: try self.literalColumnTypeFor(first, literalKind: ListLiteralSubject, columnNoun: ContainerElementColumnNoun, valueTok: firstTok))
+
+		// ⭐ **THE LITERAL RECORDS ITS OWN INSTANTIATION**, because it is the one door a `List` is born through
+		// with no `with <Element>` to anchor a diagnostic on — `parseSetMemberList`'s arm, for its reason.
+		self.artifact.recordInferredInstantiationSite(GenericInstantiationSite.create(giid, nameLine: listTok.line, nameColumn: listTok.column, filePath: self.filePath))
+
+		let list = try self.emitListCreate(giid, anchor: listTok, range: range)
+		try self.emitListAppend(list, value: first, anchor: listTok, range: range)
+		self.skipNewlines()
+
+		while self.at(TokenKind.comma) 'moreMembers'
+			try self.consume(TokenKind.comma)
+			self.skipNewlines()
+			let member = try self.parseExpression(func, block: self.currentBlock)
+			try self.emitListAppend(list, value: member, anchor: listTok, range: range)
+			self.skipNewlines()
+		end 'moreMembers'
+
+		try self.consume(TokenKind.rightBracket)
+		return list
+	end 'parseListMemberList'
+
+	// ⭐ **THE EMPTY LIST THE MEMBER-BY-MEMBER DOOR STARTS FROM — the corpus type's own `create()`.**
+	// `emitSetCreate`'s twin, and it carries that function's two obligations: the result is already enrolled as
+	// an owned temporary by `emitCall` itself (`enrolOwnedCallTemp`), so no caller may track it a second time;
+	// and the result must be RETYPED to the instance, because `emitCall` reads `constructorInstance` on the
+	// consume side alone.
+	function emitListCreate(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		var args = ValueIdArray.create()
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: range)
+		let list = try self.emitCall(qualifiedMethodName(ListBuiltinBaseName, methodName: CreateMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: true, constructorInstance: ConstructorInstance.instance(giid), mint: CalleeMint.notMinted)
+		self.retypeGenericAliasConstructorResult(list, gid: giid, aliasName: EmptySourceText)
+		return list
+	end 'emitListCreate'
+
+	// ⭐ **ONE MEMBER ONTO THE END — `emitListCreate`'s twin, and `emitSetInsert`'s.** The append is a VOID
+	// mutator; the list OWNS the value from here, and the declared `List.append(value Element)` parameter is
+	// what says so. It declares that parameter POSITIONALLY, so the desugared call spells no label.
+	function emitListAppend(list ValueId, value ValueId, anchor Token, range SourceRange) throws ParseError
+		var args = pairArgs(list, second: value)
+		var argLabels = emptyArgLabels(args)
+		var argRanges = uniformArgRanges(args, range: range)
+		_ = try self.emitCall(qualifiedMethodName(ListBuiltinBaseName, methodName: AppendMethod), anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: NoImmutableArgNames, rparenTok: anchor, resultUsed: false, constructorInstance: self.receiverConstructorInstance(list), mint: CalleeMint.notMinted)
+	end 'emitListAppend'
 
 	// ==========================================================================================
 	// The `Vector` builtin container — a FIXED-SIZE array (see `SignatureIndex.VectorBuiltinBaseName`).

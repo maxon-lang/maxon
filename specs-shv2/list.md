@@ -701,8 +701,10 @@ end 'main'
 ```
 
 <!-- test: memory.value-survives-clear-and-return -->
-### Borrow conflict: first then clear in function
-Getting a value from a list and then clearing it is a borrow conflict, even in a helper function.
+### The value survives the clear, in a helper function too
+The helper twin of `memory.value-survives-clear`, and it carries the same W160 ruling: `first()` is
+corpus-served, so the value it returns is the callee's `+1` and outlives the `clear()` that follows —
+across a function boundary as much as inside one.
 ```maxon
 typealias StringList = List with String
 
@@ -720,13 +722,18 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/list/memory.value-survives-clear-and-return.test:6:7: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 5)
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
 ```
 
 <!-- test: memory.value-survives-clear-error -->
-### Borrow conflict: indirect mutation via helper function
-Passing a borrowed-from list to a function that clears it is a borrow conflict.
+### The value survives a clear one indirection out
+The third shape of the same W160 ruling — the mutation happens inside a callee that takes the list as a
+parameter. The route to the `clear()` changes nothing, because the safety was established at the `first()`:
+`val` is an owned `String`, and no path can free it out from under the print.
 ```maxon
 typealias StringList = List with String
 
@@ -743,13 +750,28 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/list/memory.value-survives-clear-error.test:12:2: cannot mutate 'list' via 'clearList' while it is borrowed by 'val' (borrowed at line 11)
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
 ```
 
 <!-- test: memory.value-survives-clear -->
-### Borrow conflict: first then clear
-Getting a value from a list and then clearing it is a borrow conflict.
+### The value survives the clear
+⚖ **RULED 2026-08-18 (W160), AND THE CASE NAME WAS ALWAYS THE ACCEPTING ANSWER.** These three cases pinned
+`E3070` while `List.first()` was COMPILER-MINTED and handed back a borrow of the chain's element. `W153`
+retired the synthesized `List`, so `first()` is now served from `stdlib/List.maxon` and discharges a real
+`+1` through `coOwnBorrowedOpaque` — the value is OWNED, the `clear()` cannot reach it, and all three
+programs run correctly at exit 0 with no leak (measured).
+
+⚠ **THIS IS A DIVERGENCE FROM THE ORACLE, RECORDED RATHER THAN HIDDEN.** The bootstrap still raises
+`E3070` on all three; it RETAINS too and refuses anyway, so what shv2 is missing is a LANGUAGE RULE and
+not a reference. It is the divergence `BorrowCheck.maxon` already documents for `arr.last()` — *"a borrow
+composes through a borrow, and NOT through a call"* — and retiring `List` moved `first`/`get`/`clear` from
+compiler-minted to corpus-served, which is what joined them to it. **`arr.get(0)` + `arr.clear()` is still
+refused** (the compiler's own `dispatchArrayMethod` mints that borrow), so the refusal itself is intact and
+what moved is which containers reach it.
 ```maxon
 typealias StringList = List with String
 
@@ -762,8 +784,11 @@ function main() returns ExitCode
 	return 0
 end 'main'
 ```
-```maxoncstderr
-error E3070: specs/fragments/list/memory.value-survives-clear.test:8:7: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 7)
+```exitcode
+0
+```
+```stdout
+hello world!!!!!!!!!!!!!!
 ```
 
 <!-- test: memory.get-in-loop-no-over-release -->

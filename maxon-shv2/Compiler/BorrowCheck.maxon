@@ -57,6 +57,22 @@
 //     with no roster strike involved. `Parser.arraySurfaceMemberNames`' first bullet carries that
 //     measurement and the design of the column that closes it; it is the half `get`/`first` retire behind.
 //
+//     ⚖ **THE SCOPE IS THE WHOLE CORPUS-SERVED FAMILY, NOT `arr.last()` — RULED 2026-08-18 (W160), WIDENED
+//     AT `W153` BECAUSE THE RETIREMENT IS WHAT MADE THE DIFFERENCE VISIBLE.** This bullet read as a note
+//     about one method for as long as `last` was the only accessor a corpus module served. Retiring the
+//     synthesized `List` moved `List.first`/`get`/`clear` from compiler-minted to corpus-served in one step,
+//     and **five committed cases stopped being refused** (`list/memory.value-survives-clear{,-error,-and-return}`,
+//     `borrow-liveness/a-method-rebinding-a-list-field-frees-the-borrowed-element`,
+//     `borrow-liveness/a-field-store-in-a-callee-freeing-its-parameters-list`). **All five were measured to
+//     compile, run correctly and leak nothing**, so the ruling was to re-pin them here rather than close the
+//     gap — which is what those five cases now document.
+//
+//     ⇒ **The line is WHO MINTS THE BORROW, and it is not about the container.** `arr.get(0)` + `arr.clear()`
+//     is STILL refused, because `Parser.dispatchArrayMethod` mints that borrow in the compiler; the same two
+//     operations on a `List` are not, because a call is what serves them. **So a container joins this
+//     divergence exactly when it is retired into the corpus**, and the next retirement moves its accessors
+//     the same way with no edit here — which is the reason this bullet states the family and not a method.
+//
 // ⚠ **WHAT IS NOT MODELLED, AND IT IS THE REFERENCES' LIMIT TOO: a LOOP makes source order lie.**
 // A use textually BEFORE a mutation but inside the same loop body happens after it at run time,
 // and a token-ordered last use cannot say so. Both references approximate with a linear op index
