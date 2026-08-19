@@ -464,7 +464,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:8:27: cannot assign 'String' to variable 'Pair.a' of type 'int'
+error E3005: <fragment>:8:27: cannot assign a value of type 'String' to field 'a' of 'Pair', which holds 'int'
 ```
 
 <!-- test: error.static-struct-literal-field-out-of-range -->
@@ -532,7 +532,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:14:25: cannot assign 'int' to variable 'Paint.c' of type 'Color'
+error E3005: <fragment>:14:25: cannot assign a value of type 'int' to field 'c' of 'Paint', which holds 'Color'
 ```
 
 An `interface`-typed field is refused OUTRIGHT rather than by a comparison, and the refusal is the body

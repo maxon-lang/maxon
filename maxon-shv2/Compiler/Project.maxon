@@ -5797,6 +5797,32 @@ export function functionTypeDoorNoun(door FunctionTypeDoor) returns String
 	end 'd'
 end 'functionTypeDoorNoun'
 
+// ⭐ **THE PLACE AN ASSIGNMENT NAMES, WORDED THE WAY `specs/assignment.md` WORDS IT.** The noun comes from
+// `functionTypeDoorNoun` directly above, so a global and a field still cannot come to be described two ways;
+// what this adds is the NAME, and — for the one door whose name is ambiguous without it — the type that
+// declares the field. `p.x = "hello"` is a mismatch at `field 'x' of 'Point'`, and `x` alone would not say
+// which `x`, which is why the field arm takes an owner and the other two do not.
+//
+// ⚠ **RENDERED ONLY WHERE A DIAGNOSTIC IS BUILT**, under the same discipline as the noun: the doors thread a
+// scalar ENUM plus the names they already hold, never a phrase, because this path is every assignment in the
+// program and a String built per call is the +1,852 allocations `FunctionTypeDoor`'s header records.
+export function assignedPlacePhrase(door FunctionTypeDoor, name ByteArray, owner ByteArray) returns String
+	// The noun REFUSES a door that names no place, so asking for it first is also the guard: the only three
+	// doors that reach the lines below are `variable`, `global` and `field`.
+	let place = "{functionTypeDoorNoun(door)} '{String.from(name)}'"
+	match door 'd'
+		variable to global then return place
+		field then break 'd'
+		cast to containerElement then panic("assignedPlacePhrase: unreachable — `functionTypeDoorNoun` refused this door one line above")
+	end 'd'
+
+	if owner.isEmpty() 'ownerless'
+		panic("assignedPlacePhrase: a FIELD is named `field 'f' of 'Owner'`, so the declaring type is not optional — a caller reaching this sentence through the field door must thread it")
+	end 'ownerless'
+
+	return "{place} of '{String.from(owner)}'"
+end 'assignedPlacePhrase'
+
 // ⭐ **A RECORDED FUNCTION-TYPE DOOR awaiting whole-program shape agreement.** A function value meeting a
 // function-typed place — `f as Scaler`, `return twice` from a `returns Scaler`, `slot.op = twice` — must
 // be a function of THAT type, and until this record existed only the `function` TAG was compared: every

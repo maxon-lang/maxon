@@ -123,7 +123,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-struct-to-other-struct-errors.test:23:2: cannot assign 'Other' to variable 'p' of type 'Point'
+error E3005: specs/fragments/assignment/error.retype-struct-to-other-struct-errors.test:23:2: cannot assign a value of type 'Other' to variable 'p', which holds 'Point'
 ```
 
 <!-- test: error.reassign-wrong-struct -->
@@ -156,7 +156,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.reassign-wrong-struct.test:22:2: cannot assign 'BoxB' to variable 'a' of type 'BoxA'
+error E3005: specs/fragments/assignment/error.reassign-wrong-struct.test:22:2: cannot assign a value of type 'BoxB' to variable 'a', which holds 'BoxA'
 ```
 
 <!-- test: error.reassign-union-as-scalar -->
@@ -187,7 +187,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.reassign-union-as-scalar.test:18:2: cannot assign 'Holder' to variable 'n' of type 'int'
+error E3005: specs/fragments/assignment/error.reassign-union-as-scalar.test:18:2: cannot assign a value of type 'Holder' to variable 'n', which holds 'int'
 ```
 
 <!-- test: error.wrong-enum-into-an-enum-field -->
@@ -225,7 +225,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.wrong-enum-into-an-enum-field.test:23:4: cannot assign 'Shade' to variable 'Holder.c' of type 'Color'
+error E3005: specs/fragments/assignment/error.wrong-enum-into-an-enum-field.test:23:4: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
 ```
 
 <!-- test: error.wrong-enum-in-a-struct-literal-field -->
@@ -259,13 +259,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.wrong-enum-in-a-struct-literal-field.test:17:15: cannot assign 'Shade' to variable 'Holder.c' of type 'Color'
+error E3005: specs/fragments/assignment/error.wrong-enum-in-a-struct-literal-field.test:17:15: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
 ```
 
 ### The type rule — rejections
 
-<!-- disabled-test: error.retype-local-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32), ported and run: shv2 REFUSES this program with the right code at the right position — `error E3005: <fragment>:7:2: cannot assign 'String' to variable 'x' of type 'int'` — and differs only in the SENTENCE. Canonical spells it `a value of type 'struct' ... which holds 'int'`; shv2's `assignTypeMismatch` names the precise TYPE (`String`) where the bootstrap can name only the KIND (`struct`), so matching canonical byte-for-byte would make the message LESS precise. One diagnostic, two spellings, two compilers — a coordinator ruling and not a compiler gap. `error.retype-struct-to-other-struct-errors` above is this same canonical case already carried under shv2's wording. -->
+<!-- test: error.retype-local-errors -->
 A `var`'s type is its declared type. This program compiled CLEAN and printed `hello` — the
 assignment was silently accepted, because a local's readers forward the assigned value and so
 never consult the declared type at all. The variable appeared to re-infer; nothing re-inferred it.
@@ -281,11 +280,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-local-errors.test:7:2: cannot assign a value of type 'struct' to variable 'x', which holds 'int'
+error E3005: specs/fragments/assignment/error.retype-local-errors.test:7:2: cannot assign a value of type 'String' to variable 'x', which holds 'int'
 ```
 
-<!-- disabled-test: error.retype-global-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E3005: <fragment>:8:2: cannot assign 'String' to variable 'g' of type 'int'`. The rule HOLDS — the global path refuses exactly as the local one does, which is the pairing this case exists for. Two divergences, both wording: the sentence template (see `error.retype-local-errors`), and the NOUN — shv2 calls a global a 'variable' where canonical says `global 'g'`. -->
+<!-- test: error.retype-global-errors -->
 The SAME store to a GLOBAL, and the same error — this test and the local one above are the pair
 that pins the two paths together. They used to disagree: a global cannot forward the assigned
 value, it must go through a typed load using the declared kind, so this program compiled clean
@@ -303,11 +301,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-global-errors.test:8:2: cannot assign a value of type 'struct' to global 'g', which holds 'int'
+error E3005: specs/fragments/assignment/error.retype-global-errors.test:8:2: cannot assign a value of type 'String' to global 'g', which holds 'int'
 ```
 
-<!-- disabled-test: error.retype-conditional-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E3005: <fragment>:9:3: cannot assign 'String' to variable 'z' of type 'int'`. The rule this case pins HOLDS — the refusal fires on a branch the program never executes — and only the sentence template differs (see `error.retype-local-errors`). -->
+<!-- test: error.retype-conditional-errors -->
 A retype the program never executes is still a type error: the rule is about the ASSIGNMENT, not
 about whether control reaches it. This branch is dead (`c` is `false`), and the program still
 panicked with a nil pointer — `z` was typed String lexically while holding the int `0`.
@@ -326,11 +323,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-conditional-errors.test:9:3: cannot assign a value of type 'struct' to variable 'z', which holds 'int'
+error E3005: specs/fragments/assignment/error.retype-conditional-errors.test:9:3: cannot assign a value of type 'String' to variable 'z', which holds 'int'
 ```
 
-<!-- disabled-test: error.retype-in-loop-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E3005: <fragment>:9:3: cannot assign 'String' to variable 'acc' of type 'int'`. Reassignability inside a loop grants no retype, exactly as the case asks; only the sentence template differs (see `error.retype-local-errors`). -->
+<!-- test: error.retype-in-loop-errors -->
 The same inside a loop body, where the variable is legitimately reassigned on every iteration:
 being reassignable is what `var` grants, and it is not permission to change type.
 ```maxon
@@ -348,11 +344,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-in-loop-errors.test:9:3: cannot assign a value of type 'struct' to variable 'acc', which holds 'int'
+error E3005: specs/fragments/assignment/error.retype-in-loop-errors.test:9:3: cannot assign a value of type 'String' to variable 'acc', which holds 'int'
 ```
 
-<!-- disabled-test: error.retype-struct-to-int-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E3005: <fragment>:15:2: cannot assign 'struct' to variable 'n' of type 'int'`. Both halves name the SAME two types canonical names — this case's only difference is the sentence template itself (see `error.retype-local-errors`). It is also no longer the E9001 internal error the canonical prose records: shv2 refuses at the assignment. -->
+<!-- test: error.retype-struct-to-int-errors -->
 A struct into an `int`. Unchecked, this reached the arithmetic below and died as
 `E9001: Unhandled cast combination: Struct -> Integer` — an INTERNAL error with a .NET stack
 trace, naming no source position, for a plain type error. The check fires at the assignment,
@@ -381,8 +376,7 @@ end 'main'
 error E3005: specs/fragments/assignment/error.retype-struct-to-int-errors.test:15:2: cannot assign a value of type 'struct' to variable 'n', which holds 'int'
 ```
 
-<!-- disabled-test: error.retype-struct-field-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E3005: <fragment>:15:4: cannot assign 'String' to variable 'x' of type 'int'`. The field store refuses, which is what the case pins. Two wording divergences: the sentence template (see `error.retype-local-errors`), and the NOUN — shv2 calls a field a 'variable' where canonical says `field 'x' of 'Point'`. -->
+<!-- test: error.retype-struct-field-errors -->
 A FIELD is a place with a declared type too, and the rule does not change because the store lands
 in a struct instead of a frame slot. This site carried only the WIDENING half of the rule — a
 mismatch it could not widen was stored anyway — so this program compiled clean and printed a raw
@@ -407,7 +401,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/assignment/error.retype-struct-field-errors.test:15:4: cannot assign a value of type 'struct' to field 'x' of 'Point', which holds 'int'
+error E3005: specs/fragments/assignment/error.retype-struct-field-errors.test:15:4: cannot assign a value of type 'String' to field 'x' of 'Point', which holds 'int'
 ```
 
 ### The type rule — what stays legal
@@ -556,8 +550,7 @@ end 'main'
 
 ### The type rule for an ENUM place — the same rule, the same hole
 
-<!-- disabled-test: error.retype-enum-to-other-enum-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32): `error E3005: <fragment>:15:2: cannot assign 'Shade' to variable 'c' of type 'Color'`. Both halves name the same two enums canonical names, and the enum place refuses exactly as the struct place does — only the sentence template differs (see `error.retype-local-errors`). -->
+<!-- test: error.retype-enum-to-other-enum-errors -->
 Two different enums are two different types, exactly as two different structs are. This is the
 struct case above one type over, and it had the identical defect for the identical reason: the
 assignment door compared the declared NAME against the value only when the value was a struct, so
@@ -585,8 +578,7 @@ end 'main'
 error E3005: specs/fragments/assignment/error.retype-enum-to-other-enum-errors.test:15:2: cannot assign a value of type 'Shade' to variable 'c', which holds 'Color'
 ```
 
-<!-- disabled-test: error.retype-enum-field-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32). Ported RED for a reason that is now FIXED: this program COMPILED and stored a `Shade` in a `Color` field, because the scalar field-store door was the one coercion site that never asked `aggregatesConflict`. BATCH32 closed that hole (`Parser.requireSlotAggregateIdentity`), and the case now fails on the sentence alone: `error E3005: <fragment>:23:4: cannot assign 'Shade' to variable 'Holder.c' of type 'Color'`, where canonical says `field 'c' of 'Holder', which holds 'Color'` (the same template and NOUN divergence `error.retype-struct-field-errors` carries). `error.wrong-enum-into-an-enum-field` above pins the refusal in shv2's own wording. -->
+<!-- test: error.retype-enum-field-errors -->
 The FIELD store reaches the same place by the same road — it shares the door with the local
 assignment, so it shared the hole.
 ```maxon
@@ -619,8 +611,7 @@ end 'main'
 error E3005: specs/fragments/assignment/error.retype-enum-field-errors.test:23:4: cannot assign a value of type 'Shade' to field 'c' of 'Holder', which holds 'Color'
 ```
 
-<!-- disabled-test: error.wrong-enum-in-struct-literal-field-errors -->
-<!-- MEASURED 2026-08-06 (BATCH32). The literal twin of `error.retype-enum-field-errors`, and it shared that hole and its fix: before BATCH32 `Self{c: Shade.light}` compiled and stored. Now `error E3005: <fragment>:17:15: cannot assign 'Shade' to variable 'Holder.c' of type 'Color'` — the right refusal at the right position, differing only in the sentence. Pinned in shv2's wording by `error.wrong-enum-in-a-struct-literal-field` above. -->
+<!-- test: error.wrong-enum-in-struct-literal-field-errors -->
 And the STRUCT-LITERAL field initializer, which put the same value in the same slot under the same
 declared type — but reached it through a door that skipped the check entirely unless the field was
 a numeric primitive.

@@ -464,7 +464,7 @@ export union ParseError implements Error
 	// same anchor `assignToImmutable` uses, because it is the same statement failing for the
 	// other reason a binding can refuse a value. See `parseAssignment` for why this one check
 	// is what makes every merge phi's type honest.
-	assignTypeMismatch(name String, got String, expected String, line LineNumber, column ColumnNumber)
+	assignTypeMismatch(place String, got String, expected String, line LineNumber, column ColumnNumber)
 	// ⭐ **THE SENTENCE A DECLARED SLOT REACHED THROUGH AN ARGUMENT LIST REFUSES A VALUE IN** — a union
 	// case's payload slot (`Paint.tint(Shade.light)`). It names NEITHER a variable nor a parameter,
 	// and that is the canonical corpus's choice rather than a shv2 one: `specs/union-cases.md` and
@@ -17120,7 +17120,7 @@ export type Parser
 		// the SWEEP's layout a `Self{…}` reads its defaults out of — so a conversion decided here would be
 		// decided blind for exactly the fields that need it, and written into the wrong copy besides.
 		let given = try self.readFieldDefaultLiteral()
-		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, given: given)
+		try self.requireFieldDefaultType(nameTok, fieldType: fieldType, owner: layout.name, given: given)
 		layout.addField(nameTok.value, declaredType: fieldType, mutable: mutable, tier: visibility, defaultValue: FieldDefault.literal(given.payload, tag: given.tag), declaredSurface: declaredSurface)
 	end 'readStructFieldInto'
 
@@ -17239,12 +17239,12 @@ export type Parser
 	// systematically WRONG — `as Weight = 2.5` would be refused as a lossy float→int conversion, which is
 	// a rejection of legal code. The sweep is not a validator; the real parse is the only reader that
 	// reports, and it is on the far side of the fold, so it resolves the alias and decides.
-	function requireFieldDefaultType(nameTok Token, fieldType MaxonType, given ConstValue) throws ParseError
+	function requireFieldDefaultType(nameTok Token, fieldType MaxonType, owner ByteArray, given ConstValue) throws ParseError
 		if not self.signatures.allFilesFolded 'indexStillBuilding'
 			return
 		end 'indexStillBuilding'
 
-		try self.requireAssignable(nameTok, value: given.tag, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, voice: SlotMismatchVoice.assignedPlace)
+		try self.requireAssignable(nameTok, value: given.tag, declared: self.floatResolvedTag(maxonTypeTag(fieldType), nameId: typeNameIdOf(fieldType)), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, placeOwner: owner, voice: SlotMismatchVoice.assignedPlace)
 	end 'requireFieldDefaultType'
 
 	// The literal a field default is, as the SAME tagged pair the constant evaluator speaks in — its
@@ -26039,7 +26039,7 @@ export type Parser
 		// an int: `x == 3.0` on the next line was E3005 ("cannot compare int with float") against a
 		// perfectly legal program, and a rebind INSIDE A LOOP fed an i64 and an f64 into one header phi —
 		// measured, a cross-register-file panic in the x64 emitter.
-		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, declaredNameId: typeNameIdOf(binding.varType), door: FunctionTypeDoor.variable, voice: SlotMismatchVoice.assignedPlace)
+		let assigned = try self.assignableValue(nameTok, value: value, declared: declaredTag, declaredNameId: typeNameIdOf(binding.varType), door: FunctionTypeDoor.variable, placeOwner: EmptySourceText, voice: SlotMismatchVoice.assignedPlace)
 
 		// ⭐ OPEN #54/#59: reassigning a `var` to the WRONG named aggregate — a DIFFERENT struct/union, OR
 		// an aggregate where the binding declares a SCALAR — is a retype the tag check above cannot see
@@ -26061,7 +26061,7 @@ export type Parser
 		let declaredAggregate = self.aggregateNameOf(declaredTag, nameId: typeNameIdOf(binding.varType))
 		let assignedAggregate = self.aggregateNameOf(valueTag, nameId: self.valueNameId(value))
 		if self.signatures.aggregatesConflict(declaredAggregate, expectedTag: declaredTag, expectedNameId: typeNameIdOf(binding.varType), got: assignedAggregate, gotTag: valueTag, gotNameId: self.valueNameId(value)) 'aggregateReassignMismatch'
-			throw ParseError.assignTypeMismatch(String.from(nameTok.value), got: self.valueDisplayTypeName(value), expected: self.displayTypeNameOf(declaredTag, nameId: typeNameIdOf(binding.varType)), line: nameTok.line, column: nameTok.column)
+			throw ParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.variable, name: nameTok.value, owner: EmptySourceText), got: self.valueDisplayTypeName(value), expected: self.displayTypeNameOf(declaredTag, nameId: typeNameIdOf(binding.varType)), line: nameTok.line, column: nameTok.column)
 		end 'aggregateReassignMismatch'
 
 		// ⭐⭐ **A CELL-RESIDENT BINDING IS REBOUND BY STORING, NOT BY `Scope.setValue` (PBR-2).** It never
@@ -26629,7 +26629,7 @@ export type Parser
 		// The slot keeps the type its declaration gave it, so `g = 3` into a `var g = 0.0` stores a WIDENED
 		// f64 and not the integer's raw bytes — the same coercion the local rebind above performs, through
 		// the same door.
-		let stored = try self.assignableValue(nameTok, value: value, declared: maxonTypeTag(valueType), declaredNameId: typeNameIdOf(valueType), door: FunctionTypeDoor.global, voice: SlotMismatchVoice.assignedPlace)
+		let stored = try self.assignableValue(nameTok, value: value, declared: maxonTypeTag(valueType), declaredNameId: typeNameIdOf(valueType), door: FunctionTypeDoor.global, placeOwner: EmptySourceText, voice: SlotMismatchVoice.assignedPlace)
 
 		let range = SourceRange.ofToken(nameTok)
 		// `from:` names the interner `valueType`'s ids would live in — this file's own. A global's type comes
@@ -27013,9 +27013,17 @@ export type Parser
 	// rather than the noun STRING it used to: threading that string on into the function-type door cost
 	// **one allocation per call, +1,852 in `phase:parse` at scale rung 0**, for a record almost every call
 	// then discarded. See `FunctionTypeDoor`.
-	function assignableValue(nameTok Token, value ValueId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, voice SlotMismatchVoice) returns ValueId throws ParseError
+	//
+	// ⚠ **`placeOwner` IS THE ONE NON-SCALAR, AND IT IS A BORROWED NAME THAT ALREADY EXISTS — never a built
+	// one.** A FIELD is worded `field 'x' of 'Point'`, so the declaring type is part of the place and the
+	// field doors pass `layout.name`; every other door passes `EmptySourceText`. **MEASURED against a
+	// control built from the same tree without it: `phase:parse` allocations went DOWN at every rung —
+	// -588 at rung 0 and -8,834 at rung 5** — because the same change stopped the payload and
+	// container-element doors building a `String.from(...)` place EAGERLY on paths whose voice quotes no
+	// place at all. The saving grows with the corpus because it is one discarded allocation per such site.
+	function assignableValue(nameTok Token, value ValueId, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner ByteArray, voice SlotMismatchVoice) returns ValueId throws ParseError
 		let got = self.tagOf(value)
-		try self.requireAssignable(nameTok, value: got, declared: declared, declaredNameId: declaredNameId, door: door, voice: voice)
+		try self.requireAssignable(nameTok, value: got, declared: declared, declaredNameId: declaredNameId, door: door, placeOwner: placeOwner, voice: voice)
 		if isFunctionTypeDoor(declared, got: got) 'functionTypeDoor'
 			self.recordFunctionTypeDoor(declaredNameId, gotNameId: self.valueNameId(value), door: door, placeName: nameTok.value, anchor: nameTok)
 		end 'functionTypeDoor'
@@ -27032,10 +27040,10 @@ export type Parser
 	// parse-time CONSTANT rather than an SSA value (a struct field's literal default), which pays the
 	// widening the verdict licenses in the constant's own representation. Every site holding a VALUE asks
 	// `assignableValue` — this plus that conversion, in one call, so the two halves cannot come apart.
-	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, voice SlotMismatchVoice) throws ParseError
+	function requireAssignable(nameTok Token, value ValueTypeTag, declared ValueTypeTag, declaredNameId TypeNameId, door FunctionTypeDoor, placeOwner ByteArray, voice SlotMismatchVoice) throws ParseError
 		match checkDeclaredType(value, declared: declared) 'declared'
 			ok then break 'declared'
-			mismatch then throw self.slotMismatchError(voice, assignedName: String.from(nameTok.value), got: typeTagName(value), gotTag: value, resolvedExpected: typeTagName(declared), declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
+			mismatch then throw self.slotMismatchError(voice, placeDoor: door, placeName: nameTok.value, placeOwner: placeOwner, got: typeTagName(value), gotTag: value, resolvedExpected: typeTagName(declared), declared: declared, declaredNameId: declaredNameId, line: nameTok.line, column: nameTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(value), targetType: typeTagName(declared), line: nameTok.line, column: nameTok.column)
 			// A FUNCTION VALUE into a NON-function place (P1.5-A1) — the spec's specific E3005 ("cannot
 			// assign a value of type 'function' to {noun} '{name}', which holds '{held}'"). The noun comes
@@ -27056,7 +27064,7 @@ export type Parser
 	// print: the value and the slot are not even the same kind of thing), a NAME where two aggregates of one
 	// tag are told apart — and neither may have that decision taken away from it.
 	//
-	// ⚠ **`assignedName` IS THE PLACE THE VALUE WAS ENTERING, AND THE VOICE DECIDES WHETHER THE SENTENCE
+	// ⚠ **`assignedPlace` IS THE PLACE THE VALUE WAS ENTERING, AND THE VOICE DECIDES WHETHER THE SENTENCE
 	// QUOTES IT.** The assignment voice does — a local, a global, a field, a union payload all name
 	// themselves. The argument voice does not: at a container mutator the anchor and the quoted name part
 	// company, and both halves are the reference's (`specs/type-checking.md` anchors
@@ -27074,9 +27082,9 @@ export type Parser
 	// sentence. The one remaining divergence is the extra probe `declaredSlotDisplayName` makes for the
 	// argument voice, documented there rather than restated here — which is why `gotTag` is threaded down: the
 	// probe's answer depends on what the OTHER half of the sentence turned out to be.
-	function slotMismatchError(voice SlotMismatchVoice, assignedName String, got String, gotTag ValueTypeTag, resolvedExpected String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber) returns ParseError
+	function slotMismatchError(voice SlotMismatchVoice, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner ByteArray, got String, gotTag ValueTypeTag, resolvedExpected String, declared ValueTypeTag, declaredNameId TypeNameId, line LineNumber, column ColumnNumber) returns ParseError
 		return match voice 'v'
-			assignedPlace gives ParseError.assignTypeMismatch(assignedName, got: got, expected: resolvedExpected, line: line, column: column)
+			assignedPlace gives ParseError.assignTypeMismatch(assignedPlacePhrase(placeDoor, name: placeName, owner: placeOwner), got: got, expected: resolvedExpected, line: line, column: column)
 			containerElementArgument gives ParseError.builtinArgumentType(String.from(ArrayValueLabel), expected: self.declaredSlotDisplayName(declared, nameId: declaredNameId, gotTag: gotTag), got: got, line: line, column: column)
 			// The payload voice quotes no name at all (there is none to quote) and spells the EXPECTED side
 			// through `declaredSlotDisplayName`, the same probe the argument voice makes — which is what puts
@@ -45815,21 +45823,21 @@ export type Parser
 			return try self.widenValueIntoExistentialField(layout, index: index, fieldType: fieldType, value: value, anchor: anchor)
 		end 'existentialField'
 		if payloadClassIsManaged(class) 'managed'
-			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+			try self.requireManagedSlotValueMatches(class, declared: fieldType, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: layout.name, voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 			return value
 		end 'managed'
 
 		// The SAME verdict-plus-coercion the assignment doors ask, through the `field` door — which is what it always
 		// was, spelled out a second time: the four `DeclaredTypeMatch` arms that stood here were a
 		// character-for-character copy of `requireAssignable`'s, and a rule with two homes drifts.
-		let stored = try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, voice: SlotMismatchVoice.assignedPlace)
+		let stored = try self.assignableValue(anchor, value: value, declared: maxonTypeTag(fieldType), declaredNameId: typeNameIdOf(fieldType), door: FunctionTypeDoor.field, placeOwner: layout.name, voice: SlotMismatchVoice.assignedPlace)
 		// ⭐⭐ **AND THE IDENTITY THAT VERDICT CANNOT SEE — the door `parseAssignment` has had since OPEN #54
 		// and this one did not.** `assignableValue`'s verdict is tag-based, and a payload-free ENUM field is
 		// `named` + SCALAR, so it takes the arm above rather than the managed one: `checkDeclaredType(named,
 		// named)` AGREES for any two enums, and `h.c = Shade.light` on a `Color` field compiled and stored
 		// (MEASURED 2026-08-06, BATCH32 — `requireSlotAggregateIdentity` carries the full note). All three
 		// field doors funnel through here, so the literal and the two writes are closed by the one check.
-		try self.requireSlotAggregateIdentity(fieldType, value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+		try self.requireSlotAggregateIdentity(fieldType, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: layout.name, voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 		// ⭐ **THE FIELD'S DECLARED RANGE BINDS WHAT IS STORED IN IT (P1.9).** The site is recorded on the
 		// COERCED value, not the parsed one: that is the value the slot receives, and for a widening door
 		// (an int meeting a declared float) it is a different SSA id. All three field doors — the struct
@@ -45924,7 +45932,7 @@ export type Parser
 			throw self.existentialFieldStoreUnsupported(layout, index: index, line: anchor.line, column: anchor.column)
 		end 'aConcreteConformer'
 
-		try self.requireManagedValueMatches(fieldType, isString: false, value: value, assignedName: self.fieldSiteName(layout, index: index), voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
+		try self.requireManagedValueMatches(fieldType, isString: false, value: value, placeDoor: FunctionTypeDoor.field, placeName: self.fieldNameAt(layout, index: index), placeOwner: layout.name, voice: SlotMismatchVoice.assignedPlace, anchor: anchor)
 		return value
 	end 'widenValueIntoExistentialField'
 
@@ -45942,9 +45950,16 @@ export type Parser
 	end 'existentialFieldStoreUnsupported'
 
 	// The `<Struct>.<field>` label a managed-field type mismatch names.
+	// The declared name of one field — the single `get` that both the dotted prose name below and the
+	// assignment sentence's place are built from (`assignedPlacePhrase`, which the field doors reach through
+	// `placeName`). It is the NAME and not the phrase, because the sentence is worded only where the voice
+	// quotes a place at all.
+	function fieldNameAt(layout StructLayout, index FieldIndex) returns ByteArray
+		return try layout.fieldNames.get(index) otherwise panic("fieldNameAt: fieldNames.get OOB at {index}")
+	end 'fieldNameAt'
+
 	function fieldSiteName(layout StructLayout, index FieldIndex) returns String
-		let fieldName = try layout.fieldNames.get(index) otherwise panic("fieldSiteName: fieldNames.get OOB at {index}")
-		return "{String.from(layout.name)}.{String.from(fieldName)}"
+		return "{String.from(layout.name)}.{String.from(self.fieldNameAt(layout, index: index))}"
 	end 'fieldSiteName'
 
 	// ⭐⭐ **A CLASSIFIED MANAGED SLOT'S THREE-PART IDENTITY CHECK, IN ONE PLACE — the value type, the String
@@ -45963,22 +45978,22 @@ export type Parser
 	// over `PayloadClass`, so each arm reads the case's OWN fields — which is what lets the `nestedUnion` arm
 	// state `isString: false` as a fact about union boxes rather than deriving it — and folding it in would
 	// trade a legible exhaustive match for a call that re-derives what the arm already destructured.
-	function requireManagedSlotValueMatches(class PayloadClass, declared MaxonType, value ValueId, assignedName String, voice SlotMismatchVoice, anchor Token) throws ParseError
+	function requireManagedSlotValueMatches(class PayloadClass, declared MaxonType, value ValueId, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner ByteArray, voice SlotMismatchVoice, anchor Token) throws ParseError
 		// `payloadValueTypeOf`, NEVER `payloadStorageOf` (W55): the question is what a value filling the slot must
 		// BE, and for a boxed-union slot those two parted company when the payload slot's WIDTH became the machine
 		// word a box is. Asked of the width, a `Ty` box meets `integer`; asked of the identity, it meets `Ty` —
 		// and the identity is also what `containerSlotValueType` types the value a read hands BACK, so a slot
 		// admits exactly what it can return. `SignatureIndex.payloadStorageOf` is the one home of that split.
-		try self.requireManagedValueMatches(payloadValueTypeOf(class, declared: declared), isString: payloadClassIsString(class), value: value, assignedName: assignedName, voice: voice, anchor: anchor)
+		try self.requireManagedValueMatches(payloadValueTypeOf(class, declared: declared), isString: payloadClassIsString(class), value: value, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, voice: voice, anchor: anchor)
 	end 'requireManagedSlotValueMatches'
 
 	// ⭐ **A MANAGED VALUE MUST BE THE MATCHING HEAP KIND** — the ONE check a struct FIELD and a union
 	// PAYLOAD share: a `String` slot takes a `string`; a `struct` slot takes a `structRef` of the SAME struct
 	// name (a pointer of the wrong struct would pass a tag-only check). The names are compared through this
 	// file's interner, the one the classifier's `structRef` id and the value's own id were both minted from.
-	// `assignedName` is the `<Type>.<field>` / `<Union>.<case>(<field>)` label the ASSIGNMENT voice quotes;
+	// `assignedPlace` is the `<Type>.<field>` / `<Union>.<case>(<field>)` label the ASSIGNMENT voice quotes;
 	// the argument voice names the mutator's parameter instead, which `slotMismatchError` decides.
-	function requireManagedValueMatches(storage MaxonType, isString bool, value ValueId, assignedName String, voice SlotMismatchVoice, anchor Token) throws ParseError
+	function requireManagedValueMatches(storage MaxonType, isString bool, value ValueId, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner ByteArray, voice SlotMismatchVoice, anchor Token) throws ParseError
 		let got = self.tagOf(value)
 		let wantTag = maxonTypeTag(storage)
 		if got != wantTag 'tagMismatch'
@@ -45986,7 +46001,7 @@ export type Parser
 			// `typeTagName(got)`, so this arm answered `got 'struct'` for the very struct the arm below
 			// answers `got 'Other'` for — one door, two sentences, sixty lines apart in `specs-shv2/arrays.md`.
 			// The bootstrap names it (`expected 'String', got 'Item'`), and naming the type IS the ruling.
-			throw self.slotMismatchError(voice, assignedName: assignedName, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(wantTag), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(wantTag), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 		end 'tagMismatch'
 		if isString 'stringOk'
 			return
@@ -45997,7 +46012,7 @@ export type Parser
 		// while disagreeing on aggregate identity is the overloaded `named` (a boxed union slot met by a
 		// ranged-int alias value, or the reverse). `namedAggregatesConflict` (extended by #59) catches that
 		// scalar-vs-aggregate case as well as two distinct aggregates.
-		try self.requireSlotAggregateIdentity(storage, value: value, assignedName: assignedName, voice: voice, anchor: anchor)
+		try self.requireSlotAggregateIdentity(storage, value: value, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, voice: voice, anchor: anchor)
 	end 'requireManagedValueMatches'
 
 	// ⭐⭐ **THE AGGREGATE-IDENTITY HALF OF A SLOT STORE, ASKED BY THE MANAGED FIELD DOOR AND BY THE SCALAR
@@ -46029,7 +46044,7 @@ export type Parser
 	// ⚠ It reads the PARSED value at both call sites and never a coerced one, exactly as
 	// `parseAssignment`'s check does: a widening only ever produces a float scalar, whose aggregate name is
 	// empty either way, so the question is the same one before and after the coercion.
-	function requireSlotAggregateIdentity(storage MaxonType, value ValueId, assignedName String, voice SlotMismatchVoice, anchor Token) throws ParseError
+	function requireSlotAggregateIdentity(storage MaxonType, value ValueId, placeDoor FunctionTypeDoor, placeName ByteArray, placeOwner ByteArray, voice SlotMismatchVoice, anchor Token) throws ParseError
 		let got = self.tagOf(value)
 		let wantTag = maxonTypeTag(storage)
 		// ⛔⛔ **AN OPAQUE `T` SLOT IS NOT EXEMPT FROM THIS QUESTION, AND EXEMPTING IT WAS A WILD WRITE
@@ -46052,7 +46067,7 @@ export type Parser
 		let wantName = self.aggregateNameOf(wantTag, nameId: typeNameIdOf(storage))
 		let gotName = self.aggregateNameOf(got, nameId: self.valueNameId(value))
 		if self.signatures.aggregatesConflict(wantName, expectedTag: wantTag, expectedNameId: typeNameIdOf(storage), got: gotName, gotTag: got, gotNameId: self.valueNameId(value)) 'nameMismatch'
-			throw self.slotMismatchError(voice, assignedName: assignedName, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: self.displayTypeNameOf(wantTag, nameId: typeNameIdOf(storage)), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
+			throw self.slotMismatchError(voice, placeDoor: placeDoor, placeName: placeName, placeOwner: placeOwner, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: self.displayTypeNameOf(wantTag, nameId: typeNameIdOf(storage)), declared: wantTag, declaredNameId: typeNameIdOf(storage), line: anchor.line, column: anchor.column)
 		end 'nameMismatch'
 	end 'requireSlotAggregateIdentity'
 
@@ -47919,7 +47934,7 @@ export type Parser
 			typeParam then try self.requireScalarPayloadArg(field, declared: declared, value: value, caseTok: caseTok, argTok: argTok)
 			// The shared managed door directly — `requireManagedPayloadArg` stood here and did nothing but
 			// forward, once the payload voice stopped needing a `<Union>.<case>(<field>)` label built for it.
-			managed(storage, isString) then try self.requireManagedValueMatches(storage, isString: isString, value: value, assignedName: String.from(field.name), voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+			managed(storage, isString) then try self.requireManagedValueMatches(storage, isString: isString, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
 			// ⭐ **A NESTED BOXED UNION TAKES THE MANAGED DOOR, over its `named(<union>)` VALUE type and not over
 			// the machine word its slot is (W55).** A boxed union's value carries `named`, which every ranged-int
 			// alias and every payload-free enum also carries — so the tag comparison alone AGREES for any two of
@@ -47928,7 +47943,7 @@ export type Parser
 			// `Inner`'s destructor. `isString: false` — a union box is an aggregate, released by
 			// `__destruct_<U>`/`__mm_decref` and co-owned by `__mm_retain`, never by the fused-record COPY
 			// protocol a String takes.
-			nestedUnion(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, assignedName: String.from(field.name), voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+			nestedUnion(storage) then try self.requireManagedValueMatches(storage, isString: false, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
 			// An undeclared payload name is a user error TypeResolution reports (E3011); the op is kept
 			// well-formed for the instant before the pipeline's error gate throws — nothing to check here.
 			undeclaredName then break 'c'
@@ -47961,7 +47976,7 @@ export type Parser
 
 		match checkDeclaredType(got, declared: declaredTag) 'declared'
 			ok then break 'declared'
-			mismatch then throw self.slotMismatchError(SlotMismatchVoice.payloadArgument, assignedName: String.from(field.name), got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(declaredTag), declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
+			mismatch then throw self.slotMismatchError(SlotMismatchVoice.payloadArgument, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, got: self.valueDisplayTypeName(value), gotTag: got, resolvedExpected: typeTagName(declaredTag), declared: declaredTag, declaredNameId: typeNameIdOf(declared), line: argTok.line, column: argTok.column)
 			narrowsFloatToInt then throw ParseError.implicitNarrowing(typeTagName(got), targetType: typeTagName(declaredTag), line: argTok.line, column: argTok.column)
 			// A FUNCTION VALUE into a scalar union PAYLOAD whose declared type is NOT a function — the same
 			// E3005 a function value meeting any other non-function slot earns. A function-ALIAS payload no
@@ -47982,7 +47997,7 @@ export type Parser
 		//
 		// Asked past the verdict rather than instead of it: a tag disagreement is the coarser fact and reads
 		// better said first, and a value that failed it has no identity worth comparing.
-		try self.requireSlotAggregateIdentity(declared, value: value, assignedName: String.from(field.name), voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
+		try self.requireSlotAggregateIdentity(declared, value: value, placeDoor: FunctionTypeDoor.payload, placeName: field.name, placeOwner: EmptySourceText, voice: SlotMismatchVoice.payloadArgument, anchor: argTok)
 	end 'requireScalarPayloadArg'
 
 	// Load a boxed union's i64 TAG from offset 0 — the DISPATCH SUBJECT a `match` compares against
@@ -57679,7 +57694,7 @@ export type Parser
 		let element = try self.integerizedOperand(value, expected: maxonTypeTag(declared), start: valueStart, pastEnd: self.pos)
 		let class = classifyUnionPayload(self.signatures, typeNames: self.artifact.typeNames, fieldType: declared, slotScopeFilePath: self.filePath)
 		if payloadClassIsManaged(class) 'managed'
-			try self.requireManagedSlotValueMatches(class, declared: declared, value: element, assignedName: String.from(methodTok.value), voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
+			try self.requireManagedSlotValueMatches(class, declared: declared, value: element, placeDoor: FunctionTypeDoor.containerElement, placeName: methodTok.value, placeOwner: EmptySourceText, voice: SlotMismatchVoice.containerElementArgument, anchor: methodTok)
 			return element
 		end 'managed'
 
@@ -57690,7 +57705,7 @@ export type Parser
 		// The VOICE is the other axis and is the mutator's own: `push` is a METHOD and its element is that
 		// method's ARGUMENT, so the type refusal is the argument sentence rather than the assignment one.
 		// See `SlotMismatchVoice`, which records what calling `push` a "variable" was measured to say.
-		let stored = try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field, voice: SlotMismatchVoice.containerElementArgument)
+		let stored = try self.assignableValue(methodTok, value: element, declared: maxonTypeTag(declared), declaredNameId: typeNameIdOf(declared), door: FunctionTypeDoor.field, placeOwner: EmptySourceText, voice: SlotMismatchVoice.containerElementArgument)
 		// ⭐⭐ **THE ELEMENT'S DECLARED RANGE BINDS IT AT RUNTIME TOO (A1f-arrayelem) — AND THE GUARD GOES
 		// HERE, AT THE STORE, WHICH IS THE LAST PLACE THAT KNOWS THE ELEMENT TYPE.** This door owed only
 		// the compile-time half until this rung, on the argument the call-argument door owed it: the element
@@ -62747,7 +62762,7 @@ export type Parser
 		match self.signatures.constStructFieldCheck(layout, index: index, value: value, calls: calls, declName: layout.name, elementFilePath: layout.declFilePath) 'verdict'
 			agrees then break 'verdict'
 			widensToFloat then return ConstFactoryArgumentValue.folded(ConstFoldedValue.scalar(ConstValue.create(self.constFloatBits(self.constScalarFilling(value, layout: layout, index: index)), tag: ValueTypeTag.float)))
-			mismatch(got, expected) then throw ConstEvalError.defective(ParseError.assignTypeMismatch(self.fieldSiteName(layout, index: index), got: got, expected: expected, line: fieldTok.line, column: fieldTok.column))
+			mismatch(got, expected) then throw ConstEvalError.defective(ParseError.assignTypeMismatch(assignedPlacePhrase(FunctionTypeDoor.field, name: self.fieldNameAt(layout, index: index), owner: layout.name), got: got, expected: expected, line: fieldTok.line, column: fieldTok.column))
 		end 'verdict'
 
 		try self.requireConstFieldValueInRange(layout, index: index, value: value, fieldTok: fieldTok)

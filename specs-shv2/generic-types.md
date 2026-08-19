@@ -799,7 +799,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:24:2: cannot assign 'OtherBox' to variable 'b' of type 'LeafBox'
+error E3005: <fragment>:24:2: cannot assign a value of type 'OtherBox' to variable 'b', which holds 'LeafBox'
 ```
 
 <!-- test: error.struct-field-wrong-instance -->
@@ -836,7 +836,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:15: cannot assign 'OtherBox' to variable 'Holder.b' of type 'LeafBox'
+error E3005: <fragment>:25:15: cannot assign a value of type 'OtherBox' to field 'b' of 'Holder', which holds 'LeafBox'
 ```
 
 <!-- test: error.plain-struct-into-instance-arg -->
@@ -2311,7 +2311,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:25:4: cannot assign 'Other' to variable 'Box.value' of type 'Label'
+error E3005: <fragment>:25:4: cannot assign a value of type 'Other' to field 'value' of 'Box', which holds 'Label'
 ```
 
 <!-- test: error.opaque-field-write-in-the-shared-body-refuses-a-concrete-value -->
@@ -2350,7 +2350,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:15:8: cannot assign 'Label' to variable 'Box.value' of type 'type parameter'
+error E3005: <fragment>:15:8: cannot assign a value of type 'Label' to field 'value' of 'Box', which holds 'type parameter'
 ```
 
 <!-- test: generic-alias-union-payload-round-trips -->

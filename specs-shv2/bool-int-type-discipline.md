@@ -303,7 +303,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:2: cannot assign 'bool' to variable 'x' of type 'int'
+error E3005: <fragment>:4:2: cannot assign a value of type 'bool' to variable 'x', which holds 'int'
 ```
 
 <!-- test: assign-int-to-bool-var -->
@@ -315,7 +315,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:4:2: cannot assign 'int' to variable 'flag' of type 'bool'
+error E3005: <fragment>:4:2: cannot assign a value of type 'int' to variable 'flag', which holds 'bool'
 ```
 
 <!-- test: laundered-bool-into-arithmetic -->
@@ -329,7 +329,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:5:3: cannot assign 'bool' to variable 'x' of type 'int'
+error E3005: <fragment>:5:3: cannot assign a value of type 'bool' to variable 'x', which holds 'int'
 ```
 
 <!-- test: laundered-int-into-condition -->
@@ -349,7 +349,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:3: cannot assign 'int' to variable 'flag' of type 'bool'
+error E3005: <fragment>:7:3: cannot assign a value of type 'int' to variable 'flag', which holds 'bool'
 ```
 
 <!-- test: laundered-bool-through-loop-phi -->
@@ -367,7 +367,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:7:3: cannot assign 'bool' to variable 'x' of type 'int'
+error E3005: <fragment>:7:3: cannot assign a value of type 'bool' to variable 'x', which holds 'int'
 ```
 
 <!-- test: laundered-bool-into-int-param -->
@@ -387,7 +387,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: <fragment>:11:3: cannot assign 'bool' to variable 'x' of type 'int'
+error E3005: <fragment>:11:3: cannot assign a value of type 'bool' to variable 'x', which holds 'int'
 ```
 
 ### …and a reassignment WITHIN the class is fine
