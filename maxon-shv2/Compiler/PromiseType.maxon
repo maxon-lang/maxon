@@ -22,13 +22,15 @@
 // back out at the await. shv2 stores the HANDLE ITSELF, typed at the instance, and the reasons are two and
 // both measured:
 //
-//   • **A BOX WOULD BE UNREACHABLE HERE.** A boxed `Promise` element makes `Array with IntPromise` a
+//   • **A BOX WOULD HAVE BEEN UNREACHABLE HERE WHEN THIS WAS WRITTEN, AND IS NOT ANY MORE — the argument
+//     rests on the SECOND bullet now.** A boxed `Promise` element makes `Array with IntPromise` a
 //     MANAGED-element array, and shv2's managed-element array requires its element to be deep-cloneable as
-//     a single `(box) -> newBox` function (`ProgramSignatures.typeSupportsDeepClone`), which a non-Array
-//     generic instance is not — `Parser.requireOpaqueArrayCopyable` refuses it with E2015 and names the
-//     per-instance cloner as a later slice. MEASURED on a stand-in (`type Cell uses Slot` with one `int`
-//     field): `push` and `get` compile, and `for c in arr` is **E2015 raised inside `stdlib/Array.maxon`'s
-//     `slice`**. Five of this spec's storage cases iterate.
+//     a single `(box) -> newBox` function (`ProgramSignatures.typeSupportsDeepClone`). A non-`Array` generic
+//     instance was not, so `Parser.requireOpaqueArrayCopyable` refused it with E2015 — MEASURED on a stand-in
+//     (`type Cell uses Slot` with one `int` field): `push` and `get` compile, and `for c in arr` was **E2015
+//     raised inside `stdlib/Array.maxon`'s `slice`**; five of this spec's storage cases iterate. **W162 built
+//     that per-instance cloner**, so this refusal no longer stands in the way and the box is merely wrong
+//     rather than impossible.
 //   • **AND CLONING A PROMISE IS WRONG ANYWAY.** Two boxes naming one green thread is the double free
 //     `await`'s linearity (E3100) exists to make unrepresentable, so a cloner for this type would be a
 //     mechanism whose every use is a bug.

@@ -138,18 +138,25 @@ at once and both matter:
   edit above `stdlib/Array.maxon:145` still moves this expectation — a real cost, and the same one the four
   `/specs` cases pinning `Array.maxon:413`'s panic already pay.
 
-⭐⭐ **THIS REFUSAL IS FOUR OTHER CASES' ANSWER TOO, AND THIS IS WHERE THAT IS EXPLAINED ONCE.** ARRH struck
+⭐⭐ **THIS REFUSAL IS THREE OTHER CASES' ANSWER TOO, AND THIS IS WHERE THAT IS EXPLAINED ONCE.** ARRH struck
 `clone` from `Parser.arraySurfaceMemberNames`, so `arr.clone()` is `stdlib/Array.maxon:143`'s declaration
 rather than a dispatch arm — and a corpus body is a SHARED generic body over an opaque `Element`, so a
 receiver whose element cannot be deep-cloned is refused by the OPAQUE gate in the library instead of by the
-CONCRETE gate at the call. Four expectations moved onto exactly the sentence above:
+CONCRETE gate at the call. Three expectations moved onto exactly the sentence above:
 `array-clone-managed-elements.error.clone-of-a-struct-holding-a-compiler-owned-handle-is-refused`,
-`generic-type-nested-array-typealias.opaque-copy-uncopyable-instantiation-rejected`,
-`generic-type-substitution.error.bare-generic-name-nesting-is-not-deep-cloneable` and
+`generic-type-nested-array-typealias.opaque-copy-uncopyable-instantiation-rejected` and
 `typealias-file-scope.error.contested-generic-alias-at-the-opaque-copy-gate`.
 
+⚠ **A FOURTH WAS ON THAT LIST AND IS NOT A REFUSAL ANY MORE.**
+`generic-type-substitution.error.bare-generic-name-nesting-is-not-deep-cloneable` pinned this sentence
+because a non-`Array` generic instance had no per-instance cloner at all; **W162 built one**, so that case
+COMPILES and is now `generic-type-substitution.bare-generic-name-nesting-is-deep-cloneable`. The sentence
+itself moved in the same rung — what it names as uncloneable is now a compiler-owned aggregate, a
+base-struct-less container instance, or a generic instance owning one of those, and no longer every
+non-`Array` instance.
+
 ⭐⭐ **THAT COST PRECISION, AND BLAME (this rung) GIVES IT BACK — WITHOUT MOVING THE SENTENCE.** Each of the
-five prints the OPAQUE sentence, which does not name the user's element the way the concrete one did
+four prints the OPAQUE sentence, which does not name the user's element the way the concrete one did
 (`Holder`, `StrHolder`); what it now names instead is the user's own LINE — the `typealias` that
 instantiated the uncopyable element — so the element is read off the source the reader is pointed at rather
 than quoted into the message. The gate consults the INSTANCE REGISTRY, so the construct it is really about
@@ -174,7 +181,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:2:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+error E2015: <fragment>:2:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`), a compiler-owned aggregate or base-struct-less container instance (`__ManagedFile`, `List with String`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element-array / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162).
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 
@@ -255,7 +262,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:34:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
+error E2015: <fragment>:34:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`), a compiler-owned aggregate or base-struct-less container instance (`__ManagedFile`, `List with String`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element-array / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162).
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
 

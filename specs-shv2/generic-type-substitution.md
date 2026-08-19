@@ -400,20 +400,23 @@ end 'main'
 2
 ```
 
-<!-- test: error.bare-generic-name-nesting-is-not-deep-cloneable -->
-### The CLONE direction is REFUSED, not silently shallow
-The drop side of a nested bare generic name cascades; the clone side has no cascade to reach, because a
-generic instance has no `__clone_<instance>` at this slice. The gate and the strategy therefore agree that
-the element is not deep-cloneable and the front end says so with a position — which is what keeps the two
-directions from disagreeing: a gate that admitted the copy would byte-blit the inner box's pointer and
-free it twice.
+<!-- test: bare-generic-name-nesting-is-deep-cloneable -->
+### The CLONE direction CASCADES two instances deep, and is not silently shallow
+⭐ **THIS CASE WAS A REFUSAL UNTIL W162, AND ITS SUBJECT IS WHAT THAT RUNG BUILT.** The drop side of a
+nested bare generic name has always cascaded; the clone side had no cascade to reach, because a non-`Array`
+generic instance had no `__clone_<instance>` at all — so the gate and the strategy agreed to refuse, which
+is what kept the two directions from disagreeing (a gate that admitted the copy with no cloner behind it
+would byte-blit the inner box's pointer and free it twice).
 
-⚠ **THE REFUSAL IS THE LIBRARY'S SINCE ARRH STRUCK `clone` FROM THE `Array` ROSTER, AND BLAME GIVES IT
-THE USER'S SPAN BACK** — `arr.clone()` is the library's own declaration now, so this program is refused by the
-OPAQUE copy gate inside that body rather than by the concrete gate at the call, and the sentence printed is
-the opaque one. What the refusal is POSITIONED at is the user's own instantiation, with `stdlib/Array.maxon`'s
-line kept as a `note:`; `specs-shv2/array-conditional-conformance-withheld.md` explains that relocation and
-the blame edge once, for all four cases ARRH touched.
+The cloner now exists and is the exact dual of the drop cascade it mirrors: `__clone_Holder_String` clones
+its `cell` field through `__clone_Cell_String`, which clones its `v` through `__str_clone` — the same three
+levels `__destruct_Holder_String` → `__destruct_Cell_String` → `__str_decref` releases. Neither inner cloner
+is named anywhere the module scan can see, so `noteClonerUsage`'s closure has to reach them through the
+instance nodes it registers.
+
+The source array is built and dropped inside the helper, so what `main` reads is the clone alone: a shallow
+copy at ANY of the three levels would leave it pointing at a freed record, and the leak gate would see the
+other half of the same mistake.
 ```maxon
 type Cell uses T
 	export var v as T
@@ -433,16 +436,26 @@ typealias StrCell = Cell with String
 typealias StrHolder = Holder with String
 typealias HolderArray = Array with StrHolder
 
-function main() returns ExitCode
+function detached() returns HolderArray
 	var a = HolderArray.create()
 	a.push(StrHolder.create(StrCell.make("a string long enough to force a heap allocation")))
-	let b = a.clone()
+	return a.clone()
+	// a, its Holder box, its Cell box and their String are freed when this function returns
+end 'detached'
+
+function main() returns ExitCode
+	let b = detached()
+
+	let h = try b.get(0) otherwise return 91
+	if not h.cell.v.equals("a string long enough to force a heap allocation") 'lostTheString'
+		return 92
+	end 'lostTheString'
+
 	return b.count() as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:18:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).
-note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
+```exitcode
+1
 ```
 
 <!-- test: bare-generic-name-trivial-argument-stays-inert -->

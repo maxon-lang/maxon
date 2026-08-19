@@ -58,8 +58,8 @@ export typealias DestructorSet = Set with ByteArray
 
 // The set of `__clone_<T>` symbols a module references (P1.7 slice 3b-vi-b) — the CLONE twin of
 // `DestructorSet`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over nesting by
-// `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the referenced cloners.
-// The SAME `Set with ByteArray` type is reused by `typeSupportsDeepClone` as its VISITED-name set (a
+// `noteClonerUsage`, so `installStructCloners`/`installUnionCloners`/`installGenericInstanceCloners`
+// synthesize only the referenced cloners. The SAME `Set with ByteArray` type is reused by `typeSupportsDeepClone` as its VISITED-name set (a
 // cycle-breaker over struct/union names), since both are membership sets of `ByteArray` names.
 export typealias ClonerSet = Set with ByteArray
 
@@ -232,8 +232,9 @@ export type RuntimeUsage
 	export var usesOpaqueElementCopy as bool
 	// The `__clone_<T>` symbols this module references (P1.7 slice 3b-vi-b) — the CLONE twin of
 	// `neededDestructors`, collected from the `funcAddr(__clone_<T>)` element-cloner stamps and closed over
-	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners` synthesize only the
-	// referenced cloners. `usesHeap` follows any cloner (the box it allocates).
+	// nesting by `noteClonerUsage`, so `installStructCloners`/`installUnionCloners`/
+	// `installGenericInstanceCloners` synthesize only the referenced cloners. `usesHeap` follows any cloner
+	// (the box it allocates).
 	export var neededCloners as ClonerSet
 	// The `__enum_from_raw_<Enum>` symbols this module CALLS — the `neededDestructors` shape with no closure
 	// pass, so `installEnumLookupHelpers` synthesizes only the referenced helpers. See `EnumLookupSet`.

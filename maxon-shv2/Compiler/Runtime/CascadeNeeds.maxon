@@ -5,8 +5,9 @@
 // `__destruct_<Outer>` calls its managed field's `__destruct_<Inner>` (`MmRuntime.closeDestructorNeeds`),
 // and the CLONE dual `__clone_<Outer>` calls that field's `__clone_<Inner>`
 // (`MmRuntime.noteClonerUsage`). Both therefore grow a needed-SYMBOL set to a fixpoint over the SAME
-// node space — declared structs, declared unions, and (destructors only) generic instances — under the
-// SAME monotone rule. Written twice, they carried the same quadratic twice: each was a `while changed`
+// node space — declared structs, declared unions, and generic instances — under the SAME monotone rule
+// (the instance nodes are the CLONE side's too since W162; they were the drop side's alone before it).
+// Written twice, they carried the same quadratic twice: each was a `while changed`
 // RE-SCAN of every declared type, so a cascade chain of depth D cost D passes over T types —
 // **O(passes × types)** — and re-minted every type's `__destruct_`/`__clone_` symbol on every one of
 // them. Written once here, each node is EXPANDED EXACTLY ONCE and each symbol minted ONCE:
@@ -34,8 +35,9 @@
 export union CascadeNode
 	declaredStruct(layout StructLayout)
 	declaredUnion(layout EnumLayout)
-	// A monomorphized generic instance (`Box with String`). DESTRUCTOR-side only: an instance has no
-	// `__clone_<T>` at this slice, so the cloner driver registers none and panics if it is handed one.
+	// A monomorphized generic instance (`Box with String`). Registered by BOTH drivers since W162: an
+	// instance has a `__clone_<mangled>` beside its `__destruct_<mangled>`, so the two closures walk one
+	// node space. (It was destructor-side only while a non-`Array` instance had no per-instance cloner.)
 	genericInstance(id GenericInstanceId)
 end 'CascadeNode'
 

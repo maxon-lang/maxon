@@ -2143,10 +2143,10 @@ export function noteClonerUsage(usage RuntimeUsage, project Project, signatures 
 	// which is one quadratic written down twice: a cloner chain of depth D cost D passes over all T types and
 	// re-minted every type's `__clone_` symbol on each. Each referenced node is now expanded exactly once.
 	//
-	// NO generic-instance nodes are registered, and that asymmetry with the drop side is real rather than an
-	// omission: a generic instance has a `__destruct_<mangled>` but no `__clone_<mangled>` at this slice (an
-	// instance element is rejected as uncopyable by `genericTypeFieldUncopyableInstantiation`), so the drain's
-	// instance arm is unreachable here and says so.
+	// ⭐ The node space is the DROP side's exactly (W162): a generic instance now has a `__clone_<mangled>`
+	// beside its `__destruct_<mangled>`, so the drain's instance arm is reachable here and the two closures
+	// register one node space rather than two. It USED to register none, because a non-`Array` instance was
+	// rejected as uncopyable by `genericTypeFieldUncopyableInstantiation` and the arm could only panic.
 	var work = CascadeWorklist.create()
 
 	for (_, layout) in project.structTypes 'eachStruct'
@@ -2156,6 +2156,13 @@ export function noteClonerUsage(usage RuntimeUsage, project Project, signatures 
 	for (_, layout) in project.enumTypes 'eachUnion'
 		work.register(clonerSymbol(layout.name), node: CascadeNode.declaredUnion(layout))
 	end 'eachUnion'
+
+	// ⚠ The instance node space is registered under the SAME symbol-key discipline the drop side states at
+	// `closeDestructorNeeds` — a declaration and an instance cannot mint one symbol (P1.7's `reservedIfDeclared`),
+	// and two instances that do are E3006 and fail the build before this runs.
+	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
+		work.register(clonerSymbol(signatures.mangleGenericInstance(id)), node: CascadeNode.genericInstance(id))
+	end 'eachInstance'
 
 	work.seed(usage.neededCloners)
 
@@ -2170,10 +2177,31 @@ export function noteClonerUsage(usage RuntimeUsage, project Project, signatures 
 		match node 'node'
 			declaredStruct(layout) then noteStructClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
 			declaredUnion(layout) then noteUnionClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
-			genericInstance(id) then panic("noteClonerUsage: generic instance {id} was queued as a CLONER node, but no `__clone_<mangled-instance>` exists at this slice and none is registered — the drop cascade's instance arm has no clone twin")
+			genericInstance(id) then noteInstanceClonerNeeds(usage, id: id, signatures: signatures, work: work)
 		end 'node'
 	end 'drain'
 end 'noteClonerUsage'
+
+// ⭐ The GENERIC-INSTANCE twin of `noteStructClonerNeeds` (W162) — over each SUBSTITUTED managed field, and
+// the exact clone dual of `addNestedInstanceDestructors`. It needs no `project`: every fact about an instance
+// is answered inside `signatures`, over `signatures`' own interner.
+//
+// ⚠ The no-layout early-out is this walk's precondition, exactly as it is the drop twin's: a node is expanded
+// as soon as its SYMBOL is needed, and the field walk reads a base struct a layout-less instance does not have.
+// Nothing is lost by returning — `instanceCloneStrategy` refuses such an instance at the same tier, so no
+// referenced `__clone_<mangled>` can name one.
+function noteInstanceClonerNeeds(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
+	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
+		return
+	end 'noSynthesizedCloner'
+
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+			continue
+		end 'scalar'
+		noteFieldCloneNeeds(usage, strategy: signatures.genericInstanceFieldCloneStrategy(id, index: i), work: work)
+	end 'eachField'
+end 'noteInstanceClonerNeeds'
 
 // Turn on the transitive bits (and grow `neededCloners`) for every managed field of struct `layout`'s cloner,
 // queueing each newly-needed cloner on `work` so its OWN nesting is closed in turn.
@@ -2261,37 +2289,119 @@ export function installUnionCloners(module StdModule, project Project, signature
 	end 'each'
 end 'installUnionCloners'
 
-// Emit `__clone_<Struct>(src) -> newBox`: `__mm_alloc` a fresh box, BLIT the whole struct (every scalar field
-// copied for free), then DEEP-CLONE each managed field in place — the blit's shallow pointer is replaced by an
-// independent copy through the field's `managedFieldCloneStrategy`. A struct has no tag, so every field is
-// always present; the per-field null-guard (`emitManagedFieldClone`) skips a moved-out (null) slot exactly as
-// the destructor cascade's null-guard does.
-function synthesizeStructCloner(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
-	let func = IrFunction.createFromStd(clonerSymbol(layout.name), returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+// ⭐ **THE PER-INSTANCE DEEP-CLONER INSTALLER (W162)** — the clone twin of `installGenericInstanceDestructors`,
+// and `installStructCloners`' instance twin. Synthesize `__clone_<mangled>` for every instance whose cloner is
+// REFERENCED (directly by an element-cloner stamp in a layout descriptor's `copyFunc@32`, or through a nested
+// cascade `noteClonerUsage` grew the set over). Like the struct installer there is NO managed-field gate — a
+// scalar-only instance box still needs a fresh-box clone — but the base-layout gate IS one: a layout-less
+// instance has no field list to cascade over, which `declaredInstanceSupportsDeepClone` refuses at the front end.
+export function installGenericInstanceCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)
+	if needed.count() == 0 'noCloners'
+		return
+	end 'noCloners'
+	for id in 0 upto signatures.genericInstanceCount() 'each'
+		if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
+			continue
+		end 'noSynthesizedCloner'
+		if not needed.contains(clonerSymbol(signatures.mangleGenericInstance(id))) 'notReferenced'
+			continue
+		end 'notReferenced'
+		synthesizeGenericInstanceCloner(module, id: id, project: project, signatures: signatures)
+	end 'each'
+end 'installGenericInstanceCloners'
+
+// One managed field a TAGLESS box cloner must deep-copy: its byte offset in the box, and HOW it is copied.
+// `ManagedFieldDrop`'s clone dual, and it exists for that one's reason — the struct (P1.7 slice 3b-vi-b) and
+// generic-instance (W162) cloners each build a list of these and hand it to `emitFieldCascadeCloner`, so the
+// alloc/blit/clone/ret skeleton lives in ONE place rather than once per shape of field list.
+type ManagedFieldClone
+	export let offset as ByteOffset
+	export let strategy as ManagedCloneStrategy
+
+	static function create(offset ByteOffset, strategy ManagedCloneStrategy) returns ManagedFieldClone
+		return Self{offset: offset, strategy: strategy}
+	end 'create'
+end 'ManagedFieldClone'
+
+typealias ManagedFieldCloneArray = Array with ManagedFieldClone
+
+// Emit `<symbolName>(src) -> newBox` for a TAGLESS box (a struct, or a monomorphized generic instance):
+// `__mm_alloc` a fresh box, BLIT the whole record (every scalar field copied for free), then DEEP-CLONE each
+// managed field in place — the blit's shallow pointer is replaced by an independent copy through the field's
+// `ManagedCloneStrategy`. A tagless box has no case discriminant, so every field is always present; the
+// per-field null-guard (`emitManagedFieldClone`) skips a moved-out (null) slot exactly as the destructor
+// cascade's null-guard does. `emitFieldCascadeDestructor`'s dual, minus the refcount check: a clone never
+// frees, it always allocates.
+function emitFieldCascadeCloner(module StdModule, symbolName ByteArray, boxSize ByteOffset, tagName String, clones ManagedFieldCloneArray, project Project)
+	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
 	emitParams(module, block: entry, count: 1)
 	let src = 0 as ValueId
 
-	let size = emitConst(module, block: entry, value: layout.sizeBytes() as ParsedInt, ids: ids)
+	let size = emitConst(module, block: entry, value: boxSize as ParsedInt, ids: ids)
 	let zeroDtor = emitConst(module, block: entry, value: TrivialElementDestroy, ids: ids)
 	let newBox = ids.mint()
-	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: String.from(layout.name), debugStream: module.debugStream), ids: ids)
+	emitMmAllocCall(module, block: entry, result: newBox, size: size, destructor: zeroDtor, tag: userTagIndex(project.globalData, name: tagName, debugStream: module.debugStream), ids: ids)
 	var cur = emitForwardCopy(module, func: func, cur: entry, dest: newBox, src: src, byteCount: size, ids: ids)
 
+	for spec in clones 'eachField'
+		cur = emitManagedFieldClone(module, func: func, cur: cur, box: newBox, offset: spec.offset, strategy: spec.strategy, ids: ids)
+	end 'eachField'
+
+	module.setTerminator(cur, op: StdOp.ret(newBox))
+	module.functions.push(func)
+end 'emitFieldCascadeCloner'
+
+// The managed field list of declared struct `layout`, resolved through the shared `managedFieldCloneStrategy`
+// over `project.typeNames` — the ONE interner that layout's field-type ids live in.
+function synthesizeStructCloner(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures)
+	var clones = ManagedFieldCloneArray.create()
 	for i in 0 upto layout.fieldCount() 'eachField'
 		if not signatures.structFieldIsManaged(layout.name, index: i) 'scalar'
 			continue
 		end 'scalar'
 		let fieldType = try layout.fieldTypes.get(i) otherwise panic("synthesizeStructCloner: fieldTypes.get OOB at {i}")
-		let strategy = managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType)
-		cur = emitManagedFieldClone(module, func: func, cur: cur, box: newBox, offset: layout.offsetOfField(i), strategy: strategy, ids: ids)
+		clones.push(ManagedFieldClone.create(layout.offsetOfField(i), strategy: managedFieldCloneStrategy(signatures, typeNames: project.typeNames, fieldType: fieldType)))
 	end 'eachField'
 
-	module.setTerminator(cur, op: StdOp.ret(newBox))
-	module.functions.push(func)
+	emitFieldCascadeCloner(module, symbolName: clonerSymbol(layout.name), boxSize: layout.sizeBytes(), tagName: String.from(layout.name), clones: clones, project: project)
 end 'synthesizeStructCloner'
+
+// ⭐⭐ **THE PER-INSTANCE DEEP-CLONER CASCADE (W162)** — the exact clone dual of
+// `synthesizeGenericInstanceDestructor`, and the same relationship to `synthesizeStructCloner` that one has to
+// `synthesizeStructDestructor`. A generic instance is a monomorphized base struct that OWNS its managed type
+// arguments, so `__clone_<mangled>` allocates a fresh box of the BASE's size and deep-clones each SUBSTITUTED
+// managed field — `Box with String` clones the String, `Box with Holder` clones the Holder (through its own
+// `__clone_Holder`), `Box with (Box with String)` clones the inner box through ITS instance cloner. The base
+// struct's own `__clone_Box` is NOT what a managed instance uses: `Box`'s shared body compiles once against
+// opaque `T`, so a per-instance cascade is what makes the type-arg clone concrete.
+//
+// ⭐⭐ **AN INSTANCE OVER THE *ENCLOSING* BODY'S OWN TYPE PARAMETER (`Box with Element` inside
+// `Bag uses Element`) CLONES AS A PURE BLIT, AND THAT IS THE CORRECT ANSWER RATHER THAN A GAP.** Its substituted
+// `v` is a bare `typeParameter`, which `typeIsManaged` classifies scalar — so this walk emits NO field clone,
+// exactly as `synthesizeGenericInstanceDestructor` emits no field drop and `genericInstanceBoxDropCallee`
+// answers the trivial `__mm_decref`. The opaque payload's reference is not the box cascade's to take: it is the
+// enclosing instance's LAYOUT DESCRIPTOR protocol (`retainFunc@64` / `destroyFunc@40`), which is why the two
+// sides balance. MEASURED on a 30-deep clone-then-drop-the-source chain under `Bag with String`: the clone's
+// `String` reads back intact and `__mm_leak_check` sees zero live allocations. The clone side is admissible
+// here for the same reason the drop side is: it copies exactly the fields the destructor releases.
+//
+// The MM tag is the instance's own mangled name, so a cloned box decodes in `MXDS_TAGS` as the instance it is
+// — the same name `__mm_alloc` interns at the concrete construction site.
+function synthesizeGenericInstanceCloner(module StdModule, id GenericInstanceId, project Project, signatures ProgramSignatures)
+	var clones = ManagedFieldCloneArray.create()
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+			continue
+		end 'scalar'
+		clones.push(ManagedFieldClone.create(signatures.genericInstanceFieldOffset(id, index: i), strategy: signatures.genericInstanceFieldCloneStrategy(id, index: i)))
+	end 'eachField'
+
+	let mangled = signatures.mangleGenericInstance(id)
+	emitFieldCascadeCloner(module, symbolName: clonerSymbol(mangled), boxSize: signatures.genericInstanceBoxSize(id), tagName: String.from(mangled), clones: clones, project: project)
+end 'synthesizeGenericInstanceCloner'
 
 // Emit `__clone_<Union>(src) -> newBox`: `__mm_alloc` a fresh box, BLIT the whole box (the tag and every payload
 // slot copied for free), then — behind a per-managed-case tag guard chain (the same shape

@@ -49588,7 +49588,7 @@ export type Parser
 			return
 		end 'cloneable'
 
-		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `Set`, `Map`, `List` or `Vector` field, or any other generic instance that is not an `Array` (each needs a per-instance cloner, a later slice) — including one held INSIDE a struct field, such as a `CharacterSet`, whose member set is a `Set with Character`; an OS handle (`__ManagedFile`/`__ManagedDirectory`), which cannot be duplicated at all; a value held at an interface type; or an array of managed arrays. String, struct, boxed-union, enum and trivial-element `Array` fields ARE supported.", line: memberTok.line, column: memberTok.column)
+		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `List` or `Vector` field, or any other generic instance with no base struct to cascade over (each would need a per-instance cloner, and only a DECLARED generic's instance has one) — including one held INSIDE a struct field; an OS handle (`__ManagedFile`/`__ManagedDirectory`), which cannot be duplicated at all; a value held at an interface type; or an array of managed arrays. String, struct, boxed-union, enum, trivial-element `Array` and declared-generic instance (`Box with String`) fields ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireStructCloneSupported'
 
 	// ⭐ **THE CONDITIONAL-EXTENSION REFUSAL, AT THE ONE DOOR EVERY STRUCT METHOD CALL PASSES THROUGH.**
@@ -56377,8 +56377,10 @@ export type Parser
 			//
 			// ⚠ **THE NESTED-CONTAINER SHAPE THE OLD NOTE CITED AS THE SAME FAULT CANNOT BE WRITTEN TODAY**, so
 			// it is no longer evidence either way: `Array with (Array with String)` is refused outright at
-			// `stdlib/Array.maxon:145` (*"a managed-element array … per-instance cloner is a later slice"*,
-			// P1.7 slice 3b-vi-b). When that slice lands, the composition rule is already in front of it.
+			// `stdlib/Array.maxon:145` (*"a managed-element array … cannot be deep-cloned as a single-function
+			// element"*, P1.7 slice 3b-vi-b — the arm that survived W162, which cured only the non-`Array`
+			// INSTANCE half of that sentence). When the nested-array half lands, the composition rule is already
+			// in front of it.
 			//
 			// ⚠ **A SOURCE NOTHING CAN NAME MINTS NOTHING, AND THAT IS SAFE FOR A SECOND REASON.**
 			// `makeBuffer().managed.createCursor()` has no subject to key a borrow on — and needs none: no
@@ -56937,7 +56939,7 @@ export type Parser
 			instance(offender) then self.blameLibraryRefusalOnInstantiation(offender)
 		end 'uncopyable'
 
-		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`) or a non-Array generic instance (`Box with String`, whose per-instance cloner is a later slice). String / struct / boxed-union / trivial-element-array / trivial instantiations ARE supported (P1.7 slice 3b-vi-b).", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`), a compiler-owned aggregate or base-struct-less container instance (`__ManagedFile`, `List with String`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element-array / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162).", line: methodTok.line, column: methodTok.column)
 	end 'requireOpaqueArrayCopyable'
 
 	// ⭐⭐ **BLAME A LIBRARY-BODY REFUSAL ON THE INSTANTIATION THAT FORCED IT (BLAME).**
@@ -57494,7 +57496,8 @@ export type Parser
 	// struct / boxed union) now passes too — its copy is a per-element DEEP CLONE (`arrayElementCloneValue` stamps
 	// the element's `funcAddr(__clone_<E>)` into the `_managed` runtime call), shv2's move-only answer to the
 	// reference compilers' incref. What still REJECTS (E2015) is a managed element whose nested type this rung's
-	// cloner cannot reach: a `Box with T` generic-instance field/element (a per-instance cloner is a later slice)
+	// cloner cannot reach: a base-struct-less generic instance field/element (a `List`, a `Vector` — W162 gave a
+	// DECLARED generic's instance its per-instance cloner, and a layout-less one still has none)
 	// or an array-of-managed-arrays. An OPAQUE-`T` element (a generic body) is routed to `requireOpaqueArrayCopyable`
 	// by `requireArrayCopyMethodSupported` instead, so only CONCRETE elements reach here.
 	function requireArrayElementCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
@@ -57502,7 +57505,7 @@ export type Parser
 			return
 		end 'trivial'
 		if not self.signatures.arrayElementSupportsDeepClone(giid) 'unsupportedNested'
-			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this rung cannot deep-clone yet — a `Box with T` generic-instance field/element (its per-instance cloner is a later slice) or an array-of-managed-arrays. String / struct / boxed-union elements, including nested String, struct, union and Array fields, ARE supported.", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this rung cannot deep-clone — a `List`/`Vector` or other base-struct-less generic instance, an OS handle, a value held at an interface type, or an array-of-managed-arrays. String / struct / boxed-union / declared-generic-instance elements, including nested String, struct, union, Array and instance fields, ARE supported.", line: methodTok.line, column: methodTok.column)
 		end 'unsupportedNested'
 	end 'requireArrayElementCopyable'
 

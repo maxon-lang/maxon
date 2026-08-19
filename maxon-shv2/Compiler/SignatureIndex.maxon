@@ -1789,7 +1789,8 @@ enum TypeArgInstantiationKind
 	// cannot re-balance and therefore rejects.
 	coOwnedTrivial
 	// Not deep-cloneable through the single-`copyFunc` element mechanism (`not typeSupportsDeepClone(as
-	// element)`): a managed-element array or a non-Array generic instance — the opaque-copy front-end reject.
+	// element)`): a managed-element array, a compiler-owned aggregate, or a generic instance with no per-instance
+	// cloner behind it — the opaque-copy front-end reject.
 	uncopyableElement
 	// A HEAP AGGREGATE (`typeIsManaged`): a String, a struct, a boxed union, a nested container — anything
 	// whose slot is a POINTER rather than the value. The front-end reject for the one container that
@@ -4028,9 +4029,10 @@ export union ManagedCloneStrategy
 	// is the element's own `direct` clone callee. A 2-arg call, so it is reachable only as a struct/union FIELD
 	// (the synthesizer emits the funcAddr), never as a top-level array element (which must be `direct`).
 	managedArray(elementClone ByteArray)
-	// Not deep-cloneable by this rung's mechanism — a non-Array generic instance (`Box with String`, whose
-	// per-instance cloner is a later slice) or a managed-element Array whose element is not itself `direct`
-	// (an array-of-managed-arrays). The front end rejects such an element with a positioned E2015.
+	// Not deep-cloneable by this rung's mechanism — a compiler-owned aggregate (`__ManagedFile`), a
+	// base-layout-less generic instance (a `List`, a `Vector`), an existential, or a managed-element Array whose
+	// element is not itself `direct` (an array-of-managed-arrays). The front end rejects such an element with a
+	// positioned E2015.
 	unsupported
 end 'ManagedCloneStrategy'
 
@@ -4156,13 +4158,22 @@ export function compilerOwnedAggregateOf(name ByteArray) returns CompilerOwnedAg
 end 'compilerOwnedAggregateOf'
 
 // The clone strategy for a generic-INSTANCE field — an `Array` (`__managed_clone` for a trivial element,
-// `__managed_clone_managed` for a managed one) or, for any other instance (`Box with String`), `unsupported` (its
-// per-instance cloner is a later slice). The managed element's own strategy comes back through the METHOD
-// `arrayElementCloneStrategy` (which resolves the element in the index's own interner), so this free function
-// never has to reach the index's private `typeNames`.
+// `__managed_clone_managed` for a managed one) or, for any other instance (`Box with String`), the
+// PER-INSTANCE cloner `__clone_<mangled>` (W162), which is the clone twin of the `__destruct_<mangled>`
+// cascade `genericInstanceBoxDropCallee` hands back for the same instance. The managed element's own
+// strategy comes back through the METHOD `arrayElementCloneStrategy` (which resolves the element in the
+// index's own interner), so this free function never has to reach the index's private `typeNames`.
 function instanceCloneStrategy(signatures ProgramSignatures, id GenericInstanceId) returns ManagedCloneStrategy
 	if not signatures.isArrayInstance(id) 'notArray'
-		return ManagedCloneStrategy.unsupported
+		// ⛔ A base-layout-less instance (a `List`, a `Vector`, a cursor) has no field list to cascade over, so
+		// nothing synthesizes its cloner — `declaredInstanceSupportsDeepClone` refuses it at the SAME tier, which
+		// is what keeps this strategy from naming a symbol `installGenericInstanceCloners` never builds (the
+		// `__clone___ManagedFile` shape `managedNameCloneStrategy`'s header records as a measured backend panic).
+		if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
+			return ManagedCloneStrategy.unsupported
+		end 'noSynthesizedCloner'
+
+		return ManagedCloneStrategy.direct(clonerSymbol(signatures.mangleGenericInstance(id)))
 	end 'notArray'
 	if not signatures.containerElementIsManaged(id) 'trivialElement'
 		return ManagedCloneStrategy.direct(ManagedCloneName)
@@ -21306,7 +21317,8 @@ export type ProgramSignatures
 	// `direct`-clonable element (String / struct / boxed union / trivial-element array — a byte-blit copies a
 	// TRIVIAL element correctly with no cloner at all). An instantiation whose argument is a MANAGED type this
 	// rung cannot deep-clone as a single-function element — a managed-element array (`Array with (Array with
-	// String)`) or a non-Array generic instance (`Box with String`, a later slice) — has no single `copyFunc`,
+	// String)`), a compiler-owned aggregate, or a base-struct-less generic instance (`List with String`; a
+	// DECLARED generic's instance has its own `__clone_<mangled>` since W162) — has no single `copyFunc`,
 	// so a copy of it would byte-blit a managed pointer and double-free it; such an instantiation is rejected
 	// with a positioned E2015 at the copy site rather than crash at descriptor emit. HOW the instances are found
 	// is `instanceWithTypeArgKind`'s business and is described there once; what this gate adds is the KIND —
@@ -21534,6 +21546,15 @@ export type ProgramSignatures
 	export function genericInstanceFieldDropCallee(id GenericInstanceId, index FieldIndex) returns ByteArray
 		return managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.substituteInstanceFieldType(id, index: index))
 	end 'genericInstanceFieldDropCallee'
+
+	// ⭐ **THE CLONE TWIN OF `genericInstanceFieldDropCallee` (W162)**, routed through the SAME shared
+	// `managedFieldCloneStrategy` over the SAME substituted type — so a field the per-instance cloner copies is
+	// a field the per-instance destructor releases, which is the property `ManagedCloneStrategy`'s own header
+	// calls for (a clone leaks if it is not dropped and double-frees if it is dropped twice, and ONE classifier
+	// decides both). Precondition: the field is managed.
+	export function genericInstanceFieldCloneStrategy(id GenericInstanceId, index FieldIndex) returns ManagedCloneStrategy
+		return managedFieldCloneStrategy(self, typeNames: self.typeNames, fieldType: self.substituteInstanceFieldType(id, index: index))
+	end 'genericInstanceFieldCloneStrategy'
 
 	// Is substituted instance field `index` an existential — `structFieldIsExistential`'s instance twin, asked
 	// over the SUBSTITUTED type for `genericInstanceFieldDropCallee`'s reason: the drop KIND and the drop
@@ -22942,9 +22963,10 @@ export type ProgramSignatures
 	// Recursively: can a value of `type` be deep-cloned? A scalar owns no heap (nothing to clone); a String is a
 	// `direct` leaf; a struct/union is clonable iff every managed field/payload is; a trivial-element Array is a
 	// `direct` leaf; a managed-element Array is clonable iff its element is itself `direct`-clonable AND clonable
-	// (an array-of-managed-arrays is not, this rung); a non-Array generic instance (`Box with String`) is not (a
-	// later slice). `asElement` is true when `type` is reached as an ARRAY ELEMENT (invoked through
-	// `callIndirect`), which a `managedArray`-strategy type — a managed-element array — cannot satisfy. `visited`
+	// (an array-of-managed-arrays is not, this rung); a non-Array generic instance (`Box with String`) is clonable
+	// iff every one of its SUBSTITUTED fields is (W162). `asElement` is true when `type` is reached as an ARRAY
+	// ELEMENT (invoked through `callIndirect`), which a `managedArray`-strategy type — a managed-element array —
+	// cannot satisfy. `visited`
 	// (struct/union NAMES) breaks a recursive type (`type Node { var next as Node }`): a name already in flight
 	// is assumed clonable, so the walk terminates, and the synthesized cloner recurses at RUN time through the
 	// same field, which is correct.
@@ -23026,10 +23048,11 @@ export type ProgramSignatures
 	end 'aggregateNameSupportsDeepClone'
 
 	// An `Array` instance recurses into its element (a trivial one is a clonable leaf; a managed one must be a
-	// `direct`-clonable element via `asElement: true`); any other instance (`Box with String`) is a later slice.
+	// `direct`-clonable element via `asElement: true`); any other instance (`Box with String`) walks its own
+	// SUBSTITUTED fields, exactly as a declared struct walks its declared ones (W162).
 	function instanceSupportsDeepClone(id GenericInstanceId, asElement bool, visited ClonerSet) returns bool
 		if not self.isArrayInstance(id) 'notArray'
-			return false
+			return self.declaredInstanceSupportsDeepClone(id, visited: visited)
 		end 'notArray'
 		if not self.containerElementIsManaged(id) 'trivialElement'
 			return true
@@ -23041,6 +23064,50 @@ export type ProgramSignatures
 		end 'nestedManagedArrayElement'
 		return self.typeSupportsDeepClone(self.containerElementType(id), asElement: true, visited: visited)
 	end 'instanceSupportsDeepClone'
+
+	// ⭐⭐ **CAN A NON-`Array` GENERIC INSTANCE BE DEEP-CLONED (W162)?** `structFieldsSupportDeepClone`'s
+	// instance twin, and the exact gate `installGenericInstanceCloners` synthesizes to — the two agree so the
+	// synthesizer never meets an `unsupported` field on a program the front end accepted, which is the rule
+	// `arrayElementSupportsDeepClone`'s header states for the struct side and the reason it exists.
+	//
+	// ⚠ **`asElement` IS NOT A PARAMETER, AND THAT IS AN ANSWER RATHER THAN AN OMISSION.** The restriction it
+	// carries is that an ARRAY ELEMENT is invoked through `callIndirect(fn, elem)` and so must be reachable by a
+	// SINGLE `(box) -> newBox` callee. `__clone_<mangled>` is exactly that shape — the same shape a declared
+	// struct's `__clone_<T>` is — so an instance that clones at all clones as an element too.
+	//
+	// ⛔ **A BASE-LAYOUT-LESS INSTANCE IS REFUSED, AND IT IS THE SAME GATE THE DROP SIDE OPENS WITH.** An
+	// `Array`/`List`/`Vector`/cursor instance has no base struct to read fields out of
+	// (`genericInstanceHasBaseLayout`), so nothing synthesizes a per-instance cloner for it and
+	// `instanceCloneStrategy` answers `unsupported` at the same tier — a name the gate and the strategy
+	// disagreed about would admit a clone nobody can emit. (`Array` never reaches here; the caller's own arm
+	// takes it. A `List with String` does, and its copy is `ListRuntime`'s business, not a field cascade's.)
+	//
+	// The cycle break is the MANGLED INSTANCE NAME in the same `visited` set the struct/union walk uses, which
+	// is sound because the two namespaces are disjoint BY CONSTRUCTION: `mangleGenericInstance` mints a
+	// contested name behind the reserved `__` prefix no declaration may take (see its header).
+	function declaredInstanceSupportsDeepClone(id GenericInstanceId, visited ClonerSet) returns bool
+		if not self.genericInstanceHasBaseLayout(id) 'noSynthesizedCloner'
+			return false
+		end 'noSynthesizedCloner'
+
+		let mangled = self.mangleGenericInstance(id)
+		if visited.contains(mangled) 'cycle'
+			return true
+		end 'cycle'
+		visited.insert(mangled)
+
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			if not self.genericInstanceFieldIsManaged(id, index: i) 'scalar'
+				continue
+			end 'scalar'
+			// The SUBSTITUTED type, which is what the synthesized body clones — `genericInstanceFieldDropCallee`
+			// reads the same column for the same reason: the gate and the emitter must classify one type.
+			if not self.typeSupportsDeepClone(self.substituteInstanceFieldType(id, index: i), asElement: false, visited: visited) 'unsupportedField'
+				return false
+			end 'unsupportedField'
+		end 'eachField'
+		return true
+	end 'declaredInstanceSupportsDeepClone'
 
 	function structFieldsSupportDeepClone(structName ByteArray, visited ClonerSet) returns bool
 		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldsSupportDeepClone: no `type {String.from(structName)}` is declared — the caller reached here through a declared struct name")
