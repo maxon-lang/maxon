@@ -831,3 +831,94 @@ end 'main'
 ```stdout
 sum=660
 ```
+
+<!-- test: memory.mutating-the-list-inside-for-in-ends-the-loop -->
+### Clearing a list from inside `for … in` ends the walk instead of being refused
+⭐ **`W153` CHANGED THIS PROGRAM'S ANSWER, AND THE CAUSE IS THE `E3019` RULING RATHER THAN THE BORROW
+CHECKER — MEASURED ON BOTH SIDES, NOT REASONED.** Built against the merge base (`26536e5321`, the
+retirement not applied) this program is **REFUSED**:
+
+    error E3019: cannot pass 'l' to function that mutates parameter 'self' (in main)
+
+Built with the retirement it compiles and runs. ⇒ **This is `E3019` behaving exactly as it was ruled
+to (2026-08-14): it is a BUILTIN-SURFACE rule, and a DECLARED type is exempt.** While `List` was
+synthesized, `l.clear()` under a live walk met that builtin rule; retiring the container makes
+`List with T` a declaration, which the ruling excludes. Nothing about the borrow checker moved, and
+reading this as the `E3070` family would attribute it to the wrong mechanism.
+
+⭐ **IT IS SAFE FOR A REASON THAT PREDATES THIS RUNG: `W138` MADE THE NODES REFCOUNTED.** The cursor
+holds a `+1` on the node it is parked at, so `clear()` cannot free it underneath the walk. The
+observable answer is that the iterator finds no successor and the loop simply ends: the first element
+prints, the `clear()` takes effect, and `count()` is 0. **Measured: exit 0, no leak, no fault.**
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntList = List with Int
+
+function main() returns ExitCode
+	var l = IntList.create()
+	l.append(1)
+	l.append(2)
+	l.append(3)
+	for x in l 'each'
+		print("[{x}]\n")
+		l.clear()
+	end 'each'
+	print("count={l.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[1]
+count=0
+```
+
+<!-- test: an-all-scalar-struct-element -->
+### A `List` element may be a plain struct
+⚠⚠ **THIS CASE IS PLAIN COVERAGE, NOT A `W153` GUARD, AND THE DIFFERENCE WAS MEASURED RATHER THAN
+ASSUMED.** It was added at `W153` on the belief that retiring the container OPENED this surface —
+that `requireListElementType` had gated the element type and no longer stands. **That belief is
+FALSE.** Built against the merge base (`26536e5321`) with the retirement NOT applied, this program
+compiles and prints `[3,4] count=2` at exit 0: the identical answer. The gate never refused an
+all-scalar struct.
+
+⇒ **It is kept because nothing covered the shape, and it is documented as unable to fail from the
+retirement** so that a later reader does not mistake it for a guard on one. A case whose answer is the
+same on both sides of a change pins the language, not the change — and saying so is cheaper than
+letting someone re-derive it.
+
+⚠ **The element here owns no heap**, which is deliberately the EASY half — a managed-element struct
+walks `element_drop@24` and is covered by the `array-clone-managed-elements` and
+`union-managed-payload` families. This case pins the half that has no cleanup at all, where a spurious
+drop would be a fault rather than a leak.
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Point
+	export var x as Int
+	export var y as Int
+
+	export static function at(x Int, y Int) returns Self
+		return Self { x: x, y: y }
+	end 'at'
+end 'Point'
+
+typealias PointList = List with Point
+
+function main() returns ExitCode
+	var l = PointList.create()
+	l.append(Point.at(3, y: 4))
+	l.append(Point.at(5, y: 6))
+	let p = try l.first() otherwise Point.at(0, y: 0)
+	print("[{p.x},{p.y}] count={l.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[3,4] count=2
+```
