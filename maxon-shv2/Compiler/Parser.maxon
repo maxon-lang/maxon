@@ -2333,6 +2333,14 @@ type MethodDescriptorScan
 	// receiver is not resolved here, for the reason `hasContainerMoveOut`'s is not; see
 	// `Parser.containerMoveInMutatorCallAt`.
 	export let storesContainerElement as bool
+	// ⭐ Does this region walk `for … in self` — the receiver ITSELF, with no `.field` after it (W159)? The
+	// loop hands the body `current()`'s result once per trip and OWNS it for that trip, so when the cursor
+	// yields the enclosing type's own parameter the trip's release is the descriptor-gated
+	// `__drop_type_param`. The calls a cursor loop makes are emitted by the compiler and appear in NO token,
+	// which is why neither `adoptsOpaqueCallResult` nor the self-call edges can see this one. Whether the
+	// element is opaque is a question about the TYPE, asked once per site by
+	// `Parser.receiverCursorElementIsOpaque`; this half is only the token shape.
+	export let walksReceiverAsACursor as bool
 	// ⭐⭐ **THE CROSS-TYPE CALL EDGES — `Array.<member>` NAMES THIS REGION CALLS THAT THE CORPUS, NOT THE
 	// ROSTER, SERVES (ARRG).** Every other entry above is a fact about what this body DOES; this one is a fact
 	// about a CALLEE'S ABI, and it is the only edge in the descriptor fixpoint that leaves the enclosing type.
@@ -2341,8 +2349,8 @@ type MethodDescriptorScan
 	export let corpusContainerCallees as ByteArrayArray
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, corpusContainerCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, corpusContainerCallees: corpusContainerCallees, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, walksReceiverAsACursor bool, corpusContainerCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -13064,6 +13072,10 @@ export type Parser
 		// rather than once per method. See `genericTypeIsInstantiated` for why this is the weakest question the
 		// store-side seed can ask and why a stronger one is measurably wrong here.
 		let instantiated = self.signatures.genericTypeIsInstantiated(site.typeName)
+		// ⭐ Does a `for … in self` in this type's bodies own an OPAQUE element per trip (W159)? A property of
+		// the TYPE — every method walks the same cursor — so it is read once per site beside `instantiated`
+		// rather than once per method.
+		let receiverElementIsOpaque = self.receiverCursorElementIsOpaque(site.typeName)
 
 		var q = site.bodyStart
 		while self.kindAt(q) != TokenKind.eof 'walk'
@@ -13193,6 +13205,27 @@ export type Parser
 				// static has no receiver to source a descriptor from, and one that needs one is refused with a
 				// position (`requireDescriptorForOpaqueStores`).
 				let storesBorrowedOpaqueElement = scan.storesContainerElement and instantiated and not self.functionDeclIsStatic(q)
+				// ⭐⭐ **A `for … in self` OWNS ITS ELEMENT FOR ONE TRIP, AND RELEASES IT THROUGH THE
+				// DESCRIPTOR (W159).** The element is `current()`'s result, which the impl hands over as a `+1`
+				// (`coOwnBorrowedOpaque`); when the cursor yields the enclosing type's own parameter that
+				// release is the descriptor-gated `__drop_type_param`, so the method needs the parameter
+				// carrying it. `stdlib/Interfaces.maxon`'s `extension Iterable` is the whole of why this is
+				// reachable at all: `contains` reads its element and stores it NOWHERE, so it is the one
+				// traversal that drops rather than moves, and it is re-parsed onto every conformer.
+				//
+				// ⚠ **NO SIBLING SIGNAL COULD SEE IT**, and that is what made it a refusal rather than a
+				// reservation: the loop's `createIterator()`/`current()`/`advance()` are emitted by the parser,
+				// so `adoptsOpaqueCallResult`'s `.<name>(` test and the self-call edges walk a body in which
+				// those three calls appear in no token.
+				//
+				// ⛔ The two gates are NOT interchangeable with the siblings' `instantiated`, which this
+				// deliberately does not carry: `receiverElementIsOpaque` is the narrowing that keeps a
+				// concrete-element traversal out (see it). `not enclosingTypeParams.isEmpty()` because a
+				// descriptor describes the ENCLOSING type's parameters and a non-generic type has none;
+				// `not isStatic` mirrors every sibling opaque signal — a static cannot name `self`, so it has
+				// no receiver to source a descriptor from and one that needed one is `E2015`
+				// (`staticLayoutNeedsSelfReturn`).
+				let walksAnOwnedOpaqueElement = scan.walksReceiverAsACursor and receiverElementIsOpaque and not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q)
 				// ⭐⭐ **TWO DECLARATIONS CAN WEAR ONE QUALIFIED NAME, AND THE MERGE IS A UNION — NOT THE LAST
 				// ONE IN (found at review).** The columns are keyed by `Type.method` and nothing above this
 				// line guarantees that key is unique: a type body may declare `slotSize()` twice (shv2 keeps
@@ -13210,7 +13243,7 @@ export type Parser
 				// answer that must be wrong is wrong upwards, and `solveDescriptorNeeds`' claim that same-named
 				// methods "share one answer" is made true here rather than assumed.
 				let alreadyContributed = directSeeds.contains(qualified)
-				var directlyNeeded = scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or storesBorrowedOpaqueElement
+				var directlyNeeded = scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or storesBorrowedOpaqueElement or walksAnOwnedOpaqueElement
 				var edges = self.qualifiedSelfCallees(site.typeName, callees: scan.callees)
 				// ⭐⭐ **THE CROSS-TYPE EDGES (ARRG)** — already qualified, because they name a method of
 				// ANOTHER type. Gated exactly as `adoptsOpaqueResult` is and for its reasons: a NON-generic
@@ -13399,6 +13432,8 @@ export type Parser
 		var adoptsOpaqueCallResult = false
 		// ⭐ Does this region STORE INTO A CONTAINER (W60)? See `MethodDescriptorScan.storesContainerElement`.
 		var storesContainerElement = false
+		// ⭐ Does this region walk `for … in self` (W159)? See `MethodDescriptorScan.walksReceiverAsACursor`.
+		var walksReceiverAsACursor = false
 		// ⭐ The cross-type call edges (ARRG), minted on the first one. See
 		// `MethodDescriptorScan.corpusContainerCallees` and `sharedEmptyCorpusContainerCallees`.
 		var corpusContainerCallees = sharedEmptyCorpusContainerCallees
@@ -13528,6 +13563,12 @@ export type Parser
 					end 'thisDeclarationServesIt'
 				end 'eachArrayDeclaration'
 			end 'aCorpusContainerCall'
+			// ⭐⭐ **A `for … in self` IS AN EMITTED `current()` CALL, AND NO TOKEN SPELLS IT (W159).** See
+			// `forStatementWalksBareReceiverAt` for why the source must be the BARE receiver and why every
+			// other source stays with the refusal.
+			if kind == TokenKind.for and self.forStatementWalksBareReceiverAt(q) 'walksTheReceiver'
+				walksReceiverAsACursor = true
+			end 'walksTheReceiver'
 			if kind == TokenKind.selfType and self.kindAt(q + 1) == TokenKind.leftBrace 'selfLiteral'
 				constructsSelfLiteral = true
 			end 'selfLiteral'
@@ -13567,7 +13608,7 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, corpusContainerCallees: corpusContainerCallees, endPos: regionEnd)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
 
 	// ⭐⭐⭐ **THE ONE EDGE IN THE DESCRIPTOR-NEED FIXPOINT THAT LEAVES THE ENCLOSING TYPE (ARRG).** A `.<m>(`
@@ -13923,6 +13964,97 @@ export type Parser
 	function containerMoveInMutatorCallAt(q TokenIndex) returns bool
 		return self.kindAt(q + 1) == TokenKind.leftParen and self.isContainerMoveInMutator(self.tokenAt(q).value)
 	end 'containerMoveInMutatorCallAt'
+
+	// ⛔⛔ **THE SOURCE MUST BE THE BARE RECEIVER, AND THAT IS THE WHOLE OF WHY THIS SIGNAL DOES NOT LIFT
+	// THE LOAD-BEARING REFUSAL (W159).** `for … in self` walks the enclosing instance itself, whose protocol
+	// calls are DIRECT (`emitDeclaredProtocolCall`) — the conformer is this very type, so the descriptor the
+	// loop's drop reads is the one the method already carries. Every OTHER source may be a value held at a
+	// PARAMETERIZED INTERFACE or at a `where`-constrained type parameter, whose protocol calls are WITNESS
+	// DISPATCHES through a table that carries no dictionary at all; that shape is what
+	// `requireDescriptorForOpaqueDrops` refuses, and its measured cost is `0xC0000005`. The pre-scan runs
+	// before any body is parsed and cannot resolve a receiver, so `self` — the one spelling that can never be
+	// an existential — is the discriminator.
+	//
+	// ⚠ **`self.item` IS SUCH A SOURCE, AND TESTING ONLY THE `self` TOKEN CAUGHT IT.** MEASURED on the way
+	// here: `for v in self.item` inside `type Wrap uses T where T is Seq`
+	// (`specs-shv2/for-in-existential.md`'s `existential.constrained-type-parameter`) reserved a descriptor
+	// and moved that case's emitted code — a witness-dispatched loop given a slot it must not have. So the
+	// test is positive: what follows `self` is the loop's own LABEL or the end of the line, and nothing else.
+	function forStatementWalksBareReceiverAt(forPos TokenIndex) returns bool
+		var q = (forPos + 1) as TokenIndex
+		while self.kindAt(q) != TokenKind.newline and self.kindAt(q) != TokenKind.eof 'toTheSource'
+			if self.kindAt(q) != TokenKind.in 'notTheSourceYet'
+				q = q + 1
+				continue
+			end 'notTheSourceYet'
+
+			if self.kindAt(q + 1) != TokenKind.self 'someOtherSource'
+				return false
+			end 'someOtherSource'
+
+			// A block label is a `charLiteral` (`skipOptionalLabel`); a bodiless line ends at the newline.
+			return self.kindAt(q + 2) == TokenKind.charLiteral or self.kindAt(q + 2) == TokenKind.newline
+		end 'toTheSource'
+		return false
+	end 'forStatementWalksBareReceiverAt'
+
+	// ⭐⭐ **DOES A `for … in self` IN A BODY OF THIS TYPE HAND OUT AN OPAQUE ELEMENT (W159)?** The element
+	// is `current()`'s result, and the CURSOR it is called on is whatever this type's `createIterator()`
+	// returns — or this type itself, when it declares the cursor protocol directly and the loop walks it with
+	// no factory (`ProgramSignatures.declaresCursorProtocol`). So the answer is two declared returns deep, and
+	// it decides a reservation rather than merely widening one: a shared generic body whose cursor yields the
+	// enclosing type's own parameter owes a `__drop_type_param` per trip, and one whose cursor yields anything
+	// else owes nothing at all.
+	//
+	// ⛔⛔ **IT IS A NARROWING THAT IS LOAD-BEARING, NOT A TIDY-UP — MEASURED.** `stdlib/Map.maxon`'s cursor
+	// yields the tuple `Entry`, so `Map.map`'s per-trip element is concrete and no descriptor is owed. Seeded
+	// anyway, `Map.map` gains a slot, and `LowerMaxonToStd.instanceLayoutArg` then FORWARDS a real descriptor
+	// into a `MapIterator with (Key, Value)` chain whose own header records that it is deliberately inert on
+	// both ends — *"forwarding a real descriptor into half of such a chain would make the retains fire while
+	// the drops still read the mint"*. **MEASURED: `interface-extensions/stdlib-map-on-map-with-function`
+	// exits 101 where 6 is correct.** So over-reserving is NOT free for this signal, which is exactly why it
+	// asks about the element instead of about the loop.
+	//
+	// ⚠ **NOT `StructLayout.bindingsForInterface("Iterable")`, WHICH IS THE OBVIOUS KEY AND IS THE WRONG
+	// ONE** — it answers only when the type names that interface LAST, so `implements Iterable with (…),
+	// Printable` would silently answer nothing, and it would be a SECOND derivation of the element disagreeing
+	// with the declaration whenever the two drift. `extensionElementTransformHint` measured that one door
+	// over. A callee's own declared return cannot drift from the callee.
+	//
+	// ⚠ It is asked of the DECLARATIONS and not of the tokens for `calleeReturnsBareTypeParameter`'s reason:
+	// an inner alias may NAME the parameter, and the loop's own calls are emitted by the compiler and appear
+	// in no token this scan could read.
+	function receiverCursorElementIsOpaque(typeName ByteArray) returns bool
+		match self.signatures.returnTypeOf(qualifiedMethodName(typeName, methodName: CreateIteratorMethodName), into: self.artifact.typeNames) 'factory'
+			declared(returnType) then return self.cursorReturnYieldsOpaqueElement(returnType)
+			undeclared then break 'factory'
+		end 'factory'
+
+		// No factory: the loop walks `self` AS the cursor, so `current()` is this type's own.
+		return self.signatures.calleeReturnsBareTypeParameter(qualifiedMethodName(typeName, methodName: CurrentMethodName))
+	end 'receiverCursorElementIsOpaque'
+
+	// The `value`/`void` split of the factory's declared return — unwrapped a level at a time because a
+	// `match` arm holds one statement, `mappedArrayElementHint`'s shape for its reason.
+	function cursorReturnYieldsOpaqueElement(returnType MaxonReturnType) returns bool
+		match returnType 'returned'
+			value(cursor) then return self.cursorTypeYieldsOpaqueElement(cursor)
+			void then return false
+		end 'returned'
+	end 'cursorReturnYieldsOpaqueElement'
+
+	// A factory returning something that names no aggregate declares no `current()` to ask about — the loop
+	// over such a source is refused by `materializeIterableIterationSource` with a position long before any
+	// descriptor is owed.
+	function cursorTypeYieldsOpaqueElement(cursor MaxonType) returns bool
+		if not self.signatures.tagMayNameAggregate(maxonTypeTag(cursor)) 'notANamedCursor'
+			return false
+		end 'notANamedCursor'
+
+		// `localTypeName`, because `returnTypeOf` ADOPTED the cursor type into this artifact's interner — so
+		// the id is one this table holds, which is exactly that helper's precondition.
+		return self.signatures.calleeReturnsBareTypeParameter(qualifiedMethodName(self.localTypeName(cursor, asker: "cursorTypeYieldsOpaqueElement"), methodName: CurrentMethodName))
+	end 'cursorTypeYieldsOpaqueElement'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer (P1.7 Finding A).** Both the
 	// descriptor-need scan (`opaqueFieldReassignAt`, real parse) and the sweep feed (`markOpaqueFieldReassignFeed`,
@@ -21535,11 +21667,29 @@ export type Parser
 	//     reserves for the STORE, so a loop that stores into an `Array with <type parameter>` is served and one
 	//     that merely reads is refused here.
 	//
-	// ⚠⚠ **THE REFUSAL IS LOAD-BEARING FOR THAT THIRD SHAPE AND MUST NOT BE "FIXED" BY TEACHING THE PRE-SCAN.**
-	// Reserving a descriptor would let the body compile, and the dispatch it then emits — `current()` through a
-	// witness table into a GENERIC conformer's impl — passes no layout descriptor at all, because the witness
-	// ABI has no slot for one. MEASURED on this tip and on its merge base, byte-identical: **0xC0000005**. The
-	// refusal is what keeps that program from being built; lifting it belongs with the ABI slot, not before it.
+	// ⛔⛔ **THAT THIRD SHAPE IS NOW TWO SHAPES, AND ONLY ONE OF THEM IS STILL HERE (W159).** What separates
+	// them is the SOURCE, and with it the dispatch the loop emits:
+	//
+	//   • **`for … in self` — SERVED, since W159.** The receiver is the enclosing instance, so the protocol
+	//     calls are DIRECT (`emitDeclaredProtocolCall`) into the conformer's own shared bodies and the
+	//     descriptor the drop reads is the one this method already carries. `scanDescriptorSignalsIn`'s
+	//     `walksReceiverAsACursor` reserves it, gated on the cursor genuinely yielding a bare type parameter
+	//     (`receiverCursorElementIsOpaque`). This is what `stdlib/Interfaces.maxon`'s `extension Iterable`
+	//     needs — its `contains` reads its element and stores it nowhere, so it is the one traversal in the
+	//     library that DROPS rather than moves, and it is re-parsed onto every conformer. Before W159 every
+	//     listed conformer escaped by accident (`Set`/`Array` contest `contains`, `Map`'s element is a tuple,
+	//     `Range`/`String` have concrete elements), so a user's `type Bag uses Element implements Iterable`
+	//     was the first thing in the language to reach it.
+	//
+	//   • **any OTHER source — STILL REFUSED, and the refusal is load-bearing.** A parameter, a field or a
+	//     local may be a value held at a PARAMETERIZED INTERFACE or at a `where`-constrained type parameter,
+	//     and the pre-scan resolves no receiver. Reserving a descriptor would let such a body compile, and the
+	//     dispatch it then emits — `current()` through a witness table into a GENERIC conformer's impl —
+	//     passes no layout descriptor at all, because the witness ABI has no slot for one. MEASURED
+	//     byte-identical on two tips: **0xC0000005**. Lifting THAT belongs with the ABI slot; `self` is the
+	//     one spelling that can never be an existential, which is why it could be split off ahead of it. See
+	//     `forStatementWalksBareReceiverAt`, whose positive test for what follows `self` is what keeps
+	//     `for v in self.item` — a `where T is Seq` parameter — on this side of the line.
 	//
 	// So the message states the FACT it is certain of — a drop with no descriptor to drop through — and offers the
 	// causes as causes.
