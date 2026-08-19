@@ -1,0 +1,773 @@
+// Test: interface-param-managed-cursor-survives-specialization
+typealias Integer = int(i64.min to i64.max)
+typealias IntMemory = __ManagedMemory with Integer
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value as Integer
+
+	function greet() returns Integer
+		return value + 1
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function cursorVia(g Greeter, mem IntMemory) returns Integer
+	let c = try mem.createCursor() otherwise return -1
+	return g.greet() + c.current() * 10 + c.index()
+end 'cursorVia'
+
+function main() returns ExitCode
+	let h = Hello.create(0)
+	var mem = try IntMemory.create(4, elementSize: 8) otherwise panic("alloc")
+	try mem.setLength(2) otherwise panic("setLength")
+	try mem.set(0, value: 7) otherwise panic("set 0")
+	try mem.set(1, value: 9) otherwise panic("set 1")
+	print("{cursorVia(h, mem: mem)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+71
+```
+---
+// CompiledIR
+module {
+  func @Hello.greet(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, 1
+    x64.lea rax, [rdx + rax]
+    x64.epilogue
+    x64.ret
+  }
+  func @Hello.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=304
+    x64.xor ecx, ecx
+    x64.call Hello.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, 4
+    x64.xor ecx, ecx
+    x64.cmp rax, rcx
+    x64.setl rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, 7
+    x64.xor esi, esi
+    x64.test rdx, rdx
+    x64.mov rdi, rsi
+    x64.cmovne rdi, rbx
+    x64.mov r8, 8
+    x64.mov r9, rax
+    x64.imul r9, r8
+    x64.mov rdx, 64
+    x64.cmp r9, rcx
+    x64.setne rcx
+    x64.movzx rcx, rcxb
+    x64.cmp r9, rdx
+    x64.setbe rdx
+    x64.movzx rdx, rdxb
+    x64.and rcx, rdx
+    x64.test rcx, rcx
+    x64.mov [rbp-160], rdi
+    x64.mov [rbp-168], r9
+    x64.je main.__mmcreate_external_0
+  __mmcreate_inline_0:
+    x64.mov rax, 40
+    x64.mov rcx, [rbp-168]
+    x64.lea rdx, [rcx + rax]
+    x64.lea_func rbx, [__destruct___ManagedMemory]
+    x64.mov rsi, rbx
+    x64.mov rcx, rdx
+    x64.mov rdx, rsi
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rdi, 40
+    x64.mov r8, [rbp-16]
+    x64.add r8, rdi
+    x64.mov r9, -3
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+0], r8
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 4
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, 8
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], r9
+    x64.jmp main.__mmcreate_merge_0
+  __mmcreate_external_0:
+    x64.lea_func rax, [__destruct___ManagedMemory]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 40
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-168]
+    x64.call mm_raw_alloc
+    x64.xor edx, edx
+    x64.mov rbx, [rbp-16]
+    x64.mov [rbx+0], rax
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, 4
+    x64.mov [rsi+8], rdi
+    x64.mov r8, [rbp-16]
+    x64.mov [r8+16], rdi
+    x64.mov r9, [rbp-16]
+    x64.mov rax, 8
+    x64.mov [r9+24], rax
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+32], rdx
+    x64.jmp main.__mmcreate_merge_0
+  __mmcreate_merge_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.xor edx, edx
+    x64.mov rbx, [rbp-160]
+    x64.cmp rbx, rdx
+    x64.je main.otherwise_continue_0
+  otherwise_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_0:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rdx, 2
+    x64.mov rbx, [rbp-32]
+    x64.mov rsi, [rbx+16]
+    x64.xor edi, edi
+    x64.cmp rsi, rdi
+    x64.setl r8
+    x64.movzx r8, r8b
+    x64.test r8, r8
+    x64.mov r9, rsi
+    x64.cmovne r9, rdi
+    x64.mov rax, 1
+    x64.add r9, rax
+    x64.cmp rdx, r9
+    x64.setae rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 3
+    x64.xor ebx, ebx
+    x64.test rax, rax
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rcx
+    x64.test rax, rax
+    x64.mov [rbp-176], rsi
+    x64.je main.__setlen_ok_0
+  __setlen_err_0:
+    x64.jmp main.__setlen_merge_0
+  __setlen_ok_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+8]
+    x64.mov rdx, 2
+    x64.cmp rdx, rcx
+    x64.mov [rbp-184], rcx
+    x64.jae main.__setlen_store_0
+  __setlen_shrink_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.mov r8, [rbp-184]
+    x64.mov rdx, 2
+    x64.call mm_zero_element_range
+    x64.jmp main.__setlen_store_0
+  __setlen_store_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, 2
+    x64.mov [rax+8], rcx
+    x64.jmp main.__setlen_merge_0
+  __setlen_merge_0:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-176]
+    x64.cmp rcx, rax
+    x64.je main.otherwise_continue_1
+  otherwise_panic_1:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_1:
+    x64.xor eax, eax
+    x64.mov rcx, 7
+    x64.mov rdx, [rbp-32]
+    x64.mov rbx, [rdx+24]
+    x64.mov rsi, [rbp-32]
+    x64.mov rdi, [rsi+16]
+    x64.mov r8, [rbp-32]
+    x64.mov r9, [r8+8]
+    x64.mov [rbp-40], r9
+    x64.mov [rbp-48], rdi
+    x64.mov rdx, [rbp-32]
+    x64.mov rsi, [rdx+0]
+    x64.mov [rbp-56], rsi
+    x64.mov rdx, [rbp-32]
+    x64.imul r9, rbx
+    x64.mov rsi, [rbp-32]
+    x64.mov r8, [rsi+0]
+    x64.mov [rbp-192], rbx
+    x64.mov rcx, r8
+    x64.mov rdx, [rbp-48]
+    x64.mov r8, r9
+    x64.mov r9, [rbp-32]
+    x64.call maxon_cow_check
+    x64.mov rcx, [rbp-32]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-48]
+    x64.mov rdx, [rbp-56]
+    x64.cmp rdx, rax
+    x64.setne rax
+    x64.movzx rax, raxb
+    x64.mov rdx, [rbp-40]
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rdx, [rbp-32]
+    x64.mov [rdx+16], rbx
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rcx+32]
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov [rbp-200], rax
+    x64.mov [rbp-208], rdx
+    x64.mov [rbp-216], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-216]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-208]
+    x64.mov rdx, [rbp-200]
+    x64.test rdx, rdx
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rax
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+16]
+    x64.xor eax, eax
+    x64.cmp rax, rcx
+    x64.setae rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.test rcx, rcx
+    x64.mov [rbp-224], rsi
+    x64.je main.__set_ok_0
+  __set_oob_0:
+    x64.jmp main.__set_merge_0
+  __set_ok_0:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-192]
+    x64.xor ebx, ebx
+    x64.imul rbx, rdx
+    x64.add rcx, rbx
+    x64.mov rsi, 7
+    x64.mov [rcx+0], rsi
+    x64.jmp main.__set_merge_0
+  __set_merge_0:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-224]
+    x64.cmp rcx, rax
+    x64.je main.otherwise_continue_2
+  otherwise_panic_2:
+    x64.lea_symdata rax, [__panic_msg_2]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_2:
+    x64.mov rax, 1
+    x64.mov rcx, 9
+    x64.mov rdx, [rbp-32]
+    x64.mov rbx, [rdx+24]
+    x64.mov rsi, [rbp-32]
+    x64.mov rdi, [rsi+16]
+    x64.mov r8, [rbp-32]
+    x64.mov r9, [r8+8]
+    x64.mov [rbp-64], r9
+    x64.mov [rbp-72], rdi
+    x64.mov rdx, [rbp-32]
+    x64.mov rsi, [rdx+0]
+    x64.mov [rbp-80], rsi
+    x64.mov rdx, [rbp-32]
+    x64.imul r9, rbx
+    x64.mov rsi, [rbp-32]
+    x64.mov r8, [rsi+0]
+    x64.mov [rbp-232], rbx
+    x64.mov rcx, r8
+    x64.mov rdx, [rbp-72]
+    x64.mov r8, r9
+    x64.mov r9, [rbp-32]
+    x64.call maxon_cow_check
+    x64.mov rcx, [rbp-32]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-72]
+    x64.mov rdx, [rbp-80]
+    x64.cmp rdx, rax
+    x64.setne rax
+    x64.movzx rax, raxb
+    x64.mov rdx, [rbp-64]
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rdx, [rbp-32]
+    x64.mov [rdx+16], rbx
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-32]
+    x64.mov rdx, [rcx+32]
+    x64.xor ecx, ecx
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov [rbp-240], rax
+    x64.mov [rbp-248], rdx
+    x64.mov [rbp-256], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-256]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-248]
+    x64.mov rdx, [rbp-240]
+    x64.test rdx, rdx
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rax
+    x64.mov rax, [rbp-32]
+    x64.mov [rax+32], rbx
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+16]
+    x64.mov rax, 1
+    x64.cmp rax, rcx
+    x64.setae rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.xor ebx, ebx
+    x64.test rcx, rcx
+    x64.mov rsi, rbx
+    x64.cmovne rsi, rdx
+    x64.test rcx, rcx
+    x64.mov [rbp-264], rsi
+    x64.je main.__set_ok_1
+  __set_oob_1:
+    x64.jmp main.__set_merge_1
+  __set_ok_1:
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-232]
+    x64.mov rbx, 1
+    x64.imul rbx, rdx
+    x64.add rcx, rbx
+    x64.mov rsi, 9
+    x64.mov [rcx+0], rsi
+    x64.jmp main.__set_merge_1
+  __set_merge_1:
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-264]
+    x64.cmp rcx, rax
+    x64.je main.otherwise_continue_3
+  otherwise_panic_3:
+    x64.lea_symdata rax, [__panic_msg_3]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  otherwise_continue_3:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-32]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-32]
+    x64.call cursorVia$Hello
+    x64.mov [rbp-272], rax
+    x64.mov rcx, 21
+    x64.call mm_raw_alloc
+    x64.mov [rbp-88], rax
+    x64.mov rcx, [rbp-272]
+    x64.mov rdx, [rbp-88]
+    x64.call maxon_i64_to_string
+    x64.mov rdx, [rbp-88]
+    x64.lea_rdata rbx, [__interp_lit_0]
+    x64.mov rsi, rbx
+    x64.mov rdi, 1
+    x64.lea r8, [rax + rdi]
+    x64.mov r9, 49
+    x64.lea rcx, [r8 + r9]
+    x64.lea_func rbx, [__destruct_String]
+    x64.mov r9, rbx
+    x64.mov [rbp-280], rax
+    x64.mov [rbp-288], rsi
+    x64.mov [rbp-296], r8
+    x64.mov rdx, r9
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-96], rax
+    x64.mov rax, 48
+    x64.mov rcx, [rbp-96]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-104], rax
+    x64.mov [rbp-112], rcx
+    x64.mov rax, [rbp-296]
+    x64.mov [rbp-120], rax
+    x64.mov rax, [rbp-88]
+    x64.mov [rbp-128], rax
+    x64.mov rax, [rbp-280]
+    x64.mov [rbp-136], rax
+    x64.mov rax, [rbp-288]
+    x64.mov [rbp-144], rax
+    x64.mov rax, 1
+    x64.mov [rbp-152], rax
+    x64.mov rax, [rbp-112]
+    x64.mov rcx, [rbp-104]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-128]
+    x64.mov rdx, [rbp-136]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-104]
+    x64.mov rcx, [rbp-136]
+    x64.add rax, rcx
+    x64.mov [rbp-104], rax
+    x64.mov rax, [rbp-112]
+    x64.mov rcx, [rbp-104]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-144]
+    x64.mov rdx, [rbp-152]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-112]
+    x64.mov rcx, [rbp-120]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-88]
+    x64.mov rcx, [rbp-88]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-112]
+    x64.mov rcx, [rbp-120]
+    x64.mov rdx, 1
+    x64.mov rbx, -3
+    x64.mov rsi, [rbp-96]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-96]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-96]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-96]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-96]
+    x64.mov [rax+32], rbx
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-96]
+    x64.mov [rcx+40], rax
+    x64.mov rax, [rbp-96]
+    x64.mov rcx, [rbp-96]
+    x64.call mm_incref
+    x64.mov rax, [rbp-96]
+    x64.mov rcx, [rbp-96]
+    x64.call stdlib.print
+    x64.mov rax, [rbp-96]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-96]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @cursorVia$Hello(g: i64, mem: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.mov rbx, [rax+8]
+    x64.xor eax, eax
+    x64.cmp rbx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rsi, 1
+    x64.xor edi, edi
+    x64.test rax, rax
+    x64.mov r8, rdi
+    x64.cmovne r8, rsi
+    x64.lea_func rax, [__destruct___ManagedMemoryCursor]
+    x64.mov rsi, rax
+    x64.mov [rbp-48], rbx
+    x64.mov [rbp-56], r8
+    x64.mov rdx, rsi
+    x64.mov rcx, 40
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+0]
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbx+24]
+    x64.xor edi, edi
+    x64.mov r8, [rbp-24]
+    x64.mov [r8+0], rdx
+    x64.mov r9, [rbp-24]
+    x64.mov [r9+8], rdi
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-48]
+    x64.mov [rcx+16], rdx
+    x64.mov rcx, [rbp-24]
+    x64.mov [rcx+24], rsi
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+32], rcx
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-56]
+    x64.cmp rcx, rax
+    x64.je cursorVia$Hello.otherwise_continue_1
+  otherwise_stmt_0:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rax, -1
+    x64.epilogue
+    x64.ret
+  otherwise_continue_0:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Hello.greet
+    x64.mov rbx, [rbp-40]
+    x64.mov rsi, [rbx+0]
+    x64.mov rdi, [rbp-40]
+    x64.mov r8, [rdi+8]
+    x64.mov r9, [rbp-40]
+    x64.mov rcx, [r9+16]
+    x64.lea_symdata rdx, [__mm_panic_cursor_oob]
+    x64.mov rbx, rdx
+    x64.mov [rbp-48], rax
+    x64.mov [rbp-56], rsi
+    x64.mov [rbp-64], r8
+    x64.mov rdx, rcx
+    x64.mov r8, rbx
+    x64.mov rcx, [rbp-64]
+    x64.call maxon_bounds_check
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rax+24]
+    x64.mov rax, [rbp-64]
+    x64.imul rax, rcx
+    x64.mov rcx, [rbp-56]
+    x64.add rcx, rax
+    x64.mov rax, [rcx+0]
+    x64.mov rcx, 10
+    x64.imul rax, rcx
+    x64.mov rcx, [rbp-48]
+    x64.add rcx, rax
+    x64.mov rax, [rbp-40]
+    x64.mov rdx, [rax+8]
+    x64.add rcx, rdx
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-72], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_8
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.mov rax, [rbp-72]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Hello(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Hello.done
+  done:
+    x64.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct___ManagedMemory.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_String.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_String.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_String.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct_String.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_String.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct_String.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemoryCursor(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct___ManagedMemoryCursor.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

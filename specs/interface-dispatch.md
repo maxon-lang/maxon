@@ -1102,3 +1102,139 @@ end 'main'
 ```exitcode
 14
 ```
+
+<!-- test: interface-param-ucd-load-survives-specialization -->
+### A UCD table load in an interface-param function survives specialization
+`__Builtins.ucdByteAt` / `ucdI64At` lower to dedicated ops rather than calls. The interface-alias
+specialization cloner has to reproduce them, exactly as the generic-type-parameter cloner does — a
+clone path that knows only about calls drops the whole family on the floor.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Codepoint = int(0 to 65535)
+typealias SuppIndex = int(0 to 805)
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value as Integer
+
+	function greet() returns Integer
+		return value + 1
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function categoryVia(g Greeter, cp Codepoint, idx SuppIndex) returns Integer
+	let bmp = __Builtins.ucdByteAt("__ucd_bmp", offset: cp)
+	let supp = __Builtins.ucdI64At("__ucd_supp", index: idx)
+	return g.greet() + bmp * 1000 + supp - (supp / 1000) * 1000
+end 'categoryVia'
+
+function main() returns ExitCode
+	let h = Hello.create(0)
+	print("{categoryVia(h, cp: 65, idx: 0)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1201
+```
+
+<!-- test: interface-param-managed-cursor-survives-specialization -->
+### A managed-memory cursor read in an interface-param function survives specialization
+`current()` and `index()` on a `__ManagedMemoryCursor` are ops, not calls. The specialized clone
+must carry the element kind and storage width with them, or the read narrows to the wrong width.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntMemory = __ManagedMemory with Integer
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value as Integer
+
+	function greet() returns Integer
+		return value + 1
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function cursorVia(g Greeter, mem IntMemory) returns Integer
+	let c = try mem.createCursor() otherwise return -1
+	return g.greet() + c.current() * 10 + c.index()
+end 'cursorVia'
+
+function main() returns ExitCode
+	let h = Hello.create(0)
+	var mem = try IntMemory.create(4, elementSize: 8) otherwise panic("alloc")
+	try mem.setLength(2) otherwise panic("setLength")
+	try mem.set(0, value: 7) otherwise panic("set 0")
+	try mem.set(1, value: 9) otherwise panic("set 1")
+	print("{cursorVia(h, mem: mem)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+71
+```
+
+<!-- test: interface-param-managed-list-cursor-survives-specialization -->
+### A managed-list cursor read in an interface-param function survives specialization
+`cursorReset()` and `cursorValue()` on a `__ManagedList` are ops too, and `cursorValue()` carries
+the element type the read is typed by.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = __ManagedList with Integer
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value as Integer
+
+	function greet() returns Integer
+		return value + 1
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function firstVia(g Greeter, list IntList) returns Integer
+	list.cursorReset()
+	try list.cursorStart() otherwise return -1
+	return g.greet() + list.cursorValue()
+end 'firstVia'
+
+function main() returns ExitCode
+	let h = Hello.create(0)
+	var list = IntList.create()
+	list.insertLast(42)
+	print("{firstVia(h, list: list)}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+43
+```

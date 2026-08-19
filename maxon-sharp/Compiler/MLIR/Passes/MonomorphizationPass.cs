@@ -2040,6 +2040,15 @@ public static class MonomorphizationPass {
         op.TypeParamName != null && map.TryGetValue(op.TypeParamName, out var bound) ? bound : null,
         SubstituteName);
 
+    /// The kind a `TypeParameter` result takes once its parameter is bound. Every value in this
+    /// map is the CONCRETE TYPE a call site passed for an interface-typed parameter, so it is
+    /// always a struct — the enum/primitive split TypeSubstitution.SubstituteValueKind makes for
+    /// generic type parameters cannot arise here, and ToValueKind answers on its own.
+    public MaxonValueKind SubstituteValueKind(MaxonValueKind kind, string? typeParamName) {
+      if (kind != MaxonValueKind.TypeParameter) return kind;
+      return map.TryGetValue(typeParamName ?? "Element", out var bound) ? bound.ToValueKind() : kind;
+    }
+
     /// Check if the resolved "Element" type parameter (or named param) is bool.
     public bool IsBitPackedElement(string? typeParamName) {
       var paramName = typeParamName ?? "Element";
@@ -2231,6 +2240,45 @@ public static class MonomorphizationPass {
     }
   }
 
+  /// The interface-alias substitution in the shape the shared op cloner reads it, and the owner of
+  /// ONE clone's value map. The map is per-clone, not per-substitution: a single substitution
+  /// clones the parent function and each generic closure body it references, and a value id from
+  /// one of those must never resolve to a value minted for another.
+  private sealed class InterfaceAliasOpSubstitution(InterfaceAliasTypeSubstitution sub) : IOpSubstitution {
+    private readonly Dictionary<int, MaxonValue> _valueMap = [];
+
+    internal InterfaceAliasTypeSubstitution Types => sub;
+
+    public string Mechanism => "Interface alias specialization";
+
+    public MaxonValue MapValue(MaxonValue old) {
+      if (_valueMap.TryGetValue(old.Id, out var mapped)) return mapped;
+      var newId = IrContext.Current.NextId();
+      MaxonValue newVal = old switch {
+        MaxonInteger => new MaxonInteger(newId),
+        MaxonFloat => new MaxonFloat(newId),
+        MaxonBool => new MaxonBool(newId),
+        MaxonByte => new MaxonByte(newId),
+        MaxonShort => new MaxonShort(newId),
+        MaxonStruct st => new MaxonStruct(newId, sub.SubstituteName(st.TypeName)),
+        MaxonEnum e => new MaxonEnum(newId, e.TypeName),
+        // Keeps the signature for the reason the enum arm above keeps the name: a clone is the
+        // same value under a new id, and a value that forgets what it is answers "unknown" to
+        // every identity rule downstream.
+        MaxonFunctionPtr f => new MaxonFunctionPtr(newId, f.FunctionType),
+        _ => throw new InvalidOperationException($"Unknown MaxonValue type: {old.GetType()}")
+      };
+      _valueMap[old.Id] = newVal;
+      return newVal;
+    }
+
+    public void RegisterResult(MaxonValue oldResult, MaxonValue newResult) => _valueMap[oldResult.Id] = newResult;
+    public string SubstituteName(string name) => sub.SubstituteName(name);
+    public MaxonValueKind SubstituteValueKind(MaxonValueKind kind, string? typeParamName) => sub.SubstituteValueKind(kind, typeParamName);
+    public bool TryGetBoundType(string typeParamName, out IrType boundType) => sub.TryGetValue(typeParamName, out boundType);
+    public ManagedElementInfo ResolveManagedElement(MaxonManagedMemGetOp op) => sub.ResolveManagedElement(op);
+  }
+
   /// Clone a function replacing interface alias types/callees with concrete types.
   /// If `closureSpecOut` is provided, references to closures whose bodies depend
   /// on the substitution are rewritten to specialized names and scheduled for
@@ -2258,34 +2306,12 @@ public static class MonomorphizationPass {
       };
 
       // Clone blocks and operations with callee substitution
-      var valueMap = new Dictionary<int, MaxonValue>();
-
-      MaxonValue MapValue(MaxonValue old) {
-        if (valueMap.TryGetValue(old.Id, out var mapped)) return mapped;
-        var newId = IrContext.Current.NextId();
-        MaxonValue newVal = old switch {
-          MaxonInteger => new MaxonInteger(newId),
-          MaxonFloat => new MaxonFloat(newId),
-          MaxonBool => new MaxonBool(newId),
-          MaxonByte => new MaxonByte(newId),
-          MaxonShort => new MaxonShort(newId),
-          MaxonStruct s => new MaxonStruct(newId, sub.SubstituteName(s.TypeName)),
-          MaxonEnum e => new MaxonEnum(newId, e.TypeName),
-          // Keeps the signature for the reason the enum arm above keeps the name: a clone is the
-          // same value under a new id, and a value that forgets what it is answers "unknown" to
-          // every identity rule downstream.
-          MaxonFunctionPtr f => new MaxonFunctionPtr(newId, f.FunctionType),
-          _ => throw new InvalidOperationException($"Unknown MaxonValue type: {old.GetType()}")
-        };
-        valueMap[old.Id] = newVal;
-        return newVal;
-      }
+      var opSub = new InterfaceAliasOpSubstitution(sub);
 
       foreach (var block in source.Body.Blocks) {
         var newBlock = newFunc.Body.AddBlock(block.Name);
         foreach (var op in block.Operations) {
-          var cloned = CloneOpWithCalleeSub(op, sub, MapValue, valueMap, module, closureSpecOut);
-          newBlock.AddOp(cloned);
+          newBlock.AddOp(CloneOpWithCalleeSub(op, opSub, module, closureSpecOut));
         }
       }
 
@@ -2296,10 +2322,15 @@ public static class MonomorphizationPass {
   }
 
   /// Clone a single op, substituting callees that reference interface alias types.
+  /// Only the ops this stage treats DIFFERENTLY from generic monomorphization live here — a call
+  /// whose callee moves to the concrete type, and the ops whose type names this stage deliberately
+  /// leaves alone because an interface alias never names them. Everything else is the shared rule
+  /// in SubstitutingOpCloner, which is also the only place the unhandled-op message is raised.
   private static MaxonOp CloneOpWithCalleeSub(
-      MaxonOp op, InterfaceAliasTypeSubstitution sub, Func<MaxonValue, MaxonValue> mapValue, Dictionary<int, MaxonValue> valueMap,
+      MaxonOp op, InterfaceAliasOpSubstitution opSub,
       IrModule<MaxonOp>? module = null,
       List<(string SourceName, string SpecName, IrFunction<MaxonOp> SourceFunc)>? closureSpecOut = null) {
+    var sub = opSub.Types;
     switch (op) {
       // Try-call SUBTYPES carry metadata the base op does not (and CopyCallMetadata cannot reach),
       // so they must be rebuilt as themselves — matching them under `case MaxonTryCallOp` below and
@@ -2307,261 +2338,150 @@ public static class MonomorphizationPass {
       // fixed (never interface-alias-substituted), so only the args are remapped. This mirrors
       // FunctionCloner.CloneTryCallOp, the generic-type-parameter cloner; the two must agree.
       case MaxonCheckedDivTryCallOp checkedDiv: {
-        var newArgs = checkedDiv.Args.Select(mapValue).ToList();
+        var newArgs = checkedDiv.Args.Select(opSub.MapValue).ToList();
         var cloned = new MaxonCheckedDivTryCallOp(newArgs[0], newArgs[1], checkedDiv.IsMod,
           checkedDiv.IsUnsigned, checkedDiv.ResultKind!.Value, checkedDiv.ThrowsType!);
         CopyCallMetadata(checkedDiv, cloned);
         if (checkedDiv.Result != null && cloned.Result != null)
-          valueMap[checkedDiv.Result.Id] = cloned.Result;
-        valueMap[checkedDiv.ErrorFlag.Id] = cloned.ErrorFlag;
+          opSub.RegisterResult(checkedDiv.Result, cloned.Result);
+        opSub.RegisterResult(checkedDiv.ErrorFlag, cloned.ErrorFlag);
         return cloned;
       }
       case MaxonManagedMemCreateTryCallOp createTry: {
-        var newArgs = createTry.Args.Select(mapValue).ToList();
+        var newArgs = createTry.Args.Select(opSub.MapValue).ToList();
         var resultStructTypeName = createTry.ResultStructTypeName != null ? sub.SubstituteName(createTry.ResultStructTypeName) : null;
         var cloned = new MaxonManagedMemCreateTryCallOp(newArgs[0], createTry.ElementSize, createTry.IsBitPacked) {
           ResultStructTypeName = resultStructTypeName
         };
         CopyCallMetadata(createTry, cloned);
         if (createTry.Result != null && cloned.Result != null)
-          valueMap[createTry.Result.Id] = cloned.Result;
-        valueMap[createTry.ErrorFlag.Id] = cloned.ErrorFlag;
+          opSub.RegisterResult(createTry.Result, cloned.Result);
+        opSub.RegisterResult(createTry.ErrorFlag, cloned.ErrorFlag);
         return cloned;
       }
       case MaxonTryCallOp tryCall: {
         var newCallee = sub.SubstituteCallee(tryCall.Callee);
-        var newArgs = tryCall.Args.Select(mapValue).ToList();
+        var newArgs = tryCall.Args.Select(opSub.MapValue).ToList();
         var resultStructTypeName = tryCall.ResultStructTypeName != null ? sub.SubstituteName(tryCall.ResultStructTypeName) : null;
         var cloned = new MaxonTryCallOp(newCallee, newArgs, tryCall.ResultKind, resultStructTypeName);
         CopyCallMetadata(tryCall, cloned);
         if (tryCall.Result != null && cloned.Result != null)
-          valueMap[tryCall.Result.Id] = cloned.Result;
-        valueMap[tryCall.ErrorFlag.Id] = cloned.ErrorFlag;
+          opSub.RegisterResult(tryCall.Result, cloned.Result);
+        opSub.RegisterResult(tryCall.ErrorFlag, cloned.ErrorFlag);
         return cloned;
       }
       case MaxonCallOp call: {
         var newCallee = sub.SubstituteCallee(call.Callee);
-        var newArgs = call.Args.Select(mapValue).ToList();
+        var newArgs = call.Args.Select(opSub.MapValue).ToList();
         var resultStructTypeName = call.ResultStructTypeName != null ? sub.SubstituteName(call.ResultStructTypeName) : null;
-        var cloned = new MaxonCallOp(newCallee, newArgs, call.Result != null ? mapValue(call.Result) : null, call.ResultKind, resultStructTypeName);
+        var cloned = new MaxonCallOp(newCallee, newArgs, call.Result != null ? opSub.MapValue(call.Result) : null, call.ResultKind, resultStructTypeName);
         CopyCallMetadata(call, cloned);
         return cloned;
       }
-      case MaxonAssignOp assign: {
-        var cloned = new MaxonAssignOp(assign.VarName, mapValue(assign.Value), assign.IsDeclaration, assign.IsMutable, assign.ValueKind) {
+      case MaxonIndirectCallOp indirect: {
+        var newCallee = opSub.MapValue(indirect.Callee);
+        var newArgs = indirect.Args.Select(opSub.MapValue).ToList();
+        var cloned = new MaxonIndirectCallOp(newCallee, indirect.CalleeType, newArgs, indirect.ResultKind, indirect.ResultStructTypeName);
+        if (indirect.Result != null && cloned.Result != null) opSub.RegisterResult(indirect.Result, cloned.Result);
+        return cloned;
+      }
+
+      // Locals: this stage retypes a PARAMETER, never a local's kind, so the kinds ride through
+      // unchanged — unlike the generic cloner, which resolves TypeParameter kinds as it goes.
+      case MaxonAssignOp assign:
+        return new MaxonAssignOp(assign.VarName, opSub.MapValue(assign.Value), assign.IsDeclaration, assign.IsMutable, assign.ValueKind) {
           OwnerFlags = assign.OwnerFlags,
           ForceHeap = assign.ForceHeap
         };
-        return cloned;
-      }
       case MaxonParamOp param: {
         var cloned = new MaxonParamOp(param.Index, param.Name, param.ValueKind);
-        valueMap[param.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonStructParamOp sp: {
-        var cloned = new MaxonStructParamOp(sp.Index, sp.Name, sub.SubstituteName(sp.StructTypeName));
-        valueMap[sp.Result.Id] = cloned.Result;
+        opSub.RegisterResult(param.Result, cloned.Result);
         return cloned;
       }
       case MaxonVarRefOp varRef: {
         var cloned = new MaxonVarRefOp(varRef.VarName, varRef.ValueKind);
-        valueMap[varRef.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonStructVarRefOp sv: {
-        var cloned = new MaxonStructVarRefOp(sv.VarName, sub.SubstituteName(sv.StructTypeName));
-        valueMap[sv.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonLiteralOp lit: {
-        var cloned = lit.ValueKind switch {
-          MaxonValueKind.Integer => new MaxonLiteralOp(lit.IntValue),
-          MaxonValueKind.Float => new MaxonLiteralOp(lit.FloatValue),
-          MaxonValueKind.Float32 => new MaxonLiteralOp(lit.FloatValue, MaxonValueKind.Float32),
-          MaxonValueKind.Bool => new MaxonLiteralOp(lit.BoolValue),
-          _ => throw new InvalidOperationException($"Unsupported literal kind: {lit.ValueKind}")
-        };
-        valueMap[lit.Result.Id] = cloned.Result;
+        opSub.RegisterResult(varRef.Result, cloned.Result);
         return cloned;
       }
       case MaxonBinOp binOp: {
-        var cloned = new MaxonBinOp(binOp.Operator, mapValue(binOp.Lhs), mapValue(binOp.Rhs), binOp.OperandKind, binOp.OptimalType);
-        valueMap[binOp.Result.Id] = cloned.Result;
+        var cloned = new MaxonBinOp(binOp.Operator, opSub.MapValue(binOp.Lhs), opSub.MapValue(binOp.Rhs), binOp.OperandKind, binOp.OptimalType);
+        opSub.RegisterResult(binOp.Result, cloned.Result);
         return cloned;
       }
-      case MaxonCondBrOp cb:
-        return new MaxonCondBrOp(mapValue(cb.Condition), cb.ThenBlock, cb.ElseBlock);
-      case MaxonBrOp br:
-        return new MaxonBrOp(br.Target);
-      // The point id is kept, not re-minted: every specialization of one generic body adds into the
-      // one counter that body's source text owns (see FunctionCloner's twin).
-      case MaxonCovPointOp cp:
-        return new MaxonCovPointOp(cp.PointId);
-      case MaxonSwitchOp sw:
-        return new MaxonSwitchOp(sw.ScrutineeVarName, [.. sw.Intervals], sw.DefaultBlock, sw.DispatchLabelPrefix);
-      case MaxonPanicOp p:
-        return p.CloneKeepingLabel();
-      case MaxonPanicDynamicOp pd:
-        return new MaxonPanicDynamicOp((MaxonStruct)mapValue(pd.MessageStruct));
-      case MaxonRefEqOp req: {
-        var cloned = new MaxonRefEqOp(mapValue(req.Lhs), mapValue(req.Rhs), req.Negate);
-        valueMap[req.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonReturnOp ret:
-        return new MaxonReturnOp(ret.Value != null ? mapValue(ret.Value) : null, ret.IsErrorPropagation);
-      case MaxonThrowOp th:
-        return new MaxonThrowOp(mapValue(th.ErrorValue), th.ErrorTypeName) { IsOwnedLocalTransfer = th.IsOwnedLocalTransfer };
       case MaxonStructLiteralOp structLit: {
-        var newFieldValues = structLit.FieldValues.Select(fv => (fv.FieldName, mapValue(fv.Value))).ToList();
+        var newFieldValues = structLit.FieldValues.Select(fv => (fv.FieldName, opSub.MapValue(fv.Value))).ToList();
         var cloned = new MaxonStructLiteralOp(sub.SubstituteName(structLit.TypeName), newFieldValues) {
           ArrayLiteralTag = structLit.ArrayLiteralTag,
           ArrayLiteralCount = structLit.ArrayLiteralCount,
           IsBitPacked = structLit.IsBitPacked || sub.IsBitPackedElement(null)
         };
-        valueMap[structLit.Result.Id] = cloned.Result;
+        opSub.RegisterResult(structLit.Result, cloned.Result);
         return cloned;
       }
-      case MaxonFieldAccessOp fa: {
-        var cloned = fa.CloneWith(mapValue(fa.StructValue), sub.SubstituteName(fa.TypeName),
-          fa.ResultStructTypeName != null ? sub.SubstituteName(fa.ResultStructTypeName) : null);
-        valueMap[fa.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonFieldAssignOp fa:
-        return new MaxonFieldAssignOp(mapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.FieldName, mapValue(fa.NewValue));
-      case MaxonManagedMemGetOp mg: {
-        var mgInfo = sub.ResolveManagedElement(mg);
-        var clonedGet = new MaxonManagedMemGetOp(mapValue(mg.ManagedStruct), mapValue(mg.Index), mgInfo.Kind) {
-          IsStructElement = mgInfo.IsStructElement,
-          StructElementTypeName = mgInfo.StructElementTypeName,
-          TypeParamName = mg.TypeParamName,
-          IsBoundsCheckSafe = mg.IsBoundsCheckSafe,
-          ElementStorageType = mgInfo.ElementStorageType
-        };
-        valueMap[mg.Result.Id] = mgInfo.WrapResult(clonedGet.Result);
-        return clonedGet;
-      }
+
+      // Managed memory: this stage binds no Element, so the element metadata is COPIED rather than
+      // re-derived (the generic cloner re-derives it, which is the whole reason it binds Element).
       case MaxonManagedMemClearOp memClear:
-        return new MaxonManagedMemClearOp(mapValue(memClear.ManagedStruct)) {
+        return new MaxonManagedMemClearOp(opSub.MapValue(memClear.ManagedStruct)) {
           IsStructElement = memClear.IsStructElement,
           StructElementTypeName = memClear.StructElementTypeName,
           TypeParamName = memClear.TypeParamName,
           IsBitPacked = memClear.IsBitPacked || sub.IsBitPackedElement(memClear.TypeParamName)
         };
       case MaxonManagedMemAppendOp ma:
-        return new MaxonManagedMemAppendOp(mapValue(ma.ManagedStruct), mapValue(ma.Other)) {
+        return new MaxonManagedMemAppendOp(opSub.MapValue(ma.ManagedStruct), opSub.MapValue(ma.Other)) {
           IsStructElement = ma.IsStructElement,
           TypeParamName = ma.TypeParamName,
           IsBitPacked = ma.IsBitPacked || sub.IsBitPackedElement(ma.TypeParamName)
         };
-      case MaxonCallRuntimeOp cr: {
-        var na = cr.Args.Select(mapValue).ToList();
-        var cloned = new MaxonCallRuntimeOp(cr.FunctionName, na, cr.Result != null);
-        if (cr.Result != null && cloned.Result != null) valueMap[cr.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      case MaxonTruncOp t: { var c = new MaxonTruncOp(mapValue(t.Input)); valueMap[t.Result.Id] = c.Result; return c; }
-      case MaxonIntToFloatOp i: { var c = new MaxonIntToFloatOp(mapValue(i.Input)); valueMap[i.Result.Id] = c.Result; return c; }
-      case MaxonCastOp ca: { var c = new MaxonCastOp(mapValue(ca.Input), ca.TargetKind, ca.SourceOptimalType); valueMap[ca.Result.Id] = c.Result; return c; }
-      case MaxonBitcastF64ToI64Op bc: { var c = new MaxonBitcastF64ToI64Op(mapValue(bc.Input)); valueMap[bc.Result.Id] = c.Result; return c; }
-      case MaxonBitcastI64ToF64Op bc: { var c = new MaxonBitcastI64ToF64Op(mapValue(bc.Input)); valueMap[bc.Result.Id] = c.Result; return c; }
-      case MaxonSizeofOp sz: { var c = new MaxonSizeofOp(sub.SubstituteName(sz.TypeName)); valueMap[sz.Result.Id] = c.Result; return c; }
-      case MaxonAbsOp a: { var c = new MaxonAbsOp(mapValue(a.Input)); valueMap[a.Result.Id] = c.Result; return c; }
-      case MaxonSqrtOp s: { var c = new MaxonSqrtOp(mapValue(s.Input)); valueMap[s.Result.Id] = c.Result; return c; }
-      case MaxonFloorOp f: { var c = new MaxonFloorOp(mapValue(f.Input)); valueMap[f.Result.Id] = c.Result; return c; }
-      case MaxonCeilOp ce: { var c = new MaxonCeilOp(mapValue(ce.Input)); valueMap[ce.Result.Id] = c.Result; return c; }
-      case MaxonRoundOp r: { var c = new MaxonRoundOp(mapValue(r.Input)); valueMap[r.Result.Id] = c.Result; return c; }
-      case MaxonMinOp mi: { var c = new MaxonMinOp(mapValue(mi.Lhs), mapValue(mi.Rhs)); valueMap[mi.Result.Id] = c.Result; return c; }
-      case MaxonMaxOp ma: { var c = new MaxonMaxOp(mapValue(ma.Lhs), mapValue(ma.Rhs)); valueMap[ma.Result.Id] = c.Result; return c; }
-      case MaxonEnumLiteralOp el: { var c = el.BackingKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.IntValue); valueMap[el.Result.Id] = c.Result; return c; }
-      case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, ep.EnumTypeName, ep.BackingKind); valueMap[ep.Result.Id] = c.Result; return c; }
-      case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, ev.EnumTypeName, ev.BackingKind); valueMap[ev.Result.Id] = c.Result; return c; }
-      case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(mapValue(er.EnumValue), er.EnumTypeName, er.ResultKind); valueMap[er.Result.Id] = c.Result; return c; }
-      case MaxonEnumOrdinalOp eo: { var c = new MaxonEnumOrdinalOp(mapValue(eo.EnumValue), eo.EnumTypeName); valueMap[eo.Result.Id] = c.Result; return c; }
-      case MaxonEnumNameOp en: { var c = new MaxonEnumNameOp(mapValue(en.EnumValue), en.EnumTypeName); valueMap[en.Result.Id] = c.Result; return c; }
-      case MaxonEnumStringRawValueOp esr: { var c = new MaxonEnumStringRawValueOp(mapValue(esr.EnumValue), esr.EnumTypeName, esr.IsChar); valueMap[esr.Result.Id] = c.Result; return c; }
-      case MaxonEnumStructRawValueOp esrv: { var c = new MaxonEnumStructRawValueOp(mapValue(esrv.EnumValue), esrv.EnumTypeName, esrv.StructTypeName); valueMap[esrv.Result.Id] = c.Result; return c; }
-      case MaxonEnumStructRawFieldOp esrf: { var c = new MaxonEnumStructRawFieldOp(mapValue(esrf.EnumValue), esrf.EnumTypeName, esrf.StructTypeName, esrf.FieldName, esrf.ResultKind, esrf.ResultTypeName); valueMap[esrf.Result.Id] = c.Result; return c; }
-      case MaxonEnumFunctionRawValueOp efrv: { var c = new MaxonEnumFunctionRawValueOp(mapValue(efrv.EnumValue), efrv.EnumTypeName, efrv.Signature); valueMap[efrv.Result.Id] = c.Result; return c; }
-      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(mapValue(ef.ErrorFlag), ef.EnumTypeName, ef.BackingKind, ef.HasAssociatedValues); valueMap[ef.Result.Id] = c.Result; return c; }
-      // See FunctionCloner's twin: dropping the type names here lowered a boxed union's global as
-      // a bare integer inside the specialization only.
-      case MaxonGlobalLoadOp gl: {
-        var c = new MaxonGlobalLoadOp(gl.GlobalName, gl.ValueKind, gl.EnumTypeName, gl.StructTypeName) {
-          LazyGuardName = gl.LazyGuardName, LazyInitFuncName = gl.LazyInitFuncName
-        };
-        valueMap[gl.Result.Id] = c.Result;
-        return c;
-      }
-      case MaxonGlobalStoreOp gs: return new MaxonGlobalStoreOp(gs.GlobalName, mapValue(gs.Value), gs.ValueKind, gs.EnumTypeName);
-      case MaxonFunctionParamOp fp: { var c = new MaxonFunctionParamOp(fp.Index, fp.Name, fp.FunctionType); valueMap[fp.Result.Id] = c.Result; return c; }
-      case MaxonFunctionRefOp fr: {
-        var specName = SpecializeClosureNameForIface(fr.FunctionName, sub, module, closureSpecOut);
-        var c = new MaxonFunctionRefOp(specName, fr.FunctionType);
-        valueMap[fr.Result.Id] = c.Result;
-        return c;
-      }
-      case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, fv.FunctionType); valueMap[fv.Result.Id] = c.Result; return c; }
-      case MaxonIndirectCallOp indirect: {
-        var newCallee = mapValue(indirect.Callee);
-        var newArgs = indirect.Args.Select(mapValue).ToList();
-        var cloned = new MaxonIndirectCallOp(newCallee, indirect.CalleeType, newArgs, indirect.ResultKind, indirect.ResultStructTypeName);
-        if (indirect.Result != null && cloned.Result != null) valueMap[indirect.Result.Id] = cloned.Result;
-        return cloned;
-      }
-      // ManagedList (doubly-linked list) ops
-      case MaxonManagedListCreateOp mlc: { var c = new MaxonManagedListCreateOp(sub.SubstituteName(mlc.Result.TypeName)); valueMap[mlc.Result.Id] = c.Result; return c; }
-      case MaxonManagedListInsertValueOp ci: { var c = new MaxonManagedListInsertValueOp(mapValue(ci.ManagedList), mapValue(ci.Value), ci.AtHead, sub.SubstituteName(ci.ValueKind)); valueMap[ci.Result.Id] = c.Result; return c; }
-      case MaxonManagedListInsertRelativeValueOp cir: { var c = new MaxonManagedListInsertRelativeValueOp(mapValue(cir.ManagedList), mapValue(cir.Target), mapValue(cir.Value), cir.After, sub.SubstituteName(cir.ValueKind)); valueMap[cir.Result.Id] = c.Result; return c; }
-      case MaxonManagedListDetachOp cd: return new MaxonManagedListDetachOp(mapValue(cd.ManagedList), mapValue(cd.Node));
-      case MaxonManagedListRemoveOp crm: {
-        var newVK = sub.SubstituteName(crm.ValueKind);
-        var newRK = sub.TryGetValue(crm.ValueKind, out var rvt) ? rvt.ToValueKind() : crm.ResultKind;
-        var c = new MaxonManagedListRemoveOp(mapValue(crm.ManagedList), mapValue(crm.Node), newVK, newRK);
-        valueMap[crm.Result.Id] = c.Result; return c;
-      }
-      case MaxonManagedListCountOp cc: { var c = new MaxonManagedListCountOp(mapValue(cc.ManagedList)); valueMap[cc.Result.Id] = c.Result; return c; }
-      case MaxonManagedListNodeValueOp cnv: {
-        var newVK = sub.SubstituteName(cnv.ValueKind);
-        var newRK = sub.TryGetValue(cnv.ValueKind, out var nvt) ? nvt.ToValueKind() : cnv.ResultKind;
-        var c = new MaxonManagedListNodeValueOp(mapValue(cnv.Node), newVK, newRK);
-        valueMap[cnv.Result.Id] = c.Result; return c;
-      }
-      case MaxonManagedListNodeSetValueOp cns: return new MaxonManagedListNodeSetValueOp(mapValue(cns.Node), mapValue(cns.Value), sub.SubstituteName(cns.ValueKind));
-      case MaxonManagedListClearOp ccl: return new MaxonManagedListClearOp(mapValue(ccl.ManagedList), sub.SubstituteName(ccl.ValueKind));
-      case MaxonManagedListHeadPtrOp chp: { var c = new MaxonManagedListHeadPtrOp(mapValue(chp.ManagedList)); valueMap[chp.Result.Id] = c.Result; return c; }
-      case MaxonManagedListNodePtrNextOp cpn: { var c = new MaxonManagedListNodePtrNextOp(mapValue(cpn.CursorPtr)); valueMap[cpn.Result.Id] = c.Result; return c; }
-      case MaxonManagedListNodePtrValueOp cpv: {
-        var newVK = sub.SubstituteName(cpv.ValueKind);
-        var newRK = sub.TryGetValue(cpv.ValueKind, out var pvt) ? pvt.ToValueKind() : cpv.ResultKind;
-        var c = new MaxonManagedListNodePtrValueOp(mapValue(cpv.CursorPtr), newVK, newRK);
-        valueMap[cpv.Result.Id] = c.Result; return c;
-      }
 
-      case MaxonScopeEndOp scopeEnd:
-        return new MaxonScopeEndOp(scopeEnd.VarsToClean, scopeEnd.KeepVars);
+      // Enum and string type names: an interface alias never names one, so they ride through
+      // unsubstituted. The generic cloner DOES substitute them — that is a type parameter's job.
+      case MaxonEnumLiteralOp el: { var c = el.BackingKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.IntValue); opSub.RegisterResult(el.Result, c.Result); return c; }
+      case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, ep.EnumTypeName, ep.BackingKind); opSub.RegisterResult(ep.Result, c.Result); return c; }
+      case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, ev.EnumTypeName, ev.BackingKind); opSub.RegisterResult(ev.Result, c.Result); return c; }
+      case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(opSub.MapValue(er.EnumValue), er.EnumTypeName, er.ResultKind); opSub.RegisterResult(er.Result, c.Result); return c; }
+      case MaxonEnumOrdinalOp eo: { var c = new MaxonEnumOrdinalOp(opSub.MapValue(eo.EnumValue), eo.EnumTypeName); opSub.RegisterResult(eo.Result, c.Result); return c; }
+      case MaxonEnumNameOp en: { var c = new MaxonEnumNameOp(opSub.MapValue(en.EnumValue), en.EnumTypeName); opSub.RegisterResult(en.Result, c.Result); return c; }
+      case MaxonEnumStringRawValueOp esr: { var c = new MaxonEnumStringRawValueOp(opSub.MapValue(esr.EnumValue), esr.EnumTypeName, esr.IsChar); opSub.RegisterResult(esr.Result, c.Result); return c; }
+      case MaxonEnumStructRawValueOp esrv: { var c = new MaxonEnumStructRawValueOp(opSub.MapValue(esrv.EnumValue), esrv.EnumTypeName, esrv.StructTypeName); opSub.RegisterResult(esrv.Result, c.Result); return c; }
+      case MaxonEnumStructRawFieldOp esrf: { var c = new MaxonEnumStructRawFieldOp(opSub.MapValue(esrf.EnumValue), esrf.EnumTypeName, esrf.StructTypeName, esrf.FieldName, esrf.ResultKind, esrf.ResultTypeName); opSub.RegisterResult(esrf.Result, c.Result); return c; }
+      case MaxonEnumFunctionRawValueOp efrv: { var c = new MaxonEnumFunctionRawValueOp(opSub.MapValue(efrv.EnumValue), efrv.EnumTypeName, efrv.Signature); opSub.RegisterResult(efrv.Result, c.Result); return c; }
+      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(opSub.MapValue(ef.ErrorFlag), ef.EnumTypeName, ef.BackingKind, ef.HasAssociatedValues); opSub.RegisterResult(ef.Result, c.Result); return c; }
+      case MaxonEnumPayloadOp payload: {
+        var c = new MaxonEnumPayloadOp(opSub.MapValue(payload.EnumValue), sub.SubstituteName(payload.EnumTypeName), payload.PayloadIndex, payload.ResultKind, payload.ResultStructTypeName);
+        opSub.RegisterResult(payload.Result, c.Result);
+        return c;
+      }
       case MaxonStringLiteralOp strLit: {
         var c = new MaxonStringLiteralOp(strLit.Value, strLit.StringTypeName);
-        valueMap[strLit.Result.Id] = c.Result;
+        opSub.RegisterResult(strLit.Result, c.Result);
         return c;
       }
       case MaxonStringInterpOp interp: {
-        var newParts = interp.Parts.Select(p => (p.IsLiteral, p.LiteralValue, p.ExprValue != null ? mapValue(p.ExprValue) : (MaxonValue?)null, p.FormatSpec, p.OptimalType)).ToList();
+        var newParts = interp.Parts.Select(p => (p.IsLiteral, p.LiteralValue, p.ExprValue != null ? opSub.MapValue(p.ExprValue) : (MaxonValue?)null, p.FormatSpec, p.OptimalType)).ToList();
         var c = new MaxonStringInterpOp(newParts, interp.StringTypeName);
-        valueMap[interp.Result.Id] = c.Result;
+        opSub.RegisterResult(interp.Result, c.Result);
         return c;
       }
       case MaxonByteStringLiteralOp bstrLit: {
         var c = new MaxonByteStringLiteralOp(bstrLit.Value, bstrLit.ArrayTypeName);
-        valueMap[bstrLit.Result.Id] = c.Result;
+        opSub.RegisterResult(bstrLit.Result, c.Result);
         return c;
       }
 
+      // Function values: the signature rides through unchanged (no type parameter is being bound),
+      // but a referenced closure body that DOES depend on the substitution is specialized.
+      case MaxonFunctionRefOp fr: {
+        var specName = SpecializeClosureNameForIface(fr.FunctionName, sub, module, closureSpecOut);
+        var c = new MaxonFunctionRefOp(specName, fr.FunctionType);
+        opSub.RegisterResult(fr.Result, c.Result);
+        return c;
+      }
+      case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, fv.FunctionType); opSub.RegisterResult(fv.Result, c.Result); return c; }
       case MaxonClosureCreateOp closureCreate: {
         var specName = SpecializeClosureNameForIface(closureCreate.FunctionName, sub, module, closureSpecOut);
-        var newCaptured = closureCreate.CapturedValues.Select(mapValue).ToList();
+        var newCaptured = closureCreate.CapturedValues.Select(opSub.MapValue).ToList();
         var newCapturedStructTypes = closureCreate.CapturedStructTypes
           .Select(s => s == null ? null : sub.SubstituteName(s)).ToList();
         var c = new MaxonClosureCreateOp(
@@ -2571,31 +2491,12 @@ public static class MonomorphizationPass {
           [.. closureCreate.CapturedNames],
           [.. closureCreate.CapturedKinds],
           newCapturedStructTypes);
-        valueMap[closureCreate.Result.Id] = c.Result;
-        return c;
-      }
-
-      // Enum / union ops — mirror the FunctionCloner.cs handling.
-      case MaxonEnumConstructOp ec: {
-        var c = new MaxonEnumConstructOp(sub.SubstituteName(ec.EnumTypeName), ec.CaseName, ec.TagValue, [.. ec.Args.Select(mapValue)]);
-        valueMap[ec.Result.Id] = c.Result;
-        return c;
-      }
-      case MaxonEnumTagOp et: {
-        var c = new MaxonEnumTagOp(mapValue(et.EnumValue), sub.SubstituteName(et.EnumTypeName));
-        valueMap[et.Result.Id] = c.Result;
-        return c;
-      }
-      case MaxonEnumPayloadAssignOp epa:
-        return new MaxonEnumPayloadAssignOp(epa.EnumVarName, sub.SubstituteName(epa.EnumTypeName), epa.PayloadIndex, mapValue(epa.NewValue));
-      case MaxonEnumPayloadOp payload: {
-        var c = new MaxonEnumPayloadOp(mapValue(payload.EnumValue), sub.SubstituteName(payload.EnumTypeName), payload.PayloadIndex, payload.ResultKind, payload.ResultStructTypeName);
-        valueMap[payload.Result.Id] = c.Result;
+        opSub.RegisterResult(closureCreate.Result, c.Result);
         return c;
       }
 
       default:
-        throw new InvalidOperationException($"Interface alias specialization: unhandled op type {op.GetType().Name}");
+        return SubstitutingOpCloner.Clone(op, opSub);
     }
   }
 }

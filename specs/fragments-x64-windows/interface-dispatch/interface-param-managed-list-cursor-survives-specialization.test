@@ -1,0 +1,354 @@
+// Test: interface-param-managed-list-cursor-survives-specialization
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = __ManagedList with Integer
+
+interface Greeter
+	function greet() returns Integer
+end 'Greeter'
+
+type Hello implements Greeter
+	let value as Integer
+
+	function greet() returns Integer
+		return value + 1
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Hello'
+
+function firstVia(g Greeter, list IntList) returns Integer
+	list.cursorReset()
+	try list.cursorStart() otherwise return -1
+	return g.greet() + list.cursorValue()
+end 'firstVia'
+
+function main() returns ExitCode
+	let h = Hello.create(0)
+	var list = IntList.create()
+	list.insertLast(42)
+	print("{firstVia(h, list: list)}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+43
+```
+---
+// CompiledIR
+module {
+  func @Hello.greet(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov rax, 1
+    x64.lea rax, [rdx + rax]
+    x64.epilogue
+    x64.ret
+  }
+  func @Hello.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor edx, edx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=128
+    x64.xor ecx, ecx
+    x64.call Hello.create
+    x64.mov [rbp-8], rax
+    x64.lea_func rax, [__destruct_IntList]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 32
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.xor edx, edx
+    x64.mov [rax+0], rdx
+    x64.mov [rax+8], rdx
+    x64.mov [rax+16], rdx
+    x64.mov [rax+24], rdx
+    x64.mov [rbp-16], rax
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rsi, 42
+    x64.mov rcx, 32
+    x64.xor edx, edx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.xor edi, edi
+    x64.mov [rax+0], rdi
+    x64.mov [rax+8], rdi
+    x64.mov [rax+16], rdi
+    x64.mov r8, 42
+    x64.mov [rax+24], r8
+    x64.mov [rbp-24], rax
+    x64.mov r9, [rbp-16]
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-24]
+    x64.call maxon_managed_list_insert_last
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call firstVia$Hello
+    x64.mov [rbp-104], rax
+    x64.mov rcx, 21
+    x64.call mm_raw_alloc
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-104]
+    x64.mov rdx, [rbp-32]
+    x64.call maxon_i64_to_string
+    x64.mov rcx, [rbp-32]
+    x64.lea_rdata rdx, [__interp_lit_0]
+    x64.mov rbx, rdx
+    x64.mov rdx, 1
+    x64.lea rsi, [rax + rdx]
+    x64.mov rdi, 49
+    x64.lea r8, [rsi + rdi]
+    x64.lea_func rdi, [__destruct_String]
+    x64.mov r9, rdi
+    x64.mov [rbp-112], rax
+    x64.mov [rbp-120], rbx
+    x64.mov [rbp-128], rsi
+    x64.mov rcx, r8
+    x64.mov rdx, r9
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-40], rax
+    x64.mov rax, 48
+    x64.mov rcx, [rbp-40]
+    x64.add rcx, rax
+    x64.xor eax, eax
+    x64.mov [rbp-48], rax
+    x64.mov [rbp-56], rcx
+    x64.mov rax, [rbp-128]
+    x64.mov [rbp-64], rax
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-72], rax
+    x64.mov rax, [rbp-112]
+    x64.mov [rbp-80], rax
+    x64.mov rax, [rbp-120]
+    x64.mov [rbp-88], rax
+    x64.mov rax, 1
+    x64.mov [rbp-96], rax
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-48]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-72]
+    x64.mov rdx, [rbp-80]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-80]
+    x64.add rax, rcx
+    x64.mov [rbp-48], rax
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-48]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-88]
+    x64.mov rdx, [rbp-96]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-64]
+    x64.add rax, rcx
+    x64.xor ecx, ecx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-64]
+    x64.mov rdx, 1
+    x64.mov rbx, -3
+    x64.mov rsi, [rbp-40]
+    x64.mov [rsi+0], rax
+    x64.mov rax, [rbp-40]
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov [rax+24], rdx
+    x64.mov rax, [rbp-40]
+    x64.mov [rax+32], rbx
+    x64.xor eax, eax
+    x64.mov rcx, [rbp-40]
+    x64.mov [rcx+40], rax
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call stdlib.print
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.xor eax, eax
+    x64.epilogue
+    x64.ret
+  }
+  func @firstVia$Hello(g: i64, list: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.xor ebx, ebx
+    x64.mov [rax+24], rbx
+    x64.mov rax, [rbp-16]
+    x64.mov rbx, [rax+0]
+    x64.mov rax, [rbp-16]
+    x64.mov [rax+24], rbx
+    x64.xor eax, eax
+    x64.cmp rbx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rbx, 1
+    x64.xor esi, esi
+    x64.test rax, rax
+    x64.mov rdi, rsi
+    x64.cmovne rdi, rbx
+    x64.xor eax, eax
+    x64.cmp rdi, rax
+    x64.je firstVia$Hello.otherwise_continue_1
+  otherwise_stmt_0:
+    x64.mov rax, -1
+    x64.epilogue
+    x64.ret
+  otherwise_continue_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Hello.greet
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+24]
+    x64.xor ebx, ebx
+    x64.cmp rdx, rbx
+    x64.sete rsi
+    x64.movzx rsi, rsib
+    x64.mov rdi, 1
+    x64.xor r8d, r8d
+    x64.test rsi, rsi
+    x64.mov r9, r8
+    x64.cmovne r9, rdi
+    x64.lea_symdata rcx, [__mm_panic_list_empty]
+    x64.mov rbx, rcx
+    x64.mov [rbp-24], rax
+    x64.mov [rbp-32], rdx
+    x64.mov rcx, r9
+    x64.mov rdx, rdi
+    x64.mov r8, rbx
+    x64.call maxon_bounds_check
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+24]
+    x64.mov rax, [rbp-24]
+    x64.add rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Hello(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Hello.done
+  done:
+    x64.ret
+  }
+  func @__destruct_IntList(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call maxon_managed_list_clear
+    x64.jmp __destruct_IntList.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedListNode(ptr: i64) {
+  entry:
+    x64.jmp __destruct___ManagedListNode.done
+  done:
+    x64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_String.check_owned_0
+  slice_cleanup_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp __destruct_String.skip_buf_0
+  check_owned_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.mov rdx, -2
+    x64.cmp rcx, rdx
+    x64.je __destruct_String.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+32]
+    x64.mov rdx, -3
+    x64.cmp rcx, rdx
+    x64.je __destruct_String.skip_buf_0
+  raw_free_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_String.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct_String.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---
