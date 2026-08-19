@@ -44894,7 +44894,9 @@ export type Parser
 		self.emitStoreStringField(result, offset: StringCapacityOffset, value: capacity, range: range)
 		let elementSize = self.emitLiteral(ByteStringElementSize, valueType: MaxonType.integer, range: range)
 		self.emitStoreStringField(result, offset: StringElementSizeOffset, value: elementSize, range: range)
-		// `singleByteGraphemes@40 = 0` (conservative) comes from the slab's zeroing.
+		// `element_destroy@40 = TrivialElementDestroy` and `singleByteGraphemes@48 = 0` (conservative) both come
+		// from the slab's zeroing — a String's elements are `Byte`s, so the first is the TRUTH about this
+		// record and not a placeholder (W157).
 
 		// Free the owned scratch now its bytes are copied. A `__mm_decref` (rc 0 → `__mm_free`), never a raw
 		// free, so the leak counter stays balanced — the same door `emitScopeDrops` drops through.
@@ -44941,8 +44943,9 @@ export type Parser
 	end 'emitLoadStringField'
 
 	// Store an 8-byte field of a String record — the mirror of `emitLoadStringField`, the one place
-	// `emitStringInterp` writes the fused record's six fields (five explicitly; `singleByteGraphemes@40` rides the
-	// slab's zeroing).
+	// `emitStringInterp` writes the fused record's SEVEN fields. It writes FOUR of them
+	// (`buffer@0`, `length@8`, `capacity@16`, `element_size@24`); `parent@32`, `element_destroy@40` and
+	// `singleByteGraphemes@48` all ride the slab's zeroing, which is the right value for each.
 	function emitStoreStringField(rec ValueId, offset ByteOffset, value ValueId, range SourceRange)
 		self.emitIndirectStore(rec, offset: offset, value: value, storageType: MaxonType.integer, range: range)
 	end 'emitStoreStringField'
@@ -45850,7 +45853,7 @@ export type Parser
 	//
 	// ⭐⭐⭐ **`BuiltinArrayLiteral` NEEDS NO PRODUCER AT ALL, WHICH IS WHY IT IS AN ARM AND NOT A THIRD
 	// `__str_*` ENTRY (W57).** The two `String` producers exist because a `String` record is BUILT from its
-	// buffer: `__str_from_bytes` classifies the bytes and writes its own answer at `@40`, `__str_of_buffer`
+	// buffer: `__str_from_bytes` classifies the bytes and writes its own answer at `@48`, `__str_of_buffer`
 	// writes the flag it was handed there. An `Array` record has nothing of the sort to write — since the
 	// envelope collapse `Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`
 	// (`SignatureIndex.canonicalGenericBaseName`), so `Array{managed: m}` is not a construction but an
@@ -48242,10 +48245,12 @@ export type Parser
 
 		// ⭐⭐⭐ **`managed.length()` INSIDE `stdlib/String.maxon` HANDS OVER THE STRING'S OWN RECORD AND MINTS
 		// NOTHING (W49 wave 7 cure).** Reading a fused wrapper's inline `managed` normally goes through
-		// `emitFieldLoad`, which mints a 48-byte `__str_bytes_view` record plus an `__mm_incref` so the value
-		// can be TYPED as an `Array with Byte` — and when the only thing that value does is receive ONE
-		// member call, that record is allocated and destroyed for a callee that reads two words the String
-		// record already carries at the same offsets.
+		// `emitFieldLoad`, which goes through `__str_bytes_view` so the value can be TYPED as an
+		// `Array with Byte` — and when the only thing that value does is receive ONE member call, that whole
+		// round trip exists for a callee that reads two words the String record already carries at the same
+		// offsets. ⚠ **THE ROUND TRIP WAS A 48-BYTE MINTED RECORD UNTIL W157 AND IS A REFCOUNT PAIR NOW**
+		// (`__mm_incref` in, `__managed_decref` out), so what this door saves is smaller than the measurement
+		// below — which was taken against the allocation — and is still the whole of it on a hot path.
 		//
 		// ⛔ **MEASURED, AND IT IS WHY THIS EXISTS**: `s.byteLength()` — whose corpus body is exactly
 		// `return managed.length()` — ran **86.7x** slower than the synthesized arm it replaced, against the
@@ -49079,8 +49084,8 @@ export type Parser
 		end 'synthesizedClone'
 
 		// ⭐⭐ **THE FLOOR THE CORPUS CALL WILL LAND AT, READ BEFORE THE EMIT** — `emitRuntimeCall`'s own
-		// discipline, for the reason the stream-write fold needs: `addressableBytes()` produces the 48-byte
-		// byte-view record that `__Builtins.writeStdout` does not read, and the fold removes it by rewriting
+		// discipline, for the reason the stream-write fold needs: `addressableBytes()` produces a byte-buffer
+		// VALUE that `__Builtins.writeStdout` does not read, and the fold removes it by rewriting
 		// THIS op's callee in place (`foldByteViewIntoStreamWrite`). Filed here because this is the one door
 		// every corpus method call passes through, and `callee` is already built.
 		//
@@ -64412,16 +64417,22 @@ export type Parser
 	end 'parseUcdTableLoad'
 
 	// ⭐⭐⭐ **`__Builtins.writeStdout(s.addressableBytes())` BECOMES `__write_stdout(s)` — ONE OP REWRITTEN, ONE
-	// FIELD CHANGED (W35, re-aimed at W49 wave 7).** The view exists to satisfy a TYPE, not a USE:
-	// `addressableBytes()` yields a 48-byte `Array` record so the value can be an `Array with Byte`, and the
-	// write reads `buffer@0` and `length@8` — the two slots a String record already carries, at the SAME
-	// offsets (see `StringRuntime.buildStreamWrite`). So the record is minted and destroyed for a consumer
-	// that never looks at the one slot the two records disagree on (`@40`, `element_destroy` against
-	// `singleByteGraphemes`), and with it arrive `__managed_create`/`__managed_decref`, the whole allocator and the
-	// leak gate.
+	// FIELD CHANGED (W35, re-aimed at W49 wave 7).** The byte value exists to satisfy a TYPE, not a USE:
+	// `addressableBytes()` yields an `Array with Byte` so the value can be TYPED as one, and the write reads
+	// `buffer@0` and `length@8` — the two slots a String record already carries, at the SAME offsets (see
+	// `StringRuntime.buildStreamWrite`). So the whole call chain runs for a consumer that reads nothing the
+	// receiver did not already have, and with it arrives `__managed_decref` and the leak gate.
+	//
+	// ⚠ **WHAT THAT CHAIN COSTS CHANGED AT W157 AND THE FOLD DID NOT.** It used to MINT a 48-byte `Array`
+	// record — because a String record and a buffer record disagreed at `@40` (`singleByteGraphemes` against
+	// `element_destroy`) — and destroy it again. A String record now IS a buffer record, so the producer is
+	// one `__mm_incref` and the drop is a `__managed_decref`. The fold still removes both, plus two calls,
+	// and still keeps the buffer runtime out of a program that only prints.
 	//
 	// MEASURED, on a program whose only call is `print`: **1,749 code bytes with the fold, 3,226 without** —
-	// W35 read 1,703 / 3,178 for the same pair before the corpus grew.
+	// W35 read 1,703 / 3,178 for the same pair before the corpus grew. ⚠ Both numbers predate W157 and were
+	// taken against the mint; the fold's WIN is therefore smaller than they say, and the byte counts are
+	// worth re-taking by whoever next needs them to decide something.
 	//
 	// ⚠⚠ **THE OP IT REWRITES CHANGED AT WAVE 7 AND THE REWRITE DID NOT.** It used to be a
 	// `__str_bytes_view` call a synthesized arm appended; `String.addressableBytes` is

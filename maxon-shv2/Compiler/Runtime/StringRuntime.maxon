@@ -97,8 +97,8 @@ export let StringSingleByteGraphemesOffset = ManagedRecordBytes as ByteOffset
 // the alias is now an ADDITION, and that difference is the rung. It is still DERIVED rather than written
 // `56`, for the same reason: the number is "a buffer record, plus a flag".
 let StringFieldBytes = 8 as ByteCount
-export let StringRecordBytes = ManagedRecordBytes + StringFieldBytes
 
+export let StringRecordBytes = ManagedRecordBytes + StringFieldBytes
 
 // ⚠ **`StringElementSize = 1` STOOD HERE AND IS GONE (W49 wave 9).** It said *"a String's elements are
 // bytes"*, which since the envelope collapse is `ManagedMemoryRuntime.ByteStringElementSize` in other words — a
@@ -491,10 +491,17 @@ export let StrRetainName = b"__str_retain"
 //     mine to write in place, and no separate allocation owed: the record's own free takes the bytes.
 //   * DETACHED (`capacity@16 >= 0`) — a separate `__mm_alloc`'d buffer this record owns and must release,
 //     which is exactly what the encoding calls an OWNER, so its base is its own `buffer@0`.
-//   * RDATA (`capacity@16 = ImmortalRecordCapacity`) — a literal's immortal blob. It never reaches these two
-//     functions today: the parser promotes a `var` String at its declaration and only an owned String is
-//     ever dropped. It needs no arm of its own regardless — it is a non-owned buffer owing nothing, and
-//     both of those are already what the encoding says.
+//   * IMMORTAL (`capacity@16 = ImmortalRecordCapacity`) — a literal's immortal blob, in a record that is
+//     immortal too. It never reaches these two functions: the parser promotes a `var` String at its
+//     declaration and only an owned String is ever dropped.
+//     ⛔⛔ **AND "IT NEEDS NO ARM OF ITS OWN REGARDLESS" STOOD HERE AND IS WITHDRAWN (W157 review).** The
+//     argument was that an immortal record is a non-owned buffer owing nothing, which the encoding already
+//     says — true of the BUFFER half, and silent about the RECORD. `__str_decref` reaching one would run the
+//     shared refcount check against a header that is `.rdata` and then `__mm_free` an image address; that is
+//     why `__managed_decref` grew an explicit `emitRecordIsImmortal` arm at W157, the moment
+//     `addressableBytes()` made an immortal record reachable by a drop path at all. ⇒ **what keeps this
+//     function safe is the REACHABILITY argument above and nothing else**, so a change that lets a literal
+//     be dropped owes `__str_decref` the same arm its twin already has.
 //
 // ⚠ **THIS REPLACES `parent@32 == -1` ("a detached root"), AND THE BEHAVIOUR IT DECIDED IS UNCHANGED.**
 // That test was this file's own third spelling of "is this buffer mine?" — and, at the same offset as the

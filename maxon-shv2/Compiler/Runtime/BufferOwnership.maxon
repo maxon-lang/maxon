@@ -24,29 +24,33 @@
 //     non-owned-buffer kind then arrives as one more value rather than as a new test at every reader,
 //     which is exactly how the zero-copy view arrived after the rdata literal.
 //
-// ⚠⚠ **THERE IS EXACTLY ONE EXCEPTION, IT HAS ONE HOME (`emitRecordIsImmortal`), AND A NEW PROVENANCE
-// MUST BE TAUGHT ABOUT IT BY HAND.** Its four readers all ask the same thing —
-// *"is this RECORD image data rather than an allocation?"* — and the reason the question cannot be
-// answered from the sign alone is `emitBufferHostAllocation` (BATCH2 slice 1, moved here at W157): it
-// answers what the two arms above cannot, not *"which allocation do I owe a release to?"* but
-// *"which allocation must stay alive for these bytes to be readable?"*, and those part company for an
-// INLINE String, whose bytes sit in its OWN payload and which therefore owes nothing while its record is
-// very much the allocation to count. Distinguishing "immortal" from "inline" is NOT derivable
-// from the other slots (both answer `NoOwedAllocation` at `parent@32`, and comparing `buffer@0` against
-// `record + StringRecordBytes` would misread an rdata blob the linker happened to pack right after its
-// record — an `__mm_incref` of read-only memory). So it tests the value, and its LAST arm is
-// *"otherwise, INLINE"*.
+// ⚠⚠ **THERE ARE EXACTLY TWO EXCEPTIONS, EACH WITH ONE HOME, AND A NEW PROVENANCE MUST BE TAUGHT
+// ABOUT BOTH BY HAND.**
 //
-// ⇒ **ADD A FIFTH `NotOwnedBufferCapacity` HERE AND THAT ARM SILENTLY CLASSIFIES IT AS INLINE**, handing
-// out a byte view that counts the record instead of wherever the bytes really are: a dangling pointer or
-// a leak. There is still no COMPILE error for it. This note is the obligation, written at the declaration
-// because that is where the next value will be added. The runtime does NOT guard it with an abort arm,
-// for this file's own stated reason: it refuses to emit a branch no input reaches (stated where
-// `emitBufferCannotHold` stood, below).
+//   1. `emitRecordIsImmortal` — *"is this RECORD image data rather than an allocation?"*, asked by the
+//      three readers that must not perform a refcount read-modify-write on a READ-ONLY `.rdata` page.
+//   2. `emitBufferHostAllocation` (BATCH2 slice 1, moved here at W157) — *"which allocation must stay
+//      alive for these bytes to be READABLE?"*, which is not *"which allocation do I owe a release to?"*:
+//      the two part company for an INLINE String, whose bytes sit in its OWN payload and which therefore
+//      owes nothing while its record is very much the allocation to count. "Inline" is not derivable from
+//      the other slots (every non-owned provenance answers `NoOwedAllocation` at `parent@32`, and comparing
+//      `buffer@0` against `record + StringRecordBytes` would misread an rdata blob the linker happened to
+//      pack right after its record), so it tests the value.
+//
+// ⇒ **ADD A FIFTH `NotOwnedBufferCapacity` HERE AND NEITHER TEST WILL RECOGNIZE IT.** There is still no
+// COMPILE error for that. Both are written so the UNTAUGHT answer is the conservative one — not immortal,
+// and hosted by nothing — which is a refused optimization or a missing count rather than a fault; but a
+// missing count is a dangling view, so neither residual is a substitute for teaching the value. This note
+// is the obligation, written at the declaration because that is where the next value will be added. The
+// runtime does NOT guard it with an abort arm, for this file's own stated reason: it refuses to emit a
+// branch no input reaches (stated where `emitBufferCannotHold` stood, below).
 //
 // ✅ **W157 ADDED THE FOURTH (`ImmortalRecordCapacity`) AND PAID EXACTLY THIS TOLL**, which is why this
-// note now says "fifth": the arm was taught by hand, in the same commit, and the reader it had to be
-// taught in is the one named above. That is the shape a further provenance owes.
+// note now says "fifth": both readers were taught by hand in the same commit. ⛔ **AND ITS REVIEW MEASURED
+// WHAT THE SHAPE OF THE TEACHING COSTS**: `emitBufferHostAllocation` was first taught as *"immortal ⇒
+// nothing, OTHERWISE inline"*, and that residual is reached by an OWNER whose `buffer@0` is still 0 as well
+// as by an inline String — exit 101 on a slice of an empty `ByteArray`. A provenance test must name the arm
+// it is SURE of; the residual belongs to whatever the function can be wrong about safely.
 //
 // ⚠ **WHAT IS NO LONGER TRUE: "with nothing to catch it".** This note used to argue that the suite
 // STRUCTURALLY could not reach the door, because `addressableBytes` is stdlib-only and the spec runner
@@ -126,11 +130,12 @@ export let InlineBufferCapacity = (0 - 3) as NotOwnedBufferCapacity
 // Its two readers are `StringRuntime.buildStrBytesView` (skip the incref) and
 // `ManagedMemoryRuntime.__managed_decref` (skip the whole drop).
 //
-// ⭐ **THE OBLIGATION THE HEADER ABOVE RECORDS IS DISCHARGED FOR THIS VALUE, NOT INHERITED.**
-// `emitBufferHostAllocation` is the one reader that compares against a SPECIFIC provenance,
-// and its immortal arm now names this constant rather than `RdataBufferCapacity` — because the question it
-// asks ("which allocation must stay alive for these bytes to be readable?") is answered "none" by exactly
-// the records that live in `.rdata` whole. `__str_retain`'s copy-immortal arm moved for the same reason.
+// ⭐ **THE OBLIGATION THE HEADER ABOVE RECORDS IS DISCHARGED FOR THIS VALUE, NOT INHERITED.** Both
+// specific-provenance readers were taught it: `emitRecordIsImmortal` IS this value, and
+// `emitBufferHostAllocation` answers "nothing hosts these bytes" for it — its blob outlives the process —
+// through the residual it shares with the other two immortal-blob provenances. `__str_retain`'s
+// copy-immortal arm moved from `RdataBufferCapacity` to this value for the same reason the record test did:
+// it is the RECORD's writability that decides, not the blob's.
 export let ImmortalRecordCapacity = (0 - 4) as NotOwnedBufferCapacity
 
 // `parent@32` when the record owes NOTHING: an owner (its debt is its own `buffer@0`), a byte-string or
@@ -204,12 +209,17 @@ export function emitBufferNotOwned(module StdModule, block IrBlock, record Value
 end 'emitBufferNotOwned'
 
 // `capacity == ImmortalRecordCapacity` — ⭐ **THE ONE HOME OF THE IS-THIS-RECORD-IMAGE-DATA TEST**
-// (W157), `emitBufferNotOwned`'s twin and asked by the four places that must act on it:
+// (W157), `emitBufferNotOwned`'s twin and asked by the three places that must act on it:
 // `StringRuntime.__str_bytes_view` (do not incref what cannot be written), `__str_retain` (copy it
-// instead of co-owning it), `ManagedMemoryRuntime.__managed_decref` (do not count it and never free it)
-// and `emitBufferHostAllocation` (nothing must stay alive for its bytes — they outlive the process).
+// instead of co-owning it) and `ManagedMemoryRuntime.__managed_decref` (do not count it and never free it).
 // Their conclusions differ and are meant to; what must never differ is the test, because a record
 // misjudged by any one of them is a refcount read-modify-write on a READ-ONLY `.rdata` page.
+//
+// ⚠ **`emitBufferHostAllocation` IS THE FOURTH READER OF THE PROVENANCE SPACE AND DELIBERATELY NOT A
+// READER OF THIS.** It asks which allocation HOSTS the bytes, and an immortal record shares its answer
+// ("none") with an rdata-blob literal, a view over one, and an owner that never allocated — so naming this
+// value there would have been a test whose true arm was one of four cases needing the same answer, and
+// whose false arm would then have had to mean "inline". It tests `InlineBufferCapacity` instead.
 //
 // ⚠ **IT IS NOT `emitBufferNotOwned` NARROWED, AND MUST NOT BE FOLDED INTO IT.** That one asks about the
 // BUFFER — an inline String, a view and a byte-string literal all answer "not mine" while sitting in an
@@ -336,27 +346,40 @@ end 'emitReleaseOwedBase'
 //   * a non-zero owed base — an OWNER's own buffer, or a VIEW's shared base. Both are the allocation the
 //     elements are in, and a view's flattens exactly as `emitRecordView`'s nesting note describes, so no
 //     chain is built or walked.
-//   * `capacity@16 == ImmortalRecordCapacity` — an immortal blob whose RECORD is in `.rdata` too, so there
-//     is nothing to count and nothing that MAY be counted (an incref of read-only memory faults). This is
-//     the one place a specific provenance value has to be compared against, because "immortal" is not
-//     derivable from the other slots: a literal and an inline String agree on both of them.
+//   * `capacity@16 == InlineBufferCapacity` — an INLINE String, whose bytes sit at
+//     `record + StringRecordBytes` inside the record's OWN `__mm_alloc` payload, so the RECORD is the
+//     allocation that must stay alive. This is the one place a specific provenance value has to be compared
+//     against, because "inline" is not derivable from the other slots: every non-owned provenance answers
+//     `NoOwedAllocation` at `parent@32`, and comparing `buffer@0` against `record + StringRecordBytes` would
+//     misread an rdata blob the linker happened to pack right after its record.
 //     ⚠ **THAT COMPARISON IS THE EXCEPTION TO THIS FILE'S STATED RULE** ("almost no compiler-side reader
 //     compares against a specific one"), so the OBLIGATION it creates is recorded at the DECLARATION of
 //     the provenances, where the next one will be added — not only here, where nobody adding one would look.
-//   * otherwise — the buffer is INSIDE this record's own allocation (an inline String's bytes at
-//     `record + StringRecordBytes`, or an array that never allocated one), so the RECORD is the allocation.
+//   * otherwise — NOTHING hosts these bytes, and the records that land here say so for three different
+//     reasons: an immortal `.rdata` blob outlives the process, a view over one windows that same blob, and an
+//     OWNER that never allocated a buffer has no bytes at all.
+//
+// ⛔⛔ **THE RESIDUAL ARM ANSWERS `NoOwedAllocation`, AND ANSWERING "THE RECORD" THERE WAS A LEAK —
+// MEASURED, exit 101, found in W157's own review.** The arm was first written as *"immortal ⇒ nothing,
+// otherwise ⇒ the record"*, and that `otherwise` is reached by an OWNER whose `buffer@0` is still 0 just as
+// much as by an inline String. So `slice(0, endIndex: 0)` of a fresh `ByteArray.create()` put a count on the
+// ARRAY's record; the array then grew a buffer, and its `__managed_decref` — no longer the last owner —
+// lowered the count and returned WITHOUT releasing that buffer, which the view's later `__mm_decref` /
+// `__mm_free` of the record structurally cannot reach. ⇒ **the arm that names the record must be the
+// POSITIVE test**, so a provenance nobody taught this function about is refused a count rather than handed
+// one it cannot honour.
 //
 // ⭐ **THE COUNT IS CORRECT IN BOTH DROP ORDERS, in every arm.** DETACHED: the view increfs `buffer@0` and
 // the record's own drop decrefs the same address on its last-owner path, so whichever dies second frees it.
 // INLINE: the view increfs the RECORD, so the record's drop finds a non-zero count, lowers it and keeps the
 // record — and the view's `__managed_decref` then `__mm_decref`s it, which for an inline String is exactly
-// right because it owes nothing else. IMMORTAL: nothing happens, twice.
+// right because it owes nothing else. NOTHING-HOSTS-IT: nothing happens, twice.
 export function emitBufferHostAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
 	var owedJoin = module.addBlock(func, label: b"hostowed")
 	var separate = module.addBlock(func, label: b"hostsep")
 	var noSeparate = module.addBlock(func, label: b"hostnosep")
-	var immortal = module.addBlock(func, label: b"hostimm")
 	var inlineBytes = module.addBlock(func, label: b"hostinline")
+	var nothingHosts = module.addBlock(func, label: b"hostnone")
 
 	let owedBase = emitOwedAllocationBase(module, func: func, cur: cur, join: owedJoin, record: record, ids: ids)
 
@@ -370,15 +393,18 @@ export function emitBufferHostAllocation(module StdModule, func IrFunction, cur 
 	module.setTerminator(separate, op: StdOp.branch(join.id))
 	separate.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(owedBase)))
 
-	let isImmortal = emitRecordIsImmortal(module, block: noSeparate, record: record, ids: ids)
-	module.setTerminator(noSeparate, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: inlineBytes.id))
-
-	let nothing = emitConst(module, block: immortal, value: NoOwedAllocation, ids: ids)
-	module.setTerminator(immortal, op: StdOp.branch(join.id))
-	immortal.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(nothing)))
+	// The ONE positive provenance test — the header states why the residual may not answer `record`.
+	let capacity = emitLoadField(module, block: noSeparate, record: record, offset: ManagedRecordCapacityOffset, ids: ids)
+	let inlineCapacity = emitConst(module, block: noSeparate, value: InlineBufferCapacity as ParsedInt, ids: ids)
+	let isInline = emitCmp(module, block: noSeparate, a: capacity, b: inlineCapacity, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(noSeparate, op: StdOp.condBranch(isInline, thenBlockId: inlineBytes.id, elseBlockId: nothingHosts.id))
 
 	module.setTerminator(inlineBytes, op: StdOp.branch(join.id))
 	inlineBytes.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
+
+	let nothing = emitConst(module, block: nothingHosts, value: NoOwedAllocation, ids: ids)
+	module.setTerminator(nothingHosts, op: StdOp.branch(join.id))
+	nothingHosts.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(nothing)))
 
 	return base
 end 'emitBufferHostAllocation'

@@ -4404,7 +4404,7 @@ end 'buildSubpYieldRead'
 // `__gt_subp_str_from_bytes(srcBuf, srcLen) -> ownedString` — a fresh OWNED inline String (record + bytes in ONE
 // `__mm_alloc`, `capacity@16 = InlineBufferCapacity`, `parent@32 = 0`), independently droppable through
 // `__str_decref`. The raw-bytes twin of `__str_clone` (same fused-record encoding `emitStringInterp` publishes);
-// `singleByteGraphemes@40` is left 0 (the slab zeroes it) — child output is arbitrary bytes, and false is always the safe
+// `singleByteGraphemes@48` is left 0 (the slab zeroes it) — child output is arbitrary bytes, and false is always the safe
 // classification. Used by the line reader to hand a caller-droppable String back across the builtin boundary.
 function buildSubpStrFromBytes(module StdModule)
 	var func = IrFunction.createFromStd(SubpStrFromBytesName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
@@ -4415,7 +4415,7 @@ function buildSubpStrFromBytes(module StdModule)
 	let srcBuf = 0 as ValueId
 	let srcLen = 1 as ValueId
 
-	// `singleByteGraphemes@40` is 0 — child output is arbitrary bytes, and `not-ascii` is always the safe classification.
+	// `singleByteGraphemes@48` is 0 — child output is arbitrary bytes, and `not-ascii` is always the safe classification.
 	// The record layout is built by the ONE shared encoder `__str_clone` also uses, so the two can never diverge.
 	let notSingleByte = emitConst(module, block: entry, value: 0, ids: ids)
 	let newRec = emitBuildOwnedInlineString(module, block: entry, ids: ids, srcBuf: srcBuf, srcLen: srcLen, singleByteGraphemes: notSingleByte)

@@ -2226,7 +2226,12 @@ end 'emitOobReturn'
 // this one provenance — see `BufferOwnership`.
 //
 // A base of 0 ("nothing hosts it") is ordinary and needs no special case beyond the incref's null guard: it
-// is what a view over an immortal `.rdata` blob correctly has.
+// is what a view over an immortal `.rdata` blob has, and what an OWNER that never allocated a buffer has.
+// ⛔ **THAT SECOND ONE IS NOT A CURIOSITY — GIVING IT THE RECORD INSTEAD LEAKS.** W157 first wrote the
+// host answer with an `otherwise ⇒ the record` residual, so `slice(0, endIndex: 0)` of a fresh
+// `ByteArray.create()` put a count on the ARRAY's record; the array then grew a buffer and its
+// `__managed_decref` was no longer the last owner, so it lowered the count and returned without releasing
+// that buffer (exit 101, found in W157's review). See `BufferOwnership.emitBufferHostAllocation`.
 //
 // TRIVIAL elements only — the view duplicates heap POINTERS without a per-element retain, so a managed
 // element would be destroyed twice. A CONCRETE managed array never reaches here: `Parser.parseArraySlice`/

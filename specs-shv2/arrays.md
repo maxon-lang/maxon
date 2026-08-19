@@ -1478,6 +1478,38 @@ end 'main'
 0
 ```
 
+<!-- test: empty-slice-outlives-the-array-it-grew -->
+⛔⛔ **AN EMPTY SLICE MUST OWE THE SOURCE NOTHING, AND W157 BRIEFLY MADE IT OWE THE RECORD** — the
+sibling above pushes into the SLICE, which is the polarity that cannot fail; this one pushes into the
+SOURCE and then lets the source die FIRST. The view counts whatever `emitBufferHostAllocation` names, and
+an array with no buffer yet must answer "nothing hosts these bytes": naming the RECORD instead leaves the
+array's own `__managed_decref` off the last-owner path, so the element buffer it grew afterwards is never
+released and the run exits 101 with no wrong answer anywhere to point at.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function emptyViewOfAnArrayThatGrew() returns IntArray
+	var src = IntArray.create()
+	let view = try src.slice(0, endIndex: 0) otherwise panic("an empty slice of an empty array is in bounds")
+	src.push(1)
+	src.push(2)
+	src.push(3)
+	return view
+end 'emptyViewOfAnArrayThatGrew'
+
+function main() returns ExitCode
+	let view = emptyViewOfAnArrayThatGrew()
+	if view.count() == 0 'ok'
+		return 0
+	end 'ok'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: slice-of-byte-string-literal -->
 A slice of a `b"…"` literal views the immortal `.rdata` blob — nothing is owed and nothing is freed — and
 writing to it copies the window out first.

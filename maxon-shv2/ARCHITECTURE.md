@@ -1065,7 +1065,7 @@ instead reaches the same place through what it already has: `.rdata` plus static
 
 | kind | what a read materializes | shared? | dropped? |
 |---|---|---|---|
-| `String` | `lea` of the ONE immortal `.rdata` 48-byte record `lowerStringLiteral` registers (deduped by bytes) | **yes, one record for the whole program** | never — the value is borrowed |
+| `String` | `lea` of the ONE immortal `.rdata` 56-byte record `lowerStringLiteral` registers (deduped by bytes) | **yes, one record for the whole program** | never — the value is borrowed |
 | `b"…"` | `lowerByteStringLiteral`'s owned 48-byte record over the ONE immortal `.rdata` blob (deduped by bytes) | the **payload** is; the record is per read | the record is, by the ordinary owned-temp drop |
 
 > ⚠ **THE BYTE-STRING RECORD IS NOT IMMORTAL, AND THE REASON IS A MISSING PREREQUISITE, NOT A CHOICE

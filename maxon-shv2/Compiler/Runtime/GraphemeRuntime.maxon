@@ -2,7 +2,8 @@
 // views over a String's bytes (P1.8 slice B / slice E).
 //
 // ⭐ **A `Character` IS A STRING RECORD.** It carries the same fused 56-byte layout `StringRuntime` owns
-// (`buffer@0`, `length@8`, `capacity@16`, `elementSize@24`, `parent@32`, `singleByteGraphemes@40`), holding one
+// (`buffer@0`, `length@8`, `capacity@16`, `elementSize@24`, `parent@32`, `element_destroy@40`,
+// `singleByteGraphemes@48` — the first SIX slots are a whole `__ManagedMemory` since W157), holding one
 // grapheme cluster's UTF-8 bytes — so it is dropped by `__str_decref`, cloned by `__str_clone`, printed by
 // reading `buffer@0`/`length@8`, and compared by `__str_eq`. Not one line of that machinery is rebuilt
 // here; this file adds only the one MINTING door and the views. The type-level distinction between a
@@ -252,7 +253,7 @@ end 'installGraphemeRuntime'
 // (`Character.clone` deep-copies, and `String.makeCharFromBytes` mints its own managed memory), and it is
 // what makes `for c in s` safe when the body outlives or mutates the string: a view would dangle.
 //
-// `singleByteGraphemes@40` is inherited from the SOURCE, which is conservative-correct in the one direction that
+// `singleByteGraphemes@48` is inherited from the SOURCE, which is conservative-correct in the one direction that
 // matters. If the source is all-ASCII every cluster is a single ASCII byte, so `true` is exact; if it is
 // not, a one-byte ASCII cluster is marked non-ASCII, which only ever costs a fast path, never an answer.
 // Deriving it exactly would be a load, a compare and a phi per iteration for that.
@@ -288,7 +289,7 @@ end 'buildCharAt'
 // exist to prevent.
 //
 // The record is `emitAllocOwnedInlineString`'s, so a minted Character is byte-for-byte the record
-// `__char_at` mints and `__str_decref` reclaims it identically. `singleByteGraphemes@40` is EXACT here rather than
+// `__char_at` mints and `__str_decref` reclaims it identically. `singleByteGraphemes@48` is EXACT here rather than
 // inherited-and-conservative: the encoder knows which arm it took, so the one-byte arm publishes `true` and
 // the three wide arms publish `false`.
 //
@@ -317,7 +318,7 @@ function buildCharFromCodepoint(module StdModule)
 	emitUtf8WidthFork(module, block: three, cp: cp, ceiling: Utf8ThreeByteCeiling, narrow: threeByte, wider: fourByte, ids: ids)
 
 	// ASCII is the one width whose lead byte IS the codepoint, so it has no floor to add and it is the one
-	// width that CAN publish `singleByteGraphemes@40 = true`.
+	// width that CAN publish `singleByteGraphemes@48 = true`.
 	//
 	// ⚠⚠ **BUT NOT UNCONDITIONALLY, AND THE ONE EXCEPTION IS `U+000D`.** A lone CR is, on its own, one
 	// grapheme of one byte — so the flag looks true of THIS record read in isolation. It may not be
@@ -356,7 +357,7 @@ function buildCharFromCodepoint(module StdModule)
 	module.functions.push(func)
 end 'buildCharFromCodepoint'
 
-// The ONE-BYTE arm's own fork: is this codepoint the CR that clears `singleByteGraphemes@40`? Separate from
+// The ONE-BYTE arm's own fork: is this codepoint the CR that clears `singleByteGraphemes@48`? Separate from
 // `emitUtf8WidthFork` because it is not a width question — both sides encode to one byte — and folding it in
 // would make a ladder rung mean two different things.
 function emitSingleByteWidthFork(module StdModule, block IrBlock, cp ValueId, isCr IrBlock, notCr IrBlock, ids ValueMinter)

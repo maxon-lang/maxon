@@ -820,10 +820,15 @@ function closeStringMethodNeeds(usage RuntimeUsage)
 		usage.usesHeap = true
 		usage.usesStrCopy = true
 	end 'buildsStrings'
-	// `__str_bytes_view` publishes an `Array` record through `__managed_create` and increfs the allocation the
-	// bytes live in through `__mm_incref` — both inside its synthesized body, which this scan cannot see.
-	// `usesManagedMemory` is what installs the managed-memory runtime AND (through `installMmRuntime`'s `usesIncref or
-	// usesManagedMemory`) the incref helper, so the two bits below are the whole of its transitive floor.
+	// `__str_bytes_view` increfs the receiver's own record through `__mm_incref` inside its synthesized body,
+	// which this scan cannot see — and the value it hands back is a buffer the CALLER drops through
+	// `__managed_decref`. `usesManagedMemory` is what installs the managed-memory runtime AND (through
+	// `installMmRuntime`'s `usesIncref or usesManagedMemory`) the incref helper, so the two bits below are the
+	// whole of its transitive floor.
+	//
+	// ⚠ **IT PUBLISHED A FRESH `Array` RECORD THROUGH `__managed_create` UNTIL W157**, which is where this
+	// clause's `usesManagedMemory` originally came from. The bit is still owed — `__managed_decref` is in that
+	// runtime — so what changed is the REASON and not the answer, which is exactly why it is written down.
 	if usage.usesStrBytesView 'publishesAView'
 		usage.usesManagedMemory = true
 		usage.usesHeap = true
