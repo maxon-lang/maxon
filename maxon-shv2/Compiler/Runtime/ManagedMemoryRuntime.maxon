@@ -4010,11 +4010,37 @@ function buildManagedCursorCreate(module StdModule)
 	let recordDtor = emitConst(module, block: build, value: TrivialElementDestroy, ids: ids)
 	let cursor = ids.mint()
 	emitMmAllocCall(module, block: build, result: cursor, size: recordSize, destructor: recordDtor, tag: mmTagIndex(MmTag.CursorRecord), ids: ids)
-	// The retain the header argues for, balanced 1:1 by `__managed_cursor_decref`. `position@8` is left at the
-	// zero `__mm_alloc` supplies.
-	module.appendOp(build, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(arr)))
-	emitStoreField(module, block: build, record: cursor, offset: CursorSourceOffset, value: arr)
-	emitOkReturn(module, block: build, value: cursor, ids: ids)
+
+	// ⭐⭐ **THE RETAIN THE HEADER ARGUES FOR — SKIPPED FOR AN IMMORTAL SOURCE, AND ITS RELEASE IS SKIPPED BY
+	// THE SAME ONE TEST (W157 review).** `__mm_incref` is a read-modify-write, and a String or Character
+	// literal's record is `.rdata`, which the PE writer maps READ-ONLY: increfing one FAULTS.
+	//
+	// ⭐ **THE PAIRING NEEDS NO SECOND EDIT, AND THAT IS WHY THE GUARD BELONGS HERE RATHER THAN AT BOTH ENDS.**
+	// The release is `__managed_cursor_decref` → `__managed_decref(source@0)`, and `__managed_decref` ALREADY
+	// returns untouched for an immortal record on this same `emitRecordIsImmortal` test. So before this arm the
+	// pair was already asymmetric — acquire faulting, release skipping — and adding it makes both ends skip on
+	// ONE test in ONE home. There is no way to skip the acquire without the release, because the release's skip
+	// is not this file's to add or to forget. ⛔ A guard duplicated into `__managed_cursor_decref` would be the
+	// second copy that could drift, and drifting toward "release without acquire" is a DOUBLE FREE.
+	//
+	// ⚠⚠ **NO LEGAL PROGRAM REACHES IT, MEASURED.** With an `osExit(74)` in place of this incref: zero hits
+	// across 1,636 spec cases in eight families, because nothing in `stdlib/` iterates an `addressableBytes()`
+	// result and that member is the only door an immortal record has onto the buffer surface. ✅ Proved LIVE by
+	// inverting the polarity — an ordinary `for x in arr` then exits 74. It is a guard against W157 having made
+	// the shape POSSIBLE (before it, `addressableBytes()` always minted, so no caller could hold a `.rdata`
+	// record at all), not against a crash anyone has seen.
+	var countSource = module.addBlock(func, label: b"curcount")
+	var storeSource = module.addBlock(func, label: b"curstore")
+
+	let sourceIsImmortal = emitRecordIsImmortal(module, block: build, record: arr, ids: ids)
+	module.setTerminator(build, op: StdOp.condBranch(sourceIsImmortal, thenBlockId: storeSource.id, elseBlockId: countSource.id))
+
+	module.appendOp(countSource, op: StdOp.call(ids.mint(), callee: MmIncrefName, args: argsOf(arr)))
+	module.setTerminator(countSource, op: StdOp.branch(storeSource.id))
+
+	// `position@8` is left at the zero `__mm_alloc` supplies.
+	emitStoreField(module, block: storeSource, record: cursor, offset: CursorSourceOffset, value: arr)
+	emitOkReturn(module, block: storeSource, value: cursor, ids: ids)
 
 	module.functions.push(func)
 end 'buildManagedCursorCreate'
@@ -4026,6 +4052,14 @@ end 'buildManagedCursorCreate'
 // its own release has to free the external element buffer and walk its managed elements — which a generic
 // `__mm_decref` cannot reach. ⚠ It is never NULL: the only producer stores it before the cursor can escape,
 // and the refusal path above produces no cursor at all, so there is nothing for a null guard to catch.
+//
+// ⭐⭐ **AND THAT ROUTING IS WHAT MAKES THE IMMORTAL SKIP SYMMETRIC FOR FREE (W157 review).**
+// `__managed_cursor_create` does not incref an immortal `.rdata` source (increfing one faults), and this
+// release does not decref one either — not because a second guard was written here, but because
+// `__managed_decref` carries that arm on the one shared `emitRecordIsImmortal` test. ⛔ **DO NOT ADD A COPY OF
+// THE TEST TO THIS FUNCTION.** Two spellings of one skip can drift, and the direction that drifts — releasing
+// what was never acquired — is a double free, which is worse than the fault the guard exists to prevent. If
+// this release ever stops going through `__managed_decref`, the skip has to move with it.
 //
 // ⚠ **THIS BODY WAS BRIEFLY `MmRuntime.buildRetainedSlotBoxDecref`, SHARED WITH `__list_node_decref` — AND
 // THE DEDUP IS FOLDED BACK RATHER THAN REVERTED ON ITS MERITS.** `W138`'s review lifted the two because they

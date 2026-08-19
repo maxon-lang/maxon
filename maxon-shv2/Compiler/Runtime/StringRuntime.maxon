@@ -1090,6 +1090,28 @@ end 'buildBoolToString'
 // reach a destructor it cannot name. Shipping the indirect-call vocabulary now would be vocabulary ahead
 // of its forcing consumer — the mistake `__mm_incref` and `mintPhi` are the standing warnings against.
 //
+// ⭐⭐ **ITS FIRST QUESTION IS WHETHER THE RECORD IS COUNTABLE AT ALL, AND THAT ARM IS `__managed_decref`'s,
+// SPELLED THE SAME WAY (W157 review).** A String and a Character LITERAL are `.rdata` records — blob and
+// record both — and the PE writer maps that section READ-ONLY, so the refcount read-modify-write below is an
+// access violation rather than a miscount, and the last-owner path would `__mm_free` an image address.
+//
+// ⚠⚠ **IT GUARDS A DIVERGENCE, NOT A MEASURED CRASH — AND SAYING SO IS THE POINT.** No legal program
+// reaches it: MEASURED by building this function with an `osExit(75)` in this arm's place and finding **zero
+// hits across 1,636 spec cases** (string, ownership, arrays, managed-memory, character, file, slice, closure)
+// **and ten hand-written literal-ownership shapes** — array element, struct field, field reassignment,
+// parameter-into-field, union payload, tuple, `var` reassignment, array literal, module-level `let`, ternary.
+// `return "literal"` COPIES into a fresh inline record (read out of the emitted IR: `__mm_alloc(len + 57)`,
+// `capacity@16 = -3`), and `__str_retain` clones an immortal at every other door.
+// ✅ The probe was proved LIVE by INVERTING its polarity — an ordinary interpolated String's drop then exits
+// 75 — so the zero is an absence and not a mis-wired branch.
+//
+// ⇒ **WHAT IT BUYS IS THAT TWO DECREFS OVER ONE RECORD SHAPE STOP DISAGREEING.** Since W157 a String record
+// IS a buffer record, so one record can be handed to `__managed_decref` (through `addressableBytes()`) or to
+// this one, and `__managed_decref` skips an immortal. An asymmetry there is safe only by REACHABILITY, which
+// is a premise about the corpus rather than an invariant. The arm answers `retVoid` and deliberately NOT an
+// abort, for the same reason: its twin answers `retVoid`, and two drops of one record disagreeing about the
+// ANSWER is the defect being closed, not a stricter check to add.
+//
 // The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner` (load rc; `== 0` ⇒ last
 // owner; else lower and keep) — the ONE home of the refcount protocol, so a String and a struct box
 // cannot disagree about who the last owner is. `__str_decref` runs that shared check itself, rather
@@ -1100,6 +1122,8 @@ function buildStrDecref(module StdModule)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var immortal = module.addBlock(func, label: b"immortal")
+	var countable = module.addBlock(func, label: b"countable")
 	var lower = module.addBlock(func, label: b"lower")
 	var release = module.addBlock(func, label: b"release")
 	var baseJoin = module.addBlock(func, label: b"baseJoin")
@@ -1108,9 +1132,15 @@ function buildStrDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
-	// entry + lower: the shared refcount check. `rc == 0` (the last owner) branches to `release`, where a
+	// entry: is this record countable at all? An immortal `.rdata` record is left untouched — the header's
+	// argument, and `ManagedMemoryRuntime.__managed_decref`'s arm spelled off the same one test.
+	let isImmortal = emitRecordIsImmortal(module, block: entry, record: record, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: countable.id))
+	module.setTerminator(immortal, op: StdOp.retVoid)
+
+	// countable + lower: the shared refcount check. `rc == 0` (the last owner) branches to `release`, where a
 	// String does the one thing the generic decref structurally cannot — release a detached buffer first.
-	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
+	emitRefcountCheckToLastOwner(module, func: func, entry: countable, lower: lower, record: record, lastOwner: release, ids: ids)
 
 	// release + baseJoin: the last owner asks the shared pair which separate allocation this record owes a
 	// release to and pays it, BEFORE the record itself dies — the whole reason this cannot simply call

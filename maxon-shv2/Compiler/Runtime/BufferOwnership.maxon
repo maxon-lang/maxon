@@ -209,11 +209,20 @@ export function emitBufferNotOwned(module StdModule, block IrBlock, record Value
 end 'emitBufferNotOwned'
 
 // `capacity == ImmortalRecordCapacity` — ⭐ **THE ONE HOME OF THE IS-THIS-RECORD-IMAGE-DATA TEST**
-// (W157), `emitBufferNotOwned`'s twin and asked by the three places that must act on it:
-// `StringRuntime.__str_bytes_view` (do not incref what cannot be written), `__str_retain` (copy it
-// instead of co-owning it) and `ManagedMemoryRuntime.__managed_decref` (do not count it and never free it).
+// (W157), `emitBufferNotOwned`'s twin and asked by the five places that must act on it:
+// `StringRuntime.__str_bytes_view` (do not incref what cannot be written), `__str_retain` (copy it instead
+// of co-owning it), `__str_decref` and `ManagedMemoryRuntime.__managed_decref` (do not count it and never
+// free it) and `__managed_cursor_create` (do not retain it as a cursor's source).
 // Their conclusions differ and are meant to; what must never differ is the test, because a record
 // misjudged by any one of them is a refcount read-modify-write on a READ-ONLY `.rdata` page.
+//
+// ⭐⭐ **THE LAST TWO ARE PAIRED WITH THE FIRST THREE, NOT INDEPENDENT OF THEM, AND THE PAIRING IS THE
+// REVIEW'S WHOLE POINT (W157 review).** An acquire that skips must have a release that skips: `__str_bytes_view`
+// hands an immortal record back uncounted and `__managed_decref` / `__str_decref` drop it untouched;
+// `__managed_cursor_create` declines the retain and `__managed_cursor_decref` — which releases THROUGH
+// `__managed_decref` — declines the release without a line of its own. ⛔ **A SKIP ADDED ON ONE SIDE ONLY IS
+// A LEAK OR A DOUBLE FREE**, which is why every one of these reads THIS function rather than restating
+// `== -4`, and why `__managed_cursor_decref` deliberately has no test of its own.
 //
 // ⚠ **`emitBufferHostAllocation` IS THE FOURTH READER OF THE PROVENANCE SPACE AND DELIBERATELY NOT A
 // READER OF THIS.** It asks which allocation HOSTS the bytes, and an immortal record shares its answer
