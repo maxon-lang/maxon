@@ -17,8 +17,7 @@ When an array of managed structs is populated across multiple function calls, an
 
 ## Tests
 
-<!-- disabled-test: managed-array-push-across-calls -->
-<!-- moving a BORROWED struct/union into durable storage (`push(item)` of a for-in element) — E2015. NOT for-in specific and NOT the borrow-vs-retain element ruling: `dest.push(p)` on a borrowed struct PARAMETER is the same rejection with no loop in sight. The transitive-consume deferral, P1.4a wave 2+ -->
+<!-- test: managed-array-push-across-calls -->
 ### Push managed elements across separate function calls, then reassign
 Simulates the pattern from the query engine: recordDependency pushes elements
 between clearDepsFor calls.
@@ -88,8 +87,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: managed-array-grow-then-reassign -->
-<!-- array-push transitive-consume — pushing a BORROWED struct parameter into an array is refused as "moving a borrowed struct/union value into durable storage" (E2015); the call-graph consume fixpoint does not yet treat `push` as consuming -->
+<!-- test: managed-array-grow-then-reassign -->
 ### Array grows past initial capacity, then field is reassigned
 Push enough managed elements to trigger multiple buffer reallocations,
 then reassign the array field so the old array's destructor must clean up all elements.
@@ -147,8 +145,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: managed-array-interleaved-push-clear -->
-<!-- moving a BORROWED struct/union into durable storage (`push(item)` of a for-in element) — E2015. NOT for-in specific and NOT the borrow-vs-retain element ruling: `dest.push(p)` on a borrowed struct PARAMETER is the same rejection with no loop in sight. The transitive-consume deferral, P1.4a wave 2+ -->
+<!-- test: managed-array-interleaved-push-clear -->
 ### Interleaved push and clear cycles on same array field
 Multiple rounds of push-then-reassign, each round the old array is freed.
 ```maxon

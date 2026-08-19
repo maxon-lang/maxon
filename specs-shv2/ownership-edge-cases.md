@@ -58,8 +58,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-reassign-decrefs-old -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-reassign-decrefs-old -->
 Reassigning a var decrefs the old object immediately; the old object must be freed before scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -136,8 +135,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: rc-alias-survives-reassign -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-alias-survives-reassign -->
 Aliased reference keeps object alive when the original var is reassigned.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -318,8 +316,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: rc-field-overwrite-decrefs-old -->
-<!-- beyond P1.2: struct-typed struct fields not yet in shv2 -->
+<!-- test: rc-field-overwrite-decrefs-old -->
 Overwriting a struct field via a method decrefs the old field value and increfs the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -355,8 +352,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: rc-field-overwrite-managed-list -->
-<!-- beyond P1.2: struct-typed struct fields not yet in shv2 -->
+<!-- test: rc-field-overwrite-managed-list -->
 Overwriting a struct field three times; each old value must be freed promptly.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -729,8 +725,7 @@ end 'main'
 77
 ```
 
-<!-- disabled-test: rc-global-struct-outlives-local -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-global-struct-outlives-local -->
 A global variable holds a struct that outlives the function that created it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -758,8 +753,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-global-reassign-decrefs-old -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-global-reassign-decrefs-old -->
 Reassigning a global struct var decrefs the old object and increfs the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -818,8 +812,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: rc-enum-struct-payload-freed -->
-<!-- beyond P1.2: union struct-payload ownership not yet in shv2 -->
+<!-- test: rc-enum-struct-payload-freed -->
 A enum case with a struct-typed associated value; when the enum is freed its payload must be decref'd.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -853,8 +846,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: rc-closure-env-freed -->
-<!-- beyond P1.2: closures not yet in shv2 -->
+<!-- test: rc-closure-env-freed -->
 Closure environment block is allocated as a struct and freed when the closure variable goes out of scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -874,8 +866,7 @@ end 'main'
 15
 ```
 
-<!-- disabled-test: rc-closure-captures-struct -->
-<!-- beyond P1.2: closures not yet in shv2 -->
+<!-- test: rc-closure-captures-struct -->
 Closure captures a struct variable by address; the closure env is freed at scope exit but the original struct lives on.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1008,8 +999,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: rc-managed-list-node-set-value-decrefs-old -->
-<!-- beyond P1.2: __ManagedList not yet in shv2 -->
+<!-- test: rc-managed-list-node-set-value-decrefs-old -->
 Calling `setValue` on a managed list node decrefs the old value and increfs the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1189,8 +1179,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: rc-return-struct-with-managed-field -->
-<!-- beyond P1.2: struct-typed struct fields not yet in shv2 -->
+<!-- test: rc-return-struct-with-managed-field -->
 Returning a struct whose field is a shared managed reference. The callee increfs
 the shared field when storing it, and transfers the outer struct at rc=1.
 The caller must decref the outer struct, which cascades to decref the managed field.
@@ -1227,8 +1216,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: rc-list-scope-cleanup -->
-<!-- beyond P1.2: List collection not yet in shv2 -->
+<!-- test: rc-list-scope-cleanup -->
 List (struct owning a managed list field) must walk and decref managed list node values on scope exit.
 ```maxon
 typealias StringList = List with String
@@ -1243,8 +1231,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: match-string-pattern-cleanup -->
-<!-- beyond P1.2: string match patterns not yet in shv2 -->
+<!-- test: match-string-pattern-cleanup -->
 Match pattern string literals must be freed after comparison, even when a case matches.
 ```maxon
 function main() returns ExitCode
@@ -1454,8 +1441,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-struct-literal-as-function-arg -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-struct-literal-as-function-arg -->
 Passing a struct literal directly as a function argument must still free the struct after use. Currently leaks (exit 101).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1500,8 +1486,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-enum-char-rawvalue-from-function -->
-<!-- beyond P1.2: enum char rawValue not yet in shv2 -->
+<!-- test: rc-enum-char-rawvalue-from-function -->
 Returning an enum's char rawValue through a function must not underflow the refcount. Currently the returned value is treated as a managed allocation when it's actually a raw constant, causing refcount underflow.
 ```maxon
 enum Grade
@@ -1527,8 +1512,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-enum-name-from-function -->
-<!-- beyond P1.2: enum .name not yet in shv2 -->
+<!-- test: rc-enum-name-from-function -->
 Returning an enum's .name (String) through a function must not underflow the refcount. Currently the returned raw constant string is decremented as if it were a managed allocation.
 ```maxon
 enum Direction
@@ -1555,8 +1539,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-enum-string-rawvalue-from-function -->
-<!-- beyond P1.2: enum string rawValue not yet in shv2 -->
+<!-- test: rc-enum-string-rawvalue-from-function -->
 Returning a string-backed enum's rawValue through a function must not underflow the refcount. Same root cause as the char variant: raw constant treated as managed allocation.
 ```maxon
 enum Planet
@@ -1582,8 +1565,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-discarded-self-return -->
-<!-- beyond P1.2: heap-struct ownership trace not yet in shv2 -->
+<!-- test: rc-discarded-self-return -->
 When a self-returning method's result is discarded, the refcount must remain balanced. Currently the cleanup code double-decrefs the struct, causing a segfault.
 ```maxon
 typealias Count = int(i64.min to i64.max)
@@ -1611,8 +1593,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-borrow-field-from-param -->
-<!-- beyond P1.2: struct-typed struct fields not yet in shv2 -->
+<!-- test: rc-borrow-field-from-param -->
 Extracting and returning a struct field from a borrowed parameter must not crash. Currently the cleanup code decrefs the returned borrowed field incorrectly, causing a segfault after printing the correct output.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1684,8 +1665,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: rc-string-backed-enum-compare -->
-<!-- beyond P1.2: string-backed enum not yet in shv2 -->
+<!-- test: rc-string-backed-enum-compare -->
 Comparing two string-backed enum values must not leak. Currently the Character/String allocations for enum case values are not freed.
 ```maxon
 enum ContentType
@@ -1706,8 +1686,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-char-backed-enum-compare -->
-<!-- beyond P1.2: char-backed enum not yet in shv2 -->
+<!-- test: rc-char-backed-enum-compare -->
 Comparing two char-backed enum values must not leak. Currently the Character allocations for enum case values are not freed.
 ```maxon
 enum Escape
@@ -1727,8 +1706,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-nested-struct-clone-no-leak -->
-<!-- beyond P1.2: struct-typed struct fields not yet in shv2 -->
+<!-- test: rc-nested-struct-clone-no-leak -->
 Cloning a struct with a nested struct field must not leak the inner clone. Currently the cloned Inner's refcount is 1 when freed via Outer cascade, leaving 1 leaked allocation.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -1761,8 +1739,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-string-clone-no-leak -->
-<!-- beyond P1.2: String.clone not yet in shv2 -->
+<!-- test: rc-string-clone-no-leak -->
 Cloning a string must not leak internal Slice/ManagedMemory allocations. Currently String.clone leaks 2 allocations (the Slice and its buffer).
 ```maxon
 function main() returns ExitCode
@@ -1796,8 +1773,7 @@ end 'main'
 hello there
 ```
 
-<!-- disabled-test: rc-string-replacefirst-no-leak -->
-<!-- beyond P1.2: String.replaceFirst not yet in shv2 -->
+<!-- test: rc-string-replacefirst-no-leak -->
 String.replaceFirst must not leak internal working allocations. The intermediate ManagedMemory and Buffer created during the replacement must be freed.
 ```maxon
 function main() returns ExitCode
@@ -1851,8 +1827,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: rc-enum-name-no-leak -->
-<!-- beyond P1.2: enum .name not yet in shv2 -->
+<!-- test: rc-enum-name-no-leak -->
 Accessing enum .name must not leak. The getName function allocates a String wrapper around the name data; both the wrapper and its managed memory must be freed.
 ```maxon
 enum Color
@@ -1876,8 +1851,7 @@ end 'main'
 Green
 ```
 
-<!-- disabled-test: rc-enum-name-reassign-no-leak -->
-<!-- beyond P1.2: enum .name not yet in shv2 -->
+<!-- test: rc-enum-name-reassign-no-leak -->
 Accessing enum .name after reassignment must not leak. Both the old and new enum name string allocations must be properly freed.
 ```maxon
 enum Status
@@ -2066,8 +2040,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-map-string-keys-no-leak -->
-<!-- beyond P1.2: Map not yet in shv2 -->
+<!-- test: rc-map-string-keys-no-leak -->
 A map with string keys must free all string key allocations when the map is destroyed. The string used as a key is increffed into the map's key array; when the map is freed, these strings must be decreffed.
 ```maxon
 function main() returns ExitCode
@@ -2079,8 +2052,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-map-string-keys-multiple-no-leak -->
-<!-- beyond P1.2: Map not yet in shv2 -->
+<!-- test: rc-map-string-keys-multiple-no-leak -->
 A map with multiple string keys must free all key and value allocations. Each insert increfs the key string; the map destructor must decref all of them.
 ```maxon
 function main() returns ExitCode
@@ -2095,8 +2067,7 @@ end 'main'
 6
 ```
 
-<!-- disabled-test: rc-closure-capture-string-no-crash -->
-<!-- beyond P1.2: closures not yet in shv2 -->
+<!-- test: rc-closure-capture-string-no-crash -->
 A closure that captures a string variable must properly manage the string's refcount. The closure environment holds a reference to the string; when the environment is freed, it must decref the string without crashing.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2120,8 +2091,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: rc-managed-list-remove-single-no-leak -->
-<!-- beyond P1.2: __ManagedList not yet in shv2 -->
+<!-- test: rc-managed-list-remove-single-no-leak -->
 Removing a node from a managed list must properly decref the node's value. The managed list node itself and the stored value must both be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2147,8 +2117,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: rc-module-level-struct-nested-field-assign -->
-<!-- beyond P1.2: struct-typed struct fields not yet in shv2 -->
+<!-- test: rc-module-level-struct-nested-field-assign -->
 Assigning to a nested field of a module-level struct variable must not leak. The struct access chain must properly manage refcounts for intermediate accesses.
 ```maxon
 typealias SmallInt = int(0 to 255)
@@ -2246,8 +2215,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-custom-hashable-map-key-no-leak -->
-<!-- P1.6: generics / Map with Hashable key -->
+<!-- test: rc-custom-hashable-map-key-no-leak -->
 A map using a custom Hashable struct as key must not leak. The map's internal arrays (keys, values, states) and all managed elements must be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2280,8 +2248,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: may-return-arg-owned-result-no-over-release -->
-<!-- beyond P1.2: mixed-return argument-aliasing ownership not yet in shv2 -->
+<!-- test: may-return-arg-owned-result-no-over-release -->
 A function that returns its parameter on one path and a freshly-allocated OWNING box
 on another (`pickOr`: `return fallback` vs `return Tag.named(...)`) is a *mixed* returner
 whose call result owns a `+1`. When the caller passes a fresh box as that argument and the
@@ -2334,8 +2301,7 @@ end 'main'
 sum=9
 ```
 
-<!-- disabled-test: rc-snapshot-list-field-then-overwrite-no-uaf -->
-<!-- beyond P1.2: List collection not yet in shv2 -->
+<!-- test: rc-snapshot-list-field-then-overwrite-no-uaf -->
 Snapshotting a struct's `List` field into a local, then overwriting that field with a
 fresh list, then iterating the SNAPSHOT (`let old = buf.ops; buf.ops = IntList.create();
 for x in old ...`). Overwriting `buf.ops` decrefs the old list. The snapshot `old` is an

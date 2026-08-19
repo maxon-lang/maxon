@@ -637,8 +637,7 @@ end 'main'
 104
 ```
 
-<!-- disabled-test: bitwise-not-basic -->
-<!-- P1.2 String - `print` and string interpolation -->
+<!-- test: bitwise-not-basic -->
 ```maxon
 function main() returns ExitCode
 	print("{not 0}\n")
@@ -652,8 +651,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: bitwise-not-value -->
-<!-- P1.2 String - `print` and string interpolation -->
+<!-- test: bitwise-not-value -->
 ```maxon
 function main() returns ExitCode
 	let a = 5
@@ -691,8 +689,7 @@ end 'main'
 112
 ```
 
-<!-- disabled-test: bitwise-not-const -->
-<!-- P1.2 String - `print` and string interpolation. (Globals landed at P1.0d.5b; this case's remaining blocker is the printing, not the `var`.) -->
+<!-- test: bitwise-not-const -->
 ```maxon
 let MASK = not 0xFF
 
@@ -755,8 +752,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: logical-or-and-on-bool-fields -->
-<!-- P1.1 structs - a `type` with `bool` fields -->
+<!-- test: logical-or-and-on-bool-fields -->
 `or` / `and` / `xor` are LOGICAL when their operands are `bool` (and bitwise on
 ints). A logical word-op over `bool` struct fields produces a `bool`, so its
 result flows into a `bool` parameter — the op must NOT silently type as `int`.

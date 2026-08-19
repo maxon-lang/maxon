@@ -426,8 +426,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: string-backed -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: string-backed -->
 ```maxon
 enum ContentType
 	json = "application/json"
@@ -447,8 +446,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: char-backed -->
-<!-- char-backed enum cases — `readEnumIntRawValue` refuses a character raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: char-backed -->
 ```maxon
 enum Escape
 	newline = '\n'
@@ -584,8 +582,7 @@ end 'main'
 error E3031: specs/fragments/constants/error.duplicate-value.test:4:2: duplicate raw value: '200'
 ```
 
-<!-- disabled-test: error.mixed-backing-types -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: error.mixed-backing-types -->
 ```maxon
 enum Mixed
 	first = 1
@@ -761,8 +758,7 @@ error E3034: specs/fragments/constants/error.unknown-case.test:8:11: unknown enu
 
 ### Raw Value Access Tests
 
-<!-- disabled-test: simple-enum-rawvalue -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: simple-enum-rawvalue -->
 ```maxon
 enum Direction
 	north
@@ -779,8 +775,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: int-backed-rawvalue -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: int-backed-rawvalue -->
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -804,8 +799,7 @@ end 'main'
 404
 ```
 
-<!-- disabled-test: raw-value-int -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: raw-value-int -->
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -827,8 +821,7 @@ end 'main'
 200
 ```
 
-<!-- disabled-test: raw-value-int-comparison -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: raw-value-int-comparison -->
 ```maxon
 enum Priority
 	low = 1
@@ -848,8 +841,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: float-backed-rawvalue -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: float-backed-rawvalue -->
 ```maxon
 enum Weights
 	light = 1.5
@@ -870,8 +862,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: explicit-string-backed-rawvalue -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: explicit-string-backed-rawvalue -->
 ```maxon
 enum Planet
 	earth = "Earth"
@@ -894,8 +885,7 @@ end 'main'
 Mars
 ```
 
-<!-- disabled-test: explicit-char-backed-rawvalue -->
-<!-- char-backed enum cases — `readEnumIntRawValue` refuses a character raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: explicit-char-backed-rawvalue -->
 ```maxon
 enum CardSuit
 	Hearts = 'H'
@@ -917,8 +907,7 @@ end 'main'
 D
 ```
 
-<!-- disabled-test: string-rawvalue-dynamic-comparison -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: string-rawvalue-dynamic-comparison -->
 ```maxon
 enum Planet
 	earth = "Earth"
@@ -947,8 +936,7 @@ Mars
 Mars
 ```
 
-<!-- disabled-test: string-rawvalue-after-reassign -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: string-rawvalue-after-reassign -->
 ```maxon
 enum Planet
 	earth = "Earth"
@@ -970,8 +958,7 @@ end 'main'
 Mars
 ```
 
-<!-- disabled-test: float-rawvalue-in-function -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: float-rawvalue-in-function -->
 ```maxon
 
 typealias Float = float(f64.min to f64.max)
@@ -998,8 +985,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: int-rawvalue-in-function -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: int-rawvalue-in-function -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1026,8 +1012,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: string-rawvalue-function-param -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: string-rawvalue-function-param -->
 ```maxon
 enum Planet
 	earth = "Earth"
@@ -1052,8 +1037,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: char-rawvalue-function-param -->
-<!-- char-backed enum cases — `readEnumIntRawValue` refuses a character raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: char-rawvalue-function-param -->
 ```maxon
 enum Grade
 	excellent = 'A'
@@ -1080,8 +1064,7 @@ end 'main'
 
 ### Name Property Tests
 
-<!-- disabled-test: name-simple -->
-<!-- enum `.name` — the accessor that names an enum case's own NAME is not implemented (`Project.EnumLayout`'s header, beside `.rawValue`) -->
+<!-- test: name-simple -->
 ```maxon
 enum Color
 	red
@@ -1103,8 +1086,7 @@ end 'main'
 green
 ```
 
-<!-- disabled-test: name-int-backed -->
-<!-- enum `.name` — the accessor that names an enum case's own NAME is not implemented (`Project.EnumLayout`'s header, beside `.rawValue`) -->
+<!-- test: name-int-backed -->
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -1125,8 +1107,7 @@ end 'main'
 notFound
 ```
 
-<!-- disabled-test: name-string-backed -->
-<!-- string-backed enum cases — `readEnumCaseNameToken`/`readEnumIntRawValue` refuse a string raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: name-string-backed -->
 ```maxon
 enum Planet
 	earth = "Earth"
@@ -1147,8 +1128,7 @@ end 'main'
 mars
 ```
 
-<!-- disabled-test: name-from-function -->
-<!-- enum `.name` — the accessor that names an enum case's own NAME is not implemented (`Project.EnumLayout`'s header, beside `.rawValue`) -->
+<!-- test: name-from-function -->
 ```maxon
 enum Direction
 	north
@@ -1174,8 +1154,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: name-reassign -->
-<!-- enum `.name` — the accessor that names an enum case's own NAME is not implemented (`Project.EnumLayout`'s header, beside `.rawValue`) -->
+<!-- test: name-reassign -->
 ```maxon
 enum Status
 	pending
@@ -1197,8 +1176,7 @@ end 'main'
 done
 ```
 
-<!-- disabled-test: name-float-backed -->
-<!-- enum `.name` — the accessor that names an enum case's own NAME is not implemented (`Project.EnumLayout`'s header, beside `.rawValue`) -->
+<!-- test: name-float-backed -->
 ```maxon
 enum Weights
 	light = 1.5
@@ -1219,8 +1197,7 @@ end 'main'
 heavy
 ```
 
-<!-- disabled-test: name-char-backed -->
-<!-- char-backed enum cases — `readEnumIntRawValue` refuses a character raw value outright (E2015); string and char backings are a later rung -->
+<!-- test: name-char-backed -->
 ```maxon
 enum CardSuit
 	Hearts = 'H'
@@ -1273,8 +1250,7 @@ error E3097: specs/fragments/constants/error.enum-accessor-comparison.test:10:15
 
 ### fromRawValue Tests
 
-<!-- disabled-test: fromRawValue-simple -->
-<!-- `Enum.fromRawValue(...)` — the reverse lookup from a backing value to a case is not implemented (E3034 at the name) -->
+<!-- test: fromRawValue-simple -->
 ```maxon
 enum Color
 	red
@@ -1294,8 +1270,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: fromRawValue-int-backed -->
-<!-- `Enum.fromRawValue(...)` — the reverse lookup from a backing value to a case is not implemented (E3034 at the name) -->
+<!-- test: fromRawValue-int-backed -->
 ```maxon
 enum HttpStatus
 	ok = 200
@@ -1377,8 +1352,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: fromRawValue-runtime -->
-<!-- `Enum.fromRawValue(...)` — the reverse lookup from a backing value to a case is not implemented (E3034 at the name) -->
+<!-- test: fromRawValue-runtime -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1405,8 +1379,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: fromRawValue-failure -->
-<!-- `Enum.fromRawValue(...)` — the reverse lookup from a backing value to a case is not implemented (E3034 at the name) -->
+<!-- test: fromRawValue-failure -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1582,8 +1555,7 @@ end 'main'
 error E3034: specs/fragments/constants/error.fromName-invalid-case.test:8:25: no enum case named 'invalid_case_name_that_does_not_exist': 'Direction'
 ```
 
-<!-- disabled-test: keyword-case-rawvalue -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: keyword-case-rawvalue -->
 Keyword-named enum cases have correct ordinal raw values.
 ```maxon
 enum TokenType
@@ -1602,8 +1574,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: keyword-case-with-method-rawvalue -->
-<!-- enum `.rawValue` — the accessor that names an enum's backing value is not implemented; `Project.EnumLayout`'s header records it as a later rung beside `.name`. A4o gave the LAYOUT the backing fact the accessor will read, not the accessor. -->
+<!-- test: keyword-case-with-method-rawvalue -->
 Keyword-named enum cases can use rawValue.
 ```maxon
 enum TokenType

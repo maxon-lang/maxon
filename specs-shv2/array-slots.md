@@ -76,8 +76,7 @@ end 'main'
 error E3106: <fragment>:6:6: 'resize' cannot grow an array of 'String': a grown slot holds NO element — Maxon has no default constructor — so 'count()' would not agree with 'get()'. Append with 'push(value)'
 ```
 
-<!-- disabled-test: grow-filled-managed-element -->
-<!-- `Array.growFilled` — not in shv2's synthesized Array roster (E2015 names the roster it does have) -->
+<!-- test: grow-filled-managed-element -->
 ### growFilled is the grow that supplies the element
 ```maxon
 typealias Integer = int(i64.min to i64.max)

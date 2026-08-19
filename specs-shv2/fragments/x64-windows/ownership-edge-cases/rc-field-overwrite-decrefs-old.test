@@ -1,0 +1,161 @@
+// Test: rc-field-overwrite-decrefs-old
+typealias Integer = int(i64.min to i64.max)
+
+type Payload
+	export var data as Integer
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
+end 'Payload'
+
+type Container
+	export var payload as Payload
+
+	export function setPayload(p Payload)
+		payload = p
+	end 'setPayload'
+
+	static function create(payload Payload) returns Self
+		return Self{payload: payload}
+	end 'create'
+end 'Container'
+
+function main() returns ExitCode
+	let old = Payload.create(1)
+	var c = Container.create(old)
+	c.setPayload(Payload.create(2))
+	return c.payload.data
+end 'main'
+---
+ExitCode: 2
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Payload.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Container.setPayload {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Container.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect Payload.create
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.callDirect Container.create
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rcx, 2
+    x64.callDirect Payload.create
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect Container.setPayload
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_Container
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r13, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

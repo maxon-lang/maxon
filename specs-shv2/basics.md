@@ -69,18 +69,21 @@ error E3002: Function 'main' must return ExitCode
 ```
 
 <!-- disabled-test: disabled-marker-is-honored -->
-<!-- P1.2 String — and this case is ALSO the marker's own gate. It is a real P1.2
-     case (shv2 has no String yet, so it cannot compile), which makes it a proof
-     rather than a decoration: if `disabled-test:` were ever ignored, this case
-     would RUN, fail to compile, and take the suite red — loudly, not silently. It
-     also proves the second half of the contract, that a disabled case generates NO
-     `.test` golden, because `fragments/` stays clean across a full run. -->
+<!-- This case is the marker's OWN GATE, and it is the one case in the tree that must
+     stay disabled. Its expectation is DELIBERATELY WRONG: the program returns 0 and the
+     pin says 1, so if `disabled-test:` were ever ignored this case would RUN and take the
+     suite red — loudly, not silently. It also proves the second half of the contract, that
+     a disabled case mints NO `.test` golden, because `fragments/` stays clean across a
+     full run.
+     ⚠ The premise is a CONTRADICTION, never a missing feature. It used to be "shv2 has
+     no String yet, so it cannot compile", which went stale the moment P1.2 landed: the
+     program compiled and ran fine, so an ignored marker would have gone through GREEN and
+     the gate had been inert ever since. A wrong answer cannot go stale. -->
 ```maxon
 function main() returns ExitCode
-	let greeting = "shv2 cannot compile this yet"
 	return 0
 end 'main'
 ```
 ```exitcode
-0
+1
 ```

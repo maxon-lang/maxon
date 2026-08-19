@@ -584,8 +584,7 @@ would shadow the intended `SmallOp` and emit a spurious E2026. Exhaustiveness
 is deferred to TypeResolution, where the scrutinee's real type is known, so this
 exhaustive match on `SmallOp` compiles cleanly.
 
-<!-- disabled-test: cross-file-shadowed-union -->
-<!-- cross-file union scrutinee: deferred cross-file exhaustiveness (TypeResolution) -->
+<!-- test: cross-file-shadowed-union -->
 ```maxon
 // --- file: ops.maxon
 export union BigOp
@@ -643,8 +642,7 @@ cases between them). The deferred check records the raw endpoint case names and
 expands the range against `SpanOp`'s OWN ordinals, so the match is recognized as
 exhaustive.
 
-<!-- disabled-test: cross-file-shadowed-union-range -->
-<!-- cross-file union scrutinee: deferred cross-file exhaustiveness (TypeResolution) -->
+<!-- test: cross-file-shadowed-union-range -->
 ```maxon
 // --- file: spans.maxon
 export union BigSpan
@@ -701,8 +699,7 @@ spurious E2027 against the prior `ret` arm. Overlap detection is deferred to
 TypeResolution, which expands the range against `NarrowOp`'s real ordinals, so
 this exhaustive non-overlapping match compiles cleanly.
 
-<!-- disabled-test: cross-file-range-no-false-overlap -->
-<!-- cross-file union scrutinee: deferred cross-file exhaustiveness (TypeResolution) -->
+<!-- test: cross-file-range-no-false-overlap -->
 ```maxon
 // --- file: ops.maxon
 export union WideOp
@@ -754,8 +751,7 @@ genuinely covers `ret` (ordinal 1) in the scrutinee's OWN union, so the trailing
 bare `ret` arm is a real overlap. TypeResolution detects it against the resolved
 enum and reports E2027 at the offending arm's line/column.
 
-<!-- disabled-test: error.cross-file-range-genuine-overlap -->
-<!-- cross-file union scrutinee: deferred cross-file overlap check (TypeResolution) -->
+<!-- test: error.cross-file-range-genuine-overlap -->
 ```maxon
 // --- file: ops.maxon
 export union WideOp

@@ -151,9 +151,7 @@ end 'main'
 2:30
 ```
 
-<!-- disabled-test: withIterator.iterator-as-parameter -->
-<!-- BLOCKED: `ArrayIterator` and `Array.createIterator()` — shv2 iterates an `Array` with an index counter and mints no cursor object at all (board row `S2l`). Confirmed still the reason 2026-08-06 (W6): the case now stops at `for … in` over a `struct` value. -->
-<!-- S2l -->
+<!-- test: withIterator.iterator-as-parameter -->
 An iterator passed to a helper function is still iterable from its current position. The helper consumes the remaining elements.
 ```maxon
 typealias TokenIter = ArrayIterator with String

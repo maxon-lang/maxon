@@ -46,8 +46,7 @@ both fail them.
 
 ## Tests
 
-<!-- disabled-test: consumed-arg-scalar-borrow-survives-throwing-call -->
-<!-- consume analysis (E3102) — a value handed to a consuming throwing call is dead afterwards in shv2, so the scalar `.id` read after it is "use of moved value 'b'"; a consume-analysis divergence from the bootstrap -->
+<!-- test: consumed-arg-scalar-borrow-survives-throwing-call -->
 A managed `Blk` owned by a `blocks` array, aliased into a `currentBlock` cursor
 field, then handed to a THROWING recursive method (`parseExpressionBP`) that
 consumes it. Its scalar `.id`, loaded before the call and used AFTER it, keeps the

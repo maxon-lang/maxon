@@ -1,0 +1,54 @@
+// Test: int-rawvalue-in-function
+
+typealias Integer = int(i64.min to i64.max)
+
+enum HttpStatus
+	ok = 200
+	notFound = 404
+end 'HttpStatus'
+
+function getCode(s HttpStatus) returns Integer
+	return s.rawValue
+end 'getCode'
+
+function main() returns ExitCode
+	let status = HttpStatus.notFound
+	let code = getCode(status)
+	if code == 404 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+func @getCode {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.leaRegRegImm32 r8, rcx, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 404
+    x64.callDirect getCode
+    x64.cmpRegImm32 r8, 404
+    x64.jcc equal, check
+    x64.jmp ifcont
+  check:
+    x64.movRegImm32 r8, 1
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

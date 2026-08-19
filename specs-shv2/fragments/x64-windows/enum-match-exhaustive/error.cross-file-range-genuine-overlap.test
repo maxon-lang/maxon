@@ -1,0 +1,24 @@
+// Test: error.cross-file-range-genuine-overlap
+// --- file: ops.maxon
+export union WideOp
+	call
+	ret
+	param
+end 'WideOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op WideOp) returns Code
+	return match op 'check'
+		call to param gives 1
+		ret gives 2
+	end 'check'
+end 'classify'
+
+function main() returns ExitCode
+	return classify(WideOp.call)
+end 'main'
+---
+CompilerError:
+error E2027: <fragment>:15:3: overlapping pattern in match: 'ret' is already covered

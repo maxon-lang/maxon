@@ -28,8 +28,7 @@ var g = -f       // g is -3.14
 
 ## Tests
 
-<!-- disabled-test: unary-negate-variable -->
-<!-- P1.2 String — `print` + `{}` interpolation -->
+<!-- test: unary-negate-variable -->
 ```maxon
 function main() returns ExitCode
 	let x = 47

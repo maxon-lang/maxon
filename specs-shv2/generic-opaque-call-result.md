@@ -150,8 +150,7 @@ The program's own answer comes through the compiler's `Array` surface, which is 
 `Array` member still falls through to; what this case pins is that the declared body COMPILES and the
 record it describes is destroyed exactly once.
 
-<!-- disabled-test: a-self-is-its-own-instance-record-keeps-its-parameter-opaque -->
-<!-- the CORPUS FALL-THROUGH for a declared member (`specs-shv2/array-declared-record.md`'s fourth wall): a bare sibling call to a member of a record-collapsed `type Array` is neither served by the builtin `Array` surface (`self.at(0)` is E2015 against its roster) nor typed from the declaration, so its result is `unresolved` and no substitution can repair it. The unlocking rung is the one that gives a declared member its own dispatch, named there as one change with `ProgramSignatures.genericInstanceHasBaseLayout` -->
+<!-- test: a-self-is-its-own-instance-record-keeps-its-parameter-opaque -->
 ```maxon
 typealias Idx = int(0 to u64.max)
 

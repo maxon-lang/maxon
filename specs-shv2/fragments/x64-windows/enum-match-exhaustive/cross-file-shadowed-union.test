@@ -1,0 +1,156 @@
+// Test: cross-file-shadowed-union
+// --- file: ops.maxon
+export union BigOp
+	condBr
+	br
+	cmp
+	call
+	ret
+end 'BigOp'
+
+export union SmallOp
+	condBr
+	br
+end 'SmallOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op SmallOp) returns Code
+	return match op 'check'
+		condBr gives 1
+		br gives 2
+	end 'check'
+end 'classify'
+
+function describeBig(op BigOp) returns Code
+	return match op 'check'
+		condBr gives 10
+		br gives 20
+		cmp gives 30
+		call gives 40
+		ret gives 50
+	end 'check'
+end 'describeBig'
+
+function main() returns ExitCode
+	let small = classify(SmallOp.br)
+	let big = describeBig(BigOp.cmp)
+	if big == 30 'bigOk'
+		return small
+	end 'bigOk'
+	return 99
+end 'main'
+---
+ExitCode: 2
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext
+  matcharm#1:
+    x64.movRegImm32 r8, 1
+    x64.jmp matchcont
+  matchnext:
+    x64.cmpRegImm32 rcx, 1
+    x64.jcc equal, matcharm#2
+    x64.jmp matchdead
+  matcharm#2:
+    x64.movRegImm32 r8, 2
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 125
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @describeBig {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.jumpTable rcx, default=matchdead [[0]=matcharm#1, [1]=matcharm#2, [2]=matcharm#3, [3]=matcharm#4, [4]=matcharm#5] @__jumptable_2
+  matchdead:
+  matcharm#1:
+    x64.movRegImm32 r8, 10
+    x64.jmp matchcont
+  matcharm#2:
+    x64.movRegImm32 r8, 20
+    x64.jmp matchcont
+  matcharm#3:
+    x64.movRegImm32 r8, 30
+    x64.jmp matchcont
+  matcharm#4:
+    x64.movRegImm32 r8, 40
+    x64.jmp matchcont
+  matcharm#5:
+    x64.movRegImm32 r8, 50
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 125
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect classify
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 2
+    x64.callDirect describeBig
+    x64.cmpRegImm32 r8, 30
+    x64.jcc equal, bigOk
+    x64.jmp ifcont
+  bigOk:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

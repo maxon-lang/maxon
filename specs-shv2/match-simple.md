@@ -674,8 +674,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: match-expr-result-from-method-call-arm -->
-<!-- P1.2 String -->
+<!-- test: match-expr-result-from-method-call-arm -->
 A `match` expression bound to a `let` whose value-producing arm is a METHOD or
 SIBLING call (not a literal, not a free-function call) must still type the
 binding from the call's return type, so a consumer of the bound value resolves
@@ -721,8 +720,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: match-expr-result-from-payload-binding-arm -->
-<!-- payload binding (P1.3) -->
+<!-- test: match-expr-result-from-payload-binding-arm -->
 A `match` expression bound to a `let` whose value arm gives a UNION PAYLOAD
 BINDING must type the binding from the payload field's type, so a consumer of the
 bound value resolves correctly. The match-merge block is created before the arm

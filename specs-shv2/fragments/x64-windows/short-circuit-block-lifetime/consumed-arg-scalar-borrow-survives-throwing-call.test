@@ -1,0 +1,899 @@
+// Test: consumed-arg-scalar-borrow-survives-throwing-call
+typealias Num = int(0 to u64.max)
+
+enum ParseErr implements Error
+	bad
+end 'ParseErr'
+
+type Blk
+	export var id as Num
+
+	static function create(i Num) returns Blk
+		return Blk{id: i}
+	end 'create'
+
+	function bump()
+		id = id + 1
+	end 'bump'
+end 'Blk'
+
+typealias BlkArray = Array with Blk
+
+type Module
+	var blocks as BlkArray
+
+	static function create() returns Module
+		return Module{blocks: BlkArray.create()}
+	end 'create'
+
+	function addBlock(i Num) returns Blk
+		let b = Blk.create(i)
+		blocks.push(b)
+		return b
+	end 'addBlock'
+
+	function sumIds() returns Num
+		var sum = 0
+		for b in blocks 'each'
+			sum = sum + b.id
+		end 'each'
+		return sum
+	end 'sumIds'
+end 'Module'
+
+type Parser
+	var currentBlock as Blk
+	var module as Module
+
+	static function create(m Module, entry Blk) returns Parser
+		return Parser{currentBlock: entry, module: m}
+	end 'create'
+
+	function parseIdentifierExpr(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		var acc = block.id
+		if hasCall 'callArgs'
+			let args = try parseCallArgsRaw(block)
+			acc = acc + args
+		end 'callArgs'
+		return acc + block.id
+	end 'parseIdentifierExpr'
+
+	function parseCallArgsRaw(block Blk) returns Num throws ParseErr
+		currentBlock = block
+		let arg = try parseExpressionBP(block, opCount: 0, hasCall: false)
+		return arg + block.id
+	end 'parseCallArgsRaw'
+
+	function parsePrimary(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		let inner = try parseIdentifierExpr(block, hasCall: hasCall)
+		return inner + block.id
+	end 'parsePrimary'
+
+	function parseUnary(block Blk, hasCall bool) returns Num throws ParseErr
+		currentBlock = block
+		let inner = try parsePrimary(block, hasCall: hasCall)
+		return inner + block.id
+	end 'parseUnary'
+
+	function parseExpressionBP(block Blk, opCount Num, hasCall bool) returns Num throws ParseErr
+		var blk = block
+		currentBlock = blk
+		var left = try parseUnary(blk, hasCall: hasCall)
+		blk = currentBlock
+		var remaining = opCount
+		while remaining > 0 'prattLoop'
+			let merge = try emitShortCircuit(blk)
+			blk = currentBlock
+			left = left + merge
+			remaining = remaining - 1
+		end 'prattLoop'
+		return left
+	end 'parseExpressionBP'
+
+	function emitShortCircuit(entryBlock Blk) returns Num throws ParseErr
+		let entryId = entryBlock.id
+		let rhsBlock = module.addBlock(101)
+		let rhsId = rhsBlock.id
+		currentBlock = rhsBlock
+		let rhsResult = try parseExpressionBP(rhsBlock, opCount: 0, hasCall: true)
+		var mergeBlock = module.addBlock(102)
+		mergeBlock.bump()
+		let cond = rhsId + entryId
+		currentBlock = mergeBlock
+		return rhsResult + cond
+	end 'emitShortCircuit'
+end 'Parser'
+
+function main() returns ExitCode
+	var m = Module.create()
+	let entry = m.addBlock(1)
+	var p = Parser.create(m, entry: entry)
+	let r = try p.parseExpressionBP(entry, opCount: 1, hasCall: true) otherwise return 3
+	let sum = m.sumIds()
+	if sum != 205 'corrupt'
+		return 1
+	end 'corrupt'
+	if r == 0 'noResult'
+		return 2
+	end 'noResult'
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Blk.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Blk.bump {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.leaRegRegImm32 rax, rax, 1
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Module.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.leaRegFunc rdx, [rip + __mm_decref]
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Module.addBlock {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg rcx, rdx
+    x64.callDirect Blk.create
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.word64 rbx, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect __managed_push
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Module.sumIds {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegImm32 rbx, 0
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect Array.createIterator
+    x64.movRegReg r12, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+    x64.jmp forempty
+  critsplit:
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, each
+    x64.jmp forexit
+  each:
+    x64.leaRegRdata rdx, [rip + __layout_ArrayIterator_Blk]
+    x64.movRegReg rcx, r12
+    x64.callDirect ArrayIterator.current
+    x64.loadRegBaseDisp.word64 rax, [r8 + 0]
+    x64.leaRegRegReg rbx, rbx, rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
+    x64.jmp forstep
+  forstep:
+    x64.movRegReg rcx, r12
+    x64.callDirect ArrayIterator.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r12
+    x64.callDirect __destruct_ArrayIterator_Blk
+    x64.movRegReg r8, rbx
+    x64.jmp forjoin
+  forempty:
+    x64.movRegReg r8, rbx
+    x64.jmp forjoin
+  forjoin:
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Parser.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 0], r12
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r13 + 8], rbx
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Module
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Parser.parseIdentifierExpr {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.loadRegBaseDisp.word64 r14, [r12 + 0]
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, callArgs
+    x64.jmp critsplit
+  callArgs:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Parser.parseCallArgsRaw
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.leaRegRegReg rax, r14, r8
+    x64.jmp ifcont
+  critsplit:
+    x64.movRegReg rax, r14
+    x64.jmp ifcont
+  ifcont:
+    x64.loadRegBaseDisp.word64 rcx, [r12 + 0]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Parser.parseCallArgsRaw {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.loadRegBaseDisp.word64 r13, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r9, 0
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Parser.parseExpressionBP
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg r8, r8, rax
+    x64.movRegImm32 r10, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Parser.parsePrimary {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Parser.parseIdentifierExpr
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg r8, r8, rax
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Parser.parseUnary {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect Parser.parsePrimary
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.leaRegRegReg r8, r8, rax
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Parser.parseExpressionBP {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.movRegReg rcx, rdx
+    x64.callDirect __mm_retain
+    x64.movRegReg r14, r8
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r14
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, r13
+    x64.callDirect Parser.parseUnary
+    x64.movRegReg r13, r8
+    x64.movRegReg r15, r10
+    x64.cmpRegImm32 r15, 0
+    x64.jcc notEqual, tryerr#2
+    x64.jmp tryok#1
+  tryerr#2:
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r15
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#1:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __mm_retain
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rax, r12
+    x64.jmp whilehdr
+  whilehdr:
+    x64.storeSlotReg slot1, rax
+    x64.cmpRegImm32 rax, 0
+    x64.jcc greater, prattLoop
+    x64.jmp whileexit
+  prattLoop:
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r15
+    x64.callDirect Parser.emitShortCircuit
+    x64.movRegReg r12, r8
+    x64.movRegReg r14, r10
+    x64.cmpRegImm32 r14, 0
+    x64.jcc notEqual, tryerr#7
+    x64.jmp tryok#6
+  tryerr#7:
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r14
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok#6:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __mm_retain
+    x64.storeSlotReg slot0, r8
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.leaRegRegReg r13, r13, r12
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.loadRegSlot rcx, slot0
+    x64.movRegReg r15, rcx
+    x64.jmp whilehdr
+  whileexit:
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r13
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Parser.emitShortCircuit {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 56
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 r12, [rdx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 101
+    x64.callDirect Module.addBlock
+    x64.movRegReg r13, r8
+    x64.storeSlotReg slot0, r13
+    x64.loadRegBaseDisp.word64 r14, [r13 + 0]
+    x64.loadRegBaseDisp.word64 r15, [rbx + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r15
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.movRegImm32 rax, 0
+    x64.movRegImm32 r9, 1
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r13
+    x64.callDirect Parser.parseExpressionBP
+    x64.storeSlotReg slot1, r8
+    x64.movRegReg r15, r10
+    x64.cmpRegImm32 r15, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r15
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 8]
+    x64.movRegImm32 rdx, 102
+    x64.callDirect Module.addBlock
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect Blk.bump
+    x64.leaRegRegReg r12, r14, r12
+    x64.loadRegBaseDisp.word64 r14, [rbx + 0]
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r13
+    x64.loadRegSlot rax, slot1
+    x64.leaRegRegReg rbx, rax, r12
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot0
+    x64.callDirect __mm_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, rbx
+    x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.callDirect Module.create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect Module.addBlock
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.callDirect Parser.create
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 1
+    x64.movRegImm32 r9, 1
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r12
+    x64.callDirect Parser.parseExpressionBP
+    x64.movRegReg r14, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r14, 3
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Parser
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Module
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect Module.sumIds
+    x64.cmpRegImm32 r8, 205
+    x64.jcc notEqual, corrupt
+    x64.jmp ifcont#4
+  corrupt:
+    x64.movRegImm32 r14, 1
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Parser
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Module
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.cmpRegImm32 r14, 0
+    x64.jcc equal, noResult
+    x64.jmp ifcont#6
+  noResult:
+    x64.movRegImm32 r14, 2
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Parser
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Module
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#6:
+    x64.movRegImm32 r14, 0
+    x64.movRegReg rcx, r13
+    x64.callDirect __destruct_Parser
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Module
+    x64.movRegReg r8, r14
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Array.createIterator {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.callDirect __mm_retain
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect ArrayIterator.create
+    x64.movRegReg r12, r8
+    x64.movRegReg r13, r10
+    x64.cmpRegImm32 r13, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r8, 0
+    x64.movRegReg r10, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __managed_cursor_create
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_cursor_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __managed_cursor_current
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ArrayIterator.advance {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __managed_cursor_advance
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

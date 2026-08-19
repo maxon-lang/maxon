@@ -129,8 +129,7 @@ end 'main'
 65 66
 ```
 
-<!-- disabled-test: byte-string-literal.map-key -->
-<!-- P2 Map: byte-array-keyed Map is not yet built -->
+<!-- test: byte-string-literal.map-key -->
 
 
 ```maxon

@@ -394,8 +394,7 @@ end 'main'
 key1
 ```
 
-<!-- disabled-test: ternary-expression.in-extension-method-before-sibling -->
-<!-- interfaces + `extension` blocks are not parsed yet (E2015 "top-level interface"); their own rung -->
+<!-- test: ternary-expression.in-extension-method-before-sibling -->
 
 Regression: a postfix ternary on a `let` binding inside an extension method
 must not confuse the parser's extension-block scanner. The scanner walks
@@ -451,8 +450,7 @@ end 'main'
 12
 ```
 
-<!-- disabled-test: ternary-expression.error.unused-loopvar-before-ternary -->
-<!-- `List.insert`. The other two reasons this line used to give have both expired: `for … in` loops parse, and the E3012 this case is named for is now RAISED for an unused loop variable (A4g, `specs-shv2/unused-variables.md`). MEASURED on this branch's binary: `error E2015: …:16:12: Unsupported: `List` method 'insert' — shv2 provides create/append/prepend/get/first/removeFirst/count and `for … in`; last/isEmpty/insert/remove/removeLast/clear/clone are later slices`. That slice unlocks it -->
+<!-- test: ternary-expression.error.unused-loopvar-before-ternary -->
 
 Regression: a postfix ternary appearing downstream of an inner-loop
 `try ... otherwise` (which allocates a `try_N.merge` block) inside an

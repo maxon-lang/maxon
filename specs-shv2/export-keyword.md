@@ -120,8 +120,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: export-type-basic -->
-<!-- P1.1 structs -->
+<!-- test: export-type-basic -->
 ```maxon
 // --- file: api/shapes.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -360,8 +359,7 @@ end 'main'
 error E3011: specs/fragments/export-keyword/error.typealias-with-unknown-element-type.test:2:33: Unknown type 'UnknownType'
 ```
 
-<!-- disabled-test: exported-type-cross-file -->
-<!-- P1.1 structs -->
+<!-- test: exported-type-cross-file -->
 ```maxon
 // --- file: api/point.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -408,8 +406,7 @@ end 'main'
 error E4006: specs/fragments/export-keyword/error.non-exported-type-cross-file.test:16:11: Unknown type 'InternalPoint' in field access chain
 ```
 
-<!-- disabled-test: exported-enum-cross-file -->
-<!-- P1.1 enums + `match` -->
+<!-- test: exported-enum-cross-file -->
 ```maxon
 // --- file: api/color.maxon
 export enum Color
@@ -495,8 +492,7 @@ end 'main'
 error E3061: specs/fragments/export-keyword/error.duplicate-typealias-same-file.test:3:11: Duplicate typealias 'Score'
 ```
 
-<!-- disabled-test: non-exported-type-same-file -->
-<!-- P1.1 structs -->
+<!-- test: non-exported-type-same-file -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -534,8 +530,7 @@ end 'main'
 10
 ```
 
-<!-- disabled-test: exported-struct-var-cross-file -->
-<!-- P1.0d.5 globals + P1.1 structs -->
+<!-- test: exported-struct-var-cross-file -->
 Cross-file access to an exported module-level struct var.
 ```maxon
 // --- file: api/state.maxon
@@ -577,8 +572,7 @@ end 'main'
 error E2004: specs/fragments/export-keyword/error.non-exported-var-cross-file.test:7:10: Undefined variable 'secret'
 ```
 
-<!-- disabled-test: non-exported-enum-same-file -->
-<!-- P1.1 enums + `match` -->
+<!-- test: non-exported-enum-same-file -->
 ```maxon
 enum Direction
 	up

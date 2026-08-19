@@ -182,8 +182,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: bitwise-and-or-still-evaluate-both -->
-<!-- the `as` cast -->
+<!-- test: bitwise-and-or-still-evaluate-both -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

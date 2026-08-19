@@ -1,0 +1,60 @@
+// Test: rc-alias-survives-reassign
+typealias Integer = int(i64.min to i64.max)
+
+type Num
+	export var v as Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
+end 'Num'
+
+function main() returns ExitCode
+	var a = Num.create(10)
+	let b = a
+	a = Num.create(20)
+	return b.v + a.v
+end 'main'
+---
+ExitCode: 30
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 48
+    x64.movRegImm32 rax, 10
+    x64.leaRegSlot rcx, slot0
+    x64.storeBaseDispReg.word64 [rcx + 0], rax
+    x64.movRegImm32 rax, 20
+    x64.leaRegSlot rdx, slot1
+    x64.storeBaseDispReg.word64 [rdx + 0], rax
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.loadRegBaseDisp.word64 rcx, [rdx + 0]
+    x64.leaRegRegReg r8, rax, rcx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r8, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 48
+    x64.popReg rbp
+    x64.ret
+}

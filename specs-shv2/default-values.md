@@ -186,8 +186,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: default-values.enum-default-omitted -->
-<!-- ENUM `.rawValue`, not defaults: shv2 has no member access on an enum value at all. MEASURED with the default removed AND with a local instead of a parameter: `let color = Color.blue  return color.rawValue` is `E2015: a field access on 'color', which is declared 'int' and not a struct type`, which the C# bootstrap accepts (exit 2). The declaration half of this case — `color Color = Color.blue` — compiles; only the body's `.rawValue` does not. -->
+<!-- test: default-values.enum-default-omitted -->
 ```maxon
 enum Color
 	red
@@ -337,8 +336,7 @@ A
 0
 ```
 
-<!-- disabled-test: default-values.bytestring-default-omitted -->
-<!-- `ByteArray` AS A SPELLED TYPE NAME, not defaults: shv2 provides no builtin `ByteArray`, so `data ByteArray` is `E3011: Unknown type 'ByteArray'` with or without the default (every ported case that uses one declares `typealias ByteArray = Array with Byte` itself - see `array-of-bytearray.md:20`). The `b"hello"` default expression itself is fine. -->
+<!-- test: default-values.bytestring-default-omitted -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

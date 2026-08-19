@@ -1930,8 +1930,7 @@ end 'main'
 
 ### Default Panic on Non-Enum Match
 
-<!-- disabled-test: match-statements.default-panic-non-enum -->
-<!-- panic statement, not in shv2 -->
+<!-- test: match-statements.default-panic-non-enum -->
 ```maxon
 typealias Integer = int(0 to 100)
 

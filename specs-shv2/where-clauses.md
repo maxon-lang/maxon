@@ -2243,11 +2243,7 @@ end 'main'
 
 Map requires `Key is Hashable`. String implements Hashable, so this should work:
 
-<!-- disabled-test: where-clauses.map-basic -->
-<!-- P1.x-Map: DICTIONARY LITERALS + `Map`. MEASURED against this branch's binary:
-     `error E2010: <fragment>:3:19: Expected ']' but got ':'` — the parser reads `["hello": 42]` as an
-     ARRAY literal and trips on the `:`. Unblocked by a `Map` type with a dictionary-literal form, not
-     by anything in R8: no `where` constraint is resolved before the parse fails. -->
+<!-- test: where-clauses.map-basic -->
 
 ```maxon
 function main() returns ExitCode
@@ -2263,11 +2259,7 @@ end 'main'
 
 A user-defined type that implements Hashable can be used as a Map key:
 
-<!-- disabled-test: where-clauses.custom-hashable-key -->
-<!-- P1.x-Map: `Map`. MEASURED: `error E2015: <fragment>:25:9: Unsupported: a member access 'insert' on
-     a 'unknown' value` — `MyKeyMap.create()` produces no known type because `Map` is not a type shv2
-     has. R8 makes `Hashable`/`Equatable` resolve no differently: both already hit `builtinInterface`
-     and never reached the scan this rung deletes. -->
+<!-- test: where-clauses.custom-hashable-key -->
 
 ```maxon
 

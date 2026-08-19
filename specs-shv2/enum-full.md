@@ -743,8 +743,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: error.enum-method-non-exported-cross-file -->
-<!-- ⚠ NOT an enum-method gap — the method itself compiles and is called correctly here. FUNCTION VISIBILITY is not enforced anywhere in shv2: `IrFunction.visibility` is a recorded declaration that no pass reads (only ALIAS visibility is checked), so a non-exported callee is reachable from any file and `E3008` is emitted by no shv2 code path at all. Disabled with — and blocked on — the identical mechanism as its twin `export-keyword/error.non-exported-function-cross-file`, which carries the same note. -->
+<!-- test: error.enum-method-non-exported-cross-file -->
 ```maxon
 // --- file: signal.maxon
 export enum Signal

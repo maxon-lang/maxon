@@ -1,0 +1,247 @@
+// Test: may-return-arg-owned-result-no-over-release
+typealias N = int(0 to u64.max)
+
+union Tag
+	integer
+	float
+	named(id N)
+end 'Tag'
+
+function pickOr(project N, useNamed bool, fallback Tag) returns Tag
+	if project > 999999 'never'
+		return Tag.integer
+	end 'never'
+	if useNamed 'named'
+		return Tag.named(project)
+	end 'named'
+	return fallback
+end 'pickOr'
+
+function tagCode(project N, useNamed bool) returns N
+	let t = pickOr(project, useNamed: useNamed, fallback: Tag.float)
+	return match t 'm'
+		integer gives 1
+		float gives 2
+		named(id) gives id
+	end 'm'
+end 'tagCode'
+
+function main() returns ExitCode
+	var sum = 0
+	sum = sum + tagCode(3, useNamed: false)
+	sum = sum + tagCode(5, useNamed: true)
+	sum = sum + tagCode(7, useNamed: false)
+	print("sum={sum}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @pickOr {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.cmpRegImm32 rbx, 999999
+    x64.jcc greater, never
+    x64.jmp ifcont#2
+  never:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r8 + 8], rax
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#2:
+    x64.cmpRegImm32 rdx, 0
+    x64.jcc notEqual, named
+    x64.jmp ifcont#4
+  named:
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegImm32 rax, 2
+    x64.storeBaseDispReg.word64 [r8 + 0], rax
+    x64.storeBaseDispReg.word64 [r8 + 8], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont#4:
+    x64.movRegReg rcx, rax
+    x64.callDirect __mm_retain
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @tagCode {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 0], rax
+    x64.movRegImm32 rax, 0
+    x64.storeBaseDispReg.word64 [r13 + 8], rax
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect pickOr
+    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.loadRegBaseDisp.word64 rax, [rbx + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm#1
+    x64.jmp matchnext#5
+  matcharm#1:
+    x64.movRegImm32 r12, 1
+    x64.jmp matchcont
+  matchnext#5:
+    x64.cmpRegImm32 rax, 1
+    x64.jcc equal, matcharm#2
+    x64.jmp matchnext#6
+  matcharm#2:
+    x64.movRegImm32 r12, 2
+    x64.jmp matchcont
+  matchnext#6:
+    x64.cmpRegImm32 rax, 2
+    x64.jcc equal, matcharm#3
+    x64.jmp matchdead
+  matcharm#3:
+    x64.loadRegBaseDisp.word64 r12, [rbx + 8]
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 72
+    x64.movRegImm32 rcx, 3
+    x64.movRegImm32 rdx, 0
+    x64.callDirect tagCode
+    x64.leaRegRegImm32 rbx, r8, 0
+    x64.movRegImm32 rcx, 5
+    x64.movRegImm32 rdx, 1
+    x64.callDirect tagCode
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.movRegImm32 rcx, 7
+    x64.movRegImm32 rdx, 0
+    x64.callDirect tagCode
+    x64.leaRegRegReg rbx, rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_2]
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r14
+    x64.callDirect __int_to_string
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.loadRegBaseDisp.word64 rcx, [rax + 0]
+    x64.storeSlotReg slot3, rcx
+    x64.loadRegBaseDisp.word64 rax, [rax + 8]
+    x64.storeSlotReg slot2, rax
+    x64.leaRegRegReg rcx, r13, rbx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.storeSlotReg slot0, rax
+    x64.leaRegRegImm32 rcx, rax, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeSlotReg slot1, r8
+    x64.leaRegRegImm32 r15, r8, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg r12, r15, r13
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r14
+    x64.movRegReg rax, rbx
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rbx, r12, rbx
+    x64.movRegReg rcx, rbx
+    x64.loadRegSlot rdx, slot3
+    x64.loadRegSlot r12, slot2
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, rbx, r12
+    x64.loadRegSlot rbx, slot1
+    x64.storeBaseDispReg.word64 [rbx + 0], r15
+    x64.loadRegSlot rax, slot0
+    x64.storeBaseDispReg.word64 [rbx + 8], rax
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [rbx + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [rbx + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect print
+    x64.movRegReg rcx, rbx
+    x64.callDirect __str_decref
+    x64.movRegImm32 r8, 0
+    x64.epilogue 72
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

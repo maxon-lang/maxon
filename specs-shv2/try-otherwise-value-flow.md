@@ -151,8 +151,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: try-otherwise-value-flow.chained-method-on-try-receiver -->
-<!-- [later:Array] StringArray + get/set/push -->
+<!-- test: try-otherwise-value-flow.chained-method-on-try-receiver -->
 Regression guard: a method call chained onto a `(try CALL otherwise diverge)`
 receiver, followed by another statement in the same block. The receiver's try
 moves control flow onto its merge block; the chained method call (and its arg
@@ -184,8 +183,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: try-otherwise-value-flow.parenthesized-try-in-if-condition -->
-<!-- [later:Array] BoolArray + get/push -->
+<!-- test: try-otherwise-value-flow.parenthesized-try-in-if-condition -->
 A parenthesized `(try CALL otherwise VALUE)` used as an `if` condition. The
 bare-`try`-as-if-condition form (`if try f() otherwise … 'l'`) lets the
 if-parser own the success/error split and never consumes an `otherwise`, but
@@ -221,8 +219,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: try-otherwise-value-flow.try-in-call-arg-in-if-condition -->
-<!-- [later:Array] OctetArray + get/push -->
+<!-- test: try-otherwise-value-flow.try-in-call-arg-in-if-condition -->
 A `try CALL otherwise VALUE` used as a CALL ARGUMENT inside an `if` condition.
 The bare-`try`-as-if-condition special-case (parseTryExpression's `asIfCond`
 early return, which leaves `otherwise` unconsumed) applies only to the
@@ -256,8 +253,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: try-otherwise-value-flow.field-then-method-on-try-with-break-receiver -->
-<!-- [later:Array] RowArray + get/push -->
+<!-- test: try-otherwise-value-flow.field-then-method-on-try-with-break-receiver -->
 Regression guard: a FIELD access (not a method call) chained onto a
 `(try CALL otherwise break)` receiver, followed by a further method call —
 `(try pairs.get(j) otherwise break).label.count()` inside a loop. The receiver's

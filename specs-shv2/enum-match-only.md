@@ -120,8 +120,7 @@ end 'main'
 error E3066: specs/fragments/enum-match-only/error.enum-lt.test:11:7: cannot compare union values using '<', use 'match' instead
 ```
 
-<!-- disabled-test: error.enum-eq-method -->
-<!-- P1.3 slice 2+: an instance METHOD on a union (`function isEmpty()` in the union body) is a later rung; the payload + E3066 halves are done -->
+<!-- test: error.enum-eq-method -->
 
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -498,8 +497,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: enum-map-key-still-works -->
-<!-- P2 `Map` — shv2 has no `Map` builtin and no `type Map` declaration, so `Map with (Color, Int)` names an undeclared generic base (E2055 at the `with`); `ColorMap.create()` then resolves to nothing and `m.insert(…)` reports first, on an 'unknown'-typed binding (E2015) -->
+<!-- test: enum-map-key-still-works -->
 ```maxon
 enum Color
 	red

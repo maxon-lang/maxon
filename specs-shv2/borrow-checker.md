@@ -82,8 +82,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: borrow-not-live-in-otherwise -->
-<!-- needs `Map with (String, ByteArray)`, and `Map` is Phase 2 (settled by P1.0c) — the rule this case pins (a borrow is not live inside the `otherwise` handler that means the get FAILED) is enforced by activation-at-the-binding and is exercised in the array shapes this rung can write -->
+<!-- test: borrow-not-live-in-otherwise -->
 ### Try-otherwise: source is mutable inside the otherwise handler
 The borrow created by `try map.get(name)` only lives on the success path. Inside the `otherwise` block the get failed — `existing` was never bound, so there is no live borrow and mutating the same map must be allowed.
 ```maxon

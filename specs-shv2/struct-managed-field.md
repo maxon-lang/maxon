@@ -372,8 +372,7 @@ end 'main'
 77
 ```
 
-<!-- disabled-test: error.borrowed-param-consumed -->
-<!-- P1.4a wave 2+ — the transitive-consume case: a borrowed parameter forwarded to a consuming callee position needs the call-graph fixpoint (`wrap` consumes `i` because `Wrapper.create` does). Refused with E2015 until then. -->
+<!-- test: error.borrowed-param-consumed -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 

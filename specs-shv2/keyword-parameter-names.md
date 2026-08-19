@@ -31,8 +31,7 @@ binding like any other word.
 
 ## Tests
 
-<!-- disabled-test: type-as-parameter-name-crossfile -->
-<!-- needs `module typealias` (E2015 Unsupported: top-level identifier) -->
+<!-- test: type-as-parameter-name-crossfile -->
 ```maxon
 // --- file: api/shared.maxon
 module typealias StdType = int(i64.min to i64.max)
@@ -51,8 +50,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: enum-as-parameter-name-crossfile -->
-<!-- needs `module typealias` (E2015 Unsupported: top-level identifier) -->
+<!-- test: enum-as-parameter-name-crossfile -->
 ```maxon
 // --- file: api/shared.maxon
 module typealias StdType = int(i64.min to i64.max)
@@ -71,8 +69,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: union-as-parameter-name-crossfile -->
-<!-- needs `module typealias` (E2015 Unsupported: top-level identifier) -->
+<!-- test: union-as-parameter-name-crossfile -->
 ```maxon
 // --- file: api/shared.maxon
 module typealias StdType = int(i64.min to i64.max)
@@ -91,8 +88,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: interface-as-parameter-name-crossfile -->
-<!-- needs `module typealias` (E2015 Unsupported: top-level identifier) -->
+<!-- test: interface-as-parameter-name-crossfile -->
 ```maxon
 // --- file: api/shared.maxon
 module typealias StdType = int(i64.min to i64.max)

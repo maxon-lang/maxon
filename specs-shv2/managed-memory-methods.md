@@ -654,8 +654,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: clear-then-resize-bool-reads-false -->
-<!-- `Array with bool` element-type fidelity — `try b.get(i) otherwise true` comes back typed `int`, so `if v` is E3005 "'if' requires a bool condition, got 'int'" -->
+<!-- test: clear-then-resize-bool-reads-false -->
 Sub-byte-packed elements take the same invariant: a `bool` array's vacated bits are
 cleared, so regrown slots read `false`.
 ```maxon

@@ -108,14 +108,7 @@ themselves are non-deterministic (ASLR), so only the resolved function names are
 asserted. arm64-macOS has no frame-walking fault diagnostic yet, so its tests
 assert only the panic line.
 
-<!-- disabled-test: divide-by-zero -->
-<!-- BLOCK-FORM `try` — NOT the division rule. This case is ported byte-identical from `specs/safety.md`
-     and its DIVISION half is implemented: the divide throws, `otherwise (e)` binds it, and `match e`
-     discriminates `divisionByZero`. What shv2 cannot yet parse is the STATEMENT-GROUPING form
-     `try 'work' … end 'work' otherwise (e) 'handle' … end 'handle'` — `Parser.parseTry` refuses a
-     `try` followed by a block label outright ("block-form `try 'label' … end` (grouping multiple calls
-     in one try) — a later slice"). `divide-by-zero-expression-form` below is this exact program in the
-     expression form shv2 does parse, and it asserts the same 42. Enable this one with block-form `try`. -->
+<!-- test: divide-by-zero -->
 ### Integer divide-by-zero throws DivisionByZero, caught with try/otherwise
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -163,13 +156,7 @@ end 'main'
 7
 ```
 
-<!-- disabled-test: float-divide-by-zero -->
-<!-- ⚠ RE-SHELVED WITH ITS REAL REASON. Filed as blocked on float interpolation; that landed and this
-     still does not compile — it needs the block-form `try 'label' … end` (E2015), a separate slice.
-     Measured by flipping the marker and reading the error. -->
-<!-- BLOCK-FORM `try` — see `divide-by-zero` above for the whole reason; the division half is
-     implemented and `float-divide-by-zero-expression-form` below asserts the same 42 in the
-     expression form. Enable with block-form `try`. -->
+<!-- test: float-divide-by-zero -->
 ### Float divide-by-zero throws DivisionByZero, caught with try/otherwise
 ```maxon
 typealias Float = float(f64.min to f64.max)

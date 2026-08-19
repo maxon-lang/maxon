@@ -450,8 +450,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: literal-field-init-with-try-otherwise -->
-<!-- P1.4 — `throws` / `try … otherwise` (this case's whole subject), plus a struct-typed field (`inner as Inner`). -->
+<!-- test: literal-field-init-with-try-otherwise -->
 A `Self{...}` literal whose field initializer contains control flow — here a
 `try … otherwise panic(…)` nested in a constructor call argument — splits the
 enclosing block: the `structAlloc` lands in one block and that field's

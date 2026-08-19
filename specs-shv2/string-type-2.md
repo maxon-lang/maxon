@@ -86,8 +86,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: reassigned-var-equality-not-const-folded -->
-<!-- P1.2 wave C: var reassignment of an owned String -->
+<!-- test: reassigned-var-equality-not-const-folded -->
 A `var` declared with a compile-time string constant (`""`) and then reassigned
 to a runtime value must compare by content, not against its stale declaration-
 time constant. Regression: the TypeResolution string-const specializer aliased
@@ -187,8 +186,7 @@ end 'main'
 18
 ```
 
-<!-- disabled-test: memory-tracking-simple-interp -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: memory-tracking-simple-interp -->
 ```maxon
 function main() returns ExitCode
 	let a = "hello"
@@ -205,8 +203,7 @@ end 'main'
 11
 ```
 
-<!-- disabled-test: memory-tracking-chained-interp -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: memory-tracking-chained-interp -->
 String interpolation with multiple parts creates a single allocation with O(n) copy.
 All intermediate buffers use stack allocation for primitives.
 ```maxon
@@ -227,8 +224,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: memory-tracking-loop-interp -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: memory-tracking-loop-interp -->
 String accumulation in loop properly releases old values on reassignment.
 The final value is released at scope exit. Uses efficient O(n) interpolation.
 ```maxon
@@ -251,8 +247,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: memory-tracking-no-leak-scope-exit -->
-<!-- P1.2 wave B: string interpolation -->
+<!-- test: memory-tracking-no-leak-scope-exit -->
 ```maxon
 function main() returns ExitCode
 	if true 'scope'
@@ -1152,12 +1147,7 @@ end 'main'
 a=Hello b=Hello arr[0]=74
 ```
 
-<!-- disabled-test: tobytearray-is-independent-through-the-raw-managed-door -->
-<!-- The `Array.managed` / `__ManagedMemory` DOOR, and not `toByteArray` — which SHIPPED at P1.8 Slice E,
-     along with its three sibling independence cases here. MEASURED: `arr.managed.set(0, 74)` is `E2015: a
-     field access on 'arr': \`Array\` is a BUILTIN whose runtime record shv2 synthesizes, not a \`type\` it
-     compiles`. shv2's `.toByteArray()` COPIES (`__str_to_bytes` blits byte by byte into a fresh array), so
-     the independence this case is about already holds — what is missing is the raw door to observe it -->
+<!-- test: tobytearray-is-independent-through-the-raw-managed-door -->
 The independence holds through the RAW door too, and that is what makes `s.toByteArray().managed` the
 sanctioned way for code outside the stdlib to hand a string's bytes to an intrinsic that wants a
 `__ManagedMemory`. `Array` still exports `managed`; `String` stopped exporting it in Stage 4c of the

@@ -217,8 +217,7 @@ end 'main'
 4
 ```
 
-<!-- disabled-test: no-string-to-int -->
-<!-- P1.2 String — ⚠ and note the reference's own inconsistency before enabling it: this case expects the ALIAS name (`expected 'Integer'`) while `no-bool-to-int` below expects the RESOLVED primitive (`expected 'int'`) for that same `Integer` alias. TypeRules.typeTagName prints the resolved primitive, which is what makes the two enabled cases pass; whoever enables this one has to reconcile the two. -->
+<!-- test: no-string-to-int -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

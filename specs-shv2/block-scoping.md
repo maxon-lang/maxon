@@ -211,8 +211,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: local-shadows-prior-field-access -->
-<!-- P1.1 structs + P1.2 String -->
+<!-- test: local-shadows-prior-field-access -->
 ### Local declared after a non-self field access on the same name
 A field access like `foo.name` in an outer loop must not shadow a later
 local declaration `let name = ...` in a sibling block. Regression: the

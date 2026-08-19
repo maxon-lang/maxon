@@ -97,14 +97,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: bare-union-case-as-struct-field-init -->
-<!-- stdlib whitelist: `StringArray` (`stdlib/Json.maxon`'s `export typealias StringArray = Array with
-     String`). `stdlib/Json.maxon` is not on shv2's whitelist, so the `set(vars StringArray)` payload
-     resolves to a bare `int` and `v.count()` is rejected before the byte-slice path is reached.
-     ⚠ Unlike its three siblings here, this case was NOT unlocked by `stdlib/File.maxon` (R4.7): the name
-     it wants is Json's, not File's. MEASURED on the tree that listed `File.maxon` —
-     `E3011 Unknown type 'StringArray'`, raised at the `set(v) gives v.count()` ARM (where the payload
-     binding's type must resolve), not at the `union` declaration, which accepts the unknown name -->
+<!-- test: bare-union-case-as-struct-field-init -->
 ### Bare payload-free boxed-union case read as a struct-literal field initializer
 Mirrors `stdlib/Subprocess.maxon`'s `Configuration.create`: a boxed
 (payload-bearing) union's payload-free case is read bare (`Env.inherit`) as a

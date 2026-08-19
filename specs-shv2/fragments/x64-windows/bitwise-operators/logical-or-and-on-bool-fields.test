@@ -1,0 +1,162 @@
+// Test: logical-or-and-on-bool-fields
+typealias Tag = int(0 to 100)
+
+type Flags
+	export var a as bool
+	export var b as bool
+	export var c as bool
+
+	export static function make(a bool, b bool, c bool) returns Flags
+		return Flags{a: a, b: b, c: c}
+	end 'make'
+end 'Flags'
+
+function consume(flag bool) returns Tag
+	if flag 'isTrue'
+		return 1
+	end 'isTrue'
+	return 0
+end 'consume'
+
+function main() returns ExitCode
+	let f = Flags.make(true, b: false, c: true)
+	let orResult = consume(f.a or f.b)
+	let andResult = consume(f.a and f.c)
+	let bothFalse = consume(f.b or f.b)
+	return orResult * 4 + andResult * 2 + bothFalse
+end 'main'
+---
+ExitCode: 6
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @Flags.make {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegReg r12, rdx
+    x64.movRegReg r13, rax
+    x64.movRegImm32 rcx, 24
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.byte [r8 + 0], rbx
+    x64.storeBaseDispReg.byte [r8 + 8], r12
+    x64.storeBaseDispReg.byte [r8 + 16], r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @consume {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.cmpRegImm32 rcx, 0
+    x64.jcc notEqual, isTrue
+    x64.jmp ifcont
+  isTrue:
+    x64.movRegImm32 r8, 1
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.movRegImm32 rdx, 0
+    x64.movRegImm32 rax, 1
+    x64.callDirect Flags.make
+    x64.movRegReg rbx, r8
+    x64.loadRegBaseDisp.byte rax, [rbx + 0]
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#10
+    x64.jmp orrhs#1
+  critsplit#10:
+    x64.jmp scmerge#2
+  orrhs#1:
+    x64.loadRegBaseDisp.byte rcx, [rbx + 8]
+    x64.jmp scmerge#2
+  scmerge#2:
+    x64.callDirect consume
+    x64.movRegReg r12, r8
+    x64.loadRegBaseDisp.byte rax, [rbx + 0]
+    x64.movRegImm32 rcx, 0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, andrhs
+    x64.jmp critsplit#11
+  andrhs:
+    x64.loadRegBaseDisp.byte rcx, [rbx + 16]
+    x64.jmp scmerge#4
+  critsplit#11:
+    x64.jmp scmerge#4
+  scmerge#4:
+    x64.callDirect consume
+    x64.movRegReg r13, r8
+    x64.loadRegBaseDisp.byte rax, [rbx + 8]
+    x64.movRegImm32 rcx, 1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, critsplit#12
+    x64.jmp orrhs#5
+  critsplit#12:
+    x64.jmp scmerge#6
+  orrhs#5:
+    x64.loadRegBaseDisp.byte rcx, [rbx + 8]
+    x64.jmp scmerge#6
+  scmerge#6:
+    x64.callDirect consume
+    x64.imulRegRegImm32 rax, r12, 4
+    x64.imulRegRegImm32 rcx, r13, 2
+    x64.leaRegRegReg rax, rax, rcx
+    x64.leaRegRegReg r12, rax, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_decref
+    x64.cmpRegImm32 r12, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.movRegImm32 rax, 4294967295
+    x64.cmpRegReg r12, rax
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

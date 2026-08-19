@@ -54,8 +54,7 @@ end 'main'
 ```
 
 
-<!-- disabled-test: complex-expression -->
-<!-- stdlib cone - the `trunc` builtin (shv2 has no builtin/stdlib functions) -->
+<!-- test: complex-expression -->
 ```maxon
 function main() returns ExitCode
 	let result = trunc((10 + (2 * 3)) / (4 - 2))

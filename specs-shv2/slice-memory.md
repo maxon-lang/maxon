@@ -75,8 +75,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: slice-copy-increfs-parent -->
-<!-- shv2 IS MOVE-ONLY FOR AN OWNED MANAGED VALUE: `let sub2 = sub1` MOVES the String, so the `print("{sub1}")` after it is E3102 use-after-move. NOT a `slice` gap and NOT P1.8 Slice B2's — MEASURED on a slice-free program, where `let b = a.toUpper()` + `let c = b` + `print("{b}")` is the identical E3102. The reference REFCOUNTS, so its `let sub2 = sub1` is a copy with an incref and both names stay live; shv2 has moves instead (ARCHITECTURE's static-ownership pillar, and P1.2's "`toByteArray()` is a MOVE" ruling). Making a bind of an owned managed value COPY is a language-level decision that reaches every managed type at once (String, struct box, Array, Set) and needs its own rung. The other four cases in this file pass -->
+<!-- test: slice-copy-increfs-parent -->
 
 ### Slice Copy Increments Parent Refcount
 When a slice is copied, the parent's reference count must be incremented.

@@ -155,8 +155,7 @@ end 'main'
 error E2051: specs/fragments/reserved-double-underscore/enum-case.test:4:2: identifier '__green' is reserved: declarations starting with '__' are reserved for compiler internals
 ```
 
-<!-- disabled-test: closure-parameter -->
-<!-- P1.5 closures -->
+<!-- test: closure-parameter -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
