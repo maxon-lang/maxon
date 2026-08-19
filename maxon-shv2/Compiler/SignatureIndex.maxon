@@ -15931,6 +15931,39 @@ export type ProgramSignatures
 		return self.nameOfId(self.genericInstances.instanceBaseId(id))
 	end 'genericInstanceBaseName'
 
+	// ⭐⭐ **THE TYPE A DECLARED NAME DENOTES WHEN THAT NAME MAY BE AN ALIAS FOR A GENERIC INSTANCE (W172)** —
+	// `Bag.BagIter`, on a `typealias BagIter = BagIterator with Element`, answers `BagIterator`; every other
+	// name answers ITSELF. `denotedAggregateName`'s convention one registry over, and it exists for the same
+	// reason: a DECLARATION is filed under the type that declares it (`BagIterator.current`), and an alias is
+	// not one of that type's names, so a question asked of an alias-spelled type's own declarations resolves
+	// to nothing at all unless it comes through here first.
+	//
+	// ⛔⛔ **THE MISS IS THE NAME AND NOT `EmptySourceText`, WHICH IS THE WHOLE POINT.** The caller asks one
+	// question of one name; if the two spellings of a cursor had to be routed by the caller they would be two
+	// code paths, and this project's signature bug is exactly a mechanism that answers one spelling and not
+	// its twin. **MEASURED (W172):** `receiverCursorElementIsOpaque` resolved `returns BagIterator` and not
+	// `returns BagIter`, so `stdlib/List.maxon:147`'s `typealias ListIter = ListIterator with Element` reserved
+	// no layout descriptor and every program whose cone reached `extension Iterable` was refused with a false
+	// E2015 — **392 of the `List` retirement's 401 failures were this one refusal**. `W161`'s corrected header
+	// records the mirror image of the same asymmetry (`Map` spells its cursor bare and escaped an edge `Set`'s
+	// alias spelling caught).
+	//
+	// ⚠ **IT IS NOT `nestedParameterisedInstanceBaseOfAlias`, WHICH ANSWERS A NARROWER QUESTION.** That door
+	// gates on `instanceIsANestedParameterisedOne` — the DESCRIPTOR-FORWARDING condition, a property of the
+	// instance's ARGUMENTS (they must be a contiguous run of the caller's own parameters, over a base that is
+	// not one of the containers this compiler serves itself). What a base DECLARES is a property of the base
+	// alone: `FooIterator with (Element, Int)` forwards nothing and still declares exactly the `current()` its
+	// parameter-run sibling does, so borrowing that gate here would answer "no such type" for a cursor that
+	// genuinely hands out the enclosing type's own parameter — an under-reservation, which is the direction
+	// that refuses a legal program.
+	export function denotedGenericBaseName(name ByteArray, readerFilePath FilePath) returns ByteArray
+		if not self.isGenericAlias(name) 'namesNoInstance'
+			return name
+		end 'namesNoInstance'
+
+		return self.genericInstanceBaseName(self.genericAliasInstanceFrom(name, readerFilePath: readerFilePath))
+	end 'denotedGenericBaseName'
+
 	// ⭐ **IS INSTANCE `id` A GREEN-THREAD HANDLE RATHER THAN A BOX (P1.5-B2c)?** The one base whose values
 	// own no `__mm_alloc` record — see `PromiseType.maxon`, which carries the whole argument. It lives HERE,
 	// beside the base-name read, because `typeIsManaged` and `classifyUnionPayload` are both in this file and

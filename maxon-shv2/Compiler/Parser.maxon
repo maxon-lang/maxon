@@ -14281,7 +14281,16 @@ export type Parser
 
 		// `localTypeName`, because `returnTypeOf` ADOPTED the cursor type into this artifact's interner — so
 		// the id is one this table holds, which is exactly that helper's precondition.
-		return self.signatures.calleeReturnsBareTypeParameter(qualifiedMethodName(self.localTypeName(cursor, asker: "cursorTypeYieldsOpaqueElement"), methodName: CurrentMethodName))
+		//
+		// ⭐⭐ **THROUGH `denotedGenericBaseName`, BECAUSE A CURSOR HAS TWO SPELLINGS AND ONLY ONE OF THEM IS A
+		// TYPE'S OWN NAME (W172).** `returns BagIterator` names the declaring type; `returns BagIter`, on a
+		// `typealias BagIter = BagIterator with Element`, names an ALIAS, under which no `current()` is filed —
+		// so the unresolved question answered `false`, no descriptor was reserved, and the loop's own drop was
+		// then refused at `stdlib/Interfaces.maxon`. The corpus writes it the second way
+		// (`stdlib/List.maxon:147`, `Set.maxon:15`, `Array.maxon:502`, `Vector.maxon:8`); `stdlib/Map.maxon:18`
+		// writes it the first. See there for why the resolution is deliberately ungated.
+		let cursorTypeName = self.signatures.denotedGenericBaseName(self.localTypeName(cursor, asker: "cursorTypeYieldsOpaqueElement"), readerFilePath: self.filePath)
+		return self.signatures.calleeReturnsBareTypeParameter(qualifiedMethodName(cursorTypeName, methodName: CurrentMethodName))
 	end 'cursorTypeYieldsOpaqueElement'
 
 	// ⭐ **THE `self . <field> =` REASSIGNMENT HEAD — ONE token-shape recognizer (P1.7 Finding A).** Both the

@@ -46,6 +46,18 @@ bare type parameter. A conformer whose element is concrete — `Map`, whose `Map
 back a `(Key, Value)` tuple — owes no `__drop_type_param` at all, and handing it a descriptor would feed a
 real one into a chain that is deliberately inert on both ends.
 
+### A cursor has TWO spellings, and the reservation is a property of the TYPE, not of the spelling
+
+`createIterator()` may name its cursor directly (`returns BagIterator`) or through an inner generic-instance
+alias (`typealias BagIter = BagIterator with Element`, then `returns BagIter`). Only the first is a type's
+own name: a method is filed under the type that declares it, so `BagIter.current` resolves to nothing and the
+question "does this cursor hand out a bare type parameter?" silently answered *no* for the aliased spelling —
+no descriptor, and the loop's own drop refused at a line the user never wrote.
+
+**The corpus writes it the second way.** `stdlib/List.maxon`, `stdlib/Set.maxon`, `stdlib/Array.maxon` and
+`stdlib/Vector.maxon` all declare a `<Type>Iter` alias; `stdlib/Map.maxon` is the only conformer in the library
+that spells its cursor bare. So the spelling that worked was the one nothing in the library uses.
+
 ## Tests
 
 ### `contains` on a generic conformer
@@ -101,6 +113,131 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+### The same `contains`, with the cursor named through an alias
+
+The program above with ONE thing changed: the cursor is reached through
+`typealias BagIter = BagIterator with Element` instead of by its own name. Nothing about what the loop OWNS
+has moved — the element is still `current()`'s bare type parameter and is still released per trip — so this
+case and the one above must answer identically. It is `stdlib/List.maxon:147`'s spelling, and while it was
+unresolved every program whose cone reached `extension Iterable` was refused.
+
+<!-- test: contains-through-an-aliased-cursor -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type BagIterator uses Element implements Iterator with Element
+	var slot as Element
+
+	export static function create(v Element) returns Self
+		return Self{slot: v}
+	end 'create'
+
+	export function current() returns Element
+		return slot
+	end 'current'
+
+	export function advance() throws IterationError
+		throw IterationError.exhausted
+	end 'advance'
+end 'BagIterator'
+
+type Bag uses Element implements Iterable with (Element, BagIter)
+	typealias BagIter = BagIterator with Element
+	var slot as Element
+
+	export static function create(v Element) returns Self
+		return Self{slot: v}
+	end 'create'
+
+	export function createIterator() returns BagIter throws IterationError
+		return BagIter.create(slot)
+	end 'createIterator'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function isBig(n Int) returns bool
+	return n > 10
+end 'isBig'
+
+function main() returns ExitCode
+	var b = IntBag.create(30)
+	if b.contains(isBig) 'yes'
+		return 1
+	end 'yes'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+### An aliased cursor over a MANAGED element, every trip
+
+The aliased spelling's half of the refcount arithmetic, and the half a wrong reservation cannot hide in: five
+trips take five references and give five back, on the fall-through exit. A missing release is exit 101 and a
+surplus one frees the `String` the bag still holds.
+
+<!-- test: aliased-cursor-releases-every-trip -->
+```maxon
+typealias Count = int(0 to u32.max)
+
+type BagIterator uses Element implements Iterator with Element
+	var slot as Element
+	var remaining as Count
+
+	export static function create(v Element, remaining Count) returns Self
+		return Self{slot: v, remaining: remaining}
+	end 'create'
+
+	export function current() returns Element
+		return slot
+	end 'current'
+
+	export function advance() throws IterationError
+		if remaining <= 1 'atTheLast'
+			throw IterationError.exhausted
+		end 'atTheLast'
+		remaining = remaining - 1
+	end 'advance'
+end 'BagIterator'
+
+type Bag uses Element implements Iterable with (Element, BagIter)
+	typealias BagIter = BagIterator with Element
+	var slot as Element
+	let repeats as Count
+
+	export static function create(v Element, repeats Count) returns Self
+		return Self{slot: v, repeats: repeats}
+	end 'create'
+
+	export function createIterator() returns BagIter throws IterationError
+		return BagIter.create(slot, remaining: repeats)
+	end 'createIterator'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function isEmpty(s String) returns bool
+	return s.byteLength() == 0
+end 'isEmpty'
+
+function main() returns ExitCode
+	var b = StrBag.create("a string long enough to be heap allocated", repeats: 5)
+	if b.contains(isEmpty) 'found'
+		return 1
+	end 'found'
+	print("none of 5\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+none of 5
 ```
 
 ### The same body over a MANAGED element
