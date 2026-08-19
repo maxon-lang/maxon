@@ -1342,6 +1342,59 @@ end 'main'
 10
 ```
 
+<!-- test: rc-heap-directive-survives-generic-specialization -->
+<!-- MmTrace -->
+⭐ `@heap` is the user's word, and a SPECIALIZATION of a generic body has to carry it. Its only
+reader, `StackPromotionAnalysisPass`, runs AFTER monomorphization — so a clone that drops the flag
+hands that pass a binding indistinguishable from any other, and the record the user pinned to the
+heap is promoted to the stack. That is not a slower answer, it is a DIFFERENT one: the same
+`@heap let` compiled to a heap record in a concrete function and to two stack slots inside
+`Box with Num`.
+
+⚠ **THE TRACE IS THE ASSERTION, NOT THE EXIT CODE.** Both compile and both return 42; the run
+cannot tell them apart. Measured on this tree with `FunctionCloner.CloneAssignOp`'s `ForceHeap`
+line removed, `NumBox.pairSum` lost its `mm_alloc`, its `mm_incref` and its `mm_decref` outright
+and read `t.0`/`t.1` straight out of `[rbp-24]`/`[rbp-16]`. The tuple's `mm_alloc` line below is
+the one that disappears; `NumBox`'s own record is the control that stays either way.
+```maxon
+typealias Num = int(i64.min to i64.max)
+
+type Box uses T
+	export var value as T
+
+	static function create(v T) returns Self
+		return Self{value: v}
+	end 'create'
+
+	export function pairSum(extra T) returns Num
+		@heap let t = (10, 32)
+		self.value = extra
+		return t.0 + t.1
+	end 'pairSum'
+end 'Box'
+
+typealias NumBox = Box with Num
+
+function main() returns ExitCode
+	var b = NumBox.create(1)
+	return b.pairSum(5) as ExitCode
+end 'main'
+```
+```exitcode
+42
+```
+
+```mm-trace
+mm_alloc NumBox #1 size=8
+mm_incref NumBox #1 rc=1
+mm_alloc __Tuple2-i64-i64 #2 size=16
+mm_incref __Tuple2-i64-i64 #2 rc=1
+mm_decref __Tuple2-i64-i64 #2 rc=0
+mm_free __Tuple2-i64-i64 #2
+mm_decref NumBox #1 rc=0
+mm_free NumBox #1
+```
+
 <!-- test: rc-tuple-reassign-decrefs-old -->
 Reassigning a tuple var decrefs the old tuple before storing the new one.
 ```maxon

@@ -383,28 +383,9 @@ internal class FunctionCloner : IOpSubstitution {
       case MaxonIndirectCallOp indirect: return CloneIndirectCallOp(indirect);
       case MaxonStructLiteralOp structLit: return CloneStructLiteralOp(structLit, extraOps);
 
-      // String / byte-string literals and interpolation
-      case MaxonStringLiteralOp strLit: { var c = new MaxonStringLiteralOp(strLit.Value, SubName(strLit.StringTypeName)); RegisterResult(strLit.Result, c.Result); return c; }
-      case MaxonByteStringLiteralOp bstrLit: { var c = new MaxonByteStringLiteralOp(bstrLit.Value, SubName(bstrLit.ArrayTypeName)); RegisterResult(bstrLit.Result, c.Result); return c; }
-      case MaxonStringInterpOp interp: {
-        var newParts = interp.Parts.Select(p => (p.IsLiteral, p.LiteralValue, p.ExprValue != null ? MapValue(p.ExprValue) : (MaxonValue?)null, p.FormatSpec, p.OptimalType)).ToList();
-        var c = new MaxonStringInterpOp(newParts, SubName(interp.StringTypeName));
-        RegisterResult(interp.Result, c.Result);
-        return c;
-      }
-
-      // Enum ops
-      case MaxonEnumLiteralOp el: { var c = el.BackingKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? new MaxonEnumLiteralOp(SubName(el.EnumTypeName), el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(SubName(el.EnumTypeName), el.CaseName, el.IntValue); RegisterResult(el.Result, c.Result); return c; }
-      case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, SubName(ep.EnumTypeName), ep.BackingKind); RegisterResult(ep.Result, c.Result); return c; }
-      case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, SubName(ev.EnumTypeName), ev.BackingKind); RegisterResult(ev.Result, c.Result); return c; }
-      case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(MapValue(er.EnumValue), SubName(er.EnumTypeName), er.ResultKind); RegisterResult(er.Result, c.Result); return c; }
-      case MaxonEnumOrdinalOp eo: { var c = new MaxonEnumOrdinalOp(MapValue(eo.EnumValue), SubName(eo.EnumTypeName)); RegisterResult(eo.Result, c.Result); return c; }
-      case MaxonEnumNameOp en: { var c = new MaxonEnumNameOp(MapValue(en.EnumValue), SubName(en.EnumTypeName)); RegisterResult(en.Result, c.Result); return c; }
-      case MaxonEnumStringRawValueOp esr: { var c = new MaxonEnumStringRawValueOp(MapValue(esr.EnumValue), SubName(esr.EnumTypeName), esr.IsChar); RegisterResult(esr.Result, c.Result); return c; }
-      case MaxonEnumStructRawValueOp esrv: { var c = new MaxonEnumStructRawValueOp(MapValue(esrv.EnumValue), SubName(esrv.EnumTypeName), esrv.StructTypeName); RegisterResult(esrv.Result, c.Result); return c; }
-      case MaxonEnumStructRawFieldOp esrf: { var c = new MaxonEnumStructRawFieldOp(MapValue(esrf.EnumValue), SubName(esrf.EnumTypeName), esrf.StructTypeName, esrf.FieldName, esrf.ResultKind, esrf.ResultTypeName == null ? null : SubName(esrf.ResultTypeName)); RegisterResult(esrf.Result, c.Result); return c; }
-      case MaxonEnumFunctionRawValueOp efrv: { var c = new MaxonEnumFunctionRawValueOp(MapValue(efrv.EnumValue), SubName(efrv.EnumTypeName), efrv.Signature); RegisterResult(efrv.Result, c.Result); return c; }
-      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(MapValue(ef.ErrorFlag), SubName(ef.EnumTypeName), ef.BackingKind, ef.HasAssociatedValues); RegisterResult(ef.Result, c.Result); return c; }
+      // The enum payload READ is the one enum op whose clone is this pass's own: it resolves the
+      // result KIND through the type substitution, which the interface-alias pass has no binding
+      // for. The other eleven enum ops and the three string ones are the shared rule.
       case MaxonEnumPayloadOp payload: {
         var resultKind = _typeSubstitution.SubstituteValueKind(payload.ResultKind);
         var resultStructTypeName = payload.ResultStructTypeName != null ? SubName(payload.ResultStructTypeName) : null;
@@ -954,6 +935,12 @@ internal class FunctionCloner : IOpSubstitution {
     var cloned = new MaxonStructLiteralOp(resolvedTypeName, newFieldValues) {
       ArrayLiteralTag = arrayTag,
       ArrayLiteralCount = arrayCount,
+      // `skipZeroInit: true` is what SUPPRESSES the `<tag>.<i>` element declarations at parse time,
+      // so the flag and the absence of those slots are one fact. A clone that kept the tag and
+      // dropped the flag would send lowering down the heap-buffer arm, which takes the address of
+      // that tag and memcpy's from it - a read of stack space nothing reserved. Losing it is a
+      // miscompile, not a missed optimization.
+      SkipZeroInit = structLit.SkipZeroInit,
       IsBitPacked = structLit.IsBitPacked || _isBitPackedElement
     };
     RegisterResult(structLit.Result, cloned.Result);

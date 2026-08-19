@@ -114,6 +114,43 @@ internal static class SubstitutingOpCloner {
       case MaxonFieldAccessOp fa: { var c = fa.CloneWith(sub.MapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.ResultStructTypeName != null ? sub.SubstituteName(fa.ResultStructTypeName) : null); sub.RegisterResult(fa.Result, c.Result); return c; }
       case MaxonFieldAssignOp fa: return new MaxonFieldAssignOp(sub.MapValue(fa.StructValue), sub.SubstituteName(fa.TypeName), fa.FieldName, sub.MapValue(fa.NewValue));
 
+      // --- Enum and string type names ---
+      //
+      // These read their type name through the substitution exactly as the enum-construct family
+      // below does. The interface-alias pass used to keep its own copies that did NOT substitute,
+      // on the reasoning that an interface alias never names an enum or a string type. That
+      // reasoning is sound but it did not justify a second roster: it makes the substitution the
+      // IDENTITY here, not something to be skipped, and four sibling ops in that same switch
+      // already applied it. MEASURED before collapsing them, over the whole bootstrap corpus:
+      // 30 of these arms were reached under an interface-alias substitution and NONE of the names
+      // was rewritten. The invariant behind that: the interface-alias map is keyed only by
+      // interface (or interface-alias) type names, by `Self`, and by the specialized function's
+      // own owner type - and `flat-namespace check` forbids one name from being both an enum and
+      // an interface, so a hit can only be the owner naming itself, which is the identity.
+
+      case MaxonEnumLiteralOp el: { var c = el.BackingKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? new MaxonEnumLiteralOp(sub.SubstituteName(el.EnumTypeName), el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(sub.SubstituteName(el.EnumTypeName), el.CaseName, el.IntValue); sub.RegisterResult(el.Result, c.Result); return c; }
+      case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, sub.SubstituteName(ep.EnumTypeName), ep.BackingKind); sub.RegisterResult(ep.Result, c.Result); return c; }
+      case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, sub.SubstituteName(ev.EnumTypeName), ev.BackingKind); sub.RegisterResult(ev.Result, c.Result); return c; }
+      case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(sub.MapValue(er.EnumValue), sub.SubstituteName(er.EnumTypeName), er.ResultKind); sub.RegisterResult(er.Result, c.Result); return c; }
+      case MaxonEnumOrdinalOp eo: { var c = new MaxonEnumOrdinalOp(sub.MapValue(eo.EnumValue), sub.SubstituteName(eo.EnumTypeName)); sub.RegisterResult(eo.Result, c.Result); return c; }
+      case MaxonEnumNameOp en: { var c = new MaxonEnumNameOp(sub.MapValue(en.EnumValue), sub.SubstituteName(en.EnumTypeName)); sub.RegisterResult(en.Result, c.Result); return c; }
+      case MaxonEnumStringRawValueOp esr: { var c = new MaxonEnumStringRawValueOp(sub.MapValue(esr.EnumValue), sub.SubstituteName(esr.EnumTypeName), esr.IsChar); sub.RegisterResult(esr.Result, c.Result); return c; }
+      // The STRUCT type name rides through unsubstituted in both of the next two, and always did:
+      // it names the case's payload record, which the enum's own definition decides.
+      case MaxonEnumStructRawValueOp esrv: { var c = new MaxonEnumStructRawValueOp(sub.MapValue(esrv.EnumValue), sub.SubstituteName(esrv.EnumTypeName), esrv.StructTypeName); sub.RegisterResult(esrv.Result, c.Result); return c; }
+      case MaxonEnumStructRawFieldOp esrf: { var c = new MaxonEnumStructRawFieldOp(sub.MapValue(esrf.EnumValue), sub.SubstituteName(esrf.EnumTypeName), esrf.StructTypeName, esrf.FieldName, esrf.ResultKind, esrf.ResultTypeName == null ? null : sub.SubstituteName(esrf.ResultTypeName)); sub.RegisterResult(esrf.Result, c.Result); return c; }
+      case MaxonEnumFunctionRawValueOp efrv: { var c = new MaxonEnumFunctionRawValueOp(sub.MapValue(efrv.EnumValue), sub.SubstituteName(efrv.EnumTypeName), efrv.Signature); sub.RegisterResult(efrv.Result, c.Result); return c; }
+      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(sub.MapValue(ef.ErrorFlag), sub.SubstituteName(ef.EnumTypeName), ef.BackingKind, ef.HasAssociatedValues); sub.RegisterResult(ef.Result, c.Result); return c; }
+
+      case MaxonStringLiteralOp strLit: { var c = new MaxonStringLiteralOp(strLit.Value, sub.SubstituteName(strLit.StringTypeName)); sub.RegisterResult(strLit.Result, c.Result); return c; }
+      case MaxonByteStringLiteralOp bstrLit: { var c = new MaxonByteStringLiteralOp(bstrLit.Value, sub.SubstituteName(bstrLit.ArrayTypeName)); sub.RegisterResult(bstrLit.Result, c.Result); return c; }
+      case MaxonStringInterpOp interp: {
+        var newParts = interp.Parts.Select(p => (p.IsLiteral, p.LiteralValue, p.ExprValue != null ? sub.MapValue(p.ExprValue) : (MaxonValue?)null, p.FormatSpec, p.OptimalType)).ToList();
+        var c = new MaxonStringInterpOp(newParts, sub.SubstituteName(interp.StringTypeName));
+        sub.RegisterResult(interp.Result, c.Result);
+        return c;
+      }
+
       case MaxonEnumConstructOp ec: { var c = new MaxonEnumConstructOp(sub.SubstituteName(ec.EnumTypeName), ec.CaseName, ec.TagValue, [.. ec.Args.Select(sub.MapValue)]); sub.RegisterResult(ec.Result, c.Result); return c; }
       case MaxonEnumTagOp et: { var c = new MaxonEnumTagOp(sub.MapValue(et.EnumValue), sub.SubstituteName(et.EnumTypeName)); sub.RegisterResult(et.Result, c.Result); return c; }
       case MaxonEnumPayloadAssignOp epa: return new MaxonEnumPayloadAssignOp(epa.EnumVarName, sub.SubstituteName(epa.EnumTypeName), epa.PayloadIndex, sub.MapValue(epa.NewValue));

@@ -2413,6 +2413,10 @@ public static class MonomorphizationPass {
         var cloned = new MaxonStructLiteralOp(sub.SubstituteName(structLit.TypeName), newFieldValues) {
           ArrayLiteralTag = structLit.ArrayLiteralTag,
           ArrayLiteralCount = structLit.ArrayLiteralCount,
+          // Travels with the tag for the reason FunctionCloner's twin states: the flag is why the
+          // element slots the tag names do not exist, so keeping one without the other lowers to a
+          // memcpy out of unreserved stack.
+          SkipZeroInit = structLit.SkipZeroInit,
           IsBitPacked = structLit.IsBitPacked || sub.IsBitPackedElement(null)
         };
         opSub.RegisterResult(structLit.Result, cloned.Result);
@@ -2435,38 +2439,12 @@ public static class MonomorphizationPass {
           IsBitPacked = ma.IsBitPacked || sub.IsBitPackedElement(ma.TypeParamName)
         };
 
-      // Enum and string type names: an interface alias never names one, so they ride through
-      // unsubstituted. The generic cloner DOES substitute them — that is a type parameter's job.
-      case MaxonEnumLiteralOp el: { var c = el.BackingKind is MaxonValueKind.Float or MaxonValueKind.Float32 ? new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.FloatValue) : new MaxonEnumLiteralOp(el.EnumTypeName, el.CaseName, el.IntValue); opSub.RegisterResult(el.Result, c.Result); return c; }
-      case MaxonEnumParamOp ep: { var c = new MaxonEnumParamOp(ep.Index, ep.Name, ep.EnumTypeName, ep.BackingKind); opSub.RegisterResult(ep.Result, c.Result); return c; }
-      case MaxonEnumVarRefOp ev: { var c = new MaxonEnumVarRefOp(ev.VarName, ev.EnumTypeName, ev.BackingKind); opSub.RegisterResult(ev.Result, c.Result); return c; }
-      case MaxonEnumRawValueOp er: { var c = new MaxonEnumRawValueOp(opSub.MapValue(er.EnumValue), er.EnumTypeName, er.ResultKind); opSub.RegisterResult(er.Result, c.Result); return c; }
-      case MaxonEnumOrdinalOp eo: { var c = new MaxonEnumOrdinalOp(opSub.MapValue(eo.EnumValue), eo.EnumTypeName); opSub.RegisterResult(eo.Result, c.Result); return c; }
-      case MaxonEnumNameOp en: { var c = new MaxonEnumNameOp(opSub.MapValue(en.EnumValue), en.EnumTypeName); opSub.RegisterResult(en.Result, c.Result); return c; }
-      case MaxonEnumStringRawValueOp esr: { var c = new MaxonEnumStringRawValueOp(opSub.MapValue(esr.EnumValue), esr.EnumTypeName, esr.IsChar); opSub.RegisterResult(esr.Result, c.Result); return c; }
-      case MaxonEnumStructRawValueOp esrv: { var c = new MaxonEnumStructRawValueOp(opSub.MapValue(esrv.EnumValue), esrv.EnumTypeName, esrv.StructTypeName); opSub.RegisterResult(esrv.Result, c.Result); return c; }
-      case MaxonEnumStructRawFieldOp esrf: { var c = new MaxonEnumStructRawFieldOp(opSub.MapValue(esrf.EnumValue), esrf.EnumTypeName, esrf.StructTypeName, esrf.FieldName, esrf.ResultKind, esrf.ResultTypeName); opSub.RegisterResult(esrf.Result, c.Result); return c; }
-      case MaxonEnumFunctionRawValueOp efrv: { var c = new MaxonEnumFunctionRawValueOp(opSub.MapValue(efrv.EnumValue), efrv.EnumTypeName, efrv.Signature); opSub.RegisterResult(efrv.Result, c.Result); return c; }
-      case MaxonErrorFlagToEnumOp ef: { var c = new MaxonErrorFlagToEnumOp(opSub.MapValue(ef.ErrorFlag), ef.EnumTypeName, ef.BackingKind, ef.HasAssociatedValues); opSub.RegisterResult(ef.Result, c.Result); return c; }
+      // The enum payload READ keeps a local arm for the reason its twin in FunctionCloner does:
+      // the two resolve the result KIND differently, and only that field. The other eleven enum
+      // ops and the three string ones are the shared rule.
       case MaxonEnumPayloadOp payload: {
         var c = new MaxonEnumPayloadOp(opSub.MapValue(payload.EnumValue), sub.SubstituteName(payload.EnumTypeName), payload.PayloadIndex, payload.ResultKind, payload.ResultStructTypeName);
         opSub.RegisterResult(payload.Result, c.Result);
-        return c;
-      }
-      case MaxonStringLiteralOp strLit: {
-        var c = new MaxonStringLiteralOp(strLit.Value, strLit.StringTypeName);
-        opSub.RegisterResult(strLit.Result, c.Result);
-        return c;
-      }
-      case MaxonStringInterpOp interp: {
-        var newParts = interp.Parts.Select(p => (p.IsLiteral, p.LiteralValue, p.ExprValue != null ? opSub.MapValue(p.ExprValue) : (MaxonValue?)null, p.FormatSpec, p.OptimalType)).ToList();
-        var c = new MaxonStringInterpOp(newParts, interp.StringTypeName);
-        opSub.RegisterResult(interp.Result, c.Result);
-        return c;
-      }
-      case MaxonByteStringLiteralOp bstrLit: {
-        var c = new MaxonByteStringLiteralOp(bstrLit.Value, bstrLit.ArrayTypeName);
-        opSub.RegisterResult(bstrLit.Result, c.Result);
         return c;
       }
 
