@@ -1,11 +1,9 @@
 ---
 feature: arithmetic
-status: selfhosted
-keywords: [arithmetic, operators, math]
+status: stable
+keywords: arithmetic, operators, math
 category: operators
-milestone: M3
 ---
-
 # Arithmetic Operators
 
 ## Documentation
@@ -18,20 +16,7 @@ Maxon supports basic arithmetic operators for integers:
 - `/` division
 - `mod` modulo
 
-At M3 the integer non-trapping set — `+`, `-`, `*` — is implemented, parsed by a
-Pratt precedence climber: multiplicative (`*`) binds tighter than additive
-(`+`/`-`), and both are left-associative. So `10 + 5 * 2` groups as `10 + (5 * 2)`
-= 20. `/` and `mod` are DEFERRED to M5: x64 `idiv` pins its operands to the fixed
-RAX/RDX pair, which requires the real register allocator (M3's placeholder gives
-every value a fresh pool register and cannot honor fixed-register constraints).
-
 ## Tests
-
-These are the M3 slice of `specs/arithmetic.md`: `+` (from M2), `-`, `*`, and the
-precedence proof. The division/modulo tests — and every test that also needs
-`trunc`, function parameters, or `while` — are DEFERRED and recorded under
-`## Deferred` below so they are re-enabled at their milestones rather than
-forgotten.
 
 <!-- test: addition -->
 ```maxon
@@ -63,39 +48,7 @@ end 'main'
 42
 ```
 
-<!-- test: complex-expression -->
-Proves `*` binds tighter than `+`: `10 + 5 * 2` is `10 + (5 * 2)` = 20, not
-`(10 + 5) * 2` = 30.
-```maxon
-function main() returns ExitCode
-	return 10 + 5 * 2
-end 'main'
-```
-```exitcode
-20
-```
-
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live
-in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
-scans only `## Tests`, up to the next `## ` heading) never extracts them, and
-they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
-`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-
-Prerequisites:
-
-  - division, modulo — need x64 `idiv`'s fixed RAX/RDX pair, hence the real
-    register allocator (M5). `division` also needs `trunc` (float→int, later).
-  - div-live-values, mod-live-values, multi-div — division + function parameters
-    with named args (M5).
-  - div-loop — division + `while` (M4) + mutable reassignment.
-  - div-with-call — division + function calls (M5).
-  - register-pressure — pure `+`, but 12 simultaneous live values exceed M3's
-    6-register no-liveness placeholder allocator; re-enable at M5 with the real
-    liveness-based allocator (spilling).
-
-### division
+<!-- test: division -->
 ```maxon
 function main() returns ExitCode
 	return trunc(100 / 4)
@@ -105,7 +58,7 @@ end 'main'
 25
 ```
 
-### modulo
+<!-- test: modulo -->
 ```maxon
 function main() returns ExitCode
 	return 17 mod 5
@@ -115,12 +68,23 @@ end 'main'
 2
 ```
 
-### div-live-values
+<!-- test: complex-expression -->
+```maxon
+function main() returns ExitCode
+	return 10 + 5 * 2
+end 'main'
+```
+```exitcode
+20
+```
+
+<!-- test: div-live-values -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
 
-function divLive(a Integer, b Integer, x Integer) returns Integer
+function divLive(a Integer, b NonZero, x Integer) returns Integer
 	let preserved = x + 1
 	let result = a / b
 	return trunc(result + preserved)
@@ -134,12 +98,13 @@ end 'main'
 11
 ```
 
-### mod-live-values
+<!-- test: mod-live-values -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
 
-function modLive(a Integer, b Integer, x Integer) returns Integer
+function modLive(a Integer, b NonZero, x Integer) returns Integer
 	let preserved = x + 1
 	let result = a mod b
 	return result + preserved
@@ -153,7 +118,7 @@ end 'main'
 7
 ```
 
-### div-loop
+<!-- test: div-loop -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -162,7 +127,7 @@ function divLoop(n Integer) returns Integer
 	var sum = 0
 	var i = 1
 	while i <= n 'loop'
-		sum = sum + trunc(50 / i)
+		sum = sum + trunc(try (50 / i) otherwise panic("divLoop: i was 0"))
 		i = i + 1
 	end 'loop'
 	return sum
@@ -176,16 +141,17 @@ end 'main'
 113
 ```
 
-### div-with-call
+<!-- test: div-with-call -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
 
 function helper(x Integer) returns Integer
 	return x * 2
 end 'helper'
 
-function divCall(a Integer, b Integer) returns Integer
+function divCall(a Integer, b NonZero) returns Integer
 	let temp = trunc(a / b)
 	let result = helper(temp)
 	return result + temp
@@ -199,12 +165,13 @@ end 'main'
 15
 ```
 
-### multi-div
+<!-- test: multi-div -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
+typealias NonZero = int(1 to i64.max)
 
-function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
+function multiDiv(a Integer, b NonZero, c Integer, d NonZero) returns Integer
 	let r1 = a / b
 	let r2 = c / d
 	return trunc(r1 + r2)
@@ -218,7 +185,7 @@ end 'main'
 10
 ```
 
-### register-pressure
+<!-- test: register-pressure -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

@@ -76,18 +76,7 @@ end 'main'
 error E2004: <fragment>:4:12: Expected expression but got '-'
 ```
 
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live
-in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
-scans only `## Tests`, up to the next `## ` heading) never extracts them, and
-they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
-`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-
-### negate-int
-
-Needs `if` (M4) and `==` (M4, comparison feeds a branch).
-
+<!-- test: negate-int -->
 ```maxon
 function main() returns ExitCode
 	let x = -42
@@ -102,10 +91,9 @@ end 'main'
 0
 ```
 
-### negate-float
 
-Needs float literals + float negation (XMM) + `trunc`, later.
-
+<!-- test: negate-float 
+NOTE: Float negation is not yet implemented in codegen
 ```maxon
 function main() returns ExitCode
 	let x = -3.5
@@ -117,3 +105,4 @@ end 'main'
 ```exitcode
 3
 ```
+-->

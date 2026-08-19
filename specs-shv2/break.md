@@ -1,55 +1,101 @@
 ---
 feature: break
-status: selfhosted
-keywords: [break, continue, loop, control flow, exit, label]
+status: stable
+keywords: break, loop, control flow, exit
 category: control-flow
-milestone: M4b
 ---
-
-# Break and Continue
+# Break Statement
 
 ## Documentation
 
-`break` exits the innermost enclosing loop (control resumes after the loop's `end`);
-`continue` jumps to the next iteration. Both accept an optional loop label to target
-an OUTER loop (`break 'outer'`). Naming the innermost loop's own label is redundant
-(E2048); a `break`/`continue` with no enclosing loop is E2047.
+Exit from the innermost enclosing loop.
 
-Lowering (M4b): `break` branches to the target loop's EXIT block, `continue` to its
-HEADER (a back-edge). Both carry the current loop-carried variable values as block-arg
-operands, so the exit's / header's phis see this path's values (see
-`specs-shv2/while-loops.md`). The loop's header/exit block ids live on a loop-context
-stack the parser threads, mirroring the block-scope stack.
+**Syntax:**
+
+```maxon
+break           // Break from innermost loop
+break 'label'   // Break from loop with specified label
+```
+**Example:**
+
+```maxon
+var x = 5
+while true 'loop'
+	x = x + 2
+	if x == 11 'check'
+		break
+	end 'check'
+end 'loop'
+// x is now 11
+```
+
+**Labeled Break Example:**
+
+```maxon
+while true 'outer'
+	while true 'inner'
+		break 'outer'  // Breaks out of outer loop
+	end 'inner'
+end 'outer'
+```
+
+**Labeled Continue:**
+
+The same syntax works for `continue` to jump to a specific loop's next iteration:
+
+```maxon
+while x < 10 'outer'
+	x = x + 1
+	while y < 10 'inner'
+		y = y + 1
+		if y == 3 'check'
+			continue 'outer'  // Skips to next iteration of outer loop
+		end 'check'
+	end 'inner'
+end 'outer'
+```
+
+**Notes:**
+- Exits the innermost `while` or `for` loop
+- Control flow continues after the loop's `end` statement
+- Must be inside a loop (compile error otherwise)
+- Label must match an enclosing loop's label
+- `continue 'label'` jumps to the next iteration of the labeled loop
 
 ## Tests
 
-The `specs/break.md` cases whose prerequisites are all present: the own-label
-diagnostic for a `continue` inside a comparison-condition loop, and the two
-unreachable-code diagnostics (E3071, W118) — `break`/`continue` end a straight-line
-block exactly as `return`/`throw`/`panic` do, so a statement after either in the same
-block is dead code. Every PASSING `break`/`continue` case in `specs/break.md` is
-DEFERRED — each either uses a bare boolean condition (`while true`, deferred past M4b)
-or carries enough simultaneously-distinct SSA values (multiple loop-carried vars,
-loop-exit phis) to exceed the placeholder register allocator's 6-register pool.
-`continue`'s codegen IS exercised by `while-loops.continue` in
-`specs-shv2/while-loops.md`; a single-variable comparison-condition `break` loop
-compiles and runs correctly, but no such case exists verbatim in `specs/break.md`. All
-deferred cases live under `## Deferred`.
-
-<!-- test: break.error-continue-own-label -->
-Labelling a `continue` with its own (innermost) loop's label is redundant.
+<!-- test: break.in-loop -->
 ```maxon
 function main() returns ExitCode
 	var x = 0
-	while x < 10 'loop'
+	while true 'loop'
 		x = x + 1
-		continue 'loop'
+		if x == 5 'check'
+			break
+		end 'check'
 	end 'loop'
 	return x
 end 'main'
 ```
-```maxoncstderr
-error E2048: <fragment>:6:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
+```exitcode
+5
+```
+
+<!-- test: break.with-if -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	while true 'loop'
+		x = x + 1
+		if x == 10 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+```
+```exitcode
+10
 ```
 
 <!-- test: break.multiple-conditions -->
@@ -69,6 +115,171 @@ end 'main'
 ```
 ```exitcode
 8
+```
+
+<!-- test: break.labeled-break-outer -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	while x < 10 'outer'
+		x = x + 1
+		while true 'inner'
+			if x == 3 'check'
+				break 'outer'
+			end 'check'
+			break
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: break.labeled-break-inner -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	var y = 0
+	while x < 5 'outer'
+		x = x + 1
+		while y < 10 'inner'
+			y = y + 1
+			if y == 3 'check'
+				break
+			end 'check'
+		end 'inner'
+	end 'outer'
+	return x
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: break.labeled-break-triple-nested -->
+```maxon
+function main() returns ExitCode
+	var result = 0
+	while true 'outer'
+		while true 'middle'
+			while true 'inner'
+				result = result + 1
+				if result == 5 'check'
+					break 'outer'
+				end 'check'
+			end 'inner'
+		end 'middle'
+	end 'outer'
+	return result
+end 'main'
+```
+```exitcode
+5
+```
+
+<!-- test: break.labeled-continue-outer -->
+```maxon
+function main() returns ExitCode
+	var x = 0
+	var count = 0
+	while x < 3 'outer'
+		x = x + 1
+		var y = 0
+		while y < 5 'inner'
+			y = y + 1
+			count = count + 1
+			if y == 2 'check'
+				continue 'outer'
+			end 'check'
+		end 'inner'
+	end 'outer'
+	return count
+end 'main'
+```
+```exitcode
+6
+```
+
+<!-- test: break.labeled-continue-inner -->
+```maxon
+function main() returns ExitCode
+	var sum = 0
+	var x = 0
+	while x < 3 'outer'
+		x = x + 1
+		var y = 0
+		while y < 5 'inner'
+			y = y + 1
+			if y == 3 'check'
+				continue
+			end 'check'
+			sum = sum + 1
+		end 'inner'
+	end 'outer'
+	return sum
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: break.labeled-continue-triple-nested -->
+```maxon
+function main() returns ExitCode
+	var count = 0
+	var a = 0
+	while a < 2 'outer'
+		a = a + 1
+		var b = 0
+		while b < 3 'middle'
+			b = b + 1
+			var c = 0
+			while c < 4 'inner'
+				c = c + 1
+				count = count + 1
+				if c == 2 'check'
+					continue 'middle'
+				end 'check'
+			end 'inner'
+		end 'middle'
+	end 'outer'
+	return count
+end 'main'
+```
+```exitcode
+12
+```
+
+<!-- test: break.error-break-own-label -->
+Error: break with the label of its own loop is redundant.
+```maxon
+function main() returns ExitCode
+	while true 'loop'
+		break 'loop'
+	end 'loop'
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2048: specs/fragments/break/break.error-break-own-label.test:4:9: 'break' with label 'loop' targets its own loop; use 'break' without a label, or 'break' with the label of an outer loop
+```
+
+<!-- test: break.error-continue-own-label -->
+Error: continue with the label of its own loop is redundant.
+```maxon
+function main() returns ExitCode
+	var x = 0
+	while x < 10 'loop'
+		x = x + 1
+		continue 'loop'
+	end 'loop'
+	return x
+end 'main'
+```
+```maxoncstderr
+error E2048: specs/fragments/break/break.error-continue-own-label.test:6:12: 'continue' with label 'loop' targets its own loop; use 'continue' without a label, or 'continue' with the label of an outer loop
 ```
 
 <!-- test: break.error-unreachable-after-break -->
@@ -118,65 +329,4 @@ end 'main'
 ```
 ```maxoncstderr
 error E3071: specs/fragments/break/break.error-unreachable-after-continue.test:9:4: unreachable code after 'continue'
-```
-
-
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live in
-this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which scans
-only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
-NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
-prefix it with its `<!-- test: NAME -->` marker.
-
-### break.in-loop / break.with-if / break.labeled-break-outer / break.labeled-break-triple-nested / break.error-break-own-label
-
-Their LANGUAGE prerequisite — boolean-value conditions (`while true`) — has LANDED,
-and the representative case below compiles and returns 5. What still blocks them is
-this file: it is an ADAPTATION of `specs/break.md`, not a port of it, so it does not
-carry their verbatim sources. Re-enable them by porting `specs/break.md` itself (the
-corpus port), which is where those sources live. Representative case:
-
-```maxon
-function main() returns ExitCode
-	var x = 0
-	while true 'loop'
-		x = x + 1
-		if x == 5 'check'
-			break
-		end 'check'
-	end 'loop'
-	return x
-end 'main'
-```
-```exitcode
-5
-```
-
-### break.labeled-break-inner / break.labeled-continue-outer / break.labeled-continue-inner / break.labeled-continue-triple-nested
-
-Their prerequisite — the liveness-based register allocator — has LANDED (M5), and the
-representative case below compiles and returns 5. Like the group above, what still
-blocks them is that this file is an ADAPTATION of `specs/break.md` rather than a port
-of it, so it does not carry their verbatim sources. Re-enable them by porting
-`specs/break.md` itself. Representative case:
-
-```maxon
-function main() returns ExitCode
-	var x = 0
-	var y = 0
-	while x < 5 'outer'
-		x = x + 1
-		while y < 10 'inner'
-			y = y + 1
-			if y == 3 'check'
-				break
-			end 'check'
-		end 'inner'
-	end 'outer'
-	return x
-end 'main'
-```
-```exitcode
-5
 ```

@@ -388,19 +388,7 @@ end 'main'
 ```
 
 
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live in
-this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which scans
-only `## Tests`, up to the next `## ` heading) never extracts them, and they carry
-NO `<!-- test: … -->` marker. To re-enable: move the test up into `## Tests` and
-prefix it with its `<!-- test: NAME -->` marker.
-
-### nested-control
-
-Re-enable once its prerequisites land: the `mod` operator (M5, whose `idiv`
-lowering needs the real register allocator's fixed-register support).
-
+<!-- test: nested-control -->
 ```maxon
 function main() returns ExitCode
 	var result = 0

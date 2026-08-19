@@ -52,11 +52,21 @@ end 'rank'
 
 function main() returns ExitCode
 	var n = 0 as ExitCode
-	if rank(Priority.p0) == 1 'a' n = n + 1 end 'a'
-	if rank(Priority.p1) == 2 'b' n = n + 1 end 'b'
-	if rank(Priority.p2) == 3 'c' n = n + 1 end 'c'
-	if rank(Priority.p3) == 4 'd' n = n + 1 end 'd'
-	if rank(Priority.p4) == 5 'e' n = n + 1 end 'e'
+	if rank(Priority.p0) == 1 'a'
+		n = n + 1
+	end 'a'
+	if rank(Priority.p1) == 2 'b'
+		n = n + 1
+	end 'b'
+	if rank(Priority.p2) == 3 'c'
+		n = n + 1
+	end 'c'
+	if rank(Priority.p3) == 4 'd'
+		n = n + 1
+	end 'd'
+	if rank(Priority.p4) == 5 'e'
+		n = n + 1
+	end 'e'
 	return n
 end 'main'
 ```
@@ -88,13 +98,27 @@ end 'kind'
 
 function main() returns ExitCode
 	var n = 0 as ExitCode
-	if kind(Day.mon) == 1 'a' n = n + 1 end 'a'
-	if kind(Day.tue) == 2 'b' n = n + 1 end 'b'
-	if kind(Day.wed) == 3 'c' n = n + 1 end 'c'
-	if kind(Day.thu) == 3 'd' n = n + 1 end 'd'
-	if kind(Day.fri) == 3 'e' n = n + 1 end 'e'
-	if kind(Day.sat) == 4 'f' n = n + 1 end 'f'
-	if kind(Day.sun) == 5 'g' n = n + 1 end 'g'
+	if kind(Day.mon) == 1 'a'
+		n = n + 1
+	end 'a'
+	if kind(Day.tue) == 2 'b'
+		n = n + 1
+	end 'b'
+	if kind(Day.wed) == 3 'c'
+		n = n + 1
+	end 'c'
+	if kind(Day.thu) == 3 'd'
+		n = n + 1
+	end 'd'
+	if kind(Day.fri) == 3 'e'
+		n = n + 1
+	end 'e'
+	if kind(Day.sat) == 4 'f'
+		n = n + 1
+	end 'f'
+	if kind(Day.sun) == 5 'g'
+		n = n + 1
+	end 'g'
 	return n
 end 'main'
 ```
@@ -126,12 +150,24 @@ end 'idx'
 
 function main() returns ExitCode
 	var n = 0 as ExitCode
-	if idx(Color.red) == 1 'a' n = n + 1 end 'a'
-	if idx(Color.green) == 2 'b' n = n + 1 end 'b'
-	if idx(Color.blue) == 3 'c' n = n + 1 end 'c'
-	if idx(Color.cyan) == 4 'd' n = n + 1 end 'd'
-	if idx(Color.magenta) == 5 'e' n = n + 1 end 'e'
-	if idx(Color.yellow) == 6 'f' n = n + 1 end 'f'
+	if idx(Color.red) == 1 'a'
+		n = n + 1
+	end 'a'
+	if idx(Color.green) == 2 'b'
+		n = n + 1
+	end 'b'
+	if idx(Color.blue) == 3 'c'
+		n = n + 1
+	end 'c'
+	if idx(Color.cyan) == 4 'd'
+		n = n + 1
+	end 'd'
+	if idx(Color.magenta) == 5 'e'
+		n = n + 1
+	end 'e'
+	if idx(Color.yellow) == 6 'f'
+		n = n + 1
+	end 'f'
 	return n
 end 'main'
 ```
@@ -163,11 +199,21 @@ end 'sides'
 
 function main() returns ExitCode
 	var n = 0 as ExitCode
-	if sides(Shape.circle(1)) == 0 'a' n = n + 1 end 'a'
-	if sides(Shape.square(2)) == 44 'b' n = n + 1 end 'b'
-	if sides(Shape.tri(3)) == 33 'c' n = n + 1 end 'c'
-	if sides(Shape.pent(4)) == 55 'd' n = n + 1 end 'd'
-	if sides(Shape.hex(5)) == 66 'e' n = n + 1 end 'e'
+	if sides(Shape.circle(1)) == 0 'a'
+		n = n + 1
+	end 'a'
+	if sides(Shape.square(2)) == 44 'b'
+		n = n + 1
+	end 'b'
+	if sides(Shape.tri(3)) == 33 'c'
+		n = n + 1
+	end 'c'
+	if sides(Shape.pent(4)) == 55 'd'
+		n = n + 1
+	end 'd'
+	if sides(Shape.hex(5)) == 66 'e'
+		n = n + 1
+	end 'e'
 	return n
 end 'main'
 ```
@@ -190,13 +236,27 @@ end 'ored'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if ored(1) == 1 'a' n = n + 1 end 'a'
-	if ored(9) == 1 'b' n = n + 1 end 'b'
-	if ored(3) == 2 'c' n = n + 1 end 'c'
-	if ored(7) == 2 'd' n = n + 1 end 'd'
-	if ored(5) == 3 'e' n = n + 1 end 'e'
-	if ored(4) == 9 'f' n = n + 1 end 'f'
-	if ored(2) == 9 'g' n = n + 1 end 'g'
+	if ored(1) == 1 'a'
+		n = n + 1
+	end 'a'
+	if ored(9) == 1 'b'
+		n = n + 1
+	end 'b'
+	if ored(3) == 2 'c'
+		n = n + 1
+	end 'c'
+	if ored(7) == 2 'd'
+		n = n + 1
+	end 'd'
+	if ored(5) == 3 'e'
+		n = n + 1
+	end 'e'
+	if ored(4) == 9 'f'
+		n = n + 1
+	end 'f'
+	if ored(2) == 9 'g'
+		n = n + 1
+	end 'g'
 	return n as ExitCode
 end 'main'
 ```
@@ -221,14 +281,30 @@ end 'sparse'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if sparse(10) == 1 'h1' n = n + 1 end 'h1'
-	if sparse(30) == 3 'h3' n = n + 1 end 'h3'
-	if sparse(50) == 5 'h5' n = n + 1 end 'h5'
-	if sparse(25) == 9 'm1' n = n + 1 end 'm1'
-	if sparse(35) == 9 'm2' n = n + 1 end 'm2'
-	if sparse(9) == 9 'o1' n = n + 1 end 'o1'
-	if sparse(11) == 9 'o2' n = n + 1 end 'o2'
-	if sparse(51) == 9 'o3' n = n + 1 end 'o3'
+	if sparse(10) == 1 'h1'
+		n = n + 1
+	end 'h1'
+	if sparse(30) == 3 'h3'
+		n = n + 1
+	end 'h3'
+	if sparse(50) == 5 'h5'
+		n = n + 1
+	end 'h5'
+	if sparse(25) == 9 'm1'
+		n = n + 1
+	end 'm1'
+	if sparse(35) == 9 'm2'
+		n = n + 1
+	end 'm2'
+	if sparse(9) == 9 'o1'
+		n = n + 1
+	end 'o1'
+	if sparse(11) == 9 'o2'
+		n = n + 1
+	end 'o2'
+	if sparse(51) == 9 'o3'
+		n = n + 1
+	end 'o3'
 	return n as ExitCode
 end 'main'
 ```
@@ -253,14 +329,30 @@ end 'over'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if over(55) == 1 'a' n = n + 1 end 'a'
-	if over(50) == 1 'b' n = n + 1 end 'b'
-	if over(60) == 1 'c' n = n + 1 end 'c'
-	if over(1) == 1 'd' n = n + 1 end 'd'
-	if over(100) == 1 'e' n = n + 1 end 'e'
-	if over(200) == 3 'f' n = n + 1 end 'f'
-	if over(400) == 5 'g' n = n + 1 end 'g'
-	if over(150) == 9 'h' n = n + 1 end 'h'
+	if over(55) == 1 'a'
+		n = n + 1
+	end 'a'
+	if over(50) == 1 'b'
+		n = n + 1
+	end 'b'
+	if over(60) == 1 'c'
+		n = n + 1
+	end 'c'
+	if over(1) == 1 'd'
+		n = n + 1
+	end 'd'
+	if over(100) == 1 'e'
+		n = n + 1
+	end 'e'
+	if over(200) == 3 'f'
+		n = n + 1
+	end 'f'
+	if over(400) == 5 'g'
+		n = n + 1
+	end 'g'
+	if over(150) == 9 'h'
+		n = n + 1
+	end 'h'
 	return n as ExitCode
 end 'main'
 ```
@@ -285,15 +377,33 @@ end 'band'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if band(0 - 5000) == 1 'a' n = n + 1 end 'a'
-	if band(0 - 100) == 1 'b' n = n + 1 end 'b'
-	if band(0 - 99) == 2 'c' n = n + 1 end 'c'
-	if band(0 - 1) == 2 'd' n = n + 1 end 'd'
-	if band(0) == 3 'e' n = n + 1 end 'e'
-	if band(1) == 4 'f' n = n + 1 end 'f'
-	if band(100) == 4 'g' n = n + 1 end 'g'
-	if band(101) == 5 'h' n = n + 1 end 'h'
-	if band(999999) == 5 'i' n = n + 1 end 'i'
+	if band(0 - 5000) == 1 'a'
+		n = n + 1
+	end 'a'
+	if band(0 - 100) == 1 'b'
+		n = n + 1
+	end 'b'
+	if band(0 - 99) == 2 'c'
+		n = n + 1
+	end 'c'
+	if band(0 - 1) == 2 'd'
+		n = n + 1
+	end 'd'
+	if band(0) == 3 'e'
+		n = n + 1
+	end 'e'
+	if band(1) == 4 'f'
+		n = n + 1
+	end 'f'
+	if band(100) == 4 'g'
+		n = n + 1
+	end 'g'
+	if band(101) == 5 'h'
+		n = n + 1
+	end 'h'
+	if band(999999) == 5 'i'
+		n = n + 1
+	end 'i'
 	return n as ExitCode
 end 'main'
 ```
@@ -320,10 +430,18 @@ end 'perms'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if perms(1) == 31 'a' n = n + 1 end 'a'
-	if perms(3) == 28 'b' n = n + 1 end 'b'
-	if perms(5) == 16 'c' n = n + 1 end 'c'
-	if perms(6) == 0 'd' n = n + 1 end 'd'
+	if perms(1) == 31 'a'
+		n = n + 1
+	end 'a'
+	if perms(3) == 28 'b'
+		n = n + 1
+	end 'b'
+	if perms(5) == 16 'c'
+		n = n + 1
+	end 'c'
+	if perms(6) == 0 'd'
+		n = n + 1
+	end 'd'
 	return n as ExitCode
 end 'main'
 ```
@@ -350,10 +468,18 @@ end 'pick'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if pick(1) == 10 'a' n = n + 1 end 'a'
-	if pick(3) == 30 'b' n = n + 1 end 'b'
-	if pick(5) == 50 'c' n = n + 1 end 'c'
-	if pick(99) == 99 'd' n = n + 1 end 'd'
+	if pick(1) == 10 'a'
+		n = n + 1
+	end 'a'
+	if pick(3) == 30 'b'
+		n = n + 1
+	end 'b'
+	if pick(5) == 50 'c'
+		n = n + 1
+	end 'c'
+	if pick(99) == 99 'd'
+		n = n + 1
+	end 'd'
 	return n as ExitCode
 end 'main'
 ```
@@ -373,8 +499,12 @@ end 'only'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if only(5) == 7 'a' n = n + 1 end 'a'
-	if only(0) == 7 'b' n = n + 1 end 'b'
+	if only(5) == 7 'a'
+		n = n + 1
+	end 'a'
+	if only(0) == 7 'b'
+		n = n + 1
+	end 'b'
 	return n as ExitCode
 end 'main'
 ```
@@ -400,10 +530,18 @@ end 'ftd'
 
 function main() returns ExitCode
 	var n = 0 as N
-	if ftd(1) == 115 'a' n = n + 1 end 'a'
-	if ftd(3) == 112 'b' n = n + 1 end 'b'
-	if ftd(4) == 108 'c' n = n + 1 end 'c'
-	if ftd(9) == 100 'd' n = n + 1 end 'd'
+	if ftd(1) == 115 'a'
+		n = n + 1
+	end 'a'
+	if ftd(3) == 112 'b'
+		n = n + 1
+	end 'b'
+	if ftd(4) == 108 'c'
+		n = n + 1
+	end 'c'
+	if ftd(9) == 100 'd'
+		n = n + 1
+	end 'd'
 	return n as ExitCode
 end 'main'
 ```
@@ -442,10 +580,18 @@ end 'greet'
 
 function main() returns ExitCode
 	var n = 0 as ExitCode
-	if greet("alice") == 1 'a' n = n + 1 end 'a'
-	if greet("carol") == 3 'b' n = n + 1 end 'b'
-	if greet("erin") == 5 'c' n = n + 1 end 'c'
-	if greet("zoe") == 9 'd' n = n + 1 end 'd'
+	if greet("alice") == 1 'a'
+		n = n + 1
+	end 'a'
+	if greet("carol") == 3 'b'
+		n = n + 1
+	end 'b'
+	if greet("erin") == 5 'c'
+		n = n + 1
+	end 'c'
+	if greet("zoe") == 9 'd'
+		n = n + 1
+	end 'd'
 	return n
 end 'main'
 ```
@@ -484,10 +630,18 @@ function main() returns ExitCode
 	// `0 upto i64.min` is the empty range — nothing is below i64.min. A prior bug decremented
 	// the exclusive upper to `i64.min - 1`, which wrapped to `i64.max` and matched every value >= 0.
 	var n = 0 as ExitCode
-	if classify(5) == 0 'a' n = n + 1 end 'a'
-	if classify(0) == 0 'b' n = n + 1 end 'b'
-	if classify(-1) == 0 'c' n = n + 1 end 'c'
-	if classify(9223372036854775807) == 0 'd' n = n + 1 end 'd'
+	if classify(5) == 0 'a'
+		n = n + 1
+	end 'a'
+	if classify(0) == 0 'b'
+		n = n + 1
+	end 'b'
+	if classify(-1) == 0 'c'
+		n = n + 1
+	end 'c'
+	if classify(9223372036854775807) == 0 'd'
+		n = n + 1
+	end 'd'
 	return n
 end 'main'
 ```
@@ -508,9 +662,15 @@ function main() returns ExitCode
 	// `min upto min` is also empty. The wrap bug turned it into `[i64.min, i64.max]`, matching every
 	// value; that the ordinary values below still fall to default proves the arm is dead.
 	var n = 0 as ExitCode
-	if classify(5) == 0 'a' n = n + 1 end 'a'
-	if classify(0) == 0 'b' n = n + 1 end 'b'
-	if classify(-1) == 0 'c' n = n + 1 end 'c'
+	if classify(5) == 0 'a'
+		n = n + 1
+	end 'a'
+	if classify(0) == 0 'b'
+		n = n + 1
+	end 'b'
+	if classify(-1) == 0 'c'
+		n = n + 1
+	end 'c'
 	return n
 end 'main'
 ```
@@ -532,11 +692,21 @@ end 'classify'
 function main() returns ExitCode
 	// `upto` excludes its upper: 10..20 covers 10..19, 20..30 covers 20..29, and 30 is its own arm.
 	var n = 0 as ExitCode
-	if classify(19) == 1 'a' n = n + 1 end 'a'
-	if classify(20) == 2 'b' n = n + 1 end 'b'
-	if classify(29) == 2 'c' n = n + 1 end 'c'
-	if classify(30) == 3 'd' n = n + 1 end 'd'
-	if classify(9) == 0 'e' n = n + 1 end 'e'
+	if classify(19) == 1 'a'
+		n = n + 1
+	end 'a'
+	if classify(20) == 2 'b'
+		n = n + 1
+	end 'b'
+	if classify(29) == 2 'c'
+		n = n + 1
+	end 'c'
+	if classify(30) == 3 'd'
+		n = n + 1
+	end 'd'
+	if classify(9) == 0 'e'
+		n = n + 1
+	end 'e'
 	return n
 end 'main'
 ```
@@ -574,9 +744,15 @@ function main() returns ExitCode
 	// A zero-based dense enum (span 8, covered 8/8) lowers to an O(1) jump table with NO bias subtract --
 	// the enum value IS the index. Every ordinal routes to its own arm.
 	var n = 0 as ExitCode
-	if classify(Color.c0) == 10 'a' n = n + 1 end 'a'
-	if classify(Color.c5) == 15 'b' n = n + 1 end 'b'
-	if classify(Color.c7) == 17 'c' n = n + 1 end 'c'
+	if classify(Color.c0) == 10 'a'
+		n = n + 1
+	end 'a'
+	if classify(Color.c5) == 15 'b'
+		n = n + 1
+	end 'b'
+	if classify(Color.c7) == 17 'c'
+		n = n + 1
+	end 'c'
 	return n
 end 'main'
 ```
@@ -602,15 +778,33 @@ function main() returns ExitCode
 	// hole. Every covered value hits its arm; the hole, the two just-outside-span neighbours, a negative,
 	// and a far value all fall to the default.
 	var n = 0 as ExitCode
-	if scalar(0) == 100 'a' n = n + 1 end 'a'
-	if scalar(3) == 102 'b' n = n + 1 end 'b'
-	if scalar(4) == 102 'c' n = n + 1 end 'c'
-	if scalar(5) == 105 'd' n = n + 1 end 'd'
-	if scalar(6) == 999 'e' n = n + 1 end 'e'
-	if scalar(7) == 107 'f' n = n + 1 end 'f'
-	if scalar(8) == 999 'g' n = n + 1 end 'g'
-	if scalar(-1) == 999 'h' n = n + 1 end 'h'
-	if scalar(100000) == 999 'i' n = n + 1 end 'i'
+	if scalar(0) == 100 'a'
+		n = n + 1
+	end 'a'
+	if scalar(3) == 102 'b'
+		n = n + 1
+	end 'b'
+	if scalar(4) == 102 'c'
+		n = n + 1
+	end 'c'
+	if scalar(5) == 105 'd'
+		n = n + 1
+	end 'd'
+	if scalar(6) == 999 'e'
+		n = n + 1
+	end 'e'
+	if scalar(7) == 107 'f'
+		n = n + 1
+	end 'f'
+	if scalar(8) == 999 'g'
+		n = n + 1
+	end 'g'
+	if scalar(-1) == 999 'h'
+		n = n + 1
+	end 'h'
+	if scalar(100000) == 999 'i'
+		n = n + 1
+	end 'i'
 	return n as ExitCode
 end 'main'
 ```
@@ -635,12 +829,24 @@ function main() returns ExitCode
 	// A dense span that CROSSES ZERO (min -3, span 5): the bias subtract is `x - (-3)` = `x + 3`, and the
 	// UNSIGNED bounds check routes a below-min value (which wraps to a huge unsigned index) to the default.
 	var n = 0 as ExitCode
-	if classify(-3) == 1 'a' n = n + 1 end 'a'
-	if classify(-1) == 3 'b' n = n + 1 end 'b'
-	if classify(0) == 4 'c' n = n + 1 end 'c'
-	if classify(1) == 5 'd' n = n + 1 end 'd'
-	if classify(-4) == 0 'e' n = n + 1 end 'e'
-	if classify(2) == 0 'f' n = n + 1 end 'f'
+	if classify(-3) == 1 'a'
+		n = n + 1
+	end 'a'
+	if classify(-1) == 3 'b'
+		n = n + 1
+	end 'b'
+	if classify(0) == 4 'c'
+		n = n + 1
+	end 'c'
+	if classify(1) == 5 'd'
+		n = n + 1
+	end 'd'
+	if classify(-4) == 0 'e'
+		n = n + 1
+	end 'e'
+	if classify(2) == 0 'f'
+		n = n + 1
+	end 'f'
 	return n as ExitCode
 end 'main'
 ```
@@ -791,13 +997,27 @@ end 'bucket'
 function main() returns ExitCode
 	// value v in [0,4095] routes to bucket (v/32)+1; 4096 and -1 are just outside the span, so the default.
 	var n = 0 as ExitCode
-	if bucket(0) == 1 'a' n = n + 1 end 'a'
-	if bucket(31) == 1 'b' n = n + 1 end 'b'
-	if bucket(32) == 2 'c' n = n + 1 end 'c'
-	if bucket(2047) == 64 'd' n = n + 1 end 'd'
-	if bucket(4095) == 128 'e' n = n + 1 end 'e'
-	if bucket(4096) == 0 'f' n = n + 1 end 'f'
-	if bucket(-1) == 0 'g' n = n + 1 end 'g'
+	if bucket(0) == 1 'a'
+		n = n + 1
+	end 'a'
+	if bucket(31) == 1 'b'
+		n = n + 1
+	end 'b'
+	if bucket(32) == 2 'c'
+		n = n + 1
+	end 'c'
+	if bucket(2047) == 64 'd'
+		n = n + 1
+	end 'd'
+	if bucket(4095) == 128 'e'
+		n = n + 1
+	end 'e'
+	if bucket(4096) == 0 'f'
+		n = n + 1
+	end 'f'
+	if bucket(-1) == 0 'g'
+		n = n + 1
+	end 'g'
 	return n as ExitCode
 end 'main'
 ```

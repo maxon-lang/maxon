@@ -212,19 +212,7 @@ value=gt
 0
 ```
 
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live
-in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
-scans only `## Tests`, up to the next `## ` heading) never extracts them, and
-they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
-`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-
-### float-comparison
-
-Re-enable once its prerequisites land: float literals + float comparison (an XMM
-`ucomisd` + an unsigned/parity-aware jcc).
-
+<!-- test: float-comparison -->
 ```maxon
 function main() returns ExitCode
 	let x = 3.5

@@ -250,19 +250,9 @@ end 'main'
 ```
 
 
-## Deferred
-
-Tests recorded for re-enablement at the milestone that unblocks them. They live
-in this `## Deferred` section — NOT `## Tests` — so the spec-test parser (which
-scans only `## Tests`, up to the next `## ` heading) never extracts them, and
-they carry NO `<!-- test: … -->` marker. To re-enable: move the test up into
-`## Tests` and prefix it with its `<!-- test: NAME -->` marker.
-
-### if-statements.nested-if-with-scoped-string
-
-Re-enable once its prerequisites land: string literals + `==` on strings + calls
-(M5 / string milestone).
-
+<!-- test: if-statements.nested-if-with-scoped-string -->
+Variables declared inside if blocks go out of scope at the end of the block.
+Return after the if should not attempt to clean up those variables.
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -285,12 +275,7 @@ end 'main'
 42
 ```
 
-### if-statements.single-line-block-rejected
-
-Re-enable once its prerequisite lands: the "expected newline after block label"
-reject (E2001) — the parser is permissive about a label-then-statement on one
-line. (Its other prerequisite, the `true` literal, has landed.)
-
+<!-- test: if-statements.single-line-block-rejected -->
 ```maxon
 function main() returns ExitCode
 	if true 'x' return 1 end 'x'
@@ -298,5 +283,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2001: <fragment>:3:14: Expected newline after block label, got 'return'
+error E2001: specs/fragments/if-statements/if-statements.single-line-block-rejected.test:3:14: Expected newline after block label, got 'return'
 ```

@@ -861,6 +861,11 @@ export union ParseError implements Error
 	// construct this compiler does not implement YET", and a stray `42` at file scope is malformed
 	// syntax that no future feature makes legal — a permanent refusal filed as a pending one.
 	expectedDeclaration(got String, line LineNumber, column ColumnNumber)
+	// ⭐ **A BLOCK LABEL ENDS ITS LINE** — `if true 'x' return 1 end 'x'` is refused, which
+	// `specs/if-statements.md`'s `single-line-block-rejected` pins. It rides the SAME E2001 as
+	// `expectedDeclaration` beside it, for the same reason: a token stood where the layout admits
+	// exactly one thing.
+	expectedNewlineAfterBlockLabel(got String, line LineNumber, column ColumnNumber)
 	// ⭐ **`self` WHERE THERE IS NO INSTANCE — a `static function`, a free function, or a closure inside
 	// either.** Renders as **E2001** `'self' can only be used inside instance methods`, positioned at the
 	// `self` token (or at the bare self-field name that needs the receiver).
@@ -29786,6 +29791,7 @@ export type Parser
 		// Consume the block-open label (`parseBlockBody` consumes only the closing `end <label>`, exactly
 		// as `parseIfStatement`/`parseWhileStatement` consume their own opening labels).
 		try self.consume(TokenKind.charLiteral)
+		try self.requireNewlineAfterBlockLabel()
 
 		var errBlock = self.currentBlock
 
@@ -29876,6 +29882,7 @@ export type Parser
 		let tryTok = try self.consume(TokenKind.try)
 		let labelTok = try self.consume(TokenKind.charLiteral)
 
+		try self.requireNewlineAfterBlockLabel()
 		// A match arm's body must be a single statement (E2049).
 		//
 		// ⚠ **ANCHORED ON THE `try`, WHERE THE BLOCK-`otherwise` FORM ANCHORS ON ITS LABEL — and the
@@ -32686,6 +32693,7 @@ export type Parser
 		try self.requireNoRedundantContainsGet(ifIndex)
 
 		let thenLabel = try self.consume(TokenKind.charLiteral)
+		try self.requireNewlineAfterBlockLabel()
 
 		// Values entering the branches (the condition only reads, so `entry`'s values
 		// are unchanged by it). Positional over `assignedBindings`.
@@ -33015,6 +33023,7 @@ export type Parser
 		end 'elseIf'
 
 		let elseLabelTok = try self.consume(TokenKind.charLiteral)
+		try self.requireNewlineAfterBlockLabel()
 		return try self.parseBlockBody(func, block: elseBlock, label: elseLabelTok.value)
 	end 'parseElseBranchBody'
 
@@ -33562,6 +33571,7 @@ export type Parser
 		self.dropArmScopedOwned(condOwnedFloor, exitBlock: condExit, anchor: whileTok)
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
+		try self.requireNewlineAfterBlockLabel()
 
 		var body = self.newBlock(func, label: loopLabelTok.value, line: loopLabelTok.line)
 		var exit = self.newBlock(func, label: b"whileexit", line: whileTok.line)
@@ -34039,6 +34049,7 @@ export type Parser
 		let cond = try self.emitCompare(indexPhi, rhs: bound, op: testOp, opTok: self.tokenAt(testAnchorIndex))
 
 		let loopLabelTok = try self.consume(TokenKind.charLiteral)
+		try self.requireNewlineAfterBlockLabel()
 
 		var body = self.newBlock(func, label: loopLabelTok.value, line: loopLabelTok.line)
 		var step = self.newBlock(func, label: b"forstep", line: loopLabelTok.line)
@@ -36734,6 +36745,7 @@ export type Parser
 		end 'noLabel'
 		let labelTok = try self.consume(TokenKind.charLiteral)
 		let matchLabel = labelTok.value
+		try self.requireNewlineAfterBlockLabel()
 
 		let entryVals = self.snapshotBindings(carried)
 
@@ -68964,6 +68976,20 @@ export type Parser
 
 	// Consume a token of the expected kind, or throw a positioned mismatch error.
 	// A TokenKind's `.rawValue` is its human-readable display text ("(", "return").
+	// ⭐⭐ **THE LAYOUT RULE EVERY LABELLED BLOCK OPENER ASKS, AND NONE OF THEM RESTATES.** A block's
+	// label is the last thing on its line: `if`, `else`, `while`, `for`, `match` and both `try` forms
+	// open one, and a rule spelled at seven sites is a rule that drifts at six of them. shv2 enforced it
+	// NOWHERE until this call existed — `while i < 1 'w' i = i + 1 end 'w'` compiled and ran, measured on
+	// the same binary that refused nothing about it.
+	function requireNewlineAfterBlockLabel() throws ParseError
+		if self.at(TokenKind.newline) 'endsItsLine'
+			return
+		end 'endsItsLine'
+
+		let got = self.current()
+		throw ParseError.expectedNewlineAfterBlockLabel(tokenDisplayText(got), line: got.line, column: got.column)
+	end 'requireNewlineAfterBlockLabel'
+
 	function consume(kind TokenKind) returns Token throws ParseError
 		let tok = self.current()
 		if tok.kind != kind 'mismatch'
