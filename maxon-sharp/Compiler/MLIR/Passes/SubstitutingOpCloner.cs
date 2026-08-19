@@ -13,8 +13,11 @@ namespace MaxonSharp.Compiler.Ir.Passes;
 /// rule belongs in one place.
 /// </summary>
 internal interface IOpSubstitution {
-  /// Names the specialization mechanism for the unhandled-op message. The two passes used to
-  /// carry one message each and had them SWAPPED, so each one named the other's mechanism.
+  /// Names the specialization mechanism for the unhandled-op message. The two passes used to raise
+  /// that message themselves, and their names read as if they were swapped — FunctionCloner.cs said
+  /// "Monomorphization" and MonomorphizationPass.cs said "Interface alias specialization". They were
+  /// not: each names the MECHANISM, and each file's mechanism happens to be the other file's name.
+  /// Carrying it on the substitution keeps that true from the one place the message now lives.
   string Mechanism { get; }
 
   /// The clone's counterpart of a source value, minting one if the definition has not been seen.

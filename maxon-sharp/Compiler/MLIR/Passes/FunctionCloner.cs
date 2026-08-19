@@ -530,10 +530,14 @@ internal class FunctionCloner : IOpSubstitution {
     if (valueKind == MaxonValueKind.Enum && mappedValue is MaxonEnum assignEnum) {
       _enumVars.TryAdd(assign.VarName, assignEnum.TypeName);
     }
-    var cloned = new MaxonAssignOp(assign.VarName, mappedValue, assign.IsDeclaration, assign.IsMutable, valueKind) {
-      OwnerFlags = assign.OwnerFlags
+    // `@heap` is the user's word, and StackPromotionAnalysisPass — which runs AFTER this clone —
+    // is the only thing that reads it. Dropping it here let a specialization of a generic body put
+    // on the stack what the source said must be on the heap; the interface-alias cloner has always
+    // carried it, and a flag one cloner keeps and the other drops is the defect, not a detail.
+    return new MaxonAssignOp(assign.VarName, mappedValue, assign.IsDeclaration, assign.IsMutable, valueKind) {
+      OwnerFlags = assign.OwnerFlags,
+      ForceHeap = assign.ForceHeap
     };
-    return cloned;
   }
 
   private MaxonOp CloneParamOp(MaxonParamOp param) {
