@@ -2337,6 +2337,11 @@ type MethodDescriptorScan
 	// released through the descriptor-gated `__drop_type_param`. The receiver is not resolved here, for the
 	// reason `hasContainerMoveOut`'s is not; see `ProgramSignatures.methodNameEverReturnsBareTypeParameter`.
 	export let adoptsOpaqueCallResult as bool
+	// ⭐ Does the region CALL a method some declaration gives a type-parameter FEED parameter (BATCH41)? The
+	// dual of the bool above: that one is the body that TAKES a bare `T` over, this one the body that HANDS
+	// one to something that will keep it — and such a body may owe a reference through `retainFunc@64`, which
+	// only the enclosing instance's layout descriptor can supply.
+	export let forwardsToATypeParamFeed as bool
 	// ⭐ Does this region MOVE A VALUE INTO A CONTAINER — a `push`/`set`/`insert` call (W60)? The container
 	// slot is the twin of `buildsRecord`'s record slot: a BORROWED opaque `T` stored there takes its
 	// reference through the descriptor's `retainFunc@64`, released by the container's own element walk. The
@@ -2368,8 +2373,8 @@ type MethodDescriptorScan
 	export let nestedInstanceCallees as ByteArrayArray
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, walksReceiverAsACursor bool, corpusContainerCallees ByteArrayArray, nestedInstanceCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, forwardsToATypeParamFeed bool, storesContainerElement bool, walksReceiverAsACursor bool, corpusContainerCallees ByteArrayArray, nestedInstanceCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -13232,6 +13237,21 @@ export type Parser
 				// Gated on the enclosing type being GENERIC as well, which the siblings get for free from the
 				// questions they ask and this one does not: a non-generic type's method has no opaque `T` to
 				// adopt and no `uses` position a descriptor could describe.
+				// ⭐⭐ **A METHOD THAT FORWARDS A BORROWED OPAQUE `T` TO A SIBLING GENERIC'S CONSTRUCTOR TAKES A
+				// REFERENCE THROUGH `retainFunc@64`, SO IT NEEDS THE DESCRIPTOR (BATCH41).** The dual of
+				// `adoptsOpaqueResult`: that one reserves for the body that TAKES a bare `T` over, this one for
+				// the body that HANDS one to something that will keep it.
+				//
+				// ⚠ **NO `not isStatic`, ALONE AMONG THE OPAQUE SIGNALS, AND THAT IS THE POINT.** The shape
+				// this exists for is `Bag.wrap(x Element) returns EBox` and `Bag.createIterator() returns
+				// BagIter` — and a STATIC spelling of either is admissible for exactly the reason
+				// `staticLayoutNeedsSelfReturn` states: a static that RETURNS the enclosing type can source the
+				// descriptor from the instance it builds. A static returning something else is that refusal's,
+				// with a position, which is the answer that shape has always owed.
+				//
+				// Gated on the enclosing type being GENERIC, which the sibling signals get for free from the
+				// questions they ask: a non-generic type's method has no opaque `T` to forward.
+				let forwardsBorrowedOpaqueToAFeed = scan.forwardsToATypeParamFeed and not self.enclosingTypeParams.isEmpty()
 				let adoptsOpaqueResult = scan.adoptsOpaqueCallResult and not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q)
 				// ⭐⭐ **A method that STORES INTO A CONTAINER may store a BORROWED opaque `T`, and that store
 				// takes its reference through the descriptor's `retainFunc@64` (W60), so it needs the
@@ -13285,7 +13305,7 @@ export type Parser
 				// answer that must be wrong is wrong upwards, and `solveDescriptorNeeds`' claim that same-named
 				// methods "share one answer" is made true here rather than assumed.
 				let alreadyContributed = directSeeds.contains(qualified)
-				var directlyNeeded = scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or storesBorrowedOpaqueElement or walksAnOwnedOpaqueElement
+				var directlyNeeded = scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or forwardsBorrowedOpaqueToAFeed or storesBorrowedOpaqueElement or walksAnOwnedOpaqueElement
 				var edges = self.descriptorEdgesFor(site.typeName, scan: scan, isStatic: self.functionDeclIsStatic(q))
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
 				// (W43b). See `fieldDefaultHelperNamesOf` for why every helper is named rather than only the
@@ -13524,6 +13544,9 @@ export type Parser
 		// ⭐ Does this region CALL a method that hands back a bare type parameter (W58)? See
 		// `MethodDescriptorScan.adoptsOpaqueCallResult`.
 		var adoptsOpaqueCallResult = false
+		// ⭐ Does this region CALL a method some declaration gives a type-parameter FEED parameter (BATCH41)?
+		// See `MethodDescriptorScan.forwardsToATypeParamFeed`.
+		var forwardsToATypeParamFeed = false
 		// ⭐ Does this region STORE INTO A CONTAINER (W60)? See `MethodDescriptorScan.storesContainerElement`.
 		var storesContainerElement = false
 		// ⭐ Does this region walk `for … in self` (W159)? See `MethodDescriptorScan.walksReceiverAsACursor`.
@@ -13640,6 +13663,16 @@ export type Parser
 			if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen and self.signatures.methodNameEverReturnsBareTypeParameter(self.tokenAt(q + 1).value) 'adoptsOpaqueResult'
 				adoptsOpaqueCallResult = true
 			end 'adoptsOpaqueResult'
+			// ⭐⭐ **THE CALLER'S HALF OF THE CONSTRUCTOR-FEED RETAIN (BATCH41)** — the exact twin of the arm
+			// above, one direction over: that one is a `.<name>(` whose callee HANDS BACK a bare `T`, this one
+			// a `.<name>(` whose callee will KEEP one. `EBox.create(x, tag: tag)` inside `type Bag uses
+			// Element` is the shape, and the reference it owes is taken through `retainFunc@64`
+			// (`handleEscapingBorrowFeed`), so the body needs the descriptor. Read at the `.` for that arm's
+			// reason: a keyword-named method (D8) is seen, and a bare `name(` is a SIBLING call the fixpoint
+			// already reaches through its own edge.
+			if kind == TokenKind.dot and tokenCanBeAName(self.tokenAt(q + 1)) and self.kindAt(q + 2) == TokenKind.leftParen and self.signatures.methodNameEverFeedsATypeParameter(self.tokenAt(q + 1).value) 'forwardsToAFeed'
+				forwardsToATypeParamFeed = true
+			end 'forwardsToAFeed'
 			// ⭐⭐ **THE CROSS-TYPE EDGE (ARRG)** — a `.<member>(` the CORPUS serves on a builtin generic
 			// container. Read at the `.` for the arm above's reason, and recorded as an EDGE rather than as a
 			// seed because whether the callee needs a descriptor is the fixpoint's own answer, not this scan's.
@@ -13728,7 +13761,7 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, endPos: regionEnd)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
 
 	// ⭐⭐⭐ **THE ONE EDGE IN THE DESCRIPTOR-NEED FIXPOINT THAT LEAVES THE ENCLOSING TYPE (ARRG).** A `.<m>(`
@@ -30956,8 +30989,30 @@ export type Parser
 		// which is right for every OTHER reader of that layout and is exactly why the obligation is carried on
 		// the value. See `recordsOwningOpaqueSlots` for the leak this closes and why the mark is per-value.
 		if self.recordsOwningOpaqueSlots.contains(value) 'ownsOpaqueSlots'
-			self.emitOpaqueSlotReleases(value, range: range)
+			self.emitOpaqueSlotReleases(value, layout: self.declaredLayoutOfRecordValue(value), range: range)
 		end 'ownsOpaqueSlots'
+
+		// ⭐⭐ **AND A DECLARATION-VIEW INSTANCE RELEASES ITS OPAQUE SLOTS ON THE SAME TERMS, WITHOUT A MARK
+		// (BATCH41).** The mark above is a fact this FRAME knows about a record IT built; this arm is a fact
+		// about the record's TYPE, and it has to be, because the frame that drops such a record is routinely
+		// not the frame that built it — `stdlib/Interfaces.maxon`'s `contains` drops the `BagIter with Element`
+		// that the conformer's own `createIterator` built two frames away.
+		//
+		// ⛔⛔ **MEASURED: without it, closing the constructor-feed retain LEAKS — three
+		// `generic-opaque-cursor-element` cases at exit 101.** The retain hands the iterator a `+1` on its
+		// `slot`, and the only destructor the shared body can name for a `BagIter with Element` is the
+		// DECLARATION VIEW's, whose own cascade reads that field through `typeIsManaged` and is told it owns
+		// nothing. The release therefore has to be emitted HERE, where the enclosing instance's descriptor is
+		// in hand and `destroyFunc@40` says what the slot owes.
+		//
+		// ⚠ **IT CANNOT DOUBLE-FREE, AND THE INVARIANT IS ONE SENTENCE:** a declaration-view record's bare-`T`
+		// slot always holds exactly ONE reference — a concrete call site CONSUMES its argument
+		// (`argIsConsumedAt`), a shared one now RETAINS it (`referenceOrMarkOpaqueFeed`), and an owned value
+		// moved in transfers its own. A CONCRETE instance never reaches this arm (its arguments mention no
+		// parameter), so its `__destruct_<Base>_<Arg>` remains the sole releaser for it.
+		if self.dropReleasesDeclarationViewOpaqueSlots(value) 'aDeclarationViewRecord'
+			self.emitOpaqueSlotReleases(value, layout: self.baseLayoutOfInstanceValue(value), range: range)
+		end 'aDeclarationViewRecord'
 
 		let callee = self.decrefCalleeFor(value)
 		// ⭐ An OPAQUE drop reads the enclosing instance's layout descriptor at run time, so it needs the
@@ -30980,8 +31035,7 @@ export type Parser
 	//
 	// The descriptor is guaranteed: the store that set the mark went through `__retain_type_param`, which owes
 	// the same descriptor and records its absence itself, so this cannot be the first site to need one.
-	function emitOpaqueSlotReleases(box ValueId, range SourceRange)
-		let layout = self.declaredLayoutOfRecordValue(box)
+	function emitOpaqueSlotReleases(box ValueId, layout StructLayout, range SourceRange)
 		for i in 0 upto layout.fieldCount() 'eachField'
 			let declared = self.signatures.fieldTypeOf(layout, index: i, into: self.artifact.typeNames)
 			if maxonTypeTag(declared) != ValueTypeTag.typeParameter 'notOpaque'
@@ -31001,6 +31055,46 @@ export type Parser
 	// alias, so no shared body ever builds one and no `T` payload is ever stored. The panic states that rather
 	// than a layout being silently skipped, because the day the front end admits the construct this cascade
 	// owes it a release and a quiet miss would be a leak.
+	// ⭐ **DOES DROPPING `value` OWE ITS OPAQUE SLOTS A RELEASE THIS FRAME MUST EMIT (BATCH41)?** Three
+	// conditions, and each rules out a different wrong answer: the value must be a GENERIC INSTANCE (nothing
+	// else has a base layout to walk); the instance must still MENTION a type parameter, i.e. be the
+	// DECLARATION VIEW — a concrete instance's own `__destruct_<Base>_<Arg>` releases the slot and a second
+	// release here is a double free; and its base must actually DECLARE a bare-parameter field whose
+	// instantiations can be managed, which is `instanceRestsAnUnnameableSlot`'s question and keeps a trivial
+	// instantiation from emitting a `__drop_type_param` that reads a zero word to no purpose.
+	//
+	// ⚠ It deliberately does NOT ask whether this frame took the reference: that is the mark's question, and
+	// a record built two frames away is exactly the case this arm exists for.
+	function dropReleasesDeclarationViewOpaqueSlots(value ValueId) returns bool
+		if self.tagOf(value) != ValueTypeTag.genericInstance 'notAnInstance'
+			return false
+		end 'notAnInstance'
+		// ⛔⛔ **AND ONLY WHERE THIS DECREF IS THE LAST ONE — MEASURED, six committed programs otherwise.**
+		// A record is REFCOUNTED, so a `__mm_decref` is not a free: `generic-type-substitution`'s
+		// `bare-generic-name-as-a-managed-field-type` co-owns its `cell` into a `Self{…}` field (the
+		// 2026-08-12 durable-store ruling — the source keeps its own reference) and then drops its own, which
+		// is balanced on the BOX and would have released the box's opaque SLOT a second time. `valueIsSoleHeapOwner`
+		// is the one predicate that says this frame's reference is the only one, which is exactly when the
+		// decref frees the record and the slot goes with it — and it is the same guarantee the MARK above
+		// carries by provenance.
+		if not self.valueIsSoleHeapOwner(value) 'anotherOwnerWillOutliveThisDrop'
+			return false
+		end 'anotherOwnerWillOutliveThisDrop'
+
+		return self.signatures.instanceRestsAnUnnameableSlot(self.valueNameId(value))
+	end 'dropReleasesDeclarationViewOpaqueSlots'
+
+	// The BASE struct's layout for a generic-instance value — the slot table `emitOpaqueSlotReleases` walks.
+	// A generic instance's box is its base's field row (every slot a machine word), which is the same
+	// assumption `emitFieldLoad` already makes for a `Self{…}` of the same type.
+	function baseLayoutOfInstanceValue(value ValueId) returns StructLayout
+		let baseName = self.signatures.genericInstanceBaseName(self.valueNameId(value))
+		match self.signatures.structOf(baseName) 'declared'
+			declared(layout) then return layout
+			undeclared then panic("baseLayoutOfInstanceValue: generic instance value v{value} has base '{String.from(baseName)}', which declares no struct — `instanceRestsAnUnnameableSlot` answered true, and that walk opens with `genericInstanceHasBaseLayout`")
+		end 'declared'
+	end 'baseLayoutOfInstanceValue'
+
 	function declaredLayoutOfRecordValue(box ValueId) returns StructLayout
 		let name = self.valueTypeName(box)
 		match self.signatures.structOf(name) 'declared'
@@ -66739,15 +66833,7 @@ export type Parser
 		// descriptor-need seed for "forwards a borrowed opaque `T` to a feed position" that the token pre-scan
 		// cannot produce — a rung, not a review edit. FILED, with this reproducer, rather than half-taken.
 		if not feed.sinkIsCalleeStorage() 'constructorFeed'
-			// ⭐⭐ **THE PROVENANCE MARK (BATCH41 arrival roster).** `coOwnConcreteAggregateFeed` is inert on a
-			// `typeParameter` tag, so the record this call is building gets a slot holding a borrow nobody
-			// referenced. It cannot be refused HERE — the record is perfectly sound as a LOCAL that dies in the
-			// frame (MEASURED: exit 0) and as a value RETURNED to a shared caller
-			// (`generic-opaque-cursor-element`) — so what is recorded is the FACT, and the refusal is at
-			// whichever ARRIVAL the record then reaches.
-			self.noteFeedTookNoReference(argValue)
-			self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
-			return argValue
+			return self.referenceOrMarkOpaqueFeed(argValue, anchor: anchor)
 		end 'constructorFeed'
 
 		self.giveTemporaryScopeLifetime(argValue, name: EscapingFeedSourceBindingName)
@@ -66755,17 +66841,41 @@ export type Parser
 		// `argIsConsumedAt` already made off the instance's type argument — a trivial aggregate is deliberately
 		// BORROWED (the caller keeps it usable) and CO-OWNED, so the reference is taken here. An OPAQUE
 		// shared-body borrow, which no instance test can see, takes its own through the descriptor below.
+		return self.referenceOrMarkOpaqueFeed(argValue, anchor: anchor)
+	end 'handleEscapingBorrowFeed'
+
+	// ⭐⭐⭐ **THE ONE ACT BOTH FEED SINKS OWE, AND SINCE BATCH41 THE TWO DIFFER ONLY IN THE LIFETIME
+	// EXTENSION.** A CONCRETE argument is the call site's own value, whose consume/borrow decision
+	// `argIsConsumedAt` already made off the instance's type argument — a trivial aggregate is deliberately
+	// BORROWED and CO-OWNED, so the reference is taken here. An OPAQUE shared-body borrow, which no instance
+	// test can see, takes its own through the enclosing instance's descriptor.
+	//
+	// ⛔⛔ **THE CONSTRUCTOR SINK USED TO TAKE NOTHING AT ALL, AND THAT WAS A USE-AFTER-FREE.** MEASURED, on
+	// `Bag.wrap(x Element) returns EBox` at `Bag with String`, whose caller's heap `String` dies at its scope
+	// exit and whose `__destruct_Box_String` then frees it a second time: **`0xC0000005`**, byte-identical on
+	// `main` and on this branch, and exit 0 with the payload printed once the reference is taken here.
+	//
+	// ⚠ **THE NARROWING IS THE INSTANTIATION AND NOT THE SINK** (`typeParamFeedCanOwnAReference`): taking it
+	// unconditionally refuses FOUR committed programs whose instantiation is trivial and owes no reference at
+	// all, because the retain is RESERVED statically (a descriptor parameter) and NEEDED only dynamically.
+	// Declining there emits nothing that would have done anything — `retainFunc@64` is 0.
+	//
+	// ⚠ When no reference IS taken, the record this feed fills gets a slot holding a borrow nobody referenced,
+	// which is sound where the record dies inside the borrow's lifetime and is not where it comes to rest.
+	// That fact is recorded rather than acted on here; the refusal is at the ARRIVAL
+	// (`requireStoredRecordDropIsNameable`).
+	function referenceOrMarkOpaqueFeed(argValue ValueId, anchor Token) returns ValueId
 		if self.tagOf(argValue) != ValueTypeTag.typeParameter 'concreteArgument'
 			self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
 			return argValue
 		end 'concreteArgument'
-		if not self.signatures.typeParamOwnerIsInstantiated(self.valueNameId(argValue)) 'noInstantiationToReference'
+		if not self.signatures.typeParamFeedCanOwnAReference(self.valueNameId(argValue)) 'noInstantiationOwesOne'
 			self.noteFeedTookNoReference(argValue)
 			return argValue
-		end 'noInstantiationToReference'
+		end 'noInstantiationOwesOne'
 
 		return self.coOwnBorrowedOpaque(argValue, range: SourceRange.ofToken(anchor))
-	end 'handleEscapingBorrowFeed'
+	end 'referenceOrMarkOpaqueFeed'
 
 	// ⭐ **A FEED THAT TOOK NO REFERENCE FOR AN OPAQUE `T` ARMS THE MARK FOR THE CALL'S RESULT (BATCH41).**
 	// Only an OPAQUE argument can leave a slot unreferenced — a concrete aggregate is co-owned at this sink and

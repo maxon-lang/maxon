@@ -1805,6 +1805,20 @@ enum TypeArgInstantiationKind
 	// already reads. The two gates then agree on what "managed" means, which is what a shared body's refusal
 	// and a concrete instance's refusal must do.
 	managedElement
+	// A HEAP AGGREGATE again (`typeIsManaged`) — the SAME boundary as `managedElement`, asked in the EMITTING
+	// direction: can the instance descriptor's `retainFunc@64` be non-zero for this parameter, so that a
+	// shared body forwarding a borrowed `T` to a durable sink owes a reference (BATCH41)?
+	//
+	// ⛔ **IT IS A SEPARATE KIND *BECAUSE OF `kindIsARefusal`*, which is the one axis that makes two gates over
+	// one boundary two different questions.** `managedElement` REFUSES, so it must ignore rows that are not
+	// facts about the program; ignoring one there costs a wrong ANSWER. This one EMITS, and its wrong direction
+	// is a USE-AFTER-FREE — a managed instantiation whose row was skipped would leave the borrow unreferenced.
+	// So it reads EVERY row, exactly as `consumeMoved`/`coOwnedTrivial` do.
+	//
+	// ⚠ A DECLARATION-VIEW row votes NOTHING and needs no filter: its argument is a bare `typeParameter`, which
+	// `typeIsManaged` answers `false` for — this rung's own defect one door over, and the RIGHT answer here,
+	// because a declaration view describes no box any program builds.
+	retainedFeed
 end 'TypeArgInstantiationKind'
 
 // Which instance of the declaring base classified its argument as the asked-for kind, or that none did.
@@ -1835,6 +1849,7 @@ function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 		coOwnedTrivial then return false
 		uncopyableElement then return true
 		managedElement then return true
+		retainedFeed then return false
 	end 'kind'
 end 'kindIsARefusal'
 
@@ -2873,6 +2888,20 @@ export type ParamConsumeInfo
 		end 'each'
 		return false
 	end 'feedsCalleeStorage'
+
+	// Does ANY parameter feed a type parameter at ALL, either sink (BATCH41)? `feedsCalleeStorage`'s twin
+	// asking `isFeed()` rather than the sink, for the descriptor-need seed that must cover the CONSTRUCTOR
+	// feed as well: a body forwarding a borrowed opaque `T` into another generic's `create()` takes its
+	// reference through `retainFunc@64` and so needs the descriptor, and that sink is exactly the one
+	// `feedsCalleeStorage` excludes.
+	export function feedsAnyTypeParameter() returns bool
+		for i in 0 upto self.feeds.count() 'each'
+			if (try self.feeds.get(i) otherwise panic("feedsAnyTypeParameter: feeds.get OOB at {i} despite i < count")).isFeed() 'feed'
+				return true
+			end 'feed'
+		end 'each'
+		return false
+	end 'feedsAnyTypeParameter'
 
 	// The type-parameter position parameter `index` feeds, or `none` — the concrete-site managed-consume
 	// map. Out of range (a non-generic function's empty `feeds`, an unknown label) answers `none`, exactly
@@ -8621,6 +8650,10 @@ export type ProgramSignatures
 	// pipeline would have to re-establish that, which is why there is not one.
 	var bareTypeParamReturnerNames as MethodNameSet
 	var bareTypeParamReturnerNamesComputed as bool
+	// The `typeParamFeederNameSet` memo (BATCH41) — the same fold-once shape as the pair above, over the
+	// consume column rather than the return column.
+	var typeParamFeederNames as MethodNameSet
+	var typeParamFeederNamesComputed as bool
 	// ⭐⭐ **WHICH TYPE NAMES A *USER* FILE DECLARES (A1s wave 2)** — one half of the shadow contest. Filled
 	// by `foldFile` for every non-stdlib file, and read only while deciding which of a LISTED STDLIB
 	// module's declarations a user program has taken the name of. See `StdlibShadowRenameMap`.
@@ -8766,7 +8799,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -21444,6 +21477,7 @@ export type ProgramSignatures
 			coOwnedTrivial then return self.typeArgIsCoOwnedTrivial(t)
 			uncopyableElement then return not self.typeSupportsDeepClone(t, asElement: true, visited: ClonerSet.create())
 			managedElement then return self.typeArgIsManagedElement(t)
+			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
 		end 'kind'
 	end 'typeArgHasKind'
 
@@ -21504,6 +21538,24 @@ export type ProgramSignatures
 		let owner = try self.typeParamOwnerOf(param) otherwise return false
 		return self.genericTypeIsInstantiated(owner.declaringTypeName)
 	end 'typeParamOwnerIsInstantiated'
+
+	// ⭐⭐ **CAN A BORROWED VALUE OF `param` OWE A REFERENCE AT ALL — is `retainFunc@64` non-zero for SOME
+	// instantiation of the type that declares it (BATCH41)?** The gate on the descriptor-mediated retain a
+	// shared body owes when it hands its own borrowed `T` to a durable sink, and the STRONGER question
+	// `typeParamOwnerIsInstantiated` deliberately is not.
+	//
+	// ⭐ It is answerable HERE and not at the descriptor-need seed, which is the whole of why the two differ:
+	// `genericTypeIsInstantiated`'s header carries the argument — the seed runs before any body is parsed, so
+	// a concrete instantiation may not be interned yet. This is asked while a BODY is emitted.
+	//
+	// ⛔ **AND IT HAS TO BE ASKED, BECAUSE THE WEAK QUESTION REFUSES FOUR COMMITTED PROGRAMS** — MEASURED:
+	// `own-name-in-a-generic-body-is-still-Self`, `generic-body-user-generic-inner-alias-create` and two
+	// `self-type-member-expression` cases, every one a TRIVIAL instantiation owing no reference. Declining for
+	// those emits nothing that would have DONE anything: `__retain_type_param` loads a zero word and hands
+	// back the value it was given.
+	export function typeParamFeedCanOwnAReference(param TypeParamId) returns bool
+		return self.anyInstanceTypeArgHasKind(param, kind: TypeArgInstantiationKind.retainedFeed)
+	end 'typeParamFeedCanOwnAReference'
 
 	// ⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PARAMETER A CO-OWNED
 	// TRIVIAL STRUCT (the retain-escaping rung)?** A trivial struct/instance argument (`Box with
@@ -23510,6 +23562,50 @@ export type ProgramSignatures
 	export function methodNameEverReturnsBareTypeParameter(name ByteArray) returns bool
 		return self.bareTypeParamReturnerNameSet().contains(name)
 	end 'methodNameEverReturnsBareTypeParameter'
+
+	// ⭐⭐ **DOES SOME DECLARATION WEARING `name` TAKE A TYPE-PARAMETER FEED PARAMETER (BATCH41)?** The
+	// CALLER-side half of the constructor-feed retain, and the exact twin of the question above: that one is
+	// asked of a `.<name>(` whose callee HANDS BACK a bare `T`, this one of a `.<name>(` whose callee will
+	// KEEP one. A body making such a call may have to take a reference through `retainFunc@64`
+	// (`handleEscapingBorrowFeed`), so it needs the enclosing instance's layout descriptor — and no sibling
+	// signal could see that, for the reason `adoptsOpaqueResult`'s arm records: the receiver is a field, a
+	// local or an inner alias the descriptor-need pre-scan cannot resolve.
+	//
+	// ⚠ It is answered by NAME and over-approximates exactly as its twin does: a name some OTHER type's
+	// generic constructor also wears reserves an unread parameter, which costs one ignored slot. Missing one
+	// refuses a legal program at `requireDescriptorForOpaqueStores`.
+	export function methodNameEverFeedsATypeParameter(name ByteArray) returns bool
+		return self.typeParamFeederNameSet().contains(name)
+	end 'methodNameEverFeedsATypeParameter'
+
+	// The set behind the question above, folded ONCE out of `funcParamConsumes` — the only place the
+	// program's whole feed column lives. A free function is skipped for `bareTypeParamReturnerNameSet`'s
+	// reason: a bare name can never be reached through the `.` this set is asked at.
+	function typeParamFeederNameSet() returns MethodNameSet
+		if self.typeParamFeederNamesComputed 'alreadyFolded'
+			return self.typeParamFeederNames
+		end 'alreadyFolded'
+
+		for (callee, info) in self.funcParamConsumes 'eachDeclaration'
+			match splitQualifiedName(callee) 'qualified'
+				notQualified then continue
+				parts(_, member) then self.recordIfTypeParamFeeder(member, info: info)
+			end 'qualified'
+		end 'eachDeclaration'
+
+		self.typeParamFeederNamesComputed = true
+		return self.typeParamFeederNames
+	end 'typeParamFeederNameSet'
+
+	// One row of the fold above. Split out for `recordIfBareTypeParamReturn`'s reason — a `match` arm may not
+	// hold a statement sequence, and the insert is guarded.
+	function recordIfTypeParamFeeder(member ByteArray, info ParamConsumeInfo)
+		if not info.feedsAnyTypeParameter() 'noFeed'
+			return
+		end 'noFeed'
+
+		self.typeParamFeederNames.insert(member)
+	end 'recordIfTypeParamFeeder'
 
 	// The set behind the question above, folded ONCE out of `returnTypes` — the only place the program's whole
 	// declared-return column lives. A free function is skipped rather than filtered later: `splitQualifiedName`
