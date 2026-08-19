@@ -118,40 +118,34 @@ end 'main'
 <!-- test: clone-of-an-instance-over-the-enclosing-type-parameter -->
 ### The element instance is written over the ENCLOSING generic's own type parameter
 `Bag`'s inner `typealias EBox = Box with Element` names no concrete instance in the shared body; it is
-re-interned per enclosing instantiation, so `Bag with String` is what mints `Box with String`. The clone
+re-interned per enclosing instantiation, so `Bag with Integer` is what mints `Box with Integer`. The clone
 inside `Bag`'s shared body therefore has to reach the SAME per-instance cloner the top-level case does.
 
 The clone and the source are both live at the read, so a cloner that blitted the element POINTER — rather
 than allocating a fresh box per element — would hand two owners one box, and the second `__mm_decref` would
-free what the first already freed. ⚠ **WHAT THIS CASE DOES *NOT* PIN IS THE PAYLOAD'S OWNERSHIP, AND AN
-EARLIER DRAFT OF THIS PARAGRAPH CLAIMED IT DID.** It named `__destruct_Box_String` as the refcount check that
-would catch the mistake; this program emits no such symbol. MEASURED with `--emit-ir-runtime`: the element
-array is `__managed_create(8, __mm_decref)`, `Box.create` allocates each box with a ZERO destructor, and the
-cloner it reaches is `__clone_Box_T<hash>` — `__mm_alloc` + blit, no incref. The box identity IS pinned here
-(a shared box would double-free); the `String` inside it is neither retained nor released on either side, and
-its literal lives in `.rdata`, so no exit code here can distinguish an owned payload from a borrowed one.
-See `MmRuntime.synthesizeGenericInstanceCloner`'s header for that measurement and for the pre-existing
-borrow hole it belongs to.
+free what the first already freed. That box IDENTITY is what this case pins, and it pins it whatever the
+payload is.
 
-⛔⛔ **AND THE LITERAL IS NOT A CHOICE THIS CASE COULD SIMPLY REVERSE — MEASURED (BATCH41).** With a genuinely
-HEAP payload the identical program is a **use-after-free** (`0xC0000005`): nothing on the store side takes a
-reference, so the caller's release leaves the box pointing at freed bytes. That is
-`generic-opaque-value-store`'s two `disabled-test` cases, and taking the reference is not on its own the cure
-— MEASURED at the same time, with the store-side retain in place the same program exits **101**. The reason
-is one fact this case's own paragraph above already records: **`Bag.create` stamps its element array
-`__managed_create(8, __mm_decref)`.** The element type is `Box with Element`, an instance over the ENCLOSING
-type's parameter, so the destructor that would release the payload — `__destruct_Box_String` — is a fact
-about an instantiation the shared body cannot name, and the only symbol it can name is the DECLARATION-VIEW
-one, which reads its own bare `T` field through `typeIsManaged` and is told the field owns nothing.
+⛔⛔ **IT IS INSTANTIATED AT A SCALAR, AND THAT IS A PROPERTY OF THE LANGUAGE RATHER THAN OF THIS CASE'S
+AUTHOR (BATCH41).** The managed spelling of this program — `Bag with String` — is now REFUSED, and its
+refusal is `generic-opaque-value-store`'s
+`error.a-container-of-records-over-the-enclosing-parameter-is-refused`, which carries the two measurements:
+with a heap payload the identical program was a **use-after-free** (`0xC0000005`), and with the store side
+taking a reference through `retainFunc@64` it exited **101** instead. The cause is one fact this case can
+now state instead of apologising for: **`Bag.create` stamps its element array
+`__managed_create(8, __mm_decref)`**, because the element `Box with Element` reads its own bare `T` field
+through `typeIsManaged` and is told the field owns nothing — so the box is freed and the field it holds is
+not. `__destruct_Box_String` exists, but a shared body can name only the DECLARATION VIEW's destructor.
 
-⇒ **The `.rdata` blindness is therefore a property of the LANGUAGE as it stands, not of this case's author.**
-A record built over the enclosing type parameter and owned by the shared body itself has no per-instantiation
-release at all, and the compiler already says so in the one place it has a diagnostic for: reassigning such a
-field is refused with *"a descriptor slot carrying a nested instance's per-instantiation destructor is a
-later slice"*. Until that slot exists, no exit code in this file can see a payload, and a case that claimed
-otherwise would be claiming a capability the compiler does not have.
+⇒ **When a layout-descriptor slot carries a nested instance's per-instantiation destructor, this case gets
+its managed spelling back and the refusal becomes a runtime program.** Until then a MANAGED payload here
+would pin nothing that an exit code can see — an earlier draft of this paragraph believed a `.rdata` literal
+would do, and it did not: MEASURED with `--emit-ir-runtime`, `Box.create` allocates each box with a ZERO
+destructor and the cloner it reaches is `__clone_Box_T<hash>` — `__mm_alloc` + blit, no incref — so no exit
+code could distinguish an owned payload from a borrowed one. See
+`MmRuntime.synthesizeGenericInstanceCloner`'s header for that measurement.
 
-⚠ The element's `String` is read only through the box's scalar `tag`, not through `e.v`. A shared body's
+⚠ The element's payload is read only through the box's own `tag`, not through `e.v`. A shared body's
 method returning an inner alias over a NESTED instance (`Array with (Box with Element)`) hands the caller
 `Bag.EBoxArray` unsubstituted, so `e.v` resolves to the bare type parameter and a member call on it
 panics `enclosingTypeParamName` — a substitution gap of its own, unrelated to the cloner and reproducible
@@ -187,11 +181,11 @@ type Bag uses Element
 	end 'copy'
 end 'Bag'
 
-typealias StrBag = Bag with String
+typealias IntBag = Bag with Integer
 
 function main() returns ExitCode
-	var b = StrBag.create()
-	b.add("a boxed string held by a generic bag", tag: 4)
+	var b = IntBag.create()
+	b.add(91, tag: 4)
 
 	let c = b.copy()
 

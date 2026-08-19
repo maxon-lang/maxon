@@ -17003,6 +17003,98 @@ export type ProgramSignatures
 		return self.anyInstanceTypeArgHasKind(typeNameIdOf(element), kind: TypeArgInstantiationKind.managedElement)
 	end 'containerOpaqueElementCanBeManaged'
 
+	// ⭐⭐ **IS THIS COLUMN'S ELEMENT A RECORD WHOSE RELEASE IS A FACT ABOUT AN INSTANTIATION THE SHARED BODY
+	// CANNOT NAME (W171)?** The sibling of the question above, one level of nesting over: there the element IS
+	// the enclosing type's parameter, here the element is an INSTANCE written over it (`Box with Element`
+	// inside `type Bag uses Element`), and the two are separated by exactly the fact that a column's element
+	// destructor is a SYMBOL and a `destroyFunc@40` is a WORD.
+	//
+	// ⛔⛔ **MEASURED, `0xC0000005`, AND IT IS THE ROW'S OWN REPRO.** `type Bag uses Element` holding
+	// `typealias BoxArray = Array with (Box with Element)`, filled through `items.push(EBox.create(x, …))` at
+	// `Bag with String`, whose payload is a heap `String` that dies at its producer's scope exit: the box holds
+	// a pointer nobody took a reference to, and the read faults. **AND TAKING THE REFERENCE IS NOT THE CURE** —
+	// measured at the same time, with the store-side retain in place the identical program exits **101**,
+	// because the array is stamped `__managed_create(8, __mm_decref)` and the box is freed without its slot
+	// being released. The destructor that WOULD release it (`__destruct_Box_String`) exists — `Box with String`
+	// is interned by the substitution — but a shared body can name only the DECLARATION VIEW's, and that one
+	// reads its own bare `T` field through `typeIsManaged` and is told the field owns nothing. There is no
+	// descriptor slot carrying a nested instance's per-instantiation destructor; the compiler already says so
+	// where it can (`Parser.emitOpaqueFieldReassign`'s refusal, in those words).
+	//
+	// ⭐ **THE OPACITY IS THE ROUTING AND THE INSTANTIATION IS THE VERDICT** — `containerOpaqueElementCanBeManaged`'s
+	// discipline, for its reason. A `Bag` every `with` in the program instantiates at an `int` holds boxes whose
+	// bare `T` field owns nothing at run time, so its column is correct as it stands and refusing it would be a
+	// false reject. Only a field the instance leaves OPAQUE counts: one the enclosing instantiation already
+	// substituted to a concrete type has a statically nameable drop and is exactly what a concrete
+	// `Array with (Box with String)` does correctly today.
+	export function columnElementOwnsAnUnnameableSlot(columnType MaxonType) returns bool
+		// ⚠ **THE ELEMENT OF A CONTAINER DECLARED AT AN INNER ALIAS ARRIVES AS A BARE `named`, NOT AS AN
+		// INSTANCE, AND THE FIRST CUT OF THIS ANSWERED `false` FOR EVERY SHAPE IT EXISTS TO REFUSE.** A
+		// generic body's `typealias EBox = Box with Element` is re-interned per enclosing instantiation, so
+		// what `containerElementType` hands back inside the shared body is `named("Bag.EBox")` — MEASURED:
+		// `tag=named`, and the walk below never ran. It is resolved exactly as `denotesArrayInstance` resolves
+		// the same shape one question over, through the FILE-LESS alias door, because a column type reaching
+		// here travels with no reader path.
+		let tag = maxonTypeTag(columnType)
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			return self.instanceOwnsAnUnnameableSlot(typeNameIdOf(columnType))
+		end 'anInstance'
+		if tag != ValueTypeTag.named 'namesNoInstance'
+			return false
+		end 'namesNoInstance'
+
+		let name = self.nameOfId(typeNameIdOf(columnType))
+		// A superseded spelling votes nothing, for `typeArgIsManagedElement`'s reason: this is a REFUSAL, and
+		// a contested alias name no reader can reach is not an instantiation of anything.
+		if not self.isGenericAlias(name) or self.genericAliasSpellingIsSuperseded(name) 'notAnAliasForAnInstance'
+			return false
+		end 'notAnAliasForAnInstance'
+
+		return self.instanceOwnsAnUnnameableSlot(self.genericAliasInstance(name))
+	end 'columnElementOwnsAnUnnameableSlot'
+
+	// The instance-in-hand half of the question above — does `id` declare a field AT a parameter this instance
+	// leaves OPAQUE, which some instantiation of that parameter's owner makes managed?
+	function instanceOwnsAnUnnameableSlot(id GenericInstanceId) returns bool
+		// A fully concrete element resolves its own destructor at the create site — the whole point of the
+		// declaration-view/instance split (`instanceMentionsTypeParameter`).
+		if not self.instanceMentionsTypeParameter(id) 'fullyConcrete'
+			return false
+		end 'fullyConcrete'
+		// A builtin container element (`Array with Element` inside another container) has no declared field
+		// list and owes nothing here: its element destructor IS the descriptor's `destroyFunc@40`, which is
+		// the mechanism this function exists to say is missing one level up. The CLONE side of that same
+		// element is `containerOpaqueElementCanBeManaged`'s.
+		if not self.genericInstanceHasBaseLayout(id) 'noDeclaredFieldsToOwn'
+			return false
+		end 'noDeclaredFieldsToOwn'
+
+		let layout = self.baseLayoutOf(id)
+		let args = self.genericInstances.instanceArgs(id)
+		for i in 0 upto layout.fieldCount() 'eachField'
+			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.instanceOwnsAnUnnameableSlot: fieldTypes.get OOB at {i}")
+			if not self.slotTypeIsOpaque(fieldType) 'notABareParameterField'
+				continue
+			end 'notABareParameterField'
+
+			let position = self.opaqueTypeParamPosition(fieldType)
+			if position >= args.count() 'noArgumentAtThatPosition'
+				continue
+			end 'noArgumentAtThatPosition'
+
+			let arg = try args.get(position) otherwise panic("ProgramSignatures.instanceOwnsAnUnnameableSlot: instanceArgs.get OOB at {position} despite the range guard")
+			if not self.slotTypeIsOpaque(arg) 'substitutedToAConcreteType'
+				continue
+			end 'substitutedToAConcreteType'
+
+			if self.anyInstanceTypeArgHasKind(typeNameIdOf(arg), kind: TypeArgInstantiationKind.managedElement) 'someInstantiationOwnsIt'
+				return true
+			end 'someInstantiationOwnsIt'
+		end 'eachField'
+
+		return false
+	end 'instanceOwnsAnUnnameableSlot'
+
 	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`) — for the one message that has to
 	// say WHICH element type it is refusing (E3106, `Parser.requireArrayResizeHasZeroElement`). It lives here
 	// because `typeNames` is this index's own interner and is not the parser's to reach into; the parser holds

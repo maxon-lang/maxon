@@ -1,0 +1,59 @@
+// Test: error.a-container-of-records-over-the-enclosing-parameter-is-refused
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	let x as T
+	let tag as Integer
+
+	export function value() returns T
+		return x
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{x: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias BoxArray = Array with EBox
+	var items as BoxArray
+
+	export function add(x Element, tag Integer)
+		items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	export function first() returns Element throws ArrayError
+		let slot = try self.items.first() otherwise 'e'
+			throw ArrayError.indexOutOfBounds
+		end 'e'
+		return slot.value()
+	end 'first'
+
+	static function create() returns Self
+		return Self{items: BoxArray{}}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function fill(b StrBag)
+	var sb = StringBuilder.create()
+	sb.append("hello ")
+	sb.append("heap world")
+	let s = sb.build()
+	b.add(s, tag: 7)
+end 'fill'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	fill(b)
+	let got = try b.first() otherwise 'e'
+		return 9 as ExitCode
+	end 'e'
+	print(got)
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:34:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, holding a field declared AT that parameter — has no element destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. Three shapes reach this: a container FIELD declared at an inner alias over the enclosing parameter (`typealias EBox = Box with Element` then `Array with EBox`), the same alias built as a LOCAL, and a `List` over one. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build the container in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
