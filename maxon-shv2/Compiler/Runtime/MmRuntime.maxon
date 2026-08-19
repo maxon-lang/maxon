@@ -2379,14 +2379,27 @@ end 'synthesizeStructCloner'
 // opaque `T`, so a per-instance cascade is what makes the type-arg clone concrete.
 //
 // ⭐⭐ **AN INSTANCE OVER THE *ENCLOSING* BODY'S OWN TYPE PARAMETER (`Box with Element` inside
-// `Bag uses Element`) CLONES AS A PURE BLIT, AND THAT IS THE CORRECT ANSWER RATHER THAN A GAP.** Its substituted
-// `v` is a bare `typeParameter`, which `typeIsManaged` classifies scalar — so this walk emits NO field clone,
-// exactly as `synthesizeGenericInstanceDestructor` emits no field drop and `genericInstanceBoxDropCallee`
-// answers the trivial `__mm_decref`. The opaque payload's reference is not the box cascade's to take: it is the
-// enclosing instance's LAYOUT DESCRIPTOR protocol (`retainFunc@64` / `destroyFunc@40`), which is why the two
-// sides balance. MEASURED on a 30-deep clone-then-drop-the-source chain under `Bag with String`: the clone's
-// `String` reads back intact and `__mm_leak_check` sees zero live allocations. The clone side is admissible
-// here for the same reason the drop side is: it copies exactly the fields the destructor releases.
+// `Bag uses Element`) CLONES AS A PURE BLIT, AND THAT IS BALANCED AGAINST WHAT THE DROP SIDE ACTUALLY DOES.**
+// Its substituted `v` is a bare `typeParameter`, which `typeIsManaged` classifies scalar — so this walk emits
+// NO field clone, exactly as `synthesizeGenericInstanceDestructor` emits no field drop and
+// `genericInstanceBoxDropCallee` answers the trivial `__mm_decref`.
+//
+// ⚠ **WHAT MAKES THAT SAFE IS THAT BOTH SIDES ARE NO-OPS ON `v` — NOT THAT SOMETHING ELSE OWNS IT. READ THE
+// EMITTED CODE BEFORE BUILDING ON THIS NOTE.** It first credited the balance to the enclosing instance's
+// layout-descriptor protocol (`retainFunc@64` / `destroyFunc@40`), and that is NOT what this shape emits.
+// MEASURED at W162's review with `--emit-ir-runtime` on `Bag with String`: `Bag.create` builds the element
+// array as `__managed_create(8, __mm_decref)`, `Box.create` allocates each element box with a ZERO
+// destructor, and `__clone_Box_T<hash>` is `__mm_alloc` + blit with no incref — so `v` is neither retained on
+// the way in nor released on the way out, on EITHER side. The clone therefore takes no reference and frees
+// none, which is why it can neither leak nor double-free. It is admissible for exactly that reason and for no
+// stronger one.
+//
+// ⛔ The other half of that measurement is a PRE-EXISTING hole this rung neither opened nor widens: the
+// enclosing body BORROWS the element it stores. A `Bag with String` whose caller's `String` dies before the
+// read SEGFAULTS (139) — and it segfaults identically on the merge base `0b4c57a76b`, on a program with no
+// cloner in it at all — so it belongs to the opaque type-parameter ownership protocol, not to this cascade.
+// A leak check cannot settle it either way here: the spec case's payload is an `.rdata` literal, and
+// `specs-shv2/generic-instance-clone.md` records that `e.v` cannot be read from outside the shared body.
 //
 // The MM tag is the instance's own mangled name, so a cloned box decodes in `MXDS_TAGS` as the instance it is
 // — the same name `__mm_alloc` interns at the concrete construction site.

@@ -121,9 +121,17 @@ end 'main'
 re-interned per enclosing instantiation, so `Bag with String` is what mints `Box with String`. The clone
 inside `Bag`'s shared body therefore has to reach the SAME per-instance cloner the top-level case does.
 
-The clone and the source are both live at the read, so a cloner that blitted the element POINTER would
-hand two owners one box: `__destruct_Box_String` refcount-checks to the last owner, so the second drop
-would free a box the first already freed and the leak gate would see it.
+The clone and the source are both live at the read, so a cloner that blitted the element POINTER — rather
+than allocating a fresh box per element — would hand two owners one box, and the second `__mm_decref` would
+free what the first already freed. ⚠ **WHAT THIS CASE DOES *NOT* PIN IS THE PAYLOAD'S OWNERSHIP, AND AN
+EARLIER DRAFT OF THIS PARAGRAPH CLAIMED IT DID.** It named `__destruct_Box_String` as the refcount check that
+would catch the mistake; this program emits no such symbol. MEASURED with `--emit-ir-runtime`: the element
+array is `__managed_create(8, __mm_decref)`, `Box.create` allocates each box with a ZERO destructor, and the
+cloner it reaches is `__clone_Box_T<hash>` — `__mm_alloc` + blit, no incref. The box identity IS pinned here
+(a shared box would double-free); the `String` inside it is neither retained nor released on either side, and
+its literal lives in `.rdata`, so no exit code here can distinguish an owned payload from a borrowed one.
+See `MmRuntime.synthesizeGenericInstanceCloner`'s header for that measurement and for the pre-existing
+borrow hole it belongs to.
 
 ⚠ The element's `String` is read only through the box's scalar `tag`, not through `e.v`. A shared body's
 method returning an inner alias over a NESTED instance (`Array with (Box with Element)`) hands the caller
