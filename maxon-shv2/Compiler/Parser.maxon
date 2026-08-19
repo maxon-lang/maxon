@@ -13257,22 +13257,7 @@ export type Parser
 				// methods "share one answer" is made true here rather than assumed.
 				let alreadyContributed = directSeeds.contains(qualified)
 				var directlyNeeded = scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or storesBorrowedOpaqueElement or walksAnOwnedOpaqueElement
-				var edges = self.qualifiedSelfCallees(site.typeName, callees: scan.callees)
-				// ⭐⭐ **THE CROSS-TYPE EDGES (ARRG)** — already qualified, because they name a method of
-				// ANOTHER type. Gated exactly as `adoptsOpaqueResult` is and for its reasons: a NON-generic
-				// enclosing type has no descriptor to forward, and a STATIC has no receiver to source one
-				// from (`staticLayoutNeedsSelfReturn` refuses one that needs it, with a position). Without
-				// both gates this edge would reserve a parameter whose only supply is
-				// `forwardCallerLayout`'s panic.
-				if not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q) 'aGenericInstanceMethod'
-					edges.append(scan.corpusContainerCallees)
-				end 'aGenericInstanceMethod'
-				// W161's edge carries NO static gate: it is recorded only for a receiver already resolved to a
-				// nested parameterised instance, whose static constructor sources its descriptor from the
-				// RESULT it builds. A static that could not source one is `staticLayoutNeedsSelfReturn`'s
-				// positioned refusal, which is the answer that shape has always owed and is strictly better
-				// than the compiler abort it replaces.
-				edges.append(scan.nestedInstanceCallees)
+				var edges = self.descriptorEdgesFor(site.typeName, scan: scan, isStatic: self.functionDeclIsStatic(q))
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
 				// (W43b). See `fieldDefaultHelperNamesOf` for why every helper is named rather than only the
 				// fields the literal omits.
@@ -13362,14 +13347,9 @@ export type Parser
 		// extension may both wear — one helper name cannot be contributed twice and there is no union to take.
 		directSeeds.upsert(helperName, value: scan.direct)
 		// A field default is a nullary helper OF this type, so it holds the enclosing instance's descriptor on
-		// exactly the terms a method does — and a default calling a corpus-served container member owes the
-		// same cross-type edge (ARRG). No `isStatic` gate: a field default is never one. The generic gate is
-		// the enclosing type's own, read here for the same reason it is read at the method site.
-		var edges = self.qualifiedSelfCallees(typeName, callees: scan.callees)
-		if not self.enclosingTypeParams.isEmpty() 'aGenericTypesDefault'
-			edges.append(scan.corpusContainerCallees)
-		end 'aGenericTypesDefault'
-		edges.append(scan.nestedInstanceCallees)
+		// exactly the terms a method does — which is why the edge set is `descriptorEdgesFor`'s and not this
+		// door's own. A field default is never STATIC, and that is the one thing it has to say for itself.
+		let edges = self.descriptorEdgesFor(typeName, scan: scan, isStatic: false)
 
 		selfCallees.upsert(helperName, value: edges)
 		methodNames.push(helperName)
@@ -13388,6 +13368,66 @@ export type Parser
 		end 'eachCallee'
 		return qualified
 	end 'qualifiedSelfCallees'
+
+	// ⭐⭐ **THE EDGE SET ONE SCANNED REGION CONTRIBUTES TO THE DESCRIPTOR-NEED FIXPOINT, WRITTEN ONCE
+	// (found at review).** Two doors feed the graph — a METHOD body (`scanDescriptorNeedsInto`) and a FIELD
+	// DEFAULT (`recordFieldDefaultDescriptorNeeds`) — and each assembled this list itself. Nothing made the
+	// two agree: W161 had to add its line to both copies, and a signal added to one and not the other is an
+	// edge the fixpoint never draws. **A MISSING RESERVATION HAS NO ERROR PATH** — it is
+	// `forwardCallerLayout`'s ABORT at lowering, thousands of lines from the omission — so the two copies are
+	// one expression here and the doors differ only in what they can say about themselves.
+	//
+	// `isStatic` is that difference and the only one: a field default is never static, so that door passes
+	// `false` and reads exactly as it did. (`constructsSelfLiteral` stays at the method door: the names it
+	// appends are the type's field-default HELPERS, and a field default is one of them.)
+	function descriptorEdgesFor(typeName ByteArray, scan MethodDescriptorScan, isStatic bool) returns ByteArrayArray
+		var edges = self.qualifiedSelfCallees(typeName, callees: scan.callees)
+
+		// ⭐⭐ **THE CROSS-TYPE EDGES (ARRG)** — already qualified, because they name a method of ANOTHER
+		// type. Gated exactly as `adoptsOpaqueResult` is and for its reasons: a NON-generic enclosing type has
+		// no descriptor to forward, and a STATIC has no receiver to source one from
+		// (`staticLayoutNeedsSelfReturn` refuses one that needs it, with a position). Without both gates this
+		// edge would reserve a parameter whose only supply is `forwardCallerLayout`'s panic.
+		if not self.enclosingTypeParams.isEmpty() and not isStatic 'aGenericInstanceMethod'
+			edges.append(scan.corpusContainerCallees)
+			// ⭐⭐ **AND THE CALLS THE `for … in self` ITSELF MAKES (found at review — W159's other half).**
+			// W159 read this loop shape to SEED the per-trip drop and stopped there, but the very fact it
+			// rests on — the loop's `createIterator()`/`current()`/`advance()` are emitted by the parser and
+			// appear in NO token — hides the CALL EDGES just as completely as it hides the drop. While no
+			// cursor entry point needed a descriptor the omission was inert; W161 ended that, because
+			// `<InnerAlias>.create()` inside a `createIterator()` now reserves one. **MEASURED at review**: a
+			// `type Bag uses Element` whose `createIterator` returns a `BagIter with Element` built through an
+			// inner alias took `panic at LowerMaxonToStd.maxon:2209: forwardCallerLayout: caller 'Bag.walk'
+			// has no layout descriptor to forward to 'Bag.createIterator'`.
+			//
+			// They are EDGES and not a seed, so they cost nothing where the entry points need nothing — which
+			// is every corpus conformer today.
+			if scan.walksReceiverAsACursor 'anEmittedCursorWalk'
+				edges.append(self.emittedCursorProtocolCallees(typeName))
+			end 'anEmittedCursorWalk'
+		end 'aGenericInstanceMethod'
+
+		// W161's edge carries NO static gate: it is recorded only for a receiver already resolved to a
+		// nested parameterised instance, whose static constructor sources its descriptor from the RESULT it
+		// builds. A static that could not source one is `staticLayoutNeedsSelfReturn`'s positioned refusal,
+		// which is the answer that shape has always owed and is strictly better than the compiler abort it
+		// replaces.
+		edges.append(scan.nestedInstanceCallees)
+		return edges
+	end 'descriptorEdgesFor'
+
+	// The three calls a `for … in self` emits, qualified to the type they are made on — `self`, so the
+	// enclosing type, whichever of the two cursor shapes it is: a type with a FACTORY wears all three, and
+	// one declaring the cursor protocol directly wears the last two and no `createIterator`. Naming all three
+	// unconditionally is safe for the reason `qualifiedSelfCallees` gives — a name no method of the type
+	// wears is dropped by the fixpoint's own index filter.
+	function emittedCursorProtocolCallees(typeName ByteArray) returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		names.push(qualifiedMethodName(typeName, methodName: CreateIteratorMethodName))
+		names.push(qualifiedMethodName(typeName, methodName: CurrentMethodName))
+		names.push(qualifiedMethodName(typeName, methodName: AdvanceMethodName))
+		return names
+	end 'emittedCursorProtocolCallees'
 
 	// Scan ONE method's body — from `bodyStart` (just past `function <name>`) to its own `end` — for the
 	// descriptor signals. The EXTENT is found first and the signals are then read over that bounded region, so
@@ -13605,6 +13645,7 @@ export type Parser
 				nestedInstanceLocals.push(self.tokenAt(q + 1).value)
 				nestedInstanceLocalBases.push(nestedInstanceLocalBase)
 			end 'aNestedInstanceBinding'
+			self.recordNestedInstanceDeclarationAt(q, locals: nestedInstanceLocals, localBases: nestedInstanceLocalBases)
 			let nestedCallee = self.nestedInstanceCalleeAt(q, locals: nestedInstanceLocals, localBases: nestedInstanceLocalBases)
 			if not nestedCallee.isEmpty() 'aNestedInstanceCall'
 				if nestedInstanceCallees is sharedEmptyNestedInstanceCallees 'firstEdgeInThisRegion'
@@ -13826,6 +13867,52 @@ export type Parser
 
 		return self.nestedInstanceBaseOfNameAt((q + 3) as TokenIndex, locals: locals, localBases: localBases)
 	end 'nestedInstanceLocalBaseAt'
+
+	// ⭐⭐ **A NAME DECLARED *AT* A NESTED PARAMETERISED INSTANCE HOLDS ONE TOO, AND NONE OF THE THREE NAME
+	// DOORS COULD SEE IT (found at review).** `nestedInstanceBaseOfNameAt` resolves a receiver's own spelling
+	// — an inner ALIAS, a FIELD of the enclosing type, a LOCAL bound by `var <n> = <name>`. A PARAMETER
+	// (`probeVia(c EChain)`) is none of those, and neither is `var x as EChain`: the alias appears as the
+	// TYPE of a declaration rather than as a value. So `c.slotSize()` drew no edge, the method reserved
+	// nothing, and the call reached `ensureLayoutDescriptor` for an instance that can never have a blob —
+	// **MEASURED at review, on this tip and on the merge base alike: `panic at LayoutDescriptor.maxon:571:
+	// primitiveTypeByteSize: a `typeParameter`'s size is a runtime layout-descriptor read`**.
+	//
+	// It is recorded into the very columns the `var <n> = <name>` door writes, so a later `c.<m>(` draws
+	// exactly the edge the field or alias it was declared from would — the same requirement that made those
+	// three doors one predicate.
+	//
+	// ⚠ The shape is read off the TYPE token because that is the token the alias registry can answer for:
+	// what precedes it is the declared name (`c EChain`) or `as` and the declared name (`x as EChain`).
+	// Every other predecessor — `=`, `:`, `return`, `(`, `,` — is a USE of the alias, which the doors above
+	// already own. The ALIAS spelling only: a parameter written as the inline `Inner with Element` is not
+	// answered here, and reaches the same abort.
+	function recordNestedInstanceDeclarationAt(q TokenIndex, locals ByteArrayArray, localBases ByteArrayArray)
+		if q < 1 or not tokenCanBeAName(self.tokenAt(q)) 'notATypeSpellingWithRoomForAName'
+			return
+		end 'notATypeSpellingWithRoomForAName'
+
+		var nameAt = (q - 1) as TokenIndex
+		if self.kindAt(nameAt) == TokenKind.as 'theAsSpelling'
+			if q < 2 'noRoomForItsName'
+				return
+			end 'noRoomForItsName'
+
+			nameAt = (q - 2) as TokenIndex
+		end 'theAsSpelling'
+		if self.kindAt(nameAt) != TokenKind.identifier 'notADeclaration'
+			return
+		end 'notADeclaration'
+
+		// Asked LAST: the two token tests above are comparisons and this one is two map lookups, and every
+		// `<identifier> <identifier>` pair in every body reaches it.
+		let base = self.signatures.nestedParameterisedInstanceBaseOfAlias(joinQualifiedName(self.enclosingType, member: self.tokenAt(q).value), readerFilePath: self.filePath)
+		if base.isEmpty() 'namesNoNestedInstance'
+			return
+		end 'namesNoNestedInstance'
+
+		locals.push(self.tokenAt(nameAt).value)
+		localBases.push(base)
+	end 'recordNestedInstanceDeclarationAt'
 
 	// The `Array` declaration names, memoized per file off the roster anchor — see `arrayDeclarationRoster`.
 	function arrayDeclarationNames() returns ByteArrayArray

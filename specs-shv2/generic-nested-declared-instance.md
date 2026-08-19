@@ -242,3 +242,127 @@ end 'main'
 ```exitcode
 2
 ```
+
+### A PARAMETER declared at the inner alias is a receiver too
+
+Found at review. The edge resolves a receiver through three name doors — an inner alias, a field of the
+enclosing type, a local bound by `var <n> = <name>`. A parameter is none of them: the alias appears as the
+declaration's TYPE rather than as a value, so `c.slotSize()` drew no edge, `probeVia` reserved nothing, and
+the call reached the mint for an instance that can never have a blob — `panic at LayoutDescriptor.maxon:571`
+on this tip and on the merge base alike. `var x as EChain` is the same shape with `as` between the two
+tokens.
+
+<!-- test: a-parameter-declared-at-the-inner-alias -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Inner uses T
+	var v as T
+
+	export static function create(x T) returns Self
+		return Self{v: x}
+	end 'create'
+
+	export function slotSize() returns Int
+		return sizeof(T)
+	end 'slotSize'
+end 'Inner'
+
+type Bag uses Element
+	typealias EChain = Inner with Element
+	var chain as EChain
+
+	export static function create(x Element) returns Self
+		return Self{chain: EChain.create(x)}
+	end 'create'
+
+	export function probeVia(c EChain) returns Int
+		return c.slotSize()
+	end 'probeVia'
+
+	export function probe() returns Int
+		return self.probeVia(chain)
+	end 'probe'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create(7)
+	return b.probe()
+end 'main'
+```
+```exitcode
+8
+```
+
+### A `for … in self` whose cursor is built through the inner alias
+
+Found at review, and it is where this row meets W159's. The loop's `createIterator()` / `current()` /
+`advance()` are emitted by the parser and appear in NO token — W159 read that fact to SEED the per-trip
+drop and stopped there, but it hides the CALL EDGES just as completely. While no cursor entry point ever
+needed a descriptor the omission was inert; this row ends that, because `BIter.create()` inside
+`createIterator` now reserves one. Before the edges existed the program was
+`panic at LowerMaxonToStd.maxon:2209: forwardCallerLayout: caller 'Bag.walk' has no layout descriptor to
+forward to 'Bag.createIterator'`.
+
+The element is a concrete `Int`, deliberately: that keeps W159's own seed OFF (its gate asks whether the
+cursor yields a bare type parameter), so the reservation under test can only have arrived through the
+emitted-call edges.
+
+<!-- test: a-cursor-built-through-the-inner-alias-is-walked -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type BagIter uses E implements Iterator with Int
+	typealias EArray = Array with E
+	var items as EArray
+	var i as Int
+
+	export static function create() returns Self
+		return Self{items: EArray.create(), i: 3}
+	end 'create'
+
+	export function current() returns Int
+		return i
+	end 'current'
+
+	export function advance() throws IterationError
+		i = i - 1
+		if i <= 0 'exhausted'
+			throw IterationError.exhausted
+		end 'exhausted'
+	end 'advance'
+end 'BagIter'
+
+type Bag uses Element implements Iterable with (Int, BIter)
+	typealias BIter = BagIter with Element
+	var n as Int
+
+	export static function create() returns Self
+		return Self{n: 0}
+	end 'create'
+
+	export function createIterator() returns BIter throws IterationError
+		return BIter.create()
+	end 'createIterator'
+
+	export function walk() returns Int
+		var total = 0
+		for x in self 'loop'
+			total = total + x
+		end 'loop'
+		return total
+	end 'walk'
+end 'Bag'
+
+typealias IntBag = Bag with Int
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	return b.walk()
+end 'main'
+```
+```exitcode
+6
+```
