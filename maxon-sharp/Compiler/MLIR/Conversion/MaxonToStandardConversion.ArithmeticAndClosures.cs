@@ -432,6 +432,12 @@ public static partial class MaxonToStandardConversion {
     // Non-capturing: no env_ptr stored. LowerIndirectCall will inline 0.
   }
 
+  /// The closure environment's name, in the three places it is spelled: EmitAlloc's mm-trace tag,
+  /// the env temp's registry entry, and the env slot's entry in the name -> struct-type map. It is
+  /// a name the compiler mints for itself and NOT a declared type — no TypeDefs entry resolves it —
+  /// which is why it never reaches EmitAlloc's typeName.
+  private const string ClosureEnvName = "ClosureEnv";
+
   private static void LowerClosureCreate(
     MaxonClosureCreateOp closureOp,
     IrBlock<StandardOp> block,
@@ -445,9 +451,16 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(refOp);
     valueMap[closureOp.Result] = refOp.Result;
 
-    // Allocate environment to hold captured values (each 8 bytes)
+    // Allocate environment to hold captured values (each 8 bytes).
+    //
+    // The env is a SYNTHETIC allocation: it has no declared type, so it passes ClosureEnvName as
+    // EmitAlloc's mm-trace TAG rather than as its typeName. A null typeName is the honest spelling
+    // of "no declared type decides this block's destructor", and the NULL destructor it produces is
+    // CORRECT here — the env holds the ADDRESSES of the captured variables (capture by reference),
+    // which their own scopes own and free. Passing the name as a typeName would instead ASSERT that
+    // TypeDefs resolves it, which is now a refusal rather than a silent null destructor.
     int envSize = closureOp.CapturedValues.Count * 8;
-    var envPtr = EmitAlloc(block, envSize, "ClosureEnv", scopeName: _currentFuncName);
+    var envPtr = EmitAlloc(block, envSize, typeName: null, tag: ClosureEnvName, scopeName: _currentFuncName);
 
     // Store the ADDRESS of each captured variable into the environment
     // so that closures capture by reference (reads see mutations after capture)
@@ -478,11 +491,14 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(new StdStoreIndirectOp(addressVal, envPtr, i * 8, IrType.I64));
     }
 
-    // Track the env_ptr for this closure and register for scope-end cleanup
-    var envVarName = temps.CreateTemp("env", refOp.Result.Id, "ClosureEnv", OwnershipFlags.Orphan);
+    // Track the env_ptr for this closure and register for scope-end cleanup. The slot is named
+    // BEFORE the store because EmitStore reads the map for its debug-info record, and only the
+    // StdHeapPtr arm would have filled it — an untyped env would otherwise record its storage
+    // width instead of what the slot actually holds.
+    var envVarName = temps.CreateTemp("env", refOp.Result.Id, ClosureEnvName, OwnershipFlags.Orphan);
+    varNameToStructType[envVarName] = ClosureEnvName;
     EmitStore(block, envPtr, envVarName, varTypes);
     EmitIncrefValue(block, envPtr, scopeName: _currentFuncName);
-    varNameToStructType[envVarName] = "ClosureEnv";
     fnEnvVarNames[refOp.Result.Id] = envVarName;
   }
 

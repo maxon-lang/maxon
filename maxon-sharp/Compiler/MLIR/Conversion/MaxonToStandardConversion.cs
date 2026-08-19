@@ -2886,6 +2886,30 @@ public static partial class MaxonToStandardConversion {
       yield return selfElemType;
   }
 
+  /// Refuses an allocation whose DECLARED type name no type definition resolves.
+  ///
+  /// EmitAlloc's `typeName` is the declared type the allocated block carries, and it is the sole
+  /// input from which that block's destructor is chosen. An unresolvable name therefore does not
+  /// mean "this type needs no destructor" — it means the decision could not be TAKEN, and the
+  /// header would carry a null destructor whose only symptom is a leak counted much later, with
+  /// nothing pointing back at the name that lost its definition. That is the W154 defect one level
+  /// up: a pass dropped the resolvable spelling between the parser and here.
+  ///
+  /// What keeps this refusal honest is that a SYNTHETIC allocation — one the compiler mints for
+  /// itself, with no declared type at all, such as a closure environment — does not come through
+  /// here. It passes `typeName: null` and names itself with EmitAlloc's `tag`, which is the
+  /// mm-trace label and carries no destructor claim. So reaching this refusal means a name was
+  /// CLAIMED to be a declared type and is not one.
+  private static IrType RequireDeclaredAllocationType(string typeName) {
+    if (!_resultModule!.TypeDefs.TryGetValue(typeName, out var typeDef))
+      throw new InvalidOperationException(
+        $"an allocation reached lowering carrying the declared type name '{typeName}', which no "
+        + "type definition resolves, so its destructor cannot be chosen and the block would carry "
+        + "none at all. The resolvable spelling was dropped between the parser and here. An "
+        + "allocation that has no declared type must name itself with EmitAlloc's tag instead.");
+    return typeDef;
+  }
+
   /// Refuses a managed-list allocation whose type name cannot decide the list's destructor.
   ///
   /// The destructor is chosen from the name the ALLOCATION is tagged with, so a name that has
@@ -2897,28 +2921,32 @@ public static partial class MaxonToStandardConversion {
   ///     element leaks — the W154 defect itself. The bare spelling is named by its own arm, ahead
   ///     of the general one that also covers it, because it is the only name the compiler mints
   ///     for itself and so is the one case whose message can say exactly what went wrong;
-  ///   - no TypeDefs entry: RegisterTypeForDestructor returns early, EmitAlloc stores a NULL
-  ///     destructor and the nodes leak alongside the elements — strictly worse;
+  ///   - no TypeDefs entry: refused by RequireDeclaredAllocationType, which every allocation
+  ///     answers to and which this check therefore does not re-decide;
   ///   - not a __ManagedList at all: the generic struct-field destructor runs over a chain
-  ///     header, reading its head/tail/count words as if they were fields.
+  ///     header, reading its head/tail/count words as if they were fields — or, when the
+  ///     definition is not a struct, no destructor is emitted at all.
   private static void RequireElementBearingListName(string typeName) {
+    if (typeName == BareManagedListTypeName)
+      throw ManagedListNameRefusal(typeName,
+        "it is the un-parameterized builtin spelling, which binds no Element");
+
     var reason =
-      typeName == BareManagedListTypeName
-        ? "it is the un-parameterized builtin spelling, which binds no Element"
-      : !_resultModule!.TypeDefs.TryGetValue(typeName, out var typeDef) || typeDef is not IrStructType structType
-        ? "no type definition resolves it, so its allocation would carry no destructor at all"
+      RequireDeclaredAllocationType(typeName) is not IrStructType structType
+        ? "its type definition is not a struct, so its allocation would carry no destructor at all"
       : !TypeAliasInfo.IsManagedListType(typeName, _resultModule!.TypeAliasSources)
         ? "it does not name a __ManagedList, so a chain header would get a struct destructor"
       : !BoundElementTypes(typeName, ResolveStructType(structType, _resultModule!.TypeDefs)).Any()
         ? "its Element is still an unbound type parameter"
       : null;
 
-    if (reason != null)
-      throw new InvalidOperationException(
-        $"managed_list_create reached lowering with the type name '{typeName}', from which this "
-        + $"list's destructor cannot be chosen: {reason}. The element-bearing spelling was dropped "
-        + "between the parser and here.");
+    if (reason != null) throw ManagedListNameRefusal(typeName, reason);
   }
+
+  private static InvalidOperationException ManagedListNameRefusal(string typeName, string reason) =>
+    new($"managed_list_create reached lowering with the type name '{typeName}', from which this "
+      + $"list's destructor cannot be chosen: {reason}. The element-bearing spelling was dropped "
+      + "between the parser and here.");
 
   private static bool HasManagedElementType(string typeName, IrStructType resolved) {
     var typeAliasSources = _resultModule!.TypeAliasSources;
@@ -2968,7 +2996,7 @@ public static partial class MaxonToStandardConversion {
     _destructorRequests ??= [];
     if (_destructorRequests.ContainsKey(typeName)) return;
 
-    if (!typeDefs.TryGetValue(typeName, out var typeDef)) return;
+    var typeDef = RequireDeclaredAllocationType(typeName);
 
     // These types have hand-written runtime destructors — skip synthesis
     // to avoid emitting a duplicate (no-op) synthesized destructor that

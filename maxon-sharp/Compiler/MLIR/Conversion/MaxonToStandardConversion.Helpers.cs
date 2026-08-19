@@ -327,9 +327,13 @@ public static partial class MaxonToStandardConversion {
     return label;
   }
 
+  /// Computes the destructor label, or null when the type genuinely HAS no destructor — a
+  /// legitimate and common answer. A name TypeDefs cannot resolve is the other thing entirely
+  /// (the decision could not be taken), and RequireDeclaredAllocationType refuses it rather than
+  /// letting it share this null.
   private static string? ComputeDestructorLabelForType(string typeName) {
     var typeDefs = _resultModule!.TypeDefs;
-    if (!typeDefs.TryGetValue(typeName, out var typeDef)) return null;
+    var typeDef = RequireDeclaredAllocationType(typeName);
 
     // Enum types with associated values that have heap-allocated payloads need destructors
     if (typeDef is IrEnumType enumType && enumType.HasAssociatedValues) {
