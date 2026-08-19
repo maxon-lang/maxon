@@ -20744,7 +20744,7 @@ export type ProgramSignatures
 	// `Cell with T` written inside `type Holder uses T` is one — argument 0 is the parameter at `uses`-list
 	// position 0 — and so is `Cell with U` inside `Holder uses T, U`, whose run starts at position 1. It is the
 	// exact condition under which a descriptor for this instance can be FORWARDED rather than built
-	// (`MaxonToStdLowering.instanceLayoutArg`): a descriptor is a run of per-parameter blocks, so one base
+	// (`MaxonToStdLowering.emitInstanceDescriptorAddr`): a descriptor is a run of per-parameter blocks, so one base
 	// address serves the callee only while the caller's blocks line up with the callee's from some offset on.
 	//
 	// A PERMUTATION (`Slot with (V, K)`) and a MIXED list (`Pair with (Integer, T)`) both answer no. Neither
@@ -20775,6 +20775,81 @@ export type ProgramSignatures
 
 		return true
 	end 'genericInstanceArgsAreACallerParameterRun'
+
+	// ⭐⭐ **IS THIS INSTANCE A DECLARED GENERIC WRITTEN OVER SOME GENERIC'S OWN TYPE PARAMETERS (W161)?** —
+	// the `Inner with Element` a `type Bag uses Element` names through a `typealias EChain = Inner with Element`.
+	// Such an instance has NO descriptor blob and can never have one: the blob carries its argument's SIZE, and
+	// `Element` is a type parameter whose size is itself a descriptor read (`primitiveTypeByteSize` panics
+	// rather than guessing). Every layout-needing call through such a value — the receiver's own methods, and
+	// the STATIC constructor that builds it — therefore FORWARDS the enclosing frame's descriptor blocks
+	// (`MaxonToStdLowering.emitInstanceDescriptorAddr`), so the enclosing method has to carry one, which is
+	// what the descriptor-need fixpoint draws an edge for.
+	//
+	// ⛔ **THE CONTAINERS THIS COMPILER SERVES ITSELF ARE EXCLUDED, AND THE EXCLUSION IS LOAD-BEARING.**
+	// `Array with Element` is the field every generic container in `stdlib/` declares, and it already has a
+	// mechanism of its own — `Parser.corpusServesArrayMember`'s receiver-blind edge, tuned to it and
+	// deliberately withheld from statics. Admitting those bases here would draw a second, differently-gated
+	// edge over every call in `Array`, `Map`, `Set` and `Vector`. The residue — a DECLARED generic standing
+	// where a compiler-owned one used to — is what has no mechanism at all, and is what this answers for.
+	//
+	// It is ONE expression because the alias door and the field door below both ask it, and a disagreement
+	// between them would be a call whose descriptor one half supplies and the other mints.
+	export function instanceIsANestedParameterisedOne(gid GenericInstanceId) returns bool
+		if not self.genericInstanceArgsAreACallerParameterRun(gid) 'notAParameterRun'
+			return false
+		end 'notAParameterRun'
+
+		let base = self.genericInstanceBaseName(gid)
+		return not self.isBuiltinGenericBaseName(base) and not self.declaresTheArrayLiteralMarker(base)
+	end 'instanceIsANestedParameterisedOne'
+
+	// ⭐⭐ **THE BASE A GENERIC-INSTANCE ALIAS DENOTES WHEN IT IS A NESTED PARAMETERISED ONE, or
+	// `EmptySourceText` (W161).** `EChain` inside `type Bag uses Element`, on a
+	// `typealias EChain = Inner with Element`, answers `Inner` — which is the callee `EChain.create()` links
+	// to, and therefore the node the descriptor-need fixpoint has to draw an edge to. Every OTHER alias
+	// spelling answers empty: a concrete instance supplies its own descriptor, and a corpus container keeps
+	// the edge tuned to it.
+	export function nestedParameterisedInstanceBaseOfAlias(name ByteArray, readerFilePath FilePath) returns ByteArray
+		if not self.isGenericAlias(name) 'namesNoInstance'
+			return EmptySourceText
+		end 'namesNoInstance'
+
+		let gid = self.genericAliasInstanceFrom(name, readerFilePath: readerFilePath)
+		return self.genericInstanceBaseName(gid) if self.instanceIsANestedParameterisedOne(gid) else EmptySourceText
+	end 'nestedParameterisedInstanceBaseOfAlias'
+
+	// ⭐⭐ **THE SAME ANSWER FOR A FIELD RATHER THAN AN ALIAS (W161)** — `chain` inside `type Bag uses Element`,
+	// declared `var chain as EChain`, answers `Inner`. The alias door above serves the STATIC spelling
+	// (`EChain.create()`), this one the INSTANCE spelling (`chain.count()`); they are two ways to write one
+	// receiver and they resolve through one predicate.
+	//
+	// ⛔⛔ **THE COLUMN IS RESOLVED BEFORE IT IS CLASSIFIED, and skipping that step sees no instance at all.**
+	// A field declared through an inner generic alias is recorded by the declaration sweep as a bare
+	// `named("Bag.EChain")` — the alias registry is filled after the file is swept — so a classifier reading
+	// the recorded type directly gets a NAME and never a `genericInstance`. `substituteInstanceFieldType`'s
+	// header carries the measured leak the same omission produced one door over.
+	export function nestedParameterisedInstanceBaseOfField(structName ByteArray, fieldName ByteArray) returns ByteArray
+		match self.structOf(structName) 'declaringType'
+			undeclared then return EmptySourceText
+			declared(layout) then return self.nestedParameterisedInstanceBaseOfFieldIn(layout, fieldName: fieldName)
+		end 'declaringType'
+	end 'nestedParameterisedInstanceBaseOfField'
+
+	// The layout half of the answer above, split out because a `match` arm holds one statement.
+	function nestedParameterisedInstanceBaseOfFieldIn(layout StructLayout, fieldName ByteArray) returns ByteArray
+		let index = layout.indexOfField(fieldName)
+		if index >= layout.fieldCount() 'noSuchField'
+			return EmptySourceText
+		end 'noSuchField'
+
+		let declared = self.declaredSlotType(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.nestedParameterisedInstanceBaseOfFieldIn: fieldTypes.get OOB at {index} despite index < fieldCount"), into: self.typeNames, slotScopeFilePath: layout.declFilePath)
+		if maxonTypeTag(declared) != ValueTypeTag.genericInstance 'notAnInstanceField'
+			return EmptySourceText
+		end 'notAnInstanceField'
+
+		let gid = typeNameIdOf(declared)
+		return self.genericInstanceBaseName(gid) if self.instanceIsANestedParameterisedOne(gid) else EmptySourceText
+	end 'nestedParameterisedInstanceBaseOfFieldIn'
 
 	// ⚠ **IT ANSWERS THE ARGUMENT'S TYPE AND NOT ITS SPELLING, AND THAT IS A LOSS A CALLER MAY HAVE TO REPAIR.**
 	// `Array with __ManagedMemory` and `Array with ByteArray` are ONE instance, so the argument comes back

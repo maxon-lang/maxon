@@ -1,0 +1,315 @@
+// Test: the-same-collision-over-a-managed-element
+typealias Int = int(i64.min to i64.max)
+
+type BagIter uses Element implements Iterator with Element
+	var item as Element
+
+	export static function create(v Element) returns Self
+		return Self{item: v}
+	end 'create'
+
+	export function current() returns Element
+		return item
+	end 'current'
+
+	export function advance() throws IterationError
+		throw IterationError.exhausted
+	end 'advance'
+end 'BagIter'
+
+type Bag uses Element implements Iterable with (Element, BagIter)
+	var item as Element
+	var result as Int
+
+	export static function create(v Element) returns Self
+		return Self{item: v, result: 0}
+	end 'create'
+
+	export function createIterator() returns BagIter throws IterationError
+		return BagIter.create(item)
+	end 'createIterator'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function isLong(s String) returns bool
+	return s.byteLength() > 5
+end 'isLong'
+
+function main() returns ExitCode
+	var b = StrBag.create("a string long enough to be heap allocated")
+	if b.contains(isLong) 'long'
+		print("long\n")
+		return 1
+	end 'long'
+	print("short\n")
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @BagIter.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @BagIter.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rax, [rcx + 0]
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rax
+    x64.callDirect __retain_type_param
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @BagIter.advance {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.movRegImm32 r12, 0
+    x64.movRegImm32 rcx, 16
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.storeBaseDispReg.word64 [r8 + 8], r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.createIterator {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect BagIter.create
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @isLong {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect String.byteLength
+    x64.cmpRegImm32 r8, 5
+    x64.setccReg greater, r8
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.prologue 32
+    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r12, [rax + 8]
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.leaRegRegImm32 r14, r13, 56
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r14, r12
+    x64.storeBaseDispReg.word64 [r13 + 0], r14
+    x64.storeBaseDispReg.word64 [r13 + 8], r12
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r13 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r13 + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect Bag.create
+    x64.movRegReg rbx, r8
+    x64.leaRegFunc rdx, [rip + __fnref_isLong]
+    x64.movRegImm32 rax, 0
+    x64.leaRegRdata r9, [rip + __layout_Bag_String]
+    x64.movRegReg rcx, rbx
+    x64.callDirect Bag.contains
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, long
+    x64.jmp ifcont
+  long:
+    x64.leaRegRdata rcx, [rip + __str_rec_4]
+    x64.callDirect print
+    x64.movRegImm32 r12, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Bag_String
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_rec_5]
+    x64.callDirect print
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_Bag_String
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Bag.contains {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.movRegReg r12, rax
+    x64.movRegReg r13, r9
+    x64.callDirect Bag.createIterator
+    x64.movRegReg r14, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+    x64.jmp forempty
+  critsplit:
+    x64.jmp forhdr
+  forhdr:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, loop
+    x64.jmp forexit
+  loop:
+    x64.movRegReg rcx, r14
+    x64.movRegReg rdx, r13
+    x64.callDirect BagIter.current
+    x64.movRegReg r15, r8
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r12
+    x64.callReg rbx
+    x64.cmpRegImm32 r8, 0
+    x64.jcc notEqual, match
+    x64.jmp ifcont
+  match:
+    x64.movRegImm32 rbx, 1
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __drop_type_param
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegReg rcx, r13
+    x64.movRegReg rdx, r15
+    x64.callDirect __drop_type_param
+    x64.jmp forstep
+  forstep:
+    x64.movRegReg rcx, r14
+    x64.callDirect BagIter.advance
+    x64.movRegReg rax, r10
+    x64.jmp forhdr
+  forexit:
+    x64.movRegReg rcx, r14
+    x64.callDirect __mm_decref
+    x64.jmp forjoin
+  forempty:
+    x64.jmp forjoin
+  forjoin:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @String.byteLength {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

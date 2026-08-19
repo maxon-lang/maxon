@@ -2347,10 +2347,19 @@ type MethodDescriptorScan
 	// Already qualified, because the type they belong to is not `site.typeName` — see
 	// `Parser.corpusServesArrayMember`, which decides which names are on it.
 	export let corpusContainerCallees as ByteArrayArray
+	// ⭐⭐ **THE OTHER CROSS-TYPE EDGE — `<Base>.<member>` FOR A CALL ON A NESTED PARAMETERISED INSTANCE
+	// (W161).** `EChain.create()` on a `typealias EChain = Inner with Element` links to `Inner.create`, and
+	// `chain.count()` on a field declared at one links to `Inner.count`; both callees read a descriptor the
+	// caller must SUPPLY by forwarding its own blocks. Recorded apart from `corpusContainerCallees` because
+	// the two carry OPPOSITE static gates, and for the same reason: that edge is receiver-BLIND, so a static
+	// reached through it may be one the call site cannot source a descriptor for; this one RESOLVES the
+	// receiver, and a static constructor of a nested instance is precisely the shape whose RESULT is the
+	// source (`LowerMaxonToStd.emitInstanceDescriptorAddr`).
+	export let nestedInstanceCallees as ByteArrayArray
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, walksReceiverAsACursor bool, corpusContainerCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, storesContainerElement bool, walksReceiverAsACursor bool, corpusContainerCallees ByteArrayArray, nestedInstanceCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -3679,6 +3688,10 @@ let sharedEmptyOverloadMembers = OverloadMemberMap.create()
 // allocations at rung 0 rising to +17,682 at rung 5** before this anchor pair went in.
 let sharedEmptyCorpusMemberVerdicts = DescriptorNeedMap.create()
 let sharedEmptyCorpusContainerCallees = ByteArrayArray.create()
+
+// The same anchor for W161's cross-type edge, empty for every region that calls nothing on a nested
+// parameterised instance — which is every region in a program declaring no generic type at all.
+let sharedEmptyNestedInstanceCallees = ByteArrayArray.create()
 
 // ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
 // The join's INVERSE, and deliberately allocation-free: its caller
@@ -5788,7 +5801,7 @@ end 'cursorSurfaceMemberNames'
 //         `MaxonToStdLowering.materializeLayoutArgFor` → `ensureLayoutDescriptor` for the instance
 //         `Array with Key` — `stdlib/Map.maxon`'s own slot columns. ⭐ **CLOSED AT ARRG, AND ITS DIAGNOSIS
 //         HERE WAS WRONG.** It is not that such a receiver *"needs a per-instance descriptor that cannot be a
-//         static blob"* — the FORWARD it needs already existed (`instanceLayoutArg`, whose parameter-run arm
+//         static blob"* — the FORWARD it needs already existed (`emitInstanceDescriptorAddr`, whose parameter-run arm
 //         answered YES for `Array with Key` throughout). What was missing was the RESERVATION: the
 //         descriptor-need fixpoint's edges followed SELF calls only, so `Map.insertAtSlot`'s obligation to
 //         SUPPLY `Array.set`'s descriptor had no edge to arrive by. `Parser.corpusServesArrayMember` is
@@ -13254,6 +13267,12 @@ export type Parser
 				if not self.enclosingTypeParams.isEmpty() and not self.functionDeclIsStatic(q) 'aGenericInstanceMethod'
 					edges.append(scan.corpusContainerCallees)
 				end 'aGenericInstanceMethod'
+				// W161's edge carries NO static gate: it is recorded only for a receiver already resolved to a
+				// nested parameterised instance, whose static constructor sources its descriptor from the
+				// RESULT it builds. A static that could not source one is `staticLayoutNeedsSelfReturn`'s
+				// positioned refusal, which is the answer that shape has always owed and is strictly better
+				// than the compiler abort it replaces.
+				edges.append(scan.nestedInstanceCallees)
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
 				// (W43b). See `fieldDefaultHelperNamesOf` for why every helper is named rather than only the
 				// fields the literal omits.
@@ -13350,6 +13369,7 @@ export type Parser
 		if not self.enclosingTypeParams.isEmpty() 'aGenericTypesDefault'
 			edges.append(scan.corpusContainerCallees)
 		end 'aGenericTypesDefault'
+		edges.append(scan.nestedInstanceCallees)
 
 		selfCallees.upsert(helperName, value: edges)
 		methodNames.push(helperName)
@@ -13422,6 +13442,11 @@ export type Parser
 		// ⭐ **THE LOCALS THIS BODY BINDS TO A `Self{…}` — a call on one of them is a SELF-CALL** (W43b). See
 		// `selfTypedLocalBoundAt` for why the binding is read rather than every receiver over-approximated.
 		var selfTypedLocals = ByteArrayArray.create()
+		// ⭐ **THE LOCALS THIS BODY BINDS TO A NESTED PARAMETERISED INSTANCE, AND THE BASE EACH DENOTES**
+		// (W161) — two columns in lockstep, so a later `<local>.<m>(` draws the same edge the field or alias it
+		// was bound from would. See `nestedInstanceLocalBaseAt`.
+		var nestedInstanceLocals = ByteArrayArray.create()
+		var nestedInstanceLocalBases = ByteArrayArray.create()
 		// ⭐ Does this region write a `Self{…}`? Every field-default helper of the enclosing type is CALLED by
 		// one (`Parser.fillFieldDefault`), so the caller turns this into edges (W43b).
 		var constructsSelfLiteral = false
@@ -13437,6 +13462,9 @@ export type Parser
 		// ⭐ The cross-type call edges (ARRG), minted on the first one. See
 		// `MethodDescriptorScan.corpusContainerCallees` and `sharedEmptyCorpusContainerCallees`.
 		var corpusContainerCallees = sharedEmptyCorpusContainerCallees
+		// ⭐ The nested-instance construction edges (W161), minted on the first one. See
+		// `MethodDescriptorScan.nestedInstanceCallees` and `sharedEmptyNestedInstanceCallees`.
+		var nestedInstanceCallees = sharedEmptyNestedInstanceCallees
 		// The open `(`/`[`/`{` groups enclosing the cursor, each carrying whether a comma directly inside it
 		// would be a TUPLE's separator rather than an argument list's. See the comma arm below.
 		var groupIsTuplePosition = BoolArray.create()
@@ -13563,6 +13591,28 @@ export type Parser
 					end 'thisDeclarationServesIt'
 				end 'eachArrayDeclaration'
 			end 'aCorpusContainerCall'
+			// ⭐⭐ **A CALL ON A NESTED PARAMETERISED INSTANCE, AND THE BINDING THAT CARRIES ONE (W161)** — an
+			// inner alias (`EChain.create()`), a field declared at one (`chain.count()`), or a local bound
+			// from either. The callee reads the ENCLOSING instance's descriptor, which has no blob to point
+			// at, so the caller has to forward its own blocks and therefore has to carry them.
+			//
+			// The binding is recorded BEFORE the call test, so a `var i = EChain.create()` whose result is
+			// used later in the same walk is already known when `i.count()` is reached; the two arms share
+			// one resolution (`nestedInstanceBaseOfNameAt`) so a receiver cannot be one thing to the binding
+			// and another to the call.
+			let nestedInstanceLocalBase = self.nestedInstanceLocalBaseAt(q, locals: nestedInstanceLocals, localBases: nestedInstanceLocalBases)
+			if not nestedInstanceLocalBase.isEmpty() 'aNestedInstanceBinding'
+				nestedInstanceLocals.push(self.tokenAt(q + 1).value)
+				nestedInstanceLocalBases.push(nestedInstanceLocalBase)
+			end 'aNestedInstanceBinding'
+			let nestedCallee = self.nestedInstanceCalleeAt(q, locals: nestedInstanceLocals, localBases: nestedInstanceLocalBases)
+			if not nestedCallee.isEmpty() 'aNestedInstanceCall'
+				if nestedInstanceCallees is sharedEmptyNestedInstanceCallees 'firstEdgeInThisRegion'
+					nestedInstanceCallees = ByteArrayArray.create()
+				end 'firstEdgeInThisRegion'
+
+				nestedInstanceCallees.push(nestedCallee)
+			end 'aNestedInstanceCall'
 			// ⭐⭐ **A `for … in self` IS AN EMITTED `current()` CALL, AND NO TOKEN SPELLS IT (W159).** See
 			// `forStatementWalksBareReceiverAt` for why the source must be the BARE receiver and why every
 			// other source stays with the refusal.
@@ -13608,7 +13658,7 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, endPos: regionEnd)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
 
 	// ⭐⭐⭐ **THE ONE EDGE IN THE DESCRIPTOR-NEED FIXPOINT THAT LEAVES THE ENCLOSING TYPE (ARRG).** A `.<m>(`
@@ -13685,6 +13735,97 @@ export type Parser
 	function corpusArrayDeclarationServes(declaration ByteArray, member ByteArray) returns bool
 		return self.corpusServesNamedMemberOffRoster(member, surface: MemberSurface.array, typeName: declaration) and self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(declaration, methodName: member))
 	end 'corpusArrayDeclarationServes'
+
+	// ⭐⭐ **THE CALLEE A CALL ON A NESTED PARAMETERISED INSTANCE LINKS TO, or NONE (W161).**
+	// `EChain.create()` inside `type Bag uses Element` answers `Inner.create` and `chain.count()` answers
+	// `Inner.count`: BOTH spellings dispatch to the BASE struct (`qualifiedCallBaseName` for the alias, the
+	// receiver's declared type for the field), so that is the node the fixpoint indexes and the name this edge
+	// has to carry. The MISS is `EmptySourceText`, `innerAliasMember`'s convention for the same shape of
+	// question; a caller tests `isEmpty()`.
+	//
+	// ⚠ **THE RECEIVER IS RESOLVED, WHICH THE SIBLING CROSS-TYPE EDGE DELIBERATELY DOES NOT DO** — and here
+	// it is not an option: the answer turns on WHICH instance the name denotes (is it written over the
+	// enclosing type's own parameters?), and a receiver-blind name test cannot ask that. It is also what keeps
+	// the edge OFF every ordinary call: a name denoting nothing of the kind is answered by two map lookups.
+	//
+	// ⛔ **AND RESOLVING IT IS WHY THIS COSTS NO CODEGEN WHERE IT IS NOT NEEDED, WHICH A SEED DID NOT.**
+	// MEASURED: seeding every method of a type that HOLDS such an instance moved 13 committed goldens —
+	// `Holder.create(cell Cell)`, whose whole body is `Self{cell: cell}`, gained a hidden descriptor parameter
+	// and every call site gained a `lea` for a blob it never reads. An edge leaves "does `Inner.create`
+	// actually need one?" to the fixpoint's own answer about `Inner.create`, which is also what keeps every
+	// corpus iterator's `ArrayIter.create(managed)` inert.
+	function nestedInstanceCalleeAt(q TokenIndex, locals ByteArrayArray, localBases ByteArrayArray) returns ByteArray
+		if not tokenCanBeAName(self.tokenAt(q)) or not self.memberCallFollows(q + 1) 'notAMemberCallHead'
+			return EmptySourceText
+		end 'notAMemberCallHead'
+		if not self.nameOpensAReceiverChainAt(q) 'aDeeperChainsMember'
+			return EmptySourceText
+		end 'aDeeperChainsMember'
+
+		let base = self.nestedInstanceBaseOfNameAt(q, locals: locals, localBases: localBases)
+		if base.isEmpty() 'namesNoNestedInstance'
+			return EmptySourceText
+		end 'namesNoNestedInstance'
+
+		return qualifiedMethodName(base, methodName: self.tokenAt(q + 2).value)
+	end 'nestedInstanceCalleeAt'
+
+	// Is the name at `q` the RECEIVER's own spelling — a bare local, field or alias, or the field of a
+	// `self.<field>.<method>(`? Any deeper chain (`a.b.c()`) names a value produced by an expression this
+	// pre-scan cannot type, and is left to the fixpoint's other edges.
+	function nameOpensAReceiverChainAt(q TokenIndex) returns bool
+		if q == 0 or self.kindAt((q - 1) as TokenIndex) != TokenKind.dot 'aBareName'
+			return true
+		end 'aBareName'
+
+		return q >= 2 and self.kindAt((q - 2) as TokenIndex) == TokenKind.self
+	end 'nameOpensAReceiverChainAt'
+
+	// The base type of the nested parameterised instance the NAME at `q` denotes — an inner ALIAS of the
+	// enclosing type (`EChain`), a FIELD of it (`chain`), or a LOCAL this region bound to one — or
+	// `EmptySourceText`. Three doors and one answer, so the static spelling and the instance spelling of the
+	// same receiver cannot draw different edges.
+	function nestedInstanceBaseOfNameAt(q TokenIndex, locals ByteArrayArray, localBases ByteArrayArray) returns ByteArray
+		let name = self.tokenAt(q).value
+		let fromAlias = self.signatures.nestedParameterisedInstanceBaseOfAlias(joinQualifiedName(self.enclosingType, member: name), readerFilePath: self.filePath)
+		if not fromAlias.isEmpty() 'anInnerAlias'
+			return fromAlias
+		end 'anInnerAlias'
+
+		let fromField = self.signatures.nestedParameterisedInstanceBaseOfField(self.enclosingType, fieldName: name)
+		if not fromField.isEmpty() 'aFieldOfTheEnclosingType'
+			return fromField
+		end 'aFieldOfTheEnclosingType'
+
+		for i in 0 upto locals.count() 'eachLocal'
+			if (try locals.get(i) otherwise panic("nestedInstanceBaseOfNameAt: locals.get({i}) OOB below count {locals.count()}")).equals(name) 'hit'
+				return try localBases.get(i) otherwise panic("nestedInstanceBaseOfNameAt: localBases.get({i}) has no row for a recorded local — the two columns are pushed in one act")
+			end 'hit'
+		end 'eachLocal'
+
+		return EmptySourceText
+	end 'nestedInstanceBaseOfNameAt'
+
+	// ⭐ **DOES `var|let <name> = <a name denoting a nested parameterised instance>` BIND ONE (W161)?** — the
+	// binding test that lets a call on a LOCAL draw the edge the field or alias it came from would.
+	// `selfTypedLocalBoundAt`'s shape one receiver over, and it carries that function's stated
+	// over-approximation for the same reason: the RHS is read as a NAME rather than typed, so
+	// `var c = chain.somethingElse()` records `c` too. A local later reassigned, or recorded off a call
+	// returning something else, only ever ADDS edges the fixpoint's own name filter may drop.
+	function nestedInstanceLocalBaseAt(q TokenIndex, locals ByteArrayArray, localBases ByteArrayArray) returns ByteArray
+		let kind = self.kindAt(q)
+		if kind != TokenKind.var and kind != TokenKind.let 'notABinding'
+			return EmptySourceText
+		end 'notABinding'
+		if self.kindAt(q + 1) != TokenKind.identifier or self.kindAt(q + 2) != TokenKind.equals 'notAPlainInitializer'
+			return EmptySourceText
+		end 'notAPlainInitializer'
+		if not tokenCanBeAName(self.tokenAt(q + 3)) 'notANamedSource'
+			return EmptySourceText
+		end 'notANamedSource'
+
+		return self.nestedInstanceBaseOfNameAt((q + 3) as TokenIndex, locals: locals, localBases: localBases)
+	end 'nestedInstanceLocalBaseAt'
 
 	// The `Array` declaration names, memoized per file off the roster anchor — see `arrayDeclarationRoster`.
 	function arrayDeclarationNames() returns ByteArrayArray
@@ -14008,7 +14149,7 @@ export type Parser
 	//
 	// ⛔⛔ **IT IS A NARROWING THAT IS LOAD-BEARING, NOT A TIDY-UP — MEASURED.** `stdlib/Map.maxon`'s cursor
 	// yields the tuple `Entry`, so `Map.map`'s per-trip element is concrete and no descriptor is owed. Seeded
-	// anyway, `Map.map` gains a slot, and `LowerMaxonToStd.instanceLayoutArg` then FORWARDS a real descriptor
+	// anyway, `Map.map` gains a slot, and `LowerMaxonToStd.emitInstanceDescriptorAddr` then FORWARDS a real descriptor
 	// into a `MapIterator with (Key, Value)` chain whose own header records that it is deliberately inert on
 	// both ends — *"forwarding a real descriptor into half of such a chain would make the retains fire while
 	// the drops still read the mint"*. **MEASURED: `interface-extensions/stdlib-map-on-map-with-function`
@@ -21584,7 +21725,27 @@ export type Parser
 		// no struct registry holds — a primitive IS its value, so there is nothing for a layout to describe.
 		// MEASURED before this clause: every method of `extension int` took the compiler down at
 		// `enclosingLayout`, blaming the declaration sweep for a `type int` no program wrote.
-		if takesReceiver and not self.enclosingTypeIsEnum and primitiveTagOfTypeName(self.enclosingType) == ValueTypeTag.unresolved 'selfFieldAliases'
+		// ⛔⛔ **AN INTERFACE EXTENSION'S BODY IS THE THIRD SUCH DECLARATION, AND IT IS THE ONE WHOSE ABSENCE
+		// TOLD A USER TO RENAME A LOCAL THEY DID NOT WRITE (W166).** `extension Iterable` is re-parsed once per
+		// CONFORMER (`parseExtensionDeclaration`), with `enclosingType` set to the conformer — so the
+		// conformer's FIELDS were installed as bare aliases into a body written in another file, against the
+		// INTERFACE, by an author who cannot see them. A `type Bag uses Element implements Iterable` whose
+		// field is spelled `item` therefore collided with `map`'s own `for item in self`, and the diagnostic
+		// was **`error E3006: stdlib/Interfaces.maxon:201:7: local 'item' shadows self field 'Bag.item'`** — a
+		// refusal quoting a library line, naming a library local, on a program whose author's only mistake was
+		// choosing a field name. Every local in every `extension Iterable` method was a reserved word for
+		// conformers.
+		//
+		// ⭐ **THE ALIASES ARE WITHHELD RATHER THAN THE COLLISION EXCUSED, AND THAT IS THE NARROWER FIX OF THE
+		// TWO.** Permitting the shadow would let the local win and stop the refusal, but it leaves the other
+		// half standing: a bare name in an extension body that does NOT collide with a local would still
+		// resolve to the conformer's private field, so the body's meaning would depend on storage the interface
+		// does not expose and a different conformer does not have. **An interface declares a contract, not
+		// storage** — so there is nothing here for a bare name to denote, and `self.<field>` remains the
+		// explicit spelling for a body that has some other reason to reach one. It is the enum clause's
+		// sentence for a different reason: a bare name in such a body is an ordinary local or an undefined
+		// variable, never a field.
+		if takesReceiver and not self.enclosingTypeIsEnum and primitiveTagOfTypeName(self.enclosingType) == ValueTypeTag.unresolved and self.extensionInterfaceName.isEmpty() 'selfFieldAliases'
 			try self.declareSelfFieldAliases(nameTok)
 		end 'selfFieldAliases'
 

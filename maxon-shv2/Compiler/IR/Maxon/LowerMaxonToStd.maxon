@@ -2120,26 +2120,73 @@ type MaxonToStdLowering
 		return self.emitInstanceDescriptorAddr(result, dstBlock: dstBlock)
 	end 'materializeStaticConstructorLayout'
 
-	// Emit the RIP-relative address of the descriptor blob for a CONCRETE generic-instance value (`rdataAddr`
-	// of `ensureLayoutDescriptor`), the shared core of the two ways a layout-needing call finds its descriptor
-	// source — an instance-method RECEIVER and a static-constructor RESULT (P1.6-B1 / P1.7 slice 3b-i). One home
-	// so the gid read, the descriptor emission and the address op cannot drift between the two.
+	// The descriptor address for a generic-instance VALUE — the shared core of the two ways a layout-needing
+	// call finds its descriptor source, an instance-method RECEIVER and a static-constructor RESULT
+	// (P1.6-B1 / P1.7 slice 3b-i). One home so the gid read, the forward/mint decision and the address op
+	// cannot drift between the two.
+	//
+	// ⭐⭐ **A `genericInstance` IS NOT ALWAYS CONCRETE — AN INSTANCE OVER THE ENCLOSING BODY'S OWN
+	// PARAMETERS HAS NO BLOB TO POINT AT, AND IT FORWARDS.** `type Holder uses T` whose field is written with
+	// the bare name `Cell` holds a `Cell with T` (the bare name binds at the enclosing scope's parameters), so
+	// `self.cell.get()` inside `Holder`'s body is a layout-needing call on an instance whose type argument is
+	// not a type at all. `ensureLayoutDescriptor` cannot build a blob for it — the blob carries the argument's
+	// SIZE, and a type parameter's size IS the descriptor read the blob would have to contain, which is why
+	// `primitiveTypeByteSize` panics rather than guessing. The answer the callee needs is already in the
+	// caller's hand.
+	//
+	// ⭐⭐ **AND THE STATIC-CONSTRUCTOR RESULT TAKES THE SAME ARM, WHICH IS WHAT W161 CLOSED.** The forward
+	// used to live one door up, on the RECEIVER path alone, so `EChain.create()` inside `type Bag uses Element`
+	// — a `typealias EChain = Inner with Element`, a DECLARED generic over the enclosing type's own parameter —
+	// reached the mint through `materializeStaticConstructorLayout` and ABORTED THE COMPILER. Nothing about the
+	// argument-run reasoning is receiver-specific: both callers hold a value typed at the instance, and both
+	// need the caller's own blocks. Splitting the decision by the DOOR the value came through is what made one
+	// half work and the other panic.
+	//
+	// ⚠ **IT FORWARDS A BLOCK ADDRESS, NOT ALWAYS THE DESCRIPTOR'S HEAD.** The callee reads ITS parameter `i`
+	// out of block `i` of whatever pointer it is handed, so the forward is sound exactly when the instance's
+	// arguments are a CONTIGUOUS, IN-ORDER RUN of the caller's own parameters — `Cell with T` inside
+	// `Holder uses T` is the run `[0,1)`, and `Cell with U` inside `Holder uses T, U` is the run `[1,2)`, whose
+	// base is block 1. A permutation or a mixed concrete/parameter list has no single base and is not a run:
+	// `genericInstanceArgsAreACallerParameterRun` answers no, and such a value keeps today's behaviour of
+	// minting, which is right whenever it is genuinely concrete. The blob's own `size@0` describes the CALLER's
+	// box rather than the callee's, and that is sound because nothing reads it: the four words a shared body
+	// ever loads are `copyFunc@32`, `destroyFunc@40`, `elementLogicalSize@56` and `retainFunc@64`, and every
+	// one of them is a fact about the type ARGUMENT, which the run makes identical on both sides.
+	//
+	// ⛔⛔ **A CALLER THAT CARRIES NO DESCRIPTOR HAS NOTHING TO FORWARD, AND IT KEEPS THE MINT.**
+	// `stdlib/Interfaces.maxon`'s `extension Iterable` gives `Map` a `map` whose body walks a
+	// `MapIterator with (Key, Value)` — an instance over `Map`'s own parameters — yet `Map.map` reserves
+	// nothing: its need comes from a call on ANOTHER type's instance, and the descriptor-need fixpoint follows
+	// SELF-calls only (`Parser.solveDescriptorNeeds`), so no edge reaches it. Such a chain keeps what it has
+	// always had, a blob minted for the parameterised gid whose every ownership word is 0
+	// (`typeParamOwnershipProtocol` answers `none` for a type-parameter argument) — INERT, and inert on BOTH
+	// sides, because the retain and the drop read the same zero words. Forwarding a real descriptor into half
+	// of such a chain would make the retains fire while the drops still read the mint, which trades an inert
+	// pair for an unbalanced one. W161's edge is drawn only from a call whose receiver RESOLVES to such an
+	// instance (`Parser.nestedInstanceCalleeAt`), and the emitted cursor calls `Map.map` makes resolve to
+	// nothing — so that chain keeps both of its inert ends.
 	function emitInstanceDescriptorAddr(instanceValue ValueId, dstBlock IrBlock) returns ValueId
 		let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitInstanceDescriptorAddr: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+		if self.hasImplicitLayout and self.signatures.genericInstanceArgsAreACallerParameterRun(gid) 'forwardsTheCallersOwnRun'
+			// The run's base is argument 0's own `uses`-list position; the predicate above proved the rest follow it.
+			return self.descriptorBlockAddr(layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.substitutedInstanceArg(gid, position: 0))), dstBlock: dstBlock)
+		end 'forwardsTheCallersOwnRun'
+
 		let descId = self.mintStdValueId()
 		self.stdModule.appendOp(dstBlock, op: StdOp.rdataAddr(descId, label: self.ensureLayoutDescriptor(gid).toByteArray()))
 		return descId
 	end 'emitInstanceDescriptorAddr'
 
-	// The layout-descriptor address to pass for a call whose receiver is `receiver`. A CONCRETE generic
-	// instance receiver → the RIP-relative address of its descriptor blob (`rdataAddr`); a receiver that is
+	// The layout-descriptor address to pass for a call whose receiver is `receiver`. A generic instance
+	// receiver → its descriptor blob's address, or the caller's own block forwarded when the instance is
+	// written over the caller's parameters (`emitInstanceDescriptorAddr` owns that split); a receiver that is
 	// the caller's OWN type parameter (a generic body calling another generic method on a `T` value) →
 	// FORWARD the caller's own layout slot. B1's acceptance calls come from a non-generic `main` on a
 	// concrete instance, so the forward arm is reached only by a generic-to-generic call.
 	function materializeLayoutArg(receiver ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
 		let tag = self.valueTagOf(receiver)
 		if tag == ValueTypeTag.genericInstance 'instance'
-			return self.instanceLayoutArg(receiver, dstBlock: dstBlock)
+			return self.emitInstanceDescriptorAddr(receiver, dstBlock: dstBlock)
 		end 'instance'
 		// ⭐ A `structRef`(base) receiver is the enclosing generic body's OWN instance — `self` — so the
 		// descriptor to pass is the caller's own, FORWARDED. A `typeParameter` receiver (a value of the caller's
@@ -2151,44 +2198,6 @@ type MaxonToStdLowering
 		end 'forward'
 		panic("materializeLayoutArg: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
 	end 'materializeLayoutArg'
-
-	// ⭐⭐ **A `genericInstance` RECEIVER IS NOT ALWAYS CONCRETE — an instance over the ENCLOSING BODY'S OWN
-	// PARAMETERS HAS NO BLOB TO POINT AT, AND IT FORWARDS.** `type Holder uses T` whose field is written with
-	// the bare name `Cell` holds a `Cell with T` (the bare name binds at the enclosing scope's parameters), so
-	// `self.cell.get()` inside `Holder`'s body is a layout-needing call on an instance whose type argument is
-	// not a type at all. `ensureLayoutDescriptor` cannot build a blob for it — the blob carries the argument's
-	// SIZE, and a type parameter's size IS the descriptor read the blob would have to contain, which is why
-	// `primitiveTypeByteSize` panics rather than guessing. The answer the callee needs is already in the
-	// caller's hand.
-	//
-	// ⚠ **IT FORWARDS A BLOCK ADDRESS, NOT ALWAYS THE DESCRIPTOR'S HEAD.** The callee reads ITS parameter `i`
-	// out of block `i` of whatever pointer it is handed, so the forward is sound exactly when the instance's
-	// arguments are a CONTIGUOUS, IN-ORDER RUN of the caller's own parameters — `Cell with T` inside
-	// `Holder uses T` is the run `[0,1)`, and `Cell with U` inside `Holder uses T, U` is the run `[1,2)`, whose
-	// base is block 1. A permutation or a mixed concrete/parameter list has no single base and is not a run:
-	// `genericInstanceArgsAreACallerParameterRun` answers no, and such a receiver keeps today's behaviour of
-	// minting, which is right whenever it is genuinely concrete.
-	//
-	// ⛔⛔ **A CALLER THAT CARRIES NO DESCRIPTOR HAS NOTHING TO FORWARD, AND THAT IS A REACHABLE SHAPE THIS
-	// RUNG DOES NOT CLOSE.** `stdlib/Interfaces.maxon`'s `extension Iterable` gives `Map` a `map` whose body
-	// walks a `MapIterator with (Key, Value)` — an instance over `Map`'s own parameters — yet `Map.map`
-	// reserves nothing: its need comes from a call on ANOTHER type's instance, and the descriptor-need
-	// fixpoint follows SELF-calls only (`Parser.solveDescriptorNeeds`), so no edge reaches it. Such a chain
-	// keeps what it has always had, a blob minted for the parameterised gid whose every ownership word is 0
-	// (`typeParamOwnershipProtocol` answers `none` for a type-parameter argument) — INERT, and inert on BOTH
-	// sides, because the retain and the drop read the same zero words. Forwarding a real descriptor into half
-	// of such a chain would make the retains fire while the drops still read the mint, which trades an inert
-	// pair for an unbalanced one. So the fallback is today's behaviour exactly, and closing it means giving
-	// the fixpoint a cross-type edge — a mechanism of its own.
-	function instanceLayoutArg(receiver ValueId, dstBlock IrBlock) returns ValueId
-		let gid = try self.valueNameIds.get(receiver) otherwise panic("instanceLayoutArg: genericInstance value v{receiver} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
-		if not self.hasImplicitLayout or not self.signatures.genericInstanceArgsAreACallerParameterRun(gid) 'nothingToForward'
-			return self.emitInstanceDescriptorAddr(receiver, dstBlock: dstBlock)
-		end 'nothingToForward'
-
-		// The run's base is argument 0's own `uses`-list position; the predicate above proved the rest follow it.
-		return self.descriptorBlockAddr(layoutBlockOffsetFor(self.signatures.opaqueTypeParamPosition(self.signatures.substitutedInstanceArg(gid, position: 0))), dstBlock: dstBlock)
-	end 'instanceLayoutArg'
 
 	// Forward the CURRENT (generic) function's own layout slot to a callee — when a generic body calls another
 	// layout-needing method on `self` or on a value of its own type parameter. The caller MUST carry a layout
