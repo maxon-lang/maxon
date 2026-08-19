@@ -20789,8 +20789,21 @@ export type ProgramSignatures
 	// `Array with Element` is the field every generic container in `stdlib/` declares, and it already has a
 	// mechanism of its own — `Parser.corpusServesArrayMember`'s receiver-blind edge, tuned to it and
 	// deliberately withheld from statics. Admitting those bases here would draw a second, differently-gated
-	// edge over every call in `Array`, `Map`, `Set` and `Vector`. The residue — a DECLARED generic standing
-	// where a compiler-owned one used to — is what has no mechanism at all, and is what this answers for.
+	// edge over every call in the containers this compiler synthesizes. The residue — a DECLARED generic
+	// standing where a compiler-owned one used to — is what has no mechanism at all, and is what this
+	// answers for.
+	//
+	// ⛔⛔ **THIS COMMENT USED TO NAME `Map` AND `Set` AMONG THE EXCLUDED BASES. THEY ARE NOT EXCLUDED**
+	// (measured by BATCH40's review, 2026-08-19). The exclusion is `isBuiltinGenericBaseNameBesidesTheRecord`
+	// plus the record — `List`, `Vector`, `__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`, `Array`.
+	// `Map` and `Set` are ORDINARY CORPUS TYPES here and this predicate answers for them like any other.
+	//
+	// ⚠ **AND IT IS NOT HYPOTHETICAL:** `stdlib/Set.maxon:15` declares `typealias SetIter = SetIterator with Element`
+	// and `:271` calls `SetIter.create(…)`, so this answers **true** and a real edge `Set.createIterator ->
+	// SetIterator.create` is drawn today. It is harmless only because `SetIterator.create` happens to need no
+	// descriptor. `Map` escapes purely because it spells the base bare (`MapIterator.create`) rather than through
+	// an alias — **an asymmetry produced by SPELLING, not by design**, which is this project's signature bug
+	// class. Read the set, never this sentence's memory of it.
 	//
 	// It is ONE expression because the alias door and the field door below both ask it, and a disagreement
 	// between them would be a call whose descriptor one half supplies and the other mints.
