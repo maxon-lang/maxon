@@ -354,7 +354,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:34:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, holding a field declared AT that parameter — has no element destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. Three shapes reach this: a container FIELD declared at an inner alias over the enclosing parameter (`typealias EBox = Box with Element` then `Array with EBox`), the same alias built as a LOCAL, and a `List` over one. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build the container in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
+error E2015: <fragment>:34:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, holding — itself or through an instance it holds — a field declared AT that parameter — has no element destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. Three shapes reach this: a container FIELD declared at an inner alias over the enclosing parameter (`typealias EBox = Box with Element` then `Array with EBox`), the same alias built as a LOCAL, and a `__ManagedList` over one — and the unreleasable slot need not be the element's OWN field, since one held by an instance the element holds is freed by the same declaration-view destructor and counts too. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build the container in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
 ```
 
 ### …and the CONCRETE instantiation of the same constructor, which always worked
@@ -427,6 +427,176 @@ end 'main'
 ```
 ```stdout
 hello heap world
+```
+
+### …and the slot it cannot release need not be the element's OWN field
+
+**THE PREDICATE READ THE RAW DECLARED FIELD LIST AND THIS SHAPE WALKED PAST IT — MEASURED `0xC0000005`,
+FOUND BY THE BATCH41 REVIEW.** Everything above puts the bare `Element` in `Box`'s own field list, where a
+`slotTypeIsOpaque` test of the declared column sees it. Here `Box` holds an `Inner with T` instead, and
+`Inner` is the one holding the bare parameter — so `Box`'s own columns are a `genericInstance` and an `int`,
+neither of them a `typeParameter`, and the first cut of the refusal answered *"owns nothing"* and compiled
+the program. The array was then stamped with `Box`'s DECLARATION-VIEW destructor
+(`__destruct_Box_T<hash>` — MEASURED off `--emit-ir`), which frees the inner record and leaves the `String`
+it holds, the store kept a raw borrow, and **the read faulted** exactly as the case above does.
+
+⇒ The walk resolves and SUBSTITUTES each column through `substituteInstanceFieldType` — the one derivation
+`genericInstanceFieldIsManaged`, `genericInstanceFieldDropCallee` and `genericInstanceFieldCloneStrategy`
+already share, whose own header carries the exit-101 leak a second, hand-rolled reading of that column
+produced — and recurses into a column that is itself an instance. A refusal deriving the column its own way
+is free to disagree with the destructor it refuses on behalf of.
+
+<!-- test: error.a-nested-instance-two-levels-over-the-enclosing-parameter-is-refused -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner uses U
+	let x as U
+
+	export function value() returns U
+		return x
+	end 'value'
+
+	static function create(x U) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Box uses T
+	typealias TInner = Inner with T
+	let inner as TInner
+	let tag as Integer
+
+	export function value() returns T
+		return inner.value()
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{inner: TInner.create(x), tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias BoxArray = Array with EBox
+	var items as BoxArray
+
+	export function add(x Element, tag Integer)
+		items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	export function first() returns Element throws ArrayError
+		let slot = try self.items.first() otherwise 'e'
+			throw ArrayError.indexOutOfBounds
+		end 'e'
+		return slot.value()
+	end 'first'
+
+	static function create() returns Self
+		return Self{items: BoxArray{}}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+
+function fill(b StrBag)
+	var sb = StringBuilder.create()
+	sb.append("hello ")
+	sb.append("heap world")
+	let s = sb.build()
+	b.add(s, tag: 7)
+end 'fill'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	fill(b)
+	let got = try b.first() otherwise 'e'
+		return 9 as ExitCode
+	end 'e'
+	print(got)
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:47:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, holding — itself or through an instance it holds — a field declared AT that parameter — has no element destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. Three shapes reach this: a container FIELD declared at an inner alias over the enclosing parameter (`typealias EBox = Box with Element` then `Array with EBox`), the same alias built as a LOCAL, and a `__ManagedList` over one — and the unreleasable slot need not be the element's OWN field, since one held by an instance the element holds is freed by the same declaration-view destructor and counts too. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build the container in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
+```
+
+### …and the TRIVIAL instantiation of that two-level shape still runs
+
+The false-reject control for the widening above, and it is the reason the walk asks the INSTANTIATION at the
+bottom of the recursion rather than refusing every nested instance it meets. Byte-identical to the program
+above with `String` replaced by a ranged `int`: `Inner`'s bare `U` owns nothing at run time under every `with`
+the program writes, so the column's `__mm_decref` IS the correct element destructor and the program is whole.
+
+<!-- test: a-trivial-instantiation-of-the-two-level-shape-still-runs -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Small = int(0 to 100)
+
+type Inner uses U
+	let x as U
+
+	export function value() returns U
+		return x
+	end 'value'
+
+	static function create(x U) returns Self
+		return Self{x: x}
+	end 'create'
+end 'Inner'
+
+type Box uses T
+	typealias TInner = Inner with T
+	let inner as TInner
+	let tag as Integer
+
+	export function value() returns T
+		return inner.value()
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{inner: TInner.create(x), tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias BoxArray = Array with EBox
+	var items as BoxArray
+
+	export function add(x Element, tag Integer)
+		items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	export function first() returns Element throws ArrayError
+		let slot = try self.items.first() otherwise 'e'
+			throw ArrayError.indexOutOfBounds
+		end 'e'
+		return slot.value()
+	end 'first'
+
+	static function create() returns Self
+		return Self{items: BoxArray{}}
+	end 'create'
+end 'Bag'
+
+typealias SmallBag = Bag with Small
+
+function fill(b SmallBag)
+	b.add(41, tag: 7)
+end 'fill'
+
+function main() returns ExitCode
+	var b = SmallBag.create()
+	fill(b)
+	let got = try b.first() otherwise 'e'
+		return 9 as ExitCode
+	end 'e'
+	return got
+end 'main'
+```
+```exitcode
+41
 ```
 
 ### A hundred borrowed stores into the PARAMETER'S OWN container balance

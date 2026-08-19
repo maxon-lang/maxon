@@ -17037,7 +17037,7 @@ export type ProgramSignatures
 		// here travels with no reader path.
 		let tag = maxonTypeTag(columnType)
 		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.instanceOwnsAnUnnameableSlot(typeNameIdOf(columnType))
+			return self.instanceOwnsAnUnnameableSlot(typeNameIdOf(columnType), visited: ClonerSet.create())
 		end 'anInstance'
 		if tag != ValueTypeTag.named 'namesNoInstance'
 			return false
@@ -17050,50 +17050,76 @@ export type ProgramSignatures
 			return false
 		end 'notAnAliasForAnInstance'
 
-		return self.instanceOwnsAnUnnameableSlot(self.genericAliasInstance(name))
+		return self.instanceOwnsAnUnnameableSlot(self.genericAliasInstance(name), visited: ClonerSet.create())
 	end 'columnElementOwnsAnUnnameableSlot'
 
-	// The instance-in-hand half of the question above — does `id` declare a field AT a parameter this instance
+	// The instance-in-hand half of the question above — does `id` own a slot AT a parameter this instance
 	// leaves OPAQUE, which some instantiation of that parameter's owner makes managed?
-	function instanceOwnsAnUnnameableSlot(id GenericInstanceId) returns bool
+	//
+	// ⛔⛔ **IT READS THE SUBSTITUTED COLUMN, AND THE FIRST CUT READ THE RAW ONE — MEASURED `0xC0000005`, FOUND
+	// BY THE BATCH41 REVIEW.** The raw field list only ever names a slot's DECLARED spelling, so a field typed
+	// through an inner alias arrives as a bare `named("Box.TInner")` and a field typed at a NESTED INSTANCE
+	// over the parameter (`type Box uses T { let inner as Inner with T }`) is a `genericInstance` — neither is
+	// a `typeParameter`, so a scan that tested only `slotTypeIsOpaque` of the declared column skipped both and
+	// answered `false`. MEASURED on `Array with (Box with Element)` at `Bag with String`, where `Box` holds an
+	// `Inner with T` rather than a bare `T`: the column was stamped `__destruct_Box_T<hash>` — the DECLARATION
+	// VIEW's — the store kept a raw borrow, and the program **segfaulted at the read**, exactly the fault the
+	// refusal above exists to prevent, one level of nesting further in.
+	//
+	// ⇒ The column is resolved and substituted through `substituteInstanceFieldType`, which is the ONE
+	// derivation `genericInstanceFieldIsManaged`, `genericInstanceFieldDropCallee` and
+	// `genericInstanceFieldCloneStrategy` already share — its own header carries the exit-101 leak a separate,
+	// hand-rolled reading of the same column produced. A refusal deriving that column its own way is free to
+	// disagree with the destructor it is refusing on behalf of, which is what happened here.
+	function instanceOwnsAnUnnameableSlot(id GenericInstanceId, visited ClonerSet) returns bool
 		// A fully concrete element resolves its own destructor at the create site — the whole point of the
 		// declaration-view/instance split (`instanceMentionsTypeParameter`).
 		if not self.instanceMentionsTypeParameter(id) 'fullyConcrete'
 			return false
 		end 'fullyConcrete'
-		// A builtin container element (`Array with Element` inside another container) has no declared field
-		// list and owes nothing here: its element destructor IS the descriptor's `destroyFunc@40`, which is
-		// the mechanism this function exists to say is missing one level up. The CLONE side of that same
+
+		// A builtin element-bearing record (`__ManagedMemory with Element`, `__ManagedList with Element`) has no
+		// declared field list and owes nothing here: its element destructor IS the descriptor's `destroyFunc@40`,
+		// which is the mechanism this function exists to say is missing one level up. The CLONE side of that same
 		// element is `containerOpaqueElementCanBeManaged`'s.
 		if not self.genericInstanceHasBaseLayout(id) 'noDeclaredFieldsToOwn'
 			return false
 		end 'noDeclaredFieldsToOwn'
 
-		let layout = self.baseLayoutOf(id)
-		let args = self.genericInstances.instanceArgs(id)
-		for i in 0 upto layout.fieldCount() 'eachField'
-			let fieldType = try layout.fieldTypes.get(i) otherwise panic("ProgramSignatures.instanceOwnsAnUnnameableSlot: fieldTypes.get OOB at {i}")
-			if not self.slotTypeIsOpaque(fieldType) 'notABareParameterField'
-				continue
-			end 'notABareParameterField'
+		// The cycle break is `declaredInstanceSupportsDeepClone`'s, for its reason and in its set: the mangled
+		// instance name lives behind the reserved `__` prefix no declaration may take. A cycle answers "owns
+		// nothing" because a type that owns itself is E4014's to refuse, not this refusal's to guess at.
+		let mangled = self.mangleGenericInstance(id)
+		if visited.contains(mangled) 'alreadyWalked'
+			return false
+		end 'alreadyWalked'
+		visited.insert(mangled)
 
-			let position = self.opaqueTypeParamPosition(fieldType)
-			if position >= args.count() 'noArgumentAtThatPosition'
-				continue
-			end 'noArgumentAtThatPosition'
-
-			let arg = try args.get(position) otherwise panic("ProgramSignatures.instanceOwnsAnUnnameableSlot: instanceArgs.get OOB at {position} despite the range guard")
-			if not self.slotTypeIsOpaque(arg) 'substitutedToAConcreteType'
-				continue
-			end 'substitutedToAConcreteType'
-
-			if self.anyInstanceTypeArgHasKind(typeNameIdOf(arg), kind: TypeArgInstantiationKind.managedElement) 'someInstantiationOwnsIt'
+		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
+			if self.slotOwnsAnUnnameableSlot(self.substituteInstanceFieldType(id, index: i), visited: visited) 'someInstantiationOwnsIt'
 				return true
 			end 'someInstantiationOwnsIt'
 		end 'eachField'
 
 		return false
 	end 'instanceOwnsAnUnnameableSlot'
+
+	// One slot of the walk above, as the instance holding it SEES that slot. A slot still standing at a bare
+	// parameter is the answer — it is the one whose release is a fact about an instantiation this body cannot
+	// name; a slot at a nested instance recurses, because the record that instance stands for is freed by the
+	// same declaration-view destructor and carries the same unreleased word; and every other tag is a concrete
+	// leaf whose drop the create site resolves for itself.
+	function slotOwnsAnUnnameableSlot(slot MaxonType, visited ClonerSet) returns bool
+		if self.slotTypeIsOpaque(slot) 'aBareParameterSlot'
+			return self.anyInstanceTypeArgHasKind(typeNameIdOf(slot), kind: TypeArgInstantiationKind.managedElement)
+		end 'aBareParameterSlot'
+
+		if maxonTypeTag(slot) == ValueTypeTag.genericInstance 'aNestedInstance'
+			return self.instanceOwnsAnUnnameableSlot(typeNameIdOf(slot), visited: visited)
+		end 'aNestedInstance'
+
+		return false
+	end 'slotOwnsAnUnnameableSlot'
 
 	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`) — for the one message that has to
 	// say WHICH element type it is refusing (E3106, `Parser.requireArrayResizeHasZeroElement`). It lives here
