@@ -13779,7 +13779,7 @@ export type Parser
 
 	// ⭐⭐ **THE CALLEE A CALL ON A NESTED PARAMETERISED INSTANCE LINKS TO, or NONE (W161).**
 	// `EChain.create()` inside `type Bag uses Element` answers `Inner.create` and `chain.count()` answers
-	// `Inner.count`: BOTH spellings dispatch to the BASE struct (`qualifiedCallBaseName` for the alias, the
+	// `Inner.count`: BOTH spellings dispatch to the BASE struct (`denotedGenericBaseName` for the alias, the
 	// receiver's declared type for the field), so that is the node the fixpoint indexes and the name this edge
 	// has to carry. The MISS is `EmptySourceText`, `innerAliasMember`'s convention for the same shape of
 	// question; a caller tests `isEmpty()`.
@@ -34666,7 +34666,7 @@ export type Parser
 	// A plain struct answers its own name. A GENERIC INSTANCE answers its BASE, because shv2 compiles ONE body
 	// per generic type (P1.6-A): `Box with Integer`'s `createIterator` IS `Box.createIterator`, the same symbol
 	// a `Box with String` reaches, and it is the name every other method door already mangles onto
-	// (`qualifiedCallBaseName`, `dispatchMethodOnBase`). An EXISTENTIAL answers `existential`: it has a name,
+	// (`denotedGenericBaseName`, `dispatchMethodOnBase`). An EXISTENTIAL answers `existential`: it has a name,
 	// but its name is an INTERFACE, whose requirements no callee registry holds and whose conformers' bodies
 	// are not what a dispatch binds against. Everything else — an int, a `String`, a closure — answers `none`.
 	//
@@ -48229,7 +48229,7 @@ export type Parser
 		// ⭐⭐ **THE GENERIC ALIAS THIS CALL'S BASE NAMES, RESOLVED ONCE — file-scope (`IntBox`) or INNER
 		// (`Plain.IntPair`) — and all FOUR of this routine's alias-driven decisions read THIS name rather than
 		// the written token (W7):** the builtin-container interception below, the base a static mangles onto
-		// (`qualifiedCallBaseName`), the instance a constructor builds (`constructorInstanceOf`), and the type
+		// (`denotedGenericBaseName`), the instance a constructor builds (`constructorInstanceOf`), and the type
 		// its result adopts (`retypeGenericAliasConstructorResult`). Which registration a written name denotes
 		// is `genericAliasKeyFor`'s alone — the inner spelling used to be recognized here and then dropped for
 		// the other three, which is exactly how one call site came to hold two readings of one alias.
@@ -48310,7 +48310,7 @@ export type Parser
 		// needs a joined name. Every qualified call in the program pays the first; only a primitive-based one
 		// pays the rest.
 		let memberTok = self.current()
-		let declaredCallee = qualifiedMethodName(self.qualifiedCallBaseName(aliasName), methodName: memberTok.value)
+		let declaredCallee = qualifiedMethodName(self.signatures.denotedGenericBaseName(aliasName, readerFilePath: self.filePath), methodName: memberTok.value)
 		if namesAPrimitiveType(typeTok.value) and not self.signatures.declaresCallee(declaredCallee) 'primitiveStatic'
 			let minted = primitiveStaticCallee(typeTok.value, methodName: memberTok.value)
 			if self.signatures.declaresCallee(minted) 'declaredPrimitiveStatic'
@@ -48447,17 +48447,6 @@ export type Parser
 		// and it is the same spelling `recordValueInstanceAlias` is here for.
 		self.markDeclaredSurface(result, declared: surfaceOfRootBits(self.signatures.aliasSpellingSurfaceBits(aliasName, readerFilePath: self.filePath)))
 	end 'retypeGenericAliasConstructorResult'
-
-	// ⭐ **THE STRUCT A QUALIFIED CALL'S METHOD IS DECLARED ON (P1.6-A).** A generic-instance alias
-	// (`IntBox`) dispatches its static methods to the BASE struct (`Box`) — the SHARED body compiled once
-	// against the opaque type parameter, so `IntBox.create` links to `@Box.create`, byte-identical to the
-	// equivalent monomorphic call. Every other name (a plain struct, `Self`) is already its own base.
-	function qualifiedCallBaseName(name ByteArray) returns ByteArray
-		if self.signatures.isGenericAlias(name) 'genericAlias'
-			return self.signatures.genericInstanceBaseName(self.signatures.genericAliasInstanceFrom(name, readerFilePath: self.filePath))
-		end 'genericAlias'
-		return name
-	end 'qualifiedCallBaseName'
 
 	// ⭐ **`p.add(10)` / `self.add(10)` — AN INSTANCE METHOD CALL, WHICH IS AN ORDINARY DIRECT CALL
 	// WITH ONE EXTRA ARGUMENT.**
@@ -49374,7 +49363,7 @@ export type Parser
 	//     and set runtimes and NO file declares an `Array.create` to be found.
 	//   • a DECLARED callee under the mangled static name — every plain struct's `Widget.byteLength`, and
 	//     a user generic alias's `IntBox.create` through its base. The name is built by the SAME
-	//     expression `parseQualifiedCall` builds it with, `qualifiedCallBaseName` included, rather than
+	//     expression `parseQualifiedCall` builds it with, `denotedGenericBaseName` included, rather than
 	//     re-spelled here: two derivations of one callee name is the drift `voidStaticCallsAt`
 	//     documents at length, and its failure is a call accepted at one door and refused at the other.
 	function staticCallClaimsBase(index TokenIndex) returns bool
@@ -49390,7 +49379,7 @@ export type Parser
 			return true
 		end 'enumOrGenericAlias'
 
-		return self.signatures.declaresCallee(qualifiedMethodName(self.qualifiedCallBaseName(baseName), methodName: self.tokenAt(index + 2).value))
+		return self.signatures.declaresCallee(qualifiedMethodName(self.signatures.denotedGenericBaseName(baseName, readerFilePath: self.filePath), methodName: self.tokenAt(index + 2).value))
 	end 'staticCallClaimsBase'
 
 	// Dispatch a method (or a function-typed FIELD load) on an already-resolved struct base — the shared tail
@@ -68816,10 +68805,10 @@ export type Parser
 	// direction: a statement accepted here and then rejected as an unknown intrinsic three functions later.
 	//
 	// ⚠⚠ **THE NAME IS BUILT BY THE SAME EXPRESSION `parseQualifiedCall` USES — `genericAliasKeyFor` AND
-	// `qualifiedCallBaseName`, BOTH — and neither call is decoration.** Deriving the callee here from the BARE
+	// `denotedGenericBaseName`, BOTH — and neither call is decoration.** Deriving the callee here from the BARE
 	// base token agrees with the real parse only for as long as those two are jointly the identity on every
 	// name that can reach this shape, and **that premise HAS ALREADY FAILED ONCE**: this comment used to claim
-	// it "true today" of `qualifiedCallBaseName` alone, and W7 then taught `parseQualifiedCall` to read an INNER
+	// it "true today" of the base resolution alone, and W7 then taught `parseQualifiedCall` to read an INNER
 	// alias under its base-qualified key without teaching this door, so one written name meant two things. The
 	// premise is not restated as safe here — it is REMOVED, by making both doors read the one key. Two
 	// derivations of one name is the duplication this predicate was written to avoid.
@@ -68866,11 +68855,11 @@ export type Parser
 		end 'statFree'
 
 		// The base name is resolved ONCE and threaded to both readings below — the callee mangle and the
-		// declared-type claim. `qualifiedCallBaseName` is a registry lookup that can allocate, and two calls
+		// declared-type claim. `denotedGenericBaseName` is a registry lookup that can allocate, and two calls
 		// on one token are two derivations of one name, which is the drift this predicate's header is about.
 		//
 		// ⛔ **THROUGH `genericAliasKeyFor`, AND THE HEADER'S OWN PREMISE IS WHY (W7 review).** That premise —
-		// *"agrees with the real parse only for as long as `qualifiedCallBaseName` is the identity on every name
+		// *"agrees with the real parse only for as long as `denotedGenericBaseName` is the identity on every name
 		// that can reach this shape … exactly the kind of premise that quietly stops holding"* — stopped holding
 		// the moment `parseQualifiedCall` began resolving an INNER alias under its base-qualified key. Reading
 		// the bare member here made THIS door the fifth reader of "which registration does this spelling
@@ -68880,7 +68869,7 @@ export type Parser
 		// `E2015: Unsupported: identifier statement`, while `let p = IntPair.create(9)` one line below resolved
 		// perfectly — a call accepted at one door and refused at the other, which is the exact failure this
 		// predicate's header names. `staticCallClaimsBase` asks the same key for the same reason.
-		let baseName = self.qualifiedCallBaseName(self.genericAliasKeyFor(self.tokenAt(index).value))
+		let baseName = self.signatures.denotedGenericBaseName(self.genericAliasKeyFor(self.tokenAt(index).value), readerFilePath: self.filePath)
 		let callee = qualifiedMethodName(baseName, methodName: self.tokenAt(index + 2).value)
 		if isBuiltinsIntrinsicCallee(callee) 'builtinsIntrinsic'
 			return true

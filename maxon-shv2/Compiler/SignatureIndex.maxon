@@ -15956,6 +15956,16 @@ export type ProgramSignatures
 	// parameter-run sibling does, so borrowing that gate here would answer "no such type" for a cursor that
 	// genuinely hands out the enclosing type's own parameter — an under-reservation, which is the direction
 	// that refuses a legal program.
+	//
+	// ⭐⭐ **IT IS ALSO THE STRUCT A QUALIFIED CALL'S METHOD IS DECLARED ON, AND THAT WAS A SECOND COPY OF THIS
+	// BODY UNTIL W172's REVIEW.** `Parser.qualifiedCallBaseName` computed exactly these four lines against
+	// `self.filePath` — a generic-instance alias dispatches its statics to the BASE struct (shv2 compiles ONE
+	// body per generic type, so `IntBox.create` links to `@Box.create`, byte-identical to the equivalent
+	// monomorphic call), and every other name is already its own base. Two copies of one resolution is this
+	// project's signature bug in the shape that bites hardest: the alias tiers here are `scopedGenericAliasInstance`'s
+	// three (N3) and `fileScopedInstance`'s rescope (N2), and a fourth tier taught to one copy would have the
+	// descriptor-need pre-scan resolving `BagIter` to one base while the call that links against it mangles to
+	// another — a wrong SYMBOL and a wrong RESERVATION, with no compile error at either door.
 	export function denotedGenericBaseName(name ByteArray, readerFilePath FilePath) returns ByteArray
 		if not self.isGenericAlias(name) 'namesNoInstance'
 			return name
@@ -17733,7 +17743,7 @@ export type ProgramSignatures
 
 	// The `create()` static a DECLARED generic's instance is born through — `Map.create` for every
 	// `Map with (K, V)` (W41). It is the SAME name a body's `StrMap.create()` links to
-	// (`Parser.qualifiedCallBaseName` mangles the alias to its base, then joins the method), so the record a
+	// (`denotedGenericBaseName` mangles the alias to its base, then joins the method), so the record a
 	// global's slot holds and the record the identical call in a function body builds come out of one function.
 	// Precondition: `instanceCreateIsDeclared`.
 	export function declaredInstanceCreateCallee(id GenericInstanceId) returns ByteArray
