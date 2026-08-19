@@ -1,0 +1,102 @@
+// Test: float-divide-by-zero
+typealias Float = float(f64.min to f64.max)
+
+// An opaque source so the divisor is possibly-zero (the compiler cannot fold it,
+// so `100.0 / zero` throws rather than being a compile-time `a / 0.0` error). Float
+// `/` is fallible exactly as integer `/` is: `x / 0.0` would be ±inf — a representable
+// value, but still a logic error — so it is surfaced in the type, not silently produced.
+function opaque(x Float) returns Float
+	return x
+end 'opaque'
+
+function main() returns ExitCode
+	let zero = opaque(0.0)
+	var result = 0
+	try 'work'
+		let q = 100.0 / zero
+		// Unreachable: the divide throws before this runs. `q > 0.0` keeps the value used so the
+		// divide is not elided, without casting a float to the ExitCode.
+		result = 1 if q > 0.0 else 2
+	end 'work'
+	otherwise (e) 'handle'
+		match e 'kind'
+			divisionByZero then result = 42
+		end 'kind'
+	end 'handle'
+	return result as ExitCode
+end 'main'
+---
+ExitCode: 42
+---
+func @opaque {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.callDirect opaque
+    x64.movsdRegRip xmm1, [rip + __fconst_2]
+    x64.movsdRegRip xmm2, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm0, xmm2
+    x64.setccReg notEqual, rcx
+    x64.setccReg parity, rdx
+    x64.leaRegRegReg rcx, rcx, rdx
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg equal, rax
+    x64.divsdRegReg xmm1, xmm1, xmm0
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, tryblkerr
+    x64.jmp tryblkok
+  tryblkerr:
+    x64.leaRegRegImm32 rax, rax, -1
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 rax, 42
+    x64.jmp matchcont#8
+  matchcont#8:
+    x64.jmp tryblkcont
+  matchdead:
+  tryblkok:
+    x64.movsdRegRip xmm0, [rip + __fconst_1]
+    x64.ucomisdRegReg xmm1, xmm0
+    x64.jcc above, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegImm32 rax, 1
+    x64.jmp matchcont#5
+  ternaryfalse:
+    x64.movRegImm32 rax, 2
+    x64.jmp matchcont#5
+  matchcont#5:
+    x64.jmp tryblkcont
+  tryblkcont:
+    x64.cmpRegImm32 rax, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 rax, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.leaRegRegImm32 r8, rax, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}

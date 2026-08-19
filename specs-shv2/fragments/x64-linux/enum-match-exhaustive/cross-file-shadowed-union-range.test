@@ -1,0 +1,144 @@
+// Test: cross-file-shadowed-union-range
+// --- file: spans.maxon
+export union BigSpan
+	condBr
+	cmp
+	call
+	br
+	ret
+end 'BigSpan'
+
+export union SpanOp
+	condBr
+	br
+end 'SpanOp'
+
+// --- file: main.maxon
+typealias Code = int(0 to 125)
+
+function classify(op SpanOp) returns Code
+	return match op 'check'
+		condBr to br gives 7
+	end 'check'
+end 'classify'
+
+function describeBig(op BigSpan) returns Code
+	return match op 'check'
+		condBr to ret gives 3
+	end 'check'
+end 'describeBig'
+
+function main() returns ExitCode
+	let span = classify(SpanOp.br)
+	let big = describeBig(BigSpan.call)
+	if big == 3 'bigOk'
+		return span
+	end 'bigOk'
+	return 99
+end 'main'
+---
+ExitCode: 7
+---
+func @classify {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 1
+    x64.setccReg lessEqual, rcx
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 7
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 125
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @describeBig {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.cmpRegImm32 rcx, 0
+    x64.setccReg greaterEqual, rax
+    x64.cmpRegImm32 rcx, 4
+    x64.setccReg lessEqual, rcx
+    x64.andRegReg rax, rax, rcx
+    x64.cmpRegImm32 rax, 0
+    x64.jcc notEqual, matcharm
+    x64.jmp matchdead
+  matcharm:
+    x64.movRegImm32 r8, 3
+    x64.jmp matchcont
+  matchcont:
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 125
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  matchdead:
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegImm32 rcx, 1
+    x64.callDirect classify
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 2
+    x64.callDirect describeBig
+    x64.cmpRegImm32 r8, 3
+    x64.jcc equal, bigOk
+    x64.jmp ifcont
+  bigOk:
+    x64.movRegReg r8, rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.movRegImm32 r8, 99
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}

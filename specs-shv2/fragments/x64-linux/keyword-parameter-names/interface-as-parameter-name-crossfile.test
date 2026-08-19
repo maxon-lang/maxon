@@ -1,0 +1,51 @@
+// Test: interface-as-parameter-name-crossfile
+// --- file: api/shared.maxon
+module typealias StdType = int(i64.min to i64.max)
+
+// --- file: api/helper.maxon
+export function passthrough(interface StdType) returns StdType
+	return interface
+end 'passthrough'
+
+// --- file: app/main.maxon
+function main() returns ExitCode
+	return passthrough(5)
+end 'main'
+---
+ExitCode: 5
+---
+func @passthrough {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.movRegReg r8, rcx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.movRegImm32 rcx, 5
+    x64.callDirect passthrough
+    x64.cmpRegImm32 r8, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r8, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
