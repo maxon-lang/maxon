@@ -2040,10 +2040,23 @@ public static class MonomorphizationPass {
         op.TypeParamName != null && map.TryGetValue(op.TypeParamName, out var bound) ? bound : null,
         SubstituteName);
 
-    /// The kind a `TypeParameter` result takes once its parameter is bound. Every value in this
-    /// map is the CONCRETE TYPE a call site passed for an interface-typed parameter, so it is
-    /// always a struct — the enum/primitive split TypeSubstitution.SubstituteValueKind makes for
-    /// generic type parameters cannot arise here, and ToValueKind answers on its own.
+    /// The kind a `TypeParameter` result takes once its parameter is bound.
+    ///
+    /// ⚠ An earlier spelling of this comment said the bound values are "always a struct", so the
+    /// enum/primitive split TypeSubstitution.SubstituteValueKind makes could not arise here. That
+    /// is FALSE, and IsBitPackedElement four lines below is the counter-example: it tests
+    /// `resolved == IrType.I1`, which is a bound value that is not a struct.
+    ///
+    /// What is actually true is narrower, and it is about the KEYS rather than the values: this
+    /// map is keyed by interface and interface-alias type names, `Self`, and the specialized
+    /// function's own owner type — so the `typeParamName ?? "Element"` lookup below MISSES for
+    /// a bare `Element`, and `kind` is returned unchanged. The enum/primitive split therefore
+    /// does not arise because the lookup does not hit, not because the values are all structs.
+    ///
+    /// ⚠ This routes through ToValueKind while its FunctionCloner twin routes through
+    /// TypeSubstitution.SubstituteValueKind, and THE TWO DISAGREE ON A SIMPLE ENUM
+    /// (`Enum` here, `Integer` there). Unreachable today for the keying reason above; if a
+    /// future change makes an interface alias bind `Element`, that divergence becomes live.
     public MaxonValueKind SubstituteValueKind(MaxonValueKind kind, string? typeParamName) {
       if (kind != MaxonValueKind.TypeParameter) return kind;
       return map.TryGetValue(typeParamName ?? "Element", out var bound) ? bound.ToValueKind() : kind;
