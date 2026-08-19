@@ -163,3 +163,105 @@ end 'main'
 error E2015: <fragment>:8:11: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`), a compiler-owned aggregate or base-struct-less container instance (`__ManagedFile`, `List with String`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element-array / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162).
 note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
 ```
+
+<!-- test: clone-of-an-array-of-lists-is-deep -->
+### Clone of an array of LISTS, source freed before access
+⭐ **A CHAIN IS AN ELEMENT-BEARING RECORD EXACTLY AS THE MANAGED BUFFER IS (W173).** A `List with T` owns a
+`__list_create` record, a chain of nodes and — for a managed `T` — each node's element; none of it is
+reachable from a generic `__mm_decref` and none of it is reachable from a byte blit either. So its deep copy
+is a chain WALK (`__list_clone`), the structural twin of the buffer's `__managed_clone`, and it is what makes
+`Array with (List with Integer)` copyable at all.
+
+The helper clones a source array of lists and returns the clone; the source array, its two chains and every
+one of their nodes are freed when the helper returns. `__mm_free` poisons freed bytes (0x3F), so a SHALLOW
+copy faults here rather than reading stale-but-plausible values.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+typealias ListArray = Array with IntList
+
+function makeClone() returns ListArray
+	var src = ListArray.create()
+	var a = IntList.create()
+	a.append(10)
+	a.append(20)
+	src.push(a)
+	var b = IntList.create()
+	b.append(30)
+	src.push(b)
+	return src.clone()
+	// src, both chains and all three nodes are freed when this function returns
+end 'makeClone'
+
+function main() returns ExitCode
+	let cloned = makeClone()
+
+	if cloned.count() != 2 'badCount'
+		return 91
+	end 'badCount'
+
+	let first = try cloned.get(0) otherwise return 92
+	let second = try cloned.get(1) otherwise return 93
+	let head = try first.get(0) otherwise return 94
+	let tail = try first.get(1) otherwise return 95
+	let only = try second.get(0) otherwise return 96
+
+	print("{first.count()} {second.count()} {head} {tail} {only}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2 1 10 20 30
+```
+
+<!-- test: clone-of-a-struct-holding-a-managed-element-list -->
+### Clone of a struct whose field is a list of STRINGS
+The chain's own elements are managed here, so the copy cannot reuse the trivial walk: each node's `String`
+is deep-cloned in turn (`__list_clone_managed` + `__str_clone`), which is the chain's spelling of
+`__managed_clone_managed`. Reached one level down — through `__clone_Holder`'s field cascade — because a
+2-argument entry can never be an array element itself, exactly as a managed-element `Array` field cannot.
+```maxon
+typealias StrList = List with String
+
+type Holder
+	export var words as StrList
+
+	export static function create(words StrList) returns Self
+		return Self{words: words}
+	end 'create'
+end 'Holder'
+
+typealias Holders = Array with Holder
+
+function makeClone() returns Holders
+	var src = Holders.create()
+	var w = StrList.create()
+	w.append("first list element, long enough to need a heap record")
+	w.append("second list element, long enough to need a heap record")
+	src.push(Holder.create(w))
+	return src.clone()
+	// src, its Holder, its chain and both String records are freed when this function returns
+end 'makeClone'
+
+function main() returns ExitCode
+	let cloned = makeClone()
+
+	let h = try cloned.get(0) otherwise return 91
+	let first = try h.words.get(0) otherwise return 92
+	let second = try h.words.get(1) otherwise return 93
+
+	print("{h.words.count()}\n{first}\n{second}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+first list element, long enough to need a heap record
+second list element, long enough to need a heap record
+```

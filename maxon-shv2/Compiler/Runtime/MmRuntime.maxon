@@ -2233,18 +2233,19 @@ end 'noteUnionClonerNeeds'
 function noteFieldCloneNeeds(usage RuntimeUsage, strategy ManagedCloneStrategy, work CascadeWorklist)
 	match strategy 'strategy'
 		direct(callee) then noteCloneCalleeNeeds(usage, callee: callee, work: work)
-		managedArray(elementClone) then noteManagedArrayFieldNeeds(usage, elementClone: elementClone, work: work)
+		managedElements(containerClone, elementClone) then noteManagedElementsFieldNeeds(usage, containerClone: containerClone, elementClone: elementClone, work: work)
 		unsupported then panic("noteFieldCloneNeeds: an unsupported managed field strategy reached the cloner-needs closure — arrayElementSupportsDeepClone gates the front end")
 	end 'strategy'
 end 'noteFieldCloneNeeds'
 
-// A managed-element array FIELD clones through `__managed_clone_managed(field, funcAddr(elementClone))` — route
-// BOTH callees the synthesized cloner body will emit through the ONE usage map, so their bits are exactly a
-// direct scan of those calls (no second spelling of "__managed_clone_managed → usesManagedElementCopy").
-function noteManagedArrayFieldNeeds(usage RuntimeUsage, elementClone ByteArray, work CascadeWorklist)
-	recordCallUsage(ManagedCloneManagedName, usage: usage)
+// A managed-element CONTAINER field clones through `containerClone(field, funcAddr(elementClone))` — route BOTH
+// callees the synthesized cloner body will emit through the ONE usage map, so their bits are exactly a direct
+// scan of those calls (no second spelling of "__managed_clone_managed → usesManagedElementCopy", and none of
+// "__list_clone_managed → usesList" either — W173).
+function noteManagedElementsFieldNeeds(usage RuntimeUsage, containerClone ByteArray, elementClone ByteArray, work CascadeWorklist)
+	recordCallUsage(containerClone, usage: usage)
 	noteCloneCalleeNeeds(usage, callee: elementClone, work: work)
-end 'noteManagedArrayFieldNeeds'
+end 'noteManagedElementsFieldNeeds'
 
 // A single `(box) -> newBox` clone callee the synthesized cloner will CALL: its usage bits are exactly what a
 // direct scan of that call records, so route through `recordCallUsage` — THE ONE callee→bit map — rather than
@@ -2491,11 +2492,12 @@ function emitManagedFieldClone(module StdModule, func IrFunction, cur IrBlock, b
 end 'emitManagedFieldClone'
 
 // Emit the clone call for a managed field's `strategy` and return the fresh pointer. A `direct` callee is a
-// plain 1-arg call; a `managedArray` field takes the element's `funcAddr` and calls `__managed_clone_managed`.
+// plain 1-arg call; a `managedElements` field takes the element's `funcAddr` and calls its container's own
+// per-element copy entry (`__managed_clone_managed` for the record, `__list_clone_managed` for the chain).
 function emitCloneCall(module StdModule, block IrBlock, oldPtr ValueId, strategy ManagedCloneStrategy, ids ValueMinter) returns ValueId
 	match strategy 'strategy'
 		direct(callee) then return emitDirectClone(module, block: block, oldPtr: oldPtr, callee: callee, ids: ids)
-		managedArray(elementClone) then return emitManagedArrayFieldClone(module, block: block, oldPtr: oldPtr, elementClone: elementClone, ids: ids)
+		managedElements(containerClone, elementClone) then return emitManagedElementsFieldClone(module, block: block, oldPtr: oldPtr, containerClone: containerClone, elementClone: elementClone, ids: ids)
 		unsupported then panic("emitCloneCall: an unsupported managed field strategy reached the cloner synthesis — arrayElementSupportsDeepClone gates the front end")
 	end 'strategy'
 end 'emitCloneCall'
@@ -2506,13 +2508,13 @@ function emitDirectClone(module StdModule, block IrBlock, oldPtr ValueId, callee
 	return newPtr
 end 'emitDirectClone'
 
-function emitManagedArrayFieldClone(module StdModule, block IrBlock, oldPtr ValueId, elementClone ByteArray, ids ValueMinter) returns ValueId
+function emitManagedElementsFieldClone(module StdModule, block IrBlock, oldPtr ValueId, containerClone ByteArray, elementClone ByteArray, ids ValueMinter) returns ValueId
 	let elemFn = ids.mint()
 	module.appendOp(block, op: StdOp.funcAddr(elemFn, funcName: elementClone))
 	let newPtr = ids.mint()
-	module.appendOp(block, op: StdOp.call(newPtr, callee: ManagedCloneManagedName, args: twoArgs(oldPtr, second: elemFn)))
+	module.appendOp(block, op: StdOp.call(newPtr, callee: containerClone, args: twoArgs(oldPtr, second: elemFn)))
 	return newPtr
-end 'emitManagedArrayFieldClone'
+end 'emitManagedElementsFieldClone'
 
 // `__mm_leak_check(exitCode) -> exitCode` — the gate.
 //

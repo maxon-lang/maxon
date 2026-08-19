@@ -300,6 +300,22 @@ export let ListNodeDecrefName = b"__list_node_decref"
 // element in order, so it needs nothing from the parser but the array.
 export let ListFromName = b"__list_from"
 
+// ⭐⭐ **THE CHAIN'S DEEP COPY — `__list_clone(list) -> newList` and `__list_clone_managed(list, cloneFn) ->
+// newList` (W173).** The managed record's `__managed_clone` / `__managed_clone_managed` one STRUCTURE over: a
+// chain owns a record, a node per element and — when the element is managed — each node's element, and none of
+// that is reachable from a byte blit. So a copy of a chain is a WALK, for the same reason a managed-element
+// array's is: duplicating the record pointer would give `__list_decref` two owners for one chain and tear it
+// down twice.
+//
+// ⚠ **THE SPLIT BY ELEMENT KIND IS NOT AN OPTIMIZATION, IT IS THE `direct` BOUNDARY.** An ARRAY ELEMENT's
+// cloner is invoked through `callIndirect(fn, elem)`, so it must be a ONE-argument `(box) -> newBox` — which
+// the trivial entry is, and which the managed one, carrying its per-element cloner, cannot be. That is exactly
+// the line `ManagedCloneStrategy` already draws for the managed record, so `Array with (List with Integer)` is
+// copied while `Array with (List with String)` is refused at the front end and reached one level down instead,
+// through the field cascade of whatever struct or instance holds it.
+export let ListCloneName = b"__list_clone"
+export let ListCloneManagedName = b"__list_clone_managed"
+
 // `__list_node_alloc` is INTERNAL — called only by `append`/`prepend`/`insert`, the entry points that mint a
 // node. Kept out of the public name set so no parser path dispatches to it.
 let ListNodeAllocName = b"__list_node_alloc"
@@ -431,6 +447,8 @@ export function installListRuntime(module StdModule, usage RuntimeUsage)
 	buildListNodePrevChecked(module)
 	buildListNodeDecref(module)
 	buildListFrom(module)
+	buildListClone(module, name: ListCloneName, clonesElements: false)
+	buildListClone(module, name: ListCloneManagedName, clonesElements: true)
 	buildListDecref(module)
 
 	// ⭐ **THE THREE LISTS, HELD TO EACH OTHER AT INSTALL** — `installManagedDirectoryRuntime`'s guard, one
@@ -1708,6 +1726,110 @@ function buildListFrom(module StdModule)
 
 	module.functions.push(func)
 end 'buildListFrom'
+
+// ⭐⭐ **ONE CHAIN-COPY WALK, BUILT TWICE UNDER TWO ELEMENT KINDS** — `buildListEndInsert`'s arrangement for
+// its reason: the two entries differ in how ONE node's element is produced and in nothing else, so a second
+// builder would be this walk transcribed with five lines changed in the middle of it.
+//
+// The copy is created STAMPED WITH THE SOURCE'S OWN `element_drop@24` — `__list_from`'s rule, and the same
+// argument: the two chains hold one element type, so the destructor the source carries IS the copy's, and no
+// caller has to thread it. Every element is then appended in order, which is what makes the result a full
+// independent owner rather than a second reader of the source's nodes.
+//
+// ⚠ **NEITHER ENTRY THROWS AND NEITHER CAN**: `__list_create` and `__list_append` are total, and the walk has
+// no index to be out of range. So `isThrowingListRuntimeCallee` must not name them, which is what the install
+// guard above checks in both directions.
+function buildListClone(module StdModule, name ByteArray, clonesElements bool)
+	var paramTypes = oneI64Param()
+	if clonesElements 'perElementCloner'
+		paramTypes.push(StdType.i64)
+	end 'perElementCloner'
+
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: paramTypes.count(), paramTypes: paramTypes, returnLine: 0)
+	// ⚠ **BOTH ENTRIES RESERVE TWO PARAMETER ID SLOTS**, so `cloneFn` below is either parameter 1 or nothing at
+	// all. `ValueMinter.create(paramTypes.count())` would have made that id the trivial entry's FIRST MINTED
+	// TEMPORARY instead — a name that reads as a parameter and denotes an unrelated value.
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var header = module.addBlock(func, label: b"walk")
+	var body = module.addBlock(func, label: b"body")
+	var append = module.addBlock(func, label: b"append")
+	let done = module.addBlock(func, label: b"done")
+
+	emitParams(module, block: entry, count: paramTypes.count())
+	let list = 0 as ValueId
+	let cloneFn = 1 as ValueId
+
+	let elemDrop = emitLoadField(module, block: entry, record: list, offset: ListElementDropOffset, ids: ids)
+	let copy = ids.mint()
+	module.appendOp(entry, op: StdOp.call(copy, callee: ListCreateName, args: argsOf(elemDrop)))
+	let head = emitLoadField(module, block: entry, record: list, offset: ListHeadOffset, ids: ids)
+	module.setTerminator(entry, op: StdOp.branch(header.id))
+	entry.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(head)))
+
+	// walk(node): a 0 link is the chain's end — the same test `__list_node_next` licenses a `for … in list`
+	// loop to stop on, and the reason an empty source needs no arm of its own (its `head@0` is that 0).
+	let node = ids.mint()
+	header.blockArgs.push(IrBlockArg.create(node, argType: StdType.i64))
+	let chainEnd = emitConst(module, block: header, value: 0, ids: ids)
+	let atEnd = emitCmp(module, block: header, a: node, b: chainEnd, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(header, op: StdOp.condBranch(atEnd, thenBlockId: done.id, elseBlockId: body.id))
+
+	// append(elem): what this node contributes to the copy, however it was produced — the one join the two
+	// element kinds meet at, which is what keeps the append and the advance out of the split below.
+	let elem = ids.mint()
+	append.blockArgs.push(IrBlockArg.create(elem, argType: StdType.i64))
+
+	let value = emitLoadField(module, block: body, record: node, offset: ListValueOffset, ids: ids)
+	emitListClonedElement(module, func: func, body: body, append: append, value: value, cloneFn: cloneFn, clonesElements: clonesElements, ids: ids)
+
+	// The node `__list_append` mints is the COPY's own, and its reference is the copy's — so this discards the
+	// returned handle exactly as `__list_from` does. See `emitListClaimsNode`.
+	module.appendOp(append, op: StdOp.call(ids.mint(), callee: ListAppendName, args: twoArgs(copy, second: elem)))
+	let next = emitLoadField(module, block: append, record: node, offset: ListNextOffset, ids: ids)
+	module.setTerminator(append, op: StdOp.branch(header.id))
+	append.branchEdges.push(BranchEdge.create(header.id, argIds: argsOf(next)))
+
+	module.setTerminator(done, op: StdOp.ret(copy))
+
+	module.functions.push(func)
+end 'buildListClone'
+
+// ⭐ **ONE NODE'S ELEMENT, AS THE COPY WILL HOLD IT.** A TRIVIAL element IS its word, so the trivial entry
+// carries the word it read straight to the append. A MANAGED one is deep-cloned through the caller's
+// `(box) -> newBox`, because appending the source's pointer would give two chains one element and
+// `__list_node_decref` would drop it twice.
+//
+// ⚠ **A MOVED-OUT (NULL) SLOT IS APPENDED AS THE NULL IT IS**, never cloned: `emitDropNodeElement` reads that
+// same 0 as *"this node owes no drop"* (it is what `__list_remove_node` leaves behind), so calling the element
+// cloner on it would invent an element the source does not have — and `callIndirect` on a null box is a fault.
+// It is `emitElementCloneRange`'s null-slot skip, one structure over; the position is kept because a chain's
+// length is its node count.
+function emitListClonedElement(module StdModule, func IrFunction, body IrBlock, append IrBlock, value ValueId, cloneFn ValueId, clonesElements bool, ids ValueMinter)
+	if not clonesElements 'wordCopy'
+		module.setTerminator(body, op: StdOp.branch(append.id))
+		body.branchEdges.push(BranchEdge.create(append.id, argIds: argsOf(value)))
+		return
+	end 'wordCopy'
+
+	var deepCopy = module.addBlock(func, label: b"clnelem")
+	var movedOut = module.addBlock(func, label: b"clnnull")
+
+	let absent = emitConst(module, block: body, value: 0, ids: ids)
+	let owns = emitCmp(module, block: body, a: value, b: absent, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(body, op: StdOp.condBranch(owns, thenBlockId: deepCopy.id, elseBlockId: movedOut.id))
+
+	// Both ABI masks are 0 for `emitElementCloneRange`'s reason: a `(box) -> newBox` takes one whole-machine-word
+	// POINTER — never a float, never sub-word.
+	let cloned = ids.mint()
+	module.appendOp(deepCopy, op: StdOp.callIndirect(cloned, calleeReg: cloneFn, resultType: StdReturnType.value(StdType.i64), argFloatMask: 0, args: argsOf(value)))
+	module.setTerminator(deepCopy, op: StdOp.branch(append.id))
+	deepCopy.branchEdges.push(BranchEdge.create(append.id, argIds: argsOf(cloned)))
+
+	module.setTerminator(movedOut, op: StdOp.branch(append.id))
+	movedOut.branchEdges.push(BranchEdge.create(append.id, argIds: argsOf(absent)))
+end 'emitListClonedElement'
 
 // `__list_decref(list)` — one fewer owner; at the last, let go of every node (each one destroying its own
 // element and freeing itself unless a handle still holds it), then free the record. The refcount read-modify-write is the shared `emitRefcountCheckToLastOwner`.

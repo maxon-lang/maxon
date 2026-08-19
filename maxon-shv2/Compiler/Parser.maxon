@@ -57509,16 +57509,18 @@ export type Parser
 	// struct / boxed union) now passes too — its copy is a per-element DEEP CLONE (`arrayElementCloneValue` stamps
 	// the element's `funcAddr(__clone_<E>)` into the `_managed` runtime call), shv2's move-only answer to the
 	// reference compilers' incref. What still REJECTS (E2015) is a managed element whose nested type this rung's
-	// cloner cannot reach: a base-struct-less generic instance field/element (a `List`, a `Vector` — W162 gave a
-	// DECLARED generic's instance its per-instance cloner, and a layout-less one still has none)
-	// or an array-of-managed-arrays. An OPAQUE-`T` element (a generic body) is routed to `requireOpaqueArrayCopyable`
+	// cloner cannot reach: a base-struct-less generic instance with no runtime copy of its own (a `Vector` —
+	// W162 gave a DECLARED generic's instance its per-instance cloner, W173 gave the chain its runtime walk, and
+	// a layout-less one with neither still has none), or a container whose OWN elements are managed (an
+	// array-of-managed-arrays, a `List with String`), whose copy is a 2-argument call no `callIndirect(fn, elem)`
+	// can reach. An OPAQUE-`T` element (a generic body) is routed to `requireOpaqueArrayCopyable`
 	// by `requireArrayCopyMethodSupported` instead, so only CONCRETE elements reach here.
 	function requireArrayElementCopyable(giid GenericInstanceId, methodTok Token) throws ParseError
 		if not self.signatures.containerElementIsManaged(giid) 'trivial'
 			return
 		end 'trivial'
 		if not self.signatures.arrayElementSupportsDeepClone(giid) 'unsupportedNested'
-			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this rung cannot deep-clone — a `List`/`Vector` or other base-struct-less generic instance, an OS handle, a value held at an interface type, or an array-of-managed-arrays. String / struct / boxed-union / declared-generic-instance elements, including nested String, struct, union, Array and instance fields, ARE supported.", line: methodTok.line, column: methodTok.column)
+			throw ParseError.unsupported("`{String.from(methodTok.value)}` on an array whose managed element has a nested type this rung cannot deep-clone — a `Vector` or other base-struct-less generic instance with no runtime copy, an OS handle, a value held at an interface type, or a container whose OWN elements are managed (an array-of-managed-arrays, a `List with String`). String / struct / boxed-union / declared-generic-instance / trivial-element-container elements, including nested String, struct, union, Array, chain and instance fields, ARE supported.", line: methodTok.line, column: methodTok.column)
 		end 'unsupportedNested'
 	end 'requireArrayElementCopyable'
 
@@ -57526,12 +57528,12 @@ export type Parser
 	// CONCRETE managed element knows its `(box) -> newBox` clone callee at this site (`__str_clone` / `__clone_<T>`
 	// / `__managed_clone` for a trivial-element nested array), so the address rides the P1.5-A1 `funcAddr` code→register
 	// path — the `_managed` runtime helper `callIndirect`s it per element. `requireArrayElementCopyable` has already
-	// guaranteed the strategy is `direct` (an element cloner must satisfy `callIndirect(fn, elem)`); a `managedArray`/
+	// guaranteed the strategy is `direct` (an element cloner must satisfy `callIndirect(fn, elem)`); a `managedElements`/
 	// `unsupported` strategy at the TOP element is a gate drift, not a valid program.
 	function arrayElementCloneValue(giid GenericInstanceId, range SourceRange) returns ValueId
-		match self.signatures.arrayElementCloneStrategy(giid) 'strategy'
+		match self.signatures.containerElementCloneStrategy(giid) 'strategy'
 			direct(callee) then return self.emitRuntimeFuncAddr(callee, range: range)
-			managedArray then panic("arrayElementCloneValue: a top-level managed array element resolved to `managedArray` — requireArrayElementCopyable gates this to a `direct` element cloner")
+			managedElements then panic("arrayElementCloneValue: a top-level managed array element resolved to `managedElements` — requireArrayElementCopyable gates this to a `direct` element cloner")
 			unsupported then panic("arrayElementCloneValue: a top-level managed array element resolved to `unsupported` — requireArrayElementCopyable rejects it at the front end")
 		end 'strategy'
 	end 'arrayElementCloneValue'
