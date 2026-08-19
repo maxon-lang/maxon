@@ -229,7 +229,13 @@ CHANGED_FILES="$(git -C "$WORKTREE" diff --name-only "$BASE_SHA...$TIP")"
 #   made from an shv2 rung would have landed with the one suite that covers it never run. The review hit
 #   this concretely: it declined a one-fact cleanup in `stdlib/Subprocess.maxon` partly *because* this
 #   script would not have gated it. A gate nobody can reach is not a gate.
-echo "$CHANGED_FILES" | grep -qE '^(maxon-sharp|stdlib)/' && RUN_CSHARP=1
+# ⛔ `grep -c … >/dev/null`, NEVER `grep -q` — W71, MEASURED 2026-08-19 by W157 (1651 changed files).
+#    `grep -q` exits at the FIRST match and closes the pipe; `echo` then takes SIGPIPE, and `set -o
+#    pipefail` (line 65) turns that into 141. So the bigger the rung, the likelier this reads FALSE
+#    **because** the answer was yes. Here that silently left RUN_CSHARP unset — a gate not running,
+#    with no message; at the ladder-row check below it failed a rung that had written its row.
+#    `grep -c` consumes the whole stream, so there is no early exit and no signal.
+echo "$CHANGED_FILES" | grep -cE '^(maxon-sharp|stdlib)/' >/dev/null && RUN_CSHARP=1
 [ "$RUN_CSHARP" = "0" ] || ok "the branch touched maxon-sharp/ or stdlib/ — the C# suite is now part of this battery"
 
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -401,7 +407,7 @@ step "6/10  The ladder read, and the C# lane"
 # The scale-test READ is per rung and never batches — not out of thoroughness, but because ATTRIBUTION
 # IS ONLY AVAILABLE NOW. The instrument sees exactly WHAT moved and can never see why; ten rungs later,
 # neither can you. The row in docs/optimization-log.md is the deliverable.
-if echo "$CHANGED_FILES" | grep -q '^docs/optimization-log\.md$'; then
+if echo "$CHANGED_FILES" | grep -c '^docs/optimization-log\.md$' >/dev/null; then
   ok "docs/optimization-log.md carries a row from this rung"
 elif [ -n "$NO_LADDER" ]; then
   warn "no ladder row — stated reason: $NO_LADDER"
