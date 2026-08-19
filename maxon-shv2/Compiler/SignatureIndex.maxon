@@ -4214,6 +4214,16 @@ end 'instanceCloneStrategy'
 // to answer the chain and the buffer differently about what "managed element" costs.
 function elementRecordCloneStrategy(signatures ProgramSignatures, id GenericInstanceId, trivialClone ByteArray, perElementClone ByteArray) returns ManagedCloneStrategy
 	if not signatures.containerElementIsManaged(id) 'trivialElement'
+		// ⛔⛔ **AN OPAQUE ELEMENT REACHES THIS ARM ON A `false` THAT MEANS "CANNOT SAY", NOT "OWNS NOTHING"
+		// (W176).** `containerOpaqueElementCanBeManaged` carries the measurement; the record's copy is the
+		// word-for-word one and the instance's `element_drop@24` is live, so the copy and the source free the
+		// same elements. It is refused HERE and in `instanceSupportsDeepClone` **together** — one alone makes
+		// the gate and the strategy disagree, which is `emitCloneCall`'s panic in one direction and a spurious
+		// E2015 in the other, the standing rule this file states at `managedNameCloneStrategy`.
+		if signatures.containerOpaqueElementCanBeManaged(id) 'someInstantiationOwnsTheElement'
+			return ManagedCloneStrategy.unsupported
+		end 'someInstantiationOwnsTheElement'
+
 		return ManagedCloneStrategy.direct(trivialClone)
 	end 'trivialElement'
 
@@ -16958,6 +16968,41 @@ export type ProgramSignatures
 		return self.slotTypeIsOpaque(self.containerElementType(id))
 	end 'containerElementIsOpaque'
 
+	// ⭐⭐ **AN OPAQUE ELEMENT ANSWERS `false` TO `containerElementIsManaged`, AND THE CLONE SIDE ACTED ON THAT
+	// ANSWER — SO THIS IS THE QUESTION IT SHOULD HAVE ASKED (W176).** `containerElementIsManaged` is
+	// `typeIsManaged` of the element, and `typeIsManaged` of a bare `typeParameter` is `false` — not because
+	// the element owns nothing, but because a shared body cannot say what it owns. The two clone doors read
+	// that `false` as *"a trivial element, so the record's own words ARE the copy"*, while the instance the
+	// program actually builds stamps `element_drop@24` from the enclosing descriptor's `destroyFunc@40` and
+	// that word can be live.
+	//
+	// ⛔⛔ **MEASURED, `0xC0000005`, AND THE FILED ROW SAID IT WAS UNREACHABLE.** `W173`'s review measured the
+	// cost by SABOTAGING the strategy; the door was found by asking which container has an opaque element and
+	// is NOT itself opaque — a container of containers. `type Bag uses Element` holding
+	// `typealias Outer = Array with (Array with Element)`, cloned inside its own shared body at
+	// `Bag with String`: the OUTER array's element is a `genericInstance`, so `containerElementIsOpaque` is
+	// false for it and it takes the CONCRETE copy path (`Parser.requireArrayElementCopyable` +
+	// `arrayElementCloneValue`) rather than the opaque one — and the per-element cloner that path resolves for
+	// the INNER `Array with Element` is `__managed_clone`, a word-for-word buffer copy that retains no element.
+	// Both the source and the copy then cascaded `__str_decref` over the same records: the program printed its
+	// row count and **died at teardown**. ⇒ *"not reachable today"* was a statement about the doors that had
+	// been TRIED, and it aged the way a blocker note ages.
+	//
+	// ⭐ **IT IS NOT A BARE `containerElementIsOpaque`, BECAUSE THAT WOULD REFUSE A PROGRAM THAT OWES
+	// NOTHING.** The cost lands only where some instantiation makes the element own a record; a `Bag` every
+	// `with` in the program instantiates at an `int` copies its inner buffers correctly with no cloner at all,
+	// and refusing it would be the false reject `instanceWithTypeArgKind`'s header names as the one direction
+	// a refusal may not err in. So the opacity is the ROUTING and `managedElement` — a REFUSING kind, which is
+	// what this is — is the verdict.
+	export function containerOpaqueElementCanBeManaged(id GenericInstanceId) returns bool
+		let element = self.containerElementType(id)
+		if not self.slotTypeIsOpaque(element) 'notOpaque'
+			return false
+		end 'notOpaque'
+
+		return self.anyInstanceTypeArgHasKind(typeNameIdOf(element), kind: TypeArgInstantiationKind.managedElement)
+	end 'containerOpaqueElementCanBeManaged'
+
 	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`) — for the one message that has to
 	// say WHICH element type it is refusing (E3106, `Parser.requireArrayResizeHasZeroElement`). It lives here
 	// because `typeNames` is this index's own interner and is not the parser's to reach into; the parser holds
@@ -23158,7 +23203,10 @@ export type ProgramSignatures
 			return self.declaredInstanceSupportsDeepClone(id, visited: visited)
 		end 'notAnElementRecord'
 		if not self.containerElementIsManaged(id) 'trivialElement'
-			return true
+			// The gate half of `elementRecordCloneStrategy`'s refusal (W176) — see
+			// `containerOpaqueElementCanBeManaged` for the measurement and
+			// `elementRecordCloneStrategy` for why the two move together or not at all.
+			return not self.containerOpaqueElementCanBeManaged(id)
 		end 'trivialElement'
 		// A managed-element record clones its elements through `<containerClone>(field, funcAddr(elementClone))`
 		// — a 2-arg call, so it cannot itself be an outer array element (invoked through `callIndirect`).

@@ -133,6 +133,24 @@ its literal lives in `.rdata`, so no exit code here can distinguish an owned pay
 See `MmRuntime.synthesizeGenericInstanceCloner`'s header for that measurement and for the pre-existing
 borrow hole it belongs to.
 
+⛔⛔ **AND THE LITERAL IS NOT A CHOICE THIS CASE COULD SIMPLY REVERSE — MEASURED (BATCH41).** With a genuinely
+HEAP payload the identical program is a **use-after-free** (`0xC0000005`): nothing on the store side takes a
+reference, so the caller's release leaves the box pointing at freed bytes. That is
+`generic-opaque-value-store`'s two `disabled-test` cases, and taking the reference is not on its own the cure
+— MEASURED at the same time, with the store-side retain in place the same program exits **101**. The reason
+is one fact this case's own paragraph above already records: **`Bag.create` stamps its element array
+`__managed_create(8, __mm_decref)`.** The element type is `Box with Element`, an instance over the ENCLOSING
+type's parameter, so the destructor that would release the payload — `__destruct_Box_String` — is a fact
+about an instantiation the shared body cannot name, and the only symbol it can name is the DECLARATION-VIEW
+one, which reads its own bare `T` field through `typeIsManaged` and is told the field owns nothing.
+
+⇒ **The `.rdata` blindness is therefore a property of the LANGUAGE as it stands, not of this case's author.**
+A record built over the enclosing type parameter and owned by the shared body itself has no per-instantiation
+release at all, and the compiler already says so in the one place it has a diagnostic for: reassigning such a
+field is refused with *"a descriptor slot carrying a nested instance's per-instantiation destructor is a
+later slice"*. Until that slot exists, no exit code in this file can see a payload, and a case that claimed
+otherwise would be claiming a capability the compiler does not have.
+
 ⚠ The element's `String` is read only through the box's scalar `tag`, not through `e.v`. A shared body's
 method returning an inner alias over a NESTED instance (`Array with (Box with Element)`) hands the caller
 `Bag.EBoxArray` unsubstituted, so `e.v` resolves to the bare type parameter and a member call on it
@@ -236,4 +254,119 @@ end 'main'
 ```
 ```exitcode
 5
+```
+
+### A container of OPAQUE-ELEMENT containers is refused, not cloned word-for-word
+
+`containerElementIsManaged` is `typeIsManaged` of the element, and `typeIsManaged` of a bare type parameter
+is **false** — not because the element owns nothing, but because a shared body cannot say what it owns. The
+two clone doors read that `false` as *"a trivial element, so the record's own words ARE the copy"*, while the
+instance the program actually builds stamps `element_drop@24` from the enclosing descriptor and that word can
+be live.
+
+⚠ **The door is a container of CONTAINERS, and it is the one the filed row's "not reachable today" missed.**
+The OUTER array's element is `Array with Element` — a `genericInstance`, so the outer array is not itself
+opaque and takes the CONCRETE copy path rather than the descriptor-reading one. The per-element cloner that
+path resolves for the inner array is `__managed_clone`, a word-for-word buffer copy that retains no element,
+so the copy and the source then cascade `__str_decref` over the same records. **MEASURED before the refusal
+existed: the row count printed and the program died `0xC0000005` at teardown.**
+
+<!-- test: error.a-container-of-opaque-element-containers-is-refused -->
+```maxon
+typealias Idx = int(0 to u64.max)
+
+type Bag uses Element
+	typealias Inner = Array with Element
+	typealias Outer = Array with Inner
+	var rows as Outer
+
+	export function addRow(r Inner)
+		rows.push(r)
+	end 'addRow'
+
+	export function copyRows() returns Outer
+		return rows.clone()
+	end 'copyRows'
+
+	export function count() returns Idx
+		return rows.count()
+	end 'count'
+
+	static function create() returns Self
+		return Self{rows: Outer{}}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+typealias Strs = Array with String
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	var r = Strs.create()
+	var sb = StringBuilder.create()
+	sb.append("a heap row element long enough to allocate")
+	r.push(sb.build())
+	b.addRow(r)
+	let c = b.copyRows()
+	print("{c.count()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:6:12: Unsupported: `slice` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element container (`Array with (Array with String)`, `List with String`), a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element container (`Array with int`, `List with int`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173).
+note: stdlib/Array.maxon:145:32: raised inside the library, on behalf of the construct above
+```
+
+### …and a TRIVIAL instantiation of the identical shape still clones
+
+The false-reject control. The refusal is gated on some instantiation making the opaque element own a record;
+where every `with` in the program makes it a scalar, the inner buffers copy correctly word-for-word with no
+cloner at all, and refusing them would be a wrong answer about a program that owes nothing. This program is
+the one above with `String` replaced by a ranged `int` and nothing else changed.
+
+<!-- test: a-trivial-instantiation-of-the-same-nested-shape-still-clones -->
+```maxon
+typealias Idx = int(0 to u64.max)
+typealias Small = int(0 to 100)
+
+type Bag uses Element
+	typealias Inner = Array with Element
+	typealias Outer = Array with Inner
+	var rows as Outer
+
+	export function addRow(r Inner)
+		rows.push(r)
+	end 'addRow'
+
+	export function copyRows() returns Outer
+		return rows.clone()
+	end 'copyRows'
+
+	export function count() returns Idx
+		return rows.count()
+	end 'count'
+
+	static function create() returns Self
+		return Self{rows: Outer{}}
+	end 'create'
+end 'Bag'
+
+typealias SmallBag = Bag with Small
+typealias Smalls = Array with Small
+
+function main() returns ExitCode
+	var b = SmallBag.create()
+	var r = Smalls.create()
+	r.push(41)
+	b.addRow(r)
+	let c = b.copyRows()
+	print("{c.count()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
 ```
