@@ -49601,7 +49601,7 @@ export type Parser
 			return
 		end 'cloneable'
 
-		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `List` or `Vector` field, or any other generic instance with no base struct to cascade over (each would need a per-instance cloner, and only a DECLARED generic's instance has one) — including one held INSIDE a struct field; an OS handle (`__ManagedFile`/`__ManagedDirectory`), which cannot be duplicated at all; a value held at an interface type; or an array of managed arrays. String, struct, boxed-union, enum, trivial-element `Array` and declared-generic instance (`Box with String`) fields ARE supported.", line: memberTok.line, column: memberTok.column)
+		throw ParseError.unsupported("`clone` on `{String.from(layout.name)}`, which owns a field this compiler cannot deep-clone: a `Vector` field, or any other generic instance with no base struct to cascade over and no runtime copy of its own (each would need a per-instance cloner, and only a DECLARED generic's instance has one) — including one held INSIDE a struct field; an OS handle (`__ManagedFile`/`__ManagedDirectory`), which cannot be duplicated at all; a value held at an interface type; or a container holding containers that own managed elements (an `Array with (Array with String)`, a `List with (List with String)`). String, struct, boxed-union, enum, `Array`, `List` (managed elements included) and declared-generic instance (`Box with String`) fields ARE supported.", line: memberTok.line, column: memberTok.column)
 	end 'requireStructCloneSupported'
 
 	// ⭐ **THE CONDITIONAL-EXTENSION REFUSAL, AT THE ONE DOOR EVERY STRUCT METHOD CALL PASSES THROUGH.**
@@ -56952,7 +56952,7 @@ export type Parser
 			instance(offender) then self.blameLibraryRefusalOnInstantiation(offender)
 		end 'uncopyable'
 
-		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element array (`Array with (Array with String)`), a compiler-owned aggregate or base-struct-less container instance (`__ManagedFile`, `List with String`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element-array / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162).", line: methodTok.line, column: methodTok.column)
+		throw ParseError.unsupported("`{String.from(methodTok.value)}` COPIES each element of an `Array with <type parameter>` field, but this generic type is instantiated with a type whose managed element cannot be deep-cloned as a single-function element — a managed-element container (`Array with (Array with String)`, `List with String`), a compiler-owned aggregate or a base-struct-less generic instance with no runtime copy of its own (`__ManagedFile`, a `Vector`), or a generic instance that owns one of those. String / struct / boxed-union / trivial-element container (`Array with int`, `List with int`) / trivial instantiations, and a declared generic's instance whose own substituted fields are all deep-cloneable (`Box with String`), ARE supported (P1.7 slice 3b-vi-b, W162, W173).", line: methodTok.line, column: methodTok.column)
 	end 'requireOpaqueArrayCopyable'
 
 	// ⭐⭐ **BLAME A LIBRARY-BODY REFUSAL ON THE INSTANTIATION THAT FORCED IT (BLAME).**
