@@ -8,12 +8,13 @@
 //
 // This file owns THREE things and their single source is here:
 //   1. the RECORD LAYOUT — the offsets every reader loads by and the offsets `LowerMaxonToStd` writes when
-//      it assembles a literal's record. The first five are `BufferOwnership`'s shared prefix, ALIASED here
-//      rather than restated, because `__mm_cow_detach` is one emitted function over both records; `@40` is
-//      genuinely this record's own. `buildStringRecordBytes` asserts each field lands at its named offset,
+//      it assembles a literal's record. The first SIX are `BufferOwnership`'s whole buffer record, ALIASED
+//      here rather than restated, because `__mm_cow_detach` and `__managed_decref` are single emitted
+//      functions over both records; `singleByteGraphemes@48` is genuinely this record's own.
+//      `buildStringRecordBytes` asserts each field lands at its named offset,
 //      and `ProgramSignatures.checkFusedWrapperRecordLayouts` asserts the whole shape against
 //      **the corpus's own `type String`** — which is the description that outranks this one.
-//   2. the LITERAL — an immortal `.rdata` blob plus an immortal 48-byte record pointing at it, deduped by
+//   2. the LITERAL — an immortal `.rdata` blob plus an immortal 56-byte record pointing at it, deduped by
 //      bytes, with `buffer@0` patched by each object-file writer once `.rdata` has an address. Nothing is
 //      allocated, refcounted or freed, so a literal-only program stays leak-gate-free.
 //   3. the runtime GRAPHS a String needs and nothing else does — `__str_eq`, `__str_decref`,
@@ -33,33 +34,42 @@
 //     String IS its `__ManagedMemory with Byte`, so its `element_size@24` is an `Array with Byte`'s — one
 //     number, and only the survivor carries a derivation anything checks.
 
-// --- The fused 48-byte String record (bootstrap `MaxonToStandardConversion.Helpers.cs:503-536`) ---
+// --- The fused 56-byte String record (bootstrap `MaxonToStandardConversion.Helpers.cs:503-536`) ---
 //
-// Every field is an 8-byte slot, so the six offsets are 0/8/16/24/32/40 and the record is 48 bytes.
+// Every field is an 8-byte slot, so the seven offsets are 0/8/16/24/32/40/48 and the record is 56 bytes.
 // `buffer@0` is the ABSOLUTE VA of the byte blob — emitted as a PLACEHOLDER 0 and patched by the PE
 // writer once `.rdata`'s RVA is known (a fixed-base image, so the VA is compile-time computable). The
 // blob is a SEPARATE `.rdata` entry, NUL-terminated, and `length@8` EXCLUDES the NUL.
-// ⭐ **DERIVED FROM `BufferOwnership`, NOT DECLARED HERE.** The first five slots are the shared prefix the
-// Array record also uses, and `__mm_cow_detach` is ONE emitted function that reads them out of BOTH — so
-// the numbers exist once and these names alias them. Only `isAscii@40` below is genuinely this record's own
-// (the Array record's `@40` is `element_destroy`), which is why the shared prefix stops at `@32`.
+// ⭐⭐ **THE FIRST SIX SLOTS ARE A WHOLE `__ManagedMemory`, EMBEDDED, AND SINCE W157 THAT IS LITERAL RATHER
+// THAN NEARLY-TRUE.** They are `BufferOwnership`'s own constants — `__mm_cow_detach` and `__managed_decref`
+// are single emitted functions that read them out of BOTH records — so the numbers exist once and these
+// names alias them. `@40` was the one slot that disagreed (`singleByteGraphemes` here, `element_destroy`
+// there); it now holds a real `element_destroy`, always `TrivialElementDestroy`, and the flag moved to a
+// seventh slot at `@48`. That is what makes a String record servable to buffer code as-is.
 export let StringBufferOffset = ManagedRecordBufferOffset
 export let StringLengthOffset = ManagedRecordLengthOffset
 
-// Exported for `Parser.emitStringInterp`, which WRITES all six fields of an owned heap String's record
-// (the literal path here only ever writes rdata). One set of offsets, read by the runtime and written by
-// the interpolation lowering, so a reader and a writer of the same record cannot drift.
+// Exported for `Parser.emitStringInterp`, which WRITES an owned heap String's record (the literal path
+// here only ever writes rdata). One set of offsets, read by the runtime and written by the interpolation
+// lowering, so a reader and a writer of the same record cannot drift.
 // ⭐ **THESE THREE ARE DERIVED FROM `BufferOwnership`, NOT DECLARED HERE**, because `__mm_cow_detach` is ONE
 // emitted function that reads them out of this record AND out of the Array record. They were two
 // coincidentally-equal sets of literals until that function existed; a divergence would now be a wrong load
 // inside it rather than a second value flowing through a parameter, so the numbers live in one place and
-// these names alias them. `@40` below is genuinely this record's own — the Array record's `@40` is
-// `element_destroy` — which is exactly why the shared prefix stops at `@32`.
+// these names alias them.
 export let StringCapacityOffset = ManagedRecordCapacityOffset
 export let StringElementSizeOffset = ManagedRecordElementSizeOffset
 export let StringParentPtrOffset = ManagedRecordParentOffset
 
-// ⭐⭐ **SLOT@40 IS `singleByteGraphemes` — *EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE* — AND IT
+// ⭐ **`element_destroy@40` — A STRING'S IS ALWAYS `TrivialElementDestroy`, AND THAT IS A FACT RATHER THAN
+// A FILLER.** A String's elements are `Byte`s; a byte owns nothing, so there is no per-element destructor
+// to run and the drop path releases the bytes without walking them. Aliased from the shared offset for the
+// reason the five above are: `__managed_decref` reads this slot out of a String record now (W157 —
+// `__str_bytes_view` hands one over), so a divergence would be a wrong load in a function that cannot tell
+// which record it was handed.
+export let StringElementDestroyOffset = ManagedRecordElementDestroyOffset
+
+// ⭐⭐ **SLOT@48 IS `singleByteGraphemes` — *EVERY GRAPHEME IN THIS STRING IS EXACTLY ONE BYTE* — AND IT
 // USED TO BE THE STRICTLY WEAKER `isAscii`.** The corpus field this record IS
 // (`stdlib/String.maxon:86`'s `singleByteGraphemesFlag`) has always carried the stronger fact, and its own
 // declaration records the cost of the confusion: *"this field used to say only 'is ASCII', and ten methods
@@ -67,19 +77,28 @@ export let StringParentPtrOffset = ManagedRecordParentOffset
 // UAX #29 GB3**, so an all-ASCII string is not necessarily one byte per grapheme.
 //
 // ⚠ **WHILE THE TWO MEANINGS DISAGREED, `String.hasSingleByteGraphemes()` HAD TO ANSWER A CONSERVATIVE
-// `false` OUTRIGHT** — serving `isAscii@40` there would have made the corpus's `countGraphemes` take the
+// `false` OUTRIGHT** — serving `isAscii` there would have made the corpus's `countGraphemes` take the
 // shortcut and return the BYTE length, 2, for a CR+LF string where every other path in all three compilers
 // says 1. That refusal cost SPEED on long ASCII strings (measured by the corpus at ×2.4 rising to ×6.5 on
 // `findFirst`/`findLast`/`slice-by-length`), and `Parser.dispatchStringMethod` named the cure exactly:
-// *"strengthening the record's `@40` flag to the corpus's meaning at its literal scan and at all nine of its
+// *"strengthening the record's flag to the corpus's meaning at its literal scan and at all nine of its
 // propagation sites"*. That is what this is.
 //
 // ⭐ **CR-FREE RATHER THAN CRLF-FREE, AND THAT IS WHAT MAKES IT COMPOSABLE** — *"no CR"* is a property of
 // each byte ON ITS OWN, so it survives both slicing and concatenation and a concatenation may simply AND the
 // two flags. *"No CRLF pair"* would not: `"a\r"` and `"\nb"` each lack one and their join has one.
-export let StringSingleByteGraphemesOffset = 40 as ByteOffset
-export let StringRecordBytes = ManagedRecordBytes
+// ⭐⭐ **THE FLAG SITS BEHIND THE WHOLE BUFFER RECORD, WHICH IS WHY THE OFFSET IS `ManagedRecordBytes`
+// RATHER THAN `48`.** That is the one fact that decides it: `@48` is not a number this file picked, it is
+// where a `__ManagedMemory` ENDS. Widen the buffer record and this follows; write `48` and it does not.
+export let StringSingleByteGraphemesOffset = ManagedRecordBytes as ByteOffset
+
+// A String record is a whole buffer record plus this one slot. ⚠ **IT ALIASED `ManagedRecordBytes`
+// OUTRIGHT UNTIL W157**, when the two records were the same six slots disagreeing about what `@40` held;
+// the alias is now an ADDITION, and that difference is the rung. It is still DERIVED rather than written
+// `56`, for the same reason: the number is "a buffer record, plus a flag".
 let StringFieldBytes = 8 as ByteCount
+export let StringRecordBytes = ManagedRecordBytes + StringFieldBytes
+
 
 // ⚠ **`StringElementSize = 1` STOOD HERE AND IS GONE (W49 wave 9).** It said *"a String's elements are
 // bytes"*, which since the envelope collapse is `ManagedMemoryRuntime.ByteStringElementSize` in other words — a
@@ -90,12 +109,12 @@ let StringFieldBytes = 8 as ByteCount
 // literal under a comment. The four readers moved onto the checked one.
 //
 // ⭐ **A LITERAL'S `capacity@16`/`parent@32` ARE THE SHARED BUFFER-OWNERSHIP ENCODING'S** (`BufferOwnership`),
-// not this file's invention and not the Array record's either: `RdataBufferCapacity` says the buffer is an
+// not this file's invention and not the Array record's either: `ImmortalRecordCapacity` says the buffer is an
 // immortal `.rdata` blob that is not this record's to write or to release, and `NoOwedAllocation` says the
 // record owes no separate allocation a release. The Array record's byte-string literal writes exactly the
 // same pair for exactly the same reason.
 
-// ⭐ AN OWNED INTERPOLATION RESULT IS A HEAP STRING, and its bytes live INLINE — right after the 48-byte
+// ⭐ AN OWNED INTERPOLATION RESULT IS A HEAP STRING, and its bytes live INLINE — right after the 56-byte
 // record, in the SAME `__mm_alloc` payload (`buffer@0 = record + StringRecordBytes`). So the whole thing
 // is one allocation: `__mm_decref` → `__mm_free` reclaims the record AND its bytes together, and the
 // destructor a struct passes (`TrivialDestructor`, 0) is exactly right — there is no external buffer to
@@ -103,12 +122,12 @@ let StringFieldBytes = 8 as ByteCount
 // zeroing contract supplies it), which is the shared encoding saying exactly that: not mine to write in
 // place, and no separate allocation owed. See `Parser.emitStringInterp`.
 //
-// The fixed bytes an owned interpolation result allocates BEYOND its text: the 48-byte record the bytes
+// The fixed bytes an owned interpolation result allocates BEYOND its text: the 56-byte record the bytes
 // live inline behind, plus one trailing NUL (which the slab's zeroing supplies for free — nothing writes
 // it). `Parser.emitStringInterp` sizes its one `__mm_alloc` as `totalLen + StringInterpOverheadBytes`.
 export let StringInterpOverheadBytes = (StringRecordBytes as ParsedInt) + 1
 
-// `singleByteGraphemes@40` — 1 iff every byte is < 128 AND no byte is a CR (a compile-time scan). An empty
+// `singleByteGraphemes@48` — 1 iff every byte is < 128 AND no byte is a CR (a compile-time scan). An empty
 // string satisfies it vacuously. The high-bit threshold and the two flag values are named rather than bare
 // so the scan reads as the property it computes.
 let AsciiHighBit = 128 as Byte
@@ -125,7 +144,7 @@ let SingleByteGraphemesFalse = 0 as ParsedInt
 // if any of them stops treating CR specially.
 //
 // ⚠ **EXPORTED FOR `GraphemeRuntime.buildCharFromCodepoint`, WHICH IS THE OTHER PRODUCER OF THIS FIELD.**
-// Slot@40's meaning is declared in this file, so the byte that clears it is declared here too — a second
+// Slot@48's meaning is declared in this file, so the byte that clears it is declared here too — a second
 // `13` in the encoder would be a fourth statement of the number with nothing holding it to this one.
 export let CarriageReturnByte = 13 as Byte
 
@@ -137,7 +156,8 @@ let NulTerminator = 0 as Byte
 // 8-byte-aligned rdata offset. This is load-bearing for arm64-macOS ONLY: a String literal's `buffer@0`
 // there is a dyld chained-fixup REBASE (`MachOWriter.writeMachoStringBufferRebases`), and a chain links
 // its entries by a 4-byte-granular `next` delta, so every rebased slot MUST sit at an aligned offset or
-// the delta cannot be encoded. Records are 48 bytes (an 8-multiple) and arm64 float islands are 8, so
+// the delta cannot be encoded. A String record is `StringRecordBytes` (an 8-multiple, whatever slot count
+// it is made of) and arm64 float islands are 8, so
 // once blobs are 8-multiples the rdata cursor stays 8-aligned across the whole section and every record
 // is naturally aligned. The trailing zero bytes are INVISIBLE to every consumer — the blob is read as a
 // NUL-terminated C string from `buffer@0` and `length@8` counts only the payload — so this is free on
@@ -448,7 +468,7 @@ export let StrCloneName = b"__str_clone"
 // (MEASURED, both: `grow(s if c else "lit")` was 0xC0000005 and `grow(make() if c else s)` printed `v=ab`
 // where the oracle prints `v=abXY`).
 //
-// ⭐ **AND THE RECORD ALREADY CARRIES THE ANSWER** — `capacity@16 = RdataBufferCapacity` is the literal
+// ⭐ **AND THE RECORD ALREADY CARRIES THE ANSWER** — `capacity@16 = ImmortalRecordCapacity` is the literal
 // provenance `BufferOwnership` declares, so the test is one load and one compare. This is
 // `__retain_existential` one tier down: the same three-way protocol choice `promoteBorrowedToOwned` makes
 // statically, deferred to the one party that can make it.
@@ -471,7 +491,7 @@ export let StrRetainName = b"__str_retain"
 //     mine to write in place, and no separate allocation owed: the record's own free takes the bytes.
 //   * DETACHED (`capacity@16 >= 0`) — a separate `__mm_alloc`'d buffer this record owns and must release,
 //     which is exactly what the encoding calls an OWNER, so its base is its own `buffer@0`.
-//   * RDATA (`capacity@16 = RdataBufferCapacity`) — a literal's immortal blob. It never reaches these two
+//   * RDATA (`capacity@16 = ImmortalRecordCapacity`) — a literal's immortal blob. It never reaches these two
 //     functions today: the parser promotes a `var` String at its declaration and only an owned String is
 //     ever dropped. It needs no arm of its own regardless — it is a non-owned buffer owing nothing, and
 //     both of those are already what the encoding says.
@@ -480,7 +500,7 @@ export let StrRetainName = b"__str_retain"
 // That test was this file's own third spelling of "is this buffer mine?" — and, at the same offset as the
 // Array record's `parent@32`, it meant the OPPOSITE thing (there, *someone else's allocation I owe a
 // release to*). Now `parent@32` means one thing in both records and nothing here has to be told which.
-// True iff every GRAPHEME of these bytes is exactly one byte — the `singleByteGraphemes@40` scan, run once
+// True iff every GRAPHEME of these bytes is exactly one byte — the `singleByteGraphemes@48` scan, run once
 // per distinct literal at lower time (the cold path), never per value.
 //
 // ⭐ **ONE PASS TESTING BOTH, rather than an ASCII scan followed by a CR scan** — the corpus's
@@ -508,8 +528,15 @@ export function stringBlobBytes(bytes ByteArray) returns ByteArray
 	return blob
 end 'stringBlobBytes'
 
-// Build the 48-byte record for a literal. `byteLength` EXCLUDES the NUL (it is the payload count);
+// Build the 56-byte record for a literal. `byteLength` EXCLUDES the NUL (it is the payload count);
 // `singleByteGraphemes` is `bytesAreSingleByteGraphemes`'s answer.
+//
+// ⭐ **`capacity@16` IS `ImmortalRecordCapacity`, NOT `RdataBufferCapacity`, AND THE DIFFERENCE IS THIS
+// FUNCTION** (W157). Both say "the buffer is an immortal `.rdata` blob"; only this one also says "and so is
+// the record you are holding" — which is exactly what a record ASSEMBLED AS BYTES AND REGISTERED AS AN
+// `.rdata` CONSTANT is, and what a byte-string literal's heap `__mm_alloc` box is not. Since W157 hands a
+// String's own record out as a buffer (`buildStrBytesView`), that difference is what stops `__mm_incref` and
+// `__managed_decref` performing a refcount read-modify-write on read-only memory.
 //
 // ⚠ **`buffer@0` HOLDS THE BLOB'S RDATA OFFSET, NOT 0, AND THIS IS LOAD-BEARING FOR DEDUP.** The PE
 // writer OVERWRITES `buffer@0` with the blob's absolute VA (`ImageBase + rdataRva + blobOffset`), so
@@ -532,9 +559,10 @@ function buildStringRecordBytes(blobOffset ByteOffset, byteLength ByteCount, sin
 	var record = ByteArray.create()
 	appendRecordField(record, expectedOffset: StringBufferOffset, value: blobOffset as ParsedInt)
 	appendRecordField(record, expectedOffset: StringLengthOffset, value: byteLength as ParsedInt)
-	appendRecordField(record, expectedOffset: StringCapacityOffset, value: RdataBufferCapacity)
+	appendRecordField(record, expectedOffset: StringCapacityOffset, value: ImmortalRecordCapacity)
 	appendRecordField(record, expectedOffset: StringElementSizeOffset, value: ByteStringElementSize)
 	appendRecordField(record, expectedOffset: StringParentPtrOffset, value: NoOwedAllocation)
+	appendRecordField(record, expectedOffset: StringElementDestroyOffset, value: TrivialElementDestroy)
 	appendRecordField(record, expectedOffset: StringSingleByteGraphemesOffset, value: singleByteGraphemesFlagValue(singleByteGraphemes))
 
 	if record.count() != StringRecordBytes 'sizeDrift'
@@ -651,11 +679,11 @@ end 'installStringRuntime'
 // `Equatable` witness: the stream is the only difference, and the record read is not a fact worth writing
 // twice.
 //
-// ⚠ **THE ARGUMENT IS A `__ManagedMemory`, NOT A String — and the offsets are the same ones because the two
-// RECORDS agree there.** `stdlib/Print.maxon` hands over `value.addressableBytes()`, an `Array with Byte`
-// view; a String record and an Array record share `buffer@0`/`length@8` (they part company at `@40`, which
-// nothing here reads — see `buildStrBytesView` for why that one slot matters elsewhere). The bytes are
-// BORROWED: this reads through them and never frees, so a literal argument needs no decref.
+// ⚠ **THE ARGUMENT IS A `__ManagedMemory`, NOT A String — and the offsets are the same ones because a
+// String record IS one.** `stdlib/Print.maxon` hands over `value.addressableBytes()`, which since W157 is
+// the receiver's own record rather than a minted view; either way the two shapes agree on
+// `buffer@0`/`length@8`, which is all this reads. The bytes are BORROWED: this reads through them and
+// never frees, so a literal argument needs no decref.
 function buildStreamWrite(module StdModule, name ByteArray, stream OsOutputStream)
 	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1099,7 +1127,7 @@ end 'buildStrDecref'
 
 // ⭐ **THE ONE ENCODER of shv2's fused OWNED inline String record** — record + inline bytes + a trailing NUL in
 // ONE `__mm_alloc`, `buffer@0` pointing at the inline region, `capacity@16 = InlineBufferCapacity`, `parent@32`
-// left 0 by the slab zeroing, and `singleByteGraphemes@40 = singleByteGraphemes`. Emits the ops into `block` and returns the record.
+// left 0 by the slab zeroing, and `singleByteGraphemes@48 = singleByteGraphemes`. Emits the ops into `block` and returns the record.
 // Shared so the record layout has exactly ONE construction site: `__str_clone` (passes the SOURCE's `singleByteGraphemes`)
 // and `__gt_subp_str_from_bytes` (passes 0 — child output is arbitrary bytes, `not-ascii` is the safe class)
 // were byte-for-byte copies of this sequence, and a field the record later gains must be initialized once, here,
@@ -1157,12 +1185,12 @@ end 'emitInlineStringBuffer'
 // take its `funcAddr` and `callIndirect` it per element/field.
 //
 // ⭐ **THE RESULT IS INLINE, so it is INDEPENDENTLY DROPPABLE with no double-free of the source's bytes.** One
-// `__mm_alloc` holds the 48-byte record with the bytes right behind it (`buffer@0 = newRec + StringRecordBytes`),
+// `__mm_alloc` holds the 56-byte record with the bytes right behind it (`buffer@0 = newRec + StringRecordBytes`),
 // `capacity@16 = InlineBufferCapacity` and `parent@32 = NoOwedAllocation` (the slab's zeroing supplies the 0) —
 // the same encoding `emitStringInterp` publishes — so `__str_decref` reclaims record and bytes together and owes
-// nothing to anyone. A LITERAL source (immortal `.rdata`, `capacity == RdataBufferCapacity`) clones through this
+// nothing to anyone. A LITERAL source (immortal `.rdata`, `capacity == ImmortalRecordCapacity`) clones through this
 // identical path: its bytes are COPIED into the new inline box, so the clone frees its own copy and never the
-// immortal blob. `singleByteGraphemes@40` is carried over from the source, an accurate copy at no extra cost.
+// immortal blob. `singleByteGraphemes@48` is carried over from the source, an accurate copy at no extra cost.
 function buildStrClone(module StdModule)
 	var func = IrFunction.createFromStd(StrCloneName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -1185,7 +1213,7 @@ end 'buildStrClone'
 
 // `__str_retain(record) -> ownedRecord` — the two-armed graph the constant's header argues for.
 //
-// ⚠ **THE TEST IS `== RdataBufferCapacity` AND MUST NOT BE `emitBufferNotOwned`'s `capacity < 0`.** That
+// ⚠ **THE TEST IS `== ImmortalRecordCapacity` AND MUST NOT BE `emitBufferNotOwned`'s `capacity < 0`.** That
 // one asks *"is this buffer mine to write in place?"*, which is FALSE for an ordinary owned INLINE String
 // too (`InlineBufferCapacity`) — and an inline String is heap, refcounted and exactly what the incref arm
 // exists for. Asking the wider question would clone every owned String reaching a merge, which is a lost
@@ -1202,9 +1230,7 @@ function buildStrRetain(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
-	let capacity = emitLoadField(module, block: entry, record: record, offset: StringCapacityOffset, ids: ids)
-	let rdataCapacity = emitConst(module, block: entry, value: RdataBufferCapacity as ParsedInt, ids: ids)
-	let isImmortal = emitCmp(module, block: entry, a: capacity, b: rdataCapacity, pred: StdCmpPred.eq, ids: ids)
+	let isImmortal = emitRecordIsImmortal(module, block: entry, record: record, ids: ids)
 	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: copyImmortal.id, elseBlockId: coOwn.id))
 
 	// The two arms answer with DIFFERENT records — the clone's fresh one, the incref's own — so the answer
@@ -1273,7 +1299,7 @@ function buildStrFromBytes(module StdModule)
 	let zero = emitConst(module, block: entry, value: 0, ids: ids)
 	module.setTerminator(entry, op: StdOp.branch(scan.id))
 
-	// The `singleByteGraphemes@40` classification, computed rather than guessed: it is a claim about these
+	// The `singleByteGraphemes@48` classification, computed rather than guessed: it is a claim about these
 	// bytes, and the one place a String's is otherwise produced (`bytesAreSingleByteGraphemes`) makes the
 	// identical claim at lower time for a literal. It is carried as an i64 0/1, the width the field is stored
 	// at, which is why each disqualifying case is a BRANCH rather than an `and` of the `i1` a compare yields:
@@ -1379,131 +1405,69 @@ function buildMmToCString(module StdModule)
 	module.functions.push(func)
 end 'buildMmToCString'
 
-// ⭐⭐ **`__str_bytes_view(str) -> arrRecord` — `addressableBytes()`, AND IT IS A BORROW OF THE BYTES WITH
-// AN OWNED RECORD AROUND IT.** The corpus's body is `return managed` (`stdlib/String.maxon:181-183`) — hand
-// out this String's own buffer, do not copy it — and that is exactly what this does: a zero-copy
-// `Array with Byte` VIEW whose `buffer@0` IS the receiver's, built in O(1) through the same
-// `emitViewRecordHead`/`emitViewRecordTail` pair `__managed_slice` uses. Nothing is copied and the cost does not
-// depend on the length.
+// ⭐⭐ **`__str_bytes_view(str) -> arrRecord` — `addressableBytes()`, AND SINCE W157 IT IS THE RECEIVER'S
+// OWN RECORD, CO-OWNED.** The corpus's body is `return managed` (`stdlib/String.maxon:181-183`) — hand out
+// this String's own buffer, do not copy it — and that is now literally what this does: one `__mm_incref`
+// and the same pointer back. Nothing is allocated, nothing is copied, and the cost does not depend on the
+// length.
 //
-// ⚠⚠ **IT IS NOT THE STRING POINTER RETAGGED, AND THE REASON IS ONE SLOT.** A String record and an Array
-// record agree at five of their six 8-byte slots — `buffer@0`, `length@8`, `capacity@16`, `element_size@24`
-// (a String's is 1), `parent@32` (one shared `BufferOwnership` encoding) — and DISAGREE at `@40`, where a
-// String keeps `singleByteGraphemes` and an Array keeps `element_destroy`. Handing the String pointer to the array
-// dispatch would therefore make `urlBytes.slice(0, colonPos)` build a view whose `element_destroy@40` is the
-// source's ASCII FLAG, and `__managed_decref` would `callIndirect` address 1 on every element of an all-ASCII
-// slice. A URL is all-ASCII, so that is not a rare shape — it is every corpus call. A fresh record stamped
-// `element_destroy = TrivialDestructor` states the fact instead of inheriting a coincidence, and it costs
-// one 48-byte allocation for the whole `addressableBytes()` — the same allocation any `slice` already pays.
+// ⚠⚠ **IT USED TO MINT A 48-BYTE VIEW, AND ONE SLOT IS WHY.** A String record and an Array record agreed at
+// five of their six slots and DISAGREED at `@40`, where a String kept `singleByteGraphemes` and an Array
+// keeps `element_destroy`. Handing the String pointer to the array dispatch therefore made
+// `urlBytes.slice(0, colonPos)` build a view whose `element_destroy@40` was the source's ASCII FLAG, and
+// `__managed_decref` would `callIndirect` address 1 on every element of an all-ASCII slice — every corpus
+// call, since a URL is all-ASCII. **W157 removed the disagreement rather than the consequence**: a String
+// record carries a real `element_destroy@40` (always `TrivialElementDestroy`, which is the truth about a
+// buffer of `Byte`s) and its flag moved to `@48`, so the fresh record that used to STATE that fact is a
+// record that no longer needs stating. It cost one 48-byte allocation per `addressableBytes()` — i.e. per
+// `sb.append(...)`, per `print(...)`, per `File.exists(...)` — and it is gone.
 //
-// ⛔⛔ **A WRITE THROUGH THIS VIEW DOES NOT REACH THE STRING, AND THIS BLOCK USED TO CALL THAT "SAFE".**
-// `capacity@16 = ViewBufferCapacity` sends every in-place mutator through `__managed_cow_detach` first, so a
-// caller that writes gets a private copy of the bytes and the String is untouched — and since the view is
-// an owned TEMPORARY at every call site, that copy dies at statement end and the write is simply LOST. The
-// old note argued this was the safer of the two answers and rested on *"nothing in `stdlib/` writes through
-// this door"*, which was an observation about today's callers rather than a property of the door. W49 wave 2
-// retired `toLower`/`toUpper` onto the corpus, which made `mapAsciiCase` — and with it `String.setByte` —
-// reachable for the first time, and every case conversion in the suite returned its receiver verbatim.
+// ⚠⚠ **THE IMMORTAL ARM IS NOT AN OPTIMIZATION, IT IS THE ONE CASE THAT WOULD FAULT.** A String LITERAL's
+// record lives in `.rdata`, which the PE writer maps READ-ONLY (`SectionRdataFlags`), so `__mm_incref`'s
+// refcount read-modify-write on it is an access violation rather than a miscount. That arm returns the
+// record UNCOUNTED, which is sound for exactly the reason the memory is read-only: it can never be freed,
+// so nothing needs to hold it. Its dual is in `__managed_decref`, which skips the whole drop on the same
+// `ImmortalRecordCapacity` test — the two are one decision and must move together.
 //
-// ⇒ **`String.setByte` NO LONGER COMES THROUGH HERE**; it hands `__managed_set_byte` the String's own record, so
-// the detach asks about the STRING's provenance and the private copy it makes is the String's to keep. What
-// this door is for is READING: `addressableBytes()`'s four corpus call sites read, then `slice`. A future
-// writer must take the same route `setByte` now takes — the record — because a view cannot carry a write
-// home.
+// ⛔⛔ **A WRITE THROUGH THIS BUFFER REACHES THE STRING NOW, WHERE THROUGH THE OLD VIEW IT WAS LOST.** The
+// view's `capacity@16 = ViewBufferCapacity` sent every in-place mutator through `__managed_cow_detach`,
+// which gave the CALLER a private copy that died at statement end — so the write silently vanished (the
+// defect W49 wave 2 measured, when every case conversion in the suite returned its receiver verbatim). The
+// receiver's own record detaches onto a buffer the STRING keeps, which is the same answer `String.setByte`
+// already gets by taking the record. ⚠ An IMMORTAL receiver is the exception and it is a FAULT, not a lost
+// write: `__managed_cow_detach` republishes `buffer@0`/`capacity@16`/`parent@32` into the record, and that
+// record is read-only. The parser promotes a `var` String at its declaration and a `let` binding refuses
+// the mutation, which is what keeps a literal off every writing path — the same guard that already stood
+// between a literal and `String.setByte`.
 //
-// ⚠ **LIFETIME: the view holds a REFERENCE COUNT on the allocation the bytes live in** (see
-// `emitStringBytesAllocation`), so it cannot outlive them however its binding is scoped. That is one more
-// guarantee than the reference gives — where `return managed` relies on the caller keeping the String alive —
-// and it is not gold-plating: every other view in this compiler counts its parent, and a view that did not
-// would be the one dangling pointer in the runtime.
+// ⚠ **LIFETIME: the caller holds a REFERENCE COUNT on the record, which is one guarantee STRONGER than the
+// view gave.** The view counted the allocation the bytes live in and left the record to fend for itself;
+// counting the record covers both, because a record that cannot be freed cannot release its own external
+// buffer either (`__str_decref` reaches that release only as the last owner). That is one more guarantee
+// than the reference gives, where `return managed` relies on the caller keeping the String alive.
 function buildStrBytesView(module StdModule)
 	var func = IrFunction.createFromStd(StrBytesViewName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
-	var baseJoin = module.addBlock(func, label: b"bvbase")
-	var ret = module.addBlock(func, label: b"ret")
+	var coOwn = module.addBlock(func, label: b"bvcoown")
+	var ret = module.addBlock(func, label: b"bvret")
 
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
-	let length = emitLoadField(module, block: entry, record: record, offset: StringLengthOffset, ids: ids)
-	let buffer = emitLoadField(module, block: entry, record: record, offset: StringBufferOffset, ids: ids)
-	let start = emitConst(module, block: entry, value: 0, ids: ids)
-	let elementSize = emitConst(module, block: entry, value: ByteStringElementSize, ids: ids)
-	let elementDestroy = emitConst(module, block: entry, value: TrivialDestructor, ids: ids)
-	let view = emitViewRecordHead(module, block: entry, srcBuffer: buffer, start: start, sliceLen: length, elementSize: elementSize, elementDestroy: elementDestroy, ids: ids)
+	let isImmortal = emitRecordIsImmortal(module, block: entry, record: record, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: ret.id, elseBlockId: coOwn.id))
 
-	let base = emitStringBytesAllocation(module, func: func, cur: entry, join: baseJoin, record: record, ids: ids)
-	emitViewRecordTail(module, func: func, cur: baseJoin, exit: ret, view: view, base: base, ids: ids)
+	let increfed = ids.mint()
+	module.appendOp(coOwn, op: StdOp.call(increfed, callee: MmIncrefName, args: argsOf(record)))
+	module.setTerminator(coOwn, op: StdOp.branch(ret.id))
 
-	module.setTerminator(ret, op: StdOp.ret(view))
+	module.setTerminator(ret, op: StdOp.ret(record))
 
 	module.functions.push(func)
 end 'buildStrBytesView'
 
-// ⭐⭐ **WHICH ALLOCATION MUST STAY ALIVE FOR THIS STRING'S BYTES TO BE READABLE — `NoOwedAllocation` when
-// none must.** A near-twin of `emitOwedAllocationBase`, and DELIBERATELY BUILT ON IT rather than beside it,
-// because the two questions differ by exactly one provenance and the rest of the answer must not be
-// restated: *"which separate allocation do I owe a release to?"* and *"where do these bytes live?"* agree
-// for a DETACHED String (its own `buffer@0`), for a VIEW (its `parent@32`) and for an `.rdata` literal
-// (nothing) — and part company for an INLINE String, whose bytes sit inside its OWN `__mm_alloc` payload.
-// That one honestly owes NOTHING, which is the right answer to the first question and a dangling
-// `buffer@0` as an answer to this one.
-//
-// So: ask the shared question first, and answer this one only where it says "nothing".
-//
-//   * a non-zero owed base — a DETACHED String's own buffer, or a VIEW's shared base. Both are the
-//     allocation the bytes are in, and a view's flattens exactly as `emitRecordView`'s nesting note
-//     describes, so no chain is built or walked.
-//   * `capacity@16 == RdataBufferCapacity` — an immortal blob, and the RECORD is in `.rdata` too, so there
-//     is nothing to count and nothing that MAY be counted (an incref of read-only memory faults). This is
-//     the one place a specific provenance value has to be compared against, because "immortal" is not
-//     derivable from the other slots: an rdata literal and an inline String agree on both of them.
-//     ⚠ **THAT COMPARISON IS AN EXCEPTION TO `BufferOwnership`'s STATED RULE** ("no compiler-side reader
-//     compares against a specific one"), so the OBLIGATION it creates is recorded at the DECLARATION of
-//     the three provenances, where a fourth one will be added — not only here, where nobody adding one
-//     would look.
-//   * otherwise — INLINE: the bytes are at `record + StringRecordBytes`, so the RECORD is the allocation.
-//
-// ⭐ **THE COUNT IS CORRECT IN BOTH DROP ORDERS, in every arm.** DETACHED: the view increfs `buffer@0` and
-// the String's own `__str_decref` decrefs the same address on its last-owner path, so whichever dies second
-// frees it. INLINE: the view increfs the RECORD, so `__str_decref` finds a non-zero count, lowers it and
-// keeps the record — and the view's `__managed_decref` then `__mm_decref`s it, which for an inline String is
-// exactly right because it owes nothing else. RDATA: nothing happens, twice.
-function emitStringBytesAllocation(module StdModule, func IrFunction, cur IrBlock, join IrBlock, record ValueId, ids ValueMinter) returns ValueId
-	var owedJoin = module.addBlock(func, label: b"bvowed")
-	var separate = module.addBlock(func, label: b"bvsep")
-	var noSeparate = module.addBlock(func, label: b"bvnosep")
-	var immortal = module.addBlock(func, label: b"bvrdata")
-	var inlineBytes = module.addBlock(func, label: b"bvinline")
-
-	let owedBase = emitOwedAllocationBase(module, func: func, cur: cur, join: owedJoin, record: record, ids: ids)
-
-	let base = ids.mint()
-	join.blockArgs.push(IrBlockArg.create(base, argType: StdType.i64))
-
-	let zero = emitConst(module, block: owedJoin, value: NoOwedAllocation, ids: ids)
-	let owesOne = emitCmp(module, block: owedJoin, a: owedBase, b: zero, pred: StdCmpPred.ne, ids: ids)
-	module.setTerminator(owedJoin, op: StdOp.condBranch(owesOne, thenBlockId: separate.id, elseBlockId: noSeparate.id))
-
-	module.setTerminator(separate, op: StdOp.branch(join.id))
-	separate.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(owedBase)))
-
-	let capacity = emitLoadField(module, block: noSeparate, record: record, offset: StringCapacityOffset, ids: ids)
-	let rdata = emitConst(module, block: noSeparate, value: RdataBufferCapacity as ParsedInt, ids: ids)
-	let isImmortal = emitCmp(module, block: noSeparate, a: capacity, b: rdata, pred: StdCmpPred.eq, ids: ids)
-	module.setTerminator(noSeparate, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: inlineBytes.id))
-
-	let nothing = emitConst(module, block: immortal, value: NoOwedAllocation, ids: ids)
-	module.setTerminator(immortal, op: StdOp.branch(join.id))
-	immortal.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(nothing)))
-
-	module.setTerminator(inlineBytes, op: StdOp.branch(join.id))
-	inlineBytes.branchEdges.push(BranchEdge.create(join.id, argIds: argsOf(record)))
-
-	return base
-end 'emitStringBytesAllocation'
 
 // ⚠⚠ **`buildStrByteRead` WAS HERE AND WENT WITH BOTH ITS CALLEES (W49 wave 7).** It was ONE bounds-checked
 // byte read serving `__str_byte_at` and `__str_byte_at_or_panic` — the same graph wearing two failure exits,

@@ -289,13 +289,21 @@ end 'main'
 8
 ```
 
-<!-- test: sizeof.the-corpus-byte-record-is-forty-eight -->
+<!-- test: sizeof.the-corpus-byte-record-embeds-the-buffer-record -->
 ### A `managed` field of a builtin-literal conformer is embedded whole
 
 THE ENVELOPE COLLAPSE. A type whose `implements` clause names one of `stdlib/Builtins.maxon`'s three
-literal markers holds its `managed` `__ManagedMemory` INLINE — five machine words at offset 0 — rather
-than as an 8-byte pointer to one. That is what makes the corpus's two-field `type String` lay out as the
-48-byte record the runtime reads: `managed` occupies 0..40 and the flag lands at 40.
+literal markers holds its `managed` `__ManagedMemory` INLINE — a whole 48-byte buffer record at offset 0,
+six machine words — rather than as an 8-byte pointer to one. That is what makes the corpus's two-field
+`type String` lay out as the 56-byte record the runtime reads: `managed` occupies 0..48 (`buffer@0`,
+`length@8`, `capacity@16`, `element_size@24`, `parent@32`, `element_destroy@40`) and the flag lands at 48.
+
+⚠ **THE SIXTH SLOT IS THE POINT, AND IT IS WHY THIS NUMBER IS 56 RATHER THAN 48.** The embedding used to
+stop at `parent@32` and let the flag take `@40` — the slot a buffer record keeps `element_destroy` in — so
+a String record and a buffer record disagreed at exactly one offset and a String's bytes could only be
+handed to buffer code through a freshly minted view, one heap record per `addressableBytes()` call.
+Embedding the buffer record WHOLE (a String's `element_destroy` is always 0: its elements are `Byte`s and
+own nothing) makes a String record a valid buffer record, and the mint becomes an incref.
 
 ⚠ **THE SUBJECT IS THE CORPUS'S OWN `String`, AND IT HAS TO BE.** A user conformer would be the more
 direct probe, and it is the one this case first used — but a marker conformer of any name the compiler
@@ -311,7 +319,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-48
+56
 ```
 
 <!-- test: sizeof.a-plain-managed-field-is-still-a-pointer -->
@@ -319,7 +327,7 @@ end 'main'
 
 The negative control, and it is the reason the rule is keyed on the CONFORMANCE and not on the field
 name: pointer-valued `managed` fields exist (`StringIterator`'s, an `ArrayIter`'s cursor source), and
-keying on the name alone would silently widen every one of them by 32 bytes.
+keying on the name alone would silently widen every one of them by 40 bytes.
 
 ```maxon
 type Plain

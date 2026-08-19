@@ -75,8 +75,17 @@ pins is therefore the ASSEMBLER's output, exactly as the IR form pins the loweri
 
 <!-- test: string-bytes-view-body -->
 The byte-view runtime entry, reached through `stdlib/FilePath.maxon`'s own cone.
-`__str_bytes_view`'s `bvsep` block is a DETACHED String's owed-base arm: it carries the
-incref that keeps the bytes alive for as long as the view exists.
+`__str_bytes_view`'s `bvcoown` block carries the incref that keeps the receiver alive for as long
+as the buffer value exists; `bvret` is the arm an IMMORTAL record takes, which increfs nothing
+because a `.rdata` record can neither be freed nor written.
+
+⚠ **THE BODY WAS FOUR TIMES THIS SIZE UNTIL W157, AND WHAT IT LOST WAS AN ALLOCATION.** It used to
+MINT a fresh 48-byte `Array with Byte` view over the receiver's bytes — `__managed_create`, six
+field stores, and a branchy derivation of which allocation to count — because a String record and a
+buffer record disagreed at `@40` (`singleByteGraphemes` against `element_destroy`). A String record
+now embeds the buffer record whole and keeps its flag at `@48`, so `return managed` is served by
+handing back the receiver: one capacity test and one `__mm_incref`. This golden is where that shows
+as instructions rather than as a trace.
 
 ⚠ **THIS CASE NAMED A PAIR UNTIL W49 WAVE 7, AND ITS SECOND HALF NO LONGER EXISTS AS A RUNTIME
 BODY.** `__str_byte_at_or_panic` was `String.byteAtOrPanic`'s synthesized body; that member retired

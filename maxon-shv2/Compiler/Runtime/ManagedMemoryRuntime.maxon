@@ -52,10 +52,12 @@
 
 // --- The fused 48-byte `__ManagedMemory` backing record ---
 //
-// Every field is an 8-byte slot; the six offsets are 0/8/16/24/32/40 and the record is 48 bytes. It is a
-// DISTINCT record type from a String's (whose slot@40 is `singleByteGraphemes`); do not reinterpret one as
-// the other.
-// ⭐ **THE FIRST FIVE ARE `BufferOwnership`'s OWN `ManagedRecord*Offset` CONSTANTS, NAMED DIRECTLY**, because
+// Every field is an 8-byte slot; the six offsets are 0/8/16/24/32/40 and the record is 48 bytes. Since W157
+// a String record is this record with a SEVENTH slot (`singleByteGraphemes@48`) behind it, so the two are no
+// longer distinct shapes to be kept apart — a String record may be read as one of these, which is what
+// `String.addressableBytes()` now relies on. What must NOT happen is the reverse: a 48-byte buffer record
+// has no `@48` to read, so nothing that loads the flag may be given one (see `GraphemeRuntime.__char_at`).
+// ⭐ **ALL SIX ARE `BufferOwnership`'s OWN `ManagedRecord*Offset` CONSTANTS, NAMED DIRECTLY**, because
 // `__mm_cow_detach` is ONE emitted function that reads them out of this record AND out of the String record.
 // They were two coincidentally-equal sets of literals until that function existed; a divergence would now be
 // a wrong load inside it rather than a second value flowing through a parameter, so the numbers live in one
@@ -67,10 +69,11 @@
 // deliberate: a String record is a DIFFERENT record from this one, so `StringParentPtrOffset` still says
 // something the shared name does not.
 //
-// `element_destroy@40` is the one slot that is genuinely THIS record's own — the String record's `@40` is
-// `singleByteGraphemes` — which is exactly why the shared prefix stops at `@32` and why this constant is
-// declared here rather than beside the five in `BufferOwnership`.
-export let ManagedRecordElementDestroyOffset = 40 as ByteOffset
+// ⚠ **`ManagedRecordElementDestroyOffset` STOOD HERE AND MOVED TO `BufferOwnership` AT W157.** Its header
+// said `@40` was *"the one slot that is genuinely THIS record's own — the String record's `@40` is
+// `singleByteGraphemes`"*, which is exactly what W157 undid: a String record now embeds the whole buffer
+// record and keeps a real `element_destroy@40` (always `TrivialElementDestroy`), with its flag at `@48`. So
+// all SIX offsets are read out of both records by one emitted function and all six live in one place.
 
 // ⭐ **`capacity@16` AND `parent@32` CARRY THE BUFFER-OWNERSHIP ENCODING, WHICH IS NOT THIS FILE'S TO
 // DEFINE — `BufferOwnership` owns it, and the String record answers the same two questions the same
@@ -83,9 +86,10 @@ export let ManagedRecordElementDestroyOffset = 40 as ByteOffset
 // again, so nothing ever walks a chain and a view's lifetime never depends on the record it was cut from.
 // (Both references flatten too — the bootstrap stores `source.parentPtr`, not `source`.)
 //
-// `element_destroy@40` is the per-element destructor a managed-element array carries (P1.7 slice 3); for a
-// TRIVIAL element it is 0 and the drop path releases the buffer without walking. Both come pre-zeroed from
-// `__mm_alloc`, so `__managed_create` never writes them — the same zeroing contract `__mm_alloc` relies on.
+// What `element_destroy@40` means is `BufferOwnership`'s, at the offset's declaration; what belongs HERE is
+// that this value and `NoOwedAllocation` both come pre-zeroed from `__mm_alloc`, so `__managed_create`
+// never writes either — the same zeroing contract `__mm_alloc` relies on, and the reason a String record's
+// own `element_destroy@40` needs no store either (`StringRuntime.emitAllocOwnedInlineString`).
 export let TrivialElementDestroy = 0 as ParsedInt
 
 // --- Constant array literals over an immortal `.rdata` blob (P1.7 slice 2; generalized at
@@ -2207,12 +2211,22 @@ end 'emitOobReturn'
 // pin exactly those two directions, and they are unchanged by this — which is the point.
 //
 // ⭐ **NESTED SLICES FLATTEN.** `srcBuffer` is read straight out of the source, so slicing a VIEW windows
-// within the view; and the base comes from `emitOwedAllocationBase`, which for a view is its own
+// within the view; and the base comes from `emitBufferHostAllocation`, which for a view is its own
 // `parent@32`. So a slice of a slice increfs the ORIGINAL allocation and stores it directly — no chain
 // exists, and nothing ever walks one.
 //
-// A base of 0 ("owes nothing") is ordinary and needs no special case beyond the incref's null guard: it is
-// what a view over an immortal `.rdata` blob, or over an array that never allocated a buffer, correctly has.
+// ⚠⚠ **THE BASE IS `emitBufferHostAllocation`, NOT `emitOwedAllocationBase`, AND W157 IS WHERE THAT STOPPED
+// BEING THE SAME QUESTION.** A view must count the allocation its `buffer@0` points INTO — "where do these
+// bytes live?" — which for an Array coincides at every provenance with "what do I owe a release to?",
+// because an Array's elements are never inside its own record. An INLINE String's are, and
+// `String.addressableBytes()` now hands its receiver's own record to this surface, so
+// `path.addressableBytes().slice(…)` slices an INLINE record: the owed answer is `NoOwedAllocation` and a
+// view built on it would hold a raw interior pointer into a live String's payload with NO count on it. The
+// host answer counts the record. The two functions are one built on the other and part company at exactly
+// this one provenance — see `BufferOwnership`.
+//
+// A base of 0 ("nothing hosts it") is ordinary and needs no special case beyond the incref's null guard: it
+// is what a view over an immortal `.rdata` blob correctly has.
 //
 // TRIVIAL elements only — the view duplicates heap POINTERS without a per-element retain, so a managed
 // element would be destroyed twice. A CONCRETE managed array never reaches here: `Parser.parseArraySlice`/
@@ -2255,7 +2269,7 @@ function emitRecordView(module StdModule, func IrFunction, cur IrBlock, exit IrB
 	var baseJoin = module.addBlock(func, label: b"vwbase")
 	var shareDone = module.addBlock(func, label: b"vwshared")
 	let newRec = emitViewRecordHead(module, block: shareArm, srcBuffer: srcBuffer, start: start, sliceLen: sliceLen, elementSize: es, elementDestroy: dtor, ids: ids)
-	let base = emitOwedAllocationBase(module, func: func, cur: shareArm, join: baseJoin, record: srcRecord, ids: ids)
+	let base = emitBufferHostAllocation(module, func: func, cur: shareArm, join: baseJoin, record: srcRecord, ids: ids)
 	emitViewRecordTail(module, func: func, cur: baseJoin, exit: shareDone, view: newRec, base: base, ids: ids)
 	module.setTerminator(shareDone, op: StdOp.branch(exit.id))
 	shareDone.branchEdges.push(BranchEdge.create(exit.id, argIds: argsOf(newRec)))
@@ -4212,11 +4226,27 @@ function emitMemoryThrow(module StdModule, block IrBlock, flag ParsedInt, ids Va
 	emitErrorReturn(module, block: block, flag: flag, ids: ids)
 end 'emitMemoryThrow'
 
+// ⭐⭐ **`__managed_decref(record)` — ONE FEWER OWNER OF A BUFFER RECORD, AND ITS FIRST QUESTION IS WHETHER
+// THE RECORD IS COUNTABLE AT ALL (W157).** An `ImmortalRecordCapacity` record is a String LITERAL's: it and
+// its blob are both `.rdata`, which the PE writer maps READ-ONLY, so the refcount read-modify-write below
+// is an access violation rather than a miscount — and there is nothing to reclaim in any case, because
+// nothing was ever allocated. It leaves untouched.
+//
+// ⚠ **THIS IS THE DUAL OF `StringRuntime.__str_bytes_view`'s IMMORTAL ARM AND THE TWO MUST MOVE
+// TOGETHER**: that one hands the record back UNCOUNTED, and this one is what makes an uncounted hand-back
+// balanced. A guard in only one of them is either a fault or a count that never comes back down.
+//
+// ⚠ **IT IS NOT `emitBufferNotOwned`'s `capacity < 0`, AND MUST NOT BECOME IT.** That question is about the
+// BUFFER; this one is about the RECORD, and an inline String, a view and a byte-string literal all answer
+// "not mine" about their buffer while sitting in an ordinary `__mm_alloc` box that must be freed. This is
+// the one provenance whose RECORD is image data, so it is the one value compared against.
 function buildManagedDecref(module StdModule)
 	var func = IrFunction.createFromStd(ManagedDecrefName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
 
 	var entry = module.addBlock(func, label: b"entry")
+	var countable = module.addBlock(func, label: b"countable")
+	var immortal = module.addBlock(func, label: b"immortal")
 	var lower = module.addBlock(func, label: b"lower")
 	var release = module.addBlock(func, label: b"release")
 	var releaseBuf = module.addBlock(func, label: b"relbuf")
@@ -4226,7 +4256,11 @@ function buildManagedDecref(module StdModule)
 	emitParams(module, block: entry, count: 1)
 	let record = 0 as ValueId
 
-	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: record, lastOwner: release, ids: ids)
+	let isImmortal = emitRecordIsImmortal(module, block: entry, record: record, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(isImmortal, thenBlockId: immortal.id, elseBlockId: countable.id))
+	module.setTerminator(immortal, op: StdOp.retVoid)
+
+	emitRefcountCheckToLastOwner(module, func: func, entry: countable, lower: lower, record: record, lastOwner: release, ids: ids)
 
 	// release: destroy the live managed elements `[0, length)` before the buffer goes (the shared gate skips a
 	// trivial-element array). An array that never allocated a buffer has length 0, so the walk is empty and

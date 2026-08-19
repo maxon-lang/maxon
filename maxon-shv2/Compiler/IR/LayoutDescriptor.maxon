@@ -545,8 +545,11 @@ end 'slotUnsignedMax'
 // with "the typealias range printed at the type-system level" — and `specs-shv2/sizeof.md:sizeof.enum` pins the
 // 8. The two doors are the two questions, exactly as they are for a ranged alias.
 //
-// ⭐ A managed `String` is its FULL 48-byte record, NOT its 8-byte pointer — the oracle's rule
-// (`sizeof(managed T)` = the value record), which B2's managed args inherit unchanged.
+// ⭐ A managed `String` is its FULL record, NOT its 8-byte pointer — the oracle's rule
+// (`sizeof(managed T)` = the value record), which B2's managed args inherit unchanged. ⚠ **THE NUMBER IS
+// `StringRuntime.StringRecordBytes` AND WAS A BARE `48` UNTIL W157**, which made it a second, unchecked
+// statement of a width the record's own producer already fixes — so growing the record (a sixth buffer slot
+// plus the flag) would have left `sizeof(String)` answering for the old one.
 //
 // It PANICS on the aggregate and non-value tags (`structRef`/`genericInstance` are the caller's to size by
 // layout; `typeParameter` is the descriptor-read path; `unresolved`/`void` are never valid `sizeof`
@@ -558,7 +561,7 @@ export function primitiveTypeByteSize(tag ValueTypeTag) returns ByteOffset
 		float then return 8
 		exitCode then return 4
 		named then return 8
-		string then return 48
+		string then return StringRecordBytes as ByteOffset
 		function then return 8
 		structRef then panic("primitiveTypeByteSize: a `structRef` is an aggregate — size it through StructLayout.sizeBytes, not this helper")
 		genericInstance then panic("primitiveTypeByteSize: a `genericInstance` is an aggregate — size it through its base StructLayout.sizeBytes, not this helper")

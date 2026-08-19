@@ -158,7 +158,7 @@ export typealias GenericInstanceId = int(0 to u64.max)
 //
 // Void is NOT a MaxonType — a non-value can't be a value-type. Function return
 // types use MaxonReturnType (below).
-// `string` is the `String` BUILTIN — a POINTER to a fused 48-byte record (P1.2 wave A). It is its
+// `string` is the `String` BUILTIN — a POINTER to a fused 56-byte record (P1.2 wave A). It is its
 // OWN arm, NEVER `named`, for the identical reason `structRef` is: the five rules that read `named`
 // (`typeClassOf`, `tagIsIntegral`, `typeTagName`, `notOperatorFor`, `valueTagToStdType`) all treat it
 // as a ranged INT, and filing String under `named` would make `s + t`, `not s` and `return s` from an
@@ -228,7 +228,7 @@ export union MaxonType
 	// `GenericInstanceId`). APPENDED AT THE END, past `typeParameter`, per the band-append invariant.
 	genericInstance(id GenericInstanceId)
 	// ⭐ **A `Character` — ONE EXTENDED GRAPHEME CLUSTER (P1.8 slice B).** Represented by the SAME fused
-	// 48-byte record a `String` is (`StringRuntime`'s layout), holding the cluster's UTF-8 bytes: a
+	// 56-byte record a `String` is (`StringRuntime`'s layout), holding the cluster's UTF-8 bytes: a
 	// Character IS an owned byte range with a length, and shv2 has exactly one of those. That is why it
 	// drops through `__str_decref`, clones through `__str_clone` and promotes by the fused-record blit —
 	// see `TypeRules.tagIsByteRecord`, the predicate that states the shared REPRESENTATION.
@@ -332,7 +332,7 @@ export enum ValueTypeTag
 	unresolved
 	void
 	structRef
-	// The tag of a `String` value — a pointer to the fused 48-byte record (see MaxonType's `string`
+	// The tag of a `String` value — a pointer to the fused 56-byte record (see MaxonType's `string`
 	// arm for why it is not `named`). APPENDED AT THE END, past `structRef`, for the same reason
 	// every other append here is: `unresolved to void` and `named to exitCode` are range arms, and a
 	// range adopts whatever is inserted between its endpoints without a word.
@@ -1122,7 +1122,7 @@ export union MaxonOp
 	// Write `value` to `addr + offset`. A STATEMENT, not an expression — it defines no
 	// result, so unlike its two band-mates it mints no ValueId.
 	storeIndirect(addr ValueId, offset ByteOffset, value ValueId, valueType MaxonType) = MaxonOpMeta{category: OpCategory.varAccess}
-	// A `String` LITERAL (P1.2 wave A): `result` is a pointer to an IMMORTAL 48-byte rdata record.
+	// A `String` LITERAL (P1.2 wave A): `result` is a pointer to an IMMORTAL 56-byte rdata record.
 	// `bytes` is the literal's DECODED UTF-8 payload — the parser has already resolved every escape
 	// (`decodeEscapes`), so what rides here is the exact byte sequence the record's blob will hold.
 	//

@@ -6082,8 +6082,9 @@ end 'arrayWhereClause'
 // `replace`/`replaceFirst` reach `findIn` (`stdlib/String.maxon:980`), which asks `byteAt` — a THROWING,
 // bounds-checked accessor — once per candidate position, where the retired `__str_replace` walked the
 // bytes with a raw load. The cost is in the byte-read LOWERING and no corpus source can reach it: the two
-// candidate stdlib cures were MEASURED and both are regressions (an `addressableBytes` walk allocates a
-// 48-byte record per call, +115.9% on shv2; a `byteAtOrPanic` rewrite is −22% on shv2 but +108% on the
+// candidate stdlib cures were MEASURED and both are regressions (an `addressableBytes` walk allocated a
+// 48-byte record per call, +115.9% on shv2 — ⚠ **W157 REMOVED THAT ALLOCATION**, so the number
+// stands as taken but its stated cause is gone and the cure is worth RE-MEASURING; a `byteAtOrPanic` rewrite is −22% on shv2 but +108% on the
 // bootstrap, which is the compiler that builds shv2). ⇒ **ACCEPTED and recorded** (user ruling), with the
 // real cure filed as a bootstrap rung. Do not attempt a stdlib fix here.
 //
@@ -7992,7 +7993,7 @@ typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
 // position un-materializes it. That direction cannot take the shape the CHARACTER direction used to have —
 // emit the other thing and leave the first behind, which cost only a dead `const` the fold's DCE collects:
 // a Character is a `stringLiteral` op, and `LowerMaxonToStd.lowerStringLiteral`
-// registers `.rdata` for one whether or not anything reads it — a blob, a 48-byte record and a fixup off the
+// registers `.rdata` for one whether or not anything reads it — a blob, a 56-byte record and a fixup off the
 // ONE `GlobalDataTable.nextStringId` counter every rdata prefix shares. A single stray blob in a whitelisted
 // stdlib module therefore renumbers every later `__str_blob_`/`__fconst_`/`__jumptable_` label in EVERY
 // program. So the op is rewritten in place, and this is how its index is found in O(1).
@@ -8002,13 +8003,18 @@ typealias ValueDeclaredAliasMap = Map with (ValueId, TypeNameId)
 // closure body (its value ids are a fresh SSA space), exactly like the sibling value columns.
 typealias CharLiteralOpMap = Map with (ValueId, OpIndex)
 
-// ⭐⭐ **WHICH OP PRODUCED EACH `addressableBytes()` BYTE VIEW — the map that lets a write intrinsic CONSUME
-// the String instead of the view (W35, re-aimed at W49 wave 7).** `addressableBytes()` yields a 48-byte
-// `Array` record so the value can be TYPED as one; `__Builtins.writeStdout`/`writeStderr` read `buffer@0`
-// and `length@8` and NOTHING else — the two slots a String record already carries, at the same offsets. So
-// when the view's sole consumer is the write, that record is minted and destroyed to satisfy a type nobody
-// reads: the allocator, the managed-memory runtime and the leak gate arrive in a hello-world for it (MEASURED at
+// ⭐⭐ **WHICH OP PRODUCED EACH `addressableBytes()` BYTE VALUE — the map that lets a write intrinsic
+// CONSUME the String instead of the buffer surface (W35, re-aimed at W49 wave 7).** `addressableBytes()`
+// yields an `Array with Byte` so the value can be TYPED as one; `__Builtins.writeStdout`/`writeStderr` read
+// `buffer@0` and `length@8` and NOTHING else — the two slots a String record already carries, at the same
+// offsets. So when its sole consumer is the write, the whole call chain exists to satisfy a type nobody
+// reads: the managed-memory runtime and the leak gate arrive in a hello-world for it (MEASURED at
 // 1,749 ⇒ 3,226 code bytes with the fold absent).
+//
+// ⚠ **WHAT THAT CHAIN COSTS CHANGED AT W157 AND THE FOLD DID NOT.** It used to be a 48-byte `Array` record
+// MINTED and destroyed per call; a String record now IS a buffer record, so `__str_bytes_view` is one
+// `__mm_incref` and the drop is a `__managed_decref`. The fold still removes both, plus two calls — and it
+// still keeps `__managed_decref`, and with it the buffer runtime, out of a program that only prints.
 //
 // ⚠⚠ **WHAT IT FILES CHANGED AT WAVE 7 AND THE FOLD DID NOT.** It used to hold the index of a
 // `__str_bytes_view` call the `addressableBytes` ARM appended; that member is `stdlib/String.maxon:181`'s
@@ -42899,7 +42905,7 @@ export type Parser
 	//
 	// ⭐ **WHAT IS COMPARED IS THE VALUE'S OWN WORD, WHICH FOR EVERY ADMITTED TAG IS THE OBJECT'S ADDRESS:**
 	// a struct's `__mm_alloc`'d box, a generic instance's record, and — for a `String` and a `Character` — the
-	// address of the 48-byte FUSED RECORD, not of the `buffer@0` it points at. The record is the object: two
+	// address of the 56-byte FUSED RECORD, not of the `buffer@0` it points at. The record is the object: two
 	// String records legitimately SHARE one buffer (a view carries its source in `parent@32`), so a buffer
 	// compare would report a substring and its source as the same object. That the value in the register
 	// already IS that address is what makes this one `MaxonOp.compare`, with no load anywhere: there is one
@@ -42946,7 +42952,7 @@ export type Parser
 	// `Array with int` against `Array with String`.
 	//
 	// ⚠ **IT IS NOT A CONVENIENCE — WITHOUT THE TAG CLAUSE `s is c` IS A SILENT WRONG ANSWER.** A `String` and
-	// a `Character` are the same 48-byte record, so a raw pointer compare across them would answer a question
+	// a `Character` are the same 56-byte record, so a raw pointer compare across them would answer a question
 	// about two values whose types every other rule keeps apart. `emitCompare`'s byte-record arm spells the
 	// same guard for the same reason.
 	function valuesNameOneType(lhs ValueId, rhs ValueId) returns bool
@@ -43132,7 +43138,7 @@ export type Parser
 	end 'emitByteRecordCompare'
 
 	// ⭐⭐ **`<`/`>`/`<=`/`>=` ON A BYTE-RECORD PAIR — WHERE `Character` AND `String` PART COMPANY (A5m-c).**
-	// The two types share a 48-byte record and every other rule in this file treats them as one thing; this
+	// The two types share a 56-byte record and every other rule in this file treats them as one thing; this
 	// is the single question whose answer differs, and it differs because the CORPUS says so:
 	// `stdlib/Character.maxon:19` declares `implements … Comparable` and writes the order out at `:80-104`,
 	// while `stdlib/String.maxon:49` declares no such conformance. The oracle answers both accordingly —
@@ -44068,7 +44074,7 @@ export type Parser
 	// `character-ownership.md`'s `string-and-character-do-not-compare` still pins its half.
 	//
 	// ⚠⚠ **THE `.rdata` RECORD IS REWRITTEN, NOT ORPHANED, AND THAT IS NOT A TIDINESS CHOICE.**
-	// `LowerMaxonToStd.lowerStringLiteral` walks `block.opRefs` and registers a blob + a 48-byte record +
+	// `LowerMaxonToStd.lowerStringLiteral` walks `block.opRefs` and registers a blob + a 56-byte record +
 	// a fixup for EVERY `stringLiteral` op it finds, read or not; `foldConstOperands`'s const DCE
 	// deliberately excludes `rdataAddr`, and no general DCE pass is scheduled. One orphan in a whitelisted
 	// stdlib module would therefore renumber every later `__str_blob_`/`__fconst_`/`__jumptable_` label in
@@ -44135,7 +44141,7 @@ export type Parser
 
 	// ⭐ Append the `stringLiteral` op a character literal materializes as, and mint a `character`-tagged
 	// value for it. It is the SAME op a String literal emits — one immortal `.rdata` byte record,
-	// `capacity@16 = RdataBufferCapacity`, never allocated or dropped — because a Character IS that record
+	// `capacity@16 = ImmortalRecordCapacity`, never allocated or dropped — because a Character IS that record
 	// (see `GraphemeRuntime`'s header). Only the value's TAG differs, and the tag is what every rule reads,
 	// so `'é' == "é"` is a type error and `print(c)` is refused while `"{c}"` works.
 	function emitCharacterLiteral(bytes ByteArray, range SourceRange) returns ValueId
@@ -44378,7 +44384,7 @@ export type Parser
 	end 'requireConstByteStringBlobFitsItsElement'
 
 	// ⭐⭐ **`"prefix {x} suffix"` — WHERE THE FIRST OWNED HEAP STRING IS BUILT.** An interpolation lowers to
-	// ONE `__mm_alloc`'d fused record: the 48-byte String record with its UTF-8 bytes INLINE right behind it
+	// ONE `__mm_alloc`'d fused record: the 56-byte String record with its UTF-8 bytes INLINE right behind it
 	// (`buffer@0 = record + StringRecordBytes`), the concatenation of every part's bytes. It is an owned
 	// TEMPORARY — `emitStringInterp` enrolls it for the statement-scoped drop — so `print("{x}")` frees it
 	// at statement end and `let s = "{x}"` transfers it to a scope-exit drop (`parseBinding`).
@@ -44812,7 +44818,7 @@ export type Parser
 	end 'emitValueToString'
 
 	// A String-record part: load `buffer@0` and `length@8` off the record. Shared by literal fragments and
-	// `{s}` String parts — both are pointers to the fused 48-byte record, so both read the same two fields.
+	// `{s}` String parts — both are pointers to the fused 56-byte record, so both read the same two fields.
 	function materializeStringRecordPart(rec ValueId, partBufs ValueIdArray, partLens ValueIdArray, range SourceRange)
 		partBufs.push(self.emitLoadStringField(rec, offset: StringBufferOffset, range: range))
 		partLens.push(self.emitLoadStringField(rec, offset: StringLengthOffset, range: range))
@@ -44838,7 +44844,7 @@ export type Parser
 	end 'materializeScratchPart'
 
 	// ⭐ **ASSEMBLE THE FUSED OWNED STRING.** Sum the part lengths, allocate ONE `__mm_alloc` record big
-	// enough for the 48-byte record + the bytes + a NUL, copy every part into the inline region at a running
+	// enough for the 56-byte record + the bytes + a NUL, copy every part into the inline region at a running
 	// cursor, write the record fields, and free the scratch. The result is an owned temporary
 	// (`trackOwnedTemp`) — an INLINE String (`capacity@16 = InlineBufferCapacity`) whose bytes die with the
 	// record's slot, so its destructor is `TrivialDestructor` (0), exactly a struct's: `__mm_decref` →
@@ -45831,7 +45837,7 @@ export type Parser
 	// costs — a header, an alignment, a different allocator door — reaches one producer and not the other,
 	// and a box allocated without the enrolment simply leaks (exit 101).
 	// ⭐⭐ **BUILD A FUSED WRAPPER'S RECORD — `String{managed: X, singleByteGraphemesFlag: F}` and
-	// `Character{managed: X}` (THE ENVELOPE COLLAPSE, W17).** The result IS the 48-byte byte record, so its
+	// `Character{managed: X}` (THE ENVELOPE COLLAPSE, W17).** The result IS the 56-byte byte record, so its
 	// value tag is `string`/`character` and NOT `structRef`: that is the whole of what closed
 	// `E3005 Cannot return 'struct' from function declared to return 'String'` at `stdlib/String.maxon:115`,
 	// and it is not a cast — a corpus `String` and shv2's builtin `String` are one type with one layout,
@@ -46032,7 +46038,7 @@ export type Parser
 	//     bytes and writes its OWN answer at @40 — the offset that field occupies. `Self{flag: false}` read
 	//     back **TRUE**: exit 7 on a program whose only literal wrote `false`, no fault, no leak, no diagnostic.
 	//   * **The DROP is `__destruct_<T>`**, built from the DECLARED field list rather than from the record that
-	//     was actually built, so a third field is loaded from past the 48-byte record's end and handed to
+	//     was actually built, so a third field is loaded from past the fused record's end and handed to
 	//     `__str_decref`: **0xC0000005**.
 	//   * **The CLONE is `__clone_<T>`**, built from the identical list, and faults identically.
 	// There is no tag that fixes this: the value is one record and two descriptions of it. The DECLARATION
@@ -55354,23 +55360,27 @@ export type Parser
 		return buffer
 	end 'bufferSurfaceOf'
 
-	// ⭐⭐⭐ **MAY A FUSED WRAPPER'S OWN RECORD BE HANDED STRAIGHT TO THIS BUFFER MEMBER'S RUNTIME ENTRY,
-	// INSTEAD OF A MINTED VIEW? (W49 wave 7 cure.)** A `String` record and an `Array` record agree on their
-	// first FIVE slots — `buffer@0`, `length@8`, `capacity@16`, `element_size@24`, `parent@32`, all five
-	// spelled from the SAME `ManagedRecord*Offset` constants (`StringRuntime:29-43` against
-	// `ManagedMemoryRuntime:47-51`) — and they DIVERGE at `@40`, where an `Array` holds `element_destroy` (a FUNCTION
-	// POINTER) and a `String` holds `singleByteGraphemesFlag` (0/1). `BufferOwnership` declares that shared
-	// prefix, and its whole reason is one emitted function reading both records.
+	// ⭐⭐⭐ **MAY A FUSED WRAPPER'S OWN RECORD BE HANDED STRAIGHT TO THIS BUFFER MEMBER'S RUNTIME ENTRY?
+	// (W49 wave 7 cure.)** A `String` record and an `Array` record agree on all SIX buffer slots —
+	// `buffer@0`, `length@8`, `capacity@16`, `element_size@24`, `parent@32`, `element_destroy@40`, every one
+	// spelled from the SAME `BufferOwnership.ManagedRecord*Offset` constants — and a String record carries a
+	// SEVENTH slot behind them, `singleByteGraphemes@48`, which no buffer entry knows about.
 	//
-	// ⇒ **So the question is not "which member", it is "does this member's entry touch `@40`" — and the
-	// members are the ANSWER to that question, listed here rather than re-derived at the call site.**
+	// ⚠⚠ **THE LIST'S ORIGINAL QUESTION WAS "does this member's entry touch `@40`", AND W157 ANSWERED IT OUT
+	// OF EXISTENCE.** `@40` was `element_destroy` in one record and `singleByteGraphemesFlag` (0/1) in the
+	// other, so a member reading it would `callIndirect` address 0 or 1 given a String. A String record now
+	// holds a REAL `element_destroy@40` (always `TrivialElementDestroy`), so no buffer entry can be wrong
+	// about that slot. **The question this list still answers is the OTHER direction**: an entry that reads
+	// `@48` is written for a BYTE record and must never be handed a plain 48-byte buffer record, where that
+	// offset is off the end.
 	//
-	// ⚠⚠ **IT IS A WHITELIST AND MUST STAY ONE, BECAUSE THE DEFAULT HAS TO BE THE SLOW-BUT-CORRECT ANSWER.**
-	// A member absent from this list mints the view exactly as before: correct, one allocation. A member
-	// wrongly ADDED reads `singleByteGraphemesFlag` as a destructor and `callIndirect`s address 0 or 1. The
-	// two failure directions are not comparable, so a name joins only with its entry's call graph traced.
+	// ⚠⚠ **IT IS A WHITELIST AND MUST STAY ONE, BECAUSE THE DEFAULT HAS TO BE THE CONSERVATIVE ANSWER.**
+	// A member absent from this list reaches its entry through `emitFieldLoad`'s `managed`-as-a-value door
+	// instead, which since W157 hands over the same record with an `__mm_incref`/`__managed_decref` pair
+	// around it: correct, and one refcount pair dearer. So the two directions are still not comparable, and
+	// a name joins only with its entry's call graph traced.
 	//
-	// **The census, traced through every helper each entry calls (W49 wave 7):**
+	// **The census, traced through every helper each entry calls (W49 wave 7; re-read at W157):**
 	//   • `length()` -> `__managed_count` (`buildManagedCount`) — reads `@8`. Nothing else.
 	//   • `byteAt(i)` -> `__managed_byte_at` — reads `@0`, and `emitBufferAccessGuard` reads `@8`/`@16` and
 	//     `@24`. A String's `@24` is `ByteStringElementSize = 1` on EVERY producer, so `length·es` is the byte
@@ -55382,18 +55392,23 @@ export type Parser
 	//   • `append(other)` -> `__managed_append` — reads both records' `@24` and ABORTS on a mismatch, which two
 	//     String records pass (1 == 1); `__managed_move_elems` takes raw buffers and a stride as ARGUMENTS.
 	//   • `toCString()` -> `__mm_to_cstring` — reads `@8` and `@0`. Not even `@24`.
-	//   • `makeCharFromBytes(pos, len)` -> `__char_at` — reads `@40`, and that is why it is SAFE rather than
-	//     unsafe: it reads it AS `singleByteGraphemes` (`GraphemeRuntime:230`) and stores it into the
-	//     Character it builds. It is written for a byte record and is the one entry a VIEW serves WRONGLY,
-	//     because a view's `@40` is `TrivialDestructor` rather than the source's flag.
+	//   • `makeCharFromBytes(pos, len)` -> `__char_at` — reads `@48`, the flag, and stores it into the
+	//     Character it builds (`GraphemeRuntime.buildCharAt`). ⛔⛔ **IT IS THE ONE ENTRY THAT READS THE
+	//     SEVENTH SLOT, SO IT IS THE ONE THAT MUST BE GIVEN A BYTE RECORD — and this membership is what
+	//     supplies one.** Handed a plain 48-byte buffer record it would read eight bytes PAST the record's
+	//     end; before W157 the same mis-service merely read `TrivialDestructor` as the flag, a conservative
+	//     wrong answer. Nothing reaches that door today: `makeCharFromBytes` is refused to user code outright
+	//     (`requireStdlibOnlyBufferMethod`), and its single `stdlib/` caller is `String.makeCharFromBytes`'s
+	//     `managed.makeCharFromBytes(…)` — an implicit-`self` fused read that arrives HERE.
 	//
-	// ⛔ **`slice(start, end)` IS THE ONE THAT MAY NOT, AND ITS ABSENCE IS THE POINT.** It reaches
-	// `__managed_slice` -> `emitRecordView`, which LOADS `@40` (`ManagedMemoryRuntime:2080`) and STORES it into the fresh
-	// record `__managed_create` stamps (`:2494`). Given a String, that publishes `0`/`1` as the new view's
-	// `element_destroy`, and the first `__managed_decref` of it `callIndirect`s address 1. The view mint is not
-	// overhead for this member — it is exactly what supplies a correct `TrivialDestructor`
-	// (`StringRuntime.buildStrBytesView`), which is what that function exists for. ⇒ `clone()`,
-	// `sliceBytes()` and `toByteArray()` keep their allocation, and this is the reason.
+	// ⭐ **`slice(start, end)` MAY NOW, AND IS DELIBERATELY STILL ABSENT.** Its exclusion was `@40`:
+	// `__managed_slice` -> `emitRecordView` LOADS that slot and STORES it into the fresh view, so a String's
+	// flag became the view's `element_destroy` and the first `__managed_decref` `callIndirect`ed address 1.
+	// W157 removed the disagreement, so nothing is unsafe about it any more — and it removed the ALLOCATION
+	// too, from the other side: `clone()`, `sliceBytes()` and `toByteArray()` reach `managed` as a VALUE, and
+	// that door hands back the receiver's record rather than minting a view. What listing `slice` here would
+	// still save is one `__mm_incref`/`__managed_decref` pair per call, which is a measurement, not a
+	// correctness argument, and belongs to whoever takes it.
 	function fusedManagedMemberTakesTheRecord(member ByteArray) returns bool
 		return member.equals(ManagedMemoryLengthMethod) or member.equals(ByteAtMethod) or member.equals(ManagedMemorySetByteMethod) or member.equals(AppendMethod) or member.equals(ManagedMemoryToCStringMethod) or member.equals(ManagedMemoryMakeCharFromBytesMethod)
 	end 'fusedManagedMemberTakesTheRecord'
@@ -55670,6 +55685,23 @@ export type Parser
 		// omission a memory-safety hole rather than a widened surface.
 		if isManagedMemory and methodTok.value.equals(ManagedMemoryMakeCharFromBytesMethod) 'makeCharFromBytes'
 			try self.requireStdlibOnlyBufferMethod(methodTok)
+			// ⛔⛔ **`__char_at` READS `singleByteGraphemes@48`, WHICH ONLY A BYTE RECORD HAS (W157).** A plain
+			// 48-byte buffer record ends at `@48`, so serving this member one is an eight-byte read PAST the
+			// record — into the next allocation's header, or off the end of the last one. Before W157 the same
+			// mis-service read `TrivialDestructor` as the flag: a conservative wrong answer rather than a wild
+			// read, which is why the whitelist's census could merely NOTE it.
+			//
+			// ⚠ **A PANIC, NOT A DIAGNOSTIC, AND `ProgramSignatures.checkFusedWrapperRecordLayouts` IS THE
+			// PRECEDENT.** Nothing a user program can express reaches it — the line above refuses this member
+			// outside `stdlib/`, and the corpus's ONE call site is `String.makeCharFromBytes`'s
+			// `managed.makeCharFromBytes(…)`, an implicit-`self` fused read that `dispatchMethodOnBinding`
+			// routes here with the String's own record. So what could fire it is an edit to a LISTED corpus
+			// module, and there is no degraded answer available: the alternative to stopping is minting a
+			// Character out of whatever byte followed the record.
+			if not viaManagedField 'notAByteRecord'
+				panic("dispatchArrayMethod: `{String.from(ManagedMemoryMakeCharFromBytesMethod)}` reached a receiver that is NOT a fused byte-record wrapper's own `{String.from(InlineManagedFieldName)}` — `__char_at` loads `singleByteGraphemes` at {StringSingleByteGraphemesOffset}, which is one slot PAST a {ManagedRecordBytes}-byte buffer record. Reach it through a `{String.from(StringConformerName)}`/`{String.from(CharacterConformerName)}` receiver, or give `__char_at` the flag another way")
+			end 'notAByteRecord'
+
 			let window = try self.parseTwoBuiltinIntegerArgList(func, firstParam: ManagedMemoryCharPosParamName, secondParam: ManagedMemoryCharLenParamName, methodTok: methodTok)
 			let startPos = try window.get(0) otherwise panic("makeCharFromBytes: parseTwoBuiltinIntegerArgList returned fewer than the two arguments it consumes")
 			let byteLen = try window.get(1) otherwise panic("makeCharFromBytes: parseTwoBuiltinIntegerArgList returned fewer than the two arguments it consumes")
@@ -59565,18 +59597,20 @@ export type Parser
 		//
 		// ⭐ **AND THE CORPUS ALREADY HAS A NAME FOR THIS VALUE: `addressableBytes()`, whose entire body is
 		// `return managed`** (`stdlib/String.maxon:181`). shv2 serves that through `__str_bytes_view`, which
-		// publishes a fresh `Array with Byte` record over the receiver's live bytes and INCREFS the allocation
-		// they live in — so the ownership is the debugged one rather than a second answer invented here, and
-		// the two spellings of one question land in one producer. Handing back the receiver's own `ValueId`
-		// instead is the double free `bufferSurfaceOf`'s header measures.
+		// since W157 CO-OWNS the receiver's own record and hands it straight back — so the ownership is the
+		// debugged one rather than a second answer invented here, and the two spellings of one question land
+		// in one producer. Handing back the receiver's own `ValueId` UNCOUNTED is the double free
+		// `bufferSurfaceOf`'s header measures; what this door hands back is counted.
 		//
-		// ⭐⭐⭐ **THIS MINT IS A HEAP ALLOCATION, AND WHAT KEEPS IT OFF THE HOT PATH IS THE DOOR ABOVE IT.**
-		// A `managed` read that is immediately CALLED never arrives here at all — `dispatchMethodOnBinding`'s
-		// `inlineManagedServesTheRecord` hands the receiver's own record to the buffer entry and mints
-		// nothing (W49 wave 7 cure). What still reaches this line is `managed` used as a VALUE: bound,
+		// ⭐⭐⭐ **THIS USED TO BE A HEAP ALLOCATION, AND WHAT KEPT IT OFF THE HOT PATH WAS THE DOOR ABOVE
+		// IT.** A `managed` read that is immediately CALLED never arrives here at all —
+		// `dispatchMethodOnBinding`'s `inlineManagedServesTheRecord` hands the receiver's own record to the
+		// buffer entry (W49 wave 7 cure). What still reaches this line is `managed` used as a VALUE: bound,
 		// returned (`addressableBytes()`'s whole body), passed as an argument, or stored into a `String{…}`
 		// literal — every one of which may outlive the statement, and for which handing back the receiver's
-		// own `ValueId` is the double free `bufferSurfaceOf`'s header measures.
+		// own `ValueId` uncounted is the double free `bufferSurfaceOf`'s header measures. ⭐ **W157 MADE THE
+		// REMAINING COST A REFCOUNT PAIR RATHER THAN A 48-BYTE RECORD**: a String record now IS a buffer
+		// record, so there is nothing left to mint — the whole of `__str_bytes_view` is an `__mm_incref`.
 		//
 		// ⛔ **WHY THAT SPLIT EXISTS, MEASURED — IT WAS 86.7x.** `String.byteLength`'s corpus body is
 		// `return managed.length()`, and before the cure that ONE expression emitted `__str_bytes_view` (a
@@ -59593,13 +59627,15 @@ export type Parser
 		// Never a leak (`__managed_decref` ran, no run exits 101) and never a wrong answer — every mode returns a
 		// bit-identical accumulator on all three binaries, which is what says the cure deleted no work.
 		//
-		// ⚠⚠ **`clone()` IS THE MEMBER THE CURE CANNOT REACH, AND IT STILL IMPROVED.** Its body goes through
-		// `sliceBytes` -> `managed.slice(...)`, and `slice` is the ONE buffer member that may not take a String
-		// record: `__managed_slice` -> `emitRecordView` LOADS `@40` and STORES it into the fresh view, so a String's
-		// `singleByteGraphemesFlag` would become that view's `element_destroy` and the first `__managed_decref`
-		// would `callIndirect` address 1. The view mint is not overhead there — it is what supplies a correct
-		// `TrivialDestructor`. It improved anyway (5.5x -> 3.35x) because `sliceBytes` asks `byteLength()`,
-		// which the cure made cheap. See `fusedManagedMemberTakesTheRecord` for the full `@40` census.
+		// ⚠⚠ **`clone()` WAS THE MEMBER THE WAVE-7 CURE COULD NOT REACH, AND W157 REACHED IT.** Its body goes
+		// through `sliceBytes` -> `managed.slice(...)`, and `slice` was the ONE buffer member that could not
+		// take a String record: `__managed_slice` -> `emitRecordView` LOADS `@40` and STORES it into the fresh
+		// view, so a String's `singleByteGraphemesFlag` became that view's `element_destroy` and the first
+		// `__managed_decref` `callIndirect`ed address 1. The view mint was not overhead there — it was what
+		// supplied a correct `TrivialDestructor`. It improved anyway at wave 7 (5.5x -> 3.35x) because
+		// `sliceBytes` asks `byteLength()`, which the cure made cheap; W157 then removed the mint itself,
+		// because a String record's `@40` IS `TrivialElementDestroy` and this line no longer allocates. See
+		// `fusedManagedMemberTakesTheRecord` for the census as it now reads.
 		if layout.conformsToBuiltinManagedWrapper() and index == layout.inlineManagedFieldIndex() 'inlineManagedIsTheReceiver'
 			// ⭐⭐⭐ **AN `Array`'s BUFFER IS THE `Array`, SO THERE IS NO VIEW TO MINT (W57)** — the same
 			// answer `bufferSurfaceOf` gives for the SPELLED `arr.managed`, reached here by the implicit-`self`
@@ -64493,7 +64529,7 @@ export type Parser
 	// INTEGER, so — unlike `emitSleep`'s void — its result IS usable in value position and needs no `resultUsed` gate.
 	//
 	// The String is BORROWED, exactly as `print` borrows its argument: `__gt_process_run` reads the command
-	// line's `buffer`/`length` out of the 48-byte record (like `__print_string` does) and never takes ownership,
+	// line's `buffer`/`length` out of the 56-byte record (like `__print_string` does) and never takes ownership,
 	// so a literal command line needs no decref.
 	function emitRunProcess(args ValueIdArray, calleeTok Token) returns ValueId throws ParseError
 		if args.count() != RunProcessArity 'arity'
@@ -67761,7 +67797,7 @@ export type Parser
 	//   • `float` — the tag is the f64's IEEE-754 BIT PATTERN in a GPR, so the read is the `bitsToFloat`
 	//     REINTERPRETATION every other float-backed-enum read goes through (`floatBehindEnumValue`, and its
 	//     header for the four wrong answers a `cvtsi2sd` produced here).
-	//   • `character` — the tag is the Unicode CODEPOINT, and a `Character` is a 48-byte record, so the value
+	//   • `character` — the tag is the Unicode CODEPOINT, and a `Character` is a 56-byte record, so the value
 	//     has to be MINTED (`__char_from_cp`) exactly as a `for c in 'a' to 'e'` trip element is. It is the
 	//     one raw value that owns heap, so it is enrolled as an owned temporary and dropped at the statement's
 	//     end like any other minted record.

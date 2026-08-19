@@ -15048,7 +15048,7 @@ export type ProgramSignatures
 	// the record's producer happened to write at its offset. `Parser.requireFusedWrapperTag`'s header carries
 	// that defect MEASURED, for conformers of other NAMES: *"`Self{flag: false}` read back TRUE — exit 7 on a
 	// program whose only literal wrote `false`, no fault, no leak, no diagnostic"*, with the drop and the
-	// clone — both built from the DECLARED field list — then reading past the 48-byte record's end
+	// clone — both built from the DECLARED field list — then reading past the fused record's end
 	// (0xC0000005). That refusal structurally cannot cover `String` and `Character`, because those are
 	// exactly the two names it must ADMIT. This is their half of it.
 	//
@@ -15057,16 +15057,17 @@ export type ProgramSignatures
 	// there is no degraded answer available: the compiler would go on minting a record shape the corpus no
 	// longer declares.
 	//
-	// ⚠ **`Character`'s DECLARED SIZE IS 40 AND THE RECORD IT MINTS IS 48, AND THAT IS EXPLAINED RATHER THAN
+	// ⚠ **`Character`'s DECLARED SIZE IS 48 AND THE RECORD IT MINTS IS 56, AND THAT IS EXPLAINED RATHER THAN
 	// CHECKED.** `type Character` declares the inline `managed` alone, so the layout's own `sizeBytes()` stops
-	// at the shared five slots, while the record `StringRuntime.emitAllocOwnedInlineString` builds for it is
-	// `StringRecordBytes` wide — ONE encoder serves both wrappers and it always writes `@40`. Nothing reads
-	// that slot for a Character, and nothing allocates one from `sizeBytes()`: a fused literal routes to
-	// `__str_from_bytes`, never to `emitOwnedStructBox` (MEASURED — `sizeof(Character)` is 8, the pointer a
-	// Character value IS, and `sizeof(String)` is 48 off the byte-record path, so neither reads this size).
-	// So the slack is inert, and what must hold is the property that MAKES it inert: the field count.
+	// at the whole buffer record, while the record `StringRuntime.emitAllocOwnedInlineString` builds for it is
+	// `StringRecordBytes` wide — ONE encoder serves both wrappers and it always writes the flag at `@48`.
+	// Nothing reads that slot for a Character, and nothing allocates one from `sizeBytes()`: a fused literal
+	// routes to `__str_from_bytes`, never to `emitOwnedStructBox` (MEASURED — `sizeof(Character)` is 8, the
+	// pointer a Character value IS, and `sizeof(String)` is `StringRecordBytes` off the byte-record path, so
+	// neither reads this size). ⚠ W157 widened BOTH by one slot, so the eight bytes of slack are unchanged;
+	// what must hold is the property that MAKES it inert: the field count.
 	export function checkFusedWrapperRecordLayouts()
-		// `String` — two fields: the inline `managed` occupying the shared five slots, then the flag at `@40`.
+		// `String` — two fields: the inline `managed` occupying the whole buffer record, then the flag at `@48`.
 		let string = self.corpusDeclaredFusedWrapper(StringConformerName)
 		requireInlineManagedFieldFirst(string)
 		if string.fieldCount() != StringDeclaredFieldCount 'stringFieldCount'
@@ -15075,7 +15076,7 @@ export type ProgramSignatures
 
 		let flagIndex = string.indexOfField(SingleByteGraphemesFieldName)
 		if flagIndex >= string.fieldCount() 'noFlagField'
-			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` declares no `{String.from(SingleByteGraphemesFieldName)}` field, so `emitFusedWrapperLiteral` would classify every literal's bytes instead of using the flag the corpus states — the record's `@40` IS that field, and the compiler reads the corpus's spelling rather than inventing one")
+			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` declares no `{String.from(SingleByteGraphemesFieldName)}` field, so `emitFusedWrapperLiteral` would classify every literal's bytes instead of using the flag the corpus states — the record's slot behind its embedded buffer record IS that field, and the compiler reads the corpus's spelling rather than inventing one")
 		end 'noFlagField'
 		if string.offsetOfField(flagIndex) != StringSingleByteGraphemesOffset 'flagOffset'
 			panic("ProgramSignatures.checkFusedWrapperRecordLayouts: `type {String.from(StringConformerName)}` puts `{String.from(SingleByteGraphemesFieldName)}` at {string.offsetOfField(flagIndex)} but every producer and reader of the record uses {StringSingleByteGraphemesOffset} — the corpus's declared shape and the record shv2 mints have drifted")

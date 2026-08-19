@@ -2819,12 +2819,22 @@ end 'fieldSlotCount'
 // would be the second home of the corpus's own word.
 export let InlineManagedFieldName = b"managed"
 
-// ⭐⭐ **HOW MANY BYTES A COLLAPSED `managed` OCCUPIES — the FIVE `__ManagedMemory` slots, DERIVED.** The
-// buffer record is `buffer`, `length`, `capacity`, `element_size`, `parent`: five machine words, and every
-// one of them is named at that offset by both fused records shv2 already builds (`StringRuntime`'s
-// `StringBufferOffset`…`StringParentPtrOffset` and `ManagedMemoryRuntime`'s `ManagedRecordBufferOffset`…`ManagedRecordParentOffset`).
-// Writing `40` here instead would be a third statement of a number those ten constants already fix, and the
-// one that no reader would check — so it is a product of the two facts it is made of.
+// ⭐⭐ **HOW MANY BYTES A COLLAPSED `managed` OCCUPIES — the SIX `__ManagedMemory` slots, DERIVED.** The
+// buffer record is `buffer`, `length`, `capacity`, `element_size`, `parent`, `element_destroy`: six machine
+// words, and every one of them is named at that offset by both fused records shv2 already builds
+// (`StringRuntime`'s `StringBufferOffset`…`StringElementDestroyOffset` and `BufferOwnership`'s
+// `ManagedRecordBufferOffset`…`ManagedRecordElementDestroyOffset`).
+// Writing `48` here instead would be a third statement of a number those twelve constants already fix, and
+// the one that no reader would check — so it is a product of the two facts it is made of.
+//
+// ⚠ **IT WAS FIVE UNTIL W157, AND THE SIXTH SLOT IS THE WHOLE OF THAT RUNG.** The collapsed `managed`
+// deliberately STOPPED at `parent@32` and let `type String`'s own `singleByteGraphemesFlag` take `@40`,
+// which is the slot an `__ManagedMemory` keeps `element_destroy` in — so a String record and a buffer
+// record disagreed at exactly one offset and a String's bytes could only be handed to buffer code through a
+// freshly minted 48-byte VIEW. Embedding the buffer record WHOLE (`element_destroy@40`, always 0: a
+// String's bytes need no per-element destructor) and moving the flag to `@48` makes a String record a
+// structurally valid buffer record, which is what lets `String.addressableBytes()` hand back the receiver
+// instead of allocating.
 //
 // ✅ **AND THE PRODUCT IS NOW CHECKED AGAINST THE RECORD THE RUNTIME READS (W49 wave 9).** This header used
 // to record a DEBT — *"there is nothing to check it against until `stdlib/String.maxon` is listed; the
@@ -2835,7 +2845,7 @@ export let InlineManagedFieldName = b"managed"
 // holds them together. It checks the FIELD COUNT as well as the offsets, which is the clause this constant
 // could never have implied: a field the fused record has no slot for is discarded at construction in
 // silence (see `Parser.requireFusedWrapperTag`, which carries that defect measured).
-let ManagedMemorySlotCount = 5 as ByteOffset
+let ManagedMemorySlotCount = 6 as ByteOffset
 let InlineManagedMemoryBytes = ManagedMemorySlotCount * FieldSlotBytes
 
 // ⭐ **THE THREE MARKER INTERFACES, AND WHY THE PREDICATE IS A FUNCTION RATHER THAN A SET LOOKUP.** They are
@@ -3263,19 +3273,20 @@ export type StructLayout
 		return fieldSlotCount(declaredType) * FieldSlotBytes
 	end 'bytesOfField'
 
-	// ⭐⭐ **THE ENVELOPE COLLAPSE: a `managed` field of a BUILTIN LITERAL CONFORMER is the 40-byte
+	// ⭐⭐ **THE ENVELOPE COLLAPSE: a `managed` field of a BUILTIN LITERAL CONFORMER is the 48-byte
 	// `__ManagedMemory` EMBEDDED WHOLE, not an 8-byte pointer to one.** `type String` declares exactly two
-	// fields (`managed`, `singleByteGraphemesFlag`) and the record it must lay out as is the 48-byte one
+	// fields (`managed`, `singleByteGraphemesFlag`) and the record it must lay out as is the 56-byte one
 	// `StringRuntime` reads — `buffer@0`, `length@8`, `capacity@16`, `element_size@24`, `parent@32`,
-	// `singleByteGraphemes@40`. Those are the same bytes: the first FIVE slots ARE a `__ManagedMemory`, so
-	// the corpus's `managed` occupies 0..40 and its flag lands at 40. **A String IS its own
-	// `__ManagedMemory`**, which is why the reference calls this the envelope collapse rather than an
-	// embedding.
+	// `element_destroy@40`, `singleByteGraphemes@48`. Those are the same bytes: the first SIX slots ARE a
+	// `__ManagedMemory`, so the corpus's `managed` occupies 0..48 and its flag lands at 48. **A String IS its
+	// own `__ManagedMemory`**, which is why the reference calls this the envelope collapse rather than an
+	// embedding — and since W157 that is true of the WHOLE buffer record rather than of its first five
+	// slots, which is what makes a String record servable to buffer code without a minted view.
 	//
 	// ⭐ **IT IS DETECTED BY CONFORMANCE, NOT BY THE FIELD NAME ALONE, AND THAT IS LOAD-BEARING.** Plain
 	// pointer-valued `managed` fields exist and must stay 8 bytes — `StringIterator.managed`, and the
 	// cursor source an `ArrayIter` holds — so keying on the name by itself would silently widen an
-	// ordinary struct by 32 bytes. The marker interfaces are the reference's own discriminator
+	// ordinary struct by 40 bytes. The marker interfaces are the reference's own discriminator
 	// (`MlirType.ConformsToBuiltinManagedWrapper`), they are declared in `stdlib/Builtins.maxon`, which the
 	// loader already lists, and they exist for precisely this purpose: *"marker interfaces the compiler
 	// scans for to resolve literal syntax"*.

@@ -1145,7 +1145,7 @@ let StringViewOpsBase = 8 as KnobSize
 // header calls its founding defect, arriving for the sixth time; the reading is only worth what the
 // corpus can express.
 //
-// ⚠ **NOT `stringOps` WITH A NARROWER LITERAL.** The two types share the 48-byte record and every rule
+// ⚠ **NOT `stringOps` WITH A NARROWER LITERAL.** The two types share the 56-byte record and every rule
 // but one, and that one is the point: a `Character` is `Comparable` and a `String` is not, so `c < d`
 // lowers to a `__char_cmp` call plus an `Ordering` verdict where `s < t` is a diagnostic. A change to
 // `buildByteRecordCompare`, to the character `match` compare chain or to `retypeCharLiteralAsCodepoint`
@@ -3796,7 +3796,7 @@ end 'matchExpressionSite'
 // exactly as `trunc` is for floats. Without that return path the whole group would be dead code that a
 // future DCE pass could legitimately delete, taking the String dimension with it.
 //
-// The literals are deliberately LONG. A short string lives inline in its 48-byte record with no heap
+// The literals are deliberately LONG. A short string lives inline in its 56-byte record with no heap
 // allocation at all, so a corpus of short literals would measure the String type and none of the heap
 // underneath it.
 //
@@ -4764,7 +4764,7 @@ function tryCoOwnLiveText(throwsHere bool) returns String
 	return "a > 0"
 end 'tryCoOwnLiveText'
 
-// The per-site String payload. Long enough to leave the 48-byte inline record (so the promotion COPIES a
+// The per-site String payload. Long enough to leave the 56-byte inline record (so the promotion COPIES a
 // heap string rather than a record the compiler could keep in registers), and unique per site so the
 // literals are distinct `.rdata` records rather than one interned constant M sites share.
 //
@@ -5319,7 +5319,7 @@ let BufferValueDoorsPushCount = 2
 // spelling every `path.toByteArray().managed` in `stdlib/` writes, so it is the one the real corpus is
 // thickest in.
 //
-// The literal is LONG for `stringOpsSource`'s reason: a short one lives inline in the 48-byte record and
+// The literal is LONG for `stringOpsSource`'s reason: a short one lives inline in the 56-byte record and
 // the bytes never reach the heap the buffer surface is a view onto.
 function bufferPendingTempBlock(index KnobIndex) returns String
 	// The view is over the literal's own bytes, so its length is the literal's byte count — which makes
@@ -5668,7 +5668,7 @@ export function printCorpusManifest()
 	print("      over an OPAQUE scrutinee, and rotating over ALL THREE dispatch strategies: the linear\n")
 	print("      compare chain (<4 intervals), the balanced binary search (>=4, span too wide for a table)\n")
 	print("      and the JUMP TABLE (>=4 and dense: an .rdata slot table plus an indirect jump)\n")
-	print("    STRING (the heap): literals long enough to leave the 48-byte record, INTERPOLATION of the\n")
+	print("    STRING (the heap): literals long enough to leave the 56-byte record, INTERPOLATION of the\n")
 	print("      opaque accumulator (an int->String conversion that allocates), `.append` (which detaches\n")
 	print("      onto a private buffer), `==` through __str_eq, `.byteLength()` as the way back out to int,\n")
 	print("      and a struct owning a String field dropped through its synthesized __destruct_<T> cascade\n")

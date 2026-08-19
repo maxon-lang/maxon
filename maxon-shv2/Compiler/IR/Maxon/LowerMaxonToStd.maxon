@@ -130,7 +130,7 @@ export function valueTagToStdType(tag ValueTypeTag) returns StdType
 		// is a pointer too. Nothing above this line knows the width, which is the point — MaxonType
 		// stays width-free (see MaxonDialect) and the machine word is named exactly once, here.
 		structRef then return StdType.i64
-		// ⭐ A STRING IS A POINTER — to the fused 48-byte rdata record. One machine word, in a GPR,
+		// ⭐ A STRING IS A POINTER — to the fused 56-byte rdata record. One machine word, in a GPR,
 		// passed and returned like any other i64. Nothing above this line knows the width, which is the
 		// point: MaxonType stays width-free and the machine word is named exactly once, here.
 		string then return StdType.i64
@@ -782,7 +782,7 @@ type MaxonToStdLowering
 	// what `ensureWitnessTable` stamps a slot's relocation FROM, instead of re-deriving the impl symbol by a
 	// second un-suffixed join of the same two names. See `witnessSlotImpl`.
 	var witnessSlotImpls as WitnessSlotImplMap
-	// The backend's `.rdata` table — where `stringLiteral` registers its immortal 48-byte record and
+	// The backend's `.rdata` table — where `stringLiteral` registers its immortal 56-byte record and
 	// its NUL-terminated byte blob (P1.2 wave A). It is the SAME table the backend later resolves the
 	// emitted `rdataAddr` label against, and the one that carries the buffer fixups to the PE writer.
 	// Threaded here rather than a field on some later pass because this is the FIRST tier that turns a
@@ -1270,7 +1270,7 @@ type MaxonToStdLowering
 	end 'lowerLiteral'
 
 	// ⭐ **A STRING LITERAL BECOMES IMMORTAL RDATA + A `lea`** (P1.2 wave A). Two `.rdata` entries are
-	// registered — the NUL-terminated byte blob, and the 48-byte record whose `buffer@0` points at it —
+	// registered — the NUL-terminated byte blob, and the 56-byte record whose `buffer@0` points at it —
 	// and the result is the RIP-relative ADDRESS of the record. `registerRdataConstant` DEDUPES both by
 	// bytes, so every occurrence of the same literal shares one blob and one record.
 	//
