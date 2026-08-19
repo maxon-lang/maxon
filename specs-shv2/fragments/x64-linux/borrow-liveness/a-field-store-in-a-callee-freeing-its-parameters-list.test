@@ -1,0 +1,26 @@
+// Test: a-field-store-in-a-callee-freeing-its-parameters-list
+typealias StringList = List with String
+
+type Bag
+	export var items as StringList
+
+	export static function create() returns Self
+		return Self { items: StringList.create() }
+	end 'create'
+end 'Bag'
+
+function wipe(b Bag)
+	b.items = StringList.create()
+end 'wipe'
+
+function main() returns ExitCode
+	var b = Bag.create()
+	b.items.append("alpha string long enough for heap allocation")
+	let s = try b.items.first() otherwise "none"
+	wipe(b)
+	print("[{s}]\n")
+	return 0
+end 'main'
+---
+CompilerError:
+error E3070: <fragment>:20:2: cannot mutate 'b' via 'wipe' while it is borrowed by 's' (borrowed at line 19)
