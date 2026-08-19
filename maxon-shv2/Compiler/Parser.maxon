@@ -2072,6 +2072,11 @@ let sharedEmptyConstructorFeedParams = ValueMarkSet.create()
 // body that BUILDS a record out of a borrowed opaque `T` ever writes it.
 let sharedEmptyRecordsOwningOpaqueSlots = ValueMarkSet.create()
 
+// The module-level shared EMPTY anchor for `recordsHoldingUnreferencedOpaqueSlots` (BATCH41 arrival
+// roster), on the pattern above and for its reason: only a shared generic body that FORWARDS a borrowed
+// opaque `T` into another generic's constructor ever writes it.
+let sharedEmptyUnreferencedOpaqueRecords = ValueMarkSet.create()
+
 // The module-level shared EMPTY buffer-surface mark set (R4.4), held as the initial value of
 // `bufferSurfaceValues` AND as the COW anchor its per-function reset points at —
 // `sharedEmptyImmutableGlobalReads`'s pattern, for its reason and with its invariant. Every program that
@@ -8686,6 +8691,12 @@ let BorrowSourceBindingName = b"__borrow_source"
 let ScrutineeSourceBindingName = b"__match_scrutinee"
 let EscapingFeedSourceBindingName = b"__escaping_feed"
 
+// The two ARRIVALS `unnameableSlotRefusal` is raised at, as the sentence's own subject (BATCH41). Named
+// constants rather than literals at the two throws, because the message is written once and the noun is the
+// only thing that varies — a bare string at each site is that fact written twice.
+let ContainerElementArrival = "a container whose element is"
+let DurableStoreArrival = "storing into durable storage a value of type"
+
 // The tail of every panic about the sole-ownership column being unindexable, so the invariant it names — the
 // two owned-heap columns are pushed together by `mintValue`/`recordValueType` — is written once and the three
 // askers cannot come to describe it differently. The ASKER's own name still leads each message, because that
@@ -10659,6 +10670,25 @@ export type Parser
 	// A per-VALUE mark and not a per-LAYOUT rule, because the obligation is the STORE's: a record of the
 	// same type filled from an already-owned value took no reference and must not release one.
 	var recordsOwningOpaqueSlots as ValueMarkSet
+	// ⭐⭐ **WHICH RECORDS THIS BODY BUILT OUT OF A BORROWED OPAQUE `T` NOBODY TOOK A REFERENCE TO (BATCH41
+	// arrival roster)** — the PROVENANCE half of the unnameable-slot refusal, and the half a TYPE test cannot
+	// supply.
+	//
+	// ⛔⛔ **A TYPE TEST ALONE REFUSED TEN COMMITTED PROGRAMS, MEASURED.** `type Holder uses T` holding a
+	// `var cell as Cell` — a field at an instance over its own parameter, holding a bare `T` — is
+	// `generic-type-substitution`'s `bare-generic-name-as-a-managed-field-type` and it is CORRECT: the cell is
+	// built CONCRETELY by the caller (`StrHolder.create(StrCell.make(…))`), moved in, and released by
+	// `__destruct_Holder_String`'s substituted cascade. What is broken is not the field's TYPE but a record
+	// whose slot holds a borrow this frame never referenced — and only this frame knows that.
+	//
+	// ⚠ It is per-VALUE and per-FUNCTION, exactly as `recordsOwningOpaqueSlots` is, which is also what keeps
+	// `stdlib/Interfaces.maxon`'s `withIterator()` legal: the iterator IT stores is the RESULT of a call, not a
+	// record that frame built, so no mark travels with it.
+	var recordsHoldingUnreferencedOpaqueSlots as ValueMarkSet
+	// ⭐ Did the CALL now being emitted hand a borrowed opaque `T` to a feed and take no reference for it? Set
+	// while the arguments are transferred and read once the call's result exists — the two cannot be one step,
+	// because the result is what carries the mark and the arguments are settled before it is defined.
+	var callFedAnUnreferencedOpaqueSlot as bool
 	// ⭐⭐ **WHICH SSA VALUES DENOTE A `__ManagedMemory` BUFFER RATHER THAN THE `Array` AROUND IT (R4.4)** —
 	// the fact `SignatureIndex.ManagedMemoryTypeName` says the binding costs, kept where shv2 keeps such facts.
 	//
@@ -11466,6 +11496,8 @@ export type Parser
 			rebindableSlotReads: sharedEmptyRebindableSlotReads,
 			constructorFeedParams: sharedEmptyConstructorFeedParams,
 			recordsOwningOpaqueSlots: sharedEmptyRecordsOwningOpaqueSlots,
+			recordsHoldingUnreferencedOpaqueSlots: sharedEmptyUnreferencedOpaqueRecords,
+			callFedAnUnreferencedOpaqueSlot: false,
 			bufferSurfaceValues: sharedEmptyBufferSurfaceValues,
 			bufferSurfaceSlots: sharedEmptyBufferSurfaceSlots,
 			bufferSurfaceElements: sharedEmptyBufferSurfaceElements,
@@ -21703,6 +21735,8 @@ export type Parser
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
 		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
+		self.recordsHoldingUnreferencedOpaqueSlots = sharedEmptyUnreferencedOpaqueRecords
+		self.callFedAnUnreferencedOpaqueSlot = false
 		// The buffer-surface marks (R4.4, A2m) are per-function for exactly that reason too — see
 		// `bufferSurfaceValues`. All THREE reset together, because they describe one value space.
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
@@ -23104,6 +23138,8 @@ export type Parser
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
 		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
+		self.recordsHoldingUnreferencedOpaqueSlots = sharedEmptyUnreferencedOpaqueRecords
+		self.callFedAnUnreferencedOpaqueSlot = false
 		// ⭐ **ALL THREE, for `parseFunction`'s stated reason — "they describe one value space" (BATCH22
 		// review).** This site reset `bufferSurfaceValues` alone, and the other two crossed the boundary: a
 		// default helper is a whole FUNCTION drained at the end of `parseModule`, so what reaches it is the
@@ -26239,11 +26275,11 @@ export type Parser
 	// SCRATCH cell's spill. Both owe the identical three steps (allocate, take ownership, store), and the
 	// ownership step is the one that must not be written twice: a managed value moved into durable storage
 	// has to be de-listed from the statement's pending drops, or the statement end frees what the cell holds.
-	function fillFreshCell(value ValueId, declared MaxonType, rhsWasBareLocal bool, range SourceRange) returns ValueId
+	function fillFreshCell(value ValueId, declared MaxonType, rhsWasBareLocal bool, range SourceRange) returns ValueId throws ParseError
 		let cell = self.allocateCell(declared, range: range)
 		var stored = value
 		if self.signatures.typeIsManaged(declared, from: self.artifact.typeNames) 'cellTakesOwnership'
-			stored = self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(declared)), range: range)
+			stored = try self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(declared)), range: range)
 		end 'cellTakesOwnership'
 
 		self.emitIndirectStore(cell, offset: CellContentOffset, value: stored, storageType: self.wordSlotStorageType(self.resolveFloatAliasType(declared)), range: range)
@@ -26275,7 +26311,7 @@ export type Parser
 	function declareCellLocal(func IrFunction, nameTok Token, boundValue ValueId, rhsWasBareLocal bool) throws ParseError
 		let range = SourceRange.ofToken(nameTok)
 		let declared = self.typeOf(boundValue)
-		let cell = self.fillFreshCell(boundValue, declared: declared, rhsWasBareLocal: rhsWasBareLocal, range: range)
+		let cell = try self.fillFreshCell(boundValue, declared: declared, rhsWasBareLocal: rhsWasBareLocal, range: range)
 		var binding = try self.scope.declareCellBinding(nameTok.value, varType: declared, mutable: true, cell: cell, isParameter: false) otherwise throw ParseError.localShadowsSelfField(String.from(nameTok.value), typeName: String.from(self.enclosingType), line: nameTok.line, column: nameTok.column)
 		self.attachPendingBorrows(func, borrower: binding, boundValue: boundValue, liveUntil: self.pos)
 
@@ -26307,7 +26343,7 @@ export type Parser
 		let declared = self.typeOf(value)
 		// An r-value is not a bare local reference by construction — the call site only reaches here when the
 		// argument did NOT resolve to a cell-resident binding — so it moves nothing out of another name.
-		let cell = self.fillFreshCell(value, declared: declared, rhsWasBareLocal: false, range: range)
+		let cell = try self.fillFreshCell(value, declared: declared, rhsWasBareLocal: false, range: range)
 		self.markValueOwnsHeap(cell, exclusivity: OwnedHeapExclusivity.sole)
 		self.ownedBindings.push(VarInfo.createCellBinding(EmptySourceText, varType: declared, mutable: false, cell: cell, isParameter: false))
 		return cell
@@ -26351,7 +26387,7 @@ export type Parser
 		// — where a plain local rebind (`s = t`, `reassignBindingValue`) still MOVES, the new name inheriting the
 		// drop the old one owed. `moveManagedValueInto`'s header states the rule and names this exception; the
 		// two are stated together because "a rebind moves" is true of one door and false of this one.
-		let owned = self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(binding.varType)), range: range)
+		let owned = try self.moveManagedValueInto(value, argBareLocal: rhsWasBareLocal, isString: tagIsByteRecord(maxonTypeTag(binding.varType)), range: range)
 		self.emitDecref(self.emitCellLoad(binding, range: range), range: range)
 		self.emitCellStore(binding, value: owned, range: range)
 	end 'reassignCellBinding'
@@ -26646,7 +26682,7 @@ export type Parser
 		// its own reference and the binding keeps its own — the 2026-08-12 durable-store ruling), and an owned
 		// TEMPORARY is ADOPTED, its pending statement-end drop cancelled. A second spelling here would be free
 		// to leak the temporary or double-free the source.
-		let owned = self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsByteRecord(maxonTypeTag(valueType)), range: range)
+		let owned = try self.moveManagedValueInto(stored, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: tagIsByteRecord(maxonTypeTag(valueType)), range: range)
 
 		self.emitDecref(self.emitGlobalLoad(label, valueType: valueType, range: range), range: range)
 		self.emitGlobalStore(label, valueType: valueType, value: owned, range: range)
@@ -46238,6 +46274,13 @@ export type Parser
 		self.recordsOwningOpaqueSlots.insert(box)
 	end 'markRecordOwningOpaqueSlots'
 
+	// The ONE writer of `recordsHoldingUnreferencedOpaqueSlots` — its twin above, through the same
+	// copy-on-write home and for the identical reason.
+	function markRecordHoldingUnreferencedOpaqueSlot(box ValueId)
+		self.recordsHoldingUnreferencedOpaqueSlots = privateValueMarkSet(self.recordsHoldingUnreferencedOpaqueSlots, anchor: sharedEmptyUnreferencedOpaqueRecords)
+		self.recordsHoldingUnreferencedOpaqueSlots.insert(box)
+	end 'markRecordHoldingUnreferencedOpaqueSlot'
+
 	// ⭐ **ALLOCATE THE HEAP RECORD A STRUCT-SHAPED LITERAL LIVES IN, AND ENROL IT AS THIS STATEMENT'S OWNED
 	// TEMPORARY** — the three steps that MUST happen together (the size literal read off the layout, the
 	// `__mm_alloc`, and `trackOwnedTemp`, which sets the provenance bit AND the statement's drop obligation
@@ -47267,7 +47310,7 @@ export type Parser
 
 		for i in 0 upto layout.caseCount() 'eachCase'
 			let literal = self.emitStringLiteral(layout.caseNameAt(i), range: range)
-			let owned = self.moveManagedValueInto(literal, argBareLocal: false, isString: true, range: range)
+			let owned = try self.moveManagedValueInto(literal, argBareLocal: false, isString: true, range: range)
 			self.emitArrayPush(arr, element: owned, range: range)
 		end 'eachCase'
 
@@ -47527,7 +47570,7 @@ export type Parser
 		if not payloadClassIsManaged(class) 'scalar'
 			return arg
 		end 'scalar'
-		return self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: payloadClassIsString(class), range: range)
+		return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: payloadClassIsString(class), range: range)
 	end 'moveInPayload'
 
 	// ⭐⭐ **MOVE A VALUE INTO A SLOT DECLARED AT THE ENCLOSING GENERIC'S OWN TYPE PARAMETER (W41-opaque)** —
@@ -47547,7 +47590,7 @@ export type Parser
 				return arg
 			end 'trivialConcrete'
 
-			return self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: tagIsByteRecord(self.tagOf(arg)), range: range)
+			return try self.moveManagedValueInto(arg, argBareLocal: argBareLocal, isString: tagIsByteRecord(self.tagOf(arg)), range: range)
 		end 'substitutedToAConcreteType'
 
 		if self.opaqueSlotTakesItsOwnReference(arg) 'referenceThroughTheDescriptor'
@@ -47705,7 +47748,11 @@ export type Parser
 	// reference at the one place a move is provably wrong (W58/W60: across a loop back edge), which is the part of
 	// this ruling they can express. Widening the rest of the way needs the descriptor-need seed
 	// `handleEscapingBorrowFeed` names, and that is a rung.
-	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, range SourceRange) returns ValueId
+	function moveManagedValueInto(arg ValueId, argBareLocal bool, isString bool, range SourceRange) returns ValueId throws ParseError
+		// ⛔⛔ **THE ARRIVAL GUARD (BATCH41)** — this function IS "a managed value entering durable storage",
+		// which is exactly the fact `requireStoredRecordDropIsNameable` refuses on. It is asked first, before
+		// any copy or reference is taken, so no half-performed store precedes the throw.
+		try self.requireStoredRecordDropIsNameable(arg, range: range)
 		// ⭐⭐ **A TUPLE IS COPIED HERE, NOT MOVED — BECAUSE A TUPLE IS A VALUE (P1.10).** A struct is CO-OWNED
 		// below when it is borrowed and MOVED when it is owned, and both are right for a struct: it has
 		// reference identity a program can observe (an alias, a mutation through one), so a second record
@@ -52861,8 +52908,67 @@ export type Parser
 			return
 		end 'nameable'
 
-		throw ParseError.unsupported("a container whose element is '{self.signatures.arrayElementDisplayName(giid)}' — a generic instance written over this type's OWN parameter, holding — itself or through an instance it holds — a field declared AT that parameter — has no element destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. Three shapes reach this: a container FIELD declared at an inner alias over the enclosing parameter (`typealias EBox = Box with Element` then `Array with EBox`), the same alias built as a LOCAL, and a `__ManagedList` over one — and the unreleasable slot need not be the element's OWN field, since one held by an instance the element holds is freed by the same declaration-view destructor and counts too. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build the container in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice", line: range.line, column: range.column)
+		throw self.unnameableSlotRefusal(self.signatures.arrayElementDisplayName(giid), arrival: ContainerElementArrival, range: range)
 	end 'requireColumnDropIsNameable'
+
+	// ⭐⭐⭐ **THE ONE MESSAGE THE ARRIVAL DOORS SHARE (BATCH41 arrival roster).** The FACT is a property of
+	// the TYPE — a generic instance written over the enclosing type's own parameter, resting (itself or
+	// through an instance it holds) a slot declared AT that parameter — and it is the same fact whichever
+	// arrival meets it, so the sentence stating it is written once and the ARRIVAL is a noun passed in. Two
+	// doors wording one refusal differently is how a reader comes to believe they are two rules; two doors
+	// deriving it differently is how they come to disagree, which is why the PREDICATE is single-homed too
+	// (`ProgramSignatures.instanceRestsAnUnnameableSlot`).
+	//
+	// ⚠ **EVERY CURE THIS NAMES IS TESTED, and one earlier draft's was not** — it recommended nothing, but it
+	// PROMISED a shape (`a List over one`) it did not refuse, which the BATCH41 review measured false. The
+	// three cures below are `generic-opaque-value-store`'s
+	// `a-hundred-borrowed-stores-into-the-parameters-own-container-balance` (the parameter's own container),
+	// `a-trivial-instantiation-forwards-and-takes-nothing` (a trivial instantiation), and
+	// `the-concrete-spelling-of-the-same-constructor-feed` (a concrete instantiation).
+	function unnameableSlotRefusal(typeName String, arrival String, range SourceRange) returns ParseError
+		return ParseError.unsupported("{arrival} '{typeName}' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — has no destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. It is refused at every ARRIVAL in durable storage: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, a `Map` or `Set` column, and a FIELD of the enclosing type filled by `Self\{…\}`. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice", line: range.line, column: range.column)
+	end 'unnameableSlotRefusal'
+
+	// ⛔⛔ **THE DURABLE-STORE ARRIVAL, AND IT IS THE ONE THAT DOMINATES THE ROSTER (BATCH41).** The container
+	// `create` guard above stamps a column; this one refuses the VALUE coming to rest — which is where the
+	// fact actually is, because a record over the enclosing parameter is perfectly sound as a LOCAL that dies
+	// in the frame (MEASURED: exit 0) and unsound the moment something that OUTLIVES the borrow owns it.
+	//
+	// ⛔ **THREE SPELLINGS REACHED NO DOOR AT ALL BEFORE IT, ALL MEASURED `0xC0000005` AT THE BATCH41
+	// REVIEW'S MERGE:** a `List with <inner alias>` — the DECLARED corpus generic, whose chain is built inside
+	// `List`'s own body over `List`'s own opaque `Element` and so never passes the container guard above; a
+	// PLAIN FIELD (`var one as EBox`, fed by `Self\{one: EBox.create(x, …)\}`) with no container anywhere; and a
+	// `Map` VALUE column. All three pass through here, because all three are a managed value entering durable
+	// storage and this is the ONE choke point for that (`moveManagedValueInto`'s own header states the
+	// factoring, and the struct-field, union-payload, container-element and hash-table-column stores all
+	// arrive here).
+	//
+	// ⚠ **WHAT IT DELIBERATELY DOES NOT SEE IS A RETURN**, and that is not an oversight: a record RETURNED to
+	// a CONCRETE caller is released by that caller (`__destruct_Box_String`) and therefore owes a RETAIN
+	// rather than a refusal, while the byte-identical declaration returned to a SHARED caller —
+	// `generic-opaque-cursor-element`'s `createIterator`, reached by a `for … in self` — is released by
+	// nobody and is sound exactly as it stands. The two differ only in who CALLS the method, which a body
+	// compiled once cannot see. See `handleEscapingBorrowFeed` for the retain that closes the first and the
+	// measurement showing it leaks on the second.
+	function requireStoredRecordDropIsNameable(arg ValueId, range SourceRange) throws ParseError
+		// ⛔⛔ **BOTH HALVES, AND EITHER ALONE IS A MEASURED WRONG ANSWER.** The PROVENANCE half
+		// (`recordsHoldingUnreferencedOpaqueSlots`) says this frame built the record out of a borrow it never
+		// referenced — without it a TYPE test refused TEN committed programs whose record was built CONCRETELY
+		// by the caller and released correctly. The TYPE half says the record rests a slot no destructor this
+		// body can name — without it the refusal would fire on a `Bag with Integer`, whose bare `T` slot owns
+		// nothing at run time and whose column's `__mm_decref` IS the correct element destructor.
+		if not self.recordsHoldingUnreferencedOpaqueSlots.contains(arg) 'thisFrameDidNotBuildIt'
+			return
+		end 'thisFrameDidNotBuildIt'
+		if self.tagOf(arg) != ValueTypeTag.genericInstance 'namesNoInstance'
+			return
+		end 'namesNoInstance'
+		if not self.signatures.instanceRestsAnUnnameableSlot(self.valueNameId(arg)) 'nameable'
+			return
+		end 'nameable'
+
+		throw self.unnameableSlotRefusal(String.from(self.signatures.instanceDisplayName(self.valueNameId(arg))), arrival: DurableStoreArrival, range: range)
+	end 'requireStoredRecordDropIsNameable'
 
 	// ⚠⚠ **THE HASH-TABLE KEY-ROSTER GATE STOOD HERE AND IS GONE (W105):** `requireHashTableKeyType` and its
 	// five helpers (`hashTableKeyIsAdmitted`, `hashTableAdmittedKeys`, `reservedHashTableKeyNames`,
@@ -53172,7 +53278,7 @@ export type Parser
 			return parsed
 		end 'borrowed'
 
-		return self.moveColumnValueIntoTable(parsed, columnType: columnType, valueStart: valueStart)
+		return try self.moveColumnValueIntoTable(parsed, columnType: columnType, valueStart: valueStart)
 	end 'parseHashTableColumnArg'
 
 	// ⭐⭐ **THE NOMINAL IDENTITY OF A COLUMN'S RESOLVED DECLARED TYPE — the ONE expression the three column
@@ -53202,7 +53308,7 @@ export type Parser
 	// owns what it holds is DERIVED from that type here, through the same `slotTypeIsManaged` the stamped
 	// destructor is chosen by (`columnDestroyValue`): a caller that passed the answer in would be a second
 	// place deciding which type argument is the key, and the move-in and the stamp could then disagree.
-	function moveColumnValueIntoTable(value ValueId, columnType MaxonType, valueStart TokenIndex) returns ValueId
+	function moveColumnValueIntoTable(value ValueId, columnType MaxonType, valueStart TokenIndex) returns ValueId throws ParseError
 		if not self.signatures.slotTypeIsManaged(columnType) 'trivial'
 			return value
 		end 'trivial'
@@ -53213,7 +53319,7 @@ export type Parser
 		// literal is promoted to an owned copy here; an owned one is CO-OWNED when a live binding keeps it and
 		// ADOPTED when it is a temporary with no other owner.
 		let isString = tagIsByteRecord(maxonTypeTag(columnType))
-		return self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, range: SourceRange.ofToken(anchor))
+		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, range: SourceRange.ofToken(anchor))
 	end 'moveColumnValueIntoTable'
 
 	// --- The `Map` builtin generic: `create` / `upsert` / `contains` / `get` / `count` ---
@@ -58100,7 +58206,7 @@ export type Parser
 		// says it lacks, while the identical literal into a struct FIELD was accepted (that door asks
 		// `classifyUnionPayload`, which already answers `isString: true` for a Character).
 		let isString = tagIsByteRecord(maxonTypeTag(self.signatures.containerElementType(giid)))
-		return self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, range: SourceRange.ofToken(anchor))
+		return try self.moveManagedValueInto(value, argBareLocal: self.rhsWasBareLocalReference(valueStart), isString: isString, range: SourceRange.ofToken(anchor))
 	end 'moveElementIntoContainer'
 
 	// ⭐⭐ **THE MACHINE WORD A TRIVIAL ELEMENT IS STORED AS — the FLOAT boundary, and the only element type
@@ -61779,6 +61885,8 @@ export type Parser
 		self.rebindableSlotReads = sharedEmptyRebindableSlotReads
 		self.constructorFeedParams = sharedEmptyConstructorFeedParams
 		self.recordsOwningOpaqueSlots = sharedEmptyRecordsOwningOpaqueSlots
+		self.recordsHoldingUnreferencedOpaqueSlots = sharedEmptyUnreferencedOpaqueRecords
+		self.callFedAnUnreferencedOpaqueSlot = false
 		self.bufferSurfaceValues = sharedEmptyBufferSurfaceValues
 		self.bufferSurfaceSlots = sharedEmptyBufferSurfaceSlots
 		self.bufferSurfaceElements = sharedEmptyBufferSurfaceElements
@@ -65587,6 +65695,14 @@ export type Parser
 		// managed heap — is moved (poisoned / drained); a borrowed one is refused. Done BEFORE the op is
 		// emitted so a refused call emits nothing.
 		try self.applyCallerConsume(callee, args: args, argLabels: argLabels, argRanges: argRanges, anchor: anchor, constructorInstance: constructorInstance)
+		// ⭐ The provenance mark's second half (BATCH41): the arguments are settled, so the flag
+		// `noteFeedTookNoReference` armed now has a RESULT to travel on. Cleared whether or not it was set, so
+		// one call's answer cannot stand in for the next's.
+		if self.callFedAnUnreferencedOpaqueSlot 'thisCallLeftASlotUnreferenced'
+			self.markRecordHoldingUnreferencedOpaqueSlot(result)
+			self.callFedAnUnreferencedOpaqueSlot = false
+		end 'thisCallLeftASlotUnreferenced'
+
 		self.recordConstantArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor)
 		self.recordOpaqueArgRangeChecks(callee, args: args, argLabels: argLabels, anchor: anchor, constructorInstance: constructorInstance)
 		let opIdx = self.artifact.module.ops.count()
@@ -66451,6 +66567,19 @@ export type Parser
 			let label = try argLabels.get(i) otherwise panic("transferConsumedArgs: argLabels.get OOB at {i} — args and argLabels are pushed in lockstep")
 			let position = argSlotPosition(info.paramNames, argIndex: i, label: label)
 			let argValue = try args.get(i) otherwise panic("transferConsumedArgs: args.get OOB at {i}")
+			// ⛔⛔ **THE THIRD ARRIVAL: A FEED HANDS THE CALLEE A VALUE IT WILL KEEP (BATCH41 arrival roster).**
+			// A `List with <inner alias>` reaches NO other door — `List` is a DECLARED corpus generic since
+			// W153, so its chain is built inside `List`'s OWN body over `List`'s own opaque `Element` and the
+			// container-create guard never sees it, while `Bag`'s `items.append(EBox.create(…))` is an ordinary
+			// CALL and so never reaches `moveManagedValueInto` here either. MEASURED at the BATCH41 review's
+			// merge and again at this one: `typealias BoxList = List with EBox` compiled and **segfaulted at
+			// the read**. Both feed sinks are durable — a constructor feed fills a record the callee returns, a
+			// callee-storage feed fills a container the callee keeps — so the fact is asked of the FEED and not
+			// of the sink, and it is asked before the consume/borrow split because both halves store.
+			if info.typeParamFeedOf(position).isFeed() 'aFeedTheCalleeKeeps'
+				try self.requireStoredRecordDropIsNameable(argValue, range: SourceRange.ofToken(anchor))
+			end 'aFeedTheCalleeKeeps'
+
 			// ⭐ A FEED position whose argument is an enrolled opaque owned binding is a SHARED-body forward MOVE
 			// (P1.7 slice 3b-v — the forward twin of the direct `self.items.push(item)`): the callee takes
 			// ownership, so this frame must move it even though the instance test borrows it (`constructorInstance`
@@ -66610,6 +66739,13 @@ export type Parser
 		// descriptor-need seed for "forwards a borrowed opaque `T` to a feed position" that the token pre-scan
 		// cannot produce — a rung, not a review edit. FILED, with this reproducer, rather than half-taken.
 		if not feed.sinkIsCalleeStorage() 'constructorFeed'
+			// ⭐⭐ **THE PROVENANCE MARK (BATCH41 arrival roster).** `coOwnConcreteAggregateFeed` is inert on a
+			// `typeParameter` tag, so the record this call is building gets a slot holding a borrow nobody
+			// referenced. It cannot be refused HERE — the record is perfectly sound as a LOCAL that dies in the
+			// frame (MEASURED: exit 0) and as a value RETURNED to a shared caller
+			// (`generic-opaque-cursor-element`) — so what is recorded is the FACT, and the refusal is at
+			// whichever ARRIVAL the record then reaches.
+			self.noteFeedTookNoReference(argValue)
 			self.coOwnConcreteAggregateFeed(argValue, anchor: anchor)
 			return argValue
 		end 'constructorFeed'
@@ -66624,11 +66760,25 @@ export type Parser
 			return argValue
 		end 'concreteArgument'
 		if not self.signatures.typeParamOwnerIsInstantiated(self.valueNameId(argValue)) 'noInstantiationToReference'
+			self.noteFeedTookNoReference(argValue)
 			return argValue
 		end 'noInstantiationToReference'
 
 		return self.coOwnBorrowedOpaque(argValue, range: SourceRange.ofToken(anchor))
 	end 'handleEscapingBorrowFeed'
+
+	// ⭐ **A FEED THAT TOOK NO REFERENCE FOR AN OPAQUE `T` ARMS THE MARK FOR THE CALL'S RESULT (BATCH41).**
+	// Only an OPAQUE argument can leave a slot unreferenced — a concrete aggregate is co-owned at this sink and
+	// a scalar owns no record — so the tag is the whole condition. A FLAG rather than the mark itself, because
+	// the value that will CARRY the mark is the call's RESULT, which does not exist while its arguments are
+	// being settled; `emitCall` reads it back the moment it does.
+	function noteFeedTookNoReference(argValue ValueId)
+		if self.tagOf(argValue) != ValueTypeTag.typeParameter 'concreteArgumentOwnsItself'
+			return
+		end 'concreteArgumentOwnsItself'
+
+		self.callFedAnUnreferencedOpaqueSlot = true
+	end 'noteFeedTookNoReference'
 
 	// ⭐ **TAKE THE SECOND REFERENCE A BORROWED CONCRETE AGGREGATE OWES ITS DURABLE SINK** — the one act both
 	// feed sinks perform, so a third sink cannot inherit half of it. Only a NON-CONSUMED argument reaches

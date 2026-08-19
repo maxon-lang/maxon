@@ -17037,7 +17037,7 @@ export type ProgramSignatures
 		// here travels with no reader path.
 		let tag = maxonTypeTag(columnType)
 		if tag == ValueTypeTag.genericInstance 'anInstance'
-			return self.instanceOwnsAnUnnameableSlot(typeNameIdOf(columnType), visited: ClonerSet.create())
+			return self.instanceRestsAnUnnameableSlot(typeNameIdOf(columnType))
 		end 'anInstance'
 		if tag != ValueTypeTag.named 'namesNoInstance'
 			return false
@@ -17050,8 +17050,21 @@ export type ProgramSignatures
 			return false
 		end 'notAnAliasForAnInstance'
 
-		return self.instanceOwnsAnUnnameableSlot(self.genericAliasInstance(name), visited: ClonerSet.create())
+		return self.instanceRestsAnUnnameableSlot(self.genericAliasInstance(name))
 	end 'columnElementOwnsAnUnnameableSlot'
+
+	// ⭐⭐ **THE SAME QUESTION ASKED OF AN INSTANCE IN HAND, AND THE ONE PLACE THE WALK'S CYCLE SET IS SEEDED
+	// (BATCH41 arrival roster).** Two askers hold an instance rather than a slot type — the CONTAINER-create
+	// guard reads a column and comes through the door above, and the durable-STORE guard
+	// (`Parser.moveManagedValueInto`) holds the VALUE being stored, whose tag already is the instance. Both
+	// must reach the identical answer: a container `create` that refused what a store admitted, or the
+	// reverse, would be two predicates over one fact, which is the shape this file's own headers keep
+	// recording as a double free.
+	//
+	// ⇒ Seeding lives HERE and not at either asker, so a third door cannot arrive with a set of its own.
+	export function instanceRestsAnUnnameableSlot(id GenericInstanceId) returns bool
+		return self.instanceOwnsAnUnnameableSlot(id, visited: ClonerSet.create())
+	end 'instanceRestsAnUnnameableSlot'
 
 	// The instance-in-hand half of the question above — does `id` own a slot AT a parameter this instance
 	// leaves OPAQUE, which some instantiation of that parameter's owner makes managed?
