@@ -487,12 +487,15 @@ E2067 ParserBuiltinArgNamed
 	doc take name: labels' -- which is FALSE for a builtin at every position. Reusing E2052 here
 	doc would answer a labelled second argument with a sentence saying second arguments may be
 	doc labelled.
-	doc It fires only for callees whose arguments this compiler decides are positional -- the MATH
-	doc intrinsics, and that set is stated in exactly ONE place, 'Parser.calleeTakesPositionalArgsOnly'.
-	doc Every member IS a machine instruction and will never acquire a declaration to take labels
-	doc from. It covers the arity-1 members as well as the arity-2 ones, because the same wrong noun
-	doc would otherwise survive one door over: 'abs(x: 1.0)' would keep answering E2052, whose
-	doc sentence invites the nonsense fix 'abs(1.0, x: ...)'.
+	doc It fires only for callees whose arguments this compiler decides are positional, and that
+	doc decision is stated in exactly ONE place, 'Parser.argLabelRuleForCallee'. TWO disjoint families
+	doc answer that way, for the same reason and by different tests: the MATH intrinsics
+	doc ('calleeTakesPositionalArgsOnly'), each of which IS a machine instruction; and every
+	doc '__Builtins.'-qualified callee ('isBuiltinsIntrinsicCallee'), which the stdlib WRAPS and never
+	doc declares. Neither will ever acquire a declaration to take labels from. It covers the arity-1
+	doc members as well as the arity-2 ones, because the same wrong noun would otherwise survive one
+	doc door over: 'abs(x: 1.0)' would keep answering E2052, whose sentence invites the nonsense fix
+	doc 'abs(1.0, x: ...)'.
 	doc It is NOT 'every builtin'. The bare builtins that are NOT in that roster stay on the ordinary
 	doc E2052/E2053 rule -- today 'runProcess', 'spawnReadLine' and the seven 'subp*'
 	doc streaming-subprocess builtins. Every one is a STAND-IN for a stdlib declaration that will have
@@ -505,6 +508,12 @@ E2067 ParserBuiltinArgNamed
 	doc bind is stated in one place, 'Parser.calleeTakesPositionalArgsOnly'; everything else the chain
 	doc recognizes is the complement of it, and a builtin RETIRED onto a stdlib declaration leaves the
 	doc chain entirely and takes the ordinary declared-call rules with it.
+	doc ⚠ AND THE SET THAT BINDS IS NO LONGER THAT ROSTER ALONE. Since the '__Builtins.' half joined,
+	doc 'Parser.argLabelRuleForCallee' is the one place to read; 'calleeTakesPositionalArgsOnly' is
+	doc one of its two arms, not the whole answer. The '__Builtins.' arm is a QUALIFIER test and not a
+	doc roster, deliberately: the label regime is chosen while the argument list is still being parsed,
+	doc so a '__Builtins.' name this compiler does not implement parses positionally and meets E3004,
+	doc rather than a label complaint standing in front of the true diagnostic.
 	doc ⚠ THE BOOTSTRAP DOES NOT AGREE, AND CANNOT. Measured: it answers all three of
 	doc 'min(3.0, b: 5.0)', 'min(a: 3.0, 5.0)' and 'abs(x: 1.0)' with E2004 "Undefined variable",
 	doc because its builtin path parses arguments with a bare expression parser and reads the label

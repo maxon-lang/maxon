@@ -303,8 +303,16 @@ export let sharedEmptyCandidateNames = StringArray.create()
 // separator changed — so spelling it again here would be the one-fact-twice bug with `stdlib` as the fact.
 // A user directory genuinely NAMED `stdlib/` is therefore read as the library layer; v1 has that exact
 // property, and the alternative (a per-file provenance bit threaded to every candidate) buys nothing the
-// anchor does not already give: `Queries.namespaceAnchorFor` puts the real stdlib at `stdlib` and nowhere
-// else.
+// anchor does not already give: `Queries.namespaceAnchorFor` puts the real stdlib at `stdlib`.
+// ⚠ **IT IS NO LONGER "AND NOWHERE ELSE", AND THAT SENTENCE WAS EDITED RATHER THAN LEFT TO ROT.** Since
+// the anchor became a PATH fact (`livesUnderStdlibDirectory`) rather than a VISIBILITY one, a
+// `build stdlib/File.maxon` anchors its ROOT FILE at stdlib's parent too — so that file's module
+// directory is `stdlib` while the compiler still classifies it as the USER's (A1t bar 2). It is the
+// price of the repair and it is the right way round: the two files in one directory are now measured
+// from one root, which is what stopped `String.addressableBytes` being refused as invisible from its own
+// neighbour. The single consumer, `SignatureIndex.candidateIsReachable`, is unmoved — a compile rooted
+// under `stdlib/` has every other file under `stdlib/` too, so the reachable-candidate count it gates on
+// does not cross its `< 2` threshold either way.
 export function isStdlibModuleDirectory(moduleDirectory String) returns bool
 	return moduleDirectoryContains(StdlibDirName, inner: moduleDirectory)
 end 'isStdlibModuleDirectory'

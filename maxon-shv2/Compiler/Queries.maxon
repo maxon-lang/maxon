@@ -379,7 +379,9 @@ function foldOneFileInto(project Project, signatures ProgramSignatures, path Fil
 	// declarations are folded, so every later reader (this sweep's own `module`-tier questions, the real
 	// parse, the constant evaluator) reads an index rather than re-deriving a string from a path. This is the
 	// one place that holds both the file and the anchor it is measured from.
-	let moduleDirectory = moduleDirectoryForFile(project, path: path, isStdlibSource: isStdlibSource)
+	// ⚠ **THE ANCHOR IS CHOSEN BY WHERE THE FILE LIVES, NOT BY WHOSE IT IS** — see `moduleDirectoryForFile`,
+	// which states the false refusal that distinction was measured on.
+	let moduleDirectory = moduleDirectoryForFile(project, path: path, livesUnderStdlibDirectory: livesUnderStdlibDirectory(signatures, isStdlibSource: isStdlibSource))
 	signatures.recordFileModuleDirectory(path, moduleDirectory: moduleDirectory)
 
 	// A `Parser` IS the sweeper — same cursor, same `parseOptionalReturnType` — so the sweep and
@@ -413,13 +415,46 @@ end 'foldOneFileInto'
 // the same file read as the user's or as stdlib depending only on how the command line named it. Resolving
 // only the anchor would be worse than resolving neither — every file would miss its own root and fall to
 // `deriveModuleDirectory`'s parent-name arm, which produces a plausible directory and the wrong one.
-function moduleDirectoryForFile(project Project, path FilePath, isStdlibSource bool) returns String
+//
+// ⛔⛔ **AND THE PREDICATE IS `livesUnderStdlibDirectory` — A PATH FACT — NOT `isStdlibSource`, WHICH IS A
+// VISIBILITY FACT. THE TWO DIFFER FOR EXACTLY ONE COMPILE SHAPE AND IT WAS A FALSE REFUSAL.**
+//
+// `maxon-shv2 build stdlib/File.maxon` — the command `StdlibLoader`'s own readiness rule prescribes, and the
+// one every whitelist entry is MEASURED with — reported four
+// `E3088: function 'String.addressableBytes' is module-scoped and not visible from this directory`, about
+// two files sitting in the SAME directory. (`FilePath.maxon` reported five of `String.byteAtOrPanic`;
+// `Subprocess.maxon`, four. Every stdlib module that calls a `module`-visible stdlib function was affected,
+// so several listed modules' committed *"exits 1 with E3001 AND NOTHING ELSE"* claims had quietly stopped
+// being true.)
+//
+// The mechanism is that TWO FILES IN ONE DIRECTORY WERE ANCHORED AT TWO DIFFERENT ROOTS, and a module
+// directory is only comparable against one derived from the same anchor. `isStdlibSourceFile` answers
+// FALSE for the root file of `build stdlib/File.maxon` — deliberately, and that ruling is right: a project
+// ROOTED under `stdlib/` keeps its own files as the USER's, so their typealiases stay private and their
+// `__` names stay reserved (A1t bar 2). But it was then also deciding the ANCHOR, so the root file was
+// measured from its own directory (module directory `""`) while `stdlib/String.maxon`, arriving through the
+// loader, was measured from `stdlib/`'s parent (module directory `"stdlib"`). `moduleDirectoryContains`
+// then answered *"`stdlib` does not contain the root module"* — true of the two strings, false of the two
+// files.
+//
+// ⇒ **The invariant a `module` tier needs is that two files in one physical directory get one module
+// directory**, and `livesUnderStdlibDirectory` is exactly the predicate that restores it. It is
+// `isStdlibSource or rootIsUnderStdlibDirectory` — so when the root is NOT under `stdlib/` (every user
+// program, every spec case) it is LITERALLY `isStdlibSource` and this is a no-op; when the root IS under
+// `stdlib/`, every file the compile holds is under `stdlib/` too and they all anchor together.
+//
+// ⚠ It is the same distinction `Project.rootIsUnderStdlibDirectory`'s third bullet already draws for the
+// two `module`-visible `String` methods — *"for those files ARE under `stdlib/`, which is a fact about the
+// PATH and not about visibility"* — arriving at a second door. `livesUnderStdlibDirectory` is asked rather
+// than re-spelled for the reason its own header gives: a second spelling is a second thing free to drift
+// while the proof reads as if it held.
+function moduleDirectoryForFile(project Project, path FilePath, livesUnderStdlibDirectory bool) returns String
 	let cwd = Directory.currentPath()
-	return deriveModuleDirectory(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, isStdlibSource: isStdlibSource))
+	return deriveModuleDirectory(path.resolve(cwd), rootPath: namespaceAnchorFor(project, cwd: cwd, livesUnderStdlibDirectory: livesUnderStdlibDirectory))
 end 'moduleDirectoryForFile'
 
-function namespaceAnchorFor(project Project, cwd FilePath, isStdlibSource bool) returns FilePath
-	if isStdlibSource 'thestdlibsOwnCone'
+function namespaceAnchorFor(project Project, cwd FilePath, livesUnderStdlibDirectory bool) returns FilePath
+	if livesUnderStdlibDirectory 'thestdlibsOwnCone'
 		let stdlibDir = project.stdlibDir.resolve(cwd)
 		return try stdlibDir.parent() otherwise panic("namespaceAnchorFor: '{stdlibDir.toString()}' has no parent — it is an absolute directory path, resolved against the cwd on the line above")
 	end 'thestdlibsOwnCone'
@@ -1248,7 +1283,7 @@ end 'blameOutsideTheLibrary'
 // too — the project's own because the root is, and the loader's because it walks `stdlib/`. Off that path
 // the two COINCIDE, because `isStdlibSourceFile` is then literally `path.isInside(stdlibDir)`. So:
 //
-//     livesUnderStdlib(path)  ==  isStdlibSource(path)  OR  rootIsUnderStdlibDirectory
+//     livesUnderStdlibDirectory(path)  ==  isStdlibSource(path)  OR  rootIsUnderStdlibDirectory
 //
 // and the right-hand term is asked ONCE PER COMPILE (`ProgramSignatures.rootIsUnderStdlibDirectory`,
 // set in `queryProgramSignatures`), never per file.
@@ -1636,7 +1671,7 @@ function reportParseError(project Project, path FilePath, error ParseError)
 		argMissingLabel(line, column) then reportPositioned(project, code: ErrorCode.callArgMissingLabel, message: "the second and later arguments must be named ('name: value')", line: line, column: column, filePath: path)
 		// The THIRD label verdict, and the one neither sentence above can carry: both of them promise
 		// that SOME argument position takes a 'name:' label, which is false for a callee that has no
-		// declaration and therefore no parameters to name. See `Parser.calleeTakesPositionalArgsOnly`.
+		// declaration and therefore no parameters to name. See `Parser.argLabelRuleForCallee`.
 		builtinArgNamed(line, column) then reportPositioned(project, code: ErrorCode.builtinArgNamed, message: "a builtin's arguments are all positional and cannot be named ('name:' labels a parameter, and a builtin has no declaration to have one)", line: line, column: column, filePath: path)
 		// P1.7a slice 2b-vi. The three codes AND the three messages are the ones a DIRECT call's slotting
 		// failure gets (`SemanticCheck.validateCall`), because it is the same rule met at a witness

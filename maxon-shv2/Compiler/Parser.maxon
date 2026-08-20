@@ -316,10 +316,11 @@ export union ParseError implements Error
 	// A call whose 2nd-or-later argument has NO `name:` label. Renders as E2053. The
 	// symmetric syntactic rule to `firstArgNamed`.
 	argMissingLabel(line LineNumber, column ColumnNumber)
-	// A call to a bare compiler BUILTIN that labels an argument, at ANY index. Renders as E2067.
-	// The THIRD reading of the same syntactic question, and it needs its own code because the two
-	// above both assert that some position takes labels, which is false for a callee that has no
-	// declaration and so no parameters. See `calleeTakesPositionalArgsOnly`.
+	// A call that labels an argument of a callee with NO DECLARATION, at ANY index — a bare compiler
+	// BUILTIN or a `__Builtins.`-qualified intrinsic. Renders as E2067. The THIRD reading of the same
+	// syntactic question, and it needs its own code because the two above both assert that some
+	// position takes labels, which is false for a callee that has no parameters at all.
+	// See `argLabelRuleForCallee` for which callees answer that way, and why it is two families.
 	builtinArgNamed(line LineNumber, column ColumnNumber)
 	// ⭐ **THE THREE SLOTTING FAILURES OF A WITNESS DISPATCH (P1.7a slice 2b-vi)** — arity, an unknown
 	// `name:` label, and two actuals targeting one formal. They render as E3036/E3037/E3038, the SAME
@@ -4414,9 +4415,10 @@ enum ArgLabelRule
 	// also carry a label — the concrete receiver whose declaration would forbid it is exactly what the
 	// shared body does not know (P1.7a slice 2b-vi). The E2053 half is unchanged.
 	firstMayBeNamed
-	// A bare compiler BUILTIN, whose arguments are ALL positional and none of which may be labelled
-	// (E2067). Not a relaxation of the other two but a different rule: a builtin has no declaration,
-	// so there are no parameter names for a label to name. See `calleeTakesPositionalArgsOnly`.
+	// A callee with NO DECLARATION — a bare compiler BUILTIN or a `__Builtins.` intrinsic — whose
+	// arguments are ALL positional and none of which may be labelled (E2067). Not a relaxation of the
+	// other two but a different rule: with no declaration there are no parameter names for a label to
+	// name. See `argLabelRuleForCallee`, which is where the two families are decided.
 	allPositional
 end 'ArgLabelRule'
 
@@ -4768,6 +4770,65 @@ let StreamWriteArity = 1 as ParamCount
 function isBuiltinsIntrinsicCallee(callee ByteArray) returns bool
 	return bytesStartWith(callee, prefix: BuiltinsQualifierPrefix)
 end 'isBuiltinsIntrinsicCallee'
+
+// ⭐⭐ **WHICH `name:` LABEL REGIME A CALLEE'S ARGUMENT LIST IS PARSED UNDER — the one place the
+// question is answered, read by `parseCallNamed` and by nothing else.**
+//
+// The rule it states is not "is it a builtin" but the thing a label actually needs: **a `name:` label
+// names a PARAMETER OF A DECLARATION, so a callee with no parameter names has no position at which a
+// label could be right or wrong.** Two disjoint families answer that way, for two different reasons, and
+// keeping them separate is what stops this from collapsing into a prefix test:
+//
+//   • the MATH intrinsics (`calleeTakesPositionalArgsOnly`) — permanently compiler-owned because each IS
+//     a machine instruction, and therefore will never acquire a declaration to take labels from;
+//   • the `__Builtins.*` INTRINSICS — the stdlib's floor. `stdlib/Print.maxon`'s `print` is the
+//     declaration; `__Builtins.writeStdout` is what its body calls, permanently. The stdlib WRAPS these,
+//     it never declares them, so no parameter name will ever exist here either.
+//
+// ⚠⚠ **THE TEST IS THE `__Builtins.` QUALIFIER AND NOT SHV2'S ROSTER OF IMPLEMENTED INTRINSICS**, which
+// is deliberate: a label regime is chosen while the argument list is still being PARSED, long before
+// anything can know whether the name resolves at all. So a `__Builtins.*` name shv2 does NOT implement —
+// and there are such names, `__Builtins.subprocessSpawn` among them — parses positionally and then meets
+// the diagnostic that is actually true of it, `E3004: call to undefined function`, instead of a label
+// complaint standing in front of it.
+//
+// ⚠⚠ **THAT `__Builtins` HALF WAS A LIVE DEFECT THAT LEFT NO LEGAL SPELLING, AND IT WAS MEASURED.**
+// `stdlib/Subprocess.maxon:387` calls `__Builtins.subprocessSpawn` with fourteen positional arguments;
+// shv2 answered E2053 (*"the second and later arguments must be named"*) — while the BOOTSTRAP, which
+// reads the identical file, has no labelled spelling of an intrinsic call AT ALL: measured on
+// `__Builtins.subprocessWaitCollect(-1, timeoutMs: 0)` it answers
+// `E2004: Undefined variable 'timeoutMs'`, because it parses the would-be label as a value expression,
+// and it compiles the positional form clean. So the label shv2 demanded was one no spelling of that file
+// could carry — the corpus is shared, and `/specs/builtins-type.md:36-53` documents every one of these
+// intrinsics POSITIONALLY, which is the language's own answer.
+//
+// ⚠ **THE TWO UCD INTRINSICS ARE NOT AN EXCEPTION TO THIS — THEY NEVER REACH IT** (W64 gave them real
+// parameter names in BOTH compilers, so their label is checked rather than ignored). They are recognized
+// in `parseCallNamed` BEFORE the argument list is opened and parse their own arguments in
+// `parseUcdTableLoad`, so the split is structural rather than a roster to keep in step: an intrinsic with
+// parameter names parses its own arguments; one without comes through here.
+//
+// ⚠ **WIDENING MOVES NO WORKING PROGRAM — BUT IT DOES MOVE A DIAGNOSTIC, AND BOTH HALVES ARE MEASURED.**
+// The two directions have different reasons and the roster is NOT one of them, so state them apart:
+//
+//   • **RECOGNIZED** intrinsics — every arm of `parseCallNamed`'s `__Builtins` chain — take 0 or 1
+//     argument, so a label on one was already refused. It was refused as E2052, whose sentence (*"only
+//     the second and later arguments take 'name:' labels"*) invites the reader to fix
+//     `__Builtins.readStdin(n: 8)` by moving the label to a second argument that does not exist. E2067
+//     says the true thing, which is the same wrong-noun correction `calleeTakesPositionalArgsOnly`'s
+//     header records for the arity-1 math intrinsics.
+//   • **UNRECOGNIZED** ones can carry any arity — `stdlib/Subprocess.maxon:387`'s fourteen is the case
+//     that opened this — and they were never a working program either: the labelled spelling parsed
+//     under `ordinary` and died at E3004 one pass later. What moves is WHICH refusal speaks first.
+//     MEASURED both ways on `__Builtins.subprocessWaitCollect(1, timeoutMs: 0)`: E3004 before, E2067
+//     now. That is the correct direction — the label really is wrong, and saying so at the label is
+//     nearer the mistake than a resolution failure reported after the whole list is parsed.
+//
+// No committed expectation moves: the only `maxoncstderr` pin of E2052 against a `__Builtins` callee is
+// `specs-shv2/builtins-ucd.md`'s, and that one is on the ucd path above.
+function argLabelRuleForCallee(callee ByteArray) returns ArgLabelRule
+	return ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) or isBuiltinsIntrinsicCallee(callee) else ArgLabelRule.ordinary
+end 'argLabelRuleForCallee'
 
 // Every clock intrinsic reads a clock and takes nothing.
 let ClockIntrinsicArity = 0 as ParamCount
@@ -64491,11 +64552,11 @@ export type Parser
 			value(id, immutableName, subjectName, receiverTok) then try self.prependReceiverArg(func, callee: callee, callAnchor: anchor, receiverTok: receiverTok, id: id, immutableName: immutableName, subjectName: subjectName, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames)
 		end 'prependReceiver'
 
-		// ⭐ THE ONE DOOR WHERE A BARE BUILTIN CAN ARRIVE, so it is the one door that asks which label
-		// regime the callee takes. The question is asked HERE, from the name alone, because the builtin
-		// check below runs only AFTER the arguments are parsed — and the label rule fires during that
-		// parse. See `calleeTakesPositionalArgsOnly`.
-		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rule: ArgLabelRule.allPositional if calleeTakesPositionalArgsOnly(callee) else ArgLabelRule.ordinary)
+		// ⭐ THE ONE DOOR WHERE A BUILTIN — BARE OR `__Builtins.`-QUALIFIED — CAN ARRIVE, so it is the one
+		// door that asks which label regime the callee takes. The question is asked HERE, from the name
+		// alone, because the builtin check below runs only AFTER the arguments are parsed — and the label
+		// rule fires during that parse. See `argLabelRuleForCallee`.
+		try self.parseCallArgs(func, callee: callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges, argImmutableNames: argImmutableNames, rule: argLabelRuleForCallee(callee))
 
 		let rparenTok = try self.consume(TokenKind.rightParen)
 
@@ -65762,11 +65823,11 @@ export type Parser
 		let isNamed = tokenCanBeAName(labelTok) and self.peekKind() == TokenKind.colon
 
 		// The BUILTIN regime is decided WHOLE, before position is looked at, because position is not
-		// what makes a label wrong here: a bare builtin has no declaration, so a label at ANY index
-		// names a parameter that does not exist and that nothing downstream will ever check. It
+		// what makes a label wrong here: a callee with no declaration has no parameters, so a label at
+		// ANY index names one that does not exist and that nothing downstream will ever check. It
 		// returns rather than falling through to the two rules below — neither of which could state
 		// this, since both of their sentences promise that SOME argument position takes labels. See
-		// `calleeTakesPositionalArgsOnly`.
+		// `argLabelRuleForCallee`.
 		if rule == ArgLabelRule.allPositional 'builtinArgs'
 			if isNamed 'labelled'
 				throw ParseError.builtinArgNamed(labelTok.line, column: labelTok.column)
