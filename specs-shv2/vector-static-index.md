@@ -10,43 +10,62 @@ category: codegen
 ## Documentation
 
 A `Vector` carries its SIZE in its type (`Vector with 3 Int` is a different type from
-`Vector with 4 Int`, see [vector](vector.md)), so when the index is a compile-time
-constant the compiler can decide `0 <= index < size` itself. It does, and the emitted
-access then carries NO bounds check: `get` and `set` take a second runtime entry
-(`__managed_get_in_bounds` / `__managed_set_in_bounds`) whose body is the checked entry's minus
-the `index < 0 or index >= length` test and its out-of-range return.
+`Vector with 4 Int`, see [vector](vector.md)), so when the index is a compile-time constant
+the question `0 <= index < size` is one the compiler could answer itself. **For one rung it
+did**: `S2m-b` gave `get` and `set` a second runtime entry (`__managed_get_in_bounds` /
+`__managed_set_in_bounds`) whose body was the checked entry's minus the
+`index < 0 or index >= length` test, picked by `Parser.elementAccessCallee`. ⚖ USER RULING,
+2026-08-06: *"we should be able to add an optimization to remove the bounds check when using
+static indexes on a vector (fixed size)"*.
 
-Nothing about the SOURCE changes. `Array.get`/`Array.set` are declared throwing by
-`stdlib/Array.maxon`, a `Vector` publishes that same surface, and the `try … otherwise`
-the author writes stays exactly as it was — what the proof discharges is the ONE failure
-that clause admits for a vector, not the clause.
+⛔⛔ **THE ELISION IS GONE (W190), AND WHAT REMOVED IT IS THAT ITS SUBJECT LEFT — NOT A CHANGE
+OF MIND ABOUT THE OPTIMIZATION.** `get` and `set` are `stdlib/Vector.maxon`'s now: ONE shared
+body over `Element`, reached by a CALL, taking `index` as a runtime parameter. **Whether the
+caller wrote a literal is a fact about the CALL SITE, and no callee can see it** — so the check
+is present at every index, and the two runtime entries, `elementAccessCallee` and
+`Runtime/VectorRuntime.maxon` all retired together. Recovering it is an INLINER's job: once
+`Vector.get`'s body is inlined at a constant index the test compares two constants and ordinary
+folding removes it, which is one mechanism instead of a second runtime entry per accessor.
 
-### What counts as a constant index
+⭐ **EVERY CASE BELOW IS KEPT, AND THEY PIN WHAT THEY ALWAYS PINNED: THE ANSWERS.** The
+elision was an optimization over a proof of SUCCESS — it never changed a value — so a spec that
+asserts values is untouched by its removal, and that is exactly why the four `RequiredRuntime`
+blocks (the only lines here that asserted a CALLEE) are the only lines that went. What is left
+is a corpus of eighteen programs over the boundaries, the negative and at-the-size constants, a
+parameter index, a call-result index, byte stride, bit-packed `bool` across a byte boundary,
+float bit reinterpretation and an `Array` control — which is the coverage the accessors owe
+whoever emits them.
+
+### What counted as a constant index
 
 The compiler's own constant view — the same one that decides a shift count and folds
-`emitBinOp`'s operands. A literal, a `let` bound to one, and an expression folded from
-them all qualify; a loop variable, a parameter and a call result do not, and those keep
-the check.
+`emitBinOp`'s operands. A literal, a `let` bound to one, and an expression folded from them all
+qualified; a loop variable, a parameter and a call result did not. **The cases that name those
+distinctions are kept**, because each is still a distinct program worth compiling and running,
+and because the distinction becomes live again the day an inliner reaches this body.
 
 ### An index outside the vector
 
-An out-of-range CONSTANT index is decided the same way, and the answer is that the access
-can only fail — so it keeps the checked entry and throws `ArrayError.indexOutOfBounds` at
-run time, exactly as [vector](vector.md)'s `get-out-of-bounds` requires. The elision is an
-optimization over a proof of SUCCESS; it never removes a check whose verdict is failure.
+An out-of-range CONSTANT index throws `ArrayError.indexOutOfBounds` at run time, exactly as
+[vector](vector.md)'s `get-out-of-bounds` requires. That was true under the elision (which
+proved SUCCESS and declined otherwise) and it is true without it, which is the whole point of
+those cases surviving unchanged.
 
-### Why only a `Vector`
+### Why only a `Vector` had one
 
-An `Array`'s length is a runtime field, not part of its type, so `arr.get(0)` on an empty
-array is a genuine failure the compiler cannot rule out. The elision keys on the size the
-INSTANCE carries, which only a sized container has.
+An `Array`'s length is a runtime field, not part of its type, so `arr.get(0)` on an empty array
+is a genuine failure the compiler cannot rule out. The elision keyed on the size the INSTANCE
+carries, which only a sized container has — and `an-array-at-a-constant-index-keeps-its-check`
+is kept as the control it always was.
 
 ## Tests
 
-<!-- test: constant-index-get-has-no-bounds-check -->
-`__managed_get_in_bounds` is `__managed_get` without the `index < 0 or index >= length` test and
-without the `oob` block that returns `ArrayError.indexOutOfBounds` — the element load, the
-element-destructor gate and the ok-return are shared with it verbatim.
+<!-- test: a-constant-index-inside-the-vector-round-trips -->
+⚠ **THIS CASE WAS `constant-index-get-has-no-bounds-check` AND ASSERTED A CALLEE (W190).** The
+elided entry it named was `__managed_get` minus the `index < 0 or index >= length` test; with
+`get` served from `stdlib/Vector.maxon` there is no such entry and no proof to make. What the
+program says is unchanged and is what it is kept for: a write and a read at a constant index
+inside the vector round-trip.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec4 = Vector with 4 Int
@@ -61,10 +80,10 @@ end 'main'
 33
 ```
 
-<!-- test: variable-index-get-keeps-the-bounds-check -->
-The CONTROL for the case above: the same vector, the same element, an index the compiler
-cannot see. `__managed_get`'s body still carries the negative test, the at-or-over-length test
-and the `oob` return.
+<!-- test: a-variable-index-inside-the-vector-round-trips -->
+The CONTROL for the case above: the same vector, the same element, an index the compiler cannot
+see. Both spellings take the checked entry now, so what this still separates is the two
+PROGRAMS — a loop-carried index reads the slot a constant one wrote.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec4 = Vector with 4 Int
@@ -89,10 +108,11 @@ end 'main'
 22
 ```
 
-<!-- test: constant-index-set-has-no-bounds-check -->
-`__managed_set_in_bounds` is `__managed_set` without the bounds test, without the `oob` block and
-without the rejected-element destroy that block owes — a write that cannot be rejected has
-no rejected element. The COW detach and the store are shared with `__managed_set` verbatim.
+<!-- test: a-constant-index-write-round-trips -->
+⚠ The `set` half of the pair above, and it was `constant-index-set-has-no-bounds-check` for the
+same rung. Its elided entry also dropped the rejected-element destroy, on the ground that a write
+which cannot be rejected has no rejected element; the corpus `set` can be rejected — by its own
+fixed-size guard — and throws.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -106,12 +126,9 @@ end 'main'
 ```exitcode
 7
 ```
-```RequiredRuntime
-__managed_set_in_bounds
-```
 
-<!-- test: variable-index-set-keeps-the-bounds-check -->
-The CONTROL for the case above.
+<!-- test: a-variable-index-write-round-trips -->
+The CONTROL for the case above, reading its writes back through a `for … in`.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -132,9 +149,6 @@ end 'main'
 ```
 ```exitcode
 12
-```
-```RequiredRuntime
-__managed_set
 ```
 
 <!-- test: a-let-bound-literal-is-a-constant-index -->

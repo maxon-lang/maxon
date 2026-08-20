@@ -33,9 +33,24 @@ public type Vector uses Element implements BuiltinArrayLiteral, Iterable with (E
 		return try managed.get(index) otherwise throw ArrayError.indexOutOfBounds
 	end 'get'
 
-	/// Set element at index, throws if out of bounds
+	/// Set element at index, throws if out of bounds.
+	///
+	/// ⛔ THE GUARD IS THE WHOLE OF THE VECTOR'S BOUND AND NOT BELT-AND-BRACES, WHICH IS
+	/// `stdlib/Array.maxon`'s `set` word for word one container over. The BUFFER's setter is bounded by
+	/// CAPACITY where this type is bounded by its fixed SIZE (the ruling recorded at the builtin: the wider
+	/// bound is what makes the stage-then-`setLength` idiom spellable), and a vector's capacity is not its
+	/// count — `create()` grows through the array's policy, whose minimum is 4, so a three-element vector's
+	/// record has a fourth slot the type does not have. MEASURED forwarding straight to the buffer:
+	/// `v.set(3, value: 99)` on a `Vector with 3 Int` SUCCEEDED, writing a slot the type has not got, with
+	/// `count()` unmoved and no diagnostic anywhere.
 	public function set(index ElementIndex, value Element) throws ArrayError
-		try managed.set(index, value) otherwise throw ArrayError.indexOutOfBounds
+		if index >= count() 'pastTheFixedSize'
+			throw ArrayError.indexOutOfBounds
+		end 'pastTheFixedSize'
+
+		try managed.set(index, value) otherwise 'setErr'
+			panic("Vector.set: the buffer refused an index inside the fixed size, which is always within the capacity")
+		end 'setErr'
 	end 'set'
 
 	// =========================================================================

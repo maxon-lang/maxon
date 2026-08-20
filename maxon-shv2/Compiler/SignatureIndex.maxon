@@ -4530,7 +4530,7 @@ export let MapBuiltinBaseName = b"Map"
 
 // ⭐ **WHICH TYPE ARGUMENT IS THE KEY — A FACT ABOUT EVERY HASH TABLE, NOT ABOUT `Map`.** A `Set with Key`
 // and a `Map with (Key, Value)` both put the key first, and three doors depend on it being the same 0:
-// `Parser.gateAndEmitContainerCreate`'s two column gates (the `Set` arm's and, through
+// `Parser.requireContainerColumnTypes`' gates (the `List` arm's and, through
 // `Parser.parseMapColumnValue`'s key half, `ProgramSignatures.setKeyType` and `mapKeyType`. So it is ONE
 // exported constant those read — it was briefly two, a `Map`-named one here and a file-private `Set`-named
 // copy in `LowerMaxonToStd`, which made the shared invariant something this header ASSERTED while the code
@@ -4659,8 +4659,8 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 // `Vector` METHOD'S `self` CAN NEVER MATCH ITS RECEIVER.** `Self` inside `type Vector uses Element` is the
 // declaration's own instance over its own parameters (`ownRecordSelfInstance`) — a vector with **NO
 // count** — while every value a program holds states one, because the count is part of the intern KEY
-// (`fixedSizes`, below). MEASURED with `stdlib/Vector.maxon` listed and a member struck from
-// `Parser.vectorSurfaceMemberNames`, on `--filter=vector` (47 cases, base 47/0):
+// (`fixedSizes`, below). MEASURED with `stdlib/Vector.maxon` listed and a member struck from the
+// (now retired) `Parser.vectorSurfaceMemberNames`, on `--filter=vector` (47 cases, base 47/0):
 // **8 passed, 39 failed, every one of them `E3005 argument type mismatch for 'self': expected 'Vector_Int',
 // got 'Vec3'`.** The same wall stands in front of the traversal: letting `for … in` take the corpus
 // `createIterator()` — which needs no roster strike at all, only the declaration being visible — is
@@ -4682,25 +4682,31 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 // ✅✅ **CURE 1 IS BUILT (W189), AND THE WALL ABOVE IS GONE.** `substitutedFixedSize` gives a declaration's
 // own countless `Self` the SIZE of the receiver it is viewed through, so one corpus body serves every size —
 // and the roster strike this header measured at **8 passed, 39 failed** re-runs at **54 passed, 1 failed**,
-// the one being the roster's own rendered sentence. `stdlib/Vector.maxon` is LISTED, its `createIterator` is
-// the corpus's, and `count`/`get`/`set` stay compiler-served by CHOICE rather than by the wall — see
-// `Parser.vectorSurfaceMemberNames` for the reason each keeps (the constant fold, and the constant-index
-// bounds-check elision `specs-shv2/vector-static-index.md` pins with `RequiredRuntime`).
+// the one being the roster's own rendered sentence.
 //
-// ⚠ **AND `create` IS STILL RESIDUE, FOR THE FACT THIS HEADER ALREADY ISOLATED**: its answer IS the size,
-// the size is at the CALL, and one body cannot name it. Cure 2 — monomorphizing per (element, size) — is what
-// would close that one, and it is still not built: shv2 compiles a corpus generic ONCE and passes the
-// instance in the arguments (`W96`), so per-size copies are a different ABI and not a rung's edit.
+// ✅✅✅ **AND THE RESIDUE IS NOW EMPTY (W190): `create`, `count`, `get` AND `set` ARE ALL
+// `stdlib/Vector.maxon`'s, AND NEITHER CANDIDATE CURE BELOW IS WHAT CLOSED `create`.** This header had
+// isolated its fact correctly — *"its answer IS the size, the size is at the CALL, and one body cannot name
+// it"* — and then named MONOMORPHIZATION as the only way out, on the ground that v1 carries the count in the
+// LAYOUT DESCRIPTOR. **That route was BUILT AND MEASURED WRONG** (W190 step 1): a descriptor word describes
+// the type ARGUMENT and is FORWARDED wholesale to a callee whose instance is written over the caller's
+// parameters, so a `Vector with 4 Element` reached from inside `type Holder uses Element` read HOLDER's
+// count — 0 where 4 is the answer. The count travels in its OWN hidden parameter instead
+// (`fixedElementCountNeeds`), which one shared body can read and every call site can fill in from the
+// instance it holds; `Parser.emitSizedContainerRecord` is what publishes the slots for the corpus's own
+// `return Self{}`.
 //
-// ⭐ **THE TWO CANDIDATE CURES AS THEY WERE NAMED, KEPT FOR THE REASONING TRAIL.**
+// ⭐ **THE TWO CANDIDATE CURES AS THEY WERE NAMED, KEPT FOR THE REASONING TRAIL — AND AS A RECORD THAT A
+// HEADER NAMING THE ONLY WAY OUT WAS WRONG ABOUT IT.**
 //   1. **Size-polymorphic `Self`** — let a sized instance satisfy the declaration's countless `Self` at a
-//      parameter position. One body per element serves every size; `count()` would stop folding to a
-//      constant and become a `length@8` load; `error.wrong-size-vector-argument` must go on failing, so the
-//      rule has to be confined to a declaration's own `Self` and not become size erasure at large.
+//      parameter position. This is what W189 built. `count()` did stop folding to a constant and is a
+//      `length@8` load through the declared `Vector.count`; `error.wrong-size-vector-argument` goes on
+//      failing, because the rule is confined to a declaration's own `Self`.
 //   2. **Monomorphize the corpus body over (element, SIZE)**, which is v1's answer: `/specs/vector.md`'s
 //      `RequiredIR` shows `x64.call Vector.create` taking a `__layout_Vector_N3_Int` descriptor, i.e. the
-//      count travels in the LAYOUT DESCRIPTOR. shv2's descriptors carry a stride and no count, which is the
-//      same gap board row `S2u` names, and it costs one copy of every member per size.
+//      count travels in the LAYOUT DESCRIPTOR. **NOT TAKEN, AND NOT MERELY UNBUILT** — see the measurement
+//      above: shv2's forward makes a descriptor the wrong carrier for a fact about the INSTANCE, whatever
+//      the ABI cost of per-size copies would have been.
 //
 // ⚠ **AND LISTING THE MODULE COSTS THREE MECHANISMS BEFORE ANY OF THAT.** `W86` named all three and
 // withdrew all three; **`W112` LANDED THE FIRST AND WALKED THE OTHER TWO TO A FIXED POINT**, so what
@@ -4766,11 +4772,11 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 // them, not in how the bytes sit, so a second record would have been the same six slots under a second
 // name: `genericInstanceBoxSize` and `genericInstanceBoxDropCallee` answer a Vector with the `Array` row.
 //
-// ⛔⛔ **HOW `Vector.create()` IS EMITTED IS `Parser.emitVectorCreateOp`'s TO STATE, AND THIS HEADER STATED
-// IT TOO — WRONGLY (found in review, W86).** It said *"one `__managed_mem_create(N, elementSize)` — the
-// entry that PUBLISHES `N` zero-initialized elements"*, which is the shape that emitter's own ⚠ paragraph
-// records TRYING and MEASURING as **E3057 throwing function requires try: 'create'** on every case in
-// `/specs/vector.md`, because that entry THROWS. What is emitted is `__managed_create` then
+// ⛔⛔ **HOW A VECTOR'S RECORD IS BUILT IS `Parser.emitSizedContainerRecord`'s TO STATE, AND THIS HEADER
+// STATED IT TOO — WRONGLY (found in review, W86).** It said *"one `__managed_mem_create(N, elementSize)` —
+// the entry that PUBLISHES `N` zero-initialized elements"*, which is the shape that emitter's own ⚠
+// paragraph records TRYING and MEASURING as **E3057 throwing function requires try: 'create'** on every case
+// in `/specs/vector.md`, because that entry THROWS. What is emitted is `__managed_create` then
 // `__managed_resize(N)`, which throws nothing. Two headers, one fact, opposite answers — and the copy a
 // reader lands on first was the one naming the route already known not to work. The emitter is the one
 // place that says it now.
@@ -17435,7 +17441,7 @@ export type ProgramSignatures
 	// whose single field IS a `__ManagedList with T`, so the structure and the surface coincide again and all
 	// SIX doors that asked this ask `isManagedListInstance` outright — four here (`instanceCloneStrategy`,
 	// `opaqueInstanceCreateReadsTheDescriptor`, `containerCreateCall`, `instanceSupportsDeepClone`) and two in
-	// `Parser` (`gateAndEmitContainerCreate`, `requireContainerColumnTypes`), which is the "three call sites in
+	// `Parser` (`requireSizedContainerElementType`, `requireContainerColumnTypes`), which is the "three call sites in
 	// two files" this predicate's own deleted header counted before `W173` added the fourth and fifth.
 	// Keeping the disjunction would have left a predicate whose two arms could never disagree — a thin wrapper
 	// wearing a rule's name.
@@ -17529,10 +17535,10 @@ export type ProgramSignatures
 		return self.isVectorBaseName(self.genericInstanceBaseName(id))
 	end 'isVectorInstance'
 
-	// ⭐⭐ **WHICH CONTAINERS' `create` BUILDS THE FUSED MANAGED RECORD — i.e. is born through
-	// `__managed_create` (S2u).** `Parser.emitVectorCreateOp` IS `emitArrayCreateOp` plus the `__managed_resize`
-	// that publishes the N slots, so a `Vector` reaches the opaque, descriptor-reading create by exactly the
-	// route an `Array` does. Its readers are `containerCreateCall`, which goes on to EMIT that very callee, and
+	// ⭐⭐ **WHICH CONTAINERS' RECORD IS THE FUSED MANAGED ONE — i.e. is born through `__managed_create`
+	// (S2u).** `Parser.emitSizedContainerRecord` IS `emitArrayCreateOp` plus the `__managed_resize` that
+	// publishes the N slots, so a `Vector` reaches the opaque, descriptor-reading create by exactly the route
+	// an `Array` does. Its readers are `containerCreateCall`, which goes on to EMIT that very callee, and
 	// the descriptor family below, which is defined FROM it.
 	//
 	// ⚠⚠ **IT WAS ALSO "the ONE family test the descriptor-need SEED and the descriptor-reading EMIT both
@@ -18953,7 +18959,7 @@ export type ProgramSignatures
 	// The routing is settled HERE, where the instance registry is, because the synthesis holds no index.
 	//
 	// ⚠ **IT IS A SECOND COMPOSITION OF THE SAME DECISIONS, NEVER A SECOND DECIDER.** `Parser`'s body
-	// emitters (`emitArrayCreateOp` / `emitListCreateOp` / `emitVectorCreateOp`) build the same calls as VALUES and deliberately box no description per site —
+	// emitters (`emitArrayCreateOp` / `emitListCreateOp` / `emitSizedContainerRecord`) build the same calls as VALUES and deliberately box no description per site —
 	// MEASURED at +1 allocation per creation site in the program (see `Parser.arrayElementDestroyValue`).
 	// What must not be written twice is the RULE, and none of it is: which container this is
 	// (`instanceCreateIsDeclared`/`isListInstance`/…), which column owns what (`slotTypeIsManaged`), which drop
@@ -22630,7 +22636,7 @@ export type ProgramSignatures
 
 	// ⭐⭐ **DOES ANY INTERNED INSTANCE OF THE TYPE THAT DECLARES `param` MAKE THAT PUBLISHED SLOT A NULL
 	// POINTER (S2u)?** The front-end gate for `Vector with <N> <type parameter>` inside a generic body.
-	// A vector's `create()` PUBLISHES all N slots by zeroing them (`Parser.emitVectorCreateOp`'s
+	// A vector's record PUBLISHES all N slots by zeroing them (`Parser.emitSizedContainerRecord`'s
 	// `__managed_resize`), and every one of the N is then a readable element by the type's own contract —
 	// which is true of a trivial argument, whose zero IS a value, and false of a MANAGED one, whose zero is a
 	// null pointer. The shared body compiles ONCE and serves every instantiation, so it is admissible only if

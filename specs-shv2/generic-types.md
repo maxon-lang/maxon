@@ -1666,7 +1666,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:13:2: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Array.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+error E2015: <fragment>:13:2: Unsupported: a field access on 'a': `Array` is a BUILTIN whose runtime record shv2 SYNTHESIZES rather than compiling a declaration for, so a value of it carries that record's own words and not the fields `stdlib/Array.maxon` declares. The field is missing from this compiler, not from the language; reach the contents through the methods
 ```
 
 <!-- test: error.field-read-on-the-second-builtin-base-a-declaration-also-claims -->
@@ -1683,14 +1683,19 @@ wave 2's "a declaration wins" road instead of this gate. **Measured at `W153` on
 binary, the two answer identically** — `a member access 'add'/'append' on a 'unknown' value`
 — which is that other road, not this one.
 
-⇒ **`Vector` is the subject now, and it is the single-regime base for the same reason `List`
-was**: `stdlib/Vector.maxon` exists and is NOT whitelisted, so `isBuiltinGenericBaseName`
-answers about a record shv2 synthesizes and nothing declares. The `Array` write-direction twin
-directly above does not cover this direction, and `Array` would not carry the second-name half
-of the question at all. **When `Vector` is listed in its turn, this case moves to whatever base
-is still single-regime or it goes** — the roster's other members (`__ManagedList`,
-`__ManagedListNode`, `__ManagedMemoryCursor`) cannot serve, because `E2051` refuses a
-declaration whose name starts with `__` before this gate is ever reached.
+⇒ **`Vector` is the subject, and `W189`/`W190` did NOT take it away — which is worth stating,
+because the paragraph that stood here predicted they would.** It read *"`stdlib/Vector.maxon`
+exists and is NOT whitelisted … when `Vector` is listed in its turn, this case moves to whatever
+base is still single-regime or it goes"*. The module IS listed now and every member of a `Vector`
+is its declaration's, and this case is UNMOVED — because what it turns on is not who serves the
+members but who owns the RECORD, and that is still shv2 (`isBuiltinGenericBaseName`, which decides
+what `Vector with 3 Int` MEANS; taking the name off it is `W114`'s rung). The refusal's own sentence
+is re-derived to say exactly that and no longer claims this compiler reads no stdlib, which had
+stopped being true for both bases. The `Array` write-direction twin directly above does not cover
+this direction, and `Array` would not carry the second-name half of the question at all — the
+roster's other members (`__ManagedList`, `__ManagedListNode`, `__ManagedMemoryCursor`) cannot
+serve, because `E2051` refuses a declaration whose name starts with `__` before this gate is ever
+reached.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 
@@ -1706,7 +1711,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:12:9: Unsupported: a field access on 'v': `Vector` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/Vector.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods
+error E2015: <fragment>:12:9: Unsupported: a field access on 'v': `Vector` is a BUILTIN whose runtime record shv2 SYNTHESIZES rather than compiling a declaration for, so a value of it carries that record's own words and not the fields `stdlib/Vector.maxon` declares. The field is missing from this compiler, not from the language; reach the contents through the methods
 ```
 
 <!-- test: error.sizeof-of-undeclared-generic-base -->

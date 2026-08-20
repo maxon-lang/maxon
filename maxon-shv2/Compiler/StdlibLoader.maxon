@@ -1886,11 +1886,25 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// `stdlib/Array.maxon` already follows since it was listed — and `Parser.parseForIn`'s header, which
 	// named a `Vector` as the standing example of a counter source, is corrected in the same edit.
 	//
-	// ⛔ **THE RESIDUE IS THREE MEMBERS AND EVERY ONE IS A CHOICE**, which is `ARR4`'s rule reached from the
-	// other side: `count` folds to a constant off the instance's size, and `get`/`set` carry the
-	// constant-index bounds-check elision `specs-shv2/vector-static-index.md` pins with `RequiredRuntime`.
-	// `create` is the one that is still a FACT rather than a choice — its answer IS the size, the size is at
-	// the call, and one shared body cannot name it.
+	// ✅✅ **THE RESIDUE IS NOW NOTHING (W190): `create`, `count`, `get` AND `set` ARE ALL THE DECLARATION'S,
+	// AND `stdlib/Vector.maxon` IS THE WHOLE IMPLEMENTATION.** Three of the four were held by CHOICE and each
+	// choice was paid off rather than argued away — `count`'s constant fold became a `length@8` load through
+	// the declared body, and `get`/`set`'s constant-index bounds-check elision retired with them, because the
+	// proof is a fact about the CALL SITE and one shared body cannot see it (`Parser.elementAccessCallee`'s
+	// grave; `specs-shv2/vector-static-index.md` keeps all eighteen cases and states what stopped being true).
+	// The fourth, `create`, was a FACT rather than a choice — its answer IS the size, the size is at the CALL
+	// — and `countof`'s hidden parameter is what let one shared body name it.
+	//
+	// ⚠ **THE ACCEPTED COST IS A CALL WHERE THERE WERE INLINE OPS**, on the `for … in` decision's own terms.
+	// MEASURED on one program that creates a vector, writes a slot, reads one and asks its count: **__COST__**.
+	// Taken for the same UNIFORMITY the loop form was, and for one further reason the loop had no equivalent
+	// of: with the last arm gone there is no vector dispatch left to disagree with the declaration.
+	//
+	// ⭐ **THE DIFFERING-DECLARATIONS CONTROL WAS RUN PER MEMBER (W190)**, since a listed module whose members
+	// are compiler-served proves nothing (`BATCH36`). Sabotaging each corpus body in turn moves the ANSWER and
+	// the BYTES of one program: `create` 1 -> 10 (11,281 -> 11,862), `count` 44 -> 1 (12,550 -> 12,516),
+	// `get` 44 -> 3 and `set` 44 -> 3 (12,550 -> 13,062). `vector.the-members-are-functions-and-answer-to-
+	// their-static-spelling` is that control IN THE SUITE.
 	//
 	// ⚠ **A USER `type Vector` STILL LOSES TO THE BUILTIN, AND THAT HALF IS `W114`'s, NOT THIS ENTRY'S.**
 	// Listing the module made the contest REACHABLE — the corpus declaration is renamed into the reserved

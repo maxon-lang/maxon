@@ -770,12 +770,13 @@ end 'isManagedMemoryRuntimeCallee'
 // callee throws": `Parser.dispatchArrayMethod` emits exactly these seven METHODS through its throwing path,
 // and the two lists name the same `Managed*Name` constants so they cannot drift. `slice` (P1.7 slice 4) throws on
 // an out-of-bounds or inverted range.
-// ⚠ Seven METHODS, ELEVEN CALLEES — `slice` has three entries (plain, managed-element, opaque-element),
-// picked by the element's ownership rather than by anything the author writes, and `get`/`set` each have a
-// second entry (`ManagedGetInBoundsName`/`ManagedSetInBoundsName`) picked by whether the call site proved its index
-// in range — the elision `Parser.elementAccessCallee` decides and `inBoundsElementAccessor` names. Neither
-// split is anything the author spells, and both entries of each pair carry the SAME `throws` clause — which
-// is the whole reason the elided one may join this list rather than needing a rule of its own.
+// ⚠ Seven METHODS, NINE CALLEES — `slice` has three entries (plain, managed-element, opaque-element), picked
+// by the element's ownership rather than by anything the author writes. The split is nothing the author
+// spells, and all three carry the SAME `throws` clause.
+// ⚠ **`get`/`set` EACH HAD A SECOND, BOUNDS-PROVEN ENTRY UNTIL W190** (`__managed_get_in_bounds` /
+// `__managed_set_in_bounds`), picked by whether the CALL SITE proved its index in range. They went with
+// `Parser.elementAccessCallee`, whose grave carries why: the proof is a fact about the call site, and a
+// vector's `get`/`set` are one shared corpus body reached by a CALL.
 export function isThrowingManagedMemoryRuntimeCallee(callee ByteArray) returns bool
 	// R4.2 appends the three `__ManagedMemory` members, which throw `__ManagedMemoryError` rather than
 	// `ArrayError` — a different enum, but the same "throwing vs not" answer this predicate exists to give
@@ -837,7 +838,7 @@ end 'cursorSourceMethodName'
 // exact defect D12 existed to remove. Asking the NARROW predicate is disjointness **by construction**, so
 // the order of those tests stops mattering at all.
 export function isThrowingArrayAccessorCallee(callee ByteArray) returns bool
-	return callee.equals(ManagedGetName) or callee.equals(ManagedSetName) or callee.equals(ManagedGetInBoundsName) or callee.equals(ManagedSetInBoundsName) or callee.equals(ManagedFirstName) or callee.equals(ManagedRemoveName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName)
+	return callee.equals(ManagedGetName) or callee.equals(ManagedSetName) or callee.equals(ManagedFirstName) or callee.equals(ManagedRemoveName) or callee.equals(ManagedSliceName) or callee.equals(ManagedSliceManagedName) or callee.equals(ManagedSliceOpaqueName)
 end 'isThrowingArrayAccessorCallee'
 
 // The `__ManagedMemory`-specific members, as one list with two readers: `isThrowingManagedMemoryRuntimeCallee` (THAT
@@ -935,12 +936,10 @@ end 'managedMemorySourceMethodName'
 // opposite shape — ONE callee two authors could have written (`__mf_open_write`) — and nothing here needs it,
 // because the three slice entries are picked by the ELEMENT's ownership, which the author never spells.
 export function arrayAccessorSourceMethodName(callee ByteArray) returns ByteArray
-	// The elided entries answer the SAME spelling as the checked ones: the author writes `v.get(0)` whichever
-	// entry the proof picked, and a diagnostic that named the callee would quote a symbol no author can type.
-	if callee.equals(ManagedGetName) or callee.equals(ManagedGetInBoundsName) 'get'
+	if callee.equals(ManagedGetName) 'get'
 		return GetMethod
 	end 'get'
-	if callee.equals(ManagedSetName) or callee.equals(ManagedSetInBoundsName) 'set'
+	if callee.equals(ManagedSetName) 'set'
 		return ArraySetMethod
 	end 'set'
 	if callee.equals(ManagedFirstName) 'first'
@@ -1039,14 +1038,10 @@ export function installManagedMemoryRuntime(module StdModule, usage RuntimeUsage
 	buildManagedPush(module)
 	buildManagedGet(module)
 	buildManagedGetUnchecked(module)
-	// ⚠ The two IN-BOUNDS entries are built by `VectorRuntime` (ARR6): the bounds ELISION is `Vector`'s, so
-	// the code that knows why the test may be dropped lives with `Vector`. They are installed from HERE, and
-	// unconditionally, because the SYMBOLS are this record's — `__managed_`-prefixed, reached through this
-	// file's own load/store/detach, and carried by `usesManagedMemory`. A `usesVector` bit of their own would
-	// change which programs carry them, which is a behaviour change and not a rehoming.
-	buildManagedGetInBounds(module)
+	// ⚠ **TWO IN-BOUNDS ENTRIES WERE INSTALLED HERE AND BUILT BY `Runtime/VectorRuntime.maxon` (ARR6), AND
+	// BOTH THE FILE AND THE ENTRIES ARE GONE (W190)** — the bounds ELISION was `Vector`'s, and it retired with
+	// the members that reached it. See `Parser.elementAccessCallee`'s grave.
 	buildManagedSet(module)
-	buildManagedSetInBounds(module)
 	buildManagedCount(module)
 	buildManagedCapacity(module)
 	buildManagedElementSize(module)
@@ -2732,11 +2727,10 @@ function buildManagedGet(module StdModule)
 end 'buildManagedGet'
 
 // The READ half both `get` entries share — the two record fields the element load needs, then the load
-// itself. Written once so the checked and the proven entry cannot come to read an element differently;
-// what separates them is exactly the block above this call and nothing inside it. ⚠ `export`ed because the
-// PROVEN entry is `VectorRuntime.buildManagedGetInBounds` (ARR6): the elision is `Vector`'s and lives with
-// `Vector`, while the read it elides a test from is this record's and stays here.
-export function emitGetLoadAndReturn(module StdModule, func IrFunction, cur IrBlock, arr ValueId, index ValueId, ids ValueMinter)
+// itself. ⚠ It was `export`ed for a second reader — `VectorRuntime.buildManagedGetInBounds`, the
+// bounds-PROVEN entry — which retired with the elision at W190, so the read is this record's own again and
+// this is its one caller.
+function emitGetLoadAndReturn(module StdModule, func IrFunction, cur IrBlock, arr ValueId, index ValueId, ids ValueMinter)
 	let buffer = emitLoadField(module, block: cur, record: arr, offset: ManagedRecordBufferOffset, ids: ids)
 	let es = emitLoadField(module, block: cur, record: arr, offset: ManagedRecordElementSizeOffset, ids: ids)
 	emitLoadElemAndOkReturn(module, func: func, cur: cur, record: arr, buffer: buffer, index: index, es: es, ids: ids)

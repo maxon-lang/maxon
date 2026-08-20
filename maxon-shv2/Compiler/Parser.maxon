@@ -2437,7 +2437,7 @@ type MethodDescriptorScan
 	// ROSTER, SERVES (ARRG).** Every other entry above is a fact about what this body DOES; this one is a fact
 	// about a CALLEE'S ABI, and it is the only edge in the descriptor fixpoint that leaves the enclosing type.
 	// Already qualified, because the type they belong to is not `site.typeName` — see
-	// `Parser.corpusServesAContainerMember`, which decides which names are on it.
+	// `Parser.corpusServesArrayMember`, which decides which names are on it.
 	export let corpusContainerCallees as ByteArrayArray
 	// ⭐⭐ **THE OTHER CROSS-TYPE EDGE — `<Base>.<member>` FOR A CALL ON A NESTED PARAMETERISED INSTANCE
 	// (W161).** `EChain.create()` on a `typealias EChain = Inner with Element` links to `Inner.create`, and
@@ -6085,7 +6085,7 @@ end 'cursorSurfaceMemberNames'
 //         static blob"* — the FORWARD it needs already existed (`emitInstanceDescriptorAddr`, whose parameter-run arm
 //         answered YES for `Array with Key` throughout). What was missing was the RESERVATION: the
 //         descriptor-need fixpoint's edges followed SELF calls only, so `Map.insertAtSlot`'s obligation to
-//         SUPPLY `Array.set`'s descriptor had no edge to arrive by. `Parser.corpusServesAContainerMember` is
+//         SUPPLY `Array.set`'s descriptor had no edge to arrive by. `Parser.corpusServesArrayMember` is
 //         that edge. Re-measured with `set` struck: **38 panics → 0**.
 //       – a **REFUSAL** where that receiver is not even admitted: 3 cases, `stable-partition-managed-pivot`
 //         ×2 and `generic-opaque-element-borrow-liveness.a-trivial-element-container-is-untouched`.
@@ -6497,50 +6497,22 @@ end 'stringIndexSurfaceMemberNames'
 // members are its own declaration's, and an unknown one is E4006 off that declaration rather than a
 // hand-written sentence. `MemberSurface.map` and its per-file memo went with it.
 
-// ⭐⭐ **WHICH MEMBERS THE `Vector` SURFACE HAS — THE EIGHTH ROSTER, AND THE LAST DISPATCH STILL CARRYING A
-// HAND-WRITTEN ONE (W86).** `dispatchVectorMethod` gated on three `equals` arms and ended in a typed-out
-// sentence, which is the shape A2q removed from five surfaces and which `cursor`/`map` never had. It carries
-// the identical obligations as the seven above: the entries are the very constants the arms match on, the
-// ORDER is the message's order because the message is joined from this list, the gate is asked ahead of every
-// arm, and the fall-through is a PANIC naming it.
+// ⭐⭐⭐ **THE `Vector` ROSTER — THE EIGHTH AND LAST OF THEM — IS GONE, AND WITH IT THE WHOLE SYNTHESIZED
+// SURFACE (W190).** It held `count`, `get` and `set`, each kept for a compile-time fact the corpus body was
+// said not to be able to see: the SIZE, and the constant index the bounds-check elision read. Both premises
+// were paid off rather than argued away — the size by `countof`'s hidden parameter (which is what let the
+// corpus's own `create()` publish its slots), and the elision by measuring what it was worth against what it
+// cost: a fact about the CALL SITE that a shared body taking a runtime `index` cannot see is a fact the
+// retirement gives up, and `specs-shv2/vector-static-index.md` says so where it used to pin the opposite.
 //
-// ⚠ **THE TYPED-OUT SENTENCE HAD ALREADY DRIFTED, WHICH IS THE USUAL FINDING WHEN ONE OF THESE IS
-// REPLACED.** It ended *"It has no `push`/`pop`/`append`/`resize`/`clear`: its size is part of its type"* —
-// a list of what is ABSENT, which is the clause `surfaceRosterProvider`'s header records being deleted from
-// every other surface because no gate can check it. `insert` and `remove` are absent too and it never named
-// them. The positive half is what the shared sentence states, and it states it off this list.
+// ⚠ **`create` WAS NEVER ON THIS LIST AND MUST NOT COME BACK ONTO ONE.** A vector is BORN through a
+// construction, not through a member call — `Vec3.create()` is a call to the declared static and `Self{}`
+// inside the declaration is `Parser.emitSizedContainerRecord`.
 //
-// ⛔ **`create` IS NOT HERE AND MUST NOT BE.** A vector is BORN through `gateAndEmitContainerCreate`, not
-// through a member call, so a `create` on this roster would have no arm to reach — the `Array` roster's own
-// header records the identical trap, and the drift panic below is what now catches it.
-//
-// ⭐⭐⭐ **EVERY LINE HERE CAN NOW BE STRUCK, AND THESE THREE ARE KEPT BY CHOICE (W189). THE PARAGRAPH THAT
-// STOOD HERE SAID THE OPPOSITE, AND IT WAS TRUE UNTIL THE `Self` GATE WAS CURED.** It read: *"no line here
-// can be struck today … with `stdlib/Vector.maxon` listed each strike is `E3005 argument type mismatch for
-// 'self': expected 'Vector_Int', got 'Vec3'` on every case that touches the member"* — `W86` measured
-// **8 passed, 39 failed** doing exactly that. `ProgramSignatures.substitutedFixedSize` makes a declaration's
-// own countless `Self` adopt the receiver's count, so one corpus body serves every size, and **the same
-// experiment re-run at `W189` is 54/55 — the one failure being this roster's own sentence, which is rendered
-// from this list and therefore changes when the list does.**
-//
-// ⇒ **So the residue is now a DECISION, and each of the three has its own reason — none of them `self`:**
-//   • **`count` folds to a CONSTANT off the instance's size** (the arm below, and its own ⭐⭐ paragraph):
-//     the corpus body is `managed.length()`, a load, and a fixed size that is read at runtime is a fixed
-//     size the type no longer decides.
-//   • **`get` / `set` carry the CONSTANT-INDEX BOUNDS-CHECK ELISION** — `emitContainerElementAccessor` picks
-//     `__managed_get_in_bounds` when the index and the size are both known here, which is a fact about the
-//     CALL SITE that a body taking a runtime `index` parameter cannot see. `specs-shv2/vector-static-index.md`
-//     pins it with `RequiredRuntime`, so retiring these two deletes a spec's subject rather than a line.
-//
-// ⚠ **`createIterator` IS NOT ON THIS LIST AND IS SERVED BY THE CORPUS — that is what makes the whitelist
-// entry live rather than inert** (`StdlibLoader`'s entry carries the control). `create` is not here either,
-// for the reason the array roster's header gives: a vector is BORN through `gateAndEmitContainerCreate`, and
-// its body could not name the size anyway.
-function vectorSurfaceMemberNames() returns ByteArrayArray
-	var names = ByteArrayArray.create()
-	names.push(ArraySetMethod)
-	return names
-end 'vectorSurfaceMemberNames'
+// ⚠ **`MemberSurface.vector`, `vectorMethodMutatesReceiver` and `dispatchVectorMethod` WENT WITH IT**, which
+// is `Map`'s departure at W105 and `List`'s at W153 for the third time: a roster exists to hold a SYNTHESIZED
+// surface's dispatch arms and its refusal sentence to one list, and a declared type's members are its own
+// declaration's — an unknown one is E4006 off that declaration rather than a hand-written sentence.
 
 // ⚠⚠ **A ROSTER IS BUILT ONCE PER FILE THAT ASKS FOR IT, NOT ONCE PER CALL SITE, AND THE DIFFERENCE IS
 // MEASURED.** Both lists are CONSTANTS — the two functions above only push, and nothing mutates what they
@@ -6569,6 +6541,10 @@ let sharedEmptySurfaceRoster = ByteArrayArray.create()
 // each has exactly one roster — so the surface is the memo's key, the builder's selector and the refusal's
 // subject at once. It replaced a `isManagedMemory bool` that could only tell two of the five apart.
 //
+// ⚠ **A `vector` ENTRY LEFT AT W190**, with `dispatchVectorMethod` and `vectorSurfaceMemberNames`. Every
+// member of a `Vector` is `stdlib/Vector.maxon`'s now, so there is no synthesized surface for an entry to key
+// — the same departure `map` made at W105.
+//
 // ⚠ **EVERY SURFACE HERE IS A VALUE'S, AND THE ONE THAT WAS NOT IS GONE (W55).** `stringStatic` sat in this
 // enum because `String.from(bytes)` was read by a different function, off a different token, against a
 // different list from `s.byteLength()` — a member of the TYPE beside members of a VALUE. Retiring both of
@@ -6582,16 +6558,20 @@ enum MemberSurface
 	string
 	character
 	stringIndex
-	// `Vector with N Element` — the FIXED-SIZE array's own surface, and a surface of its own rather than
-	// more of the `Array`'s even though the two share a record: what may be DONE to a vector is a strict
-	// subset (no `push`/`pop`/`append`/`resize`/`clear`), and its `count()` is a constant read off the TYPE
-	// where an `Array`'s is a load off the record.
-	vector
 	// `__ManagedMemoryCursor with Element` — a navigable position INSIDE a buffer, and a surface of its own
 	// rather than more of the buffer's: what may be done to a position (`current`/`advance`/`seek`) and what
 	// may be done to the storage it points into (`get`/`setLength`/`grow`) are disjoint sets on two receivers.
 	cursor
 end 'MemberSurface'
+
+// ⭐ **WHICH ACCESS ASKED FOR A BASE'S LAYOUT** — `Parser.structLayoutOfType`'s two kinds of caller, carried
+// so the refusal it can raise names the construct the author actually wrote. A field walk and a member
+// dispatch both need a `StructLayout`, and a base that has none is the same fact about the TYPE with two
+// different things to say to the reader; see `builtinRecordAccessRefusal`.
+union BaseAccessKind
+	field
+	member
+end 'BaseAccessKind'
 
 // A roster as a refusal prints it — `length/capacity/get/…`, joined from the list the dispatch consults
 // rather than transcribed beside it. `IrInterface.builtinConformerDispatchMethodNames` renders a
@@ -6754,9 +6734,9 @@ function surfaceRosterProvider(surface MemberSurface) returns String
 		return "P1.7"
 	end 'arraySurface'
 
-	// The other six are shv2's own synthesized surfaces and say so with one arm rather than six identical
+	// The other four are shv2's own synthesized surfaces and say so with one arm rather than four identical
 	// ones — a fall-through is still impossible, which is the property the split arms existed for.
-	if surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.cursor or surface == MemberSurface.vector 'shv2sOwnSurface'
+	if surface == MemberSurface.string or surface == MemberSurface.character or surface == MemberSurface.stringIndex or surface == MemberSurface.cursor 'shv2sOwnSurface'
 		return "shv2"
 	end 'shv2sOwnSurface'
 
@@ -11645,16 +11625,16 @@ export type Parser
 	// allocation-neutral against the shared empty — until a name is actually declared twice.
 	var declaredFuncNames as DeclaredFuncNameSet
 	var overloadMembers as OverloadMemberMap
-	// ⭐ The eight MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty
-	// anchor — see `sharedEmptySurfaceRoster` for the measurement that put them here, and `MemberSurface`
-	// for which dispatch reads which.
+	// ⭐ The MEMBER ROSTERS the builtin dispatchers gate on, memoized per file off their shared empty anchor —
+	// see `sharedEmptySurfaceRoster` for the measurement that put them here, and `MemberSurface` for which
+	// dispatch reads which. (A COUNT stood in this sentence and went stale twice as surfaces retired; the enum
+	// is the list.)
 	var arraySurfaceRoster as ByteArrayArray
 	var bufferSurfaceRoster as ByteArrayArray
 	var stringSurfaceRoster as ByteArrayArray
 	var characterSurfaceRoster as ByteArrayArray
 	var stringIndexSurfaceRoster as ByteArrayArray
 	var cursorSurfaceRoster as ByteArrayArray
-	var vectorSurfaceRoster as ByteArrayArray
 	// ⭐ **THE `Array` DECLARATION NAMES, memoized off the SAME anchor and for the same measurement (ARR2)** —
 	// `ProgramSignatures.arrayDeclarationNames` mints an array, and its two askers sit on the descriptor
 	// pre-scan's per-member-name miss path, which is exactly where `sharedEmptySurfaceRoster`'s note says an
@@ -11878,7 +11858,6 @@ export type Parser
 			characterSurfaceRoster: sharedEmptySurfaceRoster,
 			stringIndexSurfaceRoster: sharedEmptySurfaceRoster,
 			cursorSurfaceRoster: sharedEmptySurfaceRoster,
-			vectorSurfaceRoster: sharedEmptySurfaceRoster,
 			arrayDeclarationRoster: sharedEmptySurfaceRoster,
 			corpusServedContainerMembers: sharedEmptyCorpusMemberVerdicts
 		}
@@ -14201,15 +14180,20 @@ export type Parser
 			// seed because whether the callee needs a descriptor is the fixpoint's own answer, not this scan's.
 			// The list is minted on the FIRST edge (`sharedEmptyCorpusContainerCallees`), so a body with no
 			// corpus call — nearly every body there is — allocates nothing for this arm.
-			if kind == TokenKind.dot and self.memberCallFollows(q) and self.corpusServesAContainerMember(self.tokenAt(q + 1).value) 'aCorpusContainerCall'
+			if kind == TokenKind.dot and self.memberCallFollows(q) and self.corpusServesArrayMember(self.tokenAt(q + 1).value) 'aCorpusContainerCall'
 				if corpusContainerCallees is sharedEmptyCorpusContainerCallees 'firstEdgeInThisRegion'
 					corpusContainerCallees = ByteArrayArray.create()
 				end 'firstEdgeInThisRegion'
 
-				// The gate above says SOME container declaration serves the name; the callee names have to say
-				// WHICH, because that is what the fixpoint indexes by. Written once, beside the gate, so the
-				// edge recorded and the verdict that admitted it read one rule.
-				self.appendCorpusContainerCallees(self.tokenAt(q + 1).value, into: corpusContainerCallees)
+				// ONE edge per `Array` DECLARATION that serves the name (ARR2) — normally one, and two only
+				// while a user program's own `type Array` has the corpus declaration in the reserved space. The
+				// gate above says SOME declaration serves it; the callee name has to say WHICH, because that is
+				// what the fixpoint indexes by.
+				for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
+					if self.corpusArrayDeclarationServes(declaration, member: self.tokenAt(q + 1).value) 'thisDeclarationServesIt'
+						corpusContainerCallees.push(qualifiedMethodName(declaration, methodName: self.tokenAt(q + 1).value))
+					end 'thisDeclarationServesIt'
+				end 'eachArrayDeclaration'
 			end 'aCorpusContainerCall'
 			// ⭐⭐ **A CALL ON A NESTED PARAMETERISED INSTANCE, AND THE BINDING THAT CARRIES ONE (W161)** — an
 			// inner alias (`EChain.create()`), a field declared at one (`chain.count()`), or a local bound
@@ -14326,8 +14310,29 @@ export type Parser
 	// so the identical edge exists there — but a `Map` edge reserves a descriptor in bodies that hold a
 	// `Map`'s element, which is a TUPLE over two of its parameters, and the layout descriptor has one block
 	// per type PARAMETER with no block a composite argument could occupy. Turning those reservations on
-	// therefore trades a wrong answer for a different one; the measurement is in this rung's report and the
+	// therefore trades a wrong answer for a different one; the measurement is in `ARRG`'s report and the
 	// mechanism is the descriptor ABI's, not this edge's.
+	//
+	// ⛔⛔ **AND `Array` IS STILL ALONE AFTER THE SIZED CONTAINER RETIRED (W190), WHICH IS THE OPPOSITE OF
+	// WHAT THAT RUNG WAS BRIEFED TO BUILD — SO IT IS WRITTEN DOWN WITH ITS MEASUREMENT.** The twin was built
+	// (a `corpusServesSizedContainerMember` asking `stdlib/Vector.maxon`'s declaration the same two clauses),
+	// and it is REDUNDANT and NOT FREE.
+	//
+	//   • **NOT FREE: 34 `map` goldens moved**, every one of them a `Map` body gaining a hidden descriptor
+	//     parameter it never reads (`x64.loadRegBaseDisp.word64 rcx, [rbp + 56]` where the golden had none).
+	//     `set` and `get` are declared on BOTH containers, so this receiver-BLIND edge gave every `arr.set(…)`
+	//     inside `stdlib/Map.maxon` a second callee — `Vector.set`, which does reserve one.
+	//   • **REDUNDANT BY CONSTRUCTION, not merely on today's corpus.** The shape that would abort is a call on
+	//     a `Vector with <N> <a parameter of the enclosing generic>`, and **that instance cannot be spelled
+	//     except through a typealias**: `function f(v Vector with 4 Element)` is `E2010 Expected ')' but got
+	//     'with'` (measured). An alias-named receiver is exactly what `nestedInstanceCalleeAt` RESOLVES (W161),
+	//     and a resolved edge is what costs no codegen where it is not needed. MEASURED with the twin removed:
+	//     a `Vector with 4 Element` reached through a FIELD, a LOCAL, a PARAMETER and a CHAINED call inside
+	//     `type Holder uses Element` all compile and answer correctly (7, 9, 11, and the suite's own
+	//     `vector.a-vector-field-in-a-generic-body-round-trips-its-elements`), with `map` drift back to 0.
+	//
+	// ⇒ **A BLIND edge is what a container needs when its receivers wear names nothing resolves** — the
+	// `Array`'s case (`bytes`, and every local in `stdlib/Map.maxon`) and not the sized container's.
 	//
 	// The verdict itself is memoized per NAME (`corpusServedContainerMembers` carries why), so the scan's `.` arm
 	// pays it once per distinct member name in a file rather than once per call site.
@@ -14342,17 +14347,16 @@ export type Parser
 	// The receiver-blind over-approximation the sibling signals take is only free where the fixpoint can
 	// still reach the caller; a STATIC's descriptor comes from its RESULT, not from a receiver, so an edge to
 	// one describes a supply route the call site does not have.
-	function corpusServesAContainerMember(member ByteArray) returns bool
+	function corpusServesArrayMember(member ByteArray) returns bool
 		if let remembered = try self.corpusServedContainerMembers.get(member) 'askedBefore'
 			return remembered
 		end 'askedBefore'
 
 		// ⭐ **ASKED OF EVERY `Array` DECLARATION THIS COMPILE HAS (ARR2)**, which is exactly one for every
-		// program that does not declare a container of its own, **AND OF THE SIZED CONTAINER'S (W190)**. The
-		// `or` stops at the first that serves it.
-		var served = self.corpusServesSizedContainerMember(member)
+		// program that does not declare a container of its own. The `or` stops at the first that serves it.
+		var served = false
 		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
-			served = served or self.corpusContainerDeclarationServes(declaration, surface: MemberSurface.array, member: member)
+			served = served or self.corpusArrayDeclarationServes(declaration, member: member)
 		end 'eachArrayDeclaration'
 
 		if self.corpusServedContainerMembers is sharedEmptyCorpusMemberVerdicts 'firstQuestionThisFileAsks'
@@ -14361,63 +14365,17 @@ export type Parser
 
 		self.corpusServedContainerMembers.upsert(member, value: served)
 		return served
-	end 'corpusServesAContainerMember'
+	end 'corpusServesArrayMember'
 
-	// The callee names the gate above admitted `member` for — one per container declaration that actually
-	// serves it. Split from the verdict because the verdict is MEMOIZED per name and this is not: it runs only
-	// where an edge is genuinely being recorded, which is once per corpus container call in a body rather than
-	// once per member name in a file.
-	function appendCorpusContainerCallees(member ByteArray, into ByteArrayArray)
-		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
-			if self.corpusContainerDeclarationServes(declaration, surface: MemberSurface.array, member: member) 'thisDeclarationServesIt'
-				into.push(qualifiedMethodName(declaration, methodName: member))
-			end 'thisDeclarationServesIt'
-		end 'eachArrayDeclaration'
-
-		let sized = self.sizedContainerDeclarationName()
-		if self.corpusServesSizedContainerMember(member) 'theSizedContainerServesItToo'
-			into.push(qualifiedMethodName(sized, methodName: member))
-		end 'theSizedContainerServesItToo'
-	end 'appendCorpusContainerCallees'
-
-	// ⭐⭐ **THE SIZED CONTAINER'S HALF OF THE EDGE (W190), AND ITS ABSENCE WAS THE MEASURED FAILURE MODE OF
-	// THIS WHOLE CLASS.** `ARRG`'s own header records what a missing cross-type edge costs: with `set` struck
-	// from `arraySurfaceMemberNames` and no edge, **38 cases died at `panic … primitiveTypeByteSize: a
-	// typeParameter's size is a runtime layout-descriptor read`** — a COMPILER ABORT, not a diagnostic. A
-	// `Vector` member retiring to the corpus opens the identical hole one container over: `slot.get(i)` inside
-	// `type Holder uses Element`, where `Slot = Vector with 4 Element`, is a call to a SHARED generic body that
-	// may reserve a descriptor its caller has to supply.
-	//
-	// ⚠ There is at most ONE sized-container declaration where an `Array` may have two: a user `type Vector`
-	// is not the corpus's record (`declarationIsASizedContainerRecordNamed` is the CORPUS's declaration and no
-	// other), so there is no union to take.
-	function corpusServesSizedContainerMember(member ByteArray) returns bool
-		let declaration = self.sizedContainerDeclarationName()
-		if declaration.isEmpty() 'noSizedContainerDeclarationInThisCompile'
-			return false
-		end 'noSizedContainerDeclarationInThisCompile'
-
-		return self.corpusContainerDeclarationServes(declaration, surface: MemberSurface.vector, member: member)
-	end 'corpusServesSizedContainerMember'
-
-	// The name `stdlib/Vector.maxon`'s declaration goes by in this compile — the bare container name normally,
-	// this compile's mint when a USER program declares it — or EMPTY when no module declares one at all.
-	// Read through `declarationIsASizedContainerRecordNamed`, which is the CORPUS's declaration and no other,
-	// so the edge and every other sized-container door name one declaration.
-	function sizedContainerDeclarationName() returns ByteArray
-		let declared = self.signatures.stdlibShadowRenameOf(VectorBuiltinBaseName)
-		return declared if self.signatures.declarationIsASizedContainerRecordNamed(declared) else EmptySourceText
-	end 'sizedContainerDeclarationName'
-
-	// Does ONE named container declaration serve `member` through a corpus body a caller may have to supply a
+	// Does ONE named `Array` declaration serve `member` through a corpus body a caller may have to supply a
 	// layout descriptor for? The first two clauses are the DISPATCH's own (`corpusServesNamedMemberOffRoster`),
 	// so the call this edge is drawn for and the call the parser will actually route to a corpus body are one
 	// decision. The receiver clause is this asker's alone — the ⛔⛔ paragraph above carries what admitting a
-	// static cost. Written once because the memo above and the callee-NAME appender both ask it, and a
+	// static cost. Written once because the memo above and the callee-NAME loop in the scan both ask it, and a
 	// second copy is how the edge would come to be recorded for a member the dispatch does not route.
-	function corpusContainerDeclarationServes(declaration ByteArray, surface MemberSurface, member ByteArray) returns bool
-		return self.corpusServesNamedMemberOffRoster(member, surface: surface, typeName: declaration) and self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(declaration, methodName: member))
-	end 'corpusContainerDeclarationServes'
+	function corpusArrayDeclarationServes(declaration ByteArray, member ByteArray) returns bool
+		return self.corpusServesNamedMemberOffRoster(member, surface: MemberSurface.array, typeName: declaration) and self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(declaration, methodName: member))
+	end 'corpusArrayDeclarationServes'
 
 	// ⭐⭐ **THE CALLEE A CALL ON A NESTED PARAMETERISED INSTANCE LINKS TO, or NONE (W161).**
 	// `EChain.create()` inside `type Bag uses Element` answers `Inner.create` and `chain.count()` answers
@@ -47760,6 +47718,12 @@ export type Parser
 	// OTHER literal marker falls through to `requireFusedWrapperTag`, whose subject is the byte record and
 	// whose sentence is true of it.
 	// (`array-declared-record.error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject`)
+	//
+	// ⚠ **THE OPENING CLAUSE READ *"serves from its own runtime rather than from a declaration"* AND W190
+	// FALSIFIED IT.** `stdlib/Vector.maxon` serves `create`, `count`, `get` and `set` now — there is no
+	// runtime surface left to name. What is still true, and is the whole of what this refusal rests on, is
+	// that shv2 SYNTHESIZES the RECORD: a `Vector with …` is this compiler's instance whatever a declaration
+	// of that name says, which is exactly why the marker's identity cannot be honoured on it.
 	function requireNameIsNotABuiltinContainerBase(layout StructLayout, anchor Token) throws ParseError
 		if not layout.requireBuiltinManagedWrapperInterfaceName().equals(BuiltinArrayLiteralInterfaceName) 'notTheArrayMarker'
 			return
@@ -47769,7 +47733,7 @@ export type Parser
 			return
 		end 'aNameNoContainerHolds'
 
-		throw ParseError.unsupported("`{String.from(layout.name)}` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `{String.from(layout.name)} with …` is already this compiler's own instance and not the `{String.from(ManagedMemoryTypeName)}` record a `{String.from(BuiltinArrayLiteralInterfaceName)}` conformer's literal is an identity on. Honouring the marker would put every `{String.from(layout.name)}` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker", line: anchor.line, column: anchor.column)
+		throw ParseError.unsupported("`{String.from(layout.name)}` is a generic container shv2 SYNTHESIZES the record for, so a `{String.from(layout.name)} with …` is already this compiler's own instance and not the `{String.from(ManagedMemoryTypeName)}` record a `{String.from(BuiltinArrayLiteralInterfaceName)}` conformer's literal is an identity on. Honouring the marker would put every `{String.from(layout.name)}` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker", line: anchor.line, column: anchor.column)
 	end 'requireNameIsNotABuiltinContainerBase'
 
 	// ⭐⭐ **A GENERIC `BuiltinArrayLiteral` CONFORMER WHOSE FIRST FIELD IS NOT THE BUFFER (ARR5)** — it exists
@@ -50316,13 +50280,12 @@ export type Parser
 			return try self.dispatchCursorMethod(func, cursor: recv.value, giid: recv.nameId, resultUsed: resultUsed, borrowSubjectName: recv.subjectName)
 		end 'cursorMethod'
 
-		// A VECTOR RECEIVER (`v.get(0)`, `v.set(0, value: 42)`, `v.count()`) goes to the fixed-size container's
-		// dispatch. It carries the STORAGE mask as well as the borrow subject, which the `List` arm above does
-		// not: a vector's slots ARE an array's, so a `set` through one can free the very element an outstanding
-		// `get` borrow names — the exact question E3070 tracks for an `Array`.
-		if self.signatures.isVectorInstanceAt(recv.tag, nameId: recv.nameId) 'vectorMethod'
-			return try self.dispatchVectorMethod(func, vec: recv.value, resultUsed: resultUsed, immutableReceiverName: recv.immutableName, borrowSubjectName: recv.subjectName, receiverOwner: recv.owner, receiverStorage: self.subjectStorageMask(func, subjectName: recv.subjectName))
-		end 'vectorMethod'
+		// ⚠ **A VECTOR ARM STOOD HERE AND WENT WITH ITS DISPATCHER (W190)**, exactly as the `Set`/`Map` arms
+		// did at W105 and the `List` arm at W153. `stdlib/Vector.maxon` declares `create`, `count`, `get` and
+		// `set`, so `v.get(0)` and `v.set(0, value: 42)` are taken by `memberBelongsToTheCorpus` at the top of
+		// this switch and reach the ordinary declared-method path. **A vector's WRITE still has to reach a
+		// caller's borrow**, which was this arm's storage mask and is `noteStorageReachingCall`'s edge now —
+		// see the gate there, whose own header demanded this widening in advance.
 
 		// A `StringIndex` RECEIVER (`idx.charIndex()`, `idx.bytePos()`, P1.8 slice B2) takes its own two
 		// accessors rather than the struct path, under the SAME roster-wins rule that keeps `s.byteLength()`
@@ -50491,7 +50454,7 @@ export type Parser
 			try self.requireConstructibleSelfFieldBase(recv.tag, nameId: recv.nameId, fieldName: recv.selfFieldName, anchor: recv.anchor)
 		end 'selfFieldAlias'
 
-		return StructBase.create(try self.structLayoutOfType(recv.tag, nameId: recv.nameId, baseTok: recv.anchor), box: recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName)
+		return StructBase.create(try self.structLayoutOfType(BaseAccessKind.member, tag: recv.tag, nameId: recv.nameId, baseTok: recv.anchor), box: recv.value, immutableName: recv.immutableName, subjectName: recv.subjectName)
 	end 'structBaseOfReceiver'
 
 	// ⭐⭐ **MAY A SELF-FIELD ALIAS OF THIS AGGREGATE TYPE BE A BASE AT ALL? — ONE PREDICATE FOR THE TWO
@@ -51480,7 +51443,7 @@ export type Parser
 		// method call on a CAPTURED receiver cannot reach a binding of the enclosing body, and a captured
 		// managed CONTAINER — the only thing a borrow could be taken out of — is refused outright at this rung
 		// (`capturedStructBase` admits only a struct). There is no storage here for a conflict to be about.
-		return StructBase.create(try self.structLayoutOfType(capturedTag, nameId: capturedTypeNameId, baseTok: baseTok), box: try self.emitCaptureRead(baseName, enclosing: enclosing, anchor: baseTok), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
+		return StructBase.create(try self.structLayoutOfType(BaseAccessKind.member, tag: capturedTag, nameId: capturedTypeNameId, baseTok: baseTok), box: try self.emitCaptureRead(baseName, enclosing: enclosing, anchor: baseTok), immutableName: self.immutableReceiverNameOf(binding, baseTok: baseTok), subjectName: EmptySourceText)
 	end 'capturedStructBase'
 
 	// ⭐ **A STRING RECEIVER'S LAST SYNTHESIZED DOOR, AND IT NOW SERVES NO METHOD OF ITS OWN (W49 wave 9).**
@@ -55893,7 +55856,7 @@ export type Parser
 	// carries `fixedSize` explicitly, for exactly this).
 	//
 	// ⛔ **WHAT IS GENUINELY UNSOUND IS ONE INSTANTIATION AT A TIME, AND IT IS THE `create()` THAT PUBLISHES
-	// SLOTS — NOT THE STRIDE.** `emitVectorCreateOp` grows the record to N by ZEROING it, so all N slots are
+	// SLOTS — NOT THE STRIDE.** `emitSizedContainerRecord` grows the record to N by ZEROING it, so all N slots are
 	// readable by the type's own contract; a trivial element's zero IS a value, and a managed element's is a
 	// NULL. A type parameter can be instantiated at a managed type, so the question the concrete arm below
 	// answers off `containerElementIsManaged` is answered here off the INSTANTIATION SET
@@ -55909,7 +55872,7 @@ export type Parser
 	// NULL slots: `count()` answered **2** while `try v.get(0)` took the empty-slot branch — two elements it
 	// does not have, exit 0, no diagnostic — and `for a in v` with a read of `a` dereferenced those NULLs
 	// through `__managed_get_unchecked` and **ACCESS-VIOLATED (0xC0000005)**. `requireArrayResizeHasZeroElement`'s
-	// E3106 is the rule that normally holds this shut, and `emitVectorCreateOp` reaches `__managed_resize`
+	// E3106 is the rule that normally holds this shut, and `emitSizedContainerRecord` reaches `__managed_resize`
 	// without passing it; that header predicted this exact failure in these words — *"If this refusal is ever
 	// relaxed, that read becomes a null deref in a function whose own text still looks correct."*
 	// ⇒ The question is asked of the ONE door that answers it (`requireListElementType` opens with the same
@@ -55991,52 +55954,13 @@ export type Parser
 	// do not relax either without the other.**
 
 
-	// Does this `Vector` method WRITE through its receiver — the `let`-rule and E3070 question, asked of the
-	// one mutator a fixed-size container has.
-	function vectorMethodMutatesReceiver(name ByteArray) returns bool
-		return name.equals(ArraySetMethod)
-	end 'vectorMethodMutatesReceiver'
-
-	// ⭐ **DISPATCH A BUILTIN `Vector` METHOD** — cursor on the method NAME, `vec` the (borrowed) receiver
-	// record. Three members, and every one of them is emitted through the CONTAINER doors the `Array` and
-	// `List` dispatchers already use (`emitContainerElementAccessor`, `parseArraySet`), so the
-	// ownership, the borrow and the element type are one answer for all three containers.
-	//
-	// ⭐⭐ **`count()` FOLDS TO A CONSTANT, WHICH IS THE ONE PLACE A VECTOR VISIBLY IS NOT AN ARRAY.** The size
-	// is part of the TYPE (`SignatureIndex.VectorBuiltinBaseName`), so the count is known wherever the type is
-	// — including for a vector arriving as a PARAMETER, whose record this code never sees. Reading `length@8`
-	// would answer the same number by a route that could disagree with the type, and a fixed size that can
-	// disagree with its own type is not a fixed size.
-	//
-	// ⭐ **THE ROSTER GATE IS ASKED FIRST**, as it is on every other surface that carries one: it is the
-	// question every other refusal about the call presupposes. It came last of the eight, and with it the
-	// typed-out fall-through sentence goes — what this surface serves is stated once, in
-	// `vectorSurfaceMemberNames`, and read by the gate, by the refusal and by the drift panic at once.
-	function dispatchVectorMethod(func IrFunction, vec ValueId, resultUsed bool, immutableReceiverName ByteArray, borrowSubjectName ByteArray, receiverOwner ParamPositionMask, receiverStorage ParamPositionMask) returns ValueId throws ParseError
-		let methodTok = try self.consume(TokenKind.identifier)
-		let roster = try self.requireSurfaceMember(MemberSurface.vector, typeName: VectorBuiltinBaseName, methodTok: methodTok)
-		let range = SourceRange.ofToken(methodTok)
-		let giid = self.valueNameId(vec)
-		let mutates = vectorMethodMutatesReceiver(methodTok.value)
-
-		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
-		self.noteBorrowSubjectWrite(func, receiver: vec, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
-
-		if methodTok.value.equals(ArraySetMethod) 'set'
-			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
-			return try self.parseArraySet(func, arr: vec, giid: giid, callee: ManagedSetName, methodTok: methodTok, secondArgLabelled: true, range: range)
-		end 'set'
-
-		// ⚠⚠ **NO RECEIVER CAN REACH HERE, AND THIS IS THE CHECK THAT SAYS SO** — the `Array` and buffer
-		// dispatchers' own closing argument, verbatim: the gate at the top admitted only the names
-		// `vectorSurfaceMemberNames` lists, and each of those matches an arm on its own spelling, so arriving
-		// here means the roster gained a member and the dispatch did not — the failure mode a roster INTRODUCES,
-		// and the one the typed-out sentence it replaces could not have. **VERIFIED RED**: pushing
-		// `ContainsMethod` onto that roster and writing `v.contains(1)` reaches this panic, naming the member,
-		// the roster it came from and both remedies.
-		let drift = rosterDriftMessage("dispatchVectorMethod", member: methodTok.value, roster: roster, rosterFuncs: "`vectorSurfaceMemberNames`")
-		panic("{drift}")
-	end 'dispatchVectorMethod'
+	// ⚠ **`vectorMethodMutatesReceiver` AND `dispatchVectorMethod` STOOD HERE (W190).** The dispatcher's last
+	// arm was `set`, emitted through `parseArraySet` — the same container door the `Array` uses — and its
+	// mutation answer fed `noteReceiverWrite` (E3019) and `noteBorrowSubjectWrite` (E3070). Both questions are
+	// the DECLARATION's now: `stdlib/Vector.maxon`'s `set` writes through `self` like any other declared
+	// method, E3019 is a BUILTIN-surface rule a declared type is exempt from (`STDLIB-BRINGUP.md`, the ruling
+	// `Set` paid three cases for), and the borrow reaches a caller through
+	// `noteStorageReachingCall`'s edge instead of through a receiver mask this door supplied.
 
 	// Is the cursor on a `Vector from` construction — the bare `Vector` identifier immediately followed by
 	// `from`? `atListFromConstruction`'s twin, read by BOTH the declaration sweep (which pre-interns the
@@ -57156,14 +57080,6 @@ export type Parser
 			return self.cursorSurfaceRoster
 		end 'cursorSurface'
 
-		if surface == MemberSurface.vector 'vectorSurface'
-			if self.vectorSurfaceRoster is sharedEmptySurfaceRoster 'firstVectorCallInThisFile'
-				self.vectorSurfaceRoster = vectorSurfaceMemberNames()
-			end 'firstVectorCallInThisFile'
-
-			return self.vectorSurfaceRoster
-		end 'vectorSurface'
-
 		panic("surfaceMemberNames: no roster for a `MemberSurface` this function does not cover — a surface added to the enum without one, which every gate reading it would then answer for by falling through")
 	end 'surfaceMemberNames'
 
@@ -57374,24 +57290,27 @@ export type Parser
 		end 'anArraySurface'
 
 		// ⭐⭐ **THE SIZED CONTAINER'S ARM, AND LISTING `stdlib/Vector.maxon` DOES NOT WORK WITHOUT IT (W189).**
-		// The roster is what the COMPILER serves (`count`/`get`/`set`, each for a compile-time fact the corpus
-		// body cannot see — the size, and the constant index the bounds-check elision reads); everything else
-		// the declaration carries is the declaration's, exactly as it is for `Array` and `String`.
 		//
 		// ⛔ **MEASURED, and it is the whole difference between a filtered run and the suite: `--filter=vector`
 		// was 55/55 without this arm and the full suite was 5941/400.** 375 of those are one sentence —
 		// `E2015 stdlib/Interfaces.maxon:229: `Vector` member 'createIterator' — shv2 provides count/get/set` —
 		// because a listed `Vector` DECLARES `implements Iterable`, so `extension Iterable`'s `map`, `filter`
 		// and `contains` specialize for it, and their `for item in self` asks the receiver for the very member
-		// the roster does not carry. The conformance is not decoration: it is what publishes those extension
+		// the roster did not carry. The conformance is not decoration: it is what publishes those extension
 		// methods onto the type, and they are compiled.
+		//
+		// ⭐⭐ **AND IT HAS NO ROSTER CLAUSE LEFT (W190), WHICH IS WHAT MAKES IT THE WHOLE SURFACE RATHER THAN
+		// ITS REMAINDER.** The three sibling arms above ask two questions — does the COMPILER serve this name
+		// itself, and does the corpus declare it — because each of those surfaces still has members of its own.
+		// The sized container has none: `vectorSurfaceMemberNames` and `dispatchVectorMethod` are gone, so the
+		// first question is vacuous and only the declaration's answer is left.
 		if self.signatures.isVectorInstanceAt(recv.tag, nameId: recv.nameId) 'aSizedContainerSurface'
 			let sizedDeclaration = self.signatures.genericInstanceBaseName(recv.nameId)
 			if not self.signatures.declarationIsASizedContainerRecordNamed(sizedDeclaration) 'notTheCorpusVector'
 				return false
 			end 'notTheCorpusVector'
 
-			return self.corpusServesMemberOffRoster(MemberSurface.vector, typeName: sizedDeclaration)
+			return self.corpusDeclaresMemberAtCursor(sizedDeclaration)
 		end 'aSizedContainerSurface'
 
 		return false
@@ -57425,9 +57344,27 @@ export type Parser
 		return self.corpusServesNamedMemberOffRoster(memberTok.value, surface: surface, typeName: typeName)
 	end 'corpusServesMemberOffRoster'
 
+	// ⭐⭐ **THE SAME DOOR FOR A TYPE WITH NO SYNTHESIZED SURFACE LEFT AT ALL (W190).** The rostered form above
+	// asks two questions and this one asks the second alone: the sized container has no roster to lose a name
+	// to, so every member a `Vector` has is `stdlib/Vector.maxon`'s. It is a SEPARATE door rather than a call
+	// with an empty roster because an empty roster would need a `MemberSurface` entry, and that entry is
+	// exactly what retires when a dispatcher does.
+	//
+	// ⚠ It PEEKS, and it carries the `tokenCanBeAName` guard for the rostered door's measured reason: a
+	// literal carries its CONTENT in `.value`, so `Vector."frobnicate"` would otherwise be tested against the
+	// declaration by bytes alone.
+	function corpusDeclaresMemberAtCursor(typeName ByteArray) returns bool
+		let memberTok = self.current()
+		if not tokenCanBeAName(memberTok) 'notAMemberName'
+			return false
+		end 'notAMemberName'
+
+		return self.signatures.declaresCallee(qualifiedMethodName(typeName, methodName: memberTok.value))
+	end 'corpusDeclaresMemberAtCursor'
+
 	// ⭐⭐ **THE RULE ITSELF, GIVEN A NAME RATHER THAN A CURSOR (ARRG).** The door above PEEKS, and that peek
 	// is a fact about where the dispatch stands rather than about the rule — so a second asker that holds a
-	// TOKEN INDEX instead of a cursor (`Parser.corpusServesAContainerMember`, the descriptor fixpoint's cross-type
+	// TOKEN INDEX instead of a cursor (`Parser.corpusServesArrayMember`, the descriptor fixpoint's cross-type
 	// edge) can read the same two clauses rather than restate them.
 	//
 	// ⛔ **AND RESTATING THEM WOULD DIVERGE SILENTLY IN THE WORST DIRECTION.** The two askers are the DISPATCH
@@ -59618,48 +59555,25 @@ export type Parser
 		throw ParseError.promiseStorageMismatch("'{storageName}' names the error type '{claimedError}', but this promise's function throws '{thrown}'", line: anchor.line, column: anchor.column)
 	end 'requirePromiseStorageErrorMatches'
 
-	// ⭐⭐ **THE CALLEE AN ELEMENT ACCESS TAKES — the ELIDED entry when the compiler can decide the bounds test
-	// itself (S2m-b), the checked one otherwise.** ⚖ USER RULING, 2026-08-06: *"we should be able to add an
-	// optimization to remove the bounds check when using static indexes on a vector (fixed size)"*.
+	// ⛔⛔ **`elementAccessCallee` STOOD HERE, AND THE BOUNDS-CHECK ELISION WENT WITH THE MEMBERS IT SERVED
+	// (W190).** ⚖ USER RULING, 2026-08-06: *"we should be able to add an optimization to remove the bounds
+	// check when using static indexes on a vector (fixed size)"* — and it was built, at `S2m-b`: a second
+	// runtime entry (`__managed_get_in_bounds` / `__managed_set_in_bounds`) picked when the container carried
+	// its SIZE in its TYPE and the index was a compile-time constant inside it.
 	//
-	// ⭐ **BOTH HALVES OF THE PROOF READ A DOOR THAT ALREADY EXISTED, AND NEITHER IS A SECOND ANSWER.**
-	//   • the LENGTH is `genericInstanceFixedSize` — the second coordinate of a sized instance's identity, the
-	//     same one `Vector.count()` folds to a literal through and the same one `requireVectorElementType`
-	//     protects by refusing `Vector with <N> <type parameter>`. It answers `NoFixedSize` for every unsized
-	//     container, which is what makes this safe to ask on the shared `set` path: an `Array`, a `List` and a
-	//     `__ManagedMemory` buffer all decline here without a per-container test.
-	//   • the INDEX is `constIsKnown`/`constOf` — the parser's OWN constant view, the same columns the shift
-	//     rule and `emitBinOp`'s fold read. So a literal, a `let` bound to one and a folded expression all
-	//     qualify by construction, and a loop variable, a parameter and a call result all decline.
+	// ⭐ **WHAT RETIRED IT IS NOT A CHANGE OF MIND ABOUT THE OPTIMIZATION — IT IS THAT ITS SUBJECT LEFT.** The
+	// proof is a fact about the CALL SITE (this index, this size); `stdlib/Vector.maxon`'s `get`/`set` are ONE
+	// shared body reached by a CALL, taking `index` as a runtime parameter, and no callee can see whether its
+	// caller wrote a literal. The elision therefore had exactly one live pair of call sites — the vector's own
+	// dispatch arms — and every other container declined by itself (`genericInstanceFixedSize` answers
+	// `NoFixedSize`), so with those arms gone this router could only ever return its argument.
+	// `specs-shv2/vector-static-index.md` keeps all eighteen of its cases, which pin the ANSWERS, and states
+	// what is no longer true of the emitted code.
 	//
-	// ⚠ **AN OUT-OF-RANGE CONSTANT KEEPS THE CHECK; IT IS NOT A COMPILE ERROR.** The index and the length are
-	// both known there, so refusing it is tempting — but `/specs/vector.md` REQUIRES it to compile and throw:
-	// `get-out-of-bounds` reads `try v.get(5) otherwise -1` off a `Vector with 2 Int` and expects `-1`, and
-	// `set-out-of-bounds-throws` runs its `otherwise` handler. Both are canonical, both are what the runnable
-	// oracle does, and a refusal here would fork shv2 from the corpus over an optimization. The elision proves
-	// SUCCESS and does nothing else: where it cannot, the checked entry answers exactly as before.
-	//
-	// ⚠ **THE CONSTANT TEST IS ASKED FIRST, AND IT IS THE ONE THAT SAYS NO.** Both probes are a single array
-	// read (`valueConstDomains`, `GenericInstanceRegistry.fixedSizes`), so this is not about their cost but
-	// about which of them DECIDES: every element access in the program reaches here, almost none of them has a
-	// constant index, and the constant column is the one the parser is already touching on every value.
-	function elementAccessCallee(checked ByteArray, index ValueId, giid GenericInstanceId) returns ByteArray
-		if not self.constIsKnown(index) 'runtimeIndex'
-			return checked
-		end 'runtimeIndex'
+	// ⚠ **RECOVERING IT LATER IS AN INLINER'S JOB AND NOT THIS DOOR'S**: once `Vector.get`'s body is inlined
+	// at a constant index, the test is a comparison of two constants and the ordinary folding removes it — one
+	// mechanism instead of a second runtime entry per accessor.
 
-		let size = self.signatures.genericInstanceFixedSize(giid)
-		if size == NoFixedSize 'lengthIsARuntimeField'
-			return checked
-		end 'lengthIsARuntimeField'
-
-		let constant = self.constOf(index)
-		if constant < 0 or constant >= size 'provablyOutOfRange'
-			return checked
-		end 'provablyOutOfRange'
-
-		return inBoundsElementAccessor(checked)
-	end 'elementAccessCallee'
 
 	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
 	function parseArrayOneArg(func IrFunction) returns ValueId throws ParseError
@@ -59765,9 +59679,7 @@ export type Parser
 		// ⚠ The Std entry still ok-returns `(0, flag)` — a throwing `void` runtime function is normal
 		// (`__managed_set_length`, `__managed_set_byte` and `__managed_mem_grow` are all declared `StdReturnType.void`
 		// and all throw); what this tag decides is whether MAXON believes the call yields something.
-		// The elision is asked HERE rather than at the `set` arms, because the index is parsed here — and it
-		// declines by itself for every unsized container, so no arm needs to know about it.
-		return self.emitRuntimeCall(self.elementAccessCallee(callee, index: index, giid: giid), args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return self.emitRuntimeCall(callee, args: tripleArgs(arr, second: index, third: value), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
 	end 'parseArraySet'
 
 	// `( expr )` — a single element-VALUE argument (`push(x)`), TYPE-CHECKED against the instance's element
@@ -60422,7 +60334,7 @@ export type Parser
 			throw ParseError.unsupported("a field access through '{String.from(baseLayout.name)}.{String.from(fieldTok.value)}', which is declared '{typeTagName(tag)}' and not a struct — only a struct field can carry a further field access", line: fieldTok.line, column: fieldTok.column)
 		end 'notAStruct'
 
-		return try self.structLayoutOfType(tag, nameId: typeNameIdOf(resolved), baseTok: fieldTok)
+		return try self.structLayoutOfType(BaseAccessKind.field, tag: tag, nameId: typeNameIdOf(resolved), baseTok: fieldTok)
 	end 'structLayoutOfField'
 
 	// ⭐⭐ **A SELF-FIELD READ — `count` AND `self.count`, ONE PATH.**
@@ -61434,7 +61346,7 @@ export type Parser
 		// The layout is proved BEFORE the box is loaded, so a base this door is going to refuse emits no op
 		// — `emitCheckedGlobalStore`'s discipline, and `structLayoutOfType` can still throw for a generic
 		// instance whose base carries no layout of its own.
-		let layout = try self.structLayoutOfType(baseTag, nameId: baseTypeNameId, baseTok: baseTok)
+		let layout = try self.structLayoutOfType(BaseAccessKind.field, tag: baseTag, nameId: baseTypeNameId, baseTok: baseTok)
 
 		let box = try self.baseBoxOf(binding, baseTok: baseTok)
 
@@ -61479,7 +61391,7 @@ export type Parser
 	// instance half asks the SAME walk gate the four `SignatureIndex` field walks open with, for the reason
 	// the gate below states: a name being declared is not the same fact as this instance's fields living
 	// there, and where they came apart the compiler read a heap pointer out as user data.
-	function structLayoutOfType(tag ValueTypeTag, nameId TypeNameId, baseTok Token) returns StructLayout throws ParseError
+	function structLayoutOfType(access BaseAccessKind, tag ValueTypeTag, nameId TypeNameId, baseTok Token) returns StructLayout throws ParseError
 		let typeName = self.baseStructNameOfType(tag, nameId: nameId, baseTok: baseTok)
 
 		// ⚠⚠ **AN INSTANCE ASKS `genericInstanceHasBaseLayout`, NEVER `structOf` ALONE — THE TWO DISAGREE,
@@ -61527,7 +61439,7 @@ export type Parser
 		// `missingBaseLayout`'s *"shv2 reads no stdlib"* sentence — a refusal whose every clause had stopped
 		// being true for this type the moment the module was listed.**
 		if tag == ValueTypeTag.genericInstance and not (self.signatures.genericInstanceHasBaseLayout(nameId) or self.signatures.declarationsValueIsTheManagedRecord(typeName)) 'noBaseLayout'
-			throw self.missingBaseLayout(typeName, baseTok: baseTok)
+			throw self.missingBaseLayout(access, typeName: typeName, baseTok: baseTok)
 		end 'noBaseLayout'
 
 		match self.signatures.structOf(typeName) 'declared'
@@ -61540,7 +61452,17 @@ export type Parser
 	// who needs opposite things from them — the diagnostic half of `ProgramSignatures.genericInstanceHasBaseLayout`,
 	// whose header states the split. Only an instance reaches here; a `structRef` with no layout is an
 	// invariant break and panics at the call site above.
-	function missingBaseLayout(typeName ByteArray, baseTok Token) returns ParseError
+	//
+	// ⭐⭐ **AND IT IS TOLD WHICH ACCESS IT WAS ASKED ABOUT, BECAUSE IT USED TO CALL EVERY ONE OF THEM A FIELD
+	// (W190).** This door serves BOTH the field walk and the member-dispatch fall-through, and its own
+	// neighbour's header recorded the consequence in so many words — *"a declared `Array.size()` got as far as
+	// `missingBaseLayout` and was refused 'a field access … `Array` is a BUILTIN whose runtime record shv2
+	// synthesizes', about a METHOD"*. That stayed theoretical while every synthesized surface caught its own
+	// members first; retiring `dispatchVectorMethod` sent the first member call here for real, and
+	// `array-declared-record.error.a-conformer-named-for-a-container-that-constructs-nothing-…` MEASURED it:
+	// `v.push(5 as Num)` reported as a field access on `v`. A refusal that misnames the construct it refuses
+	// sends the reader to look at the wrong line.
+	function missingBaseLayout(access BaseAccessKind, typeName ByteArray, baseTok Token) returns ParseError
 		// ⚠ **DO NOT SAY THE FIELD DOES NOT EXIST — IT VERY LIKELY DOES.** shv2 reads no stdlib and SYNTHESIZES
 		// the `Array`/`Set` runtime record instead of compiling the declaration, so no `type` exists here to
 		// carry a field table at all — the field is missing from this compiler, not from the language. E2015 —
@@ -61557,7 +61479,7 @@ export type Parser
 		// fields (`Array` its `managed`, `Set` its `elements`/`states`/`hashes`) and a message that named one
 		// of them would be false about the other.
 		if self.signatures.isBuiltinGenericBaseName(typeName) 'synthesizedBuiltin'
-			return ParseError.unsupported("a field access on '{String.from(baseTok.value)}': `{String.from(typeName)}` is a BUILTIN whose runtime record shv2 synthesizes, not a `type` it compiles — shv2 reads no stdlib, so none of the fields `stdlib/{String.from(typeName)}.maxon` declares exist here yet. The field is missing from this compiler, not from the language; reach the contents through the methods", line: baseTok.line, column: baseTok.column)
+			return ParseError.unsupported(builtinRecordAccessRefusal(access, typeName: typeName, baseName: baseTok.value), line: baseTok.line, column: baseTok.column)
 		end 'synthesizedBuiltin'
 
 		// The base is not declared AT ALL, so it has no fields and never will under this spelling. The
@@ -61566,6 +61488,24 @@ export type Parser
 		// message has to carry the cause on its own rather than defer to one the user will never see.
 		return ParseError.unsupported("a field access on '{String.from(baseTok.value)}': its type instantiates '{String.from(typeName)}', which no file declares as a generic `type`, so it has no fields — the `with` that names it is the error", line: baseTok.line, column: baseTok.column)
 	end 'missingBaseLayout'
+
+	// The synthesized-record refusal, worded for the access that met it. Two sentences and not one with a noun
+	// swapped, because they say genuinely different things: a FIELD is missing from this compiler and can be
+	// reached through the members instead, while a MEMBER of a declaration this name also carries is not
+	// missing at all — it belongs to a type the value is not. `containerStaticSurfaceSentence`'s per-container
+	// router is the same shape for the same reason.
+	//
+	// ⚠ **THE "shv2 READS NO STDLIB" CLAUSE IS GONE FROM BOTH, AND IT WAS FALSE RATHER THAN MERELY DATED.**
+	// `stdlib/Array.maxon` and `stdlib/Vector.maxon` are both LISTED, so this compiler has read the very file
+	// the old sentence said it does not. What is true is narrower and is what the reader needs: the RECORD is
+	// synthesized, so a value of the instance carries that record's words whatever any declaration of the name
+	// says.
+	function builtinRecordAccessRefusal(access BaseAccessKind, typeName ByteArray, baseName ByteArray) returns String
+		return match access 'access'
+			field gives "a field access on '{String.from(baseName)}': `{String.from(typeName)}` is a BUILTIN whose runtime record shv2 SYNTHESIZES rather than compiling a declaration for, so a value of it carries that record's own words and not the fields `stdlib/{String.from(typeName)}.maxon` declares. The field is missing from this compiler, not from the language; reach the contents through the methods"
+			member gives "a member access on '{String.from(baseName)}': `{String.from(typeName)}` is a BUILTIN whose runtime record shv2 SYNTHESIZES rather than compiling a declaration for, so a `{String.from(typeName)} with …` is this compiler's own instance and its members are the container's — not the ones a `type {String.from(typeName)}` declared here carries. Rename the declaration to reach its own members"
+		end 'access'
+	end 'builtinRecordAccessRefusal'
 
 	// ⭐⭐ **A MEMBER-ACCESS BASE MAY NOT BE REFUSED IN TERMS OF A TYPE THE PROGRAM DOES NOT HAVE** — the
 	// guard the same three doors `structLayoutOfType` above serves stand behind: a local BINDING
@@ -67064,7 +67004,10 @@ export type Parser
 	//     writes reach a caller by the DIRECT column instead — `noteBorrowSubjectWrite`'s `receiverStorage`,
 	//     which is the same `subjectStorageMask` derivation this door uses and which covers the field-chain
 	//     spelling `b.items.clear()` that has no argument edge (measured: refused E3070 through a callee).
-	//     ⇒ A container that ever moves onto the corpus must widen this gate with the same move.
+	//     ⇒ A container that ever moves onto the corpus must widen this gate with the same move. **`Vector` DID
+	//     (W190)**, and the widening is exactly what that sentence demanded: `dispatchVectorMethod` is gone, so
+	//     `v.set(i, value: x)` is a DECLARED callee and its write reaches a caller by this argument edge and no
+	//     longer by the receiver mask that dispatcher supplied.
 	//   • **THE STORAGE MUST REACH A PARAMETER.** A local, a temporary and a top-level `var` reach no
 	//     caller — `subjectStorageMask` is the one derivation that answers this, shared with the roster
 	//     door, so the two cannot come to disagree about which storages a receiver stands for.
@@ -67075,9 +67018,9 @@ export type Parser
 			return
 		end 'theArgumentIsTheParameterAndTheEdgeExists'
 
-		if not self.valueIsArrayInstance(func, value: id) 'notAnArrayReceiver'
+		if not self.valueIsCorpusServedContainer(func, value: id) 'notAContainerReceiverWhoseMembersAreDeclared'
 			return
-		end 'notAnArrayReceiver'
+		end 'notAContainerReceiverWhoseMembersAreDeclared'
 
 		let reach = self.subjectStorageMask(func, subjectName: subjectName)
 		if reach == NoParamPositions 'reachesNoParametersStorage'
@@ -67088,18 +67031,24 @@ export type Parser
 		facts.storageReach.push(StorageReachEdge.create(callee, argColumn: argColumn, callerParams: reach))
 	end 'noteStorageReachingCall'
 
-	// Is the value at `id` an `Array` instance? The two-part test `typeIsArrayInstance` makes of a DECLARED
-	// type, asked here of a VALUE off the published per-value columns — `TypeNameId` and `GenericInstanceId`
-	// share a numeric space, so the tag is not optional (that function's ⚠ block carries the measurement).
-	function valueIsArrayInstance(func IrFunction, value ValueId) returns bool
+	// Is the value at `id` a container whose members the CORPUS serves — the growable record or the sized one?
+	// The two-part test `typeIsArrayInstance` makes of a DECLARED type, asked here of a VALUE off the published
+	// per-value columns — `TypeNameId` and `GenericInstanceId` share a numeric space, so the tag is not
+	// optional (that function's ⚠ block carries the measurement).
+	//
+	// ⚠ **THE `Vector` HALF ARRIVED WITH ITS DISPATCHER'S RETIREMENT (W190)** and not before: while
+	// `dispatchVectorMethod` existed, a vector's write reached a caller through the receiver mask that door
+	// passed, and an edge here would have said the same thing twice. The gate's own header names this widening
+	// as the obligation a container moving onto the corpus carries.
+	function valueIsCorpusServedContainer(func IrFunction, value ValueId) returns bool
 		if value >= func.valueTags.count() 'noPublishedTagForThisValue'
 			return false
 		end 'noPublishedTagForThisValue'
 
-		let tag = try func.valueTags.get(value) otherwise panic("valueIsArrayInstance: valueTags.get OOB at {value} inside its own count()")
-		let nameId = try func.valueNameIds.get(value) otherwise panic("valueIsArrayInstance: valueNameIds.get OOB at {value} — the two per-value columns are pushed in lockstep")
-		return self.signatures.isArrayInstanceAt(tag, nameId: nameId)
-	end 'valueIsArrayInstance'
+		let tag = try func.valueTags.get(value) otherwise panic("valueIsCorpusServedContainer: valueTags.get OOB at {value} inside its own count()")
+		let nameId = try func.valueNameIds.get(value) otherwise panic("valueIsCorpusServedContainer: valueNameIds.get OOB at {value} — the two per-value columns are pushed in lockstep")
+		return self.signatures.isArrayInstanceAt(tag, nameId: nameId) or self.signatures.isVectorInstanceAt(tag, nameId: nameId)
+	end 'valueIsCorpusServedContainer'
 
 	// ⭐⭐ **WHICH STORAGES A RECEIVER STANDS FOR — and `self` stands for MORE THAN ONE.** An ordinary
 	// receiver denotes one binding, so it records one site. The ENCLOSING `self` denotes the whole receiver,

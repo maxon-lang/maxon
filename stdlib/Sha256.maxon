@@ -6,10 +6,17 @@ typealias Sha256Words = Array with Word32
 // The eight-word hash state (FIPS 180-4 section 5.3.3), held in a fixed-size Vector.
 //
 // It was eight scalars, "so round bookkeeping doesn't require bounds-checked indexing" — and that
-// reason is kept rather than overridden. Eight scalars live across the whole block loop do not fit
-// the register pool, and a plain Array would trade that for a bounds check on every state access. A
-// Vector carries its SIZE in its type, so each constant index below is decided at compile time and
-// the access carries no bounds check at all.
+// reason is kept rather than overridden: eight scalars live across the whole block loop do not fit
+// the register pool. A Vector carries its SIZE in its TYPE, which is what a plain Array cannot say
+// — the state is eight words for the whole of this file's life and no code here can grow or shrink
+// it, because the surface has no operation that could.
+//
+// ⚠ THE SENTENCE THAT STOOD HERE CLAIMED THE ACCESSES CARRY NO BOUNDS CHECK. That was true of one
+// compiler for one rung (a constant index took an elided runtime entry) and it was never true of the
+// call site below that matters: `sha256AddIntoState` takes `slot` as a PARAMETER, which no compiler
+// folds. W190 retired the elision with the members — `get`/`set` are declared methods now — so every
+// access here is checked, and what the fixed size buys is the guarantee about the LENGTH rather than
+// the absence of a test.
 typealias Sha256State = Vector with 8 Word32
 
 // SHA-256 round constants (FIPS 180-4 section 4.2.2)
@@ -163,8 +170,14 @@ function sha256Compress(state Sha256State, padded ByteArray, blockOff Word32)
 end 'sha256Compress'
 
 // state[slot] = (state[slot] + addend) mod 2^32 — the block's contribution, written once for the
-// eight slots that all owe it. `slot` is a constant at every call site, so both accesses are
-// decided at compile time and neither is bounds-checked.
+// eight slots that all owe it.
+//
+// ⚠ IT SAID "`slot` is a constant at every call site, so both accesses are decided at compile time
+// and neither is bounds-checked", AND THAT WAS FALSE WHERE IT WAS WRITTEN. The eight CALLERS pass
+// constants; `slot` inside this body is a parameter, and a parameter is what
+// `vector-static-index.an-index-that-is-a-parameter-keeps-the-check` exists to say no compiler folds.
+// Both accesses are checked, and the `otherwise` arms below are unreachable because the callers pass
+// 0..7 into an eight-slot type — which is a fact about the TYPE, not about the index.
 function sha256AddIntoState(state Sha256State, slot Word32, addend Word32)
 	let current = try state.get(slot) otherwise panic("sha256: state index unreachable")
 	try state.set(slot, value: (current + addend) and 0xFFFFFFFF) otherwise panic("sha256: state index unreachable")

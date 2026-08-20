@@ -734,20 +734,26 @@ end 'main'
 24
 ```
 
-## The Member Surface Is A Roster
+## Every Member Is The Declaration's, And A Member It Does Not Have Is Refused Off It
 
-⚠ NOT FROM `/specs/vector.md` — shv2's own, and it pins a refusal that had never been pinned at all
-(W86). The vector dispatch is the last of eight member surfaces to reach the shared roster gate
-(`Parser.vectorSurfaceMemberNames` + `requireSurfaceMember`), and until this case the sentence a reader
-gets for a member a vector does not have was a hand-written literal nothing ran. It had already drifted:
-it named `push`/`pop`/`append`/`resize`/`clear` as the absent members and never mentioned `insert` or
-`remove`. Retiring a member to `stdlib/Vector.maxon` is a deletion from that roster and this case is what
-would move with it.
+⭐⭐⭐ **THE ROSTER IS GONE (W190), AND THIS SECTION IS WHAT REPLACED IT.** It held a case named
+`error.a-member-off-the-roster-is-refused-with-the-roster`, pinning the sentence
+`Parser.vectorSurfaceMemberNames` rendered for a member the SYNTHESIZED surface did not carry — *"shv2
+provides count/get/set; that list IS the surface"*. `create`, `count`, `get` and `set` are
+`stdlib/Vector.maxon`'s now, so there is no synthesized surface to render a sentence from and a member a
+`Vector` does not have is `E3004` off the declaration, exactly as it is for a `List` (W153) or a `Map` (W41).
 
-<!-- test: error.a-member-off-the-roster-is-refused-with-the-roster -->
-A fixed-size container has no `push`: its size is part of its type, so an operation that changed the
-length would change the value's type. What the reader is told is what the surface DOES serve, rendered
-from the one list the dispatch itself gates on.
+⛔⛔ **THE FIVE CASES BELOW ARE A PROBE THAT FOUND NOTHING, WRITTEN DOWN SO IT COUNTS AS HAVING HAPPENED**,
+and the thing they probe is a LANDMINE `W86` recorded in advance: a vector losing its dispatch arm would
+fall through to `dispatchArrayMethod` and be served the GROWABLE surface — *"a fixed-size container grown
+through its own type, a WRONG ANSWER rather than a refusal"*. It is defused, and by construction rather
+than by luck: `dispatchMethodOnReceiver`'s array arm tests `isArrayInstanceAt`, which reads the base NAME,
+and a `Vector`'s base is not an `Array`'s. **MEASURED, all five growth spellings, on the binary this rung
+ships.** ⚠ W86's citation for the cure (`SignatureIndex.maxon:8334`) had gone stale and pointed at
+`descriptorNeeds`; probing is what settled it.
+
+<!-- test: error.push-is-refused-off-the-declaration -->
+The spelling `W86` named first, and the one a hijacked receiver would have ANSWERED rather than refused.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -759,7 +765,267 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:4: Unsupported: `Vector` member 'push' — shv2 provides set; that list IS the surface, so nothing else is served here
+error E3004: <fragment>:7:4: call to undefined function 'Vector.push'
+```
+
+<!-- test: error.resize-is-refused-off-the-declaration -->
+The one `W112` MEASURED a user-declared `Vector` being served: `resize(9)` then `count()` answered **9**,
+a three-element type grown to nine with no diagnostic.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.resize(9)
+	return v.count()
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:4: call to undefined function 'Vector.resize'
+```
+
+<!-- test: error.clear-is-refused-off-the-declaration -->
+`clear` empties the record. A fixed-size container whose `count()` could reach 0 is not fixed.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	v.clear()
+	return v.count()
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:4: call to undefined function 'Vector.clear'
+```
+
+<!-- test: error.insert-is-refused-off-the-declaration -->
+⚠ **`insert` AND `remove` ARE THE TWO THE OLD HAND-WRITTEN SENTENCE NEVER NAMED**, which is what
+`vectorSurfaceMemberNames`' own header recorded as the usual finding when a typed-out list is replaced by
+a rendered one. Neither is served now, and neither has to be listed anywhere for that to be true.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	try v.insert(0, value: 4) otherwise panic("insert")
+	return v.count()
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:8: call to undefined function 'Vector.insert'
+```
+
+<!-- test: error.remove-is-refused-off-the-declaration -->
+The second of that pair, and the one that SHRINKS.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return try v.remove(0) otherwise 0
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:15: call to undefined function 'Vector.remove'
+```
+
+<!-- test: error.a-bare-growth-call-inside-an-extension-body-is-refused -->
+⛔⛔ **THE SECOND ENTRANCE `W86`'s LANDMINE COULD HAVE COME IN BY, AND IT IS SHUT FOR A DIFFERENT REASON
+FROM THE FIVE ABOVE.** `implicitSelfTakesTheArrayRoster` gives a BARE call inside a container's own body
+the ARRAY roster, which is what makes `stdlib/Array.maxon`'s own `contains(sequence)` reach `get`. Its gate
+is `declarationIsTheManagedRecord` — the GROWABLE record's declaration and not
+`declarationsValueIsTheManagedRecord`, which is the `or` that also admits the sized one — so an
+`extension Vector` body does not take that roster and a bare `push` resolves as an ordinary sibling call to
+a method nothing declares.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function grow() returns Int
+		push(4)
+		return 0
+	end 'grow'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.grow()
+end 'main'
+```
+```maxoncstderr
+error E3004: <fragment>:7:3: call to undefined function 'push'
+```
+
+<!-- test: error.the-buffer-under-a-vector-is-still-the-buffer -->
+⛔ **THE THIRD ENTRANCE.** `bufferSurfaceOfDeclaredRecord` deliberately RETYPES a sized container's
+`managed` read to `Array with Element`, so that `stdlib/Vector.maxon`'s own `VectorIter.create(managed)`
+type-checks — one record, two ids. The retype is a TYPE and not a surface: the value is still marked the
+BUFFER's, so what it serves is `bufferSurfaceMemberNames` and the growable array's members are not on it.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function grow() returns Int
+		managed.push(4)
+		return 0
+	end 'grow'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.grow()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:7:11: Unsupported: `__ManagedMemory` member 'push' — R4.4 provides length/capacity/get/set/setLength/setByte/byteAt/elementSize/grow/toCString/makeCharFromBytes/append/slice/clear/remove/swap/shiftRight/shiftLeft/createCursor; that list IS the surface, so nothing else is served here
+```
+
+## The Members Are Declared FUNCTIONS, Which Is A Thing A Dispatch Arm Cannot Be
+
+⭐⭐⭐ **THE DIFFERING-DECLARATIONS CONTROL, IN THE SUITE (W190).** Every ANSWER a retired member gives is
+the answer the compiler-served arm gave — that is what makes the retirement safe, and it is also what makes
+a value-COMPARING control impossible to write for `count`, `get` or `set`: both roads answer 42. What
+separates them is not the value but the KIND of thing that produced it. A dispatch arm is reachable through
+one syntax and nothing else; a declared method is a function of the program, and Maxon lets an instance
+method be named statically with its receiver as the first argument (`Adder.bump(a)`, which
+`parseQualifiedCall`'s header settles as legal). **`Vector.get(v, index: 1)` therefore cannot compile while
+`get` is a dispatch arm — there is no such function to call — and it is a RUNTIME ANSWER rather than a
+message text.**
+
+⚠ It also exercises the corpus body end to end: sabotaging `stdlib/Vector.maxon`'s `get` to `throw
+ArrayError.indexOutOfBounds` turns this case red where the intact declaration answers 42, which is the
+control `stdlib-whitelist.md` runs for a listed module and this rung owes for a retired member.
+
+<!-- test: the-members-are-functions-and-answer-to-their-static-spelling -->
+Both retired accessors, named statically, with the receiver passed as the first argument and the
+declaration's own `index:`/`value:` labels on the rest.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	try Vector.set(v, index: 1, value: 41) otherwise panic("set")
+	return (try Vector.get(v, index: 1) otherwise 0) + 1
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: the-count-is-a-function-too -->
+The same for `count`, which had no arguments at all to tell the two roads apart by — so the static spelling
+is the whole of the difference. Under the dispatch arm it folded to a literal at the CALL and `Vector.count`
+named nothing.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec5 = Vector with 5 Int
+
+function main() returns ExitCode
+	var v = Vec5.create()
+	return Vector.count(v) as ExitCode
+end 'main'
+```
+```exitcode
+5
+```
+
+## A Vector Global Takes The Declared Generic's Road
+
+⭐⭐ **A ROAD THIS CONTAINER HAD NEVER TAKEN (W190).** A top-level `var g = Vec3.create()` used to be
+gated by `requireContainerIsCreatable` and emitted by `containerCreateCall`'s BUILTIN arm — a runtime
+`__managed_create` handed the strides it cannot look up, plus one `__managed_resize` to size the record.
+With `create` declared, `instanceCreateIsDeclared` routes the global through
+`requireDeclaredGenericGlobalCreate` instead, whose three premises are the ones
+[top-level-factory-globals](top-level-factory-globals.md) pins for every declared generic: the `create()`
+must EXIST, be NAMEABLE from its declaring file, and return `Self`. `__module_init` then emits a bare
+`call Vector.create` with no stamps at all, and the record it hands back is already published — which is
+what let `ContainerSizing` be deleted rather than kept for one producer.
+
+<!-- test: a-vector-global-is-built-by-the-declarations-own-static -->
+The global is filled from one function and read from another, so what is under test is the slot
+`__module_init` wrote before `main` and not a local the same statement built.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+var shared = Vec3.create()
+
+function fill() returns Int
+	try shared.set(0, value: 20) otherwise panic("set")
+	try shared.set(2, value: 21) otherwise panic("set")
+	return 0
+end 'fill'
+
+function main() returns ExitCode
+	_ = fill()
+	return (try shared.get(0) otherwise 0) + (try shared.get(2) otherwise 0) + shared.count()
+end 'main'
+```
+```exitcode
+44
+```
+
+## The Fixed Size Is The Bound, And The Buffer Under It Is Not
+
+⛔⛔ **NOT FROM `/specs/vector.md` — shv2's own, and it pins a WRONG ANSWER this rung introduced and
+measured (W190).** `stdlib/Vector.maxon`'s `set` forwards to `managed.set`, and the BUFFER surface's setter is
+bounded by CAPACITY where the array surface's is bounded by LENGTH (⚖ user ruling 2026-07-30, recorded at
+`ManagedMemoryRuntime.ManagedMemSetName`: the wider bound is what makes the stage-then-`setLength` idiom
+spellable). A vector's capacity is NOT its count — `Vec3.create()` grows through
+`stdlib/Array.maxon`'s policy, whose `MinimumCapacity` is **4**, so a three-element vector's record has a
+fourth slot the type does not have.
+
+**MEASURED, with `set` forwarding straight to the buffer**: `made.set(3, value: 99)` on a
+`Vec3.create()` SUCCEEDED — a write to the fourth slot of a three-slot type, no diagnostic, `count()`
+unmoved at 3. The compiler-served `set` it replaced could not do this: it emitted `__managed_set`, which is
+length-bounded. So the guard here is not belt-and-braces, it is THE WHOLE OF THE VECTOR'S BOUND —
+`stdlib/Array.maxon`'s `set` carries the identical guard for the identical measured reason, and its header
+says so.
+
+⚠ The two spellings below are the two ways a vector comes into being, and they have DIFFERENT capacities
+(a literal's is the array literal's, a `create()`'s is the growth policy's) — so a case over only one of
+them would pass on the other's arithmetic.
+
+<!-- test: a-write-past-the-fixed-size-is-refused-however-the-vector-was-built -->
+Both vectors hold three elements and both refuse index 3. The index is laundered through a call so no
+constant is in the compiler's hands at the write — what is under test is the RUNTIME bound, and a folded
+index would be answering a different question.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function runtimeIndex(n Int) returns Int
+	return n
+end 'runtimeIndex'
+
+function main() returns ExitCode
+	var made = Vec3.create()
+	var lit = Vector from [1, 2, 3]
+	var refused = 0
+	try made.set(runtimeIndex(3), value: 99) otherwise 'madePastEnd'
+		refused = refused + 1
+	end 'madePastEnd'
+	try lit.set(runtimeIndex(3), value: 99) otherwise 'litPastEnd'
+		refused = refused + 1
+	end 'litPastEnd'
+	let madeRead = try made.get(runtimeIndex(3)) otherwise 0 - 1
+	print("refused={refused} madeRead={madeRead} madeCount={made.count()} litCount={lit.count()}\n")
+	return refused as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+refused=2 madeRead=-1 madeCount=3 litCount=3
 ```
 
 ## A Published Slot Must Be A Value At Every Instantiation

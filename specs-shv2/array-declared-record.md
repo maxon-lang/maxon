@@ -1483,7 +1483,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:10:10: Unsupported: `Vector` is a generic container shv2 serves from its own runtime rather than from a declaration, so a `Vector with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
+error E2015: <fragment>:10:10: Unsupported: `Vector` is a generic container shv2 SYNTHESIZES the record for, so a `Vector with …` is already this compiler's own instance and not the `__ManagedMemory` record a `BuiltinArrayLiteral` conformer's literal is an identity on. Honouring the marker would put every `Vector` on the growable array's surface — `push`, `resize` — under the container's own name, which is a wrong answer rather than a refusal. Rename the declaration, or drop the marker
 ```
 
 <!-- test: a-conformer-named-for-the-list-is-admitted-because-the-list-left-the-class -->
@@ -1537,10 +1537,16 @@ end 'main'
 ⭐⭐ **THE HALF THE TWO CASES ABOVE CANNOT SEE: A CONFORMER THAT CONSTRUCTS NOTHING.** Its `init` satisfies
 the conformance by DELEGATING, so it never reaches a fused-wrapper literal and the declaration stands. What
 must still hold is that the marker did not make `Vector` an ARRAY declaration, and the only thing holding
-that is `ProgramSignatures.noteArrayLiteralConformer`'s skip. The assertion is the ROSTER in the sentence:
-`count/get/set` is the VECTOR surface, and a hijacked receiver would be reciting the growable array's
-`managed/get/set/first/count/push/resize/append/appendMemory` instead — or, as it did before this rung,
-not being refused at all.
+that is `ProgramSignatures.noteArrayLiteralConformer`'s skip.
+
+⚠ **THE ASSERTION USED TO BE THE ROSTER IN THE SENTENCE, AND W190 RETIRED THE ROSTER.** It read
+*"`count/get/set` is the VECTOR surface, and a hijacked receiver would be reciting the growable array's
+`managed/get/set/first/count/push/resize/append/appendMemory` instead"*. Every member of a `Vector` is
+`stdlib/Vector.maxon`'s now, so there is no synthesized surface for a sentence to recite — and what the
+refusal names instead is the fact the case has always been about: the RECORD is this compiler's, so a
+`type Vector` declared here is not the container the instance denotes. A hijacked receiver would still be
+served `push` and answer 4, which is what this case fails on — or, as it did before the skip existed, not
+being refused at all.
 
 ⭐ **BOTH SABOTAGES WERE RUN, AND THE FIRST ONE REFUTED THE PARAGRAPH THAT USED TO STAND HERE.** It said the
 skip covers the surface, the refusal covers the declaration, and neither substitutes for the other — a tidy
@@ -1578,7 +1584,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:18:4: Unsupported: `Vector` member 'push' — shv2 provides set; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:18:2: Unsupported: a member access on 'v': `Vector` is a BUILTIN whose runtime record shv2 SYNTHESIZES rather than compiling a declaration for, so a `Vector with …` is this compiler's own instance and its members are the container's — not the ones a `type Vector` declared here carries. Rename the declaration to reach its own members
 ```
 
 <!-- test: error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject -->
