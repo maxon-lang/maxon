@@ -1578,7 +1578,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:18:4: Unsupported: `Vector` member 'push' — shv2 provides count/get/set; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:18:4: Unsupported: `Vector` member 'push' — shv2 provides get/set; that list IS the surface, so nothing else is served here
 ```
 
 <!-- test: error.a-string-marker-conformer-named-for-a-container-is-not-this-doors-subject -->

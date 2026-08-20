@@ -2437,7 +2437,7 @@ type MethodDescriptorScan
 	// ROSTER, SERVES (ARRG).** Every other entry above is a fact about what this body DOES; this one is a fact
 	// about a CALLEE'S ABI, and it is the only edge in the descriptor fixpoint that leaves the enclosing type.
 	// Already qualified, because the type they belong to is not `site.typeName` — see
-	// `Parser.corpusServesArrayMember`, which decides which names are on it.
+	// `Parser.corpusServesAContainerMember`, which decides which names are on it.
 	export let corpusContainerCallees as ByteArrayArray
 	// ⭐⭐ **THE OTHER CROSS-TYPE EDGE — `<Base>.<member>` FOR A CALL ON A NESTED PARAMETERISED INSTANCE
 	// (W161).** `EChain.create()` on a `typealias EChain = Inner with Element` links to `Inner.create`, and
@@ -3782,8 +3782,8 @@ let sharedEmptyDeclaredFuncNames = DeclaredFuncNameSet.create()
 let sharedEmptyOverloadMembers = OverloadMemberMap.create()
 
 // The same two anchors for the cross-type descriptor edge (ARRG), and here for the identical reason stated
-// one paragraph up. `Parser.corpusServedArrayMembers` is the per-file memo of "does the corpus serve
-// `Array.<m>` off the roster?"; `sharedEmptyCorpusContainerCallees` is what a scanned region's edge list IS
+// one paragraph up. `Parser.corpusServedContainerMembers` is the per-file memo of "does the corpus serve
+// a container's `<m>` off its roster?"; `sharedEmptyCorpusContainerCallees` is what a scanned region's edge list IS
 // until it records its first edge. **Both stay empty for almost every region there is** — the memo is
 // touched only by a file that scans a GENERIC type's body at all, and the edge list only by a body that
 // calls a member the roster has already given up. Allocated unconditionally, the pair billed one heap object
@@ -6085,7 +6085,7 @@ end 'cursorSurfaceMemberNames'
 //         static blob"* — the FORWARD it needs already existed (`emitInstanceDescriptorAddr`, whose parameter-run arm
 //         answered YES for `Array with Key` throughout). What was missing was the RESERVATION: the
 //         descriptor-need fixpoint's edges followed SELF calls only, so `Map.insertAtSlot`'s obligation to
-//         SUPPLY `Array.set`'s descriptor had no edge to arrive by. `Parser.corpusServesArrayMember` is
+//         SUPPLY `Array.set`'s descriptor had no edge to arrive by. `Parser.corpusServesAContainerMember` is
 //         that edge. Re-measured with `set` struck: **38 panics → 0**.
 //       – a **REFUSAL** where that receiver is not even admitted: 3 cases, `stable-partition-managed-pivot`
 //         ×2 and `generic-opaque-element-borrow-liveness.a-trivial-element-container-is-untouched`.
@@ -6538,7 +6538,6 @@ end 'stringIndexSurfaceMemberNames'
 // its body could not name the size anyway.
 function vectorSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
-	names.push(CountMethod)
 	names.push(GetMethod)
 	names.push(ArraySetMethod)
 	return names
@@ -11675,7 +11674,7 @@ export type Parser
 	// the sweep would serve the early answer for the rest of the file. `scanDescriptorSignalsIn`'s arm is
 	// reached only from `Queries.foldDescriptorNeeds`, which `scanDescriptorNeedsInto`'s header records as
 	// running once the index is whole. A second asker placed inside the sweep must not share this table.
-	var corpusServedArrayMembers as DescriptorNeedMap
+	var corpusServedContainerMembers as DescriptorNeedMap
 	// ⭐⭐ **THE USER CONSTRUCT THIS FILE'S REFUSAL IS REALLY ABOUT (BLAME)** — see `LibraryBlame`, and
 	// `blameLibraryRefusalOnInstantiation`, its one writer today. It is read by `Queries.queryParseOps` on
 	// the parse-failure path, which is why it lives on the parser and not on the `FileParseArtifact`: a
@@ -11882,7 +11881,7 @@ export type Parser
 			cursorSurfaceRoster: sharedEmptySurfaceRoster,
 			vectorSurfaceRoster: sharedEmptySurfaceRoster,
 			arrayDeclarationRoster: sharedEmptySurfaceRoster,
-			corpusServedArrayMembers: sharedEmptyCorpusMemberVerdicts
+			corpusServedContainerMembers: sharedEmptyCorpusMemberVerdicts
 		}
 	end 'create'
 
@@ -13445,7 +13444,7 @@ export type Parser
 	// The same framework `scanBodyFacts` uses (`opensBlockAt` / `closesBlockAt`) delimits each method body;
 	// a named `function <ident>` opens one (a closure is `function(` — no name, no `end`). Peek-only: the
 	// cursor is positioned from the site and the `Parser` this runs on parses nothing.
-	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap)
+	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap, countCallees SelfCalleesMap)
 		// The type scope the seeds are read against: `sizeofOperandIsTypeParamAt` needs the `uses` list, and
 		// `opaqueContainerConstructionAt` / `opaqueFieldReassignAt` key on `enclosingType`. Taken from the
 		// whole-program layout rather than re-read from a header, so an EXTENSION body — which has no `uses`
@@ -13684,6 +13683,7 @@ export type Parser
 				var readsACount = scan.readsFixedElementCount
 				var directlyNeeded = scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or forwardsBorrowedOpaqueToAFeed or storesBorrowedOpaqueElement or walksAnOwnedOpaqueElement
 				var edges = self.descriptorEdgesFor(site.typeName, scan: scan, isStatic: self.functionDeclIsStatic(q))
+				var countEdges = self.fixedElementCountEdgesFor(site.typeName, scan: scan)
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
 				// (W43b). See `fieldDefaultHelperNamesOf` for why every helper is named rather than only the
 				// fields the literal omits.
@@ -13694,11 +13694,13 @@ export type Parser
 					directlyNeeded = directlyNeeded or (try directSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent by `get`"))
 					readsACount = readsACount or (try countSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent from the count column — the two seed columns are written in one act"))
 					edges.append(try selfCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no self-callee row — the two columns are written in one act"))
+					countEdges = mergedCountEdges(countEdges, previous: try countCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no count-callee row — the two edge columns are written in one act"))
 				end 'aSecondDeclarationWearingThisName'
 
 				directSeeds.upsert(qualified, value: directlyNeeded)
 				countSeeds.upsert(qualified, value: readsACount)
 				selfCallees.upsert(qualified, value: edges)
+				countCallees.upsert(qualified, value: countEdges)
 				// Once per NAME, not once per declaration: `solveDescriptorNeeds` indexes the graph by this
 				// array, and a name listed twice would be two nodes standing for one method.
 				if not alreadyContributed 'firstDeclarationWearingThisName'
@@ -13720,7 +13722,7 @@ export type Parser
 			// runs. It is a NODE of this same fixpoint rather than a rule of its own, so a default that
 			// merely CALLS something needing one is covered by the same transitive closure.
 			if self.structFieldKeywordAt(q) 'field'
-				q = self.recordFieldDefaultDescriptorNeeds(q, typeName: site.typeName, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees)
+				q = self.recordFieldDefaultDescriptorNeeds(q, typeName: site.typeName, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees, countCallees: countCallees)
 				continue
 			end 'field'
 			q = q + 1
@@ -13756,7 +13758,7 @@ export type Parser
 	// (`= 7`) mints no helper at all (`FieldDefault.literal`), and scanning one finds nothing, so the two doors
 	// need no shared verdict: an entry keyed on a helper name no layout carries is dropped by the fixpoint's own
 	// name→index filter.
-	function recordFieldDefaultDescriptorNeeds(q TokenIndex, typeName ByteArray, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap) returns TokenIndex
+	function recordFieldDefaultDescriptorNeeds(q TokenIndex, typeName ByteArray, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap, countCallees SelfCalleesMap) returns TokenIndex
 		let afterModifier = self.pastVisibilityModifier(q)
 		let fieldName = self.tokenAt(afterModifier + 1).value
 
@@ -13775,6 +13777,7 @@ export type Parser
 		// extension may both wear — one helper name cannot be contributed twice and there is no union to take.
 		directSeeds.upsert(helperName, value: scan.direct)
 		countSeeds.upsert(helperName, value: scan.readsFixedElementCount)
+		countCallees.upsert(helperName, value: self.fixedElementCountEdgesFor(typeName, scan: scan))
 		// A field default is a nullary helper OF this type, so it holds the enclosing instance's descriptor on
 		// exactly the terms a method does — which is why the edge set is `descriptorEdgesFor`'s and not this
 		// door's own. A field default is never STATIC, and that is the one thing it has to say for itself.
@@ -13790,6 +13793,22 @@ export type Parser
 	// `type Container`'s body one node of one graph. A callee that is not a sibling at all (a free function, a
 	// builtin) survives the join as a name no method wears and is dropped by the fixpoint's own index filter,
 	// exactly as the bare form was.
+	// The union of two count-edge rows for one qualified name — `scanDescriptorNeedsInto`'s union rule, on the
+	// column whose empty answer is a SHARED object. The descriptor column appends in place because its row is
+	// always freshly minted (`qualifiedSelfCallees`); a count row for anything but the sized container is
+	// `sharedEmptySizedContainerSelfCallees`, and appending into that would grow an array every scanned method
+	// in the program is reading.
+	function mergedCountEdges(edges ByteArrayArray, previous ByteArrayArray) returns ByteArrayArray
+		if previous.count() == 0 'nothingToMerge'
+			return edges
+		end 'nothingToMerge'
+
+		var merged = ByteArrayArray.create()
+		merged.append(edges)
+		merged.append(previous)
+		return merged
+	end 'mergedCountEdges'
+
 	function qualifiedSelfCallees(typeName ByteArray, callees ByteArrayArray) returns ByteArrayArray
 		var qualified = ByteArrayArray.create()
 		for callee in callees 'eachCallee'
@@ -13848,6 +13867,38 @@ export type Parser
 		edges.append(scan.nestedInstanceCallees)
 		return edges
 	end 'descriptorEdgesFor'
+
+	// ⭐⭐⭐ **THE COUNT COLUMN'S EDGES ARE *NOT* THE DESCRIPTOR'S, AND "TWO SEEDS AND ONE EDGE SET" WAS
+	// MEASURED WRONG THE FIRST TIME A `Vector` MEMBER RETIRED (W190 step 2).** `foldDescriptorNeeds` solved
+	// both columns over `selfCallees` on the stated ground that a count and a descriptor *"propagate along
+	// exactly the same self-call edges"*. They do not, and the difference is the direction each may err in:
+	//
+	//   • **AN OVER-RESERVED DESCRIPTOR COSTS ONE IGNORED PARAMETER** — every cross-type and receiver-blind
+	//     edge in `descriptorEdgesFor` is licensed by that, in so many words.
+	//   • **AN OVER-RESERVED COUNT REFUSES A LEGAL PROGRAM.** The slot's supply is the CALLER's, and a caller
+	//     holding an instance that states no count has nothing to give: it meets
+	//     `requireFixedElementCountSourceForForwarding`. **MEASURED, the moment the cross-type corpus edge
+	//     (`corpusContainerCallees`) learned about the sized container**: `slot.capacity()` inside
+	//     `type Holder uses Element` drew `Holder.size → Vector.capacity`, so `Holder.size` reserved a count
+	//     and `countof.a-sized-field-of-another-generic-answers-its-own-count` — a case whose `slot` STATES 4
+	//     and needs no forward at all — was refused at `h.size()`. A second case
+	//     (`error.an-alias-of-a-Self-typed-parameter-is-refused`) stopped being refused for the mirror reason.
+	//
+	// ⭐ **THE PRECISE RULE IS A FACT ABOUT WHERE A COUNT CAN BE READ AT ALL: only inside the SIZED
+	// CONTAINER's own body.** `countof(Self)` requires it (`countofOperandIsTheOwnInstanceAt`) and so does the
+	// `Self{}` that publishes the slots (`ownRecordLiteralOfTheSizedContainerAt`). Everywhere else a receiver's
+	// instance STATES its count, so the call site folds a constant and owes its caller nothing. So the count
+	// graph is the container's own call graph and is EMPTY for every other type — which is also why this costs
+	// no allocation where it says nothing.
+	function fixedElementCountEdgesFor(typeName ByteArray, scan MethodDescriptorScan) returns ByteArrayArray
+		if not self.signatures.isVectorBaseName(typeName) 'notTheSizedContainersOwnBody'
+			return sharedEmptySizedContainerSelfCallees
+		end 'notTheSizedContainersOwnBody'
+
+		var edges = self.qualifiedSelfCallees(typeName, callees: scan.callees)
+		edges.append(scan.sizedContainerSelfCallees)
+		return edges
+	end 'fixedElementCountEdgesFor'
 
 	// The three calls a `for … in self` emits, qualified to the type they are made on — `self`, so the
 	// enclosing type, whichever of the two cursor shapes it is: a type with a FACTORY wears all three, and
@@ -14151,20 +14202,15 @@ export type Parser
 			// seed because whether the callee needs a descriptor is the fixpoint's own answer, not this scan's.
 			// The list is minted on the FIRST edge (`sharedEmptyCorpusContainerCallees`), so a body with no
 			// corpus call — nearly every body there is — allocates nothing for this arm.
-			if kind == TokenKind.dot and self.memberCallFollows(q) and self.corpusServesArrayMember(self.tokenAt(q + 1).value) 'aCorpusContainerCall'
+			if kind == TokenKind.dot and self.memberCallFollows(q) and self.corpusServesAContainerMember(self.tokenAt(q + 1).value) 'aCorpusContainerCall'
 				if corpusContainerCallees is sharedEmptyCorpusContainerCallees 'firstEdgeInThisRegion'
 					corpusContainerCallees = ByteArrayArray.create()
 				end 'firstEdgeInThisRegion'
 
-				// ONE edge per `Array` DECLARATION that serves the name (ARR2) — normally one, and two only
-				// while a user program's own `type Array` has the corpus declaration in the reserved space. The
-				// gate above says SOME declaration serves it; the callee name has to say WHICH, because that is
-				// what the fixpoint indexes by.
-				for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
-					if self.corpusArrayDeclarationServes(declaration, member: self.tokenAt(q + 1).value) 'thisDeclarationServesIt'
-						corpusContainerCallees.push(qualifiedMethodName(declaration, methodName: self.tokenAt(q + 1).value))
-					end 'thisDeclarationServesIt'
-				end 'eachArrayDeclaration'
+				// The gate above says SOME container declaration serves the name; the callee names have to say
+				// WHICH, because that is what the fixpoint indexes by. Written once, beside the gate, so the
+				// edge recorded and the verdict that admitted it read one rule.
+				self.appendCorpusContainerCallees(self.tokenAt(q + 1).value, into: corpusContainerCallees)
 			end 'aCorpusContainerCall'
 			// ⭐⭐ **A CALL ON A NESTED PARAMETERISED INSTANCE, AND THE BINDING THAT CARRIES ONE (W161)** — an
 			// inner alias (`EChain.create()`), a field declared at one (`chain.count()`), or a local bound
@@ -14284,7 +14330,7 @@ export type Parser
 	// therefore trades a wrong answer for a different one; the measurement is in this rung's report and the
 	// mechanism is the descriptor ABI's, not this edge's.
 	//
-	// The verdict itself is memoized per NAME (`corpusServedArrayMembers` carries why), so the scan's `.` arm
+	// The verdict itself is memoized per NAME (`corpusServedContainerMembers` carries why), so the scan's `.` arm
 	// pays it once per distinct member name in a file rather than once per call site.
 	//
 	// ⛔⛔ **A STATIC IS NOT A MEMBER CALL, AND ADMITTING ONE IS THE MEASURED WAY THIS EDGE GOES WRONG.**
@@ -14297,35 +14343,82 @@ export type Parser
 	// The receiver-blind over-approximation the sibling signals take is only free where the fixpoint can
 	// still reach the caller; a STATIC's descriptor comes from its RESULT, not from a receiver, so an edge to
 	// one describes a supply route the call site does not have.
-	function corpusServesArrayMember(member ByteArray) returns bool
-		if let remembered = try self.corpusServedArrayMembers.get(member) 'askedBefore'
+	function corpusServesAContainerMember(member ByteArray) returns bool
+		if let remembered = try self.corpusServedContainerMembers.get(member) 'askedBefore'
 			return remembered
 		end 'askedBefore'
 
 		// ⭐ **ASKED OF EVERY `Array` DECLARATION THIS COMPILE HAS (ARR2)**, which is exactly one for every
-		// program that does not declare a container of its own. The `or` stops at the first that serves it.
-		var served = false
+		// program that does not declare a container of its own, **AND OF THE SIZED CONTAINER'S (W190)**. The
+		// `or` stops at the first that serves it.
+		var served = self.corpusServesSizedContainerMember(member)
 		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
-			served = served or self.corpusArrayDeclarationServes(declaration, member: member)
+			served = served or self.corpusContainerDeclarationServes(declaration, surface: MemberSurface.array, member: member)
 		end 'eachArrayDeclaration'
 
-		if self.corpusServedArrayMembers is sharedEmptyCorpusMemberVerdicts 'firstQuestionThisFileAsks'
-			self.corpusServedArrayMembers = DescriptorNeedMap.create()
+		if self.corpusServedContainerMembers is sharedEmptyCorpusMemberVerdicts 'firstQuestionThisFileAsks'
+			self.corpusServedContainerMembers = DescriptorNeedMap.create()
 		end 'firstQuestionThisFileAsks'
 
-		self.corpusServedArrayMembers.upsert(member, value: served)
+		self.corpusServedContainerMembers.upsert(member, value: served)
 		return served
-	end 'corpusServesArrayMember'
+	end 'corpusServesAContainerMember'
 
-	// Does ONE named `Array` declaration serve `member` through a corpus body a caller may have to supply a
+	// The callee names the gate above admitted `member` for — one per container declaration that actually
+	// serves it. Split from the verdict because the verdict is MEMOIZED per name and this is not: it runs only
+	// where an edge is genuinely being recorded, which is once per corpus container call in a body rather than
+	// once per member name in a file.
+	function appendCorpusContainerCallees(member ByteArray, into ByteArrayArray)
+		for declaration in self.arrayDeclarationNames() 'eachArrayDeclaration'
+			if self.corpusContainerDeclarationServes(declaration, surface: MemberSurface.array, member: member) 'thisDeclarationServesIt'
+				into.push(qualifiedMethodName(declaration, methodName: member))
+			end 'thisDeclarationServesIt'
+		end 'eachArrayDeclaration'
+
+		let sized = self.sizedContainerDeclarationName()
+		if self.corpusServesSizedContainerMember(member) 'theSizedContainerServesItToo'
+			into.push(qualifiedMethodName(sized, methodName: member))
+		end 'theSizedContainerServesItToo'
+	end 'appendCorpusContainerCallees'
+
+	// ⭐⭐ **THE SIZED CONTAINER'S HALF OF THE EDGE (W190), AND ITS ABSENCE WAS THE MEASURED FAILURE MODE OF
+	// THIS WHOLE CLASS.** `ARRG`'s own header records what a missing cross-type edge costs: with `set` struck
+	// from `arraySurfaceMemberNames` and no edge, **38 cases died at `panic … primitiveTypeByteSize: a
+	// typeParameter's size is a runtime layout-descriptor read`** — a COMPILER ABORT, not a diagnostic. A
+	// `Vector` member retiring to the corpus opens the identical hole one container over: `slot.get(i)` inside
+	// `type Holder uses Element`, where `Slot = Vector with 4 Element`, is a call to a SHARED generic body that
+	// may reserve a descriptor its caller has to supply.
+	//
+	// ⚠ There is at most ONE sized-container declaration where an `Array` may have two: a user `type Vector`
+	// is not the corpus's record (`declarationIsASizedContainerRecordNamed` is the CORPUS's declaration and no
+	// other), so there is no union to take.
+	function corpusServesSizedContainerMember(member ByteArray) returns bool
+		let declaration = self.sizedContainerDeclarationName()
+		if declaration.isEmpty() 'noSizedContainerDeclarationInThisCompile'
+			return false
+		end 'noSizedContainerDeclarationInThisCompile'
+
+		return self.corpusContainerDeclarationServes(declaration, surface: MemberSurface.vector, member: member)
+	end 'corpusServesSizedContainerMember'
+
+	// The name `stdlib/Vector.maxon`'s declaration goes by in this compile — the bare container name normally,
+	// this compile's mint when a USER program declares it — or EMPTY when no module declares one at all.
+	// Read through `declarationIsASizedContainerRecordNamed`, which is the CORPUS's declaration and no other,
+	// so the edge and every other sized-container door name one declaration.
+	function sizedContainerDeclarationName() returns ByteArray
+		let declared = self.signatures.stdlibShadowRenameOf(VectorBuiltinBaseName)
+		return declared if self.signatures.declarationIsASizedContainerRecordNamed(declared) else EmptySourceText
+	end 'sizedContainerDeclarationName'
+
+	// Does ONE named container declaration serve `member` through a corpus body a caller may have to supply a
 	// layout descriptor for? The first two clauses are the DISPATCH's own (`corpusServesNamedMemberOffRoster`),
 	// so the call this edge is drawn for and the call the parser will actually route to a corpus body are one
 	// decision. The receiver clause is this asker's alone — the ⛔⛔ paragraph above carries what admitting a
-	// static cost. Written once because the memo above and the callee-NAME loop in the scan both ask it, and a
+	// static cost. Written once because the memo above and the callee-NAME appender both ask it, and a
 	// second copy is how the edge would come to be recorded for a member the dispatch does not route.
-	function corpusArrayDeclarationServes(declaration ByteArray, member ByteArray) returns bool
-		return self.corpusServesNamedMemberOffRoster(member, surface: MemberSurface.array, typeName: declaration) and self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(declaration, methodName: member))
-	end 'corpusArrayDeclarationServes'
+	function corpusContainerDeclarationServes(declaration ByteArray, surface MemberSurface, member ByteArray) returns bool
+		return self.corpusServesNamedMemberOffRoster(member, surface: surface, typeName: declaration) and self.signatures.declaredMethodTakesReceiver(qualifiedMethodName(declaration, methodName: member))
+	end 'corpusContainerDeclarationServes'
 
 	// ⭐⭐ **THE CALLEE A CALL ON A NESTED PARAMETERISED INSTANCE LINKS TO, or NONE (W161).**
 	// `EChain.create()` inside `type Bag uses Element` answers `Inner.create` and `chain.count()` answers
@@ -55930,11 +56023,6 @@ export type Parser
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
 		self.noteBorrowSubjectWrite(func, receiver: vec, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
 
-		if methodTok.value.equals(CountMethod) 'count'
-			try self.consumeEmptyArgList()
-			return self.emitLiteral(self.signatures.genericInstanceFixedSize(giid), valueType: MaxonType.integer, range: range)
-		end 'count'
-
 		if methodTok.value.equals(GetMethod) 'get'
 			let index = try self.parseArrayOneArg(func)
 			return self.emitContainerElementAccessor(func, callee: self.elementAccessCallee(ManagedGetName, index: index, giid: giid), container: vec, args: pairArgs(vec, second: index), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
@@ -57345,7 +57433,7 @@ export type Parser
 
 	// ⭐⭐ **THE RULE ITSELF, GIVEN A NAME RATHER THAN A CURSOR (ARRG).** The door above PEEKS, and that peek
 	// is a fact about where the dispatch stands rather than about the rule — so a second asker that holds a
-	// TOKEN INDEX instead of a cursor (`Parser.corpusServesArrayMember`, the descriptor fixpoint's cross-type
+	// TOKEN INDEX instead of a cursor (`Parser.corpusServesAContainerMember`, the descriptor fixpoint's cross-type
 	// edge) can read the same two clauses rather than restate them.
 	//
 	// ⛔ **AND RESTATING THEM WOULD DIVERGE SILENTLY IN THE WORST DIRECTION.** The two askers are the DISPATCH
