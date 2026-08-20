@@ -44077,17 +44077,35 @@ export type Parser
 	// had already earned, replaced by a stack trace.
 	//
 	// ⭐⭐ **A PARAMETER'S NAME IS A PROPERTY OF THE TOKEN, NOT OF WHOEVER IS LOOKING AT IT.** Since W14 a
-	// token IS a digest of `(declaring type, parameter name)` and `typeParamOwnerOf` is the registry that
-	// inverts it, so the name is answerable wherever the token is — inside the declaring body, in a sibling
-	// generic, or in a `main` that declares nothing. That is the same reading `instanceArgDisplayName` already
-	// takes for the identical question one tier up, and it retires the second rendering rather than teaching
-	// each caller to gate against it. The gated callers get a byte-identical answer: they established the
-	// token is one of THIS declaration's, so its owner IS this declaration.
+	// token IS a digest of `(declaring type, parameter name)`, so the name is answerable wherever the token
+	// is — inside the declaring body, in a sibling generic, or in a `main` that declares nothing. TWO tables
+	// can invert it, and the order below is not a preference: it is the only order that is TOTAL.
 	//
-	// Absence stays an invariant break — `recordStruct` and `recordInterfaceDeclaration` file every declared
-	// parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw.
+	// ⛔⛔ **AND THE ORDER IS MEASURED, NOT ARGUED — REGISTRY-FIRST PANICS DURING THE SWEEP.** The obvious
+	// simplification is to read `typeParamOwnerOf` alone and call the local list redundant. It is not:
+	// `requireDefaultableFieldType` runs inside `foldDeclaredSignaturesInto`, which is the pass that FILES
+	// those owners, so the registry is empty for the very declaration being folded. MEASURED on this branch:
+	// `field-initialization/type-parameter-field-{literal,expression}-default-errors` — two committed cases
+	// expecting a positioned E2015 naming `'T'` — died with `typeParamDisplayName: type-parameter token
+	// -5864020729385773348 has no owner`, inside `readStructFieldInto`. **`enclosingTypeParams` is what a
+	// sweep-time reader has and the registry is what a post-fold reader has**, and neither covers the other's
+	// phase.
+	//
+	// ⇒ The DECLARATION the cursor is inside answers first (available from the moment the `uses` clause is
+	// read, and correct by construction for its own parameters); the whole-program registry answers for every
+	// OTHER token, which is what a file-scope reader holding a foreign parameter needs and what the old
+	// `enclosingTypeParamName` could not do — it panicked `names no parameter of ''` while building the very
+	// sentence that would have reported the program's own error (W181). The two agree wherever both can
+	// answer, because both spell the same half of the same W14 digest.
+	//
+	// Absence from BOTH is an invariant break: a token neither this declaration nor any fold has seen was
+	// minted inside a declaration that never reached either.
 	function typeParamDisplayName(param TypeParamId) returns ByteArray
-		return (try self.signatures.typeParamOwnerOf(param) otherwise panic("typeParamDisplayName: type-parameter token {param} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")).paramName
+		if let position = try typeParamPositionIn(param, declarationName: self.enclosingType, paramNames: self.enclosingTypeParams) 'oneOfTheCursorsOwn'
+			return try self.enclosingTypeParams.get(position) otherwise panic("typeParamDisplayName: enclosingTypeParams.get OOB at {position}, a position `typeParamPositionIn` just read out of the same list")
+		end 'oneOfTheCursorsOwn'
+
+		return (try self.signatures.typeParamOwnerOf(param) otherwise panic("typeParamDisplayName: type-parameter token {param} names no parameter of the declaration being parsed ('{String.from(self.enclosingType)}') and has no owner in the whole-program registry either — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token missing from both was minted inside a declaration neither fold saw")).paramName
 	end 'typeParamDisplayName'
 
 	// ⭐ **WHAT PROVIDES THE REQUIREMENTS A WITNESS DISPATCH SEARCHED — for the diagnostics that have to name
