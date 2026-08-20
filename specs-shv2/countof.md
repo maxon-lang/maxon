@@ -128,6 +128,16 @@ The case `sizeof` cannot serve. `counted()` is a `static function` — no receiv
 no `__self` in scope — and it reads its own instance's count once per element. Called through
 two different sizes it walks 3 trips and then 5, which is what the global counter shows: the
 count reached a receiverless body, and it was the right one both times.
+
+⚠ **`rebuild()` USED TO READ `try fresh.get(0) otherwise 0`, AND THAT SPELLING STOPPED BEING WELL
+TYPED WHEN `get` RETIRED (W190).** The compiler-served accessor typed a vector element `integer`
+whatever the instance said, because `requireVectorElementType` guarantees a scalar; the corpus body is
+honestly typed `Element`, which inside `extension Vector` is a TYPE PARAMETER — so the `otherwise` had
+no `Element` to offer (`E3059 … 'int' does not match expected type 'type parameter'`) and the `Int`
+return had none either. That is the shared-body thesis and not a loss: shv2 compiles ONE body for every
+size, so an element read there is opaque exactly as `sizeof(Element)` is. What the case needs of the
+static's RESULT is that it be the receiver's own instance, which `count()` states without naming an
+element at all.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -147,7 +157,10 @@ extension Vector
 
 	export function rebuild() returns Int
 		var fresh = Self.counted()
-		return try fresh.get(0) otherwise 0
+		if fresh.count() == countof(Self) 'theStaticsResultStatesTheReceiversCount'
+			return 0
+		end 'theStaticsResultStatesTheReceiversCount'
+		panic("a `Self`-returning static builds the instance its call site holds")
 	end 'rebuild'
 end 'Vector'
 
@@ -181,7 +194,10 @@ extension Vector
 
 	export function reach() returns Int
 		var v = Self.elementBytes()
-		return try v.get(0) otherwise 0
+		if v.count() > 0 'theStaticBuiltOne'
+			return 0
+		end 'theStaticBuiltOne'
+		panic("a `Self`-returning static builds the instance its call site holds")
 	end 'reach'
 end 'Vector'
 

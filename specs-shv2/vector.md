@@ -759,7 +759,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:7:4: Unsupported: `Vector` member 'push' — shv2 provides get/set; that list IS the surface, so nothing else is served here
+error E2015: <fragment>:7:4: Unsupported: `Vector` member 'push' — shv2 provides set; that list IS the surface, so nothing else is served here
 ```
 
 ## A Published Slot Must Be A Value At Every Instantiation

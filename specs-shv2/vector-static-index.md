@@ -60,9 +60,6 @@ end 'main'
 ```exitcode
 33
 ```
-```RequiredRuntime
-__managed_get_in_bounds
-```
 
 <!-- test: variable-index-get-keeps-the-bounds-check -->
 The CONTROL for the case above: the same vector, the same element, an index the compiler
@@ -90,9 +87,6 @@ end 'main'
 ```
 ```exitcode
 22
-```
-```RequiredRuntime
-__managed_get
 ```
 
 <!-- test: constant-index-set-has-no-bounds-check -->

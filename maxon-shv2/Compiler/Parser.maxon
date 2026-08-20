@@ -6538,7 +6538,6 @@ end 'stringIndexSurfaceMemberNames'
 // its body could not name the size anyway.
 function vectorSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
-	names.push(GetMethod)
 	names.push(ArraySetMethod)
 	return names
 end 'vectorSurfaceMemberNames'
@@ -56022,11 +56021,6 @@ export type Parser
 
 		try self.noteReceiverWrite(func, immutableReceiverName: immutableReceiverName, receiverOwner: receiverOwner, receiverStorage: receiverStorage, methodTok: methodTok, mutatesReceiver: mutates)
 		self.noteBorrowSubjectWrite(func, receiver: vec, subjectName: borrowSubjectName, receiverStorage: receiverStorage, display: methodTok.value, anchor: methodTok, mutatesSubject: mutates)
-
-		if methodTok.value.equals(GetMethod) 'get'
-			let index = try self.parseArrayOneArg(func)
-			return self.emitContainerElementAccessor(func, callee: self.elementAccessCallee(ManagedGetName, index: index, giid: giid), container: vec, args: pairArgs(vec, second: index), giid: giid, reference: ContainerElementReference.borrowed, borrowSubjectName: borrowSubjectName, range: range)
-		end 'get'
 
 		if methodTok.value.equals(ArraySetMethod) 'set'
 			try self.requireVoidMethodIsStatement(resultUsed, methodTok: methodTok)
