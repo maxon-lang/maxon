@@ -752,8 +752,9 @@ type MaxonToStdLowering
 	// hold — the same argument `SemanticCheck`'s throws map and escape summary now stand on.
 	let funcNames as FunctionNameIndex
 	// The qualified names of functions that carry a hidden layout-descriptor parameter (P1.6-B1) — built
-	// once by `buildLayoutNeedingFuncs` (an op-scan for `sizeofType(typeParameter)`), then read at every
-	// call site (append the descriptor argument?) and per callee (bind the descriptor param?).
+	// once by `buildLayoutNeedingFuncs` (a PARAMETER-COUNT scan, never an op-scan: see its header for the
+	// transitive reservations an op-scan would miss), then read at every call site (append the descriptor
+	// argument?) and per callee (bind the descriptor param?).
 	var layoutNeedingFuncs as LayoutNeedingFuncSet
 	// `GenericInstanceId` ⇒ the `.rdata` label of its emitted descriptor blob (P1.6-B1). Filled lazily by
 	// `ensureLayoutDescriptor` — one blob per instance actually used as a `sizeof(T)` receiver — so a
@@ -854,6 +855,14 @@ type MaxonToStdLowering
 	// Does the CURRENT function carry a layout-descriptor parameter? The non-sentinel gate on
 	// `implicitLayoutValueId` — read by `sizeof(T)` lowering and `forwardCallerLayout`.
 	var hasImplicitLayout as bool
+	// The ValueId of the CURRENT function's hidden fixed-element-count parameter (W190) — the slot between
+	// the layout descriptor and the constraint witnesses. Read only to FORWARD it, by
+	// `emitFixedElementCountOf`: `countof(Self)` itself needs nothing here, because the parser resolved its
+	// own reservation and the expression simply IS this parameter.
+	var implicitCountValueId as ValueId
+	// Does the CURRENT function carry that parameter? The non-sentinel gate on the id above — ValueId 0 is a
+	// legitimate slot for a nullary method, exactly as it is for the descriptor.
+	var hasImplicitFixedElementCount as bool
 	// The number of hidden WITNESS parameters the CURRENT function carries (P1.7a slice 2a) — one per `where`
 	// constraint of its enclosing type, for an instance method of a constrained generic type (0 otherwise).
 	// The witness parameters occupy the FINAL `currentWitnessCount` ValueIds, so witness slot `i` is
@@ -908,7 +917,7 @@ type MaxonToStdLowering
 		// pipeline runs, so this is an O(1) cache hit; a fresh FAILURE here is impossible (a signature
 		// error would already have thrown before lowering was scheduled).
 		let signatures = try queryProgramSignatures(project) otherwise panic("MaxonToStdLowering.create: queryProgramSignatures failed inside the lowering pass — it is computed and memoized by compileToCodeResult before the pipeline runs, so it cannot fail fresh here")
-		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
+		return Self{maxonModule: maxonModule, stdModule: StdModule.create(), funcSignatures: project.funcSignatures, functionTypes: functionTypeRegistryOf(project), signatures: signatures, funcNames: funcNames, layoutNeedingFuncs: LayoutNeedingFuncSet.create(), layoutDescriptors: LayoutDescriptorRegistry.create(), interfaces: project.interfaces, conformances: project.conformances, witnessSlotMemo: WitnessSlotListMemo.create(), emittedWitnessTables: WitnessTableLabelSet.create(), emittedWitnessAdapters: WitnessAdapterNameSet.create(), pendingWitnessAdapters: WitnessAdapterRequestArray.create(), witnessSlotImpls: project.witnessSlotImpls, globalData: project.globalData, debugStream: project.debugStream, allocTagSites: project.allocTagSites, currentMaxonOpIndex: 0, valueTags: ValueTypeTagArray.create(), currentByRefParams: 0, currentParamCount: 0, valueClosureEnv: ValueIdArray.create(), valueWitnessIds: ValueIdArray.create(), currentExistentialInstances: sharedEmptyExistentialInstanceMap, typeNames: project.typeNames, valueNameIds: TypeNameIdArray.create(), currentFuncName: EmptySourceText, implicitLayoutValueId: 0, hasImplicitLayout: false, implicitCountValueId: 0, hasImplicitFixedElementCount: false, currentWitnessCount: 0, witnessParamBase: 0, currentThrows: ThrowsClause.none, currentReturnType: StdReturnType.void, currentMaxonReturnType: MaxonReturnType.void, unreachableStdlib: project.stdlibFacts.unreachable, rangeChecks: project.rangeChecks, rangeSites: RangeSiteWalk.create(), nextValueId: 0}
 	end 'create'
 
 	// The Maxon type TAG a value carries, from the column `lower` pointed at the CURRENT function. The one
@@ -1386,9 +1395,9 @@ type MaxonToStdLowering
 	end 'buildLayoutNeedingFuncs'
 
 	// Does `func` carry a layout-descriptor parameter (P1.6-B1)? The parser reserves it after the user + env +
-	// EXISTENTIAL-WITNESS companions and BEFORE any constraint-witness parameters
-	// (`[user][env][existentialWitness][layout][witness_0..k]`, P1.7a slice 2a + P1.7a-existentials slice 1),
-	// so a `paramCount` above every OTHER hidden block means the layout slot is present. Each of the three
+	// EXISTENTIAL-WITNESS companions and BEFORE the fixed-element count and any constraint-witness parameters
+	// (`[user][env][existentialWitness][layout][count][witness_0..k]`, P1.7a slice 2a + P1.7a-existentials
+	// slice 1 + W190), so a `paramCount` above every OTHER hidden block means the layout slot is present. Each of the three
 	// counts is derived from a whole-program fact the parser reserved by — the declared parameter TYPES for
 	// the env and existential blocks, the enclosing type's `where` constraints for the witness block — so
 	// caller and callee agree without a per-function field.
@@ -1398,17 +1407,44 @@ type MaxonToStdLowering
 	// `layoutNeedingFuncs` claim a free function needs a descriptor, and the caller then panicked in
 	// `materializeStaticConstructorLayout` looking for a generic instance to source one from.
 	function functionHasDescriptorParam(func IrFunction) returns bool
-		return func.paramCount > func.maxonParamTypes.count() + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.function) + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.interfaceRef) + self.witnessParamCountForFunc(func)
+		return func.paramCount > func.maxonParamTypes.count() + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.function) + countParamsWithTag(func.maxonParamTypes, tag: ValueTypeTag.interfaceRef) + self.fixedElementCountParamCountFor(func.name) + self.witnessParamCountForFunc(func)
 	end 'functionHasDescriptorParam'
 
-	// Bind the CURRENT function's hidden implicit parameters (P1.6-B1 layout + P1.7a slice 2a witnesses). The
-	// witness parameters occupy the FINAL `currentWitnessCount` ValueIds; the layout descriptor (when present)
-	// sits just before them. `hasImplicitLayout` is the authoritative layout-presence bit (a zero-user-param
+	// ⭐⭐ **DOES `callee` CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER (W190)?** — asked BY NAME, of the
+	// same whole-program fixpoint `Parser.parseFunction` reserved the slot from, at BOTH ends of the ABI.
+	//
+	// ⚠ **THE LAYOUT SLOT IS RECOVERED FROM THE PARAMETER COUNT AND THIS ONE CANNOT BE, AND THE REASON IS
+	// ARITHMETIC RATHER THAN TASTE.** `functionHasDescriptorParam` works by subtracting every OTHER hidden
+	// block from `paramCount` and testing what is left over, which decides the question only while ONE
+	// optional slot is unaccounted for. With two, `base + 1` is ambiguous between them. So the newer slot
+	// states itself by name — and the older one goes on being derived, from a total this now subtracts.
+	//
+	// ⚠ **AND IT IS ASKED WITHOUT THE `anyFunction…` PRE-GATE `Parser.parseFunction` OPENS WITH, DELIBERATELY.**
+	// That gate exists because asking the question there needs the qualified name BUILT — an allocation per
+	// method declaration bought to learn `false`. Here the callee's name is already in hand, so the whole
+	// cost is one set probe that a shared-empty set answers immediately; a gate would be a branch bought to
+	// skip a branch.
+	function fixedElementCountParamCountFor(callee ByteArray) returns ParamCount
+		return 1 if self.signatures.functionReadsFixedElementCount(callee) else 0
+	end 'fixedElementCountParamCountFor'
+
+	// Bind the CURRENT function's hidden implicit parameters (P1.6-B1 layout + W190 count + P1.7a slice 2a
+	// witnesses). The witness parameters occupy the FINAL `currentWitnessCount` ValueIds; the fixed-element
+	// count (when present) sits just before them, and the layout descriptor (when present) one further in. `hasImplicitLayout` is the authoritative layout-presence bit (a zero-user-param
 	// generic method's descriptor slot is legitimately ValueId 0, so the id cannot double as the presence flag);
 	// `witnessParamBase` is witness slot 0's ValueId, read by `lowerWitnessDispatch` to forward a witness.
 	function bindImplicitParams(func IrFunction)
 		self.currentWitnessCount = self.witnessParamCountForFunc(func)
 		self.witnessParamBase = func.paramCount - self.currentWitnessCount
+
+		// ⭐ `[user][env][existentialWitness][layout][count][witness_0..k]` — read back from the END, so the
+		// count slot is found first and the descriptor sits one further in (W190).
+		let countSlots = self.fixedElementCountParamCountFor(func.name)
+		self.hasImplicitFixedElementCount = countSlots != 0
+		self.implicitCountValueId = 0
+		if self.hasImplicitFixedElementCount 'countSlot'
+			self.implicitCountValueId = (self.witnessParamBase - 1) as ValueId
+		end 'countSlot'
 
 		self.hasImplicitLayout = self.functionHasDescriptorParam(func)
 		self.implicitLayoutValueId = 0
@@ -1416,7 +1452,7 @@ type MaxonToStdLowering
 			return
 		end 'noLayout'
 
-		self.implicitLayoutValueId = (func.paramCount - self.currentWitnessCount - 1) as ValueId
+		self.implicitLayoutValueId = (self.witnessParamBase - countSlots - 1) as ValueId
 	end 'bindImplicitParams'
 
 	// The number of hidden witness parameters `func` carries (P1.7a slice 2a) — the witness twin of
@@ -1451,7 +1487,8 @@ type MaxonToStdLowering
 		let witnessCount = self.witnessParamCountForCallee(callee, sig: sig)
 		// The SUPPLY side of the reserve/supply pair — the SAME counter `Parser.parseFunction` reserves with.
 		let existentialCount = countParamsWithTag(sig.paramTypes, tag: ValueTypeTag.interfaceRef)
-		if not needsLayout and witnessCount == 0 and existentialCount == 0 'noImplicits'
+		let countSlots = self.fixedElementCountParamCountFor(callee)
+		if not needsLayout and witnessCount == 0 and existentialCount == 0 and countSlots == 0 'noImplicits'
 			return baseArgs
 		end 'noImplicits'
 
@@ -1469,6 +1506,9 @@ type MaxonToStdLowering
 		if needsLayout 'layout'
 			out.push(self.materializeLayoutArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
 		end 'layout'
+		if countSlots > 0 'fixedElementCount'
+			out.push(self.materializeFixedElementCountArgFor(argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock))
+		end 'fixedElementCount'
 		if witnessCount > 0 'witnesses'
 			self.appendWitnessArgs(out, argIds: argIds, sig: sig, result: result, callee: callee, dstBlock: dstBlock)
 		end 'witnesses'
@@ -2198,6 +2238,69 @@ type MaxonToStdLowering
 		end 'forward'
 		panic("materializeLayoutArg: call to layout-needing '{String.from(callee)}' has a receiver of tag {tag.name} — an instance method's receiver is a concrete generic instance, the enclosing self (structRef), or a type parameter")
 	end 'materializeLayoutArg'
+
+	// ⭐⭐ **THE ELEMENT COUNT A COUNT-NEEDING CALL PASSES — A COMPILE-TIME CONSTANT AT EVERY CALL SITE,
+	// WHICH IS THE WHOLE REASON THE COUNT IS A PARAMETER AND NOT A DESCRIPTOR WORD (W190).**
+	// `materializeLayoutArgFor`'s twin, with the same two doors and the same authority: the CALLEE's own
+	// parameter list decides whether the count is read off the RECEIVER's instance or off the static's RESULT
+	// instance, so a static whose first argument happens to be a generic instance is unambiguous.
+	//
+	// ⛔⛔ **AND IT IS CORRECT WHERE THE DESCRIPTOR IS NOT.** `emitInstanceDescriptorAddr` may FORWARD the
+	// caller's own blocks when the callee's instance is written over the caller's parameters, which is sound
+	// for every word the blob carries because every one of them is a fact about the type ARGUMENT. A COUNT is
+	// a fact about the INSTANCE: `Vector with 4 Element` states 4 whatever `Element` turns out to be, and the
+	// caller's own blob states `NoFixedSize`. **MEASURED before this was a parameter: a `Vector with 4 Element`
+	// field reached from inside `type Holder uses Element` answered 0.** Read here off the instance the call
+	// site actually holds, the same shape answers 4 — and it does so without asking that call site for a
+	// descriptor at all, which matters because a frame holding such a field is not guaranteed to have one.
+	function materializeFixedElementCountArgFor(argIds ValueIdArray, sig FuncSignature, result ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		if sig.takesReceiver() 'instanceMethod'
+			// The ORIGINAL receiver, never the widened/env-derived `baseArgs` — `materializeLayoutArgFor`'s rule.
+			return self.emitFixedElementCountOf(try argIds.get(0) otherwise panic("materializeFixedElementCountArgFor: count-needing instance method '{String.from(callee)}' has no receiver argument — its first parameter is `self`"), callee: callee, dstBlock: dstBlock)
+		end 'instanceMethod'
+		// ⭐ **A FIELD-DEFAULT HELPER IS THE ONE RECEIVERLESS COUNT-NEEDING CALLEE WHOSE ANSWER COMES FROM THE
+		// CALLER, AND READING ITS RESULT WOULD BE A WRONG NUMBER RATHER THAN A MISSING ONE.** Its result is the
+		// FIELD's type — which for a `var slot as Vector with 4 Element` STATES 4 — while the count it reads
+		// through `countof(Self)` is the ENCLOSING instance's. `materializeLayoutArgFor` splits the same two
+		// cases apart for the same reason; its only call site is a `Self{…}` inside the declaring type's own
+		// body, which is a method of that type and therefore holds the count to forward.
+		if isFieldDefaultHelperName(callee) 'fieldDefault'
+			return self.forwardCallerFixedElementCount(callee)
+		end 'fieldDefault'
+		// A receiverless count-needing callee is a constructor whose RESULT is the instance —
+		// `staticLayoutNeedsSelfReturn` refuses every other shape — so the result carries the concrete gid.
+		return self.emitFixedElementCountOf(result, callee: callee, dstBlock: dstBlock)
+	end 'materializeFixedElementCountArgFor'
+
+	// Forward the CURRENT function's own count slot — `forwardCallerLayout`'s twin, and the single home of
+	// the "we owe a count and the only source is our own slot" panic that both of this file's count doors end
+	// on when the fixpoint's transitive reservation has failed to reach a caller.
+	function forwardCallerFixedElementCount(callee ByteArray) returns ValueId
+		if not self.hasImplicitFixedElementCount 'noSlot'
+			panic("forwardCallerFixedElementCount: caller '{String.from(self.currentFuncName)}' has no fixed-element-count parameter to forward to '{String.from(callee)}' — the fixpoint's transitive reservation should make this unreachable")
+		end 'noSlot'
+		return self.implicitCountValueId
+	end 'forwardCallerFixedElementCount'
+
+	// The count for ONE value typed at a generic instance: a `const` when the instance STATES its own count,
+	// and the caller's own slot forwarded when it does not.
+	//
+	// ⭐ **THE FORWARD ARM IS NOT AN OPTIMIZATION HERE, IT IS THE ONLY ANSWER.** `Self` inside
+	// `type Vector uses Element` is `ownRecordSelfInstance`, interned at `NoFixedSize` so that ONE shared body
+	// serves every size — so a `Vector` method calling a sibling on `self` holds an instance that states no
+	// count, and the answer it must pass on is the one its own caller handed it.
+	function emitFixedElementCountOf(instanceValue ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
+		if self.valueTagOf(instanceValue) == ValueTypeTag.genericInstance 'anInstance'
+			let stated = self.signatures.genericInstanceFixedSize(try self.valueNameIds.get(instanceValue) otherwise panic("emitFixedElementCountOf: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep"))
+			if stated != NoFixedSize 'statesItsOwnCount'
+				let countId = self.mintStdValueId()
+				self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: stated, valueType: StdType.i64))
+				return countId
+			end 'statesItsOwnCount'
+		end 'anInstance'
+
+		return self.forwardCallerFixedElementCount(callee)
+	end 'emitFixedElementCountOf'
 
 	// Forward the CURRENT (generic) function's own layout slot to a callee — when a generic body calls another
 	// layout-needing method on `self` or on a value of its own type parameter. The caller MUST carry a layout

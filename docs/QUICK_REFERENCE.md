@@ -963,6 +963,7 @@ max(a, b: b)   // maximum of two values
 
 // Compile-time
 sizeof(TypeName)   // size of a type in bytes (compile-time constant)
+countof(TypeName)  // elements a fixed-size container type holds (Vector with N T)
 __line__           // caller's line   -- ONLY as a parameter default (E2060 elsewhere)
 __file__           // caller's file   -- ONLY as a parameter default (E2060 elsewhere)
 ```

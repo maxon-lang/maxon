@@ -939,6 +939,11 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 	// the solve sees one graph.
 	var methodNames = ByteArrayArray.create()
 	var directSeeds = DescriptorNeedMap.create()
+	// ⭐ The COUNT column (W190) — the second seed over the SAME graph. Two seeds and one edge set, because
+	// `countof(Self)` and `sizeof(T)` propagate along exactly the same self-call edges and differ only in
+	// WHICH hidden slot they reserve. See `ProgramSignatures.fixedElementCountNeeds` for why they are two
+	// slots and not one word.
+	var countSeeds = DescriptorNeedMap.create()
 	var selfCallees = SelfCalleesMap.create()
 
 	var i = 0 as ElementCount
@@ -954,12 +959,18 @@ function foldDescriptorNeeds(project Project, signatures ProgramSignatures) thro
 				break
 			end 'nextFile'
 
-			reader.scanDescriptorNeedsInto(site, methodNames: methodNames, directSeeds: directSeeds, selfCallees: selfCallees)
+			reader.scanDescriptorNeedsInto(site, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees)
 			i = i + 1
 		end 'eachSiteInFile'
 	end 'eachFile'
 
+	// Two solves over one graph rather than one solve over a pair of seed columns: the reachability the two
+	// share is the EDGES, which are built from `selfCallees` either way, and the second solve is one more
+	// linear pass (`buildCsr` is O(edges + methods)) over a site list that is EMPTY for every program
+	// declaring no generic type — the early return above. Fusing them would thread a second bit through
+	// `reverseReachabilityMark` to save a pass nothing measures.
 	signatures.recordDescriptorNeeds(solveDescriptorNeeds(methodNames, directSeeds: directSeeds, selfCallees: selfCallees))
+	signatures.recordFixedElementCountNeeds(solveDescriptorNeeds(methodNames, directSeeds: countSeeds, selfCallees: selfCallees))
 end 'foldDescriptorNeeds'
 
 // --- Per-file query: parse into a FileParseArtifact ---

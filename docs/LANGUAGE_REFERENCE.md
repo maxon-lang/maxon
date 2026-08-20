@@ -4391,7 +4391,10 @@ Math.pow(base float, exponent float) float // Power
 **Compile-Time Functions**
 ```maxon
 sizeof(TypeName) int            // Size of a type in bytes (compile-time constant)
+countof(TypeName) int           // Elements a fixed-size container type holds
 ```
+
+`countof` accepts a fixed-size container type (`Vector with 3 Int`, or `Self` inside the container's own body) and answers how many ELEMENTS it holds, where `sizeof` answers how many BYTES one value occupies. A type that states no element count — a primitive, a struct, a growable `Array` — is refused: an `Array`'s length is a runtime field of the record, so ask the value for its `count()`.
 
 `sizeof` accepts a type name (not a variable) and returns its storage size in bytes as a compile-time integer constant. Primitive sizes: `int` (8), `float` (8), `bool` (1), `byte` (1). Struct types use 8 bytes per field (minimum 8). Enum types use 8 bytes. Ranged type aliases use the optimal storage width for their range.
 

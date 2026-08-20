@@ -43,7 +43,7 @@ IDENTIFIER    = ( letter | '_' ) { letter | digit | '_' }
 ```
 KEYWORD       = '__file__' | '__line__'
               | 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | 'continue'
-              | 'cstring' | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
+              | 'countof' | 'cstring' | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
               | 'extension' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
@@ -780,6 +780,7 @@ primary       = INTEGER
               | await_expr
               | type_bound_expr
               | sizeof_expr
+              | countof_expr
               | IDENTIFIER
 
 array_literal = '[' [ expression { ',' expression } ] ']'
@@ -821,6 +822,8 @@ type_bound_expr
               = sized_type_name '.' ( 'min' | 'max' )         (* e.g., u64.max, i32.min *)
 
 sizeof_expr   = 'sizeof' '(' type_ref ')'                     (* compile-time size in bytes *)
+
+countof_expr  = 'countof' '(' type_ref ')'                    (* element count of a fixed-size container type *)
 
 from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'
 

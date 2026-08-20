@@ -2444,10 +2444,21 @@ type MethodDescriptorScan
 	// receiver, and a static constructor of a nested instance is precisely the shape whose RESULT is the
 	// source (`LowerMaxonToStd.emitInstanceDescriptorAddr`).
 	export let nestedInstanceCallees as ByteArrayArray
+	// ⭐ Does this region READ `countof(Self)` — the sized container's own element count (W190)? Its own
+	// column beside `direct` rather than folded into it, because the two reserve DIFFERENT slots: the
+	// descriptor carries facts about the type ARGUMENT, and a count is a fact about the INSTANCE. See
+	// `ProgramSignatures.fixedElementCountNeeds` for the measured wrong answer that follows from fusing them.
+	export let readsFixedElementCount as bool
+	// ⭐⭐ **THE CHAINED CALLS A SIZED CONTAINER'S OWN BODY MAKES (W190)** — the third self-call column, and
+	// the one for a receiver that has NO NAME. `self.dup().capacity()` chains onto a temporary, so there is
+	// no binding for `selfTypedLocalCallAt` to match and no `self` for `isSelfMethodCallAt`, and the value is
+	// nonetheless the enclosing instance. Recorded apart from `callees` so `descriptorEdgesFor` can apply the
+	// static gate its sibling cross-type edge carries, and ALREADY QUALIFIED for the same reason that one is.
+	export let sizedContainerSelfCallees as ByteArrayArray
 	export let endPos as TokenIndex
 
-	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, forwardsToATypeParamFeed bool, storesContainerElement bool, walksReceiverAsACursor bool, corpusContainerCallees ByteArrayArray, nestedInstanceCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
-		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, endPos: endPos}
+	export static function create(direct bool, callees ByteArrayArray, hasControlFlow bool, hasContainerMoveOut bool, reassignsOpaqueField bool, hasArrayCopy bool, constructsSelfLiteral bool, buildsRecord bool, adoptsOpaqueCallResult bool, forwardsToATypeParamFeed bool, storesContainerElement bool, walksReceiverAsACursor bool, corpusContainerCallees ByteArrayArray, nestedInstanceCallees ByteArrayArray, readsFixedElementCount bool, sizedContainerSelfCallees ByteArrayArray, endPos TokenIndex) returns MethodDescriptorScan
+		return Self{direct: direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, readsFixedElementCount: readsFixedElementCount, sizedContainerSelfCallees: sizedContainerSelfCallees, endPos: endPos}
 	end 'create'
 end 'MethodDescriptorScan'
 
@@ -3780,6 +3791,11 @@ let sharedEmptyCorpusContainerCallees = ByteArrayArray.create()
 // The same anchor for W161's cross-type edge, empty for every region that calls nothing on a nested
 // parameterised instance — which is every region in a program declaring no generic type at all.
 let sharedEmptyNestedInstanceCallees = ByteArrayArray.create()
+
+// And the same anchor for W190's chained self-call edge — its OWN, not one of the two above, because the
+// `is` identity test that decides whether a column has been minted yet reads as a claim about WHICH column
+// it is. Empty for every region that chains no call, which is every region in the corpus today.
+let sharedEmptySizedContainerSelfCallees = ByteArrayArray.create()
 
 // ⭐ **DOES `name` WEAR `typeName`'S QUALIFIER — i.e. is it `qualifiedMethodName(typeName, <anything>)`?**
 // The join's INVERSE, and deliberately allocation-free: its caller
@@ -11276,6 +11292,17 @@ export type Parser
 	// that must not stand is the narrow one: this guard's reach is "a drop the function has no descriptor for",
 	// whatever put it there.
 	var functionCarriesLayoutParam as bool
+	// ⭐ **DOES THIS FUNCTION CARRY THE HIDDEN FIXED-ELEMENT-COUNT PARAMETER (W190)?** — the count slot's twin
+	// of the bool above, re-armed per function for its reason. `parseCountof` reads it to decide whether the
+	// descriptor-free `countof(Self)` read can be served at all, so a spelling the token pre-scan could not
+	// see becomes a positioned refusal rather than a reservation the lowering discovers is missing.
+	var functionCarriesFixedElementCountParam as bool
+	// The ValueId of that slot, resolved BY THE PARSER at the moment it reserves it — the same
+	// resolve-your-own-reservation `witnessParamValueId` does, and for the same reason: the reader is the
+	// parser itself. `countof(Self)` READS this parameter, so it needs no op at all; the value is already
+	// defined by the entry block's `param`, and minting a fresh one to copy it into would be a second
+	// definition of one answer plus a `mov` per read.
+	var fixedElementCountParamValueId as ValueId
 	var functionDroppedOpaqueWithoutDescriptor as bool
 	// ⭐ **THE SAME DISAGREEMENT ON THE STORE SIDE (W41-opaque)** — the function STORED a borrowed opaque `T`
 	// into a record and so owes `__retain_type_param`, but reserved no descriptor to read `retainFunc@64`
@@ -11798,6 +11825,8 @@ export type Parser
 			tupleLayouts: sharedEmptyTupleLayouts,
 			descriptorScanSites: sharedEmptyDescriptorScanSites,
 			functionCarriesLayoutParam: false,
+			functionCarriesFixedElementCountParam: false,
+			fixedElementCountParamValueId: 0,
 			functionDroppedOpaqueWithoutDescriptor: false,
 			functionStoredOpaqueWithoutDescriptor: false,
 			siblingReceivers: sharedEmptySiblingReceivers,
@@ -13412,7 +13441,7 @@ export type Parser
 	// The same framework `scanBodyFacts` uses (`opensBlockAt` / `closesBlockAt`) delimits each method body;
 	// a named `function <ident>` opens one (a closure is `function(` — no name, no `end`). Peek-only: the
 	// cursor is positioned from the site and the `Parser` this runs on parses nothing.
-	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap)
+	export function scanDescriptorNeedsInto(site DescriptorScanSite, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap)
 		// The type scope the seeds are read against: `sizeofOperandIsTypeParamAt` needs the `uses` list, and
 		// `opaqueContainerConstructionAt` / `opaqueFieldReassignAt` key on `enclosingType`. Taken from the
 		// whole-program layout rather than re-read from a header, so an EXTENSION body — which has no `uses`
@@ -13645,6 +13674,10 @@ export type Parser
 				// answer that must be wrong is wrong upwards, and `solveDescriptorNeeds`' claim that same-named
 				// methods "share one answer" is made true here rather than assumed.
 				let alreadyContributed = directSeeds.contains(qualified)
+				// ⭐ The COUNT seed rides the same graph and takes the same union, for the identical reason: two
+				// declarations may wear one qualified name, and a plain `upsert` would make the last one the whole
+				// answer for a slot that is ABI (W190, on `directSeeds`' measured terms).
+				var readsACount = scan.readsFixedElementCount
 				var directlyNeeded = scan.direct or dropsFeed or movesOutContainerElement or reassignsOpaqueManagedField or copiesArrayElement or buildsRecordFromOpaqueSource or returnsBorrowableOpaque or adoptsOpaqueResult or forwardsBorrowedOpaqueToAFeed or storesBorrowedOpaqueElement or walksAnOwnedOpaqueElement
 				var edges = self.descriptorEdgesFor(site.typeName, scan: scan, isStatic: self.functionDeclIsStatic(q))
 				// ⭐ A `Self{…}` CALLS this type's field-default helpers, so it is a call edge like any other
@@ -13655,10 +13688,12 @@ export type Parser
 				end 'constructsSelf'
 				if alreadyContributed 'aSecondDeclarationWearingThisName'
 					directlyNeeded = directlyNeeded or (try directSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent by `get`"))
+					readsACount = readsACount or (try countSeeds.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' is a seeded key by `contains` and absent from the count column — the two seed columns are written in one act"))
 					edges.append(try selfCallees.get(qualified) otherwise panic("scanDescriptorNeedsInto: '{String.from(qualified)}' has a direct-need seed but no self-callee row — the two columns are written in one act"))
 				end 'aSecondDeclarationWearingThisName'
 
 				directSeeds.upsert(qualified, value: directlyNeeded)
+				countSeeds.upsert(qualified, value: readsACount)
 				selfCallees.upsert(qualified, value: edges)
 				// Once per NAME, not once per declaration: `solveDescriptorNeeds` indexes the graph by this
 				// array, and a name listed twice would be two nodes standing for one method.
@@ -13681,7 +13716,7 @@ export type Parser
 			// runs. It is a NODE of this same fixpoint rather than a rule of its own, so a default that
 			// merely CALLS something needing one is covered by the same transitive closure.
 			if self.structFieldKeywordAt(q) 'field'
-				q = self.recordFieldDefaultDescriptorNeeds(q, typeName: site.typeName, methodNames: methodNames, directSeeds: directSeeds, selfCallees: selfCallees)
+				q = self.recordFieldDefaultDescriptorNeeds(q, typeName: site.typeName, methodNames: methodNames, directSeeds: directSeeds, countSeeds: countSeeds, selfCallees: selfCallees)
 				continue
 			end 'field'
 			q = q + 1
@@ -13717,7 +13752,7 @@ export type Parser
 	// (`= 7`) mints no helper at all (`FieldDefault.literal`), and scanning one finds nothing, so the two doors
 	// need no shared verdict: an entry keyed on a helper name no layout carries is dropped by the fixpoint's own
 	// name→index filter.
-	function recordFieldDefaultDescriptorNeeds(q TokenIndex, typeName ByteArray, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, selfCallees SelfCalleesMap) returns TokenIndex
+	function recordFieldDefaultDescriptorNeeds(q TokenIndex, typeName ByteArray, methodNames ByteArrayArray, directSeeds DescriptorNeedMap, countSeeds DescriptorNeedMap, selfCallees SelfCalleesMap) returns TokenIndex
 		let afterModifier = self.pastVisibilityModifier(q)
 		let fieldName = self.tokenAt(afterModifier + 1).value
 
@@ -13735,6 +13770,7 @@ export type Parser
 		// A field name is unique within one declaration, so — unlike a METHOD name, which a body and an
 		// extension may both wear — one helper name cannot be contributed twice and there is no union to take.
 		directSeeds.upsert(helperName, value: scan.direct)
+		countSeeds.upsert(helperName, value: scan.readsFixedElementCount)
 		// A field default is a nullary helper OF this type, so it holds the enclosing instance's descriptor on
 		// exactly the terms a method does — which is why the edge set is `descriptorEdgesFor`'s and not this
 		// door's own. A field default is never STATIC, and that is the one thing it has to say for itself.
@@ -13779,6 +13815,10 @@ export type Parser
 		// edge would reserve a parameter whose only supply is `forwardCallerLayout`'s panic.
 		if not self.enclosingTypeParams.isEmpty() and not isStatic 'aGenericInstanceMethod'
 			edges.append(scan.corpusContainerCallees)
+			// ⭐ The sized container's CHAINED self-call edges (W190) ride the SAME gate for the SAME reason —
+			// the receiver is inferred rather than resolved, and a static that reserves a dictionary it cannot
+			// source is a refusal on a program that used to compile. See the arm that records them.
+			edges.append(scan.sizedContainerSelfCallees)
 			// ⭐⭐ **AND THE CALLS THE `for … in self` ITSELF MAKES (found at review — W159's other half).**
 			// W159 read this loop shape to SEED the per-trip drop and stopped there, but the very fact it
 			// rests on — the loop's `createIterator()`/`current()`/`advance()` are emitted by the parser and
@@ -13863,7 +13903,13 @@ export type Parser
 	// signal the caller pairs with "has an opaque feed parameter" to decide the drop needs the descriptor.
 	function scanDescriptorSignalsIn(start TokenIndex, regionEnd TokenIndex) returns MethodDescriptorScan
 		var direct = false
+		var readsFixedElementCount = false
 		var callees = ByteArrayArray.create()
+		// ⭐ Minted on the first chained edge, so every body of every other type allocates nothing for it — the
+		// `sharedEmptyCorpusContainerCallees` discipline, one column over.
+		var sizedContainerSelfCallees = sharedEmptySizedContainerSelfCallees
+		// Hoisted out of the walk: it is a property of the enclosing DECLARATION, not of a token.
+		let insideTheSizedContainer = self.signatures.isVectorBaseName(self.enclosingType)
 		var hasControlFlow = false
 		var hasContainerMoveOut = false
 		var reassignsOpaqueField = false
@@ -13906,6 +13952,12 @@ export type Parser
 			if kind == TokenKind.sizeof and self.sizeofOperandIsTypeParamAt(q) 'directSizeof'
 				direct = true
 			end 'directSizeof'
+			// ⭐ `countof(Self)` reserves the COUNT slot, and deliberately NOT the descriptor one (W190): the
+			// count travels as its own hidden constant argument, so a body that reads nothing else about its
+			// type argument can be called from a frame that carries no descriptor at all.
+			if kind == TokenKind.countof and self.countofOperandIsTheOwnInstanceAt(q) 'directCountof'
+				readsFixedElementCount = true
+			end 'directCountof'
 			// A `return`/`throw`/`break`/`continue` is a NON-final exit (or, at the tail, harmless over-inclusion):
 			// with one of these OR a nested block below, a feed parameter can be left live at an exit and dropped,
 			// so the method needs the descriptor. A straight-line body has none and unconditionally consumes its
@@ -13967,12 +14019,79 @@ export type Parser
 			if kind == TokenKind.self and self.isSelfMethodCallAt(q) 'selfCall'
 				callees.push(self.tokenAt(q + 2).value)
 			end 'selfCall'
+			// ⭐⭐ **A CHAINED CALL INSIDE THE SIZED CONTAINER'S OWN BODY IS A SELF-CALL ON A VALUE WITH NO NAME
+			// (W190).** The two precise columns key on a NAME — `self`, or a local a `Self{…}`/`Self.<static>()`
+			// bound, or a parameter declared `Self` — and `self.dup().capacity()` has none of them: it calls a
+			// method of this very type on a temporary. **MEASURED: `panic at emitFixedElementCountOf: caller
+			// 'Vector.chained' has no fixed-element-count parameter to forward to 'Vector.capacity'`** — a
+			// compiler abort on a legal program, which is what a missing edge in this fixpoint always costs.
+			//
+			// ⛔⛔ **THE `)` IS WHAT MAKES IT PRECISE, AND WITHOUT IT THIS ARM OVER-RESERVED FOUR CASES OF
+			// EMITTED CODE.** The first cut matched EVERY `.<member>(` in the body, which is the receiver-blind
+			// shape `selfTypedLocalBoundAt`'s ⛔ paragraph warns about — and it read `VectorIter.create(managed)`
+			// inside `createIterator` as a call to `Vector.create`, whose `Self{}` seeds a descriptor need. So
+			// `createIterator` reserved a descriptor nothing reads and every `for … in` over a vector grew a
+			// `lea` of the instance's `__layout_*` blob: **MEASURED as four drifting goldens** (`vector/iterate`,
+			// `vector/from-array-literal-iterate`, `vector/bool-vector-from-literal`,
+			// `vector-static-index/variable-index-set-keeps-the-bounds-check`). A receiver spelled as a NAME is
+			// already covered by a precise column; the only receiver they cannot see is one that has no name,
+			// and a value with no name is a call's RESULT.
+			//
+			// It is still gated by the enclosing declaration here and by the static rule at
+			// `descriptorEdgesFor`, on those columns' own terms; a name this type does not declare is dropped
+			// by the fixpoint's own name→index filter.
+			if insideTheSizedContainer and kind == TokenKind.dot and self.memberCallFollows(q) and q != 0 and self.kindAt((q - 1) as TokenIndex) == TokenKind.rightParen 'aChainedSelfCallInTheSizedContainer'
+				if sizedContainerSelfCallees is sharedEmptySizedContainerSelfCallees 'firstChainedEdgeInThisRegion'
+					sizedContainerSelfCallees = ByteArrayArray.create()
+				end 'firstChainedEdgeInThisRegion'
+
+				// Already QUALIFIED, like `corpusContainerCallees` and unlike `callees`: this column is appended to
+				// the edge list directly rather than through `qualifiedSelfCallees`, so a bare name here would match
+				// no node and the edge would be silently dropped by the fixpoint's own name filter.
+				sizedContainerSelfCallees.push(qualifiedMethodName(self.enclosingType, methodName: self.tokenAt(q + 1).value))
+			end 'aChainedSelfCallInTheSizedContainer'
+			// ⭐⭐ **`Self.<member>(…)` IS THE SAME EDGE UNDER THE OTHER KEYWORD, AND IT WAS MISSING (W190).**
+			// `self.m(` is an instance call and `Self.m(` a STATIC one, but the fixpoint does not ask which:
+			// what it records is *"this body reaches a sibling, so whatever that sibling's ABI needs, this
+			// body has to supply"* — and a static reached this way sources its dictionary from the RESULT it
+			// returns, which inside the declaring body is the enclosing instance itself. **MEASURED: a
+			// `Vector` instance method writing `var fresh = Self.counted()`, where `counted()` reads
+			// `countof(Self)`, reserved nothing and hit `emitFixedElementCountOf: caller 'Vector.rebuild' has
+			// no fixed-element-count parameter to forward`.** `selfTypedLocalBoundAt` one door over already
+			// recognizes this exact token shape — to record the LOCAL it binds — so the shape was seen and
+			// only the edge out of it was not drawn.
+			if kind == TokenKind.selfType and self.memberCallFollows((q + 1) as TokenIndex) 'selfTypeStaticCall'
+				callees.push(self.tokenAt(q + 2).value)
+			end 'selfTypeStaticCall'
 			// ⭐ A `var result = Self{…}` LOCAL is a value of the enclosing type, so `result.upsert(…)` reaches
 			// the same shared body `self.upsert(…)` does and must feed the fixpoint identically (W43b). Recorded
 			// on the way past the binding, so the call sites below it are recognized in this one walk.
 			if self.selfTypedLocalBoundAt(q) 'selfTypedBinding'
 				selfTypedLocals.push(self.tokenAt(q + 1).value)
 			end 'selfTypedBinding'
+			// ⭐⭐ **A `Self`-TYPED PARAMETER IS A VALUE OF THE ENCLOSING TYPE TOO, AND ITS EDGE WAS MISSING
+			// (W190).** `merge(other Self)` binds `other` to the very instance the receiver is
+			// (`substitutedFixedSize` gives a countless `Self` the RECEIVER's count, and a differently-sized
+			// argument is refused outright), so `other.<m>()` reaches the same shared body `self.<m>()` does
+			// and the caller can forward its own dictionary. The scan region opens at the `(` of the parameter
+			// list, so the declaration is in it and no signature lookup is needed.
+			//
+			// ⚠ **THE SHAPE COULD ONLY BE THIS SPELLING, WHICH IS WHY A TOKEN PAIR IS ENOUGH.** `Self` is
+			// preceded by an IDENTIFIER only in a parameter declaration — a field writes `as Self`, a return
+			// writes `returns Self`, an alias writes `= Self`, a type argument follows `with` or a count. It is
+			// PRECISE rather than receiver-blind (it reads the parameter's declared TYPE), which is what
+			// `selfTypedLocalBoundAt`'s ⛔ paragraph requires of anything feeding this list.
+			//
+			// ⛔⛔ **WITHOUT IT THE COUNT PATH ABORTS THE COMPILER, WHERE THE DESCRIPTOR PATH ONLY REFUSED.**
+			// `requireSelfForDescriptorForwarding` catches this shape for a DECLARED generic, whose `Self` is a
+			// `structRef` — but a container whose record the compiler owns has a `genericInstance` `Self`, which
+			// that guard tests its way past. **MEASURED: `Vector.pairWith(other Self)` calling
+			// `other.capacity()` hit `emitFixedElementCountOf: caller 'Vector.pairWith' has no
+			// fixed-element-count parameter to forward`.** Drawing the edge is the answer that guard's own
+			// header calls the later slice, and it retires the refusal for the declared-generic case as well.
+			if self.selfTypedParamDeclaredAt(q) 'selfTypedParam'
+				selfTypedLocals.push(self.tokenAt(q).value)
+			end 'selfTypedParam'
 			if self.selfTypedLocalCallAt(q, locals: selfTypedLocals) 'selfTypedLocalCall'
 				callees.push(self.tokenAt(q + 2).value)
 			end 'selfTypedLocalCall'
@@ -14116,7 +14235,7 @@ export type Parser
 
 			q = q + 1
 		end 'walk'
-		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, endPos: regionEnd)
+		return MethodDescriptorScan.create(direct, callees: callees, hasControlFlow: hasControlFlow, hasContainerMoveOut: hasContainerMoveOut, reassignsOpaqueField: reassignsOpaqueField, hasArrayCopy: hasArrayCopy, constructsSelfLiteral: constructsSelfLiteral, buildsRecord: buildsRecord, adoptsOpaqueCallResult: adoptsOpaqueCallResult, forwardsToATypeParamFeed: forwardsToATypeParamFeed, storesContainerElement: storesContainerElement, walksReceiverAsACursor: walksReceiverAsACursor, corpusContainerCallees: corpusContainerCallees, nestedInstanceCallees: nestedInstanceCallees, readsFixedElementCount: readsFixedElementCount, sizedContainerSelfCallees: sizedContainerSelfCallees, endPos: regionEnd)
 	end 'scanDescriptorSignalsIn'
 
 	// ⭐⭐⭐ **THE ONE EDGE IN THE DESCRIPTOR-NEED FIXPOINT THAT LEAVES THE ENCLOSING TYPE (ARRG).** A `.<m>(`
@@ -14410,6 +14529,13 @@ export type Parser
 		end 'notSelfValued'
 		return self.kindAt(q + 4) == TokenKind.leftBrace or self.memberCallFollows((q + 4) as TokenIndex)
 	end 'selfTypedLocalBoundAt'
+
+	// Is the token at `q` a `<name> Self` PARAMETER DECLARATION — the other way a name in this body denotes a
+	// value of the enclosing type (W190)? See the walk's own arm for why an identifier followed by `Self` can
+	// only be that, and for the compiler abort the missing edge produced.
+	function selfTypedParamDeclaredAt(q TokenIndex) returns bool
+		return self.kindAt(q) == TokenKind.identifier and self.kindAt((q + 1) as TokenIndex) == TokenKind.selfType
+	end 'selfTypedParamDeclaredAt'
 
 	// Is the token at `q` a `<local>.<method>(` call whose receiver `selfTypedLocalBoundAt` recorded — the
 	// self-call the line above makes visible. The name list is a handful of locals per body, so a scan is what
@@ -14753,6 +14879,49 @@ export type Parser
 		end 'noClose'
 		return self.typeParamPositionOf(self.tokenAt(sizeofPos + 2).value) < self.enclosingTypeParams.count()
 	end 'sizeofOperandIsTypeParamAt'
+
+	// Is the `countof` at `countofPos` a `countof(<the enclosing declaration's own instance>)` — the 4
+	// contiguous tokens `countof ( Self )`, or the same with the type's OWN NAME in place of the keyword
+	// (W190)? `parseCountof` consumes exactly this shape with no newline tolerance, so matching it
+	// token-for-token keeps the pre-scan and the real parse in lockstep — `sizeofOperandIsTypeParamAt`'s
+	// contract, unchanged.
+	//
+	// ⭐ **BOTH SPELLINGS, BECAUSE `parseTypeReference` ANSWERS THE SAME TYPE FOR BOTH.** `Self` and the
+	// enclosing type's own name both reach `enclosingSelfType`, which for a container whose record the
+	// compiler owns is `ownRecordSelfInstance` — the countless instance whose count only the caller can
+	// supply. A check filed against one spelling would be narrower than the fact it is about.
+	//
+	// ⚠ **AN OPERAND THIS CANNOT SEE IS A POSITIONED REFUSAL, NOT A COMPILER ABORT**, which is the one place
+	// `countof`'s door is stronger than `sizeof`'s: `parseCountof` gates the read on the slot ACTUALLY being
+	// reserved, so a spelling that reaches the read without passing here (an inner `typealias` naming the
+	// countless instance) is refused with a line and a column rather than reaching the lowering's panic.
+	//
+	// ⛔ **AND IT ASKS WHETHER THE ENCLOSING TYPE IS THE SIZED CONTAINER, WHICH IS A NARROWING AND NOT AN
+	// OVER-APPROXIMATION.** The sibling signals may over-match freely because an unread descriptor parameter
+	// costs one slot; this one may not, because a reservation ALSO drags in `staticLayoutNeedsSelfReturn` —
+	// so a `countof(Self)` inside an ordinary generic's `static function f() returns Int`, which
+	// `parseCountof` refuses as *"a type that states no element count"*, would instead be refused for
+	// failing to return `Self`: a diagnostic about the wrong thing entirely. The narrowing cannot
+	// UNDER-match, which is the direction that aborts the compiler: `enclosingSelfType` yields a countable
+	// instance for exactly the names this admits, so every operand the parse serves passes here first.
+	function countofOperandIsTheOwnInstanceAt(countofPos TokenIndex) returns bool
+		if not self.signatures.isVectorBaseName(self.enclosingType) 'notTheSizedContainersOwnBody'
+			return false
+		end 'notTheSizedContainersOwnBody'
+		if self.kindAt(countofPos + 1) != TokenKind.leftParen 'noOpen'
+			return false
+		end 'noOpen'
+		if self.kindAt(countofPos + 3) != TokenKind.rightParen 'noClose'
+			return false
+		end 'noClose'
+
+		let operand = self.tokenAt(countofPos + 2)
+		if operand.kind == TokenKind.selfType 'theSelfKeyword'
+			return true
+		end 'theSelfKeyword'
+
+		return operand.kind == TokenKind.identifier and operand.value.equals(self.enclosingType)
+	end 'countofOperandIsTheOwnInstanceAt'
 
 	// Is the innermost OPEN bracket a `{` (a struct literal)? The stack's top decides whether a `:` is a
 	// struct-field separator (yes) or a labelled call argument's (no).
@@ -22137,6 +22306,16 @@ export type Parser
 		if self.signatures.anyFunctionNeedsLayoutDescriptor() and not self.enclosingType.isEmpty() 'aMethodOfSomeType'
 			needsLayoutParam = self.signatures.functionNeedsLayoutDescriptor(qualifiedMethodName(self.enclosingType, methodName: nameTok.value))
 		end 'aMethodOfSomeType'
+		// ⭐⭐ **THE FIXED-ELEMENT-COUNT SLOT (W190)** — reserved on exactly the terms above, off the same
+		// whole-program fixpoint under the same qualified name, and INDEPENDENTLY of the descriptor: a method
+		// that reads only `countof(Self)` needs no dictionary word at all, so making the count imply a
+		// descriptor would demand one from every frame that calls it — including the frames that have none.
+		// MEASURED: `Holder.size()` calling `capacity()` on its `Vector with 4 Element` field aborts the
+		// compiler when the callee reserves a descriptor, because no edge gives `Holder.size` one to forward.
+		var needsCountParam = false
+		if self.signatures.anyFunctionReadsFixedElementCount() and not self.enclosingType.isEmpty() 'aMethodOfSomeTypeReadsACount'
+			needsCountParam = self.signatures.functionReadsFixedElementCount(qualifiedMethodName(self.enclosingType, methodName: nameTok.value))
+		end 'aMethodOfSomeTypeReadsACount'
 
 		// ⛔ **A RECEIVERLESS (static) LAYOUT-NEEDING function must RETURN `Self` (P1.7 slice 3b-i).** A `static`
 		// has no `self` to carry the type parameter's layout descriptor; a caller sources it instead from the
@@ -22159,20 +22338,35 @@ export type Parser
 			end 'declaredReturn'
 		end 'theErrorFlagAlreadyOwnsTheSecondRegister'
 
-		if needsLayoutParam and not takesReceiver and not self.returnsEnclosingType(returnType) 'staticLayoutNeedsSelfReturn'
-			throw ParseError.unsupported("a `static function` that needs the type parameter's layout descriptor — it constructs an opaque type-parameter `Array` (`ElementArray.create()`) or reads `sizeof` of the type parameter — must return `Self` so the caller can source the descriptor from the instance the static builds; a static returning any other type has no descriptor source (build the array or read the size through an instance method on `self`, or return `Self`). Threading a descriptor from a static call site's alias is a later slice", line: nameTok.line, column: nameTok.column)
+		// ⚠ **THE COUNT SLOT IS SOURCED THE SAME WAY AND SO CARRIES THE SAME REFUSAL (W190).** A static has no
+		// receiver whose instance states the count; the only instance a caller can read one off is the static's
+		// own RESULT, and that is a concrete instance only when the static returns `Self`. ONE refusal for both
+		// slots, because it is one rule about where a receiverless callee's dictionary comes from — and
+		// `countof(Self)` in a static is exactly the shape this rung exists to serve (`Vector.create()`), so
+		// this arm must ADMIT it rather than refusing it the way `parseSizeof` refuses a receiverless
+		// `sizeof(T)`. That is the one place `countof`'s door deliberately differs from `sizeof`'s: `sizeof`
+		// asks whether `__self` is in scope, which no static can answer yes to, while this asks whether the
+		// call site has anything to source the answer FROM — and a `returns Self` static does.
+		if (needsLayoutParam or needsCountParam) and not takesReceiver and not self.returnsEnclosingType(returnType) 'staticLayoutNeedsSelfReturn'
+			throw ParseError.unsupported("a `static function` that needs the enclosing instance's dictionary — it constructs an opaque type-parameter `Array` (`ElementArray.create()`), reads `sizeof` of the type parameter, or reads `countof` of the sized container's own `Self` — must return `Self` so the caller can source it from the instance the static builds; a static returning any other type has no source (build the array, read the size or read the count through an instance method on `self`, or return `Self`). Threading a dictionary from a static call site's alias is a later slice", line: nameTok.line, column: nameTok.column)
 		end 'staticLayoutNeedsSelfReturn'
 
 		// The reservation the body's opaque drops will be checked against (W10) — recorded here, where the
 		// decision is made, and re-armed per function so a previous method's answer cannot stand in for this one.
 		self.functionCarriesLayoutParam = needsLayoutParam
+		self.functionCarriesFixedElementCountParam = needsCountParam
 		self.functionDroppedOpaqueWithoutDescriptor = false
 		self.functionStoredOpaqueWithoutDescriptor = false
 
 		let layoutParamCount = 1 if needsLayoutParam else 0
+		// ⭐ The count slot sits BETWEEN the layout descriptor and the witnesses:
+		// `[user][env][existentialWitness][layout][count][witness_0..k]`. After the descriptor because it is the
+		// newer slot and appending moves nothing; before the witnesses because `bindImplicitParams` and
+		// `appendWitnessArgs` both address the witness block from the END of the list.
+		let countParamCount = 1 if needsCountParam else 0
 		// ⭐ **A HIDDEN WITNESS PARAMETER PER `where` CONSTRAINT (P1.7a slice 2a, the dictionary's dispatch
 		// half).** An INSTANCE method of a constrained generic type carries one witness pointer per constraint,
-		// TRAILING after the layout descriptor: `[user][env][layout][witness_0..k]`, index-aligned to
+		// TRAILING after every other hidden block: `[user][env][existentialWitness][layout][count][witness_0..k]`, index-aligned to
 		// `enclosingWhereConstraints`. The reservation is UNCONDITIONAL on instance methods (not gated on
 		// whether this method actually dispatches), so the type's instance-method ABI is uniform and every
 		// caller passes the witnesses; a `static function` carries none (it has no `self` to source a witness
@@ -22188,7 +22382,7 @@ export type Parser
 		// `countParamsWithTag` for why a second body here is an ABI hazard rather than a duplicate.
 		let envParamCount = countParamsWithTag(paramTypes, tag: ValueTypeTag.function)
 		let existentialWitnessCount = countParamsWithTag(paramTypes, tag: ValueTypeTag.interfaceRef)
-		let paramCount = userParamCount + envParamCount + existentialWitnessCount + layoutParamCount + witnessParamCount
+		let paramCount = userParamCount + envParamCount + existentialWitnessCount + layoutParamCount + countParamCount + witnessParamCount
 		try requireAbiParamCount(paramCount, anchor: nameTok)
 		self.scope.reset()
 		self.valueIds = ValueIdRef.create(paramCount)
@@ -22352,10 +22546,22 @@ export type Parser
 		// here keeps every value column dense through the parameter block.
 		if needsLayoutParam 'seedLayoutParam'
 			self.recordValueType(MaxonType.integer)
-			self.artifact.recordParamOrigin((paramCount - witnessParamCount - 1) as ValueId, range: SourceRange.ofToken(nameTok))
+			self.artifact.recordParamOrigin((paramCount - witnessParamCount - countParamCount - 1) as ValueId, range: SourceRange.ofToken(nameTok))
 		end 'seedLayoutParam'
 
-		// Seed the hidden witness parameters (P1.7a slice 2a) — AFTER the layout slot, so they occupy the FINAL
+		// Seed the hidden fixed-element-count parameter's value columns (W190) — AFTER the layout slot and
+		// BEFORE the constraint witnesses, which is where `parseFunction` reserved it. It is an `integer`
+		// rather than the layout slot's opaque pointer, because unlike every other hidden parameter it is
+		// READ AS A VALUE by source the user wrote: `countof(Self)` IS this parameter, so the type column has
+		// to say what the expression machinery will find there.
+		self.fixedElementCountParamValueId = 0
+		if needsCountParam 'seedCountParam'
+			self.fixedElementCountParamValueId = (paramCount - witnessParamCount - 1) as ValueId
+			self.recordValueType(MaxonType.integer)
+			self.artifact.recordParamOrigin(self.fixedElementCountParamValueId, range: SourceRange.ofToken(nameTok))
+		end 'seedCountParam'
+
+		// Seed the hidden witness parameters (P1.7a slice 2a) — AFTER the layout and count slots, so they occupy the FINAL
 		// `witnessParamCount` ValueIds (`paramCount - witnessParamCount .. paramCount - 1`). Each is an i64
 		// witness-table pointer, unnamed (only the witness dispatch / forwarding lowering reads them, by
 		// position), its span the method name (no source token declares it), exactly like the layout slot.
@@ -23623,12 +23829,23 @@ export type Parser
 		// — before the body's values are numbered — for `parseFunction`'s stated reason: its ValueId must land
 		// inside `[0, paramCount)` so the backend's param-capture clobber guard covers it.
 		// A helper takes no receiver and no user parameter, so the descriptor is ValueId 0 and `paramCount` is
-		// exactly the bit `LowerMaxonToStd.functionHasDescriptorParam` reads back.
+		// what `LowerMaxonToStd.functionHasDescriptorParam` reads it back off — minus the count slot, which since
+		// W190 that routine subtracts by NAME because two optional slots cannot both be read out of one total.
 		let needsLayoutParam = self.signatures.anyFunctionNeedsLayoutDescriptor() and self.signatures.functionNeedsLayoutDescriptor(helperName)
+		// A field default may read `countof(Self)` (`var slots as Int = countof(Self)`), so it reserves the count
+		// slot on the same terms and out of the same fixpoint (W190).
+		let needsCountParam = self.signatures.anyFunctionReadsFixedElementCount() and self.signatures.functionReadsFixedElementCount(helperName)
 		self.functionCarriesLayoutParam = needsLayoutParam
+		self.functionCarriesFixedElementCountParam = needsCountParam
 		self.functionDroppedOpaqueWithoutDescriptor = false
 		self.functionStoredOpaqueWithoutDescriptor = false
-		let helperParamCount = 1 if needsLayoutParam else 0
+		let helperParamCount = (1 if needsLayoutParam else 0) + (1 if needsCountParam else 0)
+		// A helper takes no receiver and no user parameter, so the layout slot is ValueId 0 and the count slot
+		// follows it — the same `[layout][count]` order `parseFunction` reserves in.
+		self.fixedElementCountParamValueId = 0
+		if needsCountParam 'countSlot'
+			self.fixedElementCountParamValueId = (helperParamCount - 1) as ValueId
+		end 'countSlot'
 
 		self.scope = Scope.create()
 		self.valueIds = ValueIdRef.create(helperParamCount)
@@ -23716,6 +23933,14 @@ export type Parser
 			self.recordValueType(MaxonType.integer)
 			self.artifact.recordParamOrigin(0 as ValueId, range: SourceRange.ofToken(anchor))
 		end 'seedLayoutParam'
+
+		// The hidden count slot's columns, seeded on the same terms one line up and in the same ABI order
+		// (`[layout][count]`, W190). Unlike the layout slot it is READ AS A VALUE — a default expression may
+		// write `countof(Self)` — so its recorded type is the `integer` the expression machinery will find.
+		if needsCountParam 'seedCountParam'
+			self.recordValueType(MaxonType.integer)
+			self.artifact.recordParamOrigin(self.fixedElementCountParamValueId, range: SourceRange.ofToken(anchor))
+		end 'seedCountParam'
 
 		let entry = self.artifact.module.addBlockAt(helper, label: b"entry", filePath: self.filePath.toString(), firstLine: anchor.line)
 		self.currentBlock = entry
@@ -44921,6 +45146,13 @@ export type Parser
 			return try self.parseSizeof()
 		end 'sizeofExpr'
 
+		// `countof(Type)` (W190) — its own arm for `sizeof`'s reason, one line up: `countof` is a KEYWORD, so
+		// it cannot ride the identifier arm below, which would read `countof(Self)` as a value-position call
+		// to a function nobody declares.
+		if self.at(TokenKind.countof) 'countofExpr'
+			return try self.parseCountof()
+		end 'countofExpr'
+
 		// ⭐ **`int.fromString(s)` — A STATIC ON A PRIMITIVE TYPE (A1s-prim).** Its own arm for `Self`'s
 		// reason, one arm up: `int`/`float`/`bool` are KEYWORDS, so they cannot ride the identifier arm
 		// below — and `keywordIsANameInOperandPosition` cannot admit them either, because it requires the
@@ -45159,6 +45391,75 @@ export type Parser
 			undeclared then panic("namedStructSizeBytes: `structRef` names '{String.from(name)}', which `resolveNamedStruct` only tags for a declared struct")
 		end 'lookup'
 	end 'namedStructSizeBytes'
+
+	// ⭐⭐ **`countof(Type)`** (W190) — how many ELEMENTS a fixed-size container type holds, `sizeof`'s twin
+	// one axis over: that one answers in BYTES per value, this one in ELEMENTS per instance. Two outcomes,
+	// decided by whether the operand STATES a count:
+	//
+	//   • An instance that states one (`Vector with 3 Int`, and every alias for it) is a COMPILE-TIME
+	//     CONSTANT folded to a `literal` right here, which is where the instance registry lives. It cannot
+	//     ride the op for `parseSizeof`'s reason one door over.
+	//   • The sized container's OWN `Self` states none — `ProgramSignatures.ownRecordSelfInstance` interns at
+	//     `NoFixedSize`, deliberately, so ONE shared body serves every size (`substitutedFixedSize`) — so
+	//     inside `type Vector uses Element` there is no compile-time answer, and the expression IS the hidden
+	//     FIXED-ELEMENT-COUNT parameter every call site fills in — so it emits NO OP AT ALL, the way a `let`
+	//     bound to a literal emits none: the value is already defined, by the entry block's `param`.
+	//
+	// ⛔⛔ **THE COUNT TRAVELS IN ITS OWN HIDDEN PARAMETER AND NOT AS A TENTH LAYOUT-DESCRIPTOR WORD, AND THAT
+	// IS A MEASUREMENT.** See `ProgramSignatures.fixedElementCountNeeds`: a descriptor word describes the type
+	// ARGUMENT, is FORWARDED wholesale to a callee whose instance is written over the caller's parameters, and
+	// therefore cannot carry a fact about the INSTANCE — a `Vector with 4 Element` reached from inside
+	// `type Holder uses Element` read Holder's count, 0, instead of 4.
+	//
+	// ⭐ **ITS GATE IS THE COUNT SLOT, NOT `sizeof`'s `__self`-IN-SCOPE, AND THAT DIFFERENCE IS THE POINT.**
+	// `parseSizeof` refuses a receiverless body because B1 threads the descriptor from the instance a method is
+	// called on; a STATIC has a second source — its own RESULT, when it returns `Self`
+	// (`staticLayoutNeedsSelfReturn` is what makes that true) — and `Vector.create()` is exactly that shape and
+	// is the whole reason this expression exists. So the question asked here is the one that actually decides
+	// whether the read can be served: does THIS function carry the count parameter? A body the pre-scan did not
+	// see gets a positioned refusal rather than the compiler abort `lowerSizeofType`'s divergence produces.
+	function parseCountof() returns ValueId throws ParseError
+		let countofTok = try self.consume(TokenKind.countof)
+		try self.consume(TokenKind.leftParen)
+		let operand = self.resolveNamedStruct(try self.parseTypeReference())
+		try self.consume(TokenKind.rightParen)
+
+		// ⚠ **A COUNT IS A COORDINATE OF THE INSTANCE, SO ONLY AN INSTANCE CAN HAVE ONE.** A primitive, a
+		// declared struct, a type PARAMETER and an unsized container all answer nothing here — and answering 0
+		// would be a sentinel the caller has no way to tell from a real count.
+		//
+		// ⛔ Asked through `isVectorInstanceAt`, the (tag, id) PAIR door, and not through `isVectorInstance`
+		// plus a hand-written tag test: a `TypeNameId` and a `GenericInstanceId` share one numeric space, so
+		// the id half alone can answer TRUE about an instance this operand is not. That door exists for
+		// exactly this shape and stating the pairing here again would be the same rule written twice.
+		if not self.signatures.isVectorInstanceAt(maxonTypeTag(operand), nameId: typeNameIdOf(operand)) 'noElementCount'
+			throw ParseError.unsupported("countof of a type that states no element count — only a fixed-size container type has one (`Vector with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`", line: countofTok.line, column: countofTok.column)
+		end 'noElementCount'
+
+		let stated = self.signatures.genericInstanceFixedSize(typeNameIdOf(operand))
+		if stated != NoFixedSize 'aStatedCount'
+			return self.emitLiteral(stated, valueType: MaxonType.integer, range: SourceRange.ofToken(countofTok))
+		end 'aStatedCount'
+
+		// ⛔⛔ **A LIFTED CLOSURE IS A DIFFERENT FUNCTION, AND `functionCarriesFixedElementCountParam` DESCRIBES
+		// THE ENCLOSING ONE.** A closure body is parsed in place but emitted as its own top-level function with
+		// its own parameter space, so the slot the enclosing method reserved is not a value the closure has —
+		// returning its ValueId there names a value the lifted function never defines. **MEASURED:
+		// `panic at Parser.tagOf: value v1 has no recorded type`**, on a `function() gives countof(Self)`
+		// inside a `Vector` method. `parseSizeof` reaches the same conclusion through its own gate (a closure
+		// is receiverless, so `__self` is not in scope); a count has no `__self` to test, so the closure is
+		// named directly. Reading the count OUTSIDE the closure and capturing the integer is the cure, and it
+		// is the one the message gives.
+		if not self.closureCaptureScopes.isEmpty() 'insideALiftedClosure'
+			throw ParseError.unsupported("countof of the sized container's own `Self` inside a closure — a closure is lifted to its own function, which carries none of the enclosing method's hidden parameters, so the count is not in scope there. Read `countof(Self)` into a binding outside the closure and capture that", line: countofTok.line, column: countofTok.column)
+		end 'insideALiftedClosure'
+
+		if not self.functionCarriesFixedElementCountParam 'noCountSlotToReadItFrom'
+			throw ParseError.unsupported("countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. The pre-scan that reserves that slot reads raw tokens, so spell the operand `Self` (or the container's own name) directly rather than through an alias", line: countofTok.line, column: countofTok.column)
+		end 'noCountSlotToReadItFrom'
+
+		return self.fixedElementCountParamValueId
+	end 'parseCountof'
 
 	// `( <expr> )` — grouping, which is what makes `(2 + 3) * 4` mean 20 rather than 14.
 	// The parentheses produce NO op: the group's value IS the inner expression's, so the

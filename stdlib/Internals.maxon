@@ -2806,9 +2806,14 @@ let MM_INLINE_CAP_BYTES = 64
 let MM_ALLOC_HEADER_SIZE = 32
 
 // Runtime-readable fields of the per-instantiation layout descriptor blob.
-// ABI source of truth is `maxon-selfhosted/Compiler/IR/LayoutDescriptor.maxon`
-// (56-byte rdata image: size@0, alignment@8, elementSize@16, flags@24,
-// copyFunc@32, destroyFunc@40, fieldOffsetsPtr@48). Only the two fields the
+// ⚠ The blob's LENGTH differs between the two compilers that emit one and this
+// prose named a THIRD number that neither uses: the self-hosted compiler's image
+// is 64 bytes and shv2's is 72 (size@0, alignment@8, elementSize@16, flags@24,
+// copyFunc@32, destroyFunc@40, fieldOffsetsPtr@48, elementLogicalSize@56,
+// retainFunc@64 — `maxon-shv2/Compiler/IR/LayoutDescriptor.maxon`).
+// The OFFSETS mirrored below are the ones both agree on, which is what makes this
+// file's reads portable across them; only the total length is a per-compiler fact.
+// Only the two fields the
 // generic-body element-walk wiring reads at runtime are mirrored here; changing
 // either end requires updating the other in lockstep. `flags` bit 0 is set when
 // the instance's element type is heap-managed (a String / generic-instance

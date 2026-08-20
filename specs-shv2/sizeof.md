@@ -342,3 +342,46 @@ end 'main'
 ```exitcode
 16
 ```
+
+<!-- test: sizeof.through-a-Self-typed-parameter -->
+### A `Self`-typed PARAMETER is a value of the enclosing type, and the descriptor forwards to it
+
+`merge(other Self)` binds `other` to the same instance the receiver is, so `other.slotSize()`
+reaches the same shared body `self.slotSize()` reaches and the caller forwards the descriptor
+it already carries. What had to change for this to compile is the descriptor-need fixpoint: it
+recorded a local bound to a `Self{…}` as a value of the enclosing type but not a parameter
+DECLARED `Self`, so nothing reserved `pairWith` a descriptor to forward and the call was
+refused — *"calling 'slotSize' … from a function that carries no layout descriptor of its own
+to forward"*. That refusal was a clean stand-in for an edge that had not been drawn, and its
+own header said so; the edge is drawn now.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntBag = Bag with Int
+
+type Bag uses Element
+	typealias Items = Array with Element
+
+	var items as Items
+
+	export static function create() returns Self
+		return Self{items: Items.create()}
+	end 'create'
+
+	export function slotSize() returns Int
+		return sizeof(Element)
+	end 'slotSize'
+
+	export function pairWith(other Self) returns Int
+		return other.slotSize()
+	end 'pairWith'
+end 'Bag'
+
+function main() returns ExitCode
+	var a = IntBag.create()
+	var b = IntBag.create()
+	return a.pairWith(b)
+end 'main'
+```
+```exitcode
+8
+```

@@ -392,6 +392,7 @@ abs(x)  sqrt(x)  floor(x)  ceil(x)  round(x)  trunc(x)     // trunc returns int
 min(a, b: b)
 max(a, b: b)
 sizeof(TypeName)                                             // compile-time
+countof(TypeName)                                            // elements a Vector with N T holds
 
 // Stdlib I/O
 print("hello\n")

@@ -1,0 +1,19 @@
+// Test: error.an-alias-spelling-the-pre-scan-cannot-see-is-refused
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	typealias Me = Vector with Element
+
+	export function viaAlias() returns Int
+		return countof(Me)
+	end 'viaAlias'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.viaAlias()
+end 'main'
+---
+CompilerError:
+error E2015: <fragment>:9:10: Unsupported: countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. The pre-scan that reserves that slot reads raw tokens, so spell the operand `Self` (or the container's own name) directly rather than through an alias
