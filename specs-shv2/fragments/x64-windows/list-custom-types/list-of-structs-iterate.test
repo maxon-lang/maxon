@@ -63,55 +63,84 @@ func @main {
     x64.pushReg r13
     x64.pushReg r14
     x64.pushReg r15
-    x64.prologue 72
-    x64.leaRegFunc rcx, [rip + __mm_decref]
-    x64.callDirect __list_create
+    x64.prologue 88
+    x64.leaRegRdata rcx, [rip + __layout_List_Entry]
+    x64.callDirect List.create
     x64.movRegReg rbx, r8
     x64.storeSlotReg slot0, rbx
     x64.movRegImm32 rcx, 1
     x64.movRegImm32 rdx, 100
     x64.callDirect Entry.create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot1, r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rax, [rip + __layout_List_Entry]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect __list_append
+    x64.movRegReg rdx, r12
+    x64.callDirect List.append
     x64.movRegImm32 rcx, 2
     x64.movRegImm32 rdx, 200
     x64.callDirect Entry.create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot2, r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rax, [rip + __layout_List_Entry]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect __list_append
+    x64.movRegReg rdx, r12
+    x64.callDirect List.append
     x64.movRegImm32 rcx, 3
     x64.movRegImm32 rdx, 300
     x64.callDirect Entry.create
+    x64.movRegReg r12, r8
+    x64.storeSlotReg slot3, r12
+    x64.movRegReg rcx, r12
+    x64.callDirect __mm_incref
+    x64.leaRegRdata rax, [rip + __layout_List_Entry]
     x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, r8
-    x64.callDirect __list_append
+    x64.movRegReg rdx, r12
+    x64.callDirect List.append
     x64.movRegImm32 r12, 0
     x64.movRegReg rcx, rbx
-    x64.callDirect __list_head
+    x64.callDirect List.createIterator
     x64.movRegReg rbx, r8
+    x64.movRegImm32 rax, 0
+    x64.cmpRegImm32 r10, 0
+    x64.jcc equal, critsplit
+    x64.jmp forempty
+  critsplit:
     x64.jmp forhdr
   forhdr:
-    x64.cmpRegImm32 rbx, 0
-    x64.jcc notEqual, loop
+    x64.cmpRegImm32 rax, 0
+    x64.jcc equal, loop
     x64.jmp forexit
   loop:
+    x64.leaRegRdata rdx, [rip + __layout_ListIterator_Entry]
     x64.movRegReg rcx, rbx
-    x64.callDirect __list_node_value
+    x64.callDirect ListIterator.current
     x64.loadRegBaseDisp.word64 rax, [r8 + 8]
     x64.leaRegRegReg r12, r12, rax
+    x64.movRegReg rcx, r8
+    x64.callDirect __mm_decref
     x64.jmp forstep
   forstep:
     x64.movRegReg rcx, rbx
-    x64.callDirect __list_node_next
-    x64.movRegReg rbx, r8
+    x64.callDirect ListIterator.advance
+    x64.movRegReg rax, r10
     x64.jmp forhdr
   forexit:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __destruct_ListIterator_Entry
+    x64.jmp forjoin
+  forempty:
+    x64.jmp forjoin
+  forjoin:
     x64.movRegImm32 rcx, 21
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg rbx, r8
-    x64.storeSlotReg slot1, rbx
+    x64.storeSlotReg slot4, rbx
     x64.movRegReg rcx, r12
     x64.movRegReg rdx, rbx
     x64.callDirect __int_to_string
@@ -120,11 +149,11 @@ func @main {
     x64.loadRegBaseDisp.word64 r13, [rax + 0]
     x64.loadRegBaseDisp.word64 r14, [rax + 8]
     x64.leaRegRegReg rax, r12, r14
-    x64.storeSlotReg slot2, rax
+    x64.storeSlotReg slot5, rax
     x64.leaRegRegImm32 rcx, rax, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
-    x64.storeSlotReg slot3, r8
+    x64.storeSlotReg slot6, r8
     x64.leaRegRegImm32 r15, r8, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, rbx
@@ -136,28 +165,181 @@ func @main {
     x64.movRegReg rax, r14
     x64.callDirect __str_copy
     x64.leaRegRegReg rax, rbx, r14
-    x64.loadRegSlot rbx, slot3
+    x64.loadRegSlot rbx, slot6
     x64.storeBaseDispReg.word64 [rbx + 0], r15
-    x64.loadRegSlot rax, slot2
+    x64.loadRegSlot rax, slot5
     x64.storeBaseDispReg.word64 [rbx + 8], rax
     x64.movRegImm rax, -3
     x64.storeBaseDispReg.word64 [rbx + 16], rax
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [rbx + 24], rax
-    x64.loadRegSlot rcx, slot1
+    x64.loadRegSlot rcx, slot4
     x64.callDirect __mm_decref
     x64.movRegReg rcx, rbx
     x64.callDirect print
     x64.movRegReg rcx, rbx
     x64.callDirect __str_decref
     x64.movRegImm32 rbx, 0
+    x64.loadRegSlot rcx, slot3
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot2
+    x64.callDirect __mm_decref
+    x64.loadRegSlot rcx, slot1
+    x64.callDirect __mm_decref
     x64.loadRegSlot rcx, slot0
-    x64.callDirect __list_decref
+    x64.callDirect __destruct_List_Entry
     x64.movRegReg r8, rbx
-    x64.epilogue 72
+    x64.epilogue 88
     x64.popReg r15
     x64.popReg r14
     x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 40]
+    x64.callDirect __list_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.storeBaseDispReg.word64 [r8 + 0], rbx
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.append {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __list_append
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @List.createIterator {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect ListIterator.create
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ListIterator.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.callDirect __list_head_checked
+    x64.movRegReg rbx, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_incref
+    x64.storeBaseDispReg.word64 [r12 + 0], rbx
+    x64.movRegReg rcx, rbx
+    x64.callDirect __list_node_decref
+    x64.movRegImm32 r10, 0
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ListIterator.current {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.prologue 40
+    x64.movRegReg rbx, rdx
+    x64.loadRegBaseDisp.word64 rcx, [rcx + 0]
+    x64.callDirect __list_node_value
+    x64.movRegReg rcx, rbx
+    x64.movRegReg rdx, r8
+    x64.callDirect __retain_type_param
+    x64.epilogue 40
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @ListIterator.advance {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rcx
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __list_node_next_checked
+    x64.movRegReg r12, r8
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.movRegImm32 rax, 0
+    x64.leaRegRegImm32 r10, rax, 1
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  tryok:
+    x64.loadRegBaseDisp.word64 rcx, [rbx + 0]
+    x64.callDirect __list_node_decref
+    x64.storeBaseDispReg.word64 [rbx + 0], r12
+    x64.movRegImm32 r8, 0
+    x64.movRegImm32 r10, 0
+    x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp

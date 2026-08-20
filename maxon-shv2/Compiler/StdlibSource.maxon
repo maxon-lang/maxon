@@ -460,19 +460,59 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// `markLazyStaticInitCallees`, which covers the stdlib bodies this seed deliberately does not.
 	seedLazyStaticInitCalleesOfUserCode(module, project: project, signatures: signatures, stdlib: stdlib, byName: byName, reached: reached, worklist: worklist, names: names)
 
-	// ⭐⭐ **THE CORPUS'S INTRINSIC CONFORMANCE IMPLS ARE SEEDED ONLY IF THE REACHED CODE CAN NAME A WITNESS
-	// TABLE** — see `functionDeclaresAWitnessPosition`, which owns the whole argument. The demand is
-	// discovered BY the drain, so the drain runs, the seed is planted at most once, and the drain runs again
-	// for the bodies it added. The second drain's own answer is DISCARDED, and that is not laziness: the seed
-	// has already been planted, so a demand discovered late is one it has already answered — and since the
-	// seed happens at most once there is no third round to reach.
-	let demandsWitnessTable = drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-	if demandsWitnessTable 'aTableCanNameACorpusImpl'
-		for conformerName in conformersMintedWithoutTheirOwnMethods(signatures) 'eachSeededConformer'
-			markWitnessImplsOfConformer(conformerName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		end 'eachSeededConformer'
-		_ = drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-	end 'aTableCanNameACorpusImpl'
+	// ⭐⭐⭐ **A WITNESS IMPL IS CREDITED FOR A PAIR — A CONFORMER THE WALK HAS EVIDENCE OF, AND AN INTERFACE
+	// THE REACHED CODE CAN NAME (W188).** Both halves were already here and each was asked ALONE:
+	// `markConformerWitnessImpls` credited every conformance a reached type DECLARES (evidence about the
+	// type, none about the interface), and the corpus seed credited every conformance the six roster
+	// conformers declare (evidence about the interface's existence, none about which one). Neither is wrong;
+	// together they are a cross product, and it is the CROSS that is exact — `ensureWitnessTable` is called
+	// with a conformer AND an interfaceName, and its `interfaceName` is always statically known.
+	//
+	// ⛔ **THE COST OF ASKING THEM SEPARATELY, MEASURED (W188):** with `int`/`float`/`bool` on the roster, a
+	// program whose only constraint is `Hashable` seeded `int.hash`, then the conformer key saw a REACHED
+	// `int.*` and credited every other `int`/`float` impl — including `Stringable`'s `return "{self}"`, whose
+	// float arm drags `stdlib/Builtins.maxon`'s decimal bignum cone. **Image 12,117 → 21,333 bytes (+76%),
+	// emitted CODE byte-identical at 2,783**: 91 `.rdata` panic literals for bodies the program cannot call.
+	//
+	// ⚠ **IT IS A FIXPOINT BECAUSE BOTH COORDINATES GROW DURING THE WALK**, and either one growing owes the
+	// other's whole list: a newly NAMED interface must be crossed with every conformer already reached, and a
+	// newly REACHED conformer with every interface already named. Both sets only grow and both are bounded by
+	// what the program declares, so it terminates.
+	var witnessInterfaces = InterfaceNameSet.create()
+	var witnessInterfaceOrder = ByteArrayArray.create()
+	var witnessConformers = InterfaceNameSet.create()
+	var witnessConformerOrder = ByteArrayArray.create()
+	for seedConformer in conformersMintedWithoutTheirOwnMethods(signatures) 'eachRosterConformer'
+		noteInterfaceName(seedConformer, into: witnessConformers, order: witnessConformerOrder)
+	end 'eachRosterConformer'
+
+	var interfacesSeeded = 0 as FieldIndex
+	var conformersSeeded = 0 as FieldIndex
+	while true 'seedRounds'
+		drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, witnessConformers: witnessConformers, witnessConformerOrder: witnessConformerOrder)
+		if interfacesSeeded == witnessInterfaceOrder.count() and conformersSeeded == witnessConformerOrder.count() 'nothingNewToCross'
+			break
+		end 'nothingNewToCross'
+
+		// The NEW interfaces against every conformer, then the NEW conformers against the interfaces that
+		// were already named — which covers each new pair exactly once.
+		let interfacesBefore = interfacesSeeded
+		while interfacesSeeded < witnessInterfaceOrder.count() 'eachNewlyNamedInterface'
+			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
+			interfacesSeeded = interfacesSeeded + 1
+			for conformerIndex in 0 upto witnessConformerOrder.count() 'eachKnownConformer'
+				markWitnessImplsOfConformer(try witnessConformerOrder.get(conformerIndex) otherwise panic("reachableMaxonFunctionNames: witnessConformerOrder.get OOB at {conformerIndex} despite the loop guard"), interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+			end 'eachKnownConformer'
+		end 'eachNewlyNamedInterface'
+
+		while conformersSeeded < witnessConformerOrder.count() 'eachNewlyReachedConformer'
+			let conformerName = try witnessConformerOrder.get(conformersSeeded) otherwise panic("reachableMaxonFunctionNames: witnessConformerOrder.get OOB at {conformersSeeded} despite the loop guard")
+			conformersSeeded = conformersSeeded + 1
+			for interfaceIndex in 0 upto interfacesBefore 'eachAlreadyNamedInterface'
+				markWitnessImplsOfConformer(conformerName, interfaceName: try witnessInterfaceOrder.get(interfaceIndex) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfaceIndex} despite the loop guard"), project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+			end 'eachAlreadyNamedInterface'
+		end 'eachNewlyReachedConformer'
+	end 'seedRounds'
 
 	return names
 end 'reachableMaxonFunctionNames'
@@ -500,6 +540,23 @@ end 'reachableMaxonFunctionNames'
 //     is nothing `unreachable` could hold and nothing to seed. The day one of them acquires a listed
 //     declaring module is the day it joins — by the same route `Array` did, below.
 //
+// ⭐⭐ **THAT DAY CAME FOR `int`, `float` AND `bool` (W188): `stdlib/PrimitiveExtensions.maxon` IS LISTED,
+// AND ITS `extension int implements Hashable, Equatable, Comparable, Stringable, Cloneable` IS THE LISTED
+// DECLARING MODULE THE CLAUSE ABOVE NAMES.** `undefinedImplNames` therefore stops synthesizing
+// `int.hash`/`int.equals`/`int.compare` (and their `float`/`bool` siblings) and a witness slot's `funcAbs64`
+// reloc names the CORPUS body instead — a DATA edge this Maxon-tier walk cannot see.
+//
+// ⚠ **MEASURED, BEFORE THE THREE LINES BELOW EXISTED, THE MOMENT THE MODULE WAS LISTED: 124
+// `requireUnreachableStdlibStayedDead` panics** — `int.hash` (83), `int.equals` (23), `int.compare` (18) —
+// which is `String`/`Character`'s 130 at W17 and `Array.hash`'s panic at ARR5b, a third time, on the roster
+// this function IS. **The omission is loud by construction, which is the whole reason a roster is tolerable
+// here**, and the previous two entries were each found by exactly this panic naming the missing name.
+//
+// ⚠ **THE THREE ENTRIES ARE THE BARE NAMES AND NEED NO `arrayRecordBaseName` TREATMENT**, because a
+// primitive's spelling cannot be contested: `int`/`float`/`bool` are KEYWORDS, so no user `type int` exists
+// to shadow the corpus declaration into `__int`. That is the same uncontestability `String` and `Character`
+// rest on (`TypeResolution.isCompilerOwnedTypeName`); only the array name moves.
+//
 // ⭐ **AN OMISSION HERE IS LOUD, ALWAYS, WHICH IS WHY A ROSTER IS TOLERABLE WHERE A PREDICTION WOULD NOT BE.**
 // This walk decides both what is BUILT and what is filed `unreachable`, so a conformer missing from this list
 // is a function `DeadFunctionElimination.requireUnreachableStdlibStayedDead` PANICS on BY NAME the moment a
@@ -520,6 +577,9 @@ function conformersMintedWithoutTheirOwnMethods(signatures ProgramSignatures) re
 	names.push(StringConformerName)
 	names.push(CharacterConformerName)
 	names.push(signatures.arrayRecordBaseName())
+	names.push(IntConformerName)
+	names.push(FloatConformerName)
+	names.push(BoolConformerName)
 	return names
 end 'conformersMintedWithoutTheirOwnMethods'
 
@@ -527,24 +587,20 @@ end 'conformersMintedWithoutTheirOwnMethods'
 // of `reachableMaxonFunctionNames` because the walk runs twice — once to find the demand, once for the
 // bodies the seed adds — and a second copy of the drain is a second place for a marking to be added to one
 // side only, which is the exact defect this rung repairs one screen down.
-function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet) returns bool
-	var demandsWitnessTable = false
+// ⚠ **THE COST GUARD THAT STOOD HERE WENT WITH THE BOOL (W188).** It skipped the
+// `witnessConstraintsOfMethod` ask once the answer was known, on the ground that *"once the answer is known
+// it cannot change, and `or` is monotone"*. A SET of names is not monotone in that sense — the interface a
+// later function names is one the seed still owes — so every reached function is asked. The ask is a
+// qualified-name split and a handful of map lookups, and it is now the only thing standing between a
+// `Hashable` program and 9 KB of `.rdata` it cannot reach.
+function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray, witnessConformers InterfaceNameSet, witnessConformerOrder ByteArrayArray)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
-		markConformerWitnessImpls(func, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		noteReachedConformer(func, into: witnessConformers, order: witnessConformerOrder)
 		markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names)
-		// ⚠ **THE `not demandsWitnessTable` GUARD IS A COST GUARD AND IS WORTH ITS LINE.** This asks
-		// `witnessConstraintsOfMethod` — a qualified-name split and a handful of map lookups PER REACHED
-		// FUNCTION, on every compile that touches stdlib. Once the answer is known it cannot change, and `or`
-		// is monotone. (An OP-borne demand rode `markMaxonCallees`' return value beside it until W129, and it
-		// needed no such guard because it rode a classification that loop already computed.)
-		if not demandsWitnessTable and functionDeclaresAWitnessPosition(func, signatures: signatures, funcSignatures: project.funcSignatures) 'aDeclarationWidensOne'
-			demandsWitnessTable = true
-		end 'aDeclarationWidensOne'
+		collectWitnessPositionInterfaces(func, project: project, signatures: signatures, funcSignatures: project.funcSignatures, into: witnessInterfaces, order: witnessInterfaceOrder)
 	end 'walk'
-
-	return demandsWitnessTable
 end 'drainReachableWorklist'
 
 // ⭐⭐⭐ **THE PREMISE THIS WALK'S HEADER CALLED `P2` HAS EXPIRED, AND THIS IS ITS REPLACEMENT (W17).**
@@ -633,6 +689,67 @@ end 'drainReachableWorklist'
 //     own source — so the list this gate tests and the list that pass fills are one answer, and a conditional
 //     TYPE EXTENSION's extra constraints (which no `structWhereConstraints` read would see) are covered by
 //     construction.
+// ⭐⭐ **AND IT ANSWERS WITH THE INTERFACE NAMES, NOT WITH A BOOL (W188).** It was
+// `functionDeclaresAWitnessPosition`, a yes/no that seeded EVERY method of EVERY conformance each roster
+// conformer declares. That was free while the roster was `String`/`Character`/`Array`, whose conformances
+// are `Hashable`/`Equatable`/`Comparable` — bodies with no literals. **It stopped being free the moment
+// `int`/`float`/`bool` joined it**: their `Stringable` impl is `return "{self}"`, and a `float`'s
+// interpolation drags `stdlib/Builtins.maxon`'s entire decimal bignum cone (`__bigMulSmall`,
+// `__bigShiftLeft`, `__float_bitsFromText`, …) behind it.
+//
+// ⛔ **MEASURED, on a program that names `Hashable` and no other interface and touches no primitive:
+// image 12,117 → 21,333 bytes (+9,216, +76%), with the emitted CODE byte-identical at 2,783** — the whole
+// growth is `.rdata`: **91 panic literals** none of that program's code can reach. A `String`-keyed twin
+// grew identically (13,335 → 22,551). `DeadFunctionElimination` drops the BODIES, and nothing drops the
+// literals a lowered body registered, which is `W129`'s recorded finding one seed over.
+//
+// ⇒ **The seed is now keyed on the interfaces the reached code can actually NAME**, which is the narrower
+// gate this walk's own header describes and declines: *“`ensureWitnessTable`'s `interfaceName` argument is
+// ALWAYS statically known”*. The over-approximation that remains is the CONFORMER (a `Hashable` program
+// still credits `int.hash` and `String.hash` alike), which is the cheap half — those are the bodies with no
+// literals.
+//
+// ⚠ **UNDER-APPROXIMATING HERE IS A PANIC, NOT A SILENT WRONG ANSWER**, and the seed loop in
+// `reachableMaxonFunctionNames` is what keeps it exact: a name discovered by a LATER round re-seeds, so a
+// witness position reached only through a seeded body is still covered.
+function collectWitnessPositionInterfaces(func IrFunction, project Project, signatures ProgramSignatures, funcSignatures FuncSignatureMap, into InterfaceNameSet, order ByteArrayArray)
+	for paramType in func.maxonParamTypes 'eachParam'
+		if maxonTypeTag(paramType) == ValueTypeTag.interfaceRef 'existentialParam'
+			noteWitnessPositionInterface(paramType, project: project, into: into, order: order)
+		end 'existentialParam'
+	end 'eachParam'
+
+	match func.maxonReturnType 'returnPosition'
+		void then break 'returnPosition'
+		value(inner) then noteWitnessPositionInterfaceIfExistential(inner, project: project, into: into, order: order)
+	end 'returnPosition'
+
+	for constraint in witnessConstraintsOfReachedFunction(func, signatures: signatures, funcSignatures: funcSignatures) 'eachConstraint'
+		noteInterfaceName(constraint.interfaceName, into: into, order: order)
+	end 'eachConstraint'
+end 'collectWitnessPositionInterfaces'
+
+// The interface an `interfaceRef` position names, filed once. The ids of a MERGED module's signature types
+// are project-global (`mergeArtifact` remaps them), so the project's interner is the one they live in.
+function noteWitnessPositionInterface(t MaxonType, project Project, into InterfaceNameSet, order ByteArrayArray)
+	noteInterfaceName(interfaceNameOfType(t, typeNames: project.typeNames), into: into, order: order)
+end 'noteWitnessPositionInterface'
+
+// The RETURN arm's form: a return type is a `MaxonReturnType`, so the tag test lives past the `value` arm
+// rather than in front of it — `maxonReturnTypeTag` panics on `void` by design.
+function noteWitnessPositionInterfaceIfExistential(t MaxonType, project Project, into InterfaceNameSet, order ByteArrayArray)
+	if maxonTypeTag(t) != ValueTypeTag.interfaceRef 'notAnExistential'
+		return
+	end 'notAnExistential'
+
+	noteWitnessPositionInterface(t, project: project, into: into, order: order)
+end 'noteWitnessPositionInterfaceIfExistential'
+
+// ⭐ **THE SHORT-CIRCUIT SCAN'S HALF OF THE PAIR — THE SAME THREE SOURCES, ASKED AS A YES/NO.**
+// `userCodeDemandsAWitnessTable` walks EVERY user function before the demand walk runs and needs no names,
+// so it must not pay for a set and an array per function. The two readers stay one answer by construction:
+// every source below is one of the collector's, and neither may grow a fourth alone (W17's measured defect
+// is exactly a source added to one side).
 function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns bool
 	for paramType in func.maxonParamTypes 'eachParam'
 		if maxonTypeTag(paramType) == ValueTypeTag.interfaceRef 'existentialParam'
@@ -644,6 +761,25 @@ function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSig
 		return true
 	end 'existentialReturn'
 
+	return witnessConstraintsOfReachedFunction(func, signatures: signatures, funcSignatures: funcSignatures).count() > 0
+end 'functionDeclaresAWitnessPosition'
+
+// ⚠ **A SET FOR MEMBERSHIP AND AN ARRAY FOR ORDER, because the seed loop must be able to WALK the names
+// it has not yet acted on** — and it must walk them in a fixed order, so what a compile builds cannot depend
+// on a hash bucket.
+function noteInterfaceName(name ByteArray, into InterfaceNameSet, order ByteArrayArray)
+	if into.contains(name) 'alreadyNamed'
+		return
+	end 'alreadyNamed'
+
+	into.insert(name)
+	order.push(name)
+end 'noteInterfaceName'
+
+// The `where`-clause half of the collector above, kept whole because its two-branch read of the signature
+// map is `functionDeclaresAWitnessPosition`'s own and its reason is unchanged — see the paragraphs above.
+function witnessConstraintsOfReachedFunction(func IrFunction, signatures ProgramSignatures, funcSignatures FuncSignatureMap) returns WhereConstraintArray
+
 	// ⭐ **THE EXTENSION HALF IS READ OFF THE REGISTRATION NAME'S OWN SIGNATURE (ARR3b)**, because the
 	// declaration-sweep map is keyed by the DECLARED name and a D7 overload member does not wear it — see
 	// `FuncSignature.extensionConstraints`. A function with no recorded signature (a synthesized graph, a
@@ -651,11 +787,11 @@ function functionDeclaresAWitnessPosition(func IrFunction, signatures ProgramSig
 	// clause — which is exactly what every callee read before ARR3b, and cannot be wrong for a name no
 	// declaration wears. Over-answering here costs a walk; under-answering skips a table the image needs.
 	if let sig = try funcSignatures.get(func.name) 'declared'
-		return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: sig.extensionConstraints).count() > 0
+		return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: sig.extensionConstraints)
 	end 'declared'
 
-	return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: signatures.extensionMethodConstraintsOf(func.name)).count() > 0
-end 'functionDeclaresAWitnessPosition'
+	return signatures.witnessConstraintsOfMethod(func.name, extensionConstraints: signatures.extensionMethodConstraintsOf(func.name))
+end 'witnessConstraintsOfReachedFunction'
 
 // Mark `name` reachable and queue its body. A name no module function carries (a runtime helper,
 // or a root whose runtime this program never installs) is not found and not queued — nothing to
@@ -931,13 +1067,18 @@ end 'markMaxonCalleeEdge'
 // behavioural assertions in those same fragments still pass (`--filter=filepath` 40/0, `directory` 61/0,
 // `url` 47/0), so no `lea` came to name a different string. The narrower gate that would remove this cost
 // is named in this walk's header; it was weighed and not taken.
-function markConformerWitnessImpls(func IrFunction, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+// ⚠ **IT NOTES THE CONFORMER RATHER THAN MARKING THROUGH IT (W188), and that is what makes the pair rule
+// possible.** It used to credit, then and there, every requirement impl of every conformance the reached
+// type declares — an answer that cannot wait, and therefore an answer that cannot be crossed with an
+// interface the walk has not yet met. Recorded instead, the fixpoint in `reachableMaxonFunctionNames` does
+// the crediting once both coordinates are known.
+function noteReachedConformer(func IrFunction, into InterfaceNameSet, order ByteArrayArray)
 	match splitQualifiedName(func.name) 'owner'
 		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
 		notQualified then break 'owner'
-		parts(typeName, _) then markWitnessImplsOfConformer(typeName, project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+		parts(typeName, _) then noteInterfaceName(typeName, into: into, order: order)
 	end 'owner'
-end 'markConformerWitnessImpls'
+end 'noteReachedConformer'
 
 // Credit every requirement implementation `typeName`'s witness tables can name. A type that declares no
 // conformance has no table and nothing to credit, which is almost every type in almost every program.
@@ -945,24 +1086,38 @@ end 'markConformerWitnessImpls'
 // ⚠ The index is `declaredConformanceIndex`'s, not a second walk of `project.conformances`: that memo is
 // reset in lockstep with the store it derives from (`Queries.resetMergeTargets`), so it cannot answer this
 // walk from a previous merge round's declarations.
-function markWitnessImplsOfConformer(typeName ByteArray, project Project, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
-	let conformedTo = try declaredConformanceIndex(project).get(typeName) otherwise 'declaresNoConformance'
+// ⚠ **IT TAKES BOTH COORDINATES — the conformer AND the interface — which is `ensureWitnessTable`'s own
+// argument list (W188).** It used to take the conformer alone and walk `declaredConformanceIndex`'s answer
+// for it, which is *"everything this type promises"*; a table is built for an interface the reached code can
+// NAME, and it is the pair that decides which slots exist. See `reachableMaxonFunctionNames`' fixpoint for
+// where the two lists come from and what asking them separately measured.
+//
+// ⛔⛔ **THE CONFORMANCE TEST IS NOT AN OPTIMIZATION — WITHOUT IT THE WALK MINTS NAMES NO DECLARATION COULD
+// WEAR, AND `markReachable` DOES MORE THAN LOOK ONE UP.** It also widens a callee to its minted
+// parameter-default helper, so a crossed pair like (`File`, `Hashable`) — a type that declares no `hash` —
+// reached `splitMintedHelperName('__paramDefault#File.hash')` and **PANICKED on 8 cases**
+// (`file-io`, `file-info`, `bytearray-element-size`). *"A name nothing declares is simply not found"* was
+// true of `markOneReachable` and false of its caller. `typeConformsTo` is the right gate rather than a bare
+// membership test because it walks `extends` and admits an INTRINSIC conformance — the two ways a slot can
+// exist without the type's own declaration naming this interface.
+function markWitnessImplsOfConformer(typeName ByteArray, interfaceName ByteArray, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	if not typeConformsTo(declaredConformanceIndex(project), interfaces: project.interfaces, typeName: typeName, interfaceName: interfaceName, discovered: signatures.discoveredConformerOf(typeName)) 'thisPairHasNoTable'
 		return
-	end 'declaresNoConformance'
+	end 'thisPairHasNoTable'
 
-	for interfaceName in conformedTo 'eachInterface'
-		let iface = try project.interfaces.get(interfaceName) otherwise 'noSuchInterface'
-			// A conformance naming an interface the program does not declare is E3017's, reported by
-			// `checkConformance` one pass later; a reachability walk has nothing to add and nothing to credit.
-			continue
-		end 'noSuchInterface'
+	let iface = try project.interfaces.get(interfaceName) otherwise 'noSuchInterface'
+		// A witness position naming an interface the program does not declare is E3017's / E3011's, reported
+		// one pass later; a reachability walk has nothing to add and nothing to credit.
+		return
+	end 'noSuchInterface'
 
-		// The TRANSITIVE requirement set, `ensureWitnessTable`'s own list — `iface.methods` alone would miss
-		// every `extends`-inherited slot, which is a slot like any other.
-		for slot in interfaceWitnessSlots(project.interfaces, iface: iface) 'eachSlot'
-			markReachable(qualifiedMethodName(typeName, methodName: slot.method.name), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
-		end 'eachSlot'
-	end 'eachInterface'
+	// The TRANSITIVE requirement set, `ensureWitnessTable`'s own list — `iface.methods` alone would miss
+	// every `extends`-inherited slot, which is a slot like any other. It is also what covers the `extends`
+	// case the narrower gate has to get right: a `Base`-typed place against a `T implements Derived` builds
+	// `__witness_T.Base`, whose slots are BASE's, and those are what this marks.
+	for slot in interfaceWitnessSlots(project.interfaces, iface: iface) 'eachSlot'
+		markReachable(qualifiedMethodName(typeName, methodName: slot.method.name), project: project, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'eachSlot'
 end 'markWitnessImplsOfConformer'
 
 // ⚠⚠⚠ **A SECOND SEED, `markCorpusCalleesOfSynthesizedRuntime`, STOOD HERE AND WENT AT W129 WITH ITS LAST

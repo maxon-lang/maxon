@@ -1082,6 +1082,55 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// declares a conformer and CALLS them (`specs-shv2/interface-extensions.md`), which is what actually
 	// compiles them.
 	try listWhitelistedModule(stdlibDir, relative: "Interfaces.maxon", into: listed)
+
+	// ⭐⭐ **`stdlib/PrimitiveExtensions.maxon` — THE FIRST LISTED MODULE WHOSE SUBJECT IS A KEYWORD RATHER
+	// THAN A DECLARED TYPE (W188).** 101 lines, three `extension` blocks, five members: `hash`, `equals` and
+	// `compare` — the three protocols `IrInterface.isIntrinsicBuiltinConformance` grants a primitive
+	// intrinsically — plus `toString` and `clone`, which it grants NEITHER, so those two reach a primitive
+	// only through this declaration. It declares no TYPE at all, which is why the shadowing machinery
+	// (`SignatureIndex.contestStdlibTypeName`) has nothing to do here and a different contest had to be built.
+	//
+	// ⭐ **BOTH DOUBTS THIS FILE'S HEADER RECORDS WERE MEASURED, AND THEY ANSWER DIFFERENTLY.**
+	//   • **The bodies ARE analyzed**, so the criterion is not vacuous here: `let bogus =
+	//     NoSuchType.definitelyUndefined(1)` injected into `int.hash`'s body on a copy outside `stdlib/`
+	//     answers `E3001` **+ `E3004`**. A plain `extension <primitive>` is not the conditional-extension
+	//     case the six `helpers/sort/*` files fail.
+	//   • **The entry would have been INERT before this rung** — the compiler already served every member
+	//     the module declares (`BATCH36`/`W63`). What carries it is the **differing-declarations control**,
+	//     run with the entry live: `int.hash()`'s body rewritten to `+ 100` and `int.toString()`'s to
+	//     `"X{self}"` moves a program printing `n.toString()` then `n.hash()` from **`42 42` to `X42 142`**.
+	//     The corpus bodies RUN. (Its own control is the same program on the UNLISTED binary: `42 42`.)
+	//
+	// ⛔ **ONE MEMBER IS RESIDUE AND STAYS THE COMPILER'S: `int.toString`.** The corpus body is
+	// `return "{self}"`, whose `self` is declared `int` — the WHOLE of `i64`, therefore signed — while shv2
+	// renders from the RECEIVER's declared range (`specs-shv2/string-interpolation.md`: *"signedness is a
+	// property of the value's DECLARED type"*). Listed without an exception, `unsigned-decimal-tostring`
+	// printed `[-1]` where it pins `[18446744073709551615]`. The roster and the whole measurement live at
+	// `Parser.primitiveMembersTheCompilerRetains`; it is `ARR4`'s rule again — **a roster is the RESIDUE of
+	// what could not retire** — and `hash`/`equals`/`compare`/`clone` are not on it because each is a pure
+	// function of the receiver's BITS, which is exactly what the corpus body has.
+	//
+	// ⭐ **LISTING IT COST THREE MECHANISMS, AND EACH WAS WATCHED RED FIRST:**
+	//   1. **`StdlibSource.conformersMintedWithoutTheirOwnMethods` gained the three primitives** — without
+	//      it, **124 `requireUnreachableStdlibStayedDead` panics** (`int.hash` 83, `int.equals` 23,
+	//      `int.compare` 18): a witness slot's reloc names a CORPUS body once `undefinedImplNames` stops
+	//      synthesizing one. That function's header had PREDICTED this day in so many words.
+	//   2. **The seed became a PAIR rule** (a conformer the walk has evidence of × an interface the reached
+	//      code can NAME). Entry (1) alone made a `Hashable` program credit `float.toString`, dragging
+	//      `stdlib/Builtins.maxon`'s decimal bignum cone into its `.rdata`: **image 12,117 → 21,333 bytes
+	//      with the emitted CODE byte-identical at 2,783**. The pair rule removes that AND a pre-existing
+	//      over-approximation — the same program is now **9,557 bytes, SMALLER than before this entry
+	//      existed**. Its own gate fired too: crossing pairs without a conformance test panicked 8 cases in
+	//      `splitMintedHelperName`.
+	//   3. **A user file's `extension int` now BEATS the corpus's** (`noteExtensionPublishedMethod`).
+	//      Without it, four `specs-shv2/extension-over-primitive.md` cases — the ones `W133` wrote — became
+	//      `E3006 duplicate definition of function 'int.hash#'`, i.e. **listing a module took a name out of a
+	//      user program's hands**, which is exactly what the ⚖ `W114` ruling refuses.
+	//
+	// ⭐ **THE BYTE A/B (`S2h`'s question: what does the entry cost a program that does not use it?):**
+	// `function main() returns ExitCode / return 7` is **BYTE-IDENTICAL at 5,567 bytes** with and without the
+	// entry. This module has no top-level state, which is what `Log.maxon` (+87%) had.
+	try listWhitelistedModule(stdlibDir, relative: "PrimitiveExtensions.maxon", into: listed)
 	// ⭐⭐ **`stdlib/Sha256.maxon` — `sha256(data ByteArray) returns ByteArray`, FIPS 180-4, PURE MAXON.**
 	// No intrinsic, no runtime entry and no target-specific anything: twelve free functions over `Array`,
 	// `Vector` and the bitwise operators. It is also the first listed module the COMPILER ITSELF already

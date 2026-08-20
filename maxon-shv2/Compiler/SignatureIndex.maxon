@@ -561,6 +561,23 @@ let DeclShapeContestedExtensionMethod = 78 as ContentHash
 // The base rides through `record`; only this can carry the contest.
 let DeclShapeCrossFileOverloadedFreeFunction = 105 as ContentHash
 
+// ⭐⭐ **A `<Conformer>.<method>` A LISTED STDLIB `extension` DECLARES AND A USER FILE DECLARES TOO
+// (W188)** — the entry above's SIBLING, and deliberately not the same shape. That one says *"two
+// declarations share a name, so every claimant is registered under its parameter spelling"*; this one says
+// *"one of the two is WITHHELD"*, which is a different program: the stdlib's body is never emitted and its
+// signature is never published. Mixed for the identical reason — it is a fact about WHICH FILES declare the
+// name, so moving an `extension` between files starts or ends it while every `record` call stays
+// byte-identical, and it decides what a call resolves to.
+//
+// ⚠ **IT IS 106 AND NOT 105 BECAUSE BOTH BRANCHES MINTED 105 INDEPENDENTLY.** `W188` took the next free
+// number on its own branch while the cross-file-overload rung took the same number on `main`, and the two met
+// at the rebase — **`W127`'s bug arriving by a route `W127` does not describe**, which is not one hand editing
+// a table twice but two hands each reading a table that was correct when they read it. The collision is
+// visible here only because a text conflict happened to land on the same line; had the two entries been ten
+// lines apart, git would have merged them clean and the tree would carry two facts under one mark. ⇒ `W127`'s
+// cure is a DERIVED tag space, and this is the second measurement arguing for it.
+let DeclShapeStdlibExtensionMethodBeatenByUser = 106 as ContentHash
+
 // ⭐ **THE WHOLE-PROGRAM RE-READ OF ONE `implements` CLAUSE (W95)** — its own discriminator, and not
 // `DeclShapeDeclaredConformance`, because the two are mixed at DIFFERENT MOMENTS over the same declaration:
 // `recordStruct` mixes what the sweep could prove, and `refoldConformanceClause` mixes what the complete
@@ -8636,6 +8653,14 @@ export type ProgramSignatures
 	// both. Marking it contested would re-mint two symbols to fix nothing.
 	var extensionMethodDeclFiles as ExtensionMethodDeclFileMap
 	var contestedExtensionMethods as ExtensionMethodNameSet
+	// ⭐ Which `<Conformer>.<method>` names a STDLIB file's `extension` published — the provenance half of
+	// the contest test below, kept as a set rather than derived from `extensionMethodDeclFiles` because
+	// `isStdlibSourceFile` costs four String allocations per ask and this is asked per extension member.
+	var stdlibPublishedExtensionMethods as ExtensionMethodNameSet
+	// ⭐⭐ The stdlib extension methods a USER file's `extension` takes over — see
+	// `noteExtensionPublishedMethod`, which decides it, and `Parser.parseExtensionDeclaration`, which steps
+	// the withheld stdlib member over exactly as it steps over a `W43` shadowed one.
+	var stdlibExtensionMethodsBeatenByUser as ExtensionMethodNameSet
 	// ⭐⭐ **THE `<Type>.<method>` NAMES A `static` MEMBER AND AN INSTANCE MEMBER BOTH WEAR** — the fact that
 	// makes `Type.m()` and `receiver.m()` two functions instead of a duplicate definition. `record` fills it
 	// the instant the second of the two folds, whichever order they arrive in, and moves the STATIC's own
@@ -8946,7 +8971,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), stdlibPublishedExtensionMethods: ExtensionMethodNameSet.create(), stdlibExtensionMethodsBeatenByUser: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -10291,19 +10316,78 @@ export type ProgramSignatures
 	// sits in, and moving an `extension` between two files can start or end a contest while every `record`
 	// call this index makes stays byte-identical. It decides a SYMBOL NAME, so a reader's parse memo has to
 	// move with it — `recordNamespaceQualifiedFunction`'s argument, one declaration kind over.
-	export function noteExtensionPublishedMethod(qualified ByteArray, declFilePath FilePath)
+	// ⭐⭐ **A STDLIB CLAIMANT AND A USER CLAIMANT ARE NOT A CONTEST — THE USER'S DECLARATION WINS AND THE
+	// STDLIB'S IS WITHHELD (W188).** Returns whether THIS publication is the one that loses, which is the
+	// caller's signal to read the signature and throw it away (`Parser.publishOrShadowExtensionMethod`).
+	//
+	// ⛔⛔ **WITHOUT IT, LISTING A MODULE THAT EXTENDS A BUILTIN MAKES PREVIOUSLY-LEGAL PROGRAMS ILLEGAL.**
+	// MEASURED the moment `stdlib/PrimitiveExtensions.maxon` was listed: four
+	// `specs-shv2/extension-over-primitive.md` cases — the very cases `W133` wrote to pin *a declared body
+	// beats the synthesized impl* — became **`E3006 duplicate definition of function 'int.hash#'`**, because
+	// the corpus now declares the name those programs declare. That is exactly the outcome ⛖ **the `W114`
+	// ruling of 2026-08-14 refused for `Vector`/`List`**: *the declaration wins, do not reserve*. A listed
+	// module may not take a name out of a user's hands.
+	//
+	// ⭐ **AND IT IS NOT A NEW RULE, IT IS `W43`'s, ONE PROVENANCE OVER.** A conformer that declares its own
+	// method already shadows the `extension`'s (`conformerDeclaresOwnMethod`), on the stated ground that an
+	// extension's methods are DEFAULT implementations and a declaration that names the member has said what it
+	// means there. A user file's `extension int` says the same thing about the corpus's.
+	//
+	// ⚠ **IT IS ORDER-INDEPENDENT, AND THAT IS WHAT THE RETURN VALUE BUYS.** The sweep may fold the stdlib
+	// file before the user's or after it: if the stdlib publishes FIRST, the user's publication overwrites the
+	// signature under the same key and this call records the withholding for the real parse; if the stdlib
+	// publishes SECOND, it is told so here, before it records anything.
+	//
+	// ⚠ **TWO USER FILES, OR TWO STDLIB FILES, ARE STILL A CONTEST** — there is no provenance to break the
+	// tie, and the parameter-spelling mint plus `E3006` is the right answer for them (X-contains, unchanged).
+	export function noteExtensionPublishedMethod(qualified ByteArray, declFilePath FilePath, isStdlibSource bool) returns bool
 		self.extensionPublishedMethods.insert(qualified)
 
 		if let firstDeclFile = try self.extensionMethodDeclFiles.get(qualified) 'anExtensionAlreadyPublishedIt'
-			if not firstDeclFile.equals(declFilePath) 'andItWasAnotherFile'
-				self.contestedExtensionMethods.insert(qualified)
-				self.hash = mixBytes(mix(self.hash, value: DeclShapeContestedExtensionMethod), bytes: qualified)
-			end 'andItWasAnotherFile'
-			return
+			if firstDeclFile.equals(declFilePath) 'theSameFileAgain'
+				return false
+			end 'theSameFileAgain'
+
+			let incumbentIsStdlib = self.stdlibPublishedExtensionMethods.contains(qualified)
+			if incumbentIsStdlib != isStdlibSource 'oneSideIsTheCorpus'
+				self.stdlibExtensionMethodsBeatenByUser.insert(qualified)
+				self.hash = mixBytes(mix(self.hash, value: DeclShapeStdlibExtensionMethodBeatenByUser), bytes: qualified)
+				if isStdlibSource 'theCorpusArrivedSecond'
+					return true
+				end 'theCorpusArrivedSecond'
+
+				// The USER arrived second: it takes the name, so the file recorded for it must be the user's
+				// and the corpus's claim must stop counting as the incumbent.
+				self.extensionMethodDeclFiles.upsert(qualified, value: declFilePath)
+				return false
+			end 'oneSideIsTheCorpus'
+
+			self.contestedExtensionMethods.insert(qualified)
+			self.hash = mixBytes(mix(self.hash, value: DeclShapeContestedExtensionMethod), bytes: qualified)
+			return false
 		end 'anExtensionAlreadyPublishedIt'
 
 		self.extensionMethodDeclFiles.upsert(qualified, value: declFilePath)
+		if isStdlibSource 'theCorpusPublishedIt'
+			self.stdlibPublishedExtensionMethods.insert(qualified)
+		end 'theCorpusPublishedIt'
+		return false
 	end 'noteExtensionPublishedMethod'
+
+	// ⚠ **IS THIS STDLIB `extension` METHOD ONE A USER FILE TOOK OVER?** Asked by the REAL PARSE of the
+	// stdlib file, which must step the member over whole rather than emit a second body under the one symbol.
+	// A user file asking would get the same `true` and must not act on it — the caller pairs this with its
+	// own `isStdlibSource`, which is where the provenance it means lives.
+	export function stdlibExtensionMethodIsBeatenByUser(qualified ByteArray) returns bool
+		return self.stdlibExtensionMethodsBeatenByUser.contains(qualified)
+	end 'stdlibExtensionMethodIsBeatenByUser'
+
+	// ⭐ **DID A LISTED STDLIB `extension` PUBLISH `qualified`?** — the provenance half of the pair above,
+	// and the test `Parser.corpusIsTheOnlyDeclarerOf` builds its residue rule on: a member the CORPUS declares
+	// and no user file contests is one whose declaration describes what the compiler already does.
+	export function extensionMethodPublishedByStdlib(qualified ByteArray) returns bool
+		return self.stdlibPublishedExtensionMethods.contains(qualified)
+	end 'extensionMethodPublishedByStdlib'
 
 	// ⭐⭐ **IS `qualified` DECLARED BY AN `extension` IN MORE THAN ONE FILE (X-contains)?** The one flag
 	// `Parser.overloadRegistrationNameFor` asks before it hands a declaration the bare name: a contested name
@@ -21379,6 +21463,37 @@ export type ProgramSignatures
 	//
 	// The index's OWN interner is the right table here and needs no caller to supply one: `instanceArgs` answers
 	// in this index's space, which is the same space `substituteTupleThroughInstance` interns its result into.
+	// ⭐⭐ **A DECLARATION'S OWN `Self` IS SIZE-POLYMORPHIC — IT ADOPTS THE RECEIVER'S COUNT (W113).**
+	// A `Vector`'s identity has a SECOND coordinate the args do not carry (`GenericInstanceRegistry.fixedSizes`,
+	// see `VectorBuiltinBaseName`), and `Self` inside `type Vector uses Element` states none: it is
+	// `ownRecordSelfInstance`, interned at `NoFixedSize`. So substituting `Self` through a receiver mints
+	// `Vector_Int` while every value a program holds is a `Vec3` — different keys, different ids, and a corpus
+	// method's `self` parameter that can never match its own receiver
+	// (**`E3005 argument type mismatch for 'self': expected 'Vector_Int', got 'Vec3'`**, measured at `W86` on
+	// 39 of 47 cases and re-measured at `W112` with no roster strike at all). ⇒ **the countless instance takes
+	// the count of the receiver it is being viewed through.** One body serves every size, which is cure (1) of
+	// the two `VectorBuiltinBaseName` names; cure (2) — monomorphizing the body per size — is v1's, and costs
+	// one copy of every member per distinct count in the program.
+	//
+	// ⚠ **IT IS NOT SIZE ERASURE, AND THE THREE CLAUSES ARE WHAT KEEP IT FROM BEING.** The count is adopted
+	// only when the viewed instance STATES NO COUNT (so a `Vector with 4 Element` field keeps its 4, which is
+	// `vector.capacity-is-part-of-instance-identity`), only when it shares the receiver's BASE (so a `Vector`'s
+	// own `Array with Element` buffer is untouched), and only from a receiver that HAS one. Two SIZED
+	// instances are never compared through here, so `vector.error.wrong-size-vector-argument` goes on being
+	// refused: passing a `Vec3` where a `Vec4` is declared is still two types.
+	function substitutedFixedSize(nested GenericInstanceId, through GenericInstanceId) returns FixedElementCount
+		let own = self.genericInstances.instanceFixedSize(nested)
+		if own != NoFixedSize 'itStatesItsOwnCount'
+			return own
+		end 'itStatesItsOwnCount'
+
+		if self.genericInstances.instanceBaseId(nested) != self.genericInstances.instanceBaseId(through) 'anotherContainersInstance'
+			return own
+		end 'anotherContainersInstance'
+
+		return self.genericInstances.instanceFixedSize(through)
+	end 'substitutedFixedSize'
+
 	function substituteInstanceArgsThrough(nested GenericInstanceId, through GenericInstanceId) returns MaxonType
 		let args = self.genericInstances.instanceArgs(nested)
 		var substituted = MaxonTypeArray.create()
@@ -21391,14 +21506,21 @@ export type ProgramSignatures
 			substituted.push(next)
 		end 'eachArg'
 
-		if not moved 'noArgumentMoved'
-			return MaxonType.genericInstance(nested)
-		end 'noArgumentMoved'
-
 		// The fixed size travels with the re-intern for `GenericInstanceRegistry.intern`'s stated reason: a
 		// caller re-interning an instance it already holds must carry every component of its key, and the one
-		// silence can lose is this one.
-		let substitutedId = self.genericInstances.intern(self.genericInstances.instanceBaseId(nested), args: substituted, fixedSize: self.genericInstances.instanceFixedSize(nested))
+		// silence can lose is this one. Which size that is, for a declaration's own `Self`, is
+		// `substitutedFixedSize`'s answer rather than the nested instance's own.
+		let size = self.substitutedFixedSize(nested, through: through)
+
+		// ⚠ **THE EARLY RETURN TESTS BOTH COORDINATES, NOT ONLY THE ARGS.** A `Vector`'s identity is
+		// (base, args, SIZE), so a substitution that moves no argument can still move the instance — the
+		// declaration's own `Self` over its own parameter, reached through a receiver of that same parameter
+		// at a stated count. Testing `moved` alone returned the countless instance for exactly that case.
+		if not moved and size == self.genericInstances.instanceFixedSize(nested) 'nothingMoved'
+			return MaxonType.genericInstance(nested)
+		end 'nothingMoved'
+
+		let substitutedId = self.genericInstances.intern(self.genericInstances.instanceBaseId(nested), args: substituted, fixedSize: size)
 		// ⭐ The instance this mints was written by nobody — `through` is the construct that forced it into
 		// existence, and the only one an author can be shown. See `SubstitutedInstanceOriginMap`, including
 		// why the edge is first-write-wins and why the `moved` early return above is what keeps this off the

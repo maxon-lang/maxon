@@ -17051,10 +17051,21 @@ export type Parser
 			return
 		end 'theConformerDeclaresItsOwn'
 
-		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 		// The DECLARING FILE rides along because a SECOND file publishing this same name is what makes the two
 		// an overload set rather than a duplicate (X-contains) — see `ProgramSignatures.contestedExtensionMethods`.
-		index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath)
+		// Its PROVENANCE rides too, because a stdlib claimant against a user claimant is not a contest at all:
+		// the user's declaration wins and this one is withheld (W188).
+		//
+		// ⚠ **THE NOTE COMES FIRST, AND THE ORDER IS THE POINT** — it is what answers whether THIS declaration
+		// is the one being withheld, and a signature published before asking would be a corpus signature
+		// standing where the user's belongs whenever the sweep folds `stdlib/` last.
+		let beaten = index.noteExtensionPublishedMethod(qualifiedMethodName, declFilePath: self.filePath, isStdlibSource: self.isStdlibSource)
+		if beaten 'aUserFileDeclaresIt'
+			self.recordScannedSignature(FuncReturnTypeEntryArray.create(), paramConsumes: ParamConsumeEntryArray.create(), paramReassigns: ParamReassignEntryArray.create(), globalAliasReturns: GlobalAliasReturnEntryArray.create(), paramDefaults: ParamDefaultEntryArray.create(), throwsEntries: ThrowsClauseEntryArray.create(), methodInnerAliasParamOut: MethodInnerAliasParamEntryArray.create(), freeFunctionNameOut: ByteArrayArray.create())
+			return
+		end 'aUserFileDeclaresIt'
+
+		self.recordScannedSignature(entries, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, paramDefaults: paramDefaults, throwsEntries: throwsEntries, methodInnerAliasParamOut: methodInnerAliasParamOut, freeFunctionNameOut: freeFunctionNameOut)
 	end 'publishOrShadowExtensionMethod'
 
 	// Read a WITHHELD method's signature into arrays that are discarded, and file why it is missing. The read
@@ -19802,10 +19813,16 @@ export type Parser
 				// under the same symbol. The DECISION is the fold's, read back rather than re-derived: by now the
 				// index also holds the extension's OWN published names, so `conformerDeclaresOwnMethod` can no
 				// longer tell them apart. See `ProgramSignatures.extensionPublishedMethods`.
-				if self.signatures.extensionMethodIsShadowed(qualifiedMethodName(conformer, methodName: self.extensionMemberMethodNameAt(self.pos))) 'theConformerDeclaresItsOwn'
+				// ⭐⭐ **AND A STDLIB MEMBER A USER FILE DECLARES TOO IS STEPPED OVER FOR THE SAME REASON (W188)** —
+				// the user's `extension int` wears the name (`ProgramSignatures.noteExtensionPublishedMethod`),
+				// so a body emitted here is a second definition under one symbol, which is `E3006` at the merge.
+				// The provenance test is THIS parser's own: the set is keyed by name alone, and the file that
+				// WON must go on emitting its body.
+				let extensionMemberName = qualifiedMethodName(conformer, methodName: self.extensionMemberMethodNameAt(self.pos))
+				if self.signatures.extensionMethodIsShadowed(extensionMemberName) or (self.isStdlibSource and self.signatures.stdlibExtensionMethodIsBeatenByUser(extensionMemberName)) 'anotherDeclarationWearsTheName'
 					self.skipPastExtensionMember()
 					continue
-				end 'theConformerDeclaresItsOwn'
+				end 'anotherDeclarationWearsTheName'
 
 				// An extension member is a TYPE member — same visibility, same `static`, same `function`.
 				// A `var`/`let` is refused by that reader (`requireMemberListDeclaresStorage`), which is the
@@ -51992,6 +52009,56 @@ export type Parser
 	// Resolve the method name against the conformer's INTRINSIC conformances and emit the call. The cursor
 	// sits on the method NAME. A name no intrinsic conformance supplies is a clean positioned reject — never
 	// a route to a `<type>.<method>` symbol nothing installs.
+	// ⭐⭐⭐ **THE RESIDUE OF THE `stdlib/PrimitiveExtensions.maxon` RETIREMENT — THE MEMBERS WHOSE ANSWER THE
+	// COMPILER DECIDES FROM A COORDINATE OF THE RECEIVER THE CORPUS BODY CANNOT STATE (W188).** `ARR4`'s
+	// framing, one surface over: **a roster is the RESIDUE of what could not retire**, so this list is a
+	// finding rather than a policy, and every entry owes the measurement that put it there.
+	//
+	// ⛔⛔ **`int.toString` IS ON IT BECAUSE THE CORPUS BODY IS A SILENT WRONG ANSWER FOR AN UNSIGNED
+	// RECEIVER — MEASURED, NOT ARGUED.** `stdlib/PrimitiveExtensions.maxon:21-23` is `return "{self}"`, and
+	// `self` there is declared `int`, which in this language is the WHOLE of `i64` and therefore SIGNED
+	// (`specs-shv2/x8`: no ranged type is not no constraint). shv2's rule is the opposite one —
+	// *"signedness is a property of the value's DECLARED type, read once by the compiler and handed to the
+	// renderer"* (`specs-shv2/string-interpolation.md`) — and the declared type at the CALL is the caller's
+	// `int(0 to u64.max)`, a coordinate the corpus parameter erases. With the module listed and this roster
+	// empty, `string-interpolation/unsigned-decimal-tostring` printed **`[-1]` where it pins
+	// `[18446744073709551615]`**, and `1 shl 63` came back `[-9223372036854775808]`.
+	// ⚠ **The ORACLE prints `[-1]` too** (measured, same program), so this is not shv2 catching up — it is
+	// shv2's own deliberate divergence, and it lives in the renderer the corpus cannot reach.
+	//
+	// ⭐ **IT IS THE `Vector` SIZE STORY ONE AXIS OVER, WHICH IS WHY BOTH RETIREMENTS FILE A RESIDUE.** There,
+	// a declaration's own `Self` states no COUNT while every value has one; here, a declaration's own `self`
+	// states no RANGE while every receiver has one. A member whose answer needs the coordinate cannot retire
+	// until the coordinate travels.
+	//
+	// ⚠ **`hash`, `equals`, `compare` AND `clone` ARE DELIBERATELY ABSENT**: each is a pure function of the
+	// receiver's BITS, which is exactly what the corpus body has, and each is measurably live off the
+	// declaration (the differing-declarations control moves `42.hash()` to `142`). `float.toString` and
+	// `bool.toString` are absent for the same reason — neither renderer reads a range.
+	function primitiveMembersTheCompilerRetains(typeName ByteArray) returns ByteArrayArray
+		var names = ByteArrayArray.create()
+		if typeName.equals(IntConformerName) 'theRangedPrimitive'
+			names.push(ToStringMethodName)
+		end 'theRangedPrimitive'
+		return names
+	end 'primitiveMembersTheCompilerRetains'
+
+	// ⚠ **A ROSTER ENTRY BINDS THE CORPUS'S DECLARATION AND NEVER A USER'S**, which is the whole of why the
+	// provenance test is here and not left implied. `W133`'s ordering rule — *a declared body beats every arm
+	// below, or the author's body never runs* — is unchanged for a user program: a file that writes its own
+	// `extension int implements Stringable` takes the name off the corpus entirely
+	// (`ProgramSignatures.noteExtensionPublishedMethod`), and this test then answers `false` for it, so the
+	// call reaches that declaration exactly as it did before the module was listed.
+	// (`extension-over-primitive/a-declared-tostring-beats-the-inline-lowering` is that case, and it is RED
+	// without the second clause.)
+	function compilerOutranksTheCorpusOn(typeName ByteArray, member ByteArray, callee ByteArray) returns bool
+		if not namesInclude(self.primitiveMembersTheCompilerRetains(typeName), name: member) 'notOnTheResidueRoster'
+			return false
+		end 'notOnTheResidueRoster'
+
+		return self.signatures.extensionMethodPublishedByStdlib(callee) and not self.signatures.stdlibExtensionMethodIsBeatenByUser(callee)
+	end 'compilerOutranksTheCorpusOn'
+
 	function dispatchBuiltinConformanceMethod(func IrFunction, recv MethodReceiver, conformer BuiltinConformer, resultUsed bool) returns ValueId throws ParseError
 		let typeName = builtinConformerName(conformer)
 
@@ -52021,7 +52088,7 @@ export type Parser
 		// call is in would dispatch one `n.hash()` to the declaration and another to the synthesized impl.
 		let methodTok = self.current()
 		let declaredCallee = qualifiedMethodName(typeName, methodName: methodTok.value)
-		if self.signatures.declaresCallee(declaredCallee) 'theProgramDeclaresItsOwn'
+		if self.signatures.declaresCallee(declaredCallee) and not self.compilerOutranksTheCorpusOn(typeName, member: methodTok.value, callee: declaredCallee) 'theProgramDeclaresItsOwn'
 			// `resolvedTypeQualifier`: the author wrote the MEMBER and a receiver, and no token at this call
 			// site spells the type — `dispatchMethodOnBase`'s mint, for its reason. `ConstructorInstance.none`
 			// because a primitive has no box for a constructor to have built.
