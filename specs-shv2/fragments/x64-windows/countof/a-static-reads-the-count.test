@@ -17,7 +17,10 @@ extension Vector
 
 	export function rebuild() returns Int
 		var fresh = Self.counted()
-		return try fresh.get(0) otherwise 0
+		if fresh.count() == countof(Self) 'theStaticsResultStatesTheReceiversCount'
+			return 0
+		end 'theStaticsResultStatesTheReceiversCount'
+		panic("a `Self`-returning static builds the instance its call site holds")
 	end 'rebuild'
 end 'Vector'
 
@@ -41,19 +44,21 @@ func @Vector.counted {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
     x64.movRegImm32 rax, 0
     x64.jmp whilehdr
   whilehdr:
-    x64.cmpRegReg rax, rdx
+    x64.cmpRegReg rax, rbx
     x64.jcc less, each
     x64.jmp whileexit
   each:
+    x64.leaRegGlobal rdx, __data_trips
+    x64.loadRegBaseDisp.word64 rdx, [rdx + 0]
+    x64.leaRegRegImm32 rdx, rdx, 1
     x64.leaRegGlobal rsi, __data_trips
-    x64.loadRegBaseDisp.word64 rsi, [rsi + 0]
-    x64.leaRegRegImm32 rsi, rsi, 1
-    x64.leaRegGlobal rdi, __data_trips
-    x64.storeBaseDispReg.word64 [rdi + 0], rsi
+    x64.storeBaseDispReg.word64 [rsi + 0], rdx
     x64.leaRegRegImm32 rax, rax, 1
     x64.jmp whilehdr
   whileexit:
@@ -61,12 +66,13 @@ func @Vector.counted {
     x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
     x64.movRegReg rcx, rax
     x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
     x64.callDirect __managed_resize
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -79,30 +85,30 @@ func @Vector.rebuild {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegReg rbx, rdx
-    x64.movRegReg rcx, rbx
-    x64.movRegReg rdx, rax
+    x64.movRegReg rbx, rax
+    x64.movRegReg rcx, rdx
+    x64.movRegReg rdx, rbx
     x64.callDirect Vector.counted
     x64.movRegReg r12, r8
-    x64.movRegImm32 rdx, 0
     x64.movRegReg rcx, r12
-    x64.callDirect __managed_get
-    x64.cmpRegImm32 r10, 0
-    x64.jcc notEqual, tryerr
-    x64.jmp tryok
-  tryerr:
-    x64.movRegImm32 rdx, 0
-    x64.jmp trycont
-  tryok:
-    x64.movRegReg rdx, r8
-    x64.jmp trycont
-  trycont:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __retain_type_param
-    x64.movRegReg rbx, r8
+    x64.callDirect Vector.count
+    x64.cmpRegReg r8, rbx
+    x64.jcc equal, theStaticsResultStatesTheReceiversCount
+    x64.jmp ifcont
+  theStaticsResultStatesTheReceiversCount:
+    x64.movRegImm32 rbx, 0
     x64.movRegReg rcx, r12
     x64.callDirect __managed_decref
     x64.movRegReg r8, rbx
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  ifcont:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
     x64.epilogue 32
     x64.popReg r12
     x64.popReg rbx
@@ -118,20 +124,14 @@ func @main {
     x64.pushReg r12
     x64.pushReg r13
     x64.prologue 40
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N3_Int]
     x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_resize
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg r12, r8
+    x64.callDirect Vector.create
+    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N5_Int]
     x64.movRegImm32 rdx, 5
-    x64.movRegReg rcx, r12
-    x64.callDirect __managed_resize
+    x64.callDirect Vector.create
+    x64.movRegReg r12, r8
     x64.leaRegRdata rdx, [rip + __layout_Vector_N3_Int]
     x64.movRegImm32 rax, 3
     x64.movRegReg rcx, rbx
@@ -158,7 +158,7 @@ func @main {
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
-    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.leaRegRdata rcx, [rip + __str_blob_1]
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 40
@@ -173,6 +173,41 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.count {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __managed_count
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

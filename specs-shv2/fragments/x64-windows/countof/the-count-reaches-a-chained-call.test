@@ -34,16 +34,19 @@ func @Vector.dup {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.prologue 40
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rax
     x64.movRegImm32 rcx, 8
     x64.loadRegBaseDisp.word64 rdx, [rdx + 40]
     x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
-    x64.movRegImm32 rdx, 0
-    x64.movRegReg rcx, rbx
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
     x64.callDirect __managed_resize
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
     x64.popReg rbx
     x64.popReg rbp
     x64.ret
@@ -66,6 +69,7 @@ func @Vector.chained {
     x64.pushReg r12
     x64.prologue 32
     x64.movRegReg rbx, rax
+    x64.movRegReg rax, rbx
     x64.callDirect Vector.dup
     x64.movRegReg r12, r8
     x64.movRegReg rcx, r12
@@ -89,13 +93,10 @@ func @main {
     x64.pushReg rbx
     x64.pushReg r12
     x64.prologue 32
-    x64.movRegImm32 rcx, 8
-    x64.movRegImm32 rdx, 0
-    x64.callDirect __managed_create
-    x64.movRegReg rbx, r8
+    x64.leaRegRdata rcx, [rip + __layout_Vector_N3_Int]
     x64.movRegImm32 rdx, 3
-    x64.movRegReg rcx, rbx
-    x64.callDirect __managed_resize
+    x64.callDirect Vector.create
+    x64.movRegReg rbx, r8
     x64.leaRegRdata rdx, [rip + __layout_Vector_N3_Int]
     x64.movRegImm32 rax, 3
     x64.movRegReg rcx, rbx
@@ -121,6 +122,30 @@ func @main {
     x64.popReg rbp
     x64.ret
   __rc_ok:
+    x64.movRegReg r8, r12
+    x64.epilogue 32
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @Vector.create {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.prologue 32
+    x64.movRegReg rbx, rdx
+    x64.movRegImm32 rax, 8
+    x64.loadRegBaseDisp.word64 rdx, [rcx + 40]
+    x64.movRegReg rcx, rax
+    x64.callDirect __managed_create
+    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, rbx
+    x64.callDirect __managed_resize
     x64.movRegReg r8, r12
     x64.epilogue 32
     x64.popReg r12

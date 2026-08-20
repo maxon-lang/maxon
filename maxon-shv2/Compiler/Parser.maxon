@@ -46804,13 +46804,15 @@ export type Parser
 		// retain on a record the default had just built. The NON-empty spelling (`Self{managed: m}`) keeps the
 		// ordinary path and reaches `emitFusedWrapperLiteral`'s identity arm, so the two forms stay the two
 		// statics they mirror — `create()` and `init(managed)`.
-		// ⚠ **AND `Self{}` INSIDE `stdlib/Vector.maxon` IS THE SAME FORM ON THE SIZED CONTAINER (W189)** —
-		// `create()`'s body. **What it BUILDS is a countless container, i.e. ZERO slots, and that is why
-		// `create` is the one member of that surface which cannot retire**: `Self` is the declaration's own
-		// instance, one body serves every size (`substitutedFixedSize`), and the count a `Vec3.create()` needs
-		// is at the CALL. The body is compiled so the module can be LISTED; every `<alias>.create()` is
-		// intercepted by `gateAndEmitContainerCreate` and never reaches it, which is what
-		// `requireSizedContainerStaticIsTheCompilers` makes structural instead of lucky.
+		// ⭐⭐ **AND `Self{}` INSIDE `stdlib/Vector.maxon` IS THE SAME FORM ON THE SIZED CONTAINER, AND SINCE
+		// W190 IT IS THE WHOLE OF `Vec3.create()`.** This paragraph read *"what it BUILDS is a countless
+		// container, i.e. ZERO slots, and that is why `create` is the one member of that surface which cannot
+		// retire"* — true of the emit as it then stood, and it stopped being true when the literal learned to
+		// publish. `emitOwnedContainerCreate`'s sized-container arm sizes the record from
+		// `fixedElementCountValue`: a folded literal at a concrete `Vec3{}`, and the hidden count parameter
+		// inside `Vector.create`, whose `Self` states none (`ownRecordSelfInstance`) so ONE body serves every
+		// size. The declaration's `return Self{}` is unchanged, which is what lets the BOOTSTRAP compile the
+		// same corpus line — it has no `countof` and needs none, because the count is the literal's.
 		if self.signatures.declarationsValueIsTheManagedRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `declarationIsTheManagedRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
 			return try self.emitOwnedContainerCreate(self.signatures.ownRecordSelfInstance(layout.name), aliasTok: typeTok, aliasName: layout.name, range: SourceRange.between(typeTok, last: rbraceTok))
 		end 'theEmptyContainer'
@@ -55953,7 +55955,6 @@ export type Parser
 	// construction door a declared `create()` arrives through. **The two are one invariant with two doors —
 	// do not relax either without the other.**
 
-
 	// ⚠ **`vectorMethodMutatesReceiver` AND `dispatchVectorMethod` STOOD HERE (W190).** The dispatcher's last
 	// arm was `set`, emitted through `parseArraySet` — the same container door the `Array` uses — and its
 	// mutation answer fed `noteReceiverWrite` (E3019) and `noteBorrowSubjectWrite` (E3070). Both questions are
@@ -59574,7 +59575,6 @@ export type Parser
 	// at a constant index, the test is a comparison of two constants and the ordinary folding removes it — one
 	// mechanism instead of a second runtime entry per accessor.
 
-
 	// `( expr )` — a single positional array-method argument (`push(x)`, `get(i)`, `reserve(n)`).
 	function parseArrayOneArg(func IrFunction) returns ValueId throws ParseError
 		try self.consume(TokenKind.leftParen)
@@ -59641,11 +59641,13 @@ export type Parser
 	// argument is parsed AFTER the index so the call is the last op the enclosing `try` rewrites.
 	//
 	// ⚠ **IT USED TO SERVE `insert` TOO, ON A `throwing` FLAG, AND ARR1 TOOK BOTH AWAY.** The `Array`'s
-	// `insert` left the roster and is served from `stdlib/Array.maxon`, which was the flag's only `false` — and
-	// **`List.insert` brought the shape's third spelling back at spec-port `list` WITHOUT bringing the flag
-	// back, because it THROWS** (`[0, count]`, `ArrayError.indexOutOfBounds` past it). So the three live
-	// spellings are `Vector.set`, the buffer's `set` and `List.insert`, all throwing, and a parameter with one
-	// value is still a branch nothing can reach.
+	// `insert` left the roster and is served from `stdlib/Array.maxon`, which was the flag's only `false`.
+	//
+	// ⚠ **AND THE SPELLINGS IT SERVES ARE NOW ONE CALL SITE (W190).** `List.insert` went with the list's
+	// surface at W153 and `Vector.set` with the sized container's here, so what is left is
+	// `dispatchArrayMethod`'s single `set` arm serving BOTH of its receivers — which is also what keeps
+	// `secondArgLabelled` live rather than a branch nothing can reach: it is `not isManagedMemory`, `true` for
+	// the array surface's `set(i, value: x)` and `false` for the buffer's positional one.
 	//
 	// ⚠ **EVERY SPELLING OWES THE THROW PATH'S HALF OF THE MOVE-IN CONTRACT.** `moveElementIntoContainer`
 	// below runs BEFORE the call is emitted, so a callee that refuses owns the element and must destroy it —

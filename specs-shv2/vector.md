@@ -937,6 +937,35 @@ end 'main'
 5
 ```
 
+## A `let` Vector Still Refuses The Write, By The Declaration's Own Rule
+
+⚖ **THE RULING SAID THIS REFUSAL WOULD BE DROPPED BY DESIGN, AND FOR THIS MEMBER IT IS NOT — MEASURED
+(W190).** `STDLIB-BRINGUP.md`'s E3019 ruling is that the immutable-receiver rule is a BUILTIN-SURFACE rule
+and a declared type is exempt, *"so a retirement DROPS the immutable-receiver refusal by design"*; `Set`
+paid three cases for it. A `Vector` pays none: `stdlib/Vector.maxon`'s `set` writes through its receiver
+(`managed.set`), so the ORDINARY parameter-mutation rule reaches the same conclusion from the declaration
+instead of from a roster — which is what `surfaceRosterProvider`'s note records happening for `Set`'s and
+`Map`'s own mutators at W105.
+
+⚠ **THE SENTENCE MOVED EVEN THOUGH THE VERDICT DID NOT**, and that is the whole of what this case pins:
+the old one named the surface, this one names the PARAMETER the callee declares. A case that asserted only
+"refused" would not have noticed either.
+
+<!-- test: error.a-write-through-a-let-vector-is-refused-off-the-declaration -->
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+function main() returns ExitCode
+	let v = Vec3.create()
+	try v.set(0, value: 7) otherwise panic("set")
+	return try v.get(0) otherwise 0
+end 'main'
+```
+```maxoncstderr
+error E3019: <fragment>:7:8: cannot pass 'v' to function that mutates parameter 'self' (in main)
+```
+
 ## A Vector Global Takes The Declared Generic's Road
 
 ⭐⭐ **A ROAD THIS CONTAINER HAD NEVER TAKEN (W190).** A top-level `var g = Vec3.create()` used to be
