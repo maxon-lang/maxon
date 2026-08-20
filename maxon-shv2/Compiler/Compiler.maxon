@@ -838,6 +838,12 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// `noteDestructorUsage` closed the set over) are built. It reads the instance registry, which lives on
 	// `signatures`, so it needs no `project`.
 	installGenericInstanceDestructors(pipeline.stdModule, signatures: signatures, needed: usage.neededDestructors)
+	// The DICTIONARY destructor cascade (BATCH41) — the same append, for the instance a SHARED generic body
+	// holds rather than the one a concrete call site names. A declaration view's slot standing at a bare
+	// parameter has no callee to drop through, so its cascade takes the enclosing instantiation's layout
+	// descriptor as a second parameter and releases that slot through `__drop_type_param`. Only the REFERENCED
+	// ones are built, exactly as above.
+	installGenericInstanceDictionaryDestructors(pipeline.stdModule, signatures: signatures, needed: usage.neededDestructors)
 	// The per-struct and per-union DEEP-CLONER cascades (P1.7 slice 3b-vi-b) — the clone twins of the destructor
 	// installers, appended already-lowered after the pipeline for the same reason. Only the cloners the module
 	// references (directly through a `funcAddr(__clone_<T>)` element-cloner stamp, or through a nested cascade

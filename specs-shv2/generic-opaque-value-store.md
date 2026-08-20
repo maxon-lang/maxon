@@ -354,7 +354,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:23:14: Unsupported: storing into durable storage a value of type 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — has no destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. It is refused at every ARRIVAL in durable storage: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, a `Map` or `Set` column, and a FIELD of the enclosing type filled by `Self{…}`. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
+error E2015: <fragment>:34:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — cannot be a CONTAINER ELEMENT: the shared generic body compiles once for every instantiation, so releasing such a record means releasing a field whose destructor is a fact about the enclosing instantiation, and the only entry that knows it takes the instantiation's layout descriptor as a second argument (`__destruct_dict_<instance>(descriptor, box)`). A container stamps ONE machine word as its element destructor and calls it with the element alone, so there is nowhere to carry that descriptor. It is refused at the two arrivals that stamp one: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, and a `Map` or `Set` column. Holding ONE such record in a FIELD of the enclosing type (`Self{one: Inner.create(x, …)}`) is admitted — the enclosing instantiation is concrete wherever it is freed, so its own destructor releases the field. Otherwise: hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation
 ```
 
 ### …and the CONCRETE instantiation of the same constructor, which always worked
@@ -518,7 +518,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:47:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — has no destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. It is refused at every ARRIVAL in durable storage: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, a `Map` or `Set` column, and a FIELD of the enclosing type filled by `Self{…}`. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
+error E2015: <fragment>:47:22: Unsupported: a container whose element is 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — cannot be a CONTAINER ELEMENT: the shared generic body compiles once for every instantiation, so releasing such a record means releasing a field whose destructor is a fact about the enclosing instantiation, and the only entry that knows it takes the instantiation's layout descriptor as a second argument (`__destruct_dict_<instance>(descriptor, box)`). A container stamps ONE machine word as its element destructor and calls it with the element alone, so there is nowhere to carry that descriptor. It is refused at the two arrivals that stamp one: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, and a `Map` or `Set` column. Holding ONE such record in a FIELD of the enclosing type (`Self{one: Inner.create(x, …)}`) is admitted — the enclosing instantiation is concrete wherever it is freed, so its own destructor releases the field. Otherwise: hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation
 ```
 
 ### …and the TRIVIAL instantiation of that two-level shape still runs
@@ -794,7 +794,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2015: <fragment>:24:9: Unsupported: storing into durable storage a value of type 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — has no destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. It is refused at every ARRIVAL in durable storage: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, a `Map` or `Set` column, and a FIELD of the enclosing type filled by `Self{…}`. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
+error E2015: <fragment>:24:9: Unsupported: a container element fed as a value of type 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — cannot be a CONTAINER ELEMENT: the shared generic body compiles once for every instantiation, so releasing such a record means releasing a field whose destructor is a fact about the enclosing instantiation, and the only entry that knows it takes the instantiation's layout descriptor as a second argument (`__destruct_dict_<instance>(descriptor, box)`). A container stamps ONE machine word as its element destructor and calls it with the element alone, so there is nowhere to carry that descriptor. It is refused at the two arrivals that stamp one: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, and a `Map` or `Set` column. Holding ONE such record in a FIELD of the enclosing type (`Self{one: Inner.create(x, …)}`) is admitted — the enclosing instantiation is concrete wherever it is freed, so its own destructor releases the field. Otherwise: hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation
 ```
 
 ### …and the same `List` shape at a TRIVIAL instantiation still runs
@@ -852,21 +852,24 @@ end 'main'
 41
 ```
 
-### The same record with NO CONTAINER ANYWHERE — a plain field
+### The same record with NO CONTAINER ANYWHERE — a plain field, and it ROUND-TRIPS
 
-The arrival the four-path table this rung first drew did not name. `var one as EBox` filled by
-`Self{one: EBox.create(x, tag: tag)}`: no container is created, no element is pushed, and the record still
-comes to rest in a slot that outlives the borrow — `__destruct_Bag_String`'s substituted cascade reaches
-`__destruct_Box_String`, which releases a `String` this body never referenced. **MEASURED at the BATCH41
-review's merge: compiled, and segfaulted.**
+⭐⭐ **THE ARRIVAL THAT WAS A REFUSAL AND IS NOW AN ANSWER.** `var one as EBox` filled by
+`Self{one: EBox.create(x, tag: tag)}`: no container is created, no element is pushed, and the record comes
+to rest in a slot that outlives the borrow. Both halves it needs now exist, and they are different halves
+in different places:
 
-⚠ **THE FIELD'S TYPE IS NOT WHAT IS WRONG WITH IT, AND A REFUSAL READING THE TYPE ALONE REFUSED TEN
-COMMITTED PROGRAMS.** `generic-type-substitution`'s `bare-generic-name-as-a-managed-field-type` declares the
-identical shape — a field at an instance over its own parameter, holding a bare `T` — and is CORRECT,
-because its record is built CONCRETELY by the caller and moved in. What separates them is PROVENANCE: this
-frame built the record out of a borrow it never referenced, and only this frame knows that.
+* the **reference** is taken at the constructor feed, because the `x` handed to `EBox.create` is a borrowed
+  opaque `T` and a body compiled once takes its reference through the descriptor's `retainFunc@64`;
+* the **release** is `__destruct_Bag_String`'s substituted cascade reaching `__destruct_Box_String`, which
+  it has always been able to do — the enclosing instantiation is CONCRETE wherever the bag is freed, so
+  nothing here needs the dictionary destructor at all.
 
-<!-- test: error.a-record-over-the-enclosing-parameter-in-a-plain-field-is-refused -->
+**MEASURED at the BATCH41 review's merge: compiled, and segfaulted** — the release existed and the
+reference did not. The `String` is built in `fill`, whose `StringBuilder` result dies at that frame's exit,
+so a missing reference is a read of freed memory and a surplus one is a leak the gate exits 101 on.
+
+<!-- test: a-record-over-the-enclosing-parameter-in-a-plain-field-round-trips -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -912,8 +915,11 @@ function main() returns ExitCode
 	return 0 as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:26:10: Unsupported: storing into durable storage a value of type 'Bag.EBox' — a generic instance written over this type's OWN parameter, resting (itself, or through an instance it holds) a field declared AT that parameter — has no destructor this body can name: the shared generic body compiles once for every instantiation, so the destructor that releases such a field is a fact about the enclosing instantiation, and the only symbol available here is the declaration view's, which drops the record and leaves the field it holds. It is refused at every ARRIVAL in durable storage: a container's element (an `Array`/`__ManagedList` `create` inside the body, and any `push`/`insert`/`upsert`/`set` of one), a `List` node, a `Map` or `Set` column, and a FIELD of the enclosing type filled by `Self{…}`. Hold the values in a container of the type PARAMETER itself (`Array with <type parameter>`, whose element destructor IS carried by the enclosing instance's layout descriptor), give the inner type a concrete field instead of one declared at the parameter, or build and hold the record in a method of a concrete instantiation. A descriptor slot carrying a nested instance's per-instantiation destructor is a later slice
+```exitcode
+0
+```
+```stdout
+hello heap world
 ```
 
 ### …and a record this frame built dies in the frame, which is no arrival at all
@@ -1045,4 +1051,148 @@ end 'main'
 ```
 ```stdout
 hello heap world
+```
+
+## A shared body RETURNS the record it built out of a borrow
+
+⭐⭐⭐ **THE SHAPE THE WHOLE MECHANISM EXISTS FOR, AND THE ONE THAT SEGFAULTED ON `main`.**
+`Bag.wrap(x Element) returns EBox` builds a `Box with Element` out of a borrowed opaque `Element` and hands
+it back. Every other arrival in this file is a value coming to REST; this one leaves the frame entirely, and
+the caller that receives it is CONCRETE — `makeOne` holds a `Box with String`, drops it through
+`__destruct_Box_String`, and that destructor releases the payload.
+
+⛔⛔ **THE RELEASE WAS ALREADY RIGHT AND THE REFERENCE WAS MISSING, WHICH IS WHY IT FAULTED RATHER THAN
+LEAKED.** `makeOne`'s `StringBuilder` result dies at that frame's exit, so the box was left holding a pointer
+into freed memory and `main`'s read of it took the fault; the concrete destructor then released a record
+nobody had referenced. **MEASURED on the merge base and on `main`, twice: `0xC0000005`, exit 139.** The
+constructor feed now takes the reference through the descriptor's `retainFunc@64`
+(`Parser.referenceOrMarkOpaqueFeed`), and the pair balances.
+
+⚠ **A `static` SPELLING OF `wrap` IS ADMITTED TOO — provided it returns the enclosing type**, which is the
+gate `staticLayoutNeedsSelfReturn` draws and which the descriptor-need seed now asks (see
+`a-record-over-the-enclosing-parameter-in-a-plain-field-round-trips`, whose feeding `create` is exactly that).
+
+<!-- test: a-returned-record-outlives-the-borrows-source -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	let x as T
+	let tag as Integer
+
+	export function value() returns T
+		return x
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{x: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	var seed as Integer
+
+	export function wrap(x Element) returns EBox
+		return EBox.create(x, tag: seed)
+	end 'wrap'
+
+	static function create() returns Self
+		return Self{seed: 3}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+typealias StrBox = Box with String
+
+function makeOne(b StrBag) returns StrBox
+	var sb = StringBuilder.create()
+	sb.append("a heap payload ")
+	sb.append("long enough to allocate")
+	let s = sb.build()
+	return b.wrap(s)
+end 'makeOne'
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	let boxed = makeOne(b)
+	print("{boxed.value()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+a heap payload long enough to allocate
+```
+
+### A hundred of them, kept in a concrete column, and the arithmetic balances
+
+The exit code says a program did not FAULT; only the leak gate says it took as many references as it gave
+back. A hundred trips, each building a fresh heap `String` that dies inside the loop body, each wrapped and
+pushed into an `Array with StrBox` whose element destructor is the concrete `__destruct_Box_String` — then
+the whole column is destroyed at scope exit. One retain per trip against one release per trip: a missing
+release is **exit 101** and a surplus one frees a `String` a live box still holds.
+
+⚠ The column's element is the CONCRETE `Box with String`, not the declaration view — which is the whole
+distinction `error.a-container-of-records-over-the-enclosing-parameter-is-refused` draws one section up. A
+concrete element's destructor is a symbol and fits the record's one-word stamp; a declaration view's is
+`__destruct_dict_<instance>(descriptor, box)` and does not.
+
+<!-- test: a-hundred-returned-records-balance -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Count = int(0 to u32.max)
+
+type Box uses T
+	let x as T
+	let tag as Integer
+
+	export function value() returns T
+		return x
+	end 'value'
+
+	static function create(x T, tag Integer) returns Self
+		return Self{x: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	var seed as Integer
+
+	export function wrap(x Element) returns EBox
+		return EBox.create(x, tag: seed)
+	end 'wrap'
+
+	static function create() returns Self
+		return Self{seed: 3}
+	end 'create'
+end 'Bag'
+
+typealias StrBag = Bag with String
+typealias StrBox = Box with String
+typealias BoxArray = Array with StrBox
+
+function main() returns ExitCode
+	var b = StrBag.create()
+	var kept = BoxArray.create()
+	var i = 0 as Count
+	while i < 100 'fill'
+		var sb = StringBuilder.create()
+		sb.append("payload number ")
+		sb.append("{i} long enough to be a heap record")
+		kept.push(b.wrap(sb.build()))
+		i = i + 1
+	end 'fill'
+	print("{kept.count()}\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+100
 ```

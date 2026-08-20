@@ -133,6 +133,50 @@ export function destructorSymbol(unionName ByteArray) returns ByteArray
 	return "{String.from(DestructorPrefix)}{String.from(unionName)}".toByteArray()
 end 'destructorSymbol'
 
+// ⭐⭐⭐ **THE NAME OF A DECLARATION VIEW'S *DICTIONARY* DESTRUCTOR — `__destruct_dict_<mangled>(descriptor,
+// box)` (BATCH41).** The `__destruct_<mangled>` a CONCRETE instance gets is a one-argument cascade whose every
+// field drop is a symbol; a DECLARATION VIEW (`BagIter with Element` inside `type Bag uses Element`) has a
+// field whose release is not a symbol at all but the enclosing instantiation's `destroyFunc@40`, so its
+// cascade takes the layout descriptor as a SECOND parameter and releases that field through
+// `__drop_type_param`.
+//
+// ⭐ **shv2 DOES NOT MONOMORPHIZE, AND THIS IS THAT SENTENCE APPLIED TO THE DROP.** The obvious alternative —
+// mint `__destruct_BagIter_String` per instantiation and reach it through a table of per-instance descriptor
+// pointers hanging off the enclosing blob — is the MONOMORPHIZING answer: it needs a new descriptor word, a
+// blob, an ordering agreement between the party that writes the blob and the party that indexes it, and it
+// re-derives at run time what the dictionary already carries. One shared body reading the dictionary it was
+// handed is the same answer `sizeof(T)`, `__drop_type_param` and the opaque container create all take, and it
+// costs no `.rdata` and no index.
+//
+// ⚠ **IT KEEPS THE `__destruct_` PREFIX ON PURPOSE**: `insertIfDestructorSymbol`, `recordCallUsage` and
+// `TargetPrinter`'s runtime-symbol test all key on that prefix, and a family that needed each of them widened
+// by hand is a family a fourth reader would miss. The infix is what tells the two apart where they must be
+// told apart — the DROP site (`Parser.decrefCalleeFor`), the descriptor prepend
+// (`LowerMaxonToStd.lowerRuntimeCall`) and the SYNTHESIS below.
+let DictionaryDestructorPrefix = b"__destruct_dict_"
+
+export function dictionaryDestructorSymbol(mangledInstanceName ByteArray) returns ByteArray
+	return "{String.from(DictionaryDestructorPrefix)}{String.from(mangledInstanceName)}".toByteArray()
+end 'dictionaryDestructorSymbol'
+
+// Is `callee` one of the two-argument dictionary destructors above? The ONE test, read by the drop site's
+// descriptor-reservation check and by the lowering that prepends the descriptor — a second spelling of it is
+// how a call could come to be emitted with one argument and lowered with two.
+export function isDictionaryDestructorCallee(callee ByteArray) returns bool
+	return bytesStartWith(callee, prefix: DictionaryDestructorPrefix)
+end 'isDictionaryDestructorCallee'
+
+// The dictionary destructor's signature, stated once: `(descriptor, box) -> void`, both machine words. The
+// two parameter NUMBERS are named because the synthesis has to hand the descriptor's `ValueId` to every
+// field drop that reads it, and a bare `0`/`1` there would read as an ordinal of something else. The plain
+// one-argument cascade's box is named beside them so the two shapes are one table rather than a constant
+// against a literal.
+let DictionaryDestructorParamCount = 2 as ParamCount
+let DictionaryDestructorDescriptorParam = 0 as ValueId
+let DictionaryDestructorBoxParam = 1 as ValueId
+let PlainDestructorParamCount = 1 as ParamCount
+let PlainDestructorBoxParam = 0 as ValueId
+
 // ⭐ **THE NAME OF A CONCRETE TYPE'S SYNTHESIZED DEEP-CLONER — `__clone_<TypeName>`** (P1.7 slice 3b-vi-b), the
 // `(box) -> newBox` DUAL of `__destruct_<TypeName>`. `__`-prefixed, so `isCompilerInternalCallee` routes its
 // call/`funcAddr` past the user-function checks and no file declares it. ONE speller, so the STAMP site
@@ -1471,10 +1515,18 @@ function declareDestructorCascadeNeeds(usage RuntimeUsage, project Project, sign
 	// P1.7 mints that instance as `__Array_Foo` instead (`reservedIfDeclared`), so the two can no longer
 	// meet. The guard is the walk's structural precondition regardless of which route reaches it.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		if usage.neededDestructors.contains(destructorSymbol(signatures.mangleGenericInstance(id))) 'referenced'
+		let mangled = signatures.mangleGenericInstance(id)
+		if usage.neededDestructors.contains(destructorSymbol(mangled)) 'referenced'
 			usage.usesHeap = true
 			declareInstanceFieldDropNeeds(usage, id: id, signatures: signatures)
 		end 'referenced'
+		// The DICTIONARY cascade's own bits (BATCH41). It frees its box like every other cascade, and it is
+		// the ONE cascade that calls `__drop_type_param` — a runtime entry with its own install bit, which no
+		// other walk here can turn on because no other cascade names it.
+		if usage.neededDestructors.contains(dictionaryDestructorSymbol(mangled)) 'dictionaryReferenced'
+			usage.usesHeap = true
+			declareInstanceDictionaryDropNeeds(usage, id: id, signatures: signatures)
+		end 'dictionaryReferenced'
 	end 'eachInstance'
 end 'declareDestructorCascadeNeeds'
 
@@ -1536,6 +1588,32 @@ function declareInstanceFieldDropNeeds(usage RuntimeUsage, id GenericInstanceId,
 		recordCallUsage(signatures.genericInstanceFieldDropCallee(id, index: i), usage: usage)
 	end 'eachField'
 end 'declareInstanceFieldDropNeeds'
+
+// The dictionary twin of the walk above — `addNestedInstanceDictionaryDestructors`' bit-declaring dual, over
+// the SAME `dictionaryInstanceFieldDropKind` classifier, so a field accounted for here is dropped through the
+// callee it was accounted for under.
+function declareInstanceDictionaryDropNeeds(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures)
+	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'
+		return
+	end 'noSynthesizedCascade'
+
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		match dictionaryInstanceFieldDropKind(signatures, id: id, index: i) 'released'
+			none then continue
+			released(kind) then declareDropKindNeeds(usage, kind: kind)
+		end 'released'
+	end 'eachField'
+end 'declareInstanceDictionaryDropNeeds'
+
+// The runtime bits ONE released field's drop needs. `recordCallUsage` closes each family over what its own
+// body calls, and it is what turns on `usesDropTypeParam` for the bare-parameter slot.
+function declareDropKindNeeds(usage RuntimeUsage, kind FieldDropKind)
+	match kind 'kind'
+		direct(callee) then recordCallUsage(callee, usage: usage)
+		existential then usage.usesDropExistential = true
+		throughDescriptor(callee, _, _) then recordCallUsage(callee, usage: usage)
+	end 'kind'
+end 'declareDropKindNeeds'
 
 // ⭐⭐ **ROOT EVERY FUNCTION AN `.rdata` SLOT NAMES, AFTER LOWERING HAS FILLED THEM (P1.7a-existentials
 // slice 2).** A witness table's `destroyFunc@8` and its method slots, and a layout descriptor's
@@ -1652,7 +1730,12 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 	// disjointness (`reservedIfDeclared`) means a declaration and an instance can no longer produce one
 	// symbol, and only two INSTANCES can — which is E3006 and fails the build before this runs.
 	for id in 0 upto signatures.genericInstanceCount() 'eachInstance'
-		work.register(destructorSymbol(signatures.mangleGenericInstance(id)), node: CascadeNode.genericInstance(id))
+		let mangled = signatures.mangleGenericInstance(id)
+		work.register(destructorSymbol(mangled), node: CascadeNode.genericInstance(id))
+		// The DICTIONARY destructor is a second node over the same instance, registered unconditionally for
+		// `register`'s own reason: registration is cheap and says nothing, while EXPANDING is what turns on a
+		// type's runtime bits, and only a seeded symbol is ever expanded.
+		work.register(dictionaryDestructorSymbol(mangled), node: CascadeNode.genericInstanceDictionary(id))
 	end 'eachInstance'
 
 	work.seed(usage.neededDestructors)
@@ -1663,6 +1746,7 @@ function closeDestructorNeeds(usage RuntimeUsage, project Project, signatures Pr
 			declaredStruct(layout) then addNestedStructDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
 			declaredUnion(layout) then addNestedUnionDestructors(usage, layout: layout, project: project, signatures: signatures, work: work)
 			genericInstance(id) then addNestedInstanceDestructors(usage, id: id, signatures: signatures, work: work)
+			genericInstanceDictionary(id) then addNestedInstanceDictionaryDestructors(usage, id: id, signatures: signatures, work: work)
 		end 'node'
 	end 'drain'
 end 'closeDestructorNeeds'
@@ -1747,6 +1831,37 @@ function addNestedInstanceDestructors(usage RuntimeUsage, id GenericInstanceId, 
 		insertIfDestructorSymbol(usage, callee: signatures.genericInstanceFieldDropCallee(id, index: i), work: work)
 	end 'eachField'
 end 'addNestedInstanceDestructors'
+
+// The DICTIONARY twin of the walk above (BATCH41) — add the nested cascade each released field of a
+// DECLARATION VIEW names. It differs from its twin in exactly what `dictionaryInstanceFieldDropKind` differs
+// in, and it reads that classifier rather than restating it: a bare-parameter slot names no symbol at all
+// (its release is `__drop_type_param` against a WORD), a nested declaration view names its own DICTIONARY
+// destructor, and every other managed field names whatever its concrete drop callee names.
+function addNestedInstanceDictionaryDestructors(usage RuntimeUsage, id GenericInstanceId, signatures ProgramSignatures, work CascadeWorklist)
+	// `addNestedInstanceDestructors`' precondition, for its reason: a layout-less instance has no field list
+	// to walk. It cannot be reached today — `instanceRestsARetainedSlot` opens with the same guard — and it is
+	// the walk's precondition rather than a patch on the route that reaches it.
+	if not signatures.genericInstanceHasBaseLayout(id) 'noSynthesizedCascade'
+		return
+	end 'noSynthesizedCascade'
+
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		match dictionaryInstanceFieldDropKind(signatures, id: id, index: i) 'released'
+			none then continue
+			released(kind) then noteNestedCascadeOf(usage, kind: kind, work: work)
+		end 'released'
+	end 'eachField'
+end 'addNestedInstanceDictionaryDestructors'
+
+// The nested cascade ONE released field names, whichever shape its release came in. An existential names
+// none — `addNestedStructDestructors`' arm, for its reason.
+function noteNestedCascadeOf(usage RuntimeUsage, kind FieldDropKind, work CascadeWorklist)
+	match kind 'kind'
+		direct(callee) then insertIfDestructorSymbol(usage, callee: callee, work: work)
+		existential then usage.usesDropExistential = true
+		throughDescriptor(callee, _, _) then insertIfDestructorSymbol(usage, callee: callee, work: work)
+	end 'kind'
+end 'noteNestedCascadeOf'
 
 // Insert `callee` into the needed set iff it is a `__destruct_<T>` symbol not already present, and — only
 // when it is NEWLY added — announce it to `work`, whose job is to find the declaration that symbol names and
@@ -1970,6 +2085,80 @@ export function installGenericInstanceDestructors(module StdModule, signatures P
 	end 'each'
 end 'installGenericInstanceDestructors'
 
+// ⭐⭐⭐ **THE DICTIONARY DESTRUCTOR CASCADE (BATCH41) — `__destruct_dict_<mangled>(descriptor, box)`, the drop
+// a DECLARATION VIEW owes and no symbol could name.** `synthesizeGenericInstanceDestructor` above builds the
+// cascade for a MONOMORPHIZED instance, whose every managed field has a statically resolved callee. This one
+// builds it for the view a shared generic body actually holds — `BagIter with Element` inside
+// `type Bag uses Element` — where the field standing at the bare parameter has no callee at all and its
+// release is a WORD in the enclosing instantiation's layout descriptor.
+//
+// ⛔⛔ **IT EXISTS BECAUSE THE RELEASE IS A REFCOUNT FACT AND THE COMPILER HAS ONLY A STATIC ONE.** Emitting
+// the release inline at the drop SITE was measured twice and is wrong in both directions: ungated it releases
+// the slot of a record whose `__mm_decref` is not the last one (`generic-type-substitution`'s
+// `bare-generic-name-as-a-managed-field-type` co-owns its `cell` into a field and then drops its own
+// reference — six cases PANICKED at `appendTypeParamDescriptor`), and gated on `valueIsSoleHeapOwner` — the
+// only predicate that says a decref is the last — it never fires on the shape it exists for
+// (`generic-opaque-cursor-element`, back to three cases at exit 101). ⇒ **only the party that FREES the
+// record can release what the record holds, and that party is its destructor.**
+//
+// ⚠ **THE FIELD SET IS THE SAME SET THE CONCRETE CASCADE DROPS, PLUS THE ONE `typeIsManaged` CANNOT SEE.** A
+// concrete managed field of a declaration view (a `String`, a nested concrete instance) is dropped through
+// exactly the callee `instanceFieldDropKind` gives it, so a record dropped through this cascade and the same
+// record dropped through `__destruct_<Base>_<Arg>` release the identical set — which is what makes the two
+// safe to coexist for one record shape: at refcount zero exactly one of them runs.
+function synthesizeGenericInstanceDictionaryDestructor(module StdModule, id GenericInstanceId, signatures ProgramSignatures)
+	var drops = ManagedFieldDropArray.create()
+	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
+		match dictionaryInstanceFieldDropKind(signatures, id: id, index: i) 'released'
+			none then continue
+			released(kind) then drops.push(ManagedFieldDrop.create(signatures.genericInstanceFieldOffset(id, index: i), kind: kind))
+		end 'released'
+	end 'eachField'
+	emitFieldCascadeDestructor(module, symbolName: dictionaryDestructorSymbol(signatures.mangleGenericInstance(id)), drops: drops, takesDescriptor: true)
+end 'synthesizeGenericInstanceDictionaryDestructor'
+
+// HOW substituted field `index` of a declaration view is released, or `none` for a field that owns nothing —
+// `instanceFieldDropKind`'s dictionary twin, and the ONE classifier the synthesis above, the needs closure
+// (`addNestedInstanceDictionaryDestructors`) and the runtime-bit declaration
+// (`declareInstanceDictionaryDropNeeds`) all read. Three of them asking the same question their own way is
+// how a field would come to be dropped through one callee and accounted for under another.
+//
+// The order of the arms is the order of the questions: a slot still at a bare parameter first (it is the one
+// `typeIsManaged` answers `false` for, so a managed test would skip it), then a nested declaration view
+// resting a slot of its own, then the ordinary managed field, then nothing.
+function dictionaryInstanceFieldDropKind(signatures ProgramSignatures, id GenericInstanceId, index FieldIndex) returns FieldDropKindOption
+	if signatures.genericInstanceFieldIsOpaque(id, index: index) 'aBareParameterSlot'
+		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(DropTypeParamName, descriptor: DictionaryDestructorDescriptorParam, blockOffset: signatures.genericInstanceFieldOpaqueBlockOffset(id, index: index)))
+	end 'aBareParameterSlot'
+
+	// A nested view is handed the WHOLE descriptor (block 0): its own fields substitute to parameters of the
+	// same `uses` list, so it indexes its blocks off the same base this cascade does.
+	if signatures.genericInstanceFieldRestsARetainedSlot(id, index: index) 'aNestedDeclarationView'
+		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(signatures.genericInstanceFieldDictionaryDropCallee(id, index: index), descriptor: DictionaryDestructorDescriptorParam, blockOffset: 0))
+	end 'aNestedDeclarationView'
+
+	if not signatures.genericInstanceFieldIsManaged(id, index: index) 'scalarField'
+		return FieldDropKindOption.none
+	end 'scalarField'
+
+	return FieldDropKindOption.released(instanceFieldDropKind(signatures, id: id, index: index))
+end 'dictionaryInstanceFieldDropKind'
+
+// ⭐ **THE INSTALLER FOR THE FAMILY ABOVE** — `installGenericInstanceDestructors`' dictionary twin, gated on
+// the same two questions: does this instance rest such a slot at all, and did anything REFERENCE its
+// dictionary destructor (a drop site routed to it, or another cascade named it).
+export function installGenericInstanceDictionaryDestructors(module StdModule, signatures ProgramSignatures, needed DestructorSet)
+	for id in 0 upto signatures.genericInstanceCount() 'each'
+		if not signatures.instanceRestsARetainedSlot(id) 'noRetainedSlot'
+			continue
+		end 'noRetainedSlot'
+		if not needed.contains(dictionaryDestructorSymbol(signatures.mangleGenericInstance(id))) 'notReferenced'
+			continue
+		end 'notReferenced'
+		synthesizeGenericInstanceDictionaryDestructor(module, id: id, signatures: signatures)
+	end 'each'
+end 'installGenericInstanceDictionaryDestructors'
+
 // ⭐ **HOW ONE MANAGED SLOT IS RELEASED — the two shapes a field drop comes in.** Carried on
 // `ManagedFieldDrop` so the offset and the release travel together and `emitNullGuardedDrop` decides between
 // them ONCE, rather than each cascade builder deciding and then agreeing. Exported with that emitter, whose
@@ -1983,7 +2172,27 @@ export union FieldDropKind
 	// at `+InterfaceWitnessHalfOffset` is loaded beside the value half and both go to
 	// `__drop_existential(witness, value)`, which reads the table's `destroyFunc@8`.
 	existential
+	// ⭐⭐ **A field of a DECLARATION VIEW released through the DICTIONARY the cascade was handed (BATCH41)** —
+	// `callee(descriptor + blockOffset, value)`. Two field shapes take it and they are one act, which is why
+	// they are one arm rather than two: a slot still standing at a bare type parameter goes to
+	// `__drop_type_param` at THAT parameter's block, and a slot at a nested declaration view goes to that
+	// view's own `__destruct_dict_<mangled>` at block 0 — the whole descriptor, because the nested cascade
+	// indexes its own blocks off the same `uses` list.
+	//
+	// ⚠ It carries the descriptor's `ValueId` rather than reading a well-known one, because it is a PARAMETER
+	// of the cascade being emitted and nothing outside that emit knows its number.
+	throughDescriptor(callee ByteArray, descriptor ValueId, blockOffset ByteOffset)
 end 'FieldDropKind'
+
+// ⭐ **A FIELD'S RELEASE, OR THAT IT HAS NONE** — the answer `dictionaryInstanceFieldDropKind` gives, where
+// its concrete twin `instanceFieldDropKind` can assume its caller already filtered the scalars. The
+// dictionary classifier cannot: the field it exists for is exactly the one `genericInstanceFieldIsManaged`
+// answers `false` for, so the "is it released at all?" question and the "how?" question have to be settled
+// together or the filter would have to know the answer before asking for it.
+union FieldDropKindOption
+	released(kind FieldDropKind)
+	none
+end 'FieldDropKindOption'
 
 // One managed field a TAGLESS box destructor must drop: its byte offset in the box, and HOW it is released.
 // The struct (P1.4a) and generic-instance (P1.6-B2) cascades each build a list of these and hand it to
@@ -2011,17 +2220,18 @@ typealias ManagedFieldDropArray = Array with ManagedFieldDrop
 // A void `(i64) -> void` static-dispatch signature (the drop callee is picked statically, so there is no
 // `call_indirect` type to satisfy and no `i64` return the way v1's header destructor had). It is the same
 // skeleton the union cascade uses too, minus the tag switch — hence the shared `emitNullGuardedDrop`.
-function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drops ManagedFieldDropArray)
-	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
-	var ids = ValueMinter.create(1)
+function emitFieldCascadeDestructor(module StdModule, symbolName ByteArray, drops ManagedFieldDropArray, takesDescriptor bool = false)
+	let paramCount = DictionaryDestructorParamCount if takesDescriptor else PlainDestructorParamCount
+	let func = IrFunction.createFromStd(symbolName, returnType: StdReturnType.void, paramCount: paramCount, paramTypes: twoI64Params() if takesDescriptor else oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(paramCount)
 
 	var entry = module.addBlock(func, label: b"entry")
 	var lower = module.addBlock(func, label: b"lower")
 	var drop = module.addBlock(func, label: b"drop")
 	var free = module.addBlock(func, label: b"free")
 
-	emitParams(module, block: entry, count: 1)
-	let box = 0 as ValueId
+	emitParams(module, block: entry, count: paramCount)
+	let box = DictionaryDestructorBoxParam if takesDescriptor else PlainDestructorBoxParam
 
 	emitRefcountCheckToLastOwner(module, func: func, entry: entry, lower: lower, record: box, lastOwner: drop, ids: ids)
 
@@ -2088,6 +2298,7 @@ export function emitNullGuardedDrop(module StdModule, cur IrBlock, box ValueId, 
 	match kind 'k'
 		direct(callee) then module.appendOp(dropBlock, op: StdOp.call(dropped, callee: callee, args: argsOf(ptr)))
 		existential then emitExistentialFieldDrop(module, block: dropBlock, box: box, offset: offset, value: ptr, dropped: dropped, ids: ids)
+		throughDescriptor(callee, descriptor, blockOffset) then emitDictionaryFieldDrop(module, block: dropBlock, callee: callee, descriptor: descriptor, blockOffset: blockOffset, value: ptr, dropped: dropped, ids: ids)
 	end 'k'
 	module.setTerminator(dropBlock, op: StdOp.branch(contBlock.id))
 
@@ -2103,6 +2314,24 @@ function emitExistentialFieldDrop(module StdModule, block IrBlock, box ValueId, 
 	module.appendOp(block, op: StdOp.loadIndirect(witness, addrId: box, offset: offset + InterfaceWitnessHalfOffset, valueType: StdType.i64))
 	module.appendOp(block, op: StdOp.call(dropped, callee: DropExistentialName, args: twoArgs(witness, second: value)))
 end 'emitExistentialFieldDrop'
+
+// Release an already-live field value through the dictionary the cascade was handed —
+// `callee(descriptor + blockOffset, value)`. Block 0 IS the descriptor, so a single-parameter enclosing
+// instance emits no arithmetic at all, exactly as `LowerMaxonToStd.descriptorBlockAddr` does not for its own
+// callers: the two are the same address computation at the two tiers, and they agree because both spell it
+// as "add the block offset, unless it is zero".
+function emitDictionaryFieldDrop(module StdModule, block IrBlock, callee ByteArray, descriptor ValueId, blockOffset ByteOffset, value ValueId, dropped ValueId, ids ValueMinter)
+	if blockOffset == 0 'theFirstBlockIsTheDescriptor'
+		module.appendOp(block, op: StdOp.call(dropped, callee: callee, args: twoArgs(descriptor, second: value)))
+		return
+	end 'theFirstBlockIsTheDescriptor'
+
+	let offsetConst = ids.mint()
+	module.appendOp(block, op: StdOp.const(offsetConst, value: blockOffset as ParsedInt, valueType: StdType.i64))
+	let blockAddr = ids.mint()
+	module.appendOp(block, op: StdOp.binOp(blockAddr, lhs: descriptor, rhs: offsetConst, opcode: StdBinOpcode.add, operandType: StdType.i64))
+	module.appendOp(block, op: StdOp.call(dropped, callee: callee, args: twoArgs(blockAddr, second: value)))
+end 'emitDictionaryFieldDrop'
 
 // --- The per-type deep-cloner cascade (P1.7 slice 3b-vi-b): the DUAL of the destructor cascade ---
 //
@@ -2178,6 +2407,11 @@ export function noteClonerUsage(usage RuntimeUsage, project Project, signatures 
 			declaredStruct(layout) then noteStructClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
 			declaredUnion(layout) then noteUnionClonerNeeds(usage, layout: layout, project: project, signatures: signatures, work: work)
 			genericInstance(id) then noteInstanceClonerNeeds(usage, id: id, signatures: signatures, work: work)
+			// ⭐ A DICTIONARY node names a drop cascade and no cloner at all (BATCH41), so the clone closure has
+			// nothing to expand through it. It is registered by the shared node space rather than by either
+			// driver, so this arm is where that is SAID — a `genericInstance` fallthrough would silently give
+			// the same instance's clone needs a second, redundant expansion.
+			genericInstanceDictionary then continue
 		end 'node'
 	end 'drain'
 end 'noteClonerUsage'

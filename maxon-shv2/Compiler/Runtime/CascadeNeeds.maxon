@@ -39,6 +39,12 @@ export union CascadeNode
 	// instance has a `__clone_<mangled>` beside its `__destruct_<mangled>`, so the two closures walk one
 	// node space. (It was destructor-side only while a non-`Array` instance had no per-instance cloner.)
 	genericInstance(id GenericInstanceId)
+	// ⭐ A generic instance's DECLARATION VIEW, expanded for its DICTIONARY destructor
+	// (`MmRuntime.dictionaryDestructorSymbol`) rather than its monomorphized one (BATCH41). It is a second
+	// node over the same `id` because the two cascades classify the same field list DIFFERENTLY — the slot
+	// standing at a bare parameter names no nested symbol, and a nested declaration-view field names its
+	// DICTIONARY destructor rather than its plain one — and a node is expanded by its kind.
+	genericInstanceDictionary(id GenericInstanceId)
 end 'CascadeNode'
 
 export typealias CascadeNodeArray = Array with CascadeNode

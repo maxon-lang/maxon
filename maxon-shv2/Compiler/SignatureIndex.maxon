@@ -2889,19 +2889,35 @@ export type ParamConsumeInfo
 		return false
 	end 'feedsCalleeStorage'
 
-	// Does ANY parameter feed a type parameter at ALL, either sink (BATCH41)? `feedsCalleeStorage`'s twin
-	// asking `isFeed()` rather than the sink, for the descriptor-need seed that must cover the CONSTRUCTOR
-	// feed as well: a body forwarding a borrowed opaque `T` into another generic's `create()` takes its
-	// reference through `retainFunc@64` and so needs the descriptor, and that sink is exactly the one
-	// `feedsCalleeStorage` excludes.
-	export function feedsAnyTypeParameter() returns bool
+	// ⭐ **Does ANY parameter feed a CONSTRUCTOR — the sink `feedsCalleeStorage` above excludes (BATCH41)?**
+	// The two are exact complements over one column, which is what makes them two functions rather than one
+	// with a flag: that one seeds the descriptor for a body whose feed is ENROLLED OWNED and may be dropped
+	// through it, this one for a body that forwards a borrowed opaque `T` into another generic's `create()`
+	// and takes its reference through `retainFunc@64`.
+	//
+	// ⛔⛔ **IT ASKED `isFeed()` — BOTH SINKS — WHEN IT WAS FIRST WRITTEN, AND THAT BROKE A COMMITTED
+	// PROGRAM.** Read at a `.<name>(` by the token scan, `isFeed()` matches `push`, whose sink is callee
+	// storage — so `stdlib/Interfaces.maxon`'s `extension Iterable.map`, whose body is `result.push(item)`,
+	// began reserving a descriptor it had never reserved. W161's own header states the consequence in
+	// advance (*"`Map.map` reserves nothing … forwarding a real descriptor into half of such a chain"*), and
+	// the MEASURED symptom was one step further out: with a descriptor in hand the chain minted a CONCRETE
+	// `__layout_Array___Tuple2.String.int` whose `copyFunc@32` names `__clone___Tuple2.String.int`, a cloner
+	// `installStructCloners` cannot build because a SUBSTITUTED tuple is in no `project.structTypes` —
+	// `panic at CodeResult.maxon:155: bakeFuncAbs64Relocs`, on `interface-extensions.stdlib-map-on-map-with-
+	// function`.
+	//
+	// ⇒ the callee-storage half is `feedsCalleeStorage`'s and is ALREADY seeded (`storesBorrowedOpaqueElement`,
+	// off the container-store token signal). Asking for both here was a second seed for one sink, and the
+	// duplicate is what reached a chain that must stay inert.
+	export function feedsATypeParameterConstructor() returns bool
 		for i in 0 upto self.feeds.count() 'each'
-			if (try self.feeds.get(i) otherwise panic("feedsAnyTypeParameter: feeds.get OOB at {i} despite i < count")).isFeed() 'feed'
+			let feed = try self.feeds.get(i) otherwise panic("feedsATypeParameterConstructor: feeds.get OOB at {i} despite i < count")
+			if feed.isFeed() and not feed.sinkIsCalleeStorage() 'aConstructorFeed'
 				return true
-			end 'feed'
+			end 'aConstructorFeed'
 		end 'each'
 		return false
-	end 'feedsAnyTypeParameter'
+	end 'feedsATypeParameterConstructor'
 
 	// The type-parameter position parameter `index` feeds, or `none` — the concrete-site managed-consume
 	// map. Out of range (a non-generic function's empty `feeds`, an unknown label) answers `none`, exactly
@@ -17096,11 +17112,148 @@ export type ProgramSignatures
 	//
 	// ⇒ Seeding lives HERE and not at either asker, so a third door cannot arrive with a set of its own.
 	export function instanceRestsAnUnnameableSlot(id GenericInstanceId) returns bool
-		return self.instanceOwnsAnUnnameableSlot(id, visited: ClonerSet.create())
+		if not self.instanceCanRestASlotAtAParameter(id) 'nothingToWalk'
+			return false
+		end 'nothingToWalk'
+
+		return self.instanceOwnsASlotOfKind(id, kind: TypeArgInstantiationKind.managedElement, visited: ClonerSet.create())
 	end 'instanceRestsAnUnnameableSlot'
 
-	// The instance-in-hand half of the question above — does `id` own a slot AT a parameter this instance
-	// leaves OPAQUE, which some instantiation of that parameter's owner makes managed?
+	// ⭐⭐⭐ **THE EMISSION TWIN OF THE REFUSAL ABOVE — does `id` rest a slot this rung's DICTIONARY DESTRUCTOR
+	// must release (BATCH41)?** One walk, one recursion, one cycle set; the KIND is the only thing that varies,
+	// exactly as `instanceWithTypeArgKind`'s header says of the three gates it serves.
+	//
+	// ⛔⛔ **AND THE KIND IS `retainedFeed`, NOT `managedElement`, BECAUSE THIS IS THE RELEASE HALF OF THE
+	// RETAIN.** `typeParamFeedCanOwnAReference` — the gate on whether a shared body takes a reference into such
+	// a record at all — reads `retainedFeed`, which reads EVERY interned row; `managedElement` is a REFUSING
+	// kind and skips a speculative row and a row E3017 already owns (`kindIsARefusal`). A reference taken
+	// through a row this walk had skipped would be a reference nothing releases, which is exit 101 — so the
+	// retain's gate and the release's gate are one kind, read at the two ends.
+	//
+	// ⚠ Over-approximating is free in this direction and that is the whole argument for reading every row: the
+	// release it emits is `__drop_type_param` against `destroyFunc@40`, which is **0** for an instantiation
+	// owing nothing and is therefore inert on exactly the rows a refusal would have had to exclude.
+	export function instanceRestsARetainedSlot(id GenericInstanceId) returns bool
+		if not self.instanceCanRestASlotAtAParameter(id) 'nothingToWalk'
+			return false
+		end 'nothingToWalk'
+
+		return self.instanceOwnsASlotOfKind(id, kind: TypeArgInstantiationKind.retainedFeed, visited: ClonerSet.create())
+	end 'instanceRestsARetainedSlot'
+
+	// ⭐⭐⭐ **CAN A BODY OF `callee` EVEN GET HOLD OF A BORROWED OPAQUE `T` TO FORWARD (BATCH41)?** The
+	// DECLARATION-level narrowing on the constructor-feed descriptor seed, and the one that keeps an
+	// over-approximation by NAME from reaching the whole corpus.
+	//
+	// ⛔⛔ **THE SEED IS A `.<name>(` TEST AND `create` IS A NAME EVERYTHING WEARS.** Without this,
+	// `stdlib/Interfaces.maxon`'s `extension Iterable.withIterator` — `WithIterSelf.create(iter)` — reserved a
+	// descriptor on EVERY conformer in the library, and W161's header states what that does to a chain meant to
+	// stay inert. MEASURED: `interface-extensions.stdlib-map-on-map-with-function` went from green to
+	// `panic at CodeResult.maxon:155: bakeFuncAbs64Relocs` — the chain minted a concrete
+	// `__layout_Array___Tuple2.String.int` whose `copyFunc@32` names a tuple cloner
+	// `installStructCloners` never builds. (That cloner gap is OLDER and is reachable with no generics at all —
+	// `Array with (String, Integer)` plus a `.clone()` panics the merge-base compiler identically — so it is
+	// reported separately; what belongs here is not steering the corpus into it.)
+	//
+	// ⇒ **the two ways a body can hold a bare `T` that a DECLARATION states**: a PARAMETER declared at the
+	// enclosing type's parameter (`Bag.wrap(x Element)`), or a FIELD of the enclosing type declared at one
+	// (`Bag.createIterator()` forwarding `self.slot`). Neither `Map`, `Set` nor `List` declares a bare-parameter
+	// field — every one of their columns is a container — so the whole corpus declines and the two shapes this
+	// rung serves do not.
+	//
+	// ⚠ **A THIRD WAY EXISTS AND IS DELIBERATELY NOT SEEN: a `T` read OUT of a container** (`items.get(i)` fed
+	// straight to a constructor). It is invisible from declarations, which is the sibling signals' stated
+	// discipline, and its cost is a REFUSAL with a position (`requireDescriptorForOpaqueStores`) rather than a
+	// wrong answer — which is what the merge base does with it today.
+	export function methodCanForwardABorrowedOpaque(callee ByteArray, typeName ByteArray) returns bool
+		if self.opaqueParamsOf(callee).declaresATypeParameterParam() 'aParameterAtTheParameter'
+			return true
+		end 'aParameterAtTheParameter'
+
+		return self.typeDeclaresABareTypeParameterField(typeName)
+	end 'methodCanForwardABorrowedOpaque'
+
+	// Does `typeName`'s declaration hold a field standing at one of its own type parameters — the other place a
+	// shared body can read a bare `T` from. Read off the DECLARED field types (the declaration view is what a
+	// shared body sees), through the one field-type door so a field spelled via an inner alias resolves the same
+	// way `substituteInstanceFieldType` resolves it.
+	function typeDeclaresABareTypeParameterField(typeName ByteArray) returns bool
+		match self.structOf(typeName) 'declared'
+			undeclared then return false
+			declared(layout) then return self.layoutHasABareTypeParameterField(layout)
+		end 'declared'
+	end 'typeDeclaresABareTypeParameterField'
+
+	// The walk behind the question above. Split out for `typeDeclaresABareTypeParameterField`'s reason — a
+	// `match` arm may not hold a loop.
+	function layoutHasABareTypeParameterField(layout StructLayout) returns bool
+		for i in 0 upto layout.fieldCount() 'eachField'
+			if maxonTypeTag(self.fieldTypeOf(layout, index: i, into: self.typeNames)) == ValueTypeTag.typeParameter 'aBareParameterField'
+				return true
+			end 'aBareParameterField'
+		end 'eachField'
+
+		return false
+	end 'layoutHasABareTypeParameterField'
+
+	// Is substituted instance field `index` still standing at a BARE type parameter — the slot the dictionary
+	// destructor releases through `__drop_type_param` rather than through a symbol? Asked over
+	// `substituteInstanceFieldType` for `genericInstanceFieldIsManaged`'s reason: the cascade's field KIND and
+	// its field CALLEE must classify one type.
+	export function genericInstanceFieldIsOpaque(id GenericInstanceId, index FieldIndex) returns bool
+		return maxonTypeTag(self.substituteInstanceFieldType(id, index: index)) == ValueTypeTag.typeParameter
+	end 'genericInstanceFieldIsOpaque'
+
+	// ⭐⭐ **WHICH DICTIONARY BLOCK RELEASES OPAQUE FIELD `index`, IN THE ENCLOSING BODY'S OWN `uses`-LIST
+	// TERMS.** The substituted field type names a parameter of the type whose SHARED BODY holds the descriptor
+	// — `BagIter with Element`'s `slot` substitutes to `Bag`'s `Element`, and `Bag.contains` is the frame that
+	// drops the record — so the position read here and the block the caller's descriptor lays out are the same
+	// number by construction. That is what lets the destructor take the WHOLE descriptor and index its own
+	// blocks, instead of the caller having to pre-offset one: a PERMUTED instance (`Pair with (U, T)` inside
+	// `Holder uses T, U`) is served for free, where a single forwarded block base could not express it.
+	export function genericInstanceFieldOpaqueBlockOffset(id GenericInstanceId, index FieldIndex) returns ByteOffset
+		return layoutBlockOffsetFor(self.opaqueTypeParamPosition(self.substituteInstanceFieldType(id, index: index)))
+	end 'genericInstanceFieldOpaqueBlockOffset'
+
+	// Does substituted instance field `index` hold a NESTED record that rests a retained slot of its own — the
+	// field whose release is the nested dictionary destructor rather than a one-argument callee?
+	export function genericInstanceFieldRestsARetainedSlot(id GenericInstanceId, index FieldIndex) returns bool
+		let slot = self.substituteInstanceFieldType(id, index: index)
+		if maxonTypeTag(slot) != ValueTypeTag.genericInstance 'namesNoInstance'
+			return false
+		end 'namesNoInstance'
+
+		return self.instanceRestsARetainedSlot(typeNameIdOf(slot))
+	end 'genericInstanceFieldRestsARetainedSlot'
+
+	// The nested dictionary destructor substituted instance field `index` is released through. Precondition:
+	// `genericInstanceFieldRestsARetainedSlot`.
+	export function genericInstanceFieldDictionaryDropCallee(id GenericInstanceId, index FieldIndex) returns ByteArray
+		return dictionaryDestructorSymbol(self.mangleGenericInstance(typeNameIdOf(self.substituteInstanceFieldType(id, index: index))))
+	end 'genericInstanceFieldDictionaryDropCallee'
+
+	// ⭐⭐ **THE WALK'S TWO ALLOCATION-FREE PRECONDITIONS, ASKED BEFORE ITS CYCLE SET EXISTS.** A fully
+	// CONCRETE instance resolves its own destructor at the create site — the whole point of the
+	// declaration-view/instance split — and a BUILTIN element-bearing record (`__ManagedMemory with Element`,
+	// `__ManagedList with Element`) has no declared field list to walk at all: its element destructor IS the
+	// descriptor's `destroyFunc@40`, which is the mechanism these questions exist to reason about one level up.
+	// The CLONE side of that same element is `containerOpaqueElementCanBeManaged`'s.
+	//
+	// ⚡ **IT IS ASKED AT THE TWO SEEDS AS WELL AS INSIDE THE WALK, and the recursion is why it must be both
+	// places rather than either.** The seeds pay for a `ClonerSet` before the walk can decline, and
+	// `Parser.instanceBoxDropCallee` asks one of them at EVERY generic-instance drop in the program — where
+	// the answer is `false` for essentially all of them, an `Array with Byte` or a `Box with String` having no
+	// parameter left to rest anything at. The walk needs it too, for a nested slot that is concrete. One
+	// function, so a fix to either reading cannot reach one and miss the other.
+	function instanceCanRestASlotAtAParameter(id GenericInstanceId) returns bool
+		return self.instanceMentionsTypeParameter(id) and self.genericInstanceHasBaseLayout(id)
+	end 'instanceCanRestASlotAtAParameter'
+
+	// The instance-in-hand half of the two questions above — does `id` own a slot AT a parameter this instance
+	// leaves OPAQUE, which some instantiation of that parameter's owner classifies as `kind`? The REFUSAL asks
+	// it at `managedElement` and the dictionary destructor's EMISSION asks it at `retainedFeed`; nothing else
+	// about the walk differs, so the kind rides rather than the walk being written twice
+	// (`instanceWithTypeArgKind`'s discipline, one level up).
 	//
 	// ⛔⛔ **IT READS THE SUBSTITUTED COLUMN, AND THE FIRST CUT READ THE RAW ONE — MEASURED `0xC0000005`, FOUND
 	// BY THE BATCH41 REVIEW.** The raw field list only ever names a slot's DECLARED spelling, so a field typed
@@ -17117,20 +17270,10 @@ export type ProgramSignatures
 	// `genericInstanceFieldCloneStrategy` already share — its own header carries the exit-101 leak a separate,
 	// hand-rolled reading of the same column produced. A refusal deriving that column its own way is free to
 	// disagree with the destructor it is refusing on behalf of, which is what happened here.
-	function instanceOwnsAnUnnameableSlot(id GenericInstanceId, visited ClonerSet) returns bool
-		// A fully concrete element resolves its own destructor at the create site — the whole point of the
-		// declaration-view/instance split (`instanceMentionsTypeParameter`).
-		if not self.instanceMentionsTypeParameter(id) 'fullyConcrete'
+	function instanceOwnsASlotOfKind(id GenericInstanceId, kind TypeArgInstantiationKind, visited ClonerSet) returns bool
+		if not self.instanceCanRestASlotAtAParameter(id) 'nothingToWalk'
 			return false
-		end 'fullyConcrete'
-
-		// A builtin element-bearing record (`__ManagedMemory with Element`, `__ManagedList with Element`) has no
-		// declared field list and owes nothing here: its element destructor IS the descriptor's `destroyFunc@40`,
-		// which is the mechanism this function exists to say is missing one level up. The CLONE side of that same
-		// element is `containerOpaqueElementCanBeManaged`'s.
-		if not self.genericInstanceHasBaseLayout(id) 'noDeclaredFieldsToOwn'
-			return false
-		end 'noDeclaredFieldsToOwn'
+		end 'nothingToWalk'
 
 		// The cycle break is `declaredInstanceSupportsDeepClone`'s, for its reason and in its set: the mangled
 		// instance name lives behind the reserved `__` prefix no declaration may take. A cycle answers "owns
@@ -17142,30 +17285,30 @@ export type ProgramSignatures
 		visited.insert(mangled)
 
 		for i in 0 upto self.genericInstanceFieldCount(id) 'eachField'
-			if self.slotOwnsAnUnnameableSlot(self.substituteInstanceFieldType(id, index: i), visited: visited) 'someInstantiationOwnsIt'
+			if self.slotOwnsASlotOfKind(self.substituteInstanceFieldType(id, index: i), kind: kind, visited: visited) 'someInstantiationOwnsIt'
 				return true
 			end 'someInstantiationOwnsIt'
 		end 'eachField'
 
 		return false
-	end 'instanceOwnsAnUnnameableSlot'
+	end 'instanceOwnsASlotOfKind'
 
 	// One slot of the walk above, as the instance holding it SEES that slot. A slot still standing at a bare
-	// parameter is the answer — it is the one whose release is a fact about an instantiation this body cannot
-	// name; a slot at a nested instance recurses, because the record that instance stands for is freed by the
-	// same declaration-view destructor and carries the same unreleased word; and every other tag is a concrete
-	// leaf whose drop the create site resolves for itself.
-	function slotOwnsAnUnnameableSlot(slot MaxonType, visited ClonerSet) returns bool
+	// parameter is the answer — it is the one whose release is a fact about an instantiation no SYMBOL in this
+	// body can name; a slot at a nested instance recurses, because the record that instance stands for is
+	// freed by the same declaration-view destructor and carries the same word; and every other tag is a
+	// concrete leaf whose drop the create site resolves for itself.
+	function slotOwnsASlotOfKind(slot MaxonType, kind TypeArgInstantiationKind, visited ClonerSet) returns bool
 		if self.slotTypeIsOpaque(slot) 'aBareParameterSlot'
-			return self.anyInstanceTypeArgHasKind(typeNameIdOf(slot), kind: TypeArgInstantiationKind.managedElement)
+			return self.anyInstanceTypeArgHasKind(typeNameIdOf(slot), kind: kind)
 		end 'aBareParameterSlot'
 
 		if maxonTypeTag(slot) == ValueTypeTag.genericInstance 'aNestedInstance'
-			return self.instanceOwnsAnUnnameableSlot(typeNameIdOf(slot), visited: visited)
+			return self.instanceOwnsASlotOfKind(typeNameIdOf(slot), kind: kind, visited: visited)
 		end 'aNestedInstance'
 
 		return false
-	end 'slotOwnsAnUnnameableSlot'
+	end 'slotOwnsASlotOfKind'
 
 	// The element type's name AS A DIAGNOSTIC PRINTS IT (`Slot`, `String`) — for the one message that has to
 	// say WHICH element type it is refusing (E3106, `Parser.requireArrayResizeHasZeroElement`). It lives here
@@ -23563,17 +23706,23 @@ export type ProgramSignatures
 		return self.bareTypeParamReturnerNameSet().contains(name)
 	end 'methodNameEverReturnsBareTypeParameter'
 
-	// ⭐⭐ **DOES SOME DECLARATION WEARING `name` TAKE A TYPE-PARAMETER FEED PARAMETER (BATCH41)?** The
-	// CALLER-side half of the constructor-feed retain, and the exact twin of the question above: that one is
-	// asked of a `.<name>(` whose callee HANDS BACK a bare `T`, this one of a `.<name>(` whose callee will
-	// KEEP one. A body making such a call may have to take a reference through `retainFunc@64`
-	// (`handleEscapingBorrowFeed`), so it needs the enclosing instance's layout descriptor — and no sibling
-	// signal could see that, for the reason `adoptsOpaqueResult`'s arm records: the receiver is a field, a
-	// local or an inner alias the descriptor-need pre-scan cannot resolve.
+	// ⭐⭐ **DOES SOME DECLARATION WEARING `name` TAKE A CONSTRUCTOR-FEED TYPE-PARAMETER PARAMETER (BATCH41)?**
+	// The CALLER-side half of the constructor-feed retain, and the exact twin of the question above: that one
+	// is asked of a `.<name>(` whose callee HANDS BACK a bare `T`, this one of a `.<name>(` whose callee will
+	// KEEP one in a record it returns. A body making such a call may have to take a reference through
+	// `retainFunc@64` (`handleEscapingBorrowFeed`), so it needs the enclosing instance's layout descriptor —
+	// and no sibling signal could see that, for the reason `adoptsOpaqueResult`'s arm records: the receiver is
+	// a field, a local or an inner alias the descriptor-need pre-scan cannot resolve.
 	//
-	// ⚠ It is answered by NAME and over-approximates exactly as its twin does: a name some OTHER type's
-	// generic constructor also wears reserves an unread parameter, which costs one ignored slot. Missing one
-	// refuses a legal program at `requireDescriptorForOpaqueStores`.
+	// ⛔⛔ **IT IS ANSWERED BY NAME, AND `create` IS A NAME EVERYTHING WEARS — SO THE OVER-APPROXIMATION IS
+	// NOT FREE AND IS NARROWED TWICE, NOT HERE BUT AT THE SEED.** Its twin's *"costs one ignored slot"* is
+	// true of a RETURN column and false of this one: a reserved descriptor changes what
+	// `LowerMaxonToStd.emitInstanceDescriptorAddr` does at every nested-instance call in the body, and W161's
+	// header states what that does to a chain meant to stay inert. So the seed also asks whether the method
+	// can hold a borrowed `T` at all (`methodCanForwardABorrowedOpaque`) and whether a static could source a
+	// descriptor (`calleeReturnsItsDeclaringType`); this set answers only the sink question, and the
+	// callee-storage sink is deliberately excluded (`ParamConsumeInfo.feedsATypeParameterConstructor`) because
+	// `storesBorrowedOpaqueElement` already seeds it.
 	export function methodNameEverFeedsATypeParameter(name ByteArray) returns bool
 		return self.typeParamFeederNameSet().contains(name)
 	end 'methodNameEverFeedsATypeParameter'
@@ -23600,9 +23749,9 @@ export type ProgramSignatures
 	// One row of the fold above. Split out for `recordIfBareTypeParamReturn`'s reason — a `match` arm may not
 	// hold a statement sequence, and the insert is guarded.
 	function recordIfTypeParamFeeder(member ByteArray, info ParamConsumeInfo)
-		if not info.feedsAnyTypeParameter() 'noFeed'
+		if not info.feedsATypeParameterConstructor() 'noConstructorFeed'
 			return
-		end 'noFeed'
+		end 'noConstructorFeed'
 
 		self.typeParamFeederNames.insert(member)
 	end 'recordIfTypeParamFeeder'

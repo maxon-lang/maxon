@@ -2485,6 +2485,17 @@ type MaxonToStdLowering
 			self.appendTypeParamDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
 			return
 		end 'typeParamOwnership'
+		// ⭐⭐ **A DICTIONARY DESTRUCTOR TAKES THE WHOLE DESCRIPTOR, NOT A BLOCK (BATCH41).** The arm above
+		// hands `__drop_type_param` the block of the ONE parameter its value is typed at; a dictionary
+		// destructor releases several fields standing at several parameters, so it indexes its own blocks —
+		// off the `uses`-list positions its fields substitute to, which are positions in the SAME list this
+		// descriptor lays out (`ProgramSignatures.genericInstanceFieldOpaqueBlockOffset` carries the argument).
+		// That is what serves a PERMUTED instance — `Pair with (U, T)` inside `Holder uses T, U` — which a
+		// single forwarded block base cannot express at all.
+		if isDictionaryDestructorCallee(callee) 'dictionaryCascade'
+			self.appendWholeLayoutDescriptor(result, callee: callee, args: args, dstBlock: dstBlock)
+			return
+		end 'dictionaryCascade'
 		// ⚠⚠ **A WITNESS-THREADING ARM STOOD HERE AND IS GONE, AND ITS FAMILY COUNT WENT 3 → 1 → 0.** A
 		// compiler-owned runtime call that PROBES a hash table it does not hold got the key's `Hashable`/
 		// `Equatable` witness-table addresses appended as hidden trailing arguments — the dictionary-passing
@@ -2568,6 +2579,21 @@ type MaxonToStdLowering
 		fullArgs.append(args)
 		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
 	end 'appendTypeParamDescriptor'
+
+	// Emit `__destruct_dict_<mangled>(descriptor, box)` — prepend the CURRENT function's WHOLE layout descriptor
+	// to the single box argument the parser emitted. The descriptor parameter is guaranteed by the same
+	// reservation `__drop_type_param` rests on, and by the same refusal when it is missing
+	// (`Parser.dropReadsTheLayoutDescriptor` puts both families through one test), so its absence here is a
+	// parser/lowering divergence — a loud bug, not a silent wrong load.
+	function appendWholeLayoutDescriptor(result ValueId, callee ByteArray, args ValueIdArray, dstBlock IrBlock)
+		if not self.hasImplicitLayout 'noLayout'
+			panic("appendWholeLayoutDescriptor: `{String.from(callee)}` in '{String.from(self.currentFuncName)}' but the function carries no layout descriptor parameter — the parser's descriptor-need seed and this lowering disagree")
+		end 'noLayout'
+		var fullArgs = ValueIdArray.create()
+		fullArgs.push(self.implicitLayoutValueId)
+		fullArgs.append(args)
+		self.stdModule.appendOp(dstBlock, op: StdOp.call(result, callee: callee, args: fullArgs))
+	end 'appendWholeLayoutDescriptor'
 
 	// The descriptor block of the type parameter a descriptor-gated ownership value is typed at — read off the
 	// value's own `typeParameter` token, the same token the stamp matched positions against.
