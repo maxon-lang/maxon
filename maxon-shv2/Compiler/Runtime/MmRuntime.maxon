@@ -1938,44 +1938,82 @@ end 'synthesizeUnionDestructor'
 // REFERENCED. Appended already-lowered after the pipeline, like the union one, so it is never re-optimized.
 // A struct has NO tag — every field is always present — so the cascade drops each managed field
 // unconditionally (behind a null-guard) rather than under a tag switch.
+//
+// ⚠ **GATED ON ANY DESTRUCTOR BEING NEEDED AT ALL**, so a program that drops nothing does not walk the
+// type registry to discover it needs nothing — `closeDestructorNeeds`' early-out, on the same set and for
+// the same reason. ⚠ It stood BELOW the project walk until this rung's review, where it said this and gated
+// only the SECOND of the two registries; the clone twin already gated both, which is the disagreement that
+// made the two walks worth deriving once.
 export function installStructDestructors(module StdModule, project Project, signatures ProgramSignatures, needed DestructorSet)
-	for (_, layout) in project.structTypes 'each'
-		installOneStructDestructor(module, layout: layout, project: project, signatures: signatures, needed: needed)
-	end 'each'
-
-	// ⭐⭐ **THE TUPLES, FROM THE INDEX — BECAUSE THE PROJECT REGISTRY NEVER RECEIVES A SUBSTITUTED ONE
-	// (W41).** `project.structTypes` is fed by `ParseStaging.commitStructTypes`, which copies each FILE
-	// ARTIFACT's own layouts, so it holds every tuple the source SPELLS and no tuple minted by SUBSTITUTION —
-	// `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE, straight into the
-	// whole-program index. The parser emits the drop call either way, so the missing body is a BACKEND panic
-	// rather than a leak: **MEASURED, with the corpus `Map` live, `for (_, value) in m` over `["a": 10]` walks
-	// `MapIterator.current()`, whose declared `Entry = (Key, Value)` substitutes to `__Tuple2.String.int`, and
-	// the compile stops at `resolveCallFixups: call to unknown function '__destruct___Tuple2.String.int'`.** A
-	// plain `function pair() returns (String, Num)` in the same tree compiles and runs, which is what
-	// localizes it to the substituted mint rather than to tuples.
-	//
-	// ⛔⛔ **A NAME THE PROJECT REGISTRY ALREADY HOLDS IS SKIPPED, AND LETTING THIS WALK OWN ALL TUPLES
-	// INSTEAD WAS A MEASURED REGRESSION (22 failures against 14).** The two registries are NOT two views of
-	// one table for a tuple: a sweep key is `(spelling, file)` and only a CANONICAL name is a whole-program
-	// identity, so the index can hold a layout whose elements were resolved in a different file's scope from
-	// the one `commitStructTypes` committed — see `ProgramSignatures`' A3v header, which records the wrong
-	// answer that shape already produced once. The project's entry is the authoritative resolved one wherever
-	// it exists; this walk supplies only what nothing committed.
-	//
-	// ⚠ **GATED ON ANY DESTRUCTOR BEING NEEDED AT ALL**, so a program that drops nothing does not walk the
-	// type registry to discover it needs nothing — `closeDestructorNeeds`' early-out, on the same set and for
-	// the same reason.
 	if needed.count() == 0 'nothingDrops'
 		return
 	end 'nothingDrops'
+
+	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed, kind: StructRuntimeEntryKind.destructor)
+end 'installStructDestructors'
+
+// ⭐⭐ **WHICH PER-STRUCT RUNTIME ENTRY THE ONE LAYOUT WALK BELOW IS INSTALLING.** A discriminator rather than
+// two walks, exactly as `ProgramSignatures.instanceOwnsASlotOfKind` takes a `TypeArgInstantiationKind`: the
+// TRAVERSAL is the shared fact and the per-entry body is the difference, so the difference is what gets a
+// name and the traversal is what gets written once.
+union StructRuntimeEntryKind
+	// `__destruct_<Struct>` — admitted only for a layout that owns a managed field.
+	destructor
+	// `__clone_<Struct>` — admitted for any referenced layout, managed fields or not.
+	cloner
+end 'StructRuntimeEntryKind'
+
+// ⭐⭐ **THE ONE ROSTER OF LAYOUTS A PER-STRUCT RUNTIME ENTRY MAY BE SYNTHESIZED FOR — TWO REGISTRIES, ONE
+// DERIVATION (review of W180).** The drop side and the clone side must never disagree about WHICH LAYOUTS
+// EXIST, and the way they came to disagree is that each spelled the walk itself: W41 added the second
+// registry to the drop side off a measured backend panic, W180 found the clone side still walking one
+// registry and added the same loop again — a fix that reproduced the shape it was fixing. **A third source of
+// layouts, or a fourth rule about which of the two wins, is now ONE edit; when it was two, the second copy
+// did not exist for four months and the tell was `bakeFuncAbs64Relocs: … it was never installed`, a BACKEND
+// PANIC rather than a diagnostic.** What stays per-entry is the ADMISSION TEST, which is genuinely different
+// (`installOneStructDestructor` gates on a managed field, `installOneStructCloner` deliberately does not).
+//
+// ⭐⭐ **THE TUPLES, FROM THE INDEX — BECAUSE THE PROJECT REGISTRY NEVER RECEIVES A SUBSTITUTED ONE
+// (W41).** `project.structTypes` is fed by `ParseStaging.commitStructTypes`, which copies each FILE
+// ARTIFACT's own layouts, so it holds every tuple the source SPELLS and no tuple minted by SUBSTITUTION —
+// `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE, straight into the
+// whole-program index. The parser emits the drop call either way, so the missing body is a BACKEND panic
+// rather than a leak: **MEASURED, with the corpus `Map` live, `for (_, value) in m` over `["a": 10]` walks
+// `MapIterator.current()`, whose declared `Entry = (Key, Value)` substitutes to `__Tuple2.String.int`, and
+// the compile stops at `resolveCallFixups: call to unknown function '__destruct___Tuple2.String.int'`.** A
+// plain `function pair() returns (String, Num)` in the same tree compiles and runs, which is what
+// localizes it to the substituted mint rather than to tuples. The clone side's own measurement of the same
+// hole is on `installStructCloners`.
+//
+// ⛔⛔ **A NAME THE PROJECT REGISTRY ALREADY HOLDS IS SKIPPED, AND LETTING THIS WALK OWN ALL TUPLES
+// INSTEAD WAS A MEASURED REGRESSION (22 failures against 14).** The two registries are NOT two views of
+// one table for a tuple: a sweep key is `(spelling, file)` and only a CANONICAL name is a whole-program
+// identity, so the index can hold a layout whose elements were resolved in a different file's scope from
+// the one `commitStructTypes` committed — see `ProgramSignatures`' A3v header, which records the wrong
+// answer that shape already produced once. The project's entry is the authoritative resolved one wherever
+// it exists; this walk supplies only what nothing committed.
+function installStructRuntimeEntries(module StdModule, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
+	for (_, layout) in project.structTypes 'each'
+		installOneStructRuntimeEntry(module, layout: layout, project: project, signatures: signatures, needed: needed, kind: kind)
+	end 'each'
 
 	for layout in signatures.tupleLayouts() 'eachInternedTuple'
 		if projectHasStructLayout(project, name: layout.name) 'committedAlready'
 			continue
 		end 'committedAlready'
-		installOneStructDestructor(module, layout: layout, project: project, signatures: signatures, needed: needed)
+
+		installOneStructRuntimeEntry(module, layout: layout, project: project, signatures: signatures, needed: needed, kind: kind)
 	end 'eachInternedTuple'
-end 'installStructDestructors'
+end 'installStructRuntimeEntries'
+
+// The one layout, under whichever entry the walk is installing. The two arms below are the ONLY place the
+// drop side and the clone side part company, which is the property the shared walk exists to make visible.
+function installOneStructRuntimeEntry(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures, needed ReferencedEntrySymbols, kind StructRuntimeEntryKind)
+	match kind 'entry'
+		destructor then installOneStructDestructor(module, layout: layout, project: project, signatures: signatures, needed: needed)
+		cloner then installOneStructCloner(module, layout: layout, project: project, signatures: signatures, needed: needed)
+	end 'entry'
+end 'installOneStructRuntimeEntry'
 
 // Has `ParseStaging.commitStructTypes` already committed a layout under this name? The membership half of
 // the skip above, spelled as its own question because "the project registry is authoritative where it has an
@@ -2507,27 +2545,19 @@ export function installStructCloners(module StdModule, project Project, signatur
 	if needed.count() == 0 'noCloners'
 		return
 	end 'noCloners'
-	for (_, layout) in project.structTypes 'each'
-		installOneStructCloner(module, layout: layout, project: project, signatures: signatures, needed: needed)
-	end 'each'
 
-	// ⭐⭐ **THE TUPLES, FROM THE INDEX — the exact twin of `installStructDestructors`' second walk, and it
-	// was MISSING (W180).** Everything that walk's header says holds here unchanged: `project.structTypes`
-	// carries every tuple the source SPELLS and no tuple minted by SUBSTITUTION, because
+	// ⭐⭐ **THE TUPLES ARE IN THE ROSTER, AND THEY WERE MISSING (W180).** `project.structTypes` carries every
+	// tuple the source SPELLS and no tuple minted by SUBSTITUTION, because
 	// `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE straight into the
-	// whole-program index. The drop side gained this walk at W41 off a MEASURED backend panic; the clone side
-	// kept the one-registry walk, so the two installers' key spaces differed and a `copyFunc@32` stamp could
+	// whole-program index. The drop side gained the index walk at W41 off a MEASURED backend panic; the clone
+	// side kept a one-registry walk, so the two installers' key spaces differed and a `copyFunc@32` stamp could
 	// name a cloner in neither. **MEASURED**: with the corpus `Map` live, `for e in ["a": "x"]` binds the
 	// substituted `__Tuple2.String.String`, `let arr = [e]` infers an `Array` of it and `arr.clone()` stamped
 	// `__clone___Tuple2.String.String` — `bakeFuncAbs64Relocs: … it was never installed`, on a program holding
 	// no `typealias` at all. A drop and a clone that disagree about which layouts exist is the same defect
-	// twice, so the two walks are now the same two walks.
-	for layout in signatures.tupleLayouts() 'eachInternedTuple'
-		if projectHasStructLayout(project, name: layout.name) 'committedAlready'
-			continue
-		end 'committedAlready'
-		installOneStructCloner(module, layout: layout, project: project, signatures: signatures, needed: needed)
-	end 'eachInternedTuple'
+	// twice — so the roster is `installStructRuntimeEntries`, derived once, and neither side can grow a
+	// registry the other does not see.
+	installStructRuntimeEntries(module, project: project, signatures: signatures, needed: needed, kind: StructRuntimeEntryKind.cloner)
 end 'installStructCloners'
 
 // One layout's cloner, or nothing when it is unreferenced — `installOneStructDestructor`'s twin, and it exists

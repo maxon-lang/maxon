@@ -21150,8 +21150,10 @@ export type ProgramSignatures
 	// to the substituted mint and not to tuples.
 	//
 	// It answers with the LAYOUTS rather than with the names, because its one caller needs the field list to
-	// synthesize a cascade and a name would only send it back here. Walked once per compile, and only by a
-	// program that already needs a destructor at all — see the caller's gate.
+	// synthesize a cascade and a name would only send it back here. ⚠ **ONE CALLER, TWICE PER COMPILE** since
+	// W180 gave the clone side the same roster (`MmRuntime.installStructRuntimeEntries`) — once for the drop
+	// entries and once for the clone entries, each behind that installer's own "is anything referenced at all"
+	// gate, so a program that neither drops nor clones still walks this registry zero times.
 	export function tupleLayouts() returns StructLayoutArray
 		var out = StructLayoutArray.create()
 		for (name, layout) in self.structTypes 'eachRegisteredType'
