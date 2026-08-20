@@ -2145,6 +2145,170 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// bytes**. The two String-initialized `var`s cost a program that never spells `Expect` nothing at all.
 	try listWhitelistedModule(stdlibDir, relative: "Testing.maxon", into: listed)
 
+	// ⭐⭐ **`stdlib/Subprocess.maxon` — THE CHILD-PROCESS API, AND THE FIRST ENTRY WHOSE FREE-FUNCTION CLAUSE
+	// IS ANSWERED BY AN OVERLOAD SET RATHER THAN BY A MISS.** 806 lines: twelve exported nominal declarations
+	// over the twenty `__Builtins.subprocess*` intrinsics, plus fourteen file-private free functions. Its two
+	// blockers are both cleared — the attached-subprocess runtime (`180037f32b`) and cross-file overload sets
+	// (`b54d6c3acc`) — and neither was this module's own work.
+	//
+	// ⭐ **WHAT IT DELIVERS IS A CAPABILITY, MEASURED RATHER THAN LOADED.** `Subprocess.run(Executable.name(
+	// "cmd"), arguments: argv)` compiles, spawns and collects on x64-windows and answers what the bootstrap
+	// answers; `StreamingSubprocess.spawn` + `readStdoutLine` reads `hi` out of a live child. Neither can pass
+	// against an inert entry.
+	//
+	// It clears every entry in this file's collision rule, each CHECKED rather than assumed:
+	//   • ⭐⭐ **FREE FUNCTIONS (E3006) — FOURTEEN, and the ONE this file predicted BY NAME is now an OVERLOAD
+	//     SET.** `resolveExecutablePath`, `resolveByName`, `buildArgvBlob`, `appendNulTerminated`,
+	//     `subprocessEmptyManaged`, `subprocessEmptyCString`, `requireInheritEnv`, `terminationStatusFromKind`,
+	//     `stdinTripleFromSource`, `outputTripleFromDestination`, `attachedFlagsFor`, `lastErrorMessage`,
+	//     `readLineResultToString` and `stripTrailingCR`. Checked against `Parser.parseCallNamed`'s bare-name
+	//     `if` chain AT THE CHAIN, as that rule's last bullet insists, and in BOTH directions: the chain claims
+	//     `runProcess spawnReadLine` + the seven `subp*` + `trunc floor ceil round sqrt abs min max`, none of
+	//     which is a name here — and this module CONSUMES none of them either, the way `Math.pow` consumes
+	//     `floor`: every bare call in its body is one of its own fourteen, and everything else is receiver-dot,
+	//     `Type.`-qualified or `__Builtins.`-prefixed.
+	//     ⚠ **THE LISTED SET's OWN free functions (the W5-review sixth surface) intersect in exactly ONE name,
+	//     and `Console.maxon`'s entry has been carrying the warning since it was written**: `stdlib/Console.maxon:178`
+	//     declares `stripTrailingCR(bytes ByteArray) returns ByteArray` and `stdlib/Subprocess.maxon:782`
+	//     declares `stripTrailingCR(s String) returns String`. Two files of one directory declaring one
+	//     free-function name are an OVERLOAD SET (`specs-shv2/cross-file-overload-set.md`, whose documentation
+	//     names this very pair), and these differ in parameter spelling, so each registers under its own and
+	//     each file's calls reach its own.
+	//     ⚠⚠ **VERIFIED BY MEASUREMENT AND NOT BY READING THE RULE, because this is the pair the rule was ruled
+	//     for.** One program reaching BOTH — `StreamingSubprocess.readStdoutLine` off a live `cmd /c echo hi`
+	//     (Subprocess's `String` arm) and `Console.stdin().readLine()` off piped stdin (Console's `ByteArray`
+	//     arm) — prints `child=[hi] len=2 piped=[from-stdin] len=10` under shv2 and BYTE-IDENTICALLY under the
+	//     bootstrap. Both CRs are stripped, so each call bound its own arm; had the whole-program sweep given
+	//     the name one reading, the loser's own body would not have type-checked at all (`E3005 Cannot return
+	//     'ByteArray' from function declared to return 'String'`, which is the defect
+	//     `cross-file-overload-set.md` was written against).
+	//   • TYPE NAMES: `Executable`, `Environment`, `InputSource`, `OutputDestination`, `TerminationStatus`,
+	//     `SubprocessError`, `CollectedOutput`, `PlatformOptions`, `Configuration`, `Subprocess`,
+	//     `StreamingSubprocess` and `ExecutableError` are exported nominal declarations, and `StdinKind`,
+	//     `OutputKind`, `SpawnFlag`, `ResultStatusKind` and `StdioRuntimeTriple` are file-private ones — which
+	//     this file's header measured to be irrelevant at the folds that matter, so all seventeen are weighed.
+	//     A user program spelling any of them wins and this module's moves into the reserved space (A1s wave 2,
+	//     directory-scoped by N1). Against the other stdlib modules there is no overlap AT ALL, checked at the
+	//     source across every `.maxon` file under `stdlib/` rather than against a roster transcribed here: not
+	//     one of the seventeen is declared by any other file, listed or not. ⚠ `Process.maxon`'s entry named
+	//     `Configuration`/`Environment`/`InputSource` as its own near miss and was right — the miss holds from
+	//     this side too.
+	//   • TYPE-NAME-vs-BUILTIN, the one shape still SILENT: none of the seventeen is on
+	//     `TypeResolution.isCompilerOwnedTypeName` (`ExitCode`, `HashValue`, `Codepoint`, `Ordering`,
+	//     `CharacterSet`, the four `*Error`s, `String`, `Character`, `StringIndex`) nor answered by
+	//     `builtinTypeNameTag`, and no `type`/`enum`/`union`/`interface`/`typealias` declaration anywhere under
+	//     `maxon-shv2/Compiler/` or `maxon-shv2/Testing/` spells any of them — so there is no SYNTHESIZED TWIN
+	//     of the kind that made `Set`/`Vector`/`unicodeCategory` inert when listed.
+	//   • ⚠ THE RANGED-TYPEALIAS CLAUSE IS LIVE and lands on SEVEN names. `Byte` (`:38`, `int(0 to u8.max)`) is
+	//     `stdlib/File.maxon:45`'s declaration to the byte — as `Console.maxon:23` and `String.maxon:22` already
+	//     are — so the whole-program fold (`settleRangeContests`) has nothing to settle and the `b"…"` element
+	//     bounds that moved a golden for `File.maxon` do not move again. `ExitInt` (`int(i64.min to i64.max)`),
+	//     `Pid`/`ByteLimit` (`int(0 to u64.max)`), `StdioKindValue` (`int(0 to 3)`), `SpawnFlagsValue`
+	//     (`int(0 to 7)`) and `StreamingHandle` (`int(0 to i64.max)`) are names NO other file under `stdlib/`
+	//     declares, so each is uncontested; their FORMS are already declared under other names by listed
+	//     modules (`Clock.maxon`'s four `int(0 to u64.max)`, `Sha256.maxon`'s `Word32`), the same
+	//     same-form-different-name shape every entry since `Clock` has carried. **The compiler mints instances
+	//     over NONE of the six new names** — `SignatureIndex.isByteElementName` is the mint that matters and
+	//     `Byte` is the only name on it.
+	//   • `StringArray = Array with String` (`:36`), `ByteArray = Array with Byte` (`:37`) and
+	//     `EnvMap = Map with String, String` (`:127`) are GENERIC-INSTANCE aliases, file-local per alias FORM,
+	//     so they reserve nothing from a user program and join neither fold — the first two at the same FORM
+	//     `Json.maxon`/`Console.maxon`/`File.maxon`/`String.maxon` already declare them at.
+	//   • ⚠⚠ THE "TYPE-PARAMETERIZED BY A USER DECLARATION" CLAUSE IS LIVE, and it is the one that broke
+	//     `URL.maxon`, then `CommandLine.maxon`, then `Console.maxon`. `readLineResultToString` (`:773`) takes
+	//     a `__ManagedMemory` from the intrinsic straight into `String.init`, and `subprocessEmptyManaged`
+	//     (`:529`) hands one to the spawn contract — the exact `__ManagedMemory`/`Byte` shape those three met.
+	//     Both sides of the cure are already in place from those rungs: the PRODUCER mints
+	//     `SignatureIndex.SynthesizedByteElementName` and the CONSUMER door knows the boundary
+	//     (`ProgramSignatures.byteBufferBoundaryAdmits`). The clause says checking it is a BUILD and not a
+	//     reading, so it was built: a program declaring `typealias Byte = int(0 to 1000)` that calls NOTHING
+	//     here compiles, runs and prints `byte=900 total=900` under shv2 and under the bootstrap alike.
+	//   • ⭐ TOP-LEVEL STATE: TWO file-private immutable bindings — `let defaultCaptureLimit = 16 * 1024 * 1024`
+	//     (`:292`) and `let defaultReadLineCap = 1024 * 1024 as ByteLimit` (`:767`) — the `S2h` shape that cost
+	//     `Log.maxon` +87% code bytes on a program that never spelled `Log`. Being IMMUTABLE and file-PRIVATE
+	//     they are filed under a key carrying their declaring path (`topLevelStorageKey`), so a user program may
+	//     still declare its own; an EXPORTED top-level binding would owe the E3006 argument `Log.maxon`'s entry
+	//     sets out, and these do not. The byte A/B this shape makes mandatory is at the foot of this entry.
+	//   • E3112 fires only when a user program actually contests a spelling, so there is nothing to clear ahead
+	//     of time — but this is the WIDEST member surface any entry has added, so it is counted rather than
+	//     waved: 45 spellings across fields, methods and argument labels, of which **42 are new to the listed
+	//     set** and only `create`, `resolve` and `name` were already contested. The new ones are the
+	//     `Configuration` field names (`arguments`, `executable`, `environment`, `standardInput`,
+	//     `standardOutput`, `standardError`, `workingDirectory`, `timeoutMs`, `platformOptions`), the
+	//     `CollectedOutput`/`StreamingSubprocess` fields (`status`, `stdout`, `stderr`, `pid`, `durationMs`,
+	//     `handle`, `released`) and the API's own method names (`run`, `runConfiguration`, `runDetached`,
+	//     `runDetachedConfiguration`, `spawn`, `spawnWithCwd`, the four `read*Line*`, `writeStdinLine`,
+	//     `closeStdin`, `wait`, `waitWithTimeout`, `release`, `succeeded`, `exitCode`, `isSuccess`, `code`,
+	//     `defaults`, `displayName`, `displayReason`).
+	//   • It has NO imports. It calls into three LISTED modules by name — `String.init`, `FilePath.from` /
+	//     `toString`, and `Array`/`Map`'s own members — and into no unlisted one.
+	//
+	// MEASURED before listing, which is the check this file's rule prescribes:
+	// `maxon-shv2 build stdlib/Subprocess.maxon` exits 1 with `E3001: No 'main' function found` AND NOTHING
+	// ELSE. ⚠ And the criterion was PROVED ABLE TO FAIL for THESE bodies rather than assumed to be evidence —
+	// `let bogus = NoSuchType.definitelyUndefined(1)` injected into `stripTrailingCR` answers `E3001` **plus
+	// `E3004 stdlib\Subprocess.maxon:783:25 call to undefined function 'NoSuchType.definitelyUndefined'`**, so
+	// its bodies are analyzed. The injection is made IN PLACE against a backup and the tree restored, not on a
+	// copy outside `stdlib/`: this module's `__ManagedMemory`/`cstring`/`__Builtins` uses are stdlib-only doors
+	// and a copy elsewhere dies before reaching any body — the same correction `Testing.maxon`'s entry records.
+	//
+	// ⛔⛔ **AND LISTING IT EXPOSED A USE-AFTER-FREE THAT HAS NOTHING TO DO WITH SUBPROCESS.**
+	// `Configuration.create` is a struct literal whose FIRST field is an owned `StringArray.create()` and whose
+	// third is a `try FilePath.from("") otherwise panic(…)`, and `Parser.desugarTry` released the enclosing
+	// expression's pending temporaries at the head of `tryok` — three ops before the store that consumes them.
+	// Every `Subprocess.run` SEGFAULTED where the bootstrap answers 0. Reduced to twenty-five lines of user
+	// code with no stdlib type in it and fixed at the fork (`Parser.suspendForkTempsAsOwned`), with
+	// `specs-shv2/try-fork-pending-temporaries.md` as the pin. ⇒ **an entry's readiness probe answers whether
+	// the module COMPILES, and this file's rule has never asked whether it RUNS. Run it.**
+	//
+	// ⛔⛔⛔ **AND IT REACHES THIS FILE'S CENTRAL INVARIANT THROUGH A DOOR THE HEADER DOES NOT NAME: A GENERIC
+	// INSTANTIATION.** `typealias EnvMap = Map with String, String` (`:127`) is the SECOND instantiation of
+	// `stdlib/Map.maxon` in every program that loads this module. A generic with ONE instantiation is compiled
+	// SPECIALIZED; with two it is compiled as a SHARED body taking its instance's layout descriptor at run
+	// time (P1.6's dictionary passing). So this one alias flips `Map`'s whole compilation mode program-wide —
+	// for programs that never spell `Subprocess`, `Environment` or `EnvMap`.
+	//
+	// ⇒ **WEIGH A LISTED MODULE'S `X with …` ALIASES, NOT ONLY THE NAMES IT DECLARES. A SECOND INSTANTIATION
+	// IS A WHOLE-PROGRAM CHANGE OF COMPILATION MODE**, and this file's rule had no clause that would have
+	// caught it: the alias reserves nothing, collides with nothing, and changes how every OTHER program in the
+	// corpus compiles a container it does spell.
+	//
+	// ⚠ **WHAT THAT FLIP WOKE WAS A PRE-EXISTING LEAK IN THE SHARED PATH — FIXED IN THIS SAME TREE, `W183`.**
+	// MEASURED when this entry landed: `interface-extensions/stdlib-map-on-map-with-function` went from `6` to
+	// **exit 101**, three `StringRecord`s of 58 bytes per run. `MapIterator.current` mints its `(key, value)`
+	// TUPLE — a `structRef` over the enclosing generic's own parameters — and `__retain_type_param`s both
+	// fields into it, while the record it built carried no cascade that could release them again. The cure is
+	// a DICTIONARY destructor for a DECLARED RECORD (`CascadeNode.declaredStructDictionary` ⇒
+	// `MmRuntime.dictionaryDestructorSymbol`), plus the parser seed that decides which records need one; it is
+	// the same shape `BATCH41` built for a generic instance's declaration view, one declaration kind over.
+	// ⭐ **PRE-EXISTING, WITH A CONTROL**: reproduced on the merge base's compiler with this entry ABSENT, by
+	// fourteen lines of user code containing no subprocess at all — a program declaring
+	// `typealias EnvMap = Map with String, String` beside `["a": 1, …].map(…)` was exit 101 there too, where
+	// the bootstrap answers 4. ⇒ **an entry that adds an instantiation of an already-listed generic is a
+	// COMPILATION-MODE change for the whole corpus; expect it to reach code no program in the diff mentions.**
+	//
+	// ⭐⭐ **THE BYTE A/B — MANDATORY FOR A MODULE WITH TOP-LEVEL STATE SINCE `Log.maxon`.** MEASURED in ONE
+	// tree, two binaries differing ONLY by the line below, on TWO programs rather than one — because "flat" is
+	// a claim about the SHAPE and one point cannot carry it:
+	//   • `function main() returns ExitCode / return 7` — **1,592 code bytes both ways, Δ0**, and the two
+	//     executables are **byte-for-byte identical** (5,567 bytes, `cmp` clean).
+	//   • 600 generated functions, 6,006 lines — **51,294 code bytes both ways**, executables again
+	//     **byte-for-byte identical** (66,031 bytes, `cmp` clean).
+	//
+	// ⭐ **THE PER-COMPILE PRICE IS FLAT IN THE USER'S PROGRAM, AND THAT IS THE TWO-POINT MEASUREMENT AND NOT
+	// AN ARGUMENT.** Allocations rise **+25,385** on the trivial program (489,918 ⇒ 515,303) and **+25,374** on
+	// the 6,006-line one (1,465,230 ⇒ 1,490,604) — eleven apart, which is the output path's text, so nothing
+	// here is a term that grows with the user's program. The magnitude is this module's SIZE: 36,888 source
+	// bytes, against `Sha256.maxon`'s 10,147 for +19,147.
+	// ⚠ **BYTES ARE NOT AS FLAT AS THE COUNT — +1,290,986 against +1,233,131 — AND THAT IS A READING TO EXPLAIN
+	// RATHER THAN A COST TO ACCEPT SILENTLY.** It is the shape `Console.maxon`'s entry attributed to `merge`:
+	// the same allocations at a different SIZE, because one more file's declarations move the merged module's
+	// growable arrays across a doubling they would otherwise have reached later, and a doubling reallocates in
+	// proportion to what is already there. The larger program crosses that doubling on its own account, so it
+	// pays LESS of the step rather than more — the direction this explanation predicts, and the opposite of
+	// what a term growing with the program would do.
+	try listWhitelistedModule(stdlibDir, relative: "Subprocess.maxon", into: listed)
+
 	// ⛔⛔ **A `stdlib/Set.maxon` IS NOT LISTED` PARAGRAPH STOOD HERE UNTIL W105, AND IT HAD BEEN FALSE SINCE
 	// W90 LISTED THE MODULE 390 LINES ABOVE.** It was a W63/BATCH36 measurement — the entry was added, built
 	// green, and WITHDRAWN, because with the synthesized `Set` still winning every query the listing bought

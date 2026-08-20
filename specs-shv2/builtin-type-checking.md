@@ -133,7 +133,7 @@ Code that genuinely needs the bytes as a `__ManagedMemory` asks for
 through it cannot alter the string.
 
 <!-- disabled-test: builtin-type-checking.error-subprocess-resolve-on-path-managed -->
-<!-- `stdlib/Subprocess.maxon` is not whitelisted for shv2, so `__Builtins.subprocessResolveOnPath` and the `cstring` parameter kind it type-checks against do not exist yet. -->
+<!-- shv2 resolves `cstring` to a machine word rather than to a `ValueTypeTag` of its own — `Parser.parseTypeReference`'s `cstringPointer` arm, whose comment names exactly this situation as the trigger for changing that. It DOES refuse this call (the argument is a `ByteArray`, not a word), but as `E3005 '__Builtins.subprocessResolveOnPath' requires a int, but its argument is ByteArray` at the CALLEE token, where the reference says `expects 'cstring' but got 'ByteBuffer'` at the argument. Reported to the coordinator as a candidate rung; on no rung of PLAN.md today. -->
 ```maxon
 function main() returns ExitCode
 	let s = "ls"
@@ -148,7 +148,7 @@ error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-s
 ```
 
 <!-- disabled-test: builtin-type-checking.error-subprocess-resolve-on-path-int -->
-<!-- `stdlib/Subprocess.maxon` is not whitelisted for shv2 — same blocker as the case above. -->
+<!-- Same missing mechanism, and here it is not a wording difference: with `cstring` erased to a machine word, `subprocessResolveOnPath(42)` COMPILES under shv2 (the only diagnostic left is `E3012 unused variable`). Refusing it is what `Parser.parseTypeReference`'s `cstringPointer` arm says would make `cstring` a tag of its own. -->
 ```maxon
 function main() returns ExitCode
 	let result = __Builtins.subprocessResolveOnPath(42)
@@ -160,7 +160,7 @@ error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-s
 ```
 
 <!-- disabled-test: builtin-type-checking.error-subprocess-get-pid-cstring -->
-<!-- `stdlib/Subprocess.maxon` is not whitelisted for shv2 — same blocker as the case above. -->
+<!-- The same distinction in the other direction: `subprocessGetPid` declares an `i64` parameter and a `cstring` is a machine word under shv2, so passing one COMPILES (again only `E3012 unused variable` is left). Same missing mechanism as the two cases above. -->
 ```maxon
 function main() returns ExitCode
 	let s = "abc"
@@ -173,8 +173,7 @@ end 'main'
 error E3005: specs/fragments/builtin-type-checking/builtin-type-checking.error-subprocess-get-pid-cstring.test:5:43: type mismatch: __Builtins.maxon_subprocess_get_pid argument 0 expects 'i64' but got 'cstring'
 ```
 
-<!-- disabled-test: builtin-type-checking.subprocess-resolve-on-path-cstring -->
-<!-- `stdlib/Subprocess.maxon` is not whitelisted for shv2 — same blocker as the case above. -->
+<!-- test: builtin-type-checking.subprocess-resolve-on-path-cstring -->
 ```maxon
 function main() returns ExitCode
 	// Routing the path through `String.cstr()` satisfies the cstring type

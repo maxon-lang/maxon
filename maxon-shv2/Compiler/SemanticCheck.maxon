@@ -3821,7 +3821,8 @@ end 'calleeNeedsWin32Substrate'
 // opposite case and IS quoted: its name is exactly what the user wrote.
 let TargetUnsupportedUnnamedSubject = "it"
 
-// ⭐ **REFUSE A CONSTRUCT THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN.**
+// ⭐ **REFUSE A CONSTRUCT THE CHOSEN TARGET CANNOT LOWER (E3104), AT THE CALL'S OWN SPAN — OR, FOR A
+// SUBPROCESS CROSSING ON A TARGET WITH NO PROCESS-SPAWN PRIMITIVE, E3074 (see the second arm below).**
 //
 // The x64-windows-only ops behind these entries — `osReadClock`, `osReadWallClock`, `osSleepMs` — are ones
 // `StdToArm64`/`StdToWasm` deliberately refuse rather than fake. TWO kinds of callee reach them, and this is
@@ -3881,6 +3882,41 @@ function requireTargetSupportsCallee(project Project, func IrFunction, opIndex O
 	end 'compilerOwnedEntry'
 
 	if let entry = try project.stdlibFacts.substrateEntries.get(callee) 'stdlibCrossing'
+		// ⭐⭐ **E3074 TAKES THE CROSSING AHEAD OF E3104 WHEN THE TARGET CAN NEVER HOST A CHILD PROCESS.**
+		// The two codes are two DIFFERENT facts about one call and both have to survive: E3104 says the
+		// substrate is x64-windows only AT THIS RUNG — true of arm64 and linux, where a child process
+		// exists and shv2 has simply not lowered it yet — while E3074 says subprocess can NEVER exist
+		// here, which is a permanent property of WASI rather than of this compiler's progress, and so
+		// carries advice (`#if not os(Wasi)`) instead of a runtime entry name.
+		//
+		// ⚠ **IT IS THIS ARM AND NOT THE `compilerOwnedEntry` ONE ABOVE, WHICH IS THE SPEC'S OWN BOUND**:
+		// `specs/subprocess-unsupported.md` scopes the check to *"user call sites into the public
+		// subprocess API (`Subprocess.run`, `Configuration.run`, `StreamingSubprocess.spawn`, etc.)"*, and
+		// a crossing into stdlib is exactly what those are. A bare `__Builtins.subprocessSpawn` — or
+		// `runProcess`, or the seven `subp*` builtins — is the INTRINSIC FLOOR rather than the API, it
+		// reaches the arm above, and it keeps answering E3104 with the entry named
+		// (`subprocess-builtins.rejected-on-wasm`, `async-subprocess.error.rejected-on-wasm`).
+		//
+		// ⚠ **THE RULE IS ABOUT THE API AND THE TEST IS ABOUT AN ENTRY BAND, AND THOSE ARE NOT THE SAME SET —
+		// SAID HERE, where the rule is, rather than left to be discovered at the predicate.**
+		// `isSubprocessRuntimeCallee` is the `__gt_subp_` prefix, and `runProcess`/`spawnReadLine` are
+		// subprocess surfaces whose entries live in the SCHEDULER band instead
+		// (`calleeNeedsWin32Substrate` names them individually for the same reason). Today no stdlib function
+		// wraps either, so the two sets agree on every crossing that exists; one that did would be a stdlib
+		// crossing answering E3104. That is the direction this fails in — a WEAKER, still-true diagnostic
+		// rather than a missing one — and the day a stdlib module wraps `runProcess`, this test becomes
+		// `is this entry a process spawn?` rather than `is it in the subprocess band?`.
+		//
+		// ⚠ **THE MESSAGE CARRIES NO SPAN, AND THAT IS THE PINNED WIRE FORMAT RATHER THAN AN OVERSIGHT.**
+		// `specs/subprocess-unsupported.md`'s `maxoncstderr` block is the language definition for this
+		// diagnostic and holds one bare line, so it renders through the `line == 0` arm of
+		// `Diagnostic.render` — the arm E3001/E3002 use. The CHECK still fires per user call site, which
+		// is what the spec's sentence above requires; only the rendering has no anchor to print.
+		if isSubprocessRuntimeCallee(entry) and not targetCanHostSubprocess(project.target) 'noProcessSpawnPrimitive'
+			reportDiagnostic(project, diagnostic: Diagnostic.create(ErrorCode.semanticSubprocessUnsupportedTarget, message: "Subprocess is not supported on {targetToString(project.target)} (no process-spawn primitive); guard the call with #if not os(Wasi)."))
+			return
+		end 'noProcessSpawnPrimitive'
+
 		reportTargetUnsupportedCallee(project, func: func, opIndex: opIndex, subject: "'{String.from(noun)}'", entry: entry)
 	end 'stdlibCrossing'
 end 'requireTargetSupportsCallee'
@@ -3907,6 +3943,46 @@ end 'reportTargetUnsupportedCallee'
 function targetHasWin32Substrate(target Target) returns bool
 	return target.cpu == CpuArch.x64 and target.os == Os.windows
 end 'targetHasWin32Substrate'
+
+// ⭐⭐ **WHICH OF TWO SUBSTRATE ENTRIES A STDLIB BODY REACHES IS THE ONE ITS CROSSING IS REPORTED FOR — AND
+// SINCE E3074 THAT IS A SEMANTIC CHOICE, NOT A TIE-BREAK.**
+//
+// `StdlibSource.SubstrateFixpoint` records ONE entry per stdlib function, and its `seed` used to say that the
+// first a body names wins because *"a body naming two is refused for either, and both are equally true of
+// it"*. That was true while every entry produced the same E3104 differing only in the name it quoted. It
+// stopped being true the moment `requireTargetSupportsCallee` began reading the entry to CHOOSE THE
+// DIAGNOSTIC: a subprocess entry on WASI answers E3074 (*subprocess can NEVER exist here*, with a `#if`
+// to write) and every other answers E3104 (*x64-windows only AT THIS RUNG*). Those are different claims with
+// different advice, so a body reaching both must not have its code decided by which seed the worklist
+// drained first.
+//
+// ⚠ **NO STDLIB BODY IN THE CORPUS REACHES BOTH BANDS TODAY, so the old rule was stable BY ACCIDENT OF THE
+// CORPUS rather than by construction** — which is exactly the kind of accident this project keeps paying for.
+// The rank is stated here, beside the arm that reads the entry, so the choice and its reason are one fact.
+//
+// The permanent claim outranks the provisional one: E3074 is a fact about WASI that no rung can change, while
+// E3104 is a statement about this compiler's progress. Telling a user "not at this rung" about a call that can
+// never work anywhere is the strictly worse of the two answers.
+export function substrateEntryOutranks(candidate ByteArray, incumbent ByteArray) returns bool
+	return isSubprocessRuntimeCallee(candidate) and not isSubprocessRuntimeCallee(incumbent)
+end 'substrateEntryOutranks'
+
+// ⭐ **CAN THIS TARGET HOST A CHILD PROCESS AT ALL?** A DIFFERENT question from the one above, and the
+// difference is what keeps E3074 and E3104 apart. `targetHasWin32Substrate` asks what shv2 has BUILT;
+// this asks what the platform CAN EVER OFFER. Windows, Linux and macOS all spawn children — shv2 lowers
+// the substrate on x64-windows alone, which is E3104's business and not this predicate's — while WASI
+// has no process-spawn primitive in the standard at all, so no rung can add one.
+//
+// Written as a `match` over the OS rather than as `!= wasi`, so an OS added later must be CLASSIFIED
+// here instead of silently inheriting an answer nobody chose for it.
+function targetCanHostSubprocess(target Target) returns bool
+	return match target.os 'os'
+		windows gives true
+		linux gives true
+		macos gives true
+		wasi gives false
+	end 'os'
+end 'targetCanHostSubprocess'
 
 // The whole-program signature index, for a check running inside `semanticCheck`. Written once because
 // three checks ask, and the REASON it cannot fail is one fact about the driver, not three: the index is

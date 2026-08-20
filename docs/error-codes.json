@@ -1,6 +1,6 @@
 {
   "generatedFrom": "docs/error-codes.txt",
-  "sourceHash": "7f30653b8fa3bd7a",
+  "sourceHash": "f79e9b19e3af61f5",
   "note": "GENERATED. Do not edit. Run `maxon error-codes generate`. A reader MUST hash generatedFrom's bytes (FNV-1a 64, hex) and refuse to answer unless it equals sourceHash.",
   "compilers": ["csharp", "selfhosted", "shv2"],
   "codes": [
@@ -963,9 +963,9 @@
       "tag": "E3074",
       "name": "SemanticSubprocessUnsupportedTarget",
       "stage": "semantic",
-      "doc": "A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively\ncalling a maxon_subprocess_* builtin). WASI has no process-spawn primitive, so\nsubprocess cannot exist on that target -- rather than silently throwing\n'spawnFailed' at runtime, the call is rejected at compile time. Guard the call\nwith `#if not os(Wasi)` to exclude it from the wasm build.\nSelf-hosted only: the C# bootstrap has no such check, so it declares no member.\nThe number is held by THIS ROW, not by a comment -- which is how it used to be\nheld, and why an agent grepping `= 307` saw it free. (Originally\nSemanticDiscardedEnumeratedIndex, retired with the withIterator redesign.)",
-      "emittedBy": {"selfhosted": "semanticSubprocessUnsupportedTarget"},
-      "notEmittedBy": ["csharp", "shv2"]
+      "doc": "A user program targeting wasm32-wasi reaches the 'Subprocess' API (transitively\ncalling a maxon_subprocess_* builtin). WASI has no process-spawn primitive, so\nsubprocess cannot exist on that target -- rather than silently throwing\n'spawnFailed' at runtime, the call is rejected at compile time. Guard the call\nwith `#if not os(Wasi)` to exclude it from the wasm build.\nThe C# bootstrap has no such check, so it declares no member; shv2 raises it from\n`SemanticCheck.requireTargetSupportsCallee`, at the first call from USER code into a\n`stdlib/Subprocess.maxon` entry point, where E3104 would otherwise be raised.\nThe number is held by THIS ROW, not by a comment -- which is how it used to be\nheld, and why an agent grepping `= 307` saw it free. (Originally\nSemanticDiscardedEnumeratedIndex, retired with the withIterator redesign.)",
+      "emittedBy": {"selfhosted": "semanticSubprocessUnsupportedTarget", "shv2": "semanticSubprocessUnsupportedTarget"},
+      "notEmittedBy": ["csharp"]
     },
     {
       "code": 3075,
@@ -1234,7 +1234,7 @@
       "tag": "E3104",
       "name": "SemanticTargetUnsupportedConstruct",
       "stage": "semantic",
-      "doc": "A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled\nfor another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are\nx64-windows only at this rung, so `sleep`, `runProcess`, the streaming-subprocess builtins and\nthe `__Builtins` clock intrinsics all lower to runtime entries no arm64/wasm/linux backend can\nemit. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering.\nDistinct from E3074, which is the self-hosted compiler's subprocess-specific wasm rejection:\nthis one is about the target's substrate in general, not about one API.\nBefore it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file\nand no line -- a compiler crash where a diagnostic was owed.",
+      "doc": "A construct whose RUNTIME SUBSTRATE exists on one target only is reached by a program compiled\nfor another. shv2's green-thread scheduler and its clock/subprocess/IOCP imports are\nx64-windows only at this rung, so `sleep`, `runProcess`, the streaming-subprocess builtins and\nthe `__Builtins` clock intrinsics all lower to runtime entries no arm64/wasm/linux backend can\nemit. The call is refused at ITS SOURCE SPAN, naming the runtime entry that has no lowering.\nDistinct from E3074, the subprocess-specific WASI rejection BOTH self-hosted compilers now\nraise: that one says subprocess can NEVER exist on wasm32-wasi, while this one says the\nsubstrate is x64-windows only AT THIS RUNG -- so a subprocess call on arm64/linux is still\nthis code, and only wasm32-wasi is handed to E3074.\nBefore it, every such program PANICKED three tiers down in StdToWasm/StdToArm64 with no file\nand no line -- a compiler crash where a diagnostic was owed.",
       "emittedBy": {"shv2": "targetUnsupportedConstruct"},
       "notEmittedBy": ["csharp", "selfhosted"]
     },

@@ -39,11 +39,18 @@ export union CascadeNode
 	// instance has a `__clone_<mangled>` beside its `__destruct_<mangled>`, so the two closures walk one
 	// node space. (It was destructor-side only while a non-`Array` instance had no per-instance cloner.)
 	genericInstance(id GenericInstanceId)
-	// ⭐ A generic instance's DECLARATION VIEW, expanded for its DICTIONARY destructor
-	// (`MmRuntime.dictionaryDestructorSymbol`) rather than its monomorphized one (BATCH41). It is a second
-	// node over the same `id` because the two cascades classify the same field list DIFFERENTLY — the slot
-	// standing at a bare parameter names no nested symbol, and a nested declaration-view field names its
-	// DICTIONARY destructor rather than its plain one — and a node is expanded by its kind.
+	// ⭐ **THE TWO DICTIONARY NODES, LAST AND ADJACENT ON PURPOSE.** Each is a SECOND node over a layout or an
+	// instance the list above already carries, because the plain cascade and the dictionary one classify the
+	// same field list DIFFERENTLY — a slot standing at a bare type parameter is released through the
+	// descriptor and names no nested symbol at all — and a node is expanded by its kind. They are neighbours
+	// so the CLONE closure, which has nothing to expand through either, declines them in one range arm
+	// (`MmRuntime.noteClonerUsage`); a variant inserted between them would silently join that arm.
+	//
+	// A declared record's (`MmRuntime.dictionaryDestructorSymbol`, W183) — a TUPLE of the enclosing generic's
+	// own parameters is a `structRef` and reaches none of the instance family.
+	declaredStructDictionary(layout StructLayout)
+	// A generic instance's DECLARATION VIEW (BATCH41) — a nested declaration-view field names its DICTIONARY
+	// destructor rather than its plain one, which is the second way this classification differs.
 	genericInstanceDictionary(id GenericInstanceId)
 end 'CascadeNode'
 

@@ -2843,6 +2843,15 @@ end 'TypeParamOwner'
 // Token ⇒ the `(declaring type, parameter, position)` that minted it. See `TypeParamOwnerMap`.
 export typealias TypeParamOwnerMap = Map with (TypeParamId, TypeParamOwner)
 
+// ⭐ **THE DECLARATION WHOSE `uses` LIST A RECORD'S OPAQUE SLOTS INDEX INTO — or that it rests none (W183).**
+// The answer `ProgramSignatures.recordOpaqueSlotDeclaration` gives. It is a declaration NAME rather than a
+// `bool` because two askers want two different things of it: the DROP SITE must check that the descriptor it
+// carries lays out THAT list, and the cascade INSTALLER only needs to know a slot exists at all.
+export union OpaqueSlotDeclaration
+	declaredBy(typeName ByteArray)
+	none
+end 'OpaqueSlotDeclaration'
+
 // ⭐⭐ **WHERE A FED TYPE-PARAMETER ARGUMENT ENDS UP — AND IT IS A PER-PARAMETER FACT, NOT A PER-FUNCTION ONE
 // (W10).** The two sinks want OPPOSITE things of the callee, so which one a parameter feeds decides whether the
 // shared body enrols it owned, whether the method reserves a layout descriptor to drop it through, and what a
@@ -7238,11 +7247,31 @@ export type DescriptorScanSite
 	// fixpoint's later walk starts exactly where a member walk starts and needs no header re-read.
 	export var bodyStart as TokenIndex
 	export var typeName as ByteArray
+	// ⭐⭐ **IS THIS BODY AN *INTERFACE* EXTENSION'S RATHER THAN THE TYPE'S OWN (W183)?** It decides one
+	// descriptor seed and nothing else, and it is a fact only the recorder holds: by the time the fixpoint
+	// walks the body, `typeName` is the CONFORMER either way and the two are indistinguishable.
+	//
+	// An interface-extension body is written in the INTERFACE's terms — it can name no field of the conformer
+	// and no `uses` parameter of it — so the routes by which it can hold a bare associated-type value are
+	// exactly two, and each already has its own seed: a PARAMETER declared at that type
+	// (`methodCanForwardABorrowedOpaque`) and the per-trip element of `for … in self`
+	// (`receiverCursorElementIsOpaque`). A TYPE extension is the type's own body by every other measure — it
+	// names the type's fields and its `uses` list — so it is `false` here, as a `type` body is.
+	export var bodyIsAnInterfaceExtension as bool
 
-	export static function create(path FilePath, bodyStart TokenIndex, typeName ByteArray) returns DescriptorScanSite
-		return Self{path: path, bodyStart: bodyStart, typeName: typeName}
+	export static function create(path FilePath, bodyStart TokenIndex, typeName ByteArray, bodyIsAnInterfaceExtension bool) returns DescriptorScanSite
+		return Self{path: path, bodyStart: bodyStart, typeName: typeName, bodyIsAnInterfaceExtension: bodyIsAnInterfaceExtension}
 	end 'create'
 end 'DescriptorScanSite'
+
+// Is `target` an INTERFACE extension — the half `DescriptorScanSite.bodyIsAnInterfaceExtension` records? An
+// undeclared target expands nothing, so the answer there is the safe one: it gets no site at all.
+export function extensionTargetIsAnInterface(target ExtensionTarget) returns bool
+	match target 'target'
+		interfaceExtension then return true
+		typeExtension to undeclaredTarget then return false
+	end 'target'
+end 'extensionTargetIsAnInterface'
 
 export typealias DescriptorScanSiteArray = Array with DescriptorScanSite
 
@@ -23465,15 +23494,92 @@ export type ProgramSignatures
 	// the index (not off a caller's own layout) so the destructor cascade, the `usesDropExistential` gate and
 	// the struct-clone refusal all read ONE answer.
 	export function structFieldIsExistential(structName ByteArray, index FieldIndex) returns bool
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldIsExistential: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
-		return maxonTypeTag(try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldIsExistential: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")) == ValueTypeTag.interfaceRef
+		return maxonTypeTag(self.structFieldDeclaredType(structName, index: index)) == ValueTypeTag.interfaceRef
 	end 'structFieldIsExistential'
 
 	export function structFieldIsManaged(structName ByteArray, index FieldIndex) returns bool
-		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldIsManaged: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
-		let fieldType = try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldIsManaged: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
-		return self.typeIsManaged(fieldType, from: self.typeNames)
+		return self.typeIsManaged(self.structFieldDeclaredType(structName, index: index), from: self.typeNames)
 	end 'structFieldIsManaged'
+
+	// The DECLARED type of struct field `index`, read off THIS index's own registry. The preamble every
+	// by-name field question shares — fetch the layout, fetch the field — written once because it was written
+	// three times and each copy carried its own two panic messages saying the same two things.
+	//
+	// Both misses are preconditions rather than cases: the name came from a `structOf` the caller already
+	// asked, and the index from an `indexOfField` or a `fieldCount()` loop.
+	function structFieldDeclaredType(structName ByteArray, index FieldIndex) returns MaxonType
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.structFieldDeclaredType: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		return try layout.fieldTypes.get(index) otherwise panic("ProgramSignatures.structFieldDeclaredType: field {index} is out of range for `type {String.from(structName)}`, which declares {layout.fieldCount()} — every index handed out came from `indexOfField`")
+	end 'structFieldDeclaredType'
+
+	// ⭐ **IS STRUCT FIELD `index` STANDING AT A BARE TYPE PARAMETER (W183)?** The declared-record twin of
+	// `genericInstanceFieldIsOpaque`, and the field `typeIsManaged` answers `false` for — so a caller asking
+	// "is this managed?" skips exactly the slot whose release is a run-time descriptor read.
+	export function structFieldIsOpaque(structName ByteArray, index FieldIndex) returns bool
+		return maxonTypeTag(self.structFieldDeclaredType(structName, index: index)) == ValueTypeTag.typeParameter
+	end 'structFieldIsOpaque'
+
+	// The descriptor BLOCK that field's release reads — the `uses`-list position of the parameter the slot
+	// stands at, exactly as `genericInstanceFieldOpaqueBlockOffset` gives for an instance's slot.
+	// Precondition: `structFieldIsOpaque`.
+	export function structFieldOpaqueBlockOffset(structName ByteArray, index FieldIndex) returns ByteOffset
+		return layoutBlockOffsetFor(self.opaqueTypeParamPosition(self.structFieldDeclaredType(structName, index: index)))
+	end 'structFieldOpaqueBlockOffset'
+
+	// ⭐⭐ **WHICH DECLARATION'S `uses` LIST A DECLARED RECORD'S OPAQUE SLOTS INDEX INTO, OR THAT IT RESTS NONE
+	// (W183).** The declared-record twin of `instanceRestsARetainedSlot`, and it exists because a TUPLE of a
+	// generic's own parameters — `typealias Pair = (K, V)` inside `type Holder uses K, V`, and
+	// `stdlib/Map.maxon`'s `Entry` — is a `structRef` and reaches none of that family, so the reference its
+	// stores take through `retainFunc@64` has no release at all in a body that is itself shared.
+	//
+	// ⛔⛔ **IT CARRIES THE DECLARATION RATHER THAN ANSWERING A BARE `bool`, BECAUSE THE RETAIN AND THE RELEASE
+	// MUST READ ONE `uses` LIST AND NOT TWO (BATCH41's measured half).** The store that put a reference in the
+	// slot read a BLOCK of whatever descriptor the BUILDING body was handed; a release that indexed a DIFFERENT
+	// declaration's parameter positions into the descriptor the DROPPING body happens to hold would be releasing
+	// against another type's `uses` list — the exact mismatch whose over-release measured exit 139 inside
+	// `BATCH41`'s own cure. A body only ever carries its own enclosing type's descriptor, so the drop site
+	// admits this record only when the declaration named here IS that type.
+	//
+	// ⚠ It asks about the DIRECT slots and does not descend into a nested instance —
+	// `dictionaryInstanceFieldDropKind`'s deleted third arm, for its reason. A record resting its slot one
+	// level down is refused at the store instead (`Parser.requireStoredNestedViewDropIsNameable`).
+	export function recordOpaqueSlotDeclaration(structName ByteArray) returns OpaqueSlotDeclaration
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.recordOpaqueSlotDeclaration: no `type {String.from(structName)}` is declared — every caller asks `structOf` first")
+		for i in 0 upto layout.fieldCount() 'firstOpaqueSlot'
+			if not self.structFieldIsOpaque(structName, index: i) 'notOpaque'
+				continue
+			end 'notOpaque'
+
+			let owner = self.opaqueSlotOwnerName(structName, index: i)
+			self.requireRemainingOpaqueSlotsAgree(structName, from: (i + 1) as FieldIndex, owner: owner)
+			return OpaqueSlotDeclaration.declaredBy(owner)
+		end 'firstOpaqueSlot'
+		return OpaqueSlotDeclaration.none
+	end 'recordOpaqueSlotDeclaration'
+
+	// The declaration that minted the type-parameter token field `index` stands at. Precondition:
+	// `structFieldIsOpaque`.
+	function opaqueSlotOwnerName(structName ByteArray, index FieldIndex) returns ByteArray
+		return (try self.typeParamOwnerOf(typeNameIdOf(self.structFieldDeclaredType(structName, index: index))) otherwise panic("ProgramSignatures.opaqueSlotOwnerName: the type-parameter token of field {index} of `{String.from(structName)}` has no owner — `recordStruct` files every declared parameter as the sweep folds")).declaringTypeName
+	end 'opaqueSlotOwnerName'
+
+	// Every remaining opaque slot of `structName` must stand at a parameter of `owner`. A record is written
+	// inside ONE declaration, so every parameter it can name is that declaration's — CHECKED rather than
+	// assumed, because two owners would mean one descriptor laying out two `uses` lists, and the cascade would
+	// release half the record against the wrong one: a wild free with no diagnostic anywhere.
+	function requireRemainingOpaqueSlotsAgree(structName ByteArray, from FieldIndex, owner ByteArray)
+		let layout = try self.structTypes.get(structName) otherwise panic("ProgramSignatures.requireRemainingOpaqueSlotsAgree: no `type {String.from(structName)}` is declared — the caller resolved it one line up")
+		for i in from upto layout.fieldCount() 'eachLaterField'
+			if not self.structFieldIsOpaque(structName, index: i) 'notOpaque'
+				continue
+			end 'notOpaque'
+
+			let other = self.opaqueSlotOwnerName(structName, index: i)
+			if not other.equals(owner) 'twoDeclarations'
+				panic("ProgramSignatures.requireRemainingOpaqueSlotsAgree: `{String.from(structName)}` rests slots at parameters of BOTH `{String.from(owner)}` and `{String.from(other)}` — a record is written inside one declaration and can name only its parameters, so one layout descriptor cannot lay out both")
+			end 'twoDeclarations'
+		end 'eachLaterField'
+	end 'requireRemainingOpaqueSlotsAgree'
 
 	// ⭐ **DOES A TYPE DENOTE AN `Array` INSTANCE — DIRECTLY OR THROUGH A GENERIC-ALIAS NAME?** A layout's
 	// field type is recorded by the SWEEP, before interning, so an `items as IntArr` field arrives as

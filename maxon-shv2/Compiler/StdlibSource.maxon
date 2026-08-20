@@ -1499,13 +1499,23 @@ type SubstrateFixpoint
 		return Self{marked: marked, seedOf: seedOf, seedEntries: ByteArrayArray.create(), worklist: CsrColumn.create(), edgeCallee: CsrColumn.create(), edgeCaller: CsrColumn.create()}
 	end 'overNodes'
 
-	// `node` names `entry` directly — a SEED. The FIRST entry a body names is the one it is reported for: a
-	// body naming two is refused for either, and both are equally true of it.
+	// `node` names `entry` directly — a SEED.
+	//
+	// ⛔⛔ **THIS USED TO SAY "THE FIRST ENTRY A BODY NAMES IS THE ONE IT IS REPORTED FOR: a body naming two is
+	// refused for either, AND BOTH ARE EQUALLY TRUE OF IT" — AND THAT STOPPED BEING TRUE WHEN E3074 LANDED.**
+	// The entry now decides WHICH DIAGNOSTIC the crossing gets, not merely which name it quotes, so two
+	// entries are two different claims with different advice. `SemanticCheck.substrateEntryOutranks` is the
+	// one place that says which wins and why; here it is only obeyed. An entry that outranks the incumbent
+	// REPLACES it and re-queues the node, so the callers that already inherited the weaker one are corrected.
+	//
+	// ⚠ The upgrade is MONOTONE — a rank only ever rises, and the rank has two levels — so a node is
+	// re-queued at most once and the fixpoint below stays linear.
 	function seed(node CsrIndex, entry ByteArray)
 		let already = try self.marked.get(node) otherwise panic("SubstrateFixpoint.seed: marked.get({node}) outside the node space")
-		if already 'alreadySeeded'
+		if already and not substrateEntryOutranks(entry, incumbent: self.entryOf(node)) 'keepTheIncumbent'
 			return
-		end 'alreadySeeded'
+		end 'keepTheIncumbent'
+
 		self.mark(node, seedIndex: self.seedEntries.count())
 		self.seedEntries.push(entry)
 	end 'seed'
@@ -1535,12 +1545,28 @@ type SubstrateFixpoint
 			let seedIndex = try self.seedOf.get(node) otherwise panic("SubstrateFixpoint.propagateToCallers: seedOf.get({node}) outside the node space")
 			for k in 0 upto callersOf.degree(node) 'eachCaller'
 				let caller = callersOf.neighbour(node, k: k)
-				if not (try self.marked.get(caller) otherwise panic("SubstrateFixpoint.propagateToCallers: marked.get({caller}) outside the node space")) 'newlyRequired'
+				if self.inheritsFrom(caller, seedIndex: seedIndex) 'newlyRequiredOrOutranked'
 					self.mark(caller, seedIndex: seedIndex)
-				end 'newlyRequired'
+				end 'newlyRequiredOrOutranked'
 			end 'eachCaller'
 		end 'drain'
 	end 'propagateToCallers'
+
+	// Should `caller` take `seedIndex` as its own — because it has no entry yet, or because this one
+	// OUTRANKS the entry it already inherited (`SemanticCheck.substrateEntryOutranks`)? An unmarked caller is
+	// the ordinary case and answers before any name is read; the second question is asked only of a node that
+	// is already marked, so the common propagation pays one bool test.
+	//
+	// ⚠ It is a question rather than an inlined `if` because the propagation and `seed` must ask the SAME one:
+	// a seed that upgrades a node while its callers keep the weaker entry would leave the two halves of one
+	// fixpoint disagreeing about which diagnostic a crossing earns.
+	function inheritsFrom(caller CsrIndex, seedIndex CsrIndex) returns bool
+		if not (try self.marked.get(caller) otherwise panic("SubstrateFixpoint.inheritsFrom: marked.get({caller}) outside the node space")) 'noEntryYet'
+			return true
+		end 'noEntryYet'
+
+		return substrateEntryOutranks(try self.seedEntries.get(seedIndex) otherwise panic("SubstrateFixpoint.inheritsFrom: seed {seedIndex} does not exist"), incumbent: self.entryOf(caller))
+	end 'inheritsFrom'
 
 	function requiresSubstrate(node CsrIndex) returns bool
 		return try self.marked.get(node) otherwise panic("SubstrateFixpoint.requiresSubstrate: marked.get({node}) outside the node space")

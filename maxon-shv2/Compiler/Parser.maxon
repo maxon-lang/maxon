@@ -13549,7 +13549,32 @@ export type Parser
 				// for a type no `with` ever names, and `not isStatic` mirrors every sibling opaque signal — a
 				// static has no receiver to source a descriptor from, and one that needs one is refused with a
 				// position (`requireDescriptorForOpaqueStores`).
-				let storesBorrowedOpaqueElement = scan.storesContainerElement and instantiated and not self.functionDeclIsStatic(q)
+				// ⛔⛔ **AN INTERFACE-EXTENSION BODY IS THE ONE PLACE THIS SEED IS A FALSE POSITIVE AND THE
+				// FALSE POSITIVE IS NOT FREE (W183).** `stdlib/Interfaces.maxon`'s `extension Iterable.map` is
+				// `var result = ElementArray{}` … `result.push(transform(item))`, and no token separates that
+				// push from `stdlib/Array.maxon`'s `appendMemory`. But an interface-extension body is written in
+				// the INTERFACE's terms: it can name no field of the conformer and no parameter of its `uses`
+				// list, so the only routes by which it can hold a bare associated-type value are a PARAMETER
+				// declared at that type — which `methodCanForwardABorrowedOpaque` answers — and the per-trip
+				// element of `for … in self`, which `walksAnOwnedOpaqueElement` below already seeds off
+				// `receiverCursorElementIsOpaque`. A conformer whose element IS opaque (`Bag with String`)
+				// therefore keeps its reservation through that seed; `Map`, whose element is the tuple `Entry`,
+				// does not — and must not.
+				//
+				// ⛔ **MEASURED, and it is why the gate is the EXTENSION and not the predicate alone:**
+				// `methodCanForwardABorrowedOpaque` on every body refuses `Container.copyInto`
+				// (`generic-type-nested-array-typealias/push-for-element-into-second-opaque-array`), whose
+				// `dst.push(e)` reads `e` out of `self.items` — a route neither a parameter at `Element` nor a
+				// field at `Element` describes. A TYPE body keeps the unnarrowed seed for exactly that reason.
+				//
+				// ⚠ **IT IS A CONTAINMENT OF THE CHAIN, NOT A FIX OF IT.** `Map.map` handed a REAL descriptor
+				// makes `MapIterator.current` CLONE each key into the `(Key, Value)` tuple it returns, and that
+				// tuple then enters a container whose element destructor is ONE STAMPED WORD called with the
+				// element alone — so there is nowhere to carry the descriptor its release needs. Both endings
+				// are measured: with the shallow tuple copy the array's element points at a freed record, and
+				// with the copy co-owning instead the record leaks (exit 101). The chain is sound only while it
+				// is inert on BOTH ends, which is what this keeps.
+				let storesBorrowedOpaqueElement = scan.storesContainerElement and instantiated and not self.functionDeclIsStatic(q) and (not site.bodyIsAnInterfaceExtension or self.signatures.methodCanForwardABorrowedOpaque(qualified, typeName: site.typeName))
 				// ⭐⭐ **A `for … in self` OWNS ITS ELEMENT FOR ONE TRIP, AND RELEASES IT THROUGH THE
 				// DESCRIPTOR (W159).** The element is `current()`'s result, which the impl hands over as a `+1`
 				// (`coOwnBorrowedOpaque`); when the cursor yields the enclosing type's own parameter that
@@ -14010,7 +14035,22 @@ export type Parser
 			end 'selfLiteral'
 			// ⭐ A `<TypeName>{` / `Self{` STRUCT literal is a record construction (W41-opaque) — the half of
 			// the signal that IS a token test. The tuple half is folded in below, off a paren stack.
-			if kind == TokenKind.leftBrace and tokenCanBeAName(self.tokenAt(q - 1)) 'structLiteral'
+			//
+			// ⛔⛔ **AN EMPTY `X{}` IS NOT ONE, AND ADMITTING IT REACHED A CHAIN THAT MUST STAY INERT (W183).**
+			// The signal asks whether this body may STORE a borrowed opaque `T` into a record; a literal with
+			// no arguments stores nothing a body could have borrowed (a field DEFAULT is filled by its own
+			// `__fieldDefault#…` helper, which reserves its own descriptor), so it can never be that store.
+			// `stdlib/Interfaces.maxon`'s `extension Iterable.map` opens with `var result = ElementArray{}` —
+			// an empty CONTAINER literal, which no token test can tell from a record — and MEASURED, seeded
+			// off it, `Map.map` reserved a descriptor and `emitInstanceDescriptorAddr` then FORWARDED a real
+			// one into the `MapIterator with (Key, Value)` chain whose own header records that it is
+			// deliberately inert on both ends: `MapIterator.current` CLONED each key into the `(Key, Value)`
+			// tuple it hands back and nothing released it — `interface-extensions/stdlib-map-on-map-with-function`
+			// at exit 101 where 6 is correct. It is the THIRD time this one chain has been broken by an
+			// over-reservation (`W159`'s cursor-element signal and `feedsATypeParameterConstructor`'s feed
+			// signal were the first two), and each cure was the same: ask the narrower question the signal
+			// actually means.
+			if kind == TokenKind.leftBrace and tokenCanBeAName(self.tokenAt(q - 1)) and self.kindAt(q + 1) != TokenKind.rightBrace 'structLiteral'
 				buildsRecord = true
 			end 'structLiteral'
 			// ⭐⭐ **A TUPLE LITERAL IS A `(` IN EXPRESSION POSITION HOLDING A DEPTH-1 COMMA, and a token test
@@ -16195,7 +16235,7 @@ export type Parser
 		// clause can never need one. `openTypeParamScope` has just filled the list, so the test is free.
 		if not self.enclosingTypeParams.isEmpty() 'aGenericType'
 			self.growDescriptorScanSites()
-			self.descriptorScanSites.push(DescriptorScanSite.create(self.filePath, bodyStart: bodyStart, typeName: nameTok.value))
+			self.descriptorScanSites.push(DescriptorScanSite.create(self.filePath, bodyStart: bodyStart, typeName: nameTok.value, bodyIsAnInterfaceExtension: false))
 		end 'aGenericType'
 
 		var depth = 0 as BlockDepth
@@ -16666,7 +16706,7 @@ export type Parser
 			// the verdict is what says whether these methods are this conformer's, and a site taken before it
 			// is a scan of a body that was never this type's.
 			if not extensionMethodsWithheld(verdict) and index.structDeclaresTypeParams(conformer) 'aGenericConformerThatKeepsThem'
-				descriptorScanSiteOut.push(DescriptorScanSite.create(self.filePath, bodyStart: bodyStart, typeName: conformer))
+				descriptorScanSiteOut.push(DescriptorScanSite.create(self.filePath, bodyStart: bodyStart, typeName: conformer, bodyIsAnInterfaceExtension: extensionTargetIsAnInterface(header.target)))
 			end 'aGenericConformerThatKeepsThem'
 
 			while not self.isEof() 'members'
@@ -24594,6 +24634,14 @@ export type Parser
 		// pointer's lifetime is the buffer's either way, and no tag expresses that.
 		// ⇒ The distinction is deliberately not modelled, and the day a builtin declares a `cstring` PARAMETER
 		// that must reject an ordinary int is the day this becomes a tag.
+		//
+		// ⚠ **THAT DAY HAS ARRIVED AND THE DECISION IS OPEN — the canonical corpus now carries the three cases
+		// that ask for it.** `stdlib/Subprocess.maxon`'s listing brought `__Builtins.subprocessResolveOnPath`
+		// (a `cstring` parameter) and `__Builtins.subprocessGetPid` (an `i64` one) within reach of user code,
+		// and `specs-shv2/builtin-type-checking.md`'s three `error-subprocess-*` cases pin exactly the pair of
+		// refusals this arm cannot give: MEASURED, `subprocessResolveOnPath(42)` and `subprocessGetPid(s.cstr())`
+		// both COMPILE CLEAN under shv2 and are refused by the bootstrap. They are disabled at that file with
+		// this arm named as the reason; the fourth, `subprocess-resolve-on-path-cstring`, passes.
 		if self.at(TokenKind.cstring) 'cstringPointer'
 			try self.consume(TokenKind.cstring)
 			return MaxonType.integer
@@ -26174,8 +26222,38 @@ export type Parser
 		end 'notAStruct'
 
 		let name = self.valueTypeName(value)
-		return isTupleTypeName(name) and not self.signatures.structHasManagedField(name)
+		// ⛔⛔ **A SLOT STANDING AT A BARE TYPE PARAMETER IS NOT A TRIVIAL ELEMENT, AND `structHasManagedField`
+		// CANNOT SEE IT (W183).** `typeIsManaged` answers `false` for a `typeParameter`, so a `(K, V)` tuple
+		// read as copyable — and the shallow copy below then took a SECOND pointer to a reference the source
+		// record owns. **MEASURED on the mm-trace: `Map.map` pushed the copy into its result array, the
+		// original's dictionary destructor released the key it had CLONED (`retainFunc@64` is `__str_clone`
+		// for a String argument), and the array's element was left pointing at a freed 58-byte record.** The
+		// rule this restores is the one this predicate's own header states — only a TRIVIAL-element tuple may
+		// be shallow-copied — over the one element kind the managed test is blind to.
+		return isTupleTypeName(name) and not self.signatures.structHasManagedField(name) and not self.recordRestsAnOpaqueSlot(name)
 	end 'valueIsCopyableTuple'
+
+	// ⭐ **THE ONE LOOKUP THE TWO OPAQUE-SLOT QUESTIONS SHARE.** `recordOpaqueSlotDeclaration` panics for a
+	// name that denotes no record, so the guard belongs with it rather than at each asker — written twice it
+	// was two copies of one precondition, free to be dropped from one of them.
+	function recordOpaqueSlotOwnerOf(name ByteArray) returns OpaqueSlotDeclaration
+		if not self.signatures.containsStruct(name) 'namesNoRecord'
+			return OpaqueSlotDeclaration.none
+		end 'namesNoRecord'
+
+		return self.signatures.recordOpaqueSlotDeclaration(name)
+	end 'recordOpaqueSlotOwnerOf'
+
+	// Does `name` denote a record with a slot standing at a bare type parameter — ANY declaration's? The
+	// type-level half of `recordRestsThisBodysOpaqueSlot`, for the callers that care only THAT such a slot
+	// exists and not whose `uses` list it indexes into. The two differ in exactly the line below and nothing
+	// else, which is why they read one lookup.
+	function recordRestsAnOpaqueSlot(name ByteArray) returns bool
+		match self.recordOpaqueSlotOwnerOf(name) 'restsASlot'
+			none then return false
+			declaredBy then return true
+		end 'restsASlot'
+	end 'recordRestsAnOpaqueSlot'
 
 	// A fresh record holding the same elements as `value` — the copy `valueIsCopyableTuple` licenses. It is
 	// `emitStructLiteral`'s box, filled from a load per element instead of from parsed values, so the
@@ -29123,8 +29201,9 @@ export type Parser
 		end 'primitiveStaticTarget'
 		// `try [10,20,30].get(0) otherwise …` — a throwing method on an array LITERAL (P1.7 slice 1), and its
 		// exact byte-string analogue `try b"…".get(0)` (P1.7 slice 2). Each parses to an owned array temp that
-		// the postfix chain applies its method to; the temp is a FORK temporary, dropped once per edge by
-		// `desugarTry`. Both literal kinds are enrolled together — accepting one and not the other would
+		// the postfix chain applies its method to; the temp is a FORK temporary, which `desugarTry` suspends
+		// across the handler so every ABANDONING path releases it and the merging ones keep it.
+		// Both literal kinds are enrolled together — accepting one and not the other would
 		// reject a legal `try b"…".get(…)` as "not a call".
 		if self.at(TokenKind.leftBracket) 'arrayLiteralTarget'
 			return try self.parseArrayLiteral(func, element: ArrayLiteralElementSource.inferred)
@@ -29144,7 +29223,7 @@ export type Parser
 		// ⚠ It calls `parseStringLiteral`, not `consumeStringLiteralValue`, so an INTERPOLATED receiver
 		// (`try "a{x}".findFirst("b")`) is enrolled too. That result is an OWNED heap String rather than an
 		// immortal rdata one, which needs no special handling here for the array literal's reason: the postfix
-		// chain applies its method to the temp and `desugarTry` drops it once per edge.
+		// chain applies its method to the temp and `desugarTry` suspends it across the handler.
 		if self.at(TokenKind.stringLiteral) 'stringLiteralTarget'
 			return try self.parseStringLiteral(func)
 		end 'stringLiteralTarget'
@@ -29526,17 +29605,6 @@ export type Parser
 
 		var okBlock = self.newBlock(func, label: b"tryok", line: tryTok.line)
 		let errBlock = self.newBlock(func, label: b"tryerr", line: tryTok.line)
-		self.emitCondBranch(entryBlock, cond: isErr, thenId: errBlock.id, elseId: okBlock.id, ifTok: tryTok)
-
-		// Values entering both branches: the ok path leaves the carried vars unchanged, so `entryVals`
-		// is what it carries; the error handler may reassign them (`otherwise 'err' result = 42`).
-		let entryVals = self.snapshotBindings(self.mutableVars)
-		// ⭐ **AND THE SAME SNAPSHOT FOR THE DROP-GATING BIT.** The ok edge leaves this fork having moved
-		// nothing (the handler is the only thing parsed between here and the merge), so `entryMoveMark` IS
-		// the ok edge's move state — which makes it both the state to rewind to when the handler terminates
-		// and the ok edge's half of the reconciliation when it does not. `parseIfStatement` captures its
-		// `entryMoveMark` at the identical point for the identical pair of uses.
-		let entryMoveMark = self.captureMoveMark()
 
 		// ⭐ **A MANAGED tryCall RESULT IS OWNED ONLY ON THE OK EDGE — pull it out of the ENTRY-block drop
 		// set before the handler parses.** `enrolOwnedCallTemp` tracked the result as an owned pending
@@ -29547,57 +29615,97 @@ export type Parser
 		// re-scopes the still-owned value (the owned-heap bit is untouched, so `valueIsOwnedHeap` still
 		// answers true) to the ok block, the phi, or an ok-block drop. A scalar result owns no heap, is in
 		// no drop set, and this is a no-op for it — the Wave-1 behaviour, unchanged.
+		//
+		// ⚠ **IT RUNS BEFORE `takeForkTemps`, AND THAT ORDER IS WHAT KEEPS THE SEGFAULT ABOVE FIXED.** The
+		// suspension below enrols everything the fork still owes as an OWNED BINDING, and an owned binding is
+		// released by every abandoning exit — so a `result` left on the list would be decref'd on the error
+		// edge, where its register is exactly the NULL this paragraph is about.
 		if self.valueIsOwnedHeap(result) 'managedResultOffEntry'
 			self.removeFromPendingTemps(result)
 		end 'managedResultOffEntry'
 
-		// ⭐ **THE FORK'S TEMPORARIES ARE LIVE ON BOTH EDGES, SO EACH EDGE DROPS THEM ONCE — IN ITS OWN BLOCK.**
-		// Whatever the enclosing statement still owed when the `try` forked (the receiver `make()` built for a
-		// `try make().slice(…)`, the `[10,20,30]` an array-literal target parsed, an interpolation passed as an
-		// argument) was created BEFORE the branch, so it is live on `tryok` AND on `tryerr` — and the single
-		// downstream drain that used to release it reaches only ONE of them. Every way that went wrong was a
-		// leak the gate reports as exit 101, and there was one per handler form:
-		//   • `otherwise return`/`throw` — the handler's `emitHandoffExitDrops` drained the SHARED list into the
-		//     error block and CLEARED it, so the ok path, which still owed them, dropped nothing;
-		//   • a handler BLOCK — the first statement inside it drained the shared list for the same reason,
-		//     with the same result;
-		//   • `propagate` (a bare `try f()`) and `otherwise break`/`continue` — these never drained at all, so
-		//     the ERROR edge leaked them instead.
-		// Dropping per edge, at the fork, settles all four with one rule and no per-form knowledge: the error
-		// edge's drops go in at the top of `errBlock`, the ok edge's at the top of `okBlock`, and the handler
-		// parses against a FRESH list so its own temporaries stay its own and it can no longer steal these.
-		// It cannot be done in the CONTINUATION instead — `otherwise <value>` and a fell-through block merge
-		// both edges there, so one drop in the merge is one drop too few on the other path.
+		// ⛔⛔ **THE FORK'S TEMPORARIES ARE STILL LIVE ON THE OK EDGE, AND DROPPING THEM THERE WAS A
+		// USE-AFTER-FREE.** They belong to the ENCLOSING EXPRESSION, which is only half-built when the `try`
+		// forks — so on any path that reaches the rest of that expression they are values it has yet to
+		// CONSUME, not garbage it has finished with. MEASURED, on a program with no stdlib in it at all
+		// (`specs-shv2/try-fork-pending-temporaries.md`): `Conf{a: StrArray.create(), n: try mayFail(1)
+		// otherwise panic("x")}` released the array at the head of `tryok` and then STORED it into the
+		// struct three ops later, and the reference bootstrap answers `1` where this segfaulted.
 		//
-		// Dropping the receiver at the top of `okBlock` (rather than at statement end) is safe for a VIEW
-		// result: `__managed_slice` increfs the shared base allocation, so releasing the source RECORD leaves the
-		// bytes the view reads alive — the same guarantee that already made the statement-end drop safe.
+		// ⇒ THE RULE: **a path that goes on to finish the enclosing expression keeps them; a path that
+		// ABANDONS it releases them on its way out.** The ok edge always finishes it, and so does an error
+		// edge whose handler yields a value or falls through — both merge into the continuation, where the
+		// ordinary statement-end drain releases them once for the merged path.
 		//
-		// Guarded on a non-empty list: almost no `try` has a pending temporary, and the guard keeps the common
-		// one from paying for a fresh array.
+		// ⛔⛔ **AND "ABANDONS" IS A PROPERTY OF A PATH, NOT OF THE HANDLER — THIS ROUTINE CLASSIFIED THE
+		// HANDLER, AND LEAKED.** A `fellThrough` block reaches the merge at its `end` and can STILL leave by
+		// `return`/`throw`/`break`/`continue` on an INNER path, so one answer per handler is a lie about the
+		// other half of it. MEASURED (found by review): a handler falling through at its `end` with an inner
+		// `return` was **exit 101** where the bootstrap answers 7.
 		//
-		// ⚠ **THE LIST IS REPLACED LAST, AFTER BOTH WALKS, AND THAT ORDER IS LOAD-BEARING.** Written the other
-		// way round — replace first, then walk a handle taken before the replace — this crashed the parser:
-		// `emitTempDrops` read a POINTER-shaped word where a `ValueId` belonged and `tagOf` panicked, because
-		// the store had released the array the handle still named. Measured both ways: a handle is harmless
-		// while the field still holds the list and fatal once it does not, so the walks stay ahead of the store
-		// and no handle is taken at all, which is what makes the rule unbreakable rather than remembered.
-		if self.pendingTempDrops.count() > 0 'forkTemps'
-			self.emitTempDropsInto(okBlock, temps: self.pendingTempDrops, anchor: tryTok)
-			self.emitTempDropsInto(errBlock, temps: self.pendingTempDrops, anchor: tryTok)
-			self.pendingTempDrops = ValueIdArray.create()
-		end 'forkTemps'
+		// ⭐⭐ **SO THE RELEASE IS NOT PLACED BY THIS ROUTINE AT ALL — IT IS DELEGATED TO THE MACHINERY THAT
+		// ALREADY KNOWS WHAT A PATH LEAVING EARLY OWES.** For the duration of the handler the temporaries are
+		// enrolled as ANONYMOUS OWNED BINDINGS — the enrolment `parseOtherwiseHandler` already makes one level
+		// in for the caught error box, for the reason it states there: *"so a terminating form's own
+		// `emitScopeDrops` releases it"*. Every exit is then covered with no new knowledge anywhere:
+		//   • `return` / `throw` — `emitHandoffExitDrops`, which drops the whole in-scope list and RESTORES
+		//     it, so two SIBLING exits each release them on their own path and neither steals the other's;
+		//   • a bare propagating `try` — `parseOtherwiseHandler`'s `propagate` arm already emits the same
+		//     whole-function scope drops before its terminator;
+		//   • `break` / `continue` — `dropTargetBodyOwned(ctx.ownedFloor)`, and **the destination decides the
+		//     answer for free**: a target OUTSIDE the `try` recorded its floor before this enrolment, so these
+		//     are released; a loop opened INSIDE the handler recorded its floor above them, so they are not.
+		//     That question needed no answer of its own, which is the whole argument for this mechanism;
+		//   • `panic` — releases no owned binding of any kind and aborts the process, exactly as it already
+		//     does not release the caught box;
+		//   • the handler falling through its `end` — `closeBlock` pops only above the block's own mark, which
+		//     is above this enrolment, so nothing is released and the merged path still owns them.
+		//
+		// ⇒ **THE TWO `try` FORMS ANSWER THIS FROM ONE RULE.** `tryBlockThrowEdgeTarget` gives each throwing
+		// site of the BLOCK form its own release and leaves the list intact for the paths that did not throw;
+		// this is that rule — release per ABANDONING PATH, never per construct — reached through the
+		// scope-drop registry rather than the pending-temp one, because a suspended operand outlives the
+		// statement boundaries the pending-temp list is drained at and the scope registry is the one whose
+		// floors already survive a nested block.
+		//
+		// The temporaries do come OFF `pendingTempDrops` while the handler parses, and that half is what the
+		// enrolment replaces rather than repeats: a handler's own statement-end drains read the whole list
+		// with a whole-statement floor, so left in place they would sweep the enclosing expression's operands
+		// and FORGET them, leaking on the ok path. `resumeForkTemps` hands them back once both edges are wired.
+		let forkTemps = self.takeForkTemps()
+		let suspendedMark = self.suspendForkTempsAsOwned(forkTemps)
+
+		self.emitCondBranch(entryBlock, cond: isErr, thenId: errBlock.id, elseId: okBlock.id, ifTok: tryTok)
+
+		// Values entering both branches: the ok path leaves the carried vars unchanged, so `entryVals`
+		// is what it carries; the error handler may reassign them (`otherwise 'err' result = 42`).
+		//
+		// ⚠ Both snapshots are taken AFTER the suspension above, and that order is load-bearing:
+		// `restoreMoveMark` PANICS unless the owned-binding height it rewinds to is the one it captured, so
+		// an enrolment made between the two would abort the compiler rather than misbehave quietly.
+		let entryVals = self.snapshotBindings(self.mutableVars)
+		// ⭐ **AND THE SAME SNAPSHOT FOR THE DROP-GATING BIT.** The ok edge leaves this fork having moved
+		// nothing (the handler is the only thing parsed between here and the merge), so `entryMoveMark` IS
+		// the ok edge's move state — which makes it both the state to rewind to when the handler terminates
+		// and the ok edge's half of the reconciliation when it does not. `parseIfStatement` captures its
+		// `entryMoveMark` at the identical point for the identical pair of uses.
+		let entryMoveMark = self.captureMoveMark()
 
 		self.currentBlock = errBlock
 		let handler = try self.parseOtherwiseHandler(func, result: result, flag: flag, target: target, resultUsed: resultUsed, tryTok: tryTok)
 		var errEnd = self.currentBlock
 		let errMoveMark = self.captureMoveMark()
 
-		return match handler 'h'
+		let merged = match handler 'h'
 			terminated gives self.finishTerminatedTry(okBlock, entryVals: entryVals, entryMoveMark: entryMoveMark, result: result)
 			value(otherwiseValue, blame) gives try self.finishValueTry(func, okBlock: okBlock, errEnd: errEnd, result: result, otherwiseValue: otherwiseValue, otherwiseBlame: blame, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
 			fellThrough gives try self.finishFellThroughTry(func, okBlock: okBlock, errEnd: errEnd, entryVals: entryVals, result: result, resultUsed: resultUsed, entryMoveMark: entryMoveMark, errMoveMark: errMoveMark, tryTok: tryTok)
 		end 'h'
+
+		// LAST, and after the finish: `finishValueTry` drains the FALLBACK's own temporaries on the error edge
+		// with a whole-statement floor, and would sweep these with them if they were back on the list.
+		self.resumeForkTemps(forkTemps, suspendedMark: suspendedMark)
+		return merged
 	end 'desugarTry'
 
 	// ⭐⭐ **RECONCILE A `try`'s TWO LIVE EDGES' MOVE STATE — the ok edge, which moved nothing since the fork,
@@ -30940,11 +31048,16 @@ export type Parser
 	// would both leak. They cannot be released in the shared error block — it is reached from every routed
 	// call, each owing a DIFFERENT set — so each site that owes anything gets its own one-way pad. This is
 	// the bootstrap's `PendingLandingPads` (`2-Parser.cs:167`, "body-local-temps-live-at-throw") reached from
-	// the same reasoning, and it is `desugarTry`'s per-edge fork drops with N edges instead of two.
+	// the same reasoning, and it is the SAME RULE the expression-level `try` reaches by another route: release
+	// what the half-finished statement owes on each path that ABANDONS it, never once per construct. That fork
+	// suspends its temporaries as owned bindings instead (`Parser.suspendForkTempsAsOwned`), because its
+	// abandoning paths are the handler's own exits and those already carry scope drops; here the abandoning
+	// paths are routed CALL SITES, which do not, so each gets a pad.
 	//
 	// ⚠ **THE PENDING TEMP LIST IS READ, NOT CLEARED.** The OK path continues and still owes those same
-	// temporaries at the end of its statement, so clearing here — which is what `desugarTry` may do, because
-	// BOTH of its edges drop at the fork — would leak them on the path that did not throw.
+	// temporaries at the end of its statement, so clearing here would leak them on the path that did not
+	// throw. `desugarTry` keeps the same property by a different mechanism — it hands its list back
+	// (`resumeForkTemps`) once both edges are wired.
 	//
 	// A site owing nothing branches straight to the error block: no pad, no block, no drops.
 	//
@@ -31611,7 +31724,7 @@ export type Parser
 		// field and the trivial `__mm_decref` otherwise, reading only allocation-free `Map.contains` /
 		// per-field checks (no throwaway box), so it needs no hot-path guard of its own.
 		if tagIsStructRef(tag) 'struct'
-			return managedFieldDropCallee(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.typeOf(value))
+			return self.structBoxDropCallee(value)
 		end 'struct'
 		// ⭐ A GENERIC-INSTANCE box (`Box with String`, P1.6-B2) drops through its own `__destruct_<mangled>`
 		// cascade when the instance owns managed heap, else the trivial `__mm_decref`. The gid is on the value's
@@ -31647,12 +31760,46 @@ export type Parser
 		// (byte-identical), so only the managed case changes. The `containsStruct` gate keeps a `named` that
 		// names no declared struct (a ranged typealias) on the trivial path, where `managedFieldDropCallee`
 		// would otherwise panic (it classifies only struct/union/generic-alias fields).
-		let name = self.valueTypeName(value)
-		if self.signatures.containsStruct(name) 'struct'
-			return managedFieldDropCallee(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.typeOf(value))
+		if self.signatures.containsStruct(self.valueTypeName(value)) 'struct'
+			return self.structBoxDropCallee(value)
 		end 'struct'
 		return MmDecrefName
 	end 'decrefCalleeFor'
+
+	// ⭐⭐⭐ **WHICH CASCADE FREES A RECORD BOX — the ordinary one, or the DICTIONARY one (W183).** The
+	// declared-record twin of `instanceBoxDropCallee`, and it carries that function's whole argument at the one
+	// record shape the instance family cannot see: a TUPLE whose elements stand at the enclosing generic's own
+	// parameters. `typeIsManaged` answers `false` for a bare parameter, so `managedFieldDropCallee` hands back
+	// the trivial `__mm_decref` — which frees the box and STRANDS the reference `Parser.moveOpaqueValueInto`
+	// took into the slot through `retainFunc@64`.
+	//
+	// ⛔ **IT IS GATED ON THE BODY HAVING A DESCRIPTOR, exactly as `instanceBoxDropCallee` is**: a frame with
+	// no descriptor has nothing to release THROUGH, and it is also a frame no real protocol ever reached — a
+	// caller that carries none hands such a chain the parameterised blob whose ownership words are all zero,
+	// so nothing was retained there either (`LowerMaxonToStd.emitInstanceDescriptorAddr`'s mint arm).
+	//
+	// ⛔⛔ **AND ON THE RECORD'S SLOTS BEING *THIS* BODY'S OWN PARAMETERS**, which is `recordOpaqueSlotDeclaration`
+	// carrying a declaration rather than a `bool`: the descriptor a method holds lays out its ENCLOSING type's
+	// `uses` list, and releasing another declaration's parameter positions into it is the position mismatch
+	// `BATCH41`'s review measured at exit 139 inside that rung's own cure.
+	function structBoxDropCallee(value ValueId) returns ByteArray
+		let name = self.valueTypeName(value)
+		if self.functionCarriesLayoutParam and self.recordRestsThisBodysOpaqueSlot(name) 'aRecordOverThisBodysParameters'
+			return dictionaryDestructorSymbol(name)
+		end 'aRecordOverThisBodysParameters'
+
+		return managedFieldDropCallee(self.signatures, typeNames: self.artifact.typeNames, fieldType: self.typeOf(value))
+	end 'structBoxDropCallee'
+
+	// Does `name` denote a record resting a slot at a parameter of the type THIS body is a method of? The two
+	// halves of the gate above that are questions about the record rather than about the frame, asked together
+	// because either alone admits a record this body cannot release correctly.
+	function recordRestsThisBodysOpaqueSlot(name ByteArray) returns bool
+		match self.recordOpaqueSlotOwnerOf(name) 'restsASlot'
+			none then return false
+			declaredBy(owner) then return owner.equals(self.enclosingType)
+		end 'restsASlot'
+	end 'recordRestsThisBodysOpaqueSlot'
 
 	// ⭐⭐⭐ **WHICH CASCADE FREES AN INSTANCE BOX — the MONOMORPHIZED one, or the DICTIONARY one (BATCH41).**
 	// A concrete `Box with String` has a `__destruct_Box_String` that resolves every field's release
@@ -33030,16 +33177,21 @@ export type Parser
 	// is a leak (a release on too few paths) or a release of a value the taken path never built (which the
 	// register allocator reports, several passes later, as "a use dominates its def"):
 	//   • `parseIfStatement` / `parseWhileStatement` — the condition, in its exit block before the branch,
-	//     EXCEPT a CATCHING `if`, which is a `try` fork and takes `desugarTry`'s per-edge rule instead
-	//     (`takeCatchingForkTemps`);
+	//     EXCEPT a CATCHING `if`, whose condition is a fork and releases them at the head of EACH EDGE
+	//     (`takeCatchingForkTemps`). ⚠ That is NOT `desugarTry`'s rule and this bullet said it was: an `if`'s
+	//     condition is FINISHED when it branches, so its temporaries are dead on both edges, while an
+	//     expression-level `try` forks mid-expression and its operands are not;
 	//   • `parseMatchCommon` — the scrutinee before the first test, and each ARM at its own exit
 	//     (`finishArmExit`, which releases the arm's SCOPE-lifetime records in the same block and by the same
 	//     rule);
 	//   • `parseTernaryExpression` — the condition, and each of the two arms (`finishArmExit` again);
 	//   • `emitShortCircuit` — the right-hand side, which runs on one path only;
 	//   • `desugarTry` — the odd one out, and deliberately: its fork temporaries belong to the ENCLOSING
-	//     statement and are still live past the fork, so they are released once per EDGE rather than swept
-	//     here (see there).
+	//     EXPRESSION, which is only half-built at the fork, so they are LIVE past it on every PATH that goes
+	//     on to finish that expression. For the handler's parse they leave this list entirely
+	//     (`takeForkTemps`) and are enrolled as anonymous OWNED BINDINGS
+	//     (`suspendForkTempsAsOwned`), so that each abandoning path releases them through its own scope drop;
+	//     `resumeForkTemps` hands them back for the paths that merge. Never swept here.
 	// There is no automatic check behind this list, and that is a known gap rather than an oversight: the
 	// flat list is always drained by *something* downstream, so an end-of-parse "nothing left over" assertion
 	// cannot see a release that landed in the wrong BLOCK — the defect this discipline exists to prevent. A
@@ -33053,12 +33205,88 @@ export type Parser
 		end 'forget'
 	end 'drainPendingTemps'
 
+	// ⭐⭐ **SUSPEND THE ENCLOSING EXPRESSION'S PENDING TEMPORARIES FOR THE DURATION OF A `try` HANDLER — the
+	// pair `desugarTry` brackets its handler parse with, and the whole of what makes an abandoning path
+	// release them without this file knowing which paths abandon.**
+	//
+	// `takeForkTemps` moves them OFF `pendingTempDrops`, because a handler's own drains
+	// (`emitHandoffExitDrops` behind an `otherwise return`, a handler block's statement tails) read the WHOLE
+	// list with a whole-statement floor: left in place they would release values the ok edge still owns AND
+	// FORGET them, leaking on that path. It COPIES rather than moving the field's array — a handle taken out
+	// of a field that is then reassigned is the exact shape that once crashed this parser (`emitTempDrops`
+	// reading a pointer-shaped word where a `ValueId` belonged) — and the list is empty for almost every
+	// `try`, so the copy is a `create()` and nothing else.
+	function takeForkTemps() returns ValueIdArray
+		var taken = ValueIdArray.create()
+		for temp in self.pendingTempDrops 'eachPending'
+			taken.push(temp)
+		end 'eachPending'
+
+		self.pendingTempDrops = ValueIdArray.create()
+		return taken
+	end 'takeForkTemps'
+
+	// ⭐⭐ **AND ENROL THEM AS ANONYMOUS OWNED BINDINGS, WHICH IS WHERE THE RELEASE ACTUALLY COMES FROM.**
+	// `parseOtherwiseHandler` makes the identical enrolment one level in for the caught error box, and states
+	// the reason this one exists too: *"so a terminating form's own `emitScopeDrops` releases it"*. Every
+	// path that leaves the enclosing expression already funnels through a scope drop with a FLOOR — a
+	// hand-off exit through the whole-function one, a `break`/`continue` through its target's — so putting
+	// the temporaries in that registry answers, for free and by construction, both "which paths owe a
+	// release" and "does THIS `break` leave the `try` at all". See `desugarTry`'s fork for the enumeration.
+	//
+	// They are enrolled ANONYMOUSLY (`EmptySourceText`): an operand of a half-built expression has no name
+	// and must acquire none — every name-keyed reader (`requireBindingLive`, the move poisoner, the
+	// reassignment scan) reaches a binding through `Scope`, which this never enters.
+	//
+	// ⚠ `movedFrom` is false and stays false — nothing inside a handler can name these to move out of one —
+	// so `emitScopeDrops` never skips them and `captureMoveMark`'s positional snapshot is unaffected beyond
+	// its height, which `desugarTry` takes AFTER this call for exactly that reason.
+	//
+	// Returns the height to rewind to, so the un-enrolment cannot drift from the enrolment's count.
+	function suspendForkTempsAsOwned(forkTemps ValueIdArray) returns BindingMark
+		let mark = self.ownedBindings.count()
+		for temp in forkTemps 'eachSuspended'
+			self.ownedBindings.push(VarInfo.createValueBinding(EmptySourceText, varType: self.typeOf(temp), mutable: false, boundValue: temp))
+		end 'eachSuspended'
+		return mark
+	end 'suspendForkTempsAsOwned'
+
+	// ⭐ **RESUME: un-enrol, and hand the temporaries back to the statement that owns them.** The paths that
+	// reach here are the ones that go on to finish the enclosing expression — the ok edge, and a merged error
+	// edge — so from here the ordinary statement-end drain is the correct releaser again.
+	//
+	// They go back UNDER everything enrolled since (the value merge's phi, a re-enrolled managed try-result),
+	// because the drop order is creation order reversed and these were built first.
+	//
+	// ⚠ The owned-binding pop is a TRUNCATION to the recorded mark rather than a `removeFromOwnedBindings`
+	// per temp: mid-stack removal desyncs every block and loop drop mark taken since, which is the reason
+	// `reassignBindingValue` gives for leaving a moved-from ghost in the list rather than deleting it.
+	function resumeForkTemps(forkTemps ValueIdArray, suspendedMark BindingMark)
+		while self.ownedBindings.count() > suspendedMark 'unenrol'
+			_ = try self.ownedBindings.pop() otherwise panic("resumeForkTemps: ownedBindings.pop above the suspension mark {suspendedMark} failed on a list of {self.ownedBindings.count()} — the loop pops strictly while the count exceeds the mark")
+		end 'unenrol'
+
+		if forkTemps.count() == 0 'nothingToHandBack'
+			return
+		end 'nothingToHandBack'
+
+		var merged = ValueIdArray.create()
+		for temp in forkTemps 'builtBeforeTheFork'
+			merged.push(temp)
+		end 'builtBeforeTheFork'
+		for temp in self.pendingTempDrops 'enrolledSinceTheFork'
+			merged.push(temp)
+		end 'enrolledSinceTheFork'
+
+		self.pendingTempDrops = merged
+	end 'resumeForkTemps'
+
 	// Emit the `__mm_decref` for each of `temps` above `floor`, in REVERSE creation order, into
-	// `currentBlock`, WITHOUT touching the list. The drop LOOP, split out so the `try` fork — which releases
-	// the SAME temporaries into TWO blocks, one per edge, and forgets them once (`desugarTry`) — reuses it
-	// instead of spelling the reverse walk a second time. A second copy is how the two would come to disagree
-	// on the order, and the order is a rule (`emitScopeDrops`' convention: the last built is the first torn
-	// down).
+	// `currentBlock`, WITHOUT touching the list. The drop LOOP, split out so a fork that releases the SAME
+	// temporaries into more than one block — the catching `if`, through `emitTempDropsInto`, and the block
+	// form's landing pads — reuses it instead of spelling the reverse walk a second time. A second copy is how
+	// they would come to disagree on the order, and the order is a rule (`emitScopeDrops`' convention: the
+	// last built is the first torn down).
 	function emitTempDrops(temps ValueIdArray, floor TempDropMark, anchor Token)
 		var i = temps.count()
 		while i > floor 'eachTemp'
@@ -33068,12 +33296,18 @@ export type Parser
 		end 'eachTemp'
 	end 'emitTempDrops'
 
-	// ⭐⭐ **RELEASE A FORK'S TEMPORARIES AT THE HEAD OF ONE EDGE — in that edge's OWN block, whatever block
-	// the parse is standing in.** The half the parser's TWO `try` forks share: the temporaries were built
-	// BEFORE the split and are live on both edges, so each edge releases them exactly once, in a block their
-	// definitions dominate. `desugarTry` calls it for `tryok` and `tryerr`; the catching `if` calls it for its
-	// then and else blocks, which are the identical pair of edges wearing the `if`'s spelling. `currentBlock`
-	// is saved and restored because neither caller is done with the block it was standing in.
+	// ⭐⭐ **RELEASE A CATCHING `if`'s CONDITION TEMPORARIES AT THE HEAD OF ONE EDGE — in that edge's OWN
+	// block, whatever block the parse is standing in.** The condition is fully evaluated before the split, so
+	// nothing downstream can still consume what it built: the temporaries are dead on BOTH edges and each
+	// releases them exactly once, in a block their definitions dominate. `currentBlock` is saved and restored
+	// because the caller is not done with the block it was standing in.
+	//
+	// ⛔ **`desugarTry` USED TO SHARE THIS AND MUST NOT.** An expression-level `try` forks in the MIDDLE of an
+	// expression, so its pending temporaries are operands the ok edge has yet to consume rather than garbage —
+	// releasing them at the head of `tryok` freed a value stored into a struct three ops later. That fork
+	// suspends them as owned bindings instead (`suspendForkTempsAsOwned`), so each ABANDONING PATH releases
+	// them through its own scope drop; the difference between the two forks is exactly whether an unfinished
+	// expression survives the split.
 	function emitTempDropsInto(block IrBlock, temps ValueIdArray, anchor Token)
 		if temps.count() == 0 'nothingToRelease'
 			return
@@ -33090,11 +33324,16 @@ export type Parser
 	// the condition and dominates then, else and continuation alike, so one release there is one release on
 	// every path.
 	//
-	// ⛔ **A CATCHING CONDITION IS THE SAME FORK `desugarTry` BUILDS, AND IT OWES THE SAME PLACEMENT.** That
-	// fork releases its condition's temporaries at the HEAD OF EACH EDGE and then parses the handler against a
-	// FRESH list, because the two edges merge in the continuation and one release there is one release too few
-	// on the other path. A catching `if` forks the identical way — its handler is the else branch — so the two
-	// try forks say it once, through `emitTempDropsInto`.
+	// ⛔ **THE PLACEMENT IS PER EDGE, because the two edges merge in the continuation and one release there is
+	// one release too few on the other path.** The then and else blocks are the fork's two edges, and each
+	// gets the drops at its head, through `emitTempDropsInto`.
+	//
+	// ⚠ **`desugarTry` LOOKED LIKE THE SAME FORK AND IS NOT, AND THIS PARAGRAPH USED TO SAY THEY SHARED THE
+	// RULE.** An `if`'s CONDITION is a finished expression when it branches, so nothing downstream can consume
+	// what it built and the temporaries are dead on both edges. An expression-level `try` forks in the MIDDLE
+	// of an expression, so its pending temporaries are operands still to be consumed — releasing them at the
+	// head of `tryok` freed a value stored into a struct three ops later. That fork therefore releases only on
+	// a PATH that abandons the expression (`suspendForkTempsAsOwned`), and this one is unchanged.
 	//
 	// ⚠ **AND THE HEAD OF AN EDGE IS WHERE A COMPILER EMITS THINGS THAT READ A TEMPORARY.** MEASURED when the
 	// caller still took a substituted `T` result's `+1` itself: that retain landed at the head of the ok edge
@@ -33121,9 +33360,12 @@ export type Parser
 		return carried
 	end 'takeCatchingForkTemps'
 
-	// ⭐ **OPEN A CATCHING `if`'s OK EDGE — the fork's condition temporaries are released at its head, exactly
-	// as `desugarTry` releases them at the head of `tryok`.** A plain `if` carries none (`takeCatchingForkTemps`
-	// drained them into the entry block, where a single path makes that right) and this is inert for it.
+	// ⭐ **OPEN A CATCHING `if`'s OK EDGE — the fork's condition temporaries are released at its head.** They
+	// can be, because the condition is a FINISHED expression when it branches: nothing downstream consumes
+	// them. ⛔ `desugarTry` may NOT do this and this header used to say it did — an expression-level `try`
+	// forks mid-expression, and releasing its operands at the head of `tryok` was a use-after-free. A plain
+	// `if` carries none (`takeCatchingForkTemps` drained them into the entry block, where a single path makes
+	// that right) and this is inert for it.
 	function openCatchingOkEdge(cond IfCondition, okBlock IrBlock, temps ValueIdArray, anchor Token)
 		if not ifConditionCatches(cond) 'plainCondition'
 			return
@@ -58008,7 +58250,7 @@ export type Parser
 			// ⭐⭐ **A CONTAINER THE STATEMENT ALONE OWNS IS HELD TO THE SCOPE'S EXIT, BECAUSE THE ELEMENT JUST
 			// HANDED OUT POINTS INTO IT (A3h).** ⚖ USER RULING, 2026-08-01: extend the TEMPORARY's lifetime.
 			// `let n = try make().get(0) otherwise …` used to free `make()`'s array at the statement's end
-			// (`drainPendingTemps`, or `desugarTry`'s per-edge fork drop) while `n` still named an element
+			// (`drainPendingTemps`, or the release `desugarTry` places on an abandoning path) while `n` still named an element
 			// inside it — measured **`4557430888798830399`** = `0x3F3F3F3F3F3F3F3F`, `__mm_free`'s poison byte
 			// read back as a `count()`. **A WRONG ANSWER in every channel this project has**: not a crash, not
 			// a refusal, and no leak (the free is legitimate), so the suite was green over it for as long as it

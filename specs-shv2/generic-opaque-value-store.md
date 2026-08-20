@@ -1353,3 +1353,205 @@ end 'main'
 ```maxoncstderr
 error E2015: <fragment>:19:10: Unsupported: storing into a field a value of type 'Mid.In' — a generic instance written over this type's OWN parameter, resting a field declared AT that parameter, where THIS type is itself spelled over another generic's parameter — has no destructor this body can name: the enclosing record is freed by a SHARED body, so releasing the stored field means releasing a slot whose destructor is a fact about an instantiation two levels out, and the entry that knows it (`__destruct_dict_<instance>(descriptor, box)`) is handed the descriptor of the nearer one. Hold the record in a type that is instantiated concretely rather than over another generic's parameter. A descriptor carrying a NESTED declaration view's per-instantiation destructor is a later slice
 ```
+
+### The record's RELEASE, in a body that is itself shared — a tuple of parameters
+
+Every case above hands its record to a CONCRETE frame, and there the release is a symbol: the caller's
+`(String, Integer)` has a `__destruct___Tuple2.String.Integer` that decrefs the first slot whoever filled
+it. A frame that is ITSELF shared has no such symbol — the tuple it holds is typed `(K, V)`, both slots
+stand at bare parameters, and `typeIsManaged` answers `false` for a parameter, so the drop router hands
+back the trivial `__mm_decref`. That frees the box and STRANDS the reference `retainFunc@64` took when the
+record was built.
+
+The release is therefore the same dictionary cascade a declaration view takes —
+`__destruct_dict_<tuple>(descriptor, box)` — reading `destroyFunc@40` out of the block of each slot's own
+parameter, and running only at refcount zero, because a shared frame is not always the record's last owner.
+
+⚠ **THE TWO ENDS MUST READ ONE DESCRIPTOR AND THE MINT READS NONE.** `__mm_alloc(size, 0)` says the box
+owns nothing while the stores that follow it take two references; the disagreement is invisible until a
+shared frame is the party that frees the box.
+
+<!-- test: a-tuple-of-parameters-dropped-in-a-shared-body-releases-what-it-took -->
+```maxon
+typealias Small = int(0 to 1000)
+
+type Holder uses K, V
+	typealias Pair = (K, V)
+	let k as K
+	let v as V
+
+	export static function create(k K, v V) returns Self
+		return Self{k: k, v: v}
+	end 'create'
+
+	export function pair() returns Pair
+		return (k, v)
+	end 'pair'
+
+	// The drop under test: this body is shared, so the tuple it takes back is typed
+	// at the parameters and the reference its first slot holds is a descriptor read.
+	export function second() returns V
+		let p = pair()
+		return p.1
+	end 'second'
+end 'Holder'
+
+typealias StrHolder = Holder with String, Small
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let h = StrHolder.create(heapString("a heap key ", b: "long enough to allocate"), v: 7)
+	print("second {h.second()}\n")
+	return 4 as ExitCode
+end 'main'
+```
+```stdout
+second 7
+```
+```exitcode
+4
+```
+
+### …and the same shape with a SECOND instantiation of the same generic
+
+The number of instantiations is the variable, because it decides whether the enclosing type is
+`genericTypeIsInstantiated` — which decides whether the shared body reserves a layout descriptor at all,
+and therefore whether the record's stores read a REAL protocol or the all-zero one a parameterised blob
+carries. A cure that balances one of the two modes is silent about the other, so both are pinned.
+
+<!-- test: a-tuple-of-parameters-dropped-in-a-shared-body-with-two-instantiations -->
+```maxon
+typealias Small = int(0 to 1000)
+
+type Holder uses K, V
+	typealias Pair = (K, V)
+	let k as K
+	let v as V
+
+	export static function create(k K, v V) returns Self
+		return Self{k: k, v: v}
+	end 'create'
+
+	export function pair() returns Pair
+		return (k, v)
+	end 'pair'
+
+	export function second() returns V
+		let p = pair()
+		return p.1
+	end 'second'
+end 'Holder'
+
+typealias StrHolder = Holder with String, Small
+typealias SmallHolder = Holder with Small, Small
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let h = StrHolder.create(heapString("a heap key ", b: "long enough to allocate"), v: 7)
+	let t = SmallHolder.create(5, v: 6)
+	print("second {h.second()} {t.second()}\n")
+	return 4 as ExitCode
+end 'main'
+```
+```stdout
+second 7 6
+```
+```exitcode
+4
+```
+
+### …and the CONCRETE caller of the same `pair()`, which always worked
+
+The control. `main` is not generic, so the tuple it takes back is typed `(String, Small)` and its release
+is the ordinary substituted cascade. The retain in `pair()` is the SAME retain in all three cases — one
+shared body, one `__retain_type_param` — so a cure that removed it would redden this case rather than the
+two above.
+
+<!-- test: a-tuple-of-parameters-dropped-by-a-concrete-caller -->
+```maxon
+typealias Small = int(0 to 1000)
+
+type Holder uses K, V
+	typealias Pair = (K, V)
+	let k as K
+	let v as V
+
+	export static function create(k K, v V) returns Self
+		return Self{k: k, v: v}
+	end 'create'
+
+	export function pair() returns Pair
+		return (k, v)
+	end 'pair'
+end 'Holder'
+
+typealias StrHolder = Holder with String, Small
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	let h = StrHolder.create(heapString("a heap key ", b: "long enough to allocate"), v: 7)
+	let p = h.pair()
+	print("pair {p.0} {p.1}\n")
+	return 4 as ExitCode
+end 'main'
+```
+```stdout
+pair a heap key long enough to allocate 7
+```
+```exitcode
+4
+```
+
+### The stdlib chain the same drop runs through — `Map`'s `Entry` tuple
+
+`stdlib/Interfaces.maxon`'s `extension Iterable` gives `Map` a `map` whose per-trip element is
+`MapIterator.current()`'s `(Key, Value)` — the tuple of parameters above, built by one shared body and
+freed by another. The keys here are HEAP Strings (a `Map` copies a literal key into an owned record), so a
+stranded reference is a real leak and the runner's exit code says so.
+
+⚠ **A SECOND DECLARED INSTANTIATION IS PART OF THE CASE.** `typealias EnvMap = Map with String, String`
+is what makes `Map` answer `genericTypeIsInstantiated`, which is what gives `Map.map` a descriptor to
+forward into the iterator chain instead of the inert parameterised blob it would otherwise mint.
+
+<!-- test: mapping-a-map-releases-the-entry-tuples-it-built -->
+```maxon
+typealias EnvMap = Map with String, String
+typealias Cnt = int(0 to 1000)
+
+function envSize(e EnvMap) returns Cnt
+	return e.count()
+end 'envSize'
+
+function main() returns ExitCode
+	let m = ["a": 1, "b": 2, "c": 3]
+	let mapped = m.map(function(p) gives p)
+	var e = EnvMap.create()
+	try e.insert("k", value: "v") otherwise return 9 as ExitCode
+	print("mapped {mapped.count()}\n")
+	return (mapped.count() + envSize(e)) as ExitCode
+end 'main'
+```
+```stdout
+mapped 3
+```
+```exitcode
+4
+```
