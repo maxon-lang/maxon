@@ -203,8 +203,17 @@ function typeClassesAgree(left TypeClass, right TypeClass) returns bool
 	// comparison operators on such a value are intercepted upstream and dispatched through the parameter's
 	// `Equatable`/`Comparable` witness (`Parser.emitCompare`, P1.7a slice 2b/2b-ii) — because letting them
 	// through here would compare two opaque WORDS, i.e. two POINTERS for a struct `T`, a silent wrong answer.
+	// ⛔⛔ **AND A COERCION SITE NO LONGER REACHES IT WITH A CONCRETE AGGREGATE ON THE OTHER SIDE EITHER
+	// (W179).** This header used to end *"the deferral is still right for … every non-comparison agreement
+	// question (an argument, a `return`, an assignment)"*, and that sentence named the exact case it was wrong
+	// about: `checkDeclaredType` now refuses an opaque value meeting a declared `String`/struct/function/
+	// `Character` BEFORE asking anything here, because the answer is DIRECTIONAL and a symmetric rule cannot
+	// carry a direction. The reason lives on that guard; what belongs here is only that the deferral below is
+	// no longer the last word for those pairs.
+	//
 	// The deferral is still right for what DOES reach it: a concrete generic-method result in a non-generic
-	// caller, and every non-comparison agreement question (an argument, a `return`, an assignment).
+	// caller, a `T` meeting a `T`, a concrete value meeting an opaque PLACE (the reverse direction, which the
+	// instantiation settles at the call site), and every scalar pairing.
 	if left == TypeClass.typeParameter or right == TypeClass.typeParameter 'typeParam'
 		return true
 	end 'typeParam'
@@ -418,6 +427,47 @@ export function checkDeclaredType(value ValueTypeTag, declared ValueTypeTag) ret
 		return DeclaredTypeMatch.functionIntoNonFunction
 	end 'functionValue'
 
+	// ⭐⭐ **AN OPAQUE TYPE PARAMETER MEETING A CONCRETE AGGREGATE PLACE (W179).** A generic body compiles ONCE,
+	// for the DECLARATION VIEW, where a `T` is one machine word whose representation no `with` has fixed. A
+	// concrete aggregate place is the claim that the word is a POINTER to a particular record — it will be
+	// dereferenced, stored under that type, and DROPPED by that type's destructor — and a shared body has
+	// nothing with which to keep that claim. It is refused here rather than at any one door because it is the
+	// SAME question at all four (`SemanticCheck.checkOneArgType`, the `return`, the global store, the scalar
+	// field store), and answering it at one of them is how they came to give four different answers. MEASURED
+	// on the merge base, one program per door: the managed FIELD store was refused (`Parser.
+	// requireManagedValueMatches` compares the tags EXACTLY, so `self.s = t` is refused at every
+	// instantiation); the `return` was refused for an unrelated reason by the descriptor door (E2015, which
+	// this now answers ahead of); and the call ARGUMENT and the GLOBAL store were accepted with no diagnostic
+	// at all — `takeText(t)` and `slot = t` both compiled and faulted, `0xC0000005`.
+	//
+	// ⚠ **IT IS DIRECTIONAL, WHICH IS WHY IT CANNOT LIVE IN `typeClassesAgree`.** The REVERSE pairing — a
+	// concrete value meeting an opaque PLACE — is a different question with a different answer: the
+	// instantiation fixes it at the call site (`SemanticCheck.checkTypeParameterArgsAt` substitutes and then
+	// asks this same verdict), and `specs-shv2/generic-types.md`'s `managed-string-arg` is that direction
+	// working. A symmetric rule cannot tell the two apart, and the deferral it holds is still correct for
+	// every other pair that reaches it.
+	//
+	// ⚠ **AND IT IS NOT DECIDED FROM THE INSTANTIATIONS, DELIBERATELY.** `Outer with String` — where `T` IS
+	// the declared `String` — is refused exactly as `Outer with Integer` is. Admitting it would need an
+	// ALL-fold over every `with` in the program and would make a body's validity change when an unrelated
+	// file adds a second instantiation. The bootstrap oracle refuses both spellings at the same position with
+	// the same E3005, and the managed field door above has always refused both; this is the third answer
+	// agreeing rather than a new rule.
+	//
+	// ⚠ **`interfaceValue` IS EXCLUDED AND THAT IS NOT AN OVERSIGHT.** An existential place is a WIDENING
+	// position, not an agreement one — `checkOneArgType`'s `existentialParam` arm returns before the tag rule
+	// is asked at all — so whether an opaque `T` may widen into one is `existentialWideningVerdict`'s
+	// question, decided against the conformances. The SCALAR classes are excluded for their own reason: a
+	// word moving into a word-shaped `int`/`bool` slot dereferences nothing and drops nothing, and
+	// `specs-shv2/array-declared-record.md`'s `the-self-spelling-of-a-corpus-served-member-reaches-the-same-body`
+	// is a committed program that returns an opaque element as its ranged-int alias.
+	if value == ValueTypeTag.typeParameter 'opaqueValue'
+		let declaredClass = typeClassOf(declared)
+		if typeClassIsAggregate(declaredClass) and declaredClass != TypeClass.interfaceValue 'aConcreteRecord'
+			return DeclaredTypeMatch.mismatch
+		end 'aConcreteRecord'
+	end 'opaqueValue'
+
 	if not typesAgree(value, right: declared) 'disagree'
 		return DeclaredTypeMatch.mismatch
 	end 'disagree'
@@ -515,6 +565,22 @@ end 'implicitNarrowingMessage'
 // function-typed place declared with `typealias`), which is the whole content of the rule the spec
 // states: "a function value is only usable where a function type declared with 'typealias' is expected."
 export let FunctionValueMisuseSuffix = "a function value is only usable where a function type declared with 'typealias' is expected"
+
+// ⭐⭐ **THE ONE EXPLANATION OF THE OPAQUE-VALUE RULE `checkDeclaredType` DECIDES ABOVE (W179)**, written once
+// beside the verdict for `FunctionValueMisuseSuffix`'s reason. It exists because this refusal is the one in
+// this file a CORRECT-LOOKING program provokes: `Outer with String` binds `T` to the very type the place
+// declares, and it is still refused — so a bare "expected 'String', got 'type parameter'" leaves the reader
+// with a contradiction rather than a cure. The tail states the fact (the body is checked once, against a view
+// no `with` has reached) and then offers the two cures, BOTH MEASURED on the rung's own reproducer: declaring
+// the callee's parameter at the type parameter too compiles and runs, and so does making the call from a
+// concrete instantiation.
+//
+// ⚠ **ONLY THE ARGUMENT DOOR QUOTES IT TODAY.** The verdict is shared by four doors, but the sentences for
+// the `return` and the global/local store are rendered in `Queries.renderParseError` and the field store's in
+// `Parser.slotMismatchError` — outside this rung's file set — so those three still say only the head. That is
+// a sentence owed, not a second rule: the tail lives here precisely so adopting it there is a reference and
+// never a re-authoring.
+export let OpaqueValueMisuseSuffix = "a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known"
 
 // ⭐ **TWO NAMED AGGREGATES ARE THE SAME TYPE IFF THEIR INTERNED NAMES ARE EQUAL** — the ONE
 // name-comparison every site that meets a value against a declared aggregate shares (OPEN #54): the

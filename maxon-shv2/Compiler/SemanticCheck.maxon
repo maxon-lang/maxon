@@ -5451,7 +5451,12 @@ function checkOneArgType(project Project, func IrFunction, paramType MaxonType, 
 		// carries cannot fire here: it needs an EMPTY `expectedAggregate`, and an empty one only reaches this
 		// line through `argAggregateCannotDecay`, which has already answered the same question wider.
 		if programSignaturesIn(project, asker: "checkOneArgType").aggregatesConflict(expectedAggregate, expectedTag: paramTag, expectedNameId: typeNameIdOf(paramType), got: gotAggregate, gotTag: argTag, gotNameId: argNameId) 'aggregateArgMismatch'
-			reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
+			// ⚠ **THE OPAQUE TAIL BELONGS HERE TOO, AND FOR ONE FACT THERE IS ONE SENTENCE (W179).** A boxed
+			// UNION parameter carries a nominal identity, so an opaque `T` meeting one is refused by THIS arm and
+			// never reaches the tag rule below — measured on `takeMsg(t)` with a `union Message` formal. Same
+			// fault, same reader, so the same explanation: `argMismatchWithOpaqueTail` appends nothing unless the
+			// ARGUMENT is the opaque one, which leaves every nominal-vs-nominal refusal here spelled as before.
+			reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: paramType, paramTag: paramTag, aggregate: expectedAggregate, declaredName: declaredParamName, argTag: argTag), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 			return
 		end 'aggregateArgMismatch'
 	end 'aggregateComparable'
@@ -5532,7 +5537,7 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 	let verdict = checkDeclaredType(argTag, declared: declaredTag)
 	match verdict 'declared'
 		ok then break 'declared'
-		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), line: callRange.line, column: callRange.column, filePath: filePath)
+		mismatch then reportPositioned(project, code: ErrorCode.typeMismatch, message: argMismatchWithOpaqueTail(argTypeMismatchMessage(paramName, position: position, expected: paramDisplayName(project, paramType: declaredType, paramTag: declaredTag, aggregate: declaredAggregate, declaredName: declaredName, argTag: argTag), got: typeDisplayName(project, tag: argTag, nameId: argNameId)), argTag: argTag), line: callRange.line, column: callRange.column, filePath: filePath)
 		// ⚠ **THE TWO ARMS BELOW SPELL THE PARAMETER BY ITS RESOLVED CLASS WORD AND NOT BY ITS DECLARATION,
 		// AND THAT IS THE CANONICAL COROLLARY OF THE DISPLAY RULE RATHER THAN AN EXCEPTION TO IT.** Each is
 		// ONE SENTENCE WITH SEVERAL DOORS, and every other door of each is a place with no parameter to name:
@@ -5554,6 +5559,21 @@ function checkArgAgainstDeclaredTag(project Project, argTag ValueTypeTag, argNam
 	end 'declared'
 	return verdict
 end 'checkArgAgainstDeclaredTag'
+
+// ⭐ **THE `mismatch` SENTENCE, PLUS THE ONE TAIL AN OPAQUE ARGUMENT NEEDS (W179).** `checkDeclaredType`
+// answers one `mismatch` for two quite different faults: a value of the WRONG type (a `bool` where an `int` is
+// declared), where the head already tells the reader everything; and a value of NO KNOWN type — an enclosing
+// generic's type parameter at a concrete aggregate place — where the head is a contradiction on its face,
+// because the author may have bound that parameter to exactly the declared type. The tail is
+// `OpaqueValueMisuseSuffix`, stated once beside the rule that decides this, and appended only for the second
+// group so the first keeps the corpus-pinned sentence verbatim (`argTypeMismatchSentence`).
+function argMismatchWithOpaqueTail(sentence String, argTag ValueTypeTag) returns String
+	if argTag != ValueTypeTag.typeParameter 'aConcreteWrongType'
+		return sentence
+	end 'aConcreteWrongType'
+
+	return "{sentence}: {OpaqueValueMisuseSuffix}"
+end 'argMismatchWithOpaqueTail'
 
 // The interned name of the declared STRUCT or boxed UNION/ENUM a (tag, nameId) pair denotes, or
 // `EmptySourceText` for anything that is not one — the SemanticCheck half of the OPEN #54 identity

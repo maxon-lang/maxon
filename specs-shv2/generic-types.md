@@ -3750,3 +3750,272 @@ end 'main'
 ```stdout
 ok
 ```
+
+### ⭐⭐ An OPAQUE type parameter may not stand where a CONCRETE AGGREGATE is declared — W179
+
+A generic body compiles ONCE, for the declaration view, and a `T` there is one opaque machine word whose
+representation no instantiation has fixed. A CONCRETE AGGREGATE place — a `String`, a struct, a generic
+instance, a function value, a `Character` — is a promise that the word is a POINTER to a particular record
+with a particular destructor, and the shared body cannot keep that promise: it is dereferenced, stored and
+DROPPED under the declared type. Passing a `T` there was accepted with no diagnostic at all and the program
+faulted (`0xC0000005`), because the deferral that admits a type parameter lives in the TAG domain and a
+primitive formal has no other domain to be judged in.
+
+**The refusal does NOT depend on what the instantiations bind.** It is refused at `Outer with String` — where
+`T` really is `String` — exactly as it is refused at `Outer with Integer`, and
+`error.opaque-type-parameter-at-a-concrete-aggregate-argument-is-refused-at-a-matching-instantiation` below
+pins that.
+Two things in the tree already answer it that way and this is now the third: the MANAGED FIELD door has always
+compared the tags EXACTLY (`Parser.requireManagedValueMatches`), so `self.s = t` is refused at every
+instantiation; and the bootstrap oracle refuses both spellings at the same position with the same E3005.
+Deciding it from the instantiation set instead would need an ALL-fold over every `with` in the program, and
+would make a body's validity change when an unrelated file adds a second instantiation.
+
+⚠ **The SCALAR quadrant is deliberately NOT refused, and that is a BOUND on this rule rather than a claim
+that it is sound.** A `T` meeting a declared `int`/`bool` place is a word moving to a word-shaped slot: it
+dereferences nothing and drops nothing, so the worst it can produce is a wrong NUMBER, never the fault above —
+and `array-declared-record`'s `the-self-spelling-of-a-corpus-served-member-reaches-the-same-body` is a
+committed program that returns an opaque element as its ranged-int alias and depends on being allowed to.
+Refusing that quadrant as well was MEASURED against the whole suite and costs three committed cases, two of
+them `error.` cases whose own subject it masks; separating the sound instances from the unsound ones needs the
+instantiation fold this rule deliberately does without.
+
+<!-- test: error.opaque-type-parameter-at-a-concrete-aggregate-argument -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner uses P
+	let p as P
+	let s as String
+
+	export function tag() returns Integer
+		return s.count() as Integer
+	end 'tag'
+
+	static function create(p P, s String) returns Self
+		return Self{p: p, s: s}
+	end 'create'
+end 'Inner'
+
+type Outer uses T
+	typealias I = Inner with T
+	var n as Integer
+
+	export function build(t T) returns Integer
+		let i = I.create(t, s: t)
+		return n + i.tag()
+	end 'build'
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with Integer
+
+function main() returns ExitCode
+	var o = O.create()
+	print("{o.build(42)}")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:13: argument type mismatch for 's': expected 'String', got 'type parameter': a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known
+```
+
+<!-- test: error.opaque-type-parameter-at-a-concrete-aggregate-argument-of-a-plain-function -->
+The same rule with no generic in the CALLEE at all — a plain `takeText(s String)` reached from inside a
+generic body. It is the wider shape and the one that shows the hole was never about the callee's own
+instance: the argument door alone decides it.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function takeText(s String) returns Integer
+	return s.count() as Integer
+end 'takeText'
+
+type Outer uses T
+	var n as Integer
+
+	export function build(t T) returns Integer
+		return takeText(t) + n
+	end 'build'
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with Integer
+
+function main() returns ExitCode
+	var o = O.create()
+	print("{o.build(42)}")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:12:10: argument type mismatch for 's': expected 'String', got 'type parameter': a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known
+```
+
+<!-- test: error.opaque-type-parameter-into-a-concrete-aggregate-global -->
+The ASSIGNMENT half of the same rule. The verdict is `TypeRules.checkDeclaredType`'s, so the global's own
+door reports it without restating anything.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+var slot = "x"
+
+type Outer uses T
+	var n as Integer
+
+	export function put(t T) returns Integer
+		slot = t
+		return n
+	end 'put'
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with Integer
+
+function main() returns ExitCode
+	var o = O.create()
+	print("{o.put(42)}")
+	print("{slot}")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:10:3: cannot assign a value of type 'type parameter' to global 'slot', which holds 'String'
+```
+
+<!-- test: error.opaque-type-parameter-at-a-concrete-aggregate-argument-is-refused-at-a-matching-instantiation -->
+⭐ **THE CONTROL, AND IT IS A REFUSAL.** The first case's program with its ONE instantiation changed to
+`Outer with String`, so `T` is bound to exactly the type the formal declares. It COMPILED and printed `3`
+before this rule existed. It is refused now, for the reason the section above gives: the body is checked once,
+against a declaration view no `with` has reached, and the answer cannot be allowed to depend on which
+instantiations the rest of the program happens to contain.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner uses P
+	let p as P
+	let s as String
+
+	export function tag() returns Integer
+		return s.count() as Integer
+	end 'tag'
+
+	static function create(p P, s String) returns Self
+		return Self{p: p, s: s}
+	end 'create'
+end 'Inner'
+
+type Outer uses T
+	typealias I = Inner with T
+	var n as Integer
+
+	export function build(t T) returns Integer
+		let i = I.create(t, s: t)
+		return n + i.tag()
+	end 'build'
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with String
+
+function main() returns ExitCode
+	var o = O.create()
+	print("{o.build("ab")}")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:22:13: argument type mismatch for 's': expected 'String', got 'type parameter': a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known
+```
+
+<!-- test: error.opaque-type-parameter-returned-at-a-concrete-aggregate-return -->
+⚠ **THE RETURN QUADRANT WAS NEVER A HOLE, AND THIS CASE RECORDS WHICH REFUSAL SPEAKS — measured both ways.**
+On the merge base this program is refused too, by the DESCRIPTOR door (`E2015`, "takes a reference to a
+borrowed type-parameter value"): returning a `T` means taking a reference to it, and a `static function` has
+no `self` to read the instantiation's descriptor from. The coercion rule now answers first, because the type
+fault is the more fundamental one — following E2015's advice and moving the body to an instance method lands
+on this same refusal — and because its cure ("declare the place at the type parameter too", i.e. `returns T`)
+is the one that makes the program compile. It is pinned so that the ordering is a decision on the record
+rather than a side effect nothing observes.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Outer uses T
+	var n as Integer
+
+	export static function pick(t T) returns String
+		return t
+	end 'pick'
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with Integer
+
+function main() returns ExitCode
+	var o = O.create()
+	print("{O.pick(42)}{o.n}")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:8:3: Cannot return 'type parameter' from function declared to return 'String'
+```
+
+<!-- test: error.opaque-type-parameter-at-a-boxed-union-argument-explains-itself -->
+A boxed UNION formal carries a NOMINAL identity, so this pairing is refused by the argument door's identity
+arm and never reaches the tag rule at all — it was never part of the hole. It is pinned because the READER is
+the same reader: one fault gets one explanation, so the identity arm quotes the same tail the tag arm does
+whenever the ARGUMENT is the opaque one.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Message
+	silent
+	text(body String)
+end 'Message'
+
+function takeMsg(m Message) returns Integer
+	return match m 'm'
+		silent gives 1
+		text(b) gives b.count() as Integer
+	end 'm'
+end 'takeMsg'
+
+type Outer uses T
+	var n as Integer
+
+	export function build(t T) returns Integer
+		return takeMsg(t) + n
+	end 'build'
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with Integer
+
+function main() returns ExitCode
+	var o = O.create()
+	print("{o.build(42)}")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3005: <fragment>:20:10: argument type mismatch for 'm': expected 'Message', got 'type parameter': a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known
+```
