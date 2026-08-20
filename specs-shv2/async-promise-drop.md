@@ -47,7 +47,7 @@ function trivial() returns int
 end 'trivial'
 
 function main() returns ExitCode
-	let p = async trivial()
+	_ = async trivial()
 	return 0 as ExitCode
 end 'main'
 ```
@@ -74,7 +74,7 @@ function twenty() returns int
 end 'twenty'
 
 function main() returns ExitCode
-	let a = async ten()
+	_ = async ten()
 	let b = async twenty()
 	return (await b) as ExitCode
 end 'main'
@@ -98,7 +98,7 @@ function incFlag() returns int
 end 'incFlag'
 
 function main() returns ExitCode
-	let p = async incFlag()
+	_ = async incFlag()
 	return flag as ExitCode
 end 'main'
 ```
@@ -123,7 +123,7 @@ end 'trivial'
 function main() returns ExitCode
 	var i = 0
 	while i < 1000 'loop'
-		let p = async trivial()
+		_ = async trivial()
 		i = i + 1
 	end 'loop'
 	return 0 as ExitCode
@@ -154,7 +154,7 @@ function fast() returns int
 end 'fast'
 
 function main() returns ExitCode
-	let slow = async sleeper()
+	_ = async sleeper()
 	let q = async fast()
 	let r = await q
 	return r as ExitCode
@@ -216,7 +216,7 @@ function fast() returns int
 end 'fast'
 
 function main() returns ExitCode
-	let slow = async slowProc()
+	_ = async slowProc()
 	let q = async fast()
 	let r = await q
 	return r as ExitCode
@@ -376,10 +376,15 @@ end 'nine'
 function main() returns ExitCode
 	var p = async nine()
 	let r = await p
+	print("{r}")
 	p = 5
 	return p as ExitCode
 end 'main'
 ```
 ```exitcode
 5
+```
+```stdout
+9
+
 ```

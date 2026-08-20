@@ -22297,7 +22297,7 @@ export type Parser
 			let waivable = match candidate.kind 'candidateKind'
 				parameter gives true
 				loopVariable gives false
-				mutableLocal gives false
+				mutableLocal to immutableLocal gives false
 				// A divergent `otherwise`'s `(e)` is the author's own and OPTIONAL — no contract can force it
 				// to be declared, so there is nothing for the interface waiver to excuse.
 				divergentHandlerBinding gives false
@@ -25047,7 +25047,7 @@ export type Parser
 		try self.requireMutableBindingSource(nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
 
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: value, sourceName: sourceName, sourceReadsAField: sourceReadsAField, mutable: mutable)
-		self.noteBodyVarDeclared(nameTok, mutable: mutable)
+		self.noteBodyBindingDeclared(nameTok, mutable: mutable)
 	end 'parseBinding'
 
 	// ⭐ **E3077 / E3012 CANDIDATE: A BODY `var` THE AUTHOR WROTE.** Enrolled at the SAME two doors E3078 is
@@ -25055,8 +25055,8 @@ export type Parser
 	// `declareInitializedBinding`'s third caller declares the destructuring TEMP, a name the compiler mints,
 	// and no diagnostic telling an author what to change may name it.
 	//
-	// ⚠ A body `let` is deliberately not enrolled — see `UnusedBindingKind.mutableLocal` for the measured
-	// reason and for which spec owns that rung.
+	// ⚠ A body `let` IS enrolled since the 2026-08-19 ruling — see `UnusedBindingKind.mutableLocal` for the
+	// blocker that stood here and the IR measurement that refuted it.
 	//
 	// ⭐ `_` is the discard and is exempt, exactly as it is in a `for` header (`declareLoopVariable`) and as
 	// v1 filters it out of its parameter candidates. It binds a name the source never intends to read.
@@ -25070,13 +25070,14 @@ export type Parser
 	// directly, so a bound-then `var` is a candidate for NEITHER rule. That is the safe direction — a missed
 	// diagnostic, never a refused program — and it is written down here because "two doors" reads like an
 	// exhaustive claim otherwise.
-	function noteBodyVarDeclared(nameTok Token, mutable bool)
-		if not mutable or nameTok.value.equals(DiscardBindingName) 'notACandidateName'
+	function noteBodyBindingDeclared(nameTok Token, mutable bool)
+		if nameTok.value.equals(DiscardBindingName) 'notACandidateName'
 			return
 		end 'notACandidateName'
 
-		self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(nameTok.value), nameRange: SourceRange.ofToken(nameTok), kind: UnusedBindingKind.mutableLocal))
-	end 'noteBodyVarDeclared'
+		let kind = UnusedBindingKind.mutableLocal if mutable else UnusedBindingKind.immutableLocal
+		self.unusedCandidates.push(UnusedBindingCandidate.create(self.scope.getInfo(nameTok.value), nameRange: SourceRange.ofToken(nameTok), kind: kind))
+	end 'noteBodyBindingDeclared'
 
 	// ⭐ **BIND ONE NAME TO ONE ALREADY-PARSED INITIALIZER — the whole declaration half of a `let`/`var`.**
 	// Split out of `parseBinding` when destructuring landed (P1.10): `let (x, y) = t` declares N names from
@@ -25420,7 +25421,7 @@ export type Parser
 		// No source name for the DECLARATION: a field load is a fresh borrowed value held by no binding,
 		// so there is nothing for the move poison to find.
 		try self.declareInitializedBinding(func, nameTok: nameTok, value: element, sourceName: EmptySourceText, sourceReadsAField: false, mutable: mutable)
-		self.noteBodyVarDeclared(nameTok, mutable: mutable)
+		self.noteBodyBindingDeclared(nameTok, mutable: mutable)
 	end 'declareDestructuredElement'
 
 	// ⭐⭐ **`(x, let y) = makePair(10, b: 32)` — STATEMENT-LEVEL TUPLE ASSIGNMENT (`specs/tuple-assign.md`),

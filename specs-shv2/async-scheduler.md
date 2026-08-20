@@ -222,7 +222,7 @@ function compute() returns int
 end 'compute'
 
 function main() returns ExitCode
-	let p = async compute()
+	_ = async compute()
 	return 7 as ExitCode
 end 'main'
 ```

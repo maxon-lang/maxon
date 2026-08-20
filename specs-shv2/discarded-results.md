@@ -265,7 +265,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: underscore-not-prefix-suppression -->
+<!-- test: underscore-not-prefix-suppression -->
 <!-- MEASURED 2026-08-13: compiles clean, and NOTHING to do with purity — the case is an unused body `let` wanting E3012. A body `let` is deliberately not an unused-binding candidate in shv2 (`UnusedBindingKind.mutableLocal` carries the reason and names the rung that owns it); only `var`s, parameters and `for` bindings are enrolled. -->
 ```maxon
 

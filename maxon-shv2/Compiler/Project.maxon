@@ -764,22 +764,28 @@ export enum UnusedBindingKind
 	// reports E3012 instead. That IS the precedence `specs-shv2/var-should-be-let.md:unused-takes-precedence`
 	// pins, and it is the whole of why a `var` local is checked here.
 	//
-	// ⚠ **THE UNUSED-`let` HALF IS A SEPARATE RUNG WITH A MEASURED COST, and the cost is not corpus tidying
-	// — it is EXPRESSIVENESS.** Admitting body `let`s refuses **82** cases of this suite, and the shapes are
-	// the point of the tests rather than sloppiness in them: a leak gate binds an owned value and
-	// deliberately never touches it, so that scope exit is the only thing that can free it
-	// (`union-managed-payload.string-payload-drop-leak-free`, `block-scope-drops.owned-struct-in-block`, and
-	// ~40 more); `register-pressure.dead-def-mid-block-holds-a-register` needs a def that is never read, by
-	// name. MEASURED on the oracle, all of those are E3012 there — which is presumably why it has no such
-	// tests, and why shv2 has found register-allocator and drop defects through shapes the oracle cannot
-	// express. Making them legal again means either deleting the binding (the test goes) or adding a mention
-	// (which moves the drop, so the test silently stops testing the drop). `specs-shv2/unused-variables.md`
-	// owns that rung and carries the disabled cases; nothing in THIS spec reaches it.
+	// ✅ **THE UNUSED-`let` HALF LANDED (user ruling, 2026-08-19), and the blocker written here was wrong
+	// on BOTH of its claims.** It said admitting body `let`s costs 82 cases in EXPRESSIVENESS, because a
+	// leak gate binds an owned value and deliberately never touches it, and because "adding a mention moves
+	// the drop, so the test silently stops testing the drop". MEASURED at the IR, both are false:
 	//
-	// ⚠ The compiler-minted destructuring TEMP is not one either: it goes through the same
-	// `declareInitializedBinding`, and a name the source cannot spell can be the subject of no sentence
-	// telling the author what to change — the identical line E3078 draws at the same three doors.
+	//   • **A mention does not move the drop.** For the one shape that HAS a drop — a heap-allocated
+	//     managed value, e.g. an interpolated `String` — the IR with `print(s)` added is byte-identical to
+	//     the IR without it except for the two inserted instructions of the call. `__str_decref` stays the
+	//     last thing in the block, in the same position. Reading a value does not re-home its drop.
+	//   • **The named exemplars had no drop to move.** `block-scope-drops.owned-struct-in-block` emits NO
+	//     `__mm_alloc` and NO decref at all on shv2 — the struct is a STACK SLOT — and a `String` bound from
+	//     a literal is `.rdata` and immortal. Those cases were already inert as drop gates, which is the
+	//     `spec-can-pass-without-testing-its-subject` shape, not an expressiveness cost.
+	//
+	// ⇒ The cases that DID trip the rule were rewritten to read their binding, because **the binding not
+	// being read was never the test**. `specs-shv2/unused-variables.md` carries the rule.
 	mutableLocal
+	// ⭐ **A body `let` the author wrote.** Enrolled at the same door as `mutableLocal` above and exempt on
+	// the same `_` discard; it is a separate KIND only because E3077 (`var` should be `let`) must never
+	// speak about one — that rule's filter is `binding.mutable`, which a `let` fails, so the split costs no
+	// test there.
+	immutableLocal
 	// ⭐ **THE OPTIONAL `(e)` OF A DIVERGENT `otherwise` — `otherwise (e) panic("…")` /
 	// `otherwise (e) throws E.case`, AND NOTHING ELSE.** It is checked where a body `let` deliberately is
 	// not, and the difference is that this binding is OPTIONAL: an author who declares one and never reads it

@@ -533,6 +533,7 @@ end 'Point'
 function main() returns ExitCode
 	var p = Point.create(1)
 	let q = p
+	print("{q.x}")
 	p = Point.create(3)
 	p.x = 5
 	return p.x
@@ -542,6 +543,8 @@ end 'main'
 5
 ```
 ```stdout
+1
+
 ```
 
 ### Field Access and Method Call on a Live Struct (Positive Control)

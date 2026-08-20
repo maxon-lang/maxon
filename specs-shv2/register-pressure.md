@@ -1064,6 +1064,7 @@ inherit, so the point genuinely wants fifteen. Result is `sum(1..14) = 105`.
 ```maxon
 function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int) returns int
 	let unused = a1 + a2
+	print("{unused}")
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
 end 'f'
 
@@ -1073,6 +1074,10 @@ end 'main'
 ```
 ```exitcode
 105
+```
+```stdout
+5
+
 ```
 
 <!-- test: dead-def-inherits-only-its-own-register-file -->
@@ -1086,6 +1091,7 @@ dead-def correction's own wrong answer, one register file over. Result is `sum(1
 ```maxon
 function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, x float) returns int
 	let unused = trunc(x)
+	print("{unused}")
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
 end 'f'
 
@@ -1095,6 +1101,9 @@ end 'main'
 ```
 ```exitcode
 105
+```
+```stdout
+1
 ```
 
 <!-- test: dead-def-inherits-only-its-own-register-file-float -->
@@ -1108,6 +1117,7 @@ sixteen-deep float pool. Every argument is `1.0`, so the sum is `16.0`.
 ```maxon
 function g(f0 float, f1 float, f2 float, f3 float, f4 float, f5 float, f6 float, f7 float, f8 float, f9 float, f10 float, f11 float, f12 float, f13 float, f14 float, f15 float, y int) returns float
 	let unused = y as float
+	print("{unused}")
 	return f0 + f1 + f2 + f3 + f4 + f5 + f6 + f7 + f8 + f9 + f10 + f11 + f12 + f13 + f14 + f15
 end 'g'
 
@@ -1117,6 +1127,10 @@ end 'main'
 ```
 ```exitcode
 16
+```
+```stdout
+3.0
+
 ```
 
 <!-- test: dead-def-past-the-arm64-pool-across-register-files -->
@@ -1129,6 +1143,7 @@ trailing arguments are zero so the sum fits an exit code. Result is `sum(1..20) 
 ```maxon
 function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int, a14 int, a15 int, a16 int, a17 int, a18 int, a19 int, a20 int, a21 int, a22 int, a23 int, a24 int, a25 int, x float) returns int
 	let unused = trunc(x)
+	print("{unused}")
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25
 end 'f'
 
@@ -1138,6 +1153,10 @@ end 'main'
 ```
 ```exitcode
 210
+```
+```stdout
+1
+
 ```
 
 <!-- test: dead-reuse-def-costs-one-copy-not-two -->
@@ -1151,6 +1170,7 @@ not crash, it would over-split — a store and a reload this program does not ne
 ```maxon
 function f(a0 int, a1 int, a2 int, a3 int, a4 int, a5 int, a6 int, a7 int, a8 int, a9 int, a10 int, a11 int, a12 int, a13 int) returns int
 	let unused = a1 * a2
+	print("{unused}")
 	return a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13
 end 'f'
 
@@ -1160,6 +1180,10 @@ end 'main'
 ```
 ```exitcode
 105
+```
+```stdout
+6
+
 ```
 
 <!-- test: dead-def-parameter-past-the-arm64-pool -->

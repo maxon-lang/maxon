@@ -266,7 +266,7 @@ function pair() returns (__ManagedMemory, Int)
 end 'pair'
 
 function main() returns ExitCode
-	let (m, n) = pair()
+	let (m, _) = pair()
 	return m.length() as ExitCode
 end 'main'
 ```

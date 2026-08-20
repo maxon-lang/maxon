@@ -118,7 +118,7 @@ function reader() returns int
 end 'reader'
 
 function dropInFlight() returns int
-	let r = async reader()
+	_ = async reader()
 	sleep(1)
 	return 0
 end 'dropInFlight'
@@ -126,7 +126,7 @@ end 'dropInFlight'
 function main() returns ExitCode
 	var i = 0
 	while i < 5 'loop'
-		let d = dropInFlight()
+		_ = dropInFlight()
 		i = i + 1
 	end 'loop'
 	let n = spawnReadLine("cmd /c echo hello")

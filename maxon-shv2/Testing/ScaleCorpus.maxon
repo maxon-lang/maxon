@@ -4723,7 +4723,10 @@ function genericInstancesSource(instanceCount KnobSize) returns String
 			// instance now owns — a different ownership shape from the one this knob exists to price. It
 			// therefore contributes nothing to `acc`, and what it still gets for free is `ownedSiteBlock`'s
 			// entered-mark: a create this rung skipped is short by one and the driver says so.
-			body.append("\t\tlet xv{i} = {GenericInstancePrefix}{i}.create({GenericInstanceHoldPrefix}{i}.create(\"generic managed instance {i} payload for the heap\", value: a))\n")
+			// ⚠ `_ =` rather than a binding: this arm has no value to witness, and a body `let` that
+			// nothing reads is E3012 since the unused-`let` rule landed. The create this knob prices
+			// is unchanged.
+			body.append("\t\t_ = {GenericInstancePrefix}{i}.create({GenericInstanceHoldPrefix}{i}.create(\"generic managed instance {i} payload for the heap\", value: a))\n")
 		end 'managedUse' else 'noArgUse'
 			panic("genericInstancesSource: GenericInstanceArgShapeCount is {GenericInstanceArgShapeCount} but argument shape {shape} has no USE branch — the declaration loop above and this one realize the same shape set, so both need the branch")
 		end 'noArgUse'

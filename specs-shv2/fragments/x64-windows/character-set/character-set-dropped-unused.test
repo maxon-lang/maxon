@@ -1,7 +1,7 @@
 // Test: character-set-dropped-unused
 function main() returns ExitCode
-	let unused = CharacterSet.punctuation()
-	let alsoUnused = CharacterSet.whitespacesAndNewlines()
+	_ = CharacterSet.punctuation()
+	_ = CharacterSet.whitespacesAndNewlines()
 	print("ok")
 	return 0
 end 'main'
@@ -20,26 +20,17 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
-    x64.pushReg r13
-    x64.prologue 40
+    x64.prologue 32
     x64.callDirect CharacterSet.punctuation
-    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_CharacterSet
     x64.callDirect CharacterSet.whitespacesAndNewlines
-    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_CharacterSet
     x64.leaRegRdata rcx, [rip + __str_rec_9]
     x64.callDirect print
-    x64.movRegImm32 r13, 0
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_CharacterSet
-    x64.movRegReg rcx, rbx
-    x64.callDirect __destruct_CharacterSet
-    x64.movRegReg r8, r13
-    x64.epilogue 40
-    x64.popReg r13
-    x64.popReg r12
-    x64.popReg rbx
+    x64.movRegImm32 r8, 0
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

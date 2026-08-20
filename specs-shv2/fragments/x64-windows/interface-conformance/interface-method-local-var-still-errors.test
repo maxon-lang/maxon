@@ -1,0 +1,28 @@
+// Test: interface-method-local-var-still-errors
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Greeter
+	function greet(volume Integer) returns Integer
+end 'Greeter'
+
+type Silent implements Greeter
+	let value as Integer
+
+	function greet(volume Integer) returns Integer
+		let unusedLocal = 99
+		return value
+	end 'greet'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Silent'
+
+function main() returns ExitCode
+	let s = Silent.create(1)
+	return s.greet(0)
+end 'main'
+---
+CompilerError:
+error E3012: <fragment>:13:7: unused variable: 'unusedLocal'

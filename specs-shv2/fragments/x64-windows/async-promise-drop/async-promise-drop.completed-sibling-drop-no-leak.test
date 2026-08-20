@@ -11,7 +11,7 @@ function twenty() returns int
 end 'twenty'
 
 function main() returns ExitCode
-	let a = async ten()
+	_ = async ten()
 	let b = async twenty()
 	return (await b) as ExitCode
 end 'main'
@@ -74,23 +74,21 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
     x64.leaRegFunc rcx, [rip + ten]
     x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_promise_drop
     x64.leaRegFunc rcx, [rip + twenty]
     x64.callDirect __gt_spawn
     x64.movRegReg rcx, r8
     x64.callDirect __gt_await
-    x64.movRegReg r12, r8
-    x64.cmpRegImm32 r12, 0
+    x64.cmpRegImm32 r8, 0
     x64.jcc less, __rc_panic
     x64.jmp __rc_chk
   __rc_chk:
     x64.movRegImm32 rax, 4294967295
-    x64.cmpRegReg r12, rax
+    x64.cmpRegReg r8, rax
     x64.jcc greater, __rc_panic
     x64.jmp __rc_ok
   __rc_panic:
@@ -98,17 +96,10 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_promise_drop
-    x64.movRegReg r8, r12
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

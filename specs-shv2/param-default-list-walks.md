@@ -49,6 +49,7 @@ function main() returns ExitCode
 	while i < 50 'loop'
 		let s = "hello!"
 		let b = StrBox.create(2, item: s)
+		print("{b.item}")
 		total = 6
 		i = i + 1
 	end 'loop'
@@ -57,6 +58,10 @@ end 'main'
 ```
 ```exitcode
 6
+```
+```stdout
+hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!
+
 ```
 
 <!-- test: generic-feed-without-default-control -->
@@ -82,6 +87,7 @@ function main() returns ExitCode
 	while i < 50 'loop'
 		let s = "hello!"
 		let b = StrBox.create(2, item: s)
+		print("{b.item}")
 		total = 6
 		i = i + 1
 	end 'loop'
@@ -90,6 +96,10 @@ end 'main'
 ```
 ```exitcode
 6
+```
+```stdout
+hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!
+
 ```
 
 <!-- test: generic-feed-after-two-defaulted-params -->
@@ -114,6 +124,7 @@ function main() returns ExitCode
 	while i < 50 'loop'
 		let s = "hello!"
 		let b = StrBox.create(2, item: s)
+		print("{b.item}")
 		total = 6
 		i = i + 1
 	end 'loop'
@@ -122,6 +133,10 @@ end 'main'
 ```
 ```exitcode
 6
+```
+```stdout
+hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!hello!
+
 ```
 
 <!-- test: default-holding-commas-does-not-split-the-list -->

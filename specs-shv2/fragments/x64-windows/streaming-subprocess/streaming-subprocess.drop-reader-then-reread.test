@@ -5,17 +5,17 @@ function reader(h int) returns int
 end 'reader'
 
 function dropIt(h int) returns int
-	let r = async reader(h)
+	_ = async reader(h)
 	sleep(200)
 	return 0
 end 'dropIt'
 
 function main() returns ExitCode
 	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
-	let d = dropIt(h)
+	_ = dropIt(h)
 	let line = subpReadLine(h)
 	let n = line.byteLength()
-	let code = subpWait(h)
+	_ = subpWait(h)
 	subpRelease(h)
 	return n as ExitCode
 end 'main'
@@ -84,21 +84,17 @@ func @dropIt {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
-    x64.pushReg r12
-    x64.prologue 32
+    x64.prologue 40
     x64.movRegReg rbx, rcx
     x64.leaRegFunc rcx, [rip + reader]
     x64.callDirect __gt_spawn
-    x64.movRegReg r12, r8
-    x64.storeBaseDispReg.word64 [r12 + 192], rbx
+    x64.storeBaseDispReg.word64 [r8 + 192], rbx
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_promise_drop
     x64.movRegImm32 rcx, 200
     x64.callDirect sleep
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
-    x64.callDirect __gt_promise_drop
-    x64.movRegReg r8, rbx
-    x64.epilogue 32
-    x64.popReg r12
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
     x64.popReg rbx
     x64.popReg rbp
     x64.ret

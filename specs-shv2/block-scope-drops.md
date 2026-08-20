@@ -264,7 +264,7 @@ function main() returns ExitCode
 	var i = 0
 	while i < 3 'loop'
 		if i < 2 'b'
-			let q = Box.create(i)
+			_ = Box.create(i)
 		end 'b'
 		i = i + 1
 	end 'loop'

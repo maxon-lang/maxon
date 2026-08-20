@@ -34,6 +34,7 @@ function main() returns ExitCode
 	let a = WA.create(1, tag: 5)
 	let t = a.getTag()
 	let b = IntBox.create(t)
+	print("{b.value}")
 	return takesPlain(a.getTag())
 end 'main'
 ---
@@ -68,6 +69,10 @@ func @main {
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
     x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.pushReg r14
+    x64.pushReg r15
     x64.prologue 56
     x64.movRegImm32 rax, 1
     x64.movRegImm32 rcx, 5
@@ -78,12 +83,58 @@ func @main {
     x64.callDirect Wrapper.getTag
     x64.leaRegSlot rax, slot2
     x64.storeBaseDispReg.word64 [rax + 0], r8
+    x64.loadRegBaseDisp.word64 r12, [rax + 0]
+    x64.movRegImm32 rcx, 21
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r13, r8
+    x64.movRegReg rcx, r12
+    x64.movRegReg rdx, r13
+    x64.callDirect __int_to_string
+    x64.movRegReg r12, r8
+    x64.leaRegRegImm32 rcx, r12, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, r13
+    x64.movRegReg rax, r12
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r12
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r13
+    x64.callDirect __mm_decref
+    x64.movRegReg rcx, r14
+    x64.callDirect print
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
     x64.movRegReg rcx, rbx
     x64.callDirect Wrapper.getTag
     x64.movRegReg rcx, r8
     x64.callDirect takesPlain
     x64.epilogue 56
+    x64.popReg r15
+    x64.popReg r14
+    x64.popReg r13
+    x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

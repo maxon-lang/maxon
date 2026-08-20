@@ -238,11 +238,16 @@ typealias PointBox = Box with Point
 function main() returns ExitCode
 	let p = Point.create(7)
 	let b = PointBox.create(p)
+	print("{b.item.x}")
 	return p.getX() - 7
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+7
+
 ```
 
 <!-- test: trivial-instance-arg-co-owned -->

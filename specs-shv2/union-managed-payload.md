@@ -107,11 +107,16 @@ end 'Shape'
 
 function main() returns ExitCode
 	let s = Shape.solid(Body.create(5))
+	print("{s}")
 	return 7
 end 'main'
 ```
 ```exitcode
 7
+```
+```stdout
+solid
+
 ```
 
 <!-- test: struct-payload-match-consume -->
@@ -157,11 +162,16 @@ end 'Message'
 
 function main() returns ExitCode
 	let m = Message.text("hello world this is a long enough string to be heap")
+	print("{m}")
 	return 9
 end 'main'
 ```
 ```exitcode
 9
+```
+```stdout
+text
+
 ```
 
 <!-- test: string-payload-match-consume -->
@@ -1122,11 +1132,16 @@ end 'Pair'
 
 function main() returns ExitCode
 	let p = Pair.both("the first heap string is long", b: "the second heap string is long too")
+	print("{p}")
 	return 6
 end 'main'
 ```
 ```exitcode
 6
+```
+```stdout
+both
+
 ```
 
 <!-- test: two-managed-fields-bind-one-discard-one -->
@@ -1446,6 +1461,7 @@ end 'Message'
 function main() returns ExitCode
 	let msg = build(1)
 	let m = Message.text(msg)
+	print("{m}")
 	print(msg)
 	return 0
 end 'main'
@@ -1454,7 +1470,8 @@ end 'main'
 0
 ```
 ```stdout
-v1
+textv1
+
 ```
 
 <!-- test: construct-co-owns-struct-source -->
@@ -1480,11 +1497,16 @@ end 'Shape'
 function main() returns ExitCode
 	let b = Body.create(5)
 	let s = Shape.solid(b)
+	print("{s}")
 	return b.mass
 end 'main'
 ```
 ```exitcode
 5
+```
+```stdout
+solid
+
 ```
 
 <!-- test: error.match-consume-then-use -->
@@ -1861,11 +1883,15 @@ end 'UHold'
 
 function main() returns ExitCode
 	let u = UHold.holds(BoxA.create(1))
+	print("{u}")
 	return 4
 end 'main'
 ```
 ```exitcode
 4
+```
+```stdout
+holds
 ```
 
 <!-- test: union-struct-payload-ranged-alias-match -->

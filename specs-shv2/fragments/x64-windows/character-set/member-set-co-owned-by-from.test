@@ -1,7 +1,7 @@
 // Test: member-set-co-owned-by-from
 function main() returns ExitCode
 	let members = CharSet from ['x']
-	let cs = CharacterSet.from(members)
+	_ = CharacterSet.from(members)
 	print("{members.count()}")
 	return 0
 end 'main'
@@ -29,7 +29,6 @@ func @main {
     x64.leaRegRdata rax, [rip + __witness_Character.Equatable]
     x64.callDirect Set.create
     x64.movRegReg rbx, r8
-    x64.storeSlotReg slot0, rbx
     x64.leaRegRdata rax, [rip + __str_rec_1]
     x64.loadRegBaseDisp.word64 r12, [rax + 0]
     x64.loadRegBaseDisp.word64 r13, [rax + 8]
@@ -59,32 +58,33 @@ func @main {
     x64.callDirect __mm_incref
     x64.movRegReg rcx, rbx
     x64.callDirect CharacterSet.from
-    x64.movRegReg r12, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __destruct_CharacterSet
     x64.leaRegRdata rdx, [rip + __witness_Character.Hashable]
     x64.leaRegRdata rax, [rip + __witness_Character.Equatable]
     x64.movRegReg rcx, rbx
     x64.callDirect Set.count
-    x64.movRegReg rbx, r8
+    x64.movRegReg r12, r8
     x64.movRegImm32 rcx, 20
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r13, r8
-    x64.movRegReg rcx, rbx
+    x64.movRegReg rcx, r12
     x64.movRegReg rdx, r13
     x64.callDirect __uint_to_string
-    x64.movRegReg rbx, r8
-    x64.leaRegRegImm32 rcx, rbx, 57
+    x64.movRegReg r12, r8
+    x64.leaRegRegImm32 rcx, r12, 57
     x64.movRegImm32 rdx, 0
     x64.callDirect __mm_alloc
     x64.movRegReg r14, r8
     x64.leaRegRegImm32 r15, r14, 56
     x64.movRegReg rcx, r15
     x64.movRegReg rdx, r13
-    x64.movRegReg rax, rbx
+    x64.movRegReg rax, r12
     x64.callDirect __str_copy
-    x64.leaRegRegReg rax, r15, rbx
+    x64.leaRegRegReg rax, r15, r12
     x64.storeBaseDispReg.word64 [r14 + 0], r15
-    x64.storeBaseDispReg.word64 [r14 + 8], rbx
+    x64.storeBaseDispReg.word64 [r14 + 8], r12
     x64.movRegImm rax, -3
     x64.storeBaseDispReg.word64 [r14 + 16], rax
     x64.movRegImm32 rax, 1
@@ -95,12 +95,10 @@ func @main {
     x64.callDirect print
     x64.movRegReg rcx, r14
     x64.callDirect __str_decref
-    x64.movRegImm32 rbx, 0
-    x64.movRegReg rcx, r12
-    x64.callDirect __destruct_CharacterSet
-    x64.loadRegSlot rcx, slot0
+    x64.movRegImm32 r12, 0
+    x64.movRegReg rcx, rbx
     x64.callDirect __destruct_Set_Character
-    x64.movRegReg r8, rbx
+    x64.movRegReg r8, r12
     x64.epilogue 40
     x64.popReg r15
     x64.popReg r14

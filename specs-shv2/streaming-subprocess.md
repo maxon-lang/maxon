@@ -59,12 +59,17 @@ function main() returns ExitCode
 	let line = subpReadLine(h)
 	let n = line.byteLength()
 	let code = subpWait(h)
+	print("{code}")
 	subpRelease(h)
 	return n as ExitCode
 end 'main'
 ```
 ```exitcode
 7
+```
+```stdout
+0
+
 ```
 
 <!-- test: streaming-subprocess.eof-latched -->
@@ -78,12 +83,17 @@ function main() returns ExitCode
 	let eof1 = subpReadLine(h)
 	let eof2 = subpReadLine(h)
 	let code = subpWait(h)
+	print("{code}")
 	subpRelease(h)
 	return (line1.byteLength() + eof1.byteLength() * 10 + eof2.byteLength() * 10) as ExitCode
 end 'main'
 ```
 ```exitcode
 7
+```
+```stdout
+0
+
 ```
 
 <!-- test: streaming-subprocess.spawned-reader -->
@@ -97,6 +107,7 @@ function reader() returns int
 	let line = subpReadLine(h)
 	let n = line.byteLength()
 	let code = subpWait(h)
+	print("{code}")
 	subpRelease(h)
 	return n
 end 'reader'
@@ -110,6 +121,10 @@ end 'main'
 ```exitcode
 7
 ```
+```stdout
+0
+
+```
 
 <!-- test: streaming-subprocess.interleave-with-sleep -->
 <!-- targets: x64-windows -->
@@ -121,6 +136,7 @@ function reader() returns int
 	let line = subpReadLine(h)
 	let n = line.byteLength()
 	let code = subpWait(h)
+	print("{code}")
 	subpRelease(h)
 	return n
 end 'reader'
@@ -141,6 +157,10 @@ end 'main'
 ```exitcode
 8
 ```
+```stdout
+0
+
+```
 
 <!-- test: streaming-subprocess.two-lines -->
 <!-- targets: x64-windows -->
@@ -152,12 +172,17 @@ function main() returns ExitCode
 	let l1 = subpReadLine(h)
 	let l2 = subpReadLine(h)
 	let code = subpWait(h)
+	print("{code}")
 	subpRelease(h)
 	return (l1.byteLength() + l2.byteLength()) as ExitCode
 end 'main'
 ```
 ```exitcode
 6
+```
+```stdout
+0
+
 ```
 
 <!-- test: streaming-subprocess.write-echo -->
@@ -178,6 +203,7 @@ function main() returns ExitCode
 	let first = subpReadLine(h)
 	let second = subpReadLine(h)
 	let code = subpWait(h)
+	print("{code}")
 	subpRelease(h)
 	var result = 0
 	if w1 == 0 and w2 == 0 and first.byteLength() > 0 and first.byteLength() < second.byteLength() 'roundtrip'
@@ -188,6 +214,10 @@ end 'main'
 ```
 ```exitcode
 23
+```
+```stdout
+0
+
 ```
 
 <!-- test: streaming-subprocess.drop-reader-then-reread -->
@@ -206,17 +236,17 @@ function reader(h int) returns int
 end 'reader'
 
 function dropIt(h int) returns int
-	let r = async reader(h)
+	_ = async reader(h)
 	sleep(200)
 	return 0
 end 'dropIt'
 
 function main() returns ExitCode
 	let h = subpSpawn("cmd /c ping -n 3 127.0.0.1 >nul & echo hi")
-	let d = dropIt(h)
+	_ = dropIt(h)
 	let line = subpReadLine(h)
 	let n = line.byteLength()
-	let code = subpWait(h)
+	_ = subpWait(h)
 	subpRelease(h)
 	return n as ExitCode
 end 'main'
@@ -250,12 +280,17 @@ function main() returns ExitCode
 	let l2 = subpReadLine(h2)
 	let n2 = l2.byteLength()
 	let c2 = subpWait(h2)
+	print("{c2}")
 	subpRelease(h2)
 	return (n2 * 10 + rn) as ExitCode
 end 'main'
 ```
 ```exitcode
 80
+```
+```stdout
+0
+
 ```
 
 <!-- test: streaming-subprocess.spawn-release-loop -->
@@ -271,7 +306,7 @@ function main() returns ExitCode
 		let h = subpSpawn("cmd /c echo hello")
 		let line = subpReadLine(h)
 		total = total + line.byteLength()
-		let code = subpWait(h)
+		_ = subpWait(h)
 		subpRelease(h)
 		i = i + 1
 	end 'loop'

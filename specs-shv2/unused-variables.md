@@ -55,7 +55,7 @@ end 'main'
 error E3012: specs/fragments/unused-variables/unused-var.test:4:6: unused variable: 'x'
 ```
 
-<!-- disabled-test: unused-let -->
+<!-- test: unused-let -->
 <!-- unused BODY `let`s. shv2 checks body `var`s (E3077 owes that half — an unmentioned `var` reports as unused rather than as should-be-let); the `let` half is its own rung, and its cost is EXPRESSIVENESS rather than tidiness: MEASURED, it refuses 82 cases of this suite whose shape IS the test — a leak gate binds an owned value and deliberately never touches it, so scope exit is the only thing that can free it, and `register-pressure` needs a def that is never read. The E2001/E3064 reason this note used to give was the ORACLE's and does not transfer: shv2 has no purity analysis, so `_ = <any call>` is already legal here -->
 ```maxon
 
@@ -119,7 +119,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: tuple-destructuring-unused -->
+<!-- test: tuple-destructuring-unused -->
 <!-- TUPLE-DESTRUCTURING bindings — `let (a, b) = …` binds through a path that mints no unused candidate. Its own rung -->
 ```maxon
 
@@ -138,7 +138,7 @@ end 'main'
 error E3012: specs/fragments/unused-variables/tuple-destructuring-unused.test:10:10: unused variable: 'b'
 ```
 
-<!-- disabled-test: multiple-unused-first-reported -->
+<!-- test: multiple-unused-first-reported -->
 <!-- two unused BODY `let`s — the same missing rung as `unused-let` above. (The "first reported" property itself is already live: `reportUnusedBindings` scans `unusedCandidates` in declaration order and returns on the first hit, and `unused-var` above now exercises it for a `var`.) -->
 ```maxon
 

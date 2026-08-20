@@ -7,6 +7,7 @@ end 'Pair'
 
 function main() returns ExitCode
 	let p = Pair.both("the first heap string is long", b: "the second heap string is long too")
+	print("{p}")
 	return 6
 end 'main'
 ---
@@ -28,8 +29,8 @@ func @main {
     x64.pushReg r14
     x64.pushReg r15
     x64.prologue 40
-    x64.leaRegRdata rbx, [rip + __str_rec_2]
-    x64.leaRegRdata rax, [rip + __str_rec_3]
+    x64.leaRegRdata rbx, [rip + __str_rec_4]
+    x64.leaRegRdata rax, [rip + __str_rec_5]
     x64.storeSlotReg slot0, rax
     x64.movRegImm32 rcx, 24
     x64.movRegImm32 rdx, 0
@@ -76,6 +77,39 @@ func @main {
     x64.movRegImm32 rax, 1
     x64.storeBaseDispReg.word64 [r14 + 24], rax
     x64.storeBaseDispReg.word64 [r12 + 16], r14
+    x64.loadRegBaseDisp.word64 rax, [r12 + 0]
+    x64.cmpRegImm32 rax, 0
+    x64.setccReg equal, rcx
+    x64.leaRegRdata rdx, [rip + __str_rec_6]
+    x64.imulRegReg rcx, rcx, rdx
+    x64.leaRegRegImm32 rcx, rcx, 0
+    x64.cmpRegImm32 rax, 1
+    x64.setccReg equal, rax
+    x64.leaRegRdata rdx, [rip + __str_rec_7]
+    x64.imulRegReg rax, rax, rdx
+    x64.leaRegRegReg rax, rcx, rax
+    x64.loadRegBaseDisp.word64 rbx, [rax + 0]
+    x64.loadRegBaseDisp.word64 r13, [rax + 8]
+    x64.leaRegRegImm32 rcx, r13, 57
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __mm_alloc
+    x64.movRegReg r14, r8
+    x64.leaRegRegImm32 r15, r14, 56
+    x64.movRegReg rcx, r15
+    x64.movRegReg rdx, rbx
+    x64.movRegReg rax, r13
+    x64.callDirect __str_copy
+    x64.leaRegRegReg rax, r15, r13
+    x64.storeBaseDispReg.word64 [r14 + 0], r15
+    x64.storeBaseDispReg.word64 [r14 + 8], r13
+    x64.movRegImm rax, -3
+    x64.storeBaseDispReg.word64 [r14 + 16], rax
+    x64.movRegImm32 rax, 1
+    x64.storeBaseDispReg.word64 [r14 + 24], rax
+    x64.movRegReg rcx, r14
+    x64.callDirect print
+    x64.movRegReg rcx, r14
+    x64.callDirect __str_decref
     x64.movRegImm32 rbx, 6
     x64.movRegReg rcx, r12
     x64.callDirect __destruct_Pair
@@ -86,6 +120,17 @@ func @main {
     x64.popReg r13
     x64.popReg r12
     x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
+
+func @print {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.prologue 32
+    x64.callDirect __write_stdout
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

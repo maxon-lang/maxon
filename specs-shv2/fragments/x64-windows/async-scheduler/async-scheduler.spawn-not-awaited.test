@@ -6,7 +6,7 @@ function compute() returns int
 end 'compute'
 
 function main() returns ExitCode
-	let p = async compute()
+	_ = async compute()
 	return 7 as ExitCode
 end 'main'
 ---
@@ -56,16 +56,13 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.prologue 40
+    x64.prologue 32
     x64.leaRegFunc rcx, [rip + compute]
     x64.callDirect __gt_spawn
-    x64.movRegImm32 rbx, 7
     x64.movRegReg rcx, r8
     x64.callDirect __gt_promise_drop
-    x64.movRegReg r8, rbx
-    x64.epilogue 40
-    x64.popReg rbx
+    x64.movRegImm32 r8, 7
+    x64.epilogue 32
     x64.popReg rbp
     x64.ret
 }

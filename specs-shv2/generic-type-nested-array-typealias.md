@@ -418,7 +418,7 @@ type Container uses Element
 	end 'push'
 
 	export function drainOne()
-		let x = try self.items.pop() otherwise return
+		_ = try self.items.pop() otherwise return
 	end 'drainOne'
 end 'Container'
 
@@ -470,7 +470,7 @@ type Container uses Element
 
 	export function drainViaLocal()
 		var arr = self.items
-		let x = try arr.pop() otherwise return
+		_ = try arr.pop() otherwise return
 	end 'drainViaLocal'
 end 'Container'
 
@@ -515,7 +515,7 @@ type Container uses Element
 	end 'push'
 
 	export function peekCount() returns Count
-		let x = try self.items.get(0) otherwise return 0
+		_ = try self.items.get(0) otherwise return 0
 		return self.items.count()
 	end 'peekCount'
 end 'Container'
@@ -560,8 +560,8 @@ type Container uses Element
 	end 'push'
 
 	export function peekEnds()
-		let a = try self.items.first() otherwise return
-		let b = try self.items.last() otherwise return
+		_ = try self.items.first() otherwise return
+		_ = try self.items.last() otherwise return
 	end 'peekEnds'
 end 'Container'
 
@@ -602,7 +602,7 @@ type Container uses Element
 	end 'push'
 
 	export function dropAt()
-		let x = try self.items.remove(0) otherwise return
+		_ = try self.items.remove(0) otherwise return
 	end 'dropAt'
 end 'Container'
 
@@ -655,7 +655,7 @@ type Container uses Element
 	end 'push'
 
 	export function drainOne()
-		let x = try self.items.pop() otherwise return
+		_ = try self.items.pop() otherwise return
 	end 'drainOne'
 end 'Container'
 
@@ -743,11 +743,11 @@ type Container uses Element
 	end 'push'
 
 	export function drainOne()
-		let x = try self.items.pop() otherwise return
+		_ = try self.items.pop() otherwise return
 	end 'drainOne'
 
 	export function peek()
-		let y = try self.items.get(0) otherwise return
+		_ = try self.items.get(0) otherwise return
 	end 'peek'
 end 'Container'
 
@@ -851,11 +851,16 @@ function main() returns ExitCode
 	var sc = StringContainer.create()
 	sc.push("alpha string long enough to force a heap allocation")
 	let taken = sc.takeOne()
+	print("{taken}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+alpha string long enough to force a heap allocation
+
 ```
 
 ### Clone a managed opaque array field (deep, source freed)
@@ -1844,7 +1849,7 @@ type Container uses Element
 	end 'create'
 
 	export function add(item Element)
-		let kept = self.sink.push(item)
+		_ = self.sink.push(item)
 	end 'add'
 end 'Container'
 

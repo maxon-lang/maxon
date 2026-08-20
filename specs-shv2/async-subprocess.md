@@ -145,7 +145,7 @@ that blocked the single thread on the child would instead produce `12`.
 var order = 0
 
 function slow() returns int
-	let c = try runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
+	_ = try runProcess("cmd /c ping -n 2 127.0.0.1 >nul") otherwise 99
 	order = order * 10 + 1
 	return 1
 end 'slow'
@@ -159,8 +159,8 @@ end 'fast'
 function main() returns ExitCode
 	let p1 = async slow()
 	let p2 = async fast()
-	let r1 = await p1
-	let r2 = await p2
+	_ = await p1
+	_ = await p2
 	return order as ExitCode
 end 'main'
 ```
@@ -341,6 +341,70 @@ function main() returns ExitCode
 	let p63 = async child()
 	let p64 = async child()
 	let r = await p64
+	_ = await p00
+	_ = await p01
+	_ = await p02
+	_ = await p03
+	_ = await p04
+	_ = await p05
+	_ = await p06
+	_ = await p07
+	_ = await p08
+	_ = await p09
+	_ = await p10
+	_ = await p11
+	_ = await p12
+	_ = await p13
+	_ = await p14
+	_ = await p15
+	_ = await p16
+	_ = await p17
+	_ = await p18
+	_ = await p19
+	_ = await p20
+	_ = await p21
+	_ = await p22
+	_ = await p23
+	_ = await p24
+	_ = await p25
+	_ = await p26
+	_ = await p27
+	_ = await p28
+	_ = await p29
+	_ = await p30
+	_ = await p31
+	_ = await p32
+	_ = await p33
+	_ = await p34
+	_ = await p35
+	_ = await p36
+	_ = await p37
+	_ = await p38
+	_ = await p39
+	_ = await p40
+	_ = await p41
+	_ = await p42
+	_ = await p43
+	_ = await p44
+	_ = await p45
+	_ = await p46
+	_ = await p47
+	_ = await p48
+	_ = await p49
+	_ = await p50
+	_ = await p51
+	_ = await p52
+	_ = await p53
+	_ = await p54
+	_ = await p55
+	_ = await p56
+	_ = await p57
+	_ = await p58
+	_ = await p59
+	_ = await p60
+	_ = await p61
+	_ = await p62
+	_ = await p63
 	return r as ExitCode
 end 'main'
 ```

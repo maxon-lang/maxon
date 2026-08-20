@@ -10,7 +10,7 @@ function fast() returns int
 end 'fast'
 
 function main() returns ExitCode
-	let slow = async slowProc()
+	_ = async slowProc()
 	let q = async fast()
 	let r = await q
 	return r as ExitCode
@@ -83,12 +83,11 @@ func @main {
   entry:
     x64.pushReg rbp
     x64.movRegReg rbp, rsp
-    x64.pushReg rbx
-    x64.pushReg r12
     x64.prologue 32
     x64.leaRegFunc rcx, [rip + slowProc]
     x64.callDirect __gt_spawn
-    x64.movRegReg rbx, r8
+    x64.movRegReg rcx, r8
+    x64.callDirect __gt_promise_drop
     x64.leaRegFunc rcx, [rip + fast]
     x64.callDirect __gt_spawn
     x64.movRegReg rcx, r8
@@ -106,18 +105,11 @@ func @main {
     x64.callDirect mrt_panic
     x64.movRegImm32 r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
   __rc_ok:
-    x64.leaRegRegImm32 r12, r8, 0
-    x64.movRegReg rcx, rbx
-    x64.callDirect __gt_promise_drop
-    x64.movRegReg r8, r12
+    x64.leaRegRegImm32 r8, r8, 0
     x64.epilogue 32
-    x64.popReg r12
-    x64.popReg rbx
     x64.popReg rbp
     x64.ret
 }

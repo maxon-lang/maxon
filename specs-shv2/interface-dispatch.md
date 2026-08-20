@@ -3164,7 +3164,7 @@ function box() returns Printer
 end 'box'
 
 function main() returns ExitCode
-	let p = box()
+	_ = box()
 	return 3
 end 'main'
 ```

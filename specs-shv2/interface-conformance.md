@@ -498,7 +498,7 @@ error E3012: specs/fragments/interface-conformance/non-interface-method-on-confo
 ```
 
 
-<!-- disabled-test: interface-method-local-var-still-errors -->
+<!-- test: interface-method-local-var-still-errors -->
 <!-- E3012 exists for PARAMETERS (ff9c825fa) but not yet for LOCALS, and this case asserts the LOCAL half — an unused `let` inside an interface method, which the waiver must not cover. Unblocked by `unused-variables.md` (whitelist 170), not by this file. -->
 ```maxon
 

@@ -232,7 +232,7 @@ two drops. (It used to be a MOVE, and `members.count()` here was E3102.)
 ```maxon
 function main() returns ExitCode
 	let members = CharSet from ['x']
-	let cs = CharacterSet.from(members)
+	_ = CharacterSet.from(members)
 	print("{members.count()}")
 	return 0
 end 'main'
@@ -287,8 +287,8 @@ end 'main'
 Both the box and the member set it owns; a leak here exits 101.
 ```maxon
 function main() returns ExitCode
-	let unused = CharacterSet.punctuation()
-	let alsoUnused = CharacterSet.whitespacesAndNewlines()
+	_ = CharacterSet.punctuation()
+	_ = CharacterSet.whitespacesAndNewlines()
 	print("ok")
 	return 0
 end 'main'
@@ -485,7 +485,7 @@ type Trimmer
 end 'Trimmer'
 
 function main() returns ExitCode
-	let t = Trimmer.init(CharacterSet.whitespaces())
+	_ = Trimmer.init(CharacterSet.whitespaces())
 	return 0
 end 'main'
 ```
@@ -509,11 +509,16 @@ end 'Slot'
 
 function main() returns ExitCode
 	let s = Slot.filled(CharacterSet.whitespaces())
+	print("{s}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+filled
+
 ```
 
 <!-- test: characterset-at-a-generic-instance-field -->
@@ -534,7 +539,7 @@ end 'Box'
 typealias CharacterSetBox = Box with CharacterSet
 
 function main() returns ExitCode
-	let b = CharacterSetBox.init(CharacterSet.whitespaces())
+	_ = CharacterSetBox.init(CharacterSet.whitespaces())
 	return 0
 end 'main'
 ```

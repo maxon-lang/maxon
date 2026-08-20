@@ -63,6 +63,7 @@ end 'makeWrap'
 
 function main() returns ExitCode
 	let w = makeWrap(0)
+	print("{w}")
 	return 0
 end 'main'
 ```
@@ -70,6 +71,8 @@ end 'main'
 0
 ```
 ```stdout
+empty
+
 ```
 
 ### Consumed-Into-Field Parameter Moved on One Branch, Other Branch Live
@@ -95,6 +98,7 @@ end 'Named'
 function main() returns ExitCode
 	let s = "argument {7} padded out long enough to heap allocate"
 	let n = Named.create(s, flag: 0)
+	print("{n.name}")
 	return 0
 end 'main'
 ```
@@ -102,6 +106,8 @@ end 'main'
 0
 ```
 ```stdout
+fallback name padded long enough to heap allocate
+
 ```
 
 ### Move in One `if`/`else` Branch, Other Branch Live (Both Fall Through)
@@ -194,6 +200,7 @@ end 'makeWrap'
 
 function main() returns ExitCode
 	let w = makeWrap(0)
+	print("{w}")
 	return 0
 end 'main'
 ```
@@ -201,6 +208,8 @@ end 'main'
 0
 ```
 ```stdout
+holds
+
 ```
 
 ### Move in One `match` Arm, Other Arms Live
@@ -225,11 +234,13 @@ end 'build'
 
 function pick(c Color) returns ExitCode
 	var a = build(1)
+	var moved = ""
 	match c 'm'
-		red then let u = a
+		red then moved = a
 		green then print("green arm leaves it live padded long")
 		blue then print("blue arm leaves it live padded long")
 	end 'm'
+	print("{moved}")
 	return 0
 end 'pick'
 
@@ -281,6 +292,7 @@ end 'pick'
 
 function main() returns ExitCode
 	let w = pick(Color.green)
+	print("{w}")
 	return 0
 end 'main'
 ```
@@ -288,7 +300,8 @@ end 'main'
 0
 ```
 ```stdout
-green arm leaves it live padded long
+green arm leaves it live padded longempty
+
 ```
 
 ### Conditional Move of a Loop-Body-Local Value (Reconciled Per Iteration)

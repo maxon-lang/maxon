@@ -64,11 +64,16 @@ end 'Named'
 
 function main() returns ExitCode
 	let n = Named.create()
+	print("{n.name}")
 	return 7
 end 'main'
 ```
 ```exitcode
 7
+```
+```stdout
+hello
+
 ```
 
 <!-- test: string-field-read -->
@@ -140,11 +145,16 @@ end 'Outer'
 
 function main() returns ExitCode
 	let o = Outer.create()
+	print("{o.inner.label}")
 	return 3
 end 'main'
 ```
 ```exitcode
 3
+```
+```stdout
+hi
+
 ```
 
 <!-- test: nested-managed-field-ranged-create-param -->
@@ -176,11 +186,16 @@ end 'WrapA'
 
 function main() returns ExitCode
 	let w = WrapA.create()
+	print("{w.inner.label}")
 	return 3
 end 'main'
 ```
 ```exitcode
 3
+```
+```stdout
+v1
+
 ```
 
 <!-- test: param-consumed-into-field -->
@@ -331,11 +346,16 @@ end 'Outer'
 function main() returns ExitCode
 	let i = Inner.create(10)
 	let o = Outer.create(i)
+	print("{o.inner.x}")
 	return i.x
 end 'main'
 ```
 ```exitcode
 10
+```
+```stdout
+10
+
 ```
 
 <!-- test: managed-double-store-co-owns -->
@@ -495,11 +515,16 @@ end 'Holder'
 
 function main() returns ExitCode
 	let h = Holder.create()
+	print("{h.pending}")
 	return 4
 end 'main'
 ```
 ```exitcode
 4
+```
+```stdout
+unterminatedString
+
 ```
 
 <!-- test: reassign-managed-struct-field -->

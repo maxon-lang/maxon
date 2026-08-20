@@ -1451,6 +1451,7 @@ function main() returns ExitCode
 	let a = try outer(false) otherwise return 1
 	if a == "value" 'x'
 		let b = try outer(true) otherwise return 0
+		print("{b}")
 		return 2
 	end 'x'
 	return 3

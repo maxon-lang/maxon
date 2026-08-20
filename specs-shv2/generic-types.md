@@ -193,11 +193,16 @@ typealias PointBox = Box with Point
 function main() returns ExitCode
 	let p = Point.create(7)
 	let pb = PointBox.create(p)
+	print("{pb.value.x}")
 	return p.getX() - 7
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+7
+
 ```
 
 <!-- test: error.non-generic-with -->
@@ -243,11 +248,15 @@ typealias StrBox = Box with String
 function main() returns ExitCode
 	let s = "{42}"
 	let b = StrBox.create(s)
+	print("{b.value}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+42
 ```
 
 <!-- test: managed-struct-field-arg -->
@@ -270,11 +279,16 @@ typealias HolderBox = Box with Holder
 function main() returns ExitCode
 	let h = Holder.create("{9}", n: 3)
 	let b = HolderBox.create(h)
+	print("{b.value.label}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+9
+
 ```
 
 <!-- test: generic-nested-trivial -->
@@ -294,11 +308,16 @@ typealias BoxBox = Box with (Box with Integer)
 function main() returns ExitCode
 	let inner = IntBox.create(5)
 	let outer = BoxBox.create(inner)
+	print("{outer.value.value}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+5
+
 ```
 
 <!-- test: managed-string-arg-loop -->
@@ -313,7 +332,7 @@ typealias StrBox = Box with String
 function main() returns ExitCode
 	var i = 0
 	while i < 100 'loop'
-		let b = StrBox.create("{i}")
+		_ = StrBox.create("{i}")
 		i = i + 1
 	end 'loop'
 	return 0
@@ -336,11 +355,16 @@ function main() returns ExitCode
 	let s = "{42}"
 	let a = StrBox.create(s)
 	let b = a
+	print("{b.value}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+42
+
 ```
 
 <!-- test: managed-instance-escape-owns-content -->
@@ -380,7 +404,7 @@ function main() returns ExitCode
 	var i = 0
 	while i < 50 'loop'
 		let inner = StrBox.create("{i}")
-		let outer = BoxBox.create(inner)
+		_ = BoxBox.create(inner)
 		i = i + 1
 	end 'loop'
 	return 0
@@ -403,11 +427,16 @@ end 'Tagged'
 typealias IntTagged = Tagged with Integer
 function main() returns ExitCode
 	let t = IntTagged.create(5, tag: "{3}")
+	print("{t.value}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+5
+
 ```
 
 <!-- test: error.generic-double-store-managed -->
@@ -944,11 +973,16 @@ typealias LeafBoxBox = Box with (Box with Leaf)
 function main() returns ExitCode
 	let inner = LeafBox.create(Leaf.make("a"))
 	let outer = LeafBoxBox.create(inner)
+	print("{outer.value.value.s}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+a
+
 ```
 
 <!-- test: alias-named-type-argument-agrees -->
@@ -970,11 +1004,16 @@ typealias N1 = Box with N0
 function main() returns ExitCode
 	let v0 = N0.create(S0.make("x"))
 	let v1 = N1.create(v0)
+	print("{v1.value.value.s}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+x
+
 ```
 
 <!-- test: alias-named-type-argument-forward-declared-agrees -->
@@ -996,11 +1035,16 @@ typealias N0 = Box with S0
 function main() returns ExitCode
 	let v0 = N0.create(S0.make("x"))
 	let v1 = N1.create(v0)
+	print("{v1.value.value.s}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+x
+
 ```
 
 <!-- test: alias-named-type-argument-cross-file-types-first -->
@@ -1024,11 +1068,16 @@ typealias N1 = Box with N0
 function main() returns ExitCode
 	let v0 = N0.create(S0.make("x"))
 	let v1 = N1.create(v0)
+	print("{v1.value.value.s}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+x
+
 ```
 
 <!-- test: alias-named-type-argument-cross-file-use-first -->
@@ -1038,6 +1087,7 @@ typealias N1 = Box with N0
 function main() returns ExitCode
 	let v0 = N0.create(S0.make("x"))
 	let v1 = N1.create(v0)
+	print("{v1.value.value.s}")
 	return 0
 end 'main'
 // --- file: b_types.maxon
@@ -1057,6 +1107,10 @@ export typealias N0 = Box with S0
 ```
 ```exitcode
 0
+```
+```stdout
+x
+
 ```
 
 <!-- test: both-spellings-agree-at-the-comparison -->
@@ -1090,15 +1144,23 @@ function makeIt() returns ViaAlias
 end 'makeIt'
 function main() returns ExitCode
 	let a = ViaAlias.create(N0.create(S0.make("a")))
+	print("{a.value.value.s}")
 	let b = ViaInline.create(N0.create(S0.make("b")))
+	print("{b.value.value.s}")
 	var swap = ViaAlias.create(N0.create(S0.make("c")))
 	swap = ViaInline.create(N0.create(S0.make("d")))
+	print("{swap.value.value.s}")
 	let q = makeIt()
+	print("{q.value.value.s}")
 	return takes(ViaInline.create(N0.create(S0.make("e"))))
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+abdr
+
 ```
 
 <!-- test: both-spellings-agree-at-a-nested-type-argument -->
@@ -1127,12 +1189,18 @@ function takes(_ DeepAlias) returns ExitCode
 end 'takes'
 function main() returns ExitCode
 	let d = DeepAlias.create(N1.create(N0.create(S0.make("x"))))
+	print("{d.value.value.value.s}")
 	let e = DeepInline.create(N1.create(N0.create(S0.make("y"))))
+	print("{e.value.value.value.s}")
 	return takes(DeepInline.create(N1.create(N0.create(S0.make("z")))))
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+xy
+
 ```
 
 <!-- test: alias-named-type-argument-owning-heap-is-not-co-owned-trivial -->
@@ -1234,6 +1302,7 @@ typealias N1 = Box with N0
 function main() returns ExitCode
 	let v0 = N0.create(S0.make("x"))
 	let v1 = N1.create(v0)
+	print("{v1.value.value.s}")
 	let again = v0.value
 	print("{again.s}")
 	return 0
@@ -1243,7 +1312,8 @@ end 'main'
 0
 ```
 ```stdout
-x
+xx
+
 ```
 
 <!-- test: inline-nested-type-argument-is-consumed-and-co-owned -->
@@ -1269,6 +1339,7 @@ typealias N1 = Box with (Box with S0)
 function main() returns ExitCode
 	let v0 = N0.create(S0.make("x"))
 	let v1 = N1.create(v0)
+	print("{v1.value.value.s}")
 	let again = v0.value
 	print("{again.s}")
 	return 0
@@ -1278,7 +1349,8 @@ end 'main'
 0
 ```
 ```stdout
-x
+xx
+
 ```
 
 <!-- test: error.bare-generic-constructor-unbound-t -->
@@ -1395,11 +1467,16 @@ function main() returns ExitCode
 	let a = WA.create(1, tag: 5)
 	let t = a.getTag()
 	let b = IntBox.create(t)
+	print("{b.value}")
 	return takesPlain(a.getTag())
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+5
+
 ```
 
 <!-- test: error.self-cycle-alias -->
@@ -1907,13 +1984,20 @@ typealias LeafBox = Box with Leaf
 typealias LeafBoxBox = Box with (Box with Leaf)
 function main() returns ExitCode
 	let sb = StringBox.create("hello")
+	print("{sb.value}")
 	let lb = LeafBox.create(Leaf.make("a"))
+	print("{lb.value.s}")
 	let nested = LeafBoxBox.create(LeafBox.create(Leaf.make("b")))
+	print("{nested.value.value.s}")
 	return 0
 end 'main'
 ```
 ```exitcode
 0
+```
+```stdout
+helloab
+
 ```
 
 <!-- test: ranged-alias-type-arg-admitted -->
