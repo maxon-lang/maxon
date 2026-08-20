@@ -1206,6 +1206,13 @@ there is nothing for any destructor to release. The dictionary destructor must t
 slot either: it once did, reaching it by walking THROUGH the nested view to `Outer`'s parameter, where
 `Outer with (String, String)` made it managed. Release without retain is an over-release, and this program
 was **exit 139** with that walk in place while the merge base ran it at exit 0.
+
+⚠ **`m` is read for its scalar `tag` ONLY to satisfy `E3012`, which widened to unused `let` bindings
+after this case was written.** The read is a plain field load: it neither retains nor releases the opaque
+slot, and what the case needs is unchanged — the record is BUILT in a shared body that carries a
+descriptor and DROPPED in that frame, which is what routes the drop through `instanceBoxDropCallee`.
+RE-MEASURED in this spelling against the pre-fix compiler: **exit 139**. (The faithful spelling — a bare
+`M.create(t, z: u)` statement with no binding at all — is not legal Maxon: `E2015: identifier statement`.)
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1221,7 +1228,7 @@ end 'Inner2'
 type Mid uses Y, Z
 	typealias In = Inner2 with (Y, Z)
 	let i as In
-	let tag as Integer
+	export let tag as Integer
 
 	static function create(y Y, z Z) returns Self
 		return Self{i: In.create(y, q: z), tag: 2}
@@ -1234,7 +1241,7 @@ type Outer uses T, U
 
 	export function build(t T, u U) returns Integer
 		let m = M.create(t, z: u)
-		return n
+		return n + m.tag
 	end 'build'
 
 	static function create() returns Self
@@ -1267,7 +1274,7 @@ end 'main'
 0
 ```
 ```stdout
-11
+13
 first payload long enough to allocate
 second payload long enough to allocate
 ```
@@ -1280,6 +1287,13 @@ field of `Mid`, whose own instantiation is a DECLARATION VIEW. The frame that fr
 the release would have to be a dictionary destructor handed the descriptor of the NEARER instantiation, and
 the slot's own release is a fact about one two levels out. Admitted, this program was **exit 139**; the
 merge base refused it, and so does this.
+
+⚠ **`m` is read for its scalar `tag` ONLY to satisfy `E3012`, which widened to unused `let` bindings
+after this case was written.** The read is a plain field load: it neither retains nor releases the opaque
+slot, and what the case needs is unchanged — the record is BUILT in a shared body that carries a
+descriptor and DROPPED in that frame, which is what routes the drop through `instanceBoxDropCallee`.
+RE-MEASURED in this spelling against the pre-fix compiler: **exit 139**. (The faithful spelling — a bare
+`M.create(t, z: u)` statement with no binding at all — is not legal Maxon: `E2015: identifier statement`.)
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1295,7 +1309,7 @@ end 'Inner2'
 type Mid uses Y, Z
 	typealias In = Inner2 with (Y, Z)
 	let i as In
-	let tag as Integer
+	export let tag as Integer
 
 	static function create(y Y, z Z) returns Self
 		return Self{i: In.create(y, q: z), tag: 2}
@@ -1308,7 +1322,7 @@ type Outer uses T, U
 
 	export function build(t T, u U) returns Integer
 		let m = M.create(t, z: u)
-		return n
+		return n + m.tag
 	end 'build'
 
 	static function create() returns Self
@@ -1332,7 +1346,7 @@ function main() returns ExitCode
 	let s2 = heapString("second payload ", b: "long enough to allocate")
 	print("{o.build(s1, u: s2)}\n")
 	let extra = MS.create(heapString("x ", b: "yyyyyyyyyyyyyyyyyyyyyy"), z: heapString("z ", b: "wwwwwwwwwwwwwwwwwwwwww"))
-	print("extra\n")
+	print("extra {extra.tag}\n")
 	return 0 as ExitCode
 end 'main'
 ```
