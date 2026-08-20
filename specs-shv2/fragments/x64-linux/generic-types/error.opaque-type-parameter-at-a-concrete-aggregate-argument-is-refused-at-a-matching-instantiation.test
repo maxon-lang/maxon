@@ -1,0 +1,40 @@
+// Test: error.opaque-type-parameter-at-a-concrete-aggregate-argument-is-refused-at-a-matching-instantiation
+typealias Integer = int(i64.min to i64.max)
+
+type Inner uses P
+	let p as P
+	let s as String
+
+	export function tag() returns Integer
+		return s.count() as Integer
+	end 'tag'
+
+	static function create(p P, s String) returns Self
+		return Self{p: p, s: s}
+	end 'create'
+end 'Inner'
+
+type Outer uses T
+	typealias I = Inner with T
+	var n as Integer
+
+	export function build(t T) returns Integer
+		let i = I.create(t, s: t)
+		return n + i.tag()
+	end 'build'
+
+	static function create() returns Self
+		return Self{n: 1}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with String
+
+function main() returns ExitCode
+	var o = O.create()
+	print("{o.build("ab")}")
+	return 0 as ExitCode
+end 'main'
+---
+CompilerError:
+error E3005: <fragment>:22:13: argument type mismatch for 's': expected 'String', got 'type parameter': a generic body is compiled ONCE, against the declaration view, so a type parameter is an opaque machine word here and nothing has fixed what it points at — this is refused even where every 'with' in the program binds it to that very type. Declare the place at the type parameter too, or make the call from a concrete instantiation, where the type argument is known
