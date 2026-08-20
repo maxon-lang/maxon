@@ -1575,17 +1575,16 @@ function declareInstanceFieldDropNeeds(usage RuntimeUsage, id GenericInstanceId,
 		return
 	end 'noSynthesizedCascade'
 
+	// ⭐ **IT READS `instanceFieldDropKind` RATHER THAN RESTATING IT (BATCH41 review).** This walk used to ask
+	// the classifier's three questions again in its own `if` chain — is the field managed, is it existential,
+	// what is its callee — which is the CONCRETE family doing what the DICTIONARY family beside it was
+	// deliberately built not to do: one field classified in two places, agreeing today, with nothing making
+	// them agree tomorrow. A field is now accounted for under exactly the callee the cascade drops it through.
 	for i in 0 upto signatures.genericInstanceFieldCount(id) 'eachField'
 		if not signatures.genericInstanceFieldIsManaged(id, index: i) 'scalar'
 			continue
 		end 'scalar'
-		// The base struct's OWN interface-typed field survives substitution into the instance's cascade
-		// (`instanceFieldDropKind`) — `declareStructFieldDropNeeds`' arm, for its reason.
-		if signatures.genericInstanceFieldIsExistential(id, index: i) 'existential'
-			usage.usesDropExistential = true
-			continue
-		end 'existential'
-		recordCallUsage(signatures.genericInstanceFieldDropCallee(id, index: i), usage: usage)
+		declareDropKindNeeds(usage, kind: instanceFieldDropKind(signatures, id: id, index: i))
 	end 'eachField'
 end 'declareInstanceFieldDropNeeds'
 
@@ -2124,18 +2123,21 @@ end 'synthesizeGenericInstanceDictionaryDestructor'
 // how a field would come to be dropped through one callee and accounted for under another.
 //
 // The order of the arms is the order of the questions: a slot still at a bare parameter first (it is the one
-// `typeIsManaged` answers `false` for, so a managed test would skip it), then a nested declaration view
-// resting a slot of its own, then the ordinary managed field, then nothing.
+// `typeIsManaged` answers `false` for, so a managed test would skip it), then the ordinary managed field,
+// then nothing.
+//
+// ⛔⛔ **A THIRD ARM STOOD BETWEEN THEM AND IS GONE (BATCH41 review): a NESTED DECLARATION VIEW released
+// through ITS OWN dictionary destructor at block 0.** It was an over-release. The record it dropped had its
+// slots RETAINED — if at all — in the nested type's own shared body, against the parameter THAT body spells,
+// while this cascade releases them against the parameter they substitute to one level out; the two are
+// different tokens with different instantiations, and MEASURED they disagree: exit **139** on a program the
+// merge base runs at exit **0**. `kindWalksNestedInstances` carries the full measurement and the control that
+// pins it. The nested store is refused instead (`Parser.requireStoredNestedViewDropIsNameable`), which is
+// what the merge base did.
 function dictionaryInstanceFieldDropKind(signatures ProgramSignatures, id GenericInstanceId, index FieldIndex) returns FieldDropKindOption
 	if signatures.genericInstanceFieldIsOpaque(id, index: index) 'aBareParameterSlot'
 		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(DropTypeParamName, descriptor: DictionaryDestructorDescriptorParam, blockOffset: signatures.genericInstanceFieldOpaqueBlockOffset(id, index: index)))
 	end 'aBareParameterSlot'
-
-	// A nested view is handed the WHOLE descriptor (block 0): its own fields substitute to parameters of the
-	// same `uses` list, so it indexes its blocks off the same base this cascade does.
-	if signatures.genericInstanceFieldRestsARetainedSlot(id, index: index) 'aNestedDeclarationView'
-		return FieldDropKindOption.released(FieldDropKind.throughDescriptor(signatures.genericInstanceFieldDictionaryDropCallee(id, index: index), descriptor: DictionaryDestructorDescriptorParam, blockOffset: 0))
-	end 'aNestedDeclarationView'
 
 	if not signatures.genericInstanceFieldIsManaged(id, index: index) 'scalarField'
 		return FieldDropKindOption.none

@@ -1196,3 +1196,146 @@ end 'main'
 ```stdout
 100
 ```
+
+<!-- test: a-nested-view-whose-parameter-owes-no-reference-round-trips -->
+### A nested declaration view whose OWN parameter is never made managed rests nothing, and RUNS
+`Mid` holds an `Inner2 with (Y, Z)` and is itself spelled by `Outer` as `Mid with (T, U)`. `Mid`'s own
+parameters are instantiated ONLY at `Outer`'s parameters, which are bare type parameters — so
+`typeParamFeedCanOwnAReference` declines, the constructor feed inside `Mid.create` takes no reference, and
+there is nothing for any destructor to release. The dictionary destructor must therefore NOT release the
+slot either: it once did, reaching it by walking THROUGH the nested view to `Outer`'s parameter, where
+`Outer with (String, String)` made it managed. Release without retain is an over-release, and this program
+was **exit 139** with that walk in place while the merge base ran it at exit 0.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner2 uses P, Q
+	let p as P
+	let q as Q
+
+	static function create(p P, q Q) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Inner2'
+
+type Mid uses Y, Z
+	typealias In = Inner2 with (Y, Z)
+	let i as In
+	let tag as Integer
+
+	static function create(y Y, z Z) returns Self
+		return Self{i: In.create(y, q: z), tag: 2}
+	end 'create'
+end 'Mid'
+
+type Outer uses T, U
+	typealias M = Mid with (T, U)
+	var n as Integer
+
+	export function build(t T, u U) returns Integer
+		let m = M.create(t, z: u)
+		return n
+	end 'build'
+
+	static function create() returns Self
+		return Self{n: 11}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with (String, String)
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var o = O.create()
+	let s1 = heapString("first payload ", b: "long enough to allocate")
+	let s2 = heapString("second payload ", b: "long enough to allocate")
+	print("{o.build(s1, u: s2)}\n")
+	print(s1)
+	print("\n")
+	print(s2)
+	print("\n")
+	return 0 as ExitCode
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+11
+first payload long enough to allocate
+second payload long enough to allocate
+```
+
+<!-- test: error.a-nested-view-fed-a-referenced-borrow-into-a-field-is-refused -->
+### …and the same shape WITH a managed instantiation of the middle type is REFUSED
+Adding `Mid with (String, String)` makes `Mid`'s own parameter managed, so the constructor feed inside
+`Mid.create` DOES take a descriptor-mediated reference — and the record that holds it comes to rest in a
+field of `Mid`, whose own instantiation is a DECLARATION VIEW. The frame that frees it is a shared body, so
+the release would have to be a dictionary destructor handed the descriptor of the NEARER instantiation, and
+the slot's own release is a fact about one two levels out. Admitted, this program was **exit 139**; the
+merge base refused it, and so does this.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Inner2 uses P, Q
+	let p as P
+	let q as Q
+
+	static function create(p P, q Q) returns Self
+		return Self{p: p, q: q}
+	end 'create'
+end 'Inner2'
+
+type Mid uses Y, Z
+	typealias In = Inner2 with (Y, Z)
+	let i as In
+	let tag as Integer
+
+	static function create(y Y, z Z) returns Self
+		return Self{i: In.create(y, q: z), tag: 2}
+	end 'create'
+end 'Mid'
+
+type Outer uses T, U
+	typealias M = Mid with (T, U)
+	var n as Integer
+
+	export function build(t T, u U) returns Integer
+		let m = M.create(t, z: u)
+		return n
+	end 'build'
+
+	static function create() returns Self
+		return Self{n: 11}
+	end 'create'
+end 'Outer'
+
+typealias O = Outer with (String, String)
+typealias MS = Mid with (String, String)
+
+function heapString(a String, b String) returns String
+	var sb = StringBuilder.create()
+	sb.append(a)
+	sb.append(b)
+	return sb.build()
+end 'heapString'
+
+function main() returns ExitCode
+	var o = O.create()
+	let s1 = heapString("first payload ", b: "long enough to allocate")
+	let s2 = heapString("second payload ", b: "long enough to allocate")
+	print("{o.build(s1, u: s2)}\n")
+	let extra = MS.create(heapString("x ", b: "yyyyyyyyyyyyyyyyyyyyyy"), z: heapString("z ", b: "wwwwwwwwwwwwwwwwwwwwww"))
+	print("extra\n")
+	return 0 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:19:10: Unsupported: storing into a field a value of type 'Mid.In' — a generic instance written over this type's OWN parameter, resting a field declared AT that parameter, where THIS type is itself spelled over another generic's parameter — has no destructor this body can name: the enclosing record is freed by a SHARED body, so releasing the stored field means releasing a slot whose destructor is a fact about an instantiation two levels out, and the entry that knows it (`__destruct_dict_<instance>(descriptor, box)`) is handed the descriptor of the nearer one. Hold the record in a type that is instantiated concretely rather than over another generic's parameter. A descriptor carrying a NESTED declaration view's per-instantiation destructor is a later slice
+```

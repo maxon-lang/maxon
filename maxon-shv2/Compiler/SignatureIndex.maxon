@@ -1819,6 +1819,15 @@ enum TypeArgInstantiationKind
 	// `typeIsManaged` answers `false` for — this rung's own defect one door over, and the RIGHT answer here,
 	// because a declaration view describes no box any program builds.
 	retainedFeed
+	// ⛔⛔ **IS THE ARGUMENT A BARE TYPE PARAMETER — i.e. is the declaring type itself ever held as a NESTED
+	// DECLARATION VIEW (BATCH41 review)?** Not a property of the argument's ownership at all, which is why it
+	// reads nothing the four kinds above read: it asks whether the type that declares this parameter is ever
+	// spelled over ANOTHER type's parameter, so that the frame which would have to release its slots is a
+	// shared body rather than a concrete instantiation.
+	//
+	// It REFUSES (`kindIsARefusal`), so it skips the rows that are not facts about the program, for the same
+	// reason `managedElement` does.
+	nestedDeclarationViewArg
 end 'TypeArgInstantiationKind'
 
 // Which instance of the declaring base classified its argument as the asked-for kind, or that none did.
@@ -1850,8 +1859,41 @@ function kindIsARefusal(kind TypeArgInstantiationKind) returns bool
 		uncopyableElement then return true
 		managedElement then return true
 		retainedFeed then return false
+		nestedDeclarationViewArg then return true
 	end 'kind'
 end 'kindIsARefusal'
+
+// ⛔⛔ **DOES THE SLOT WALK DESCEND INTO A NESTED GENERIC-INSTANCE FIELD FOR THIS KIND — and the answer is
+// NOT the same for all of them, which is a defect the BATCH41 review MEASURED as a SEGFAULT.**
+//
+// A REFUSING kind (`managedElement`) asks *"can any symbol this body could name release the slot?"*, and that
+// is transitive: a record holding a record holding an unnameable slot is just as unnameable, so the walk
+// descends.
+//
+// `retainedFeed` asks a DIFFERENT question — *"did a shared body TAKE a reference into this slot?"* — and the
+// retain is emitted at the constructor feed against **the parameter the FEEDING body spells**
+// (`typeParamFeedCanOwnAReference`, read at `referenceOrMarkOpaqueFeed`). Descending one level changes which
+// parameter is asked about: a `Mid uses Y, Z` holding an `Inner2 with (Y, Z)`, itself held by
+// `Outer uses T, U` as `Mid with (T, U)`, has the release ask about `Outer`'s `T` (managed — `Outer with
+// (String, String)` is interned) while the retain asks about `Mid`'s `Y`, whose ONLY instantiation is
+// `Outer`'s `T`, a bare `typeParameter` that `typeIsManaged` answers `false` for. Release without retain is an
+// over-release: **MEASURED `0xC0000005`, exit 139, on a program the merge base runs at exit 0** — and adding a
+// concrete `Mid with (String, String)` beside it makes the retain fire and the same program exit 0, which is
+// the control that pins the cause on WHICH PARAMETER IS ASKED and not on the kind.
+//
+// ⇒ the dictionary destructor serves ONE level of declaration view, which is the level whose retain it can
+// see. The nested level is held by `Parser.requireStoredNestedViewDropIsNameable`, which refuses exactly the
+// store the merge base refused.
+function kindWalksNestedInstances(kind TypeArgInstantiationKind) returns bool
+	match kind 'kind'
+		consumeMoved then return true
+		coOwnedTrivial then return true
+		uncopyableElement then return true
+		managedElement then return true
+		retainedFeed then return false
+		nestedDeclarationViewArg then return true
+	end 'kind'
+end 'kindWalksNestedInstances'
 
 // The `StdType` a global whose `.data` bytes ARE ITS VALUE occupies its slot as — which is to say WHICH
 // TAGS MAY BE A FOLDED GLOBAL AT ALL, because the width itself is not this function's to know.
@@ -17133,6 +17175,30 @@ export type ProgramSignatures
 	// ⚠ Over-approximating is free in this direction and that is the whole argument for reading every row: the
 	// release it emits is `__drop_type_param` against `destroyFunc@40`, which is **0** for an instantiation
 	// owing nothing and is therefore inert on exactly the rows a refusal would have had to exclude.
+	// ⭐⭐⭐ **DOES `id` REST ITS SLOT AT A PARAMETER WHOSE OWNER IS ITSELF EVER A NESTED DECLARATION VIEW
+	// (BATCH41 review)?** The one fact that separates the field arrival this rung ADMITS from the one it
+	// MISCOMPILED, and it is a fact about the ENCLOSING declaration rather than about the stored record:
+	//
+	//   • `Bag uses Element` holding a `Box with Element` — `Bag`'s only instantiation is `Bag with String`,
+	//     so `__destruct_Bag_String` is a CONCRETE cascade and it drops the field through the substituted
+	//     `__destruct_Box_String`. Admitted, and it is `a-record-over-the-enclosing-parameter-in-a-plain-field-
+	//     round-trips`.
+	//   • `Mid uses Y, Z` holding an `Inner2 with (Y, Z)` where some `Outer uses T, U` spells `Mid with (T, U)`
+	//     — `Mid`'s instantiation is a DECLARATION VIEW, so the frame that must release the field is a shared
+	//     body, and the dictionary destructor cannot serve it (`kindWalksNestedInstances` carries the
+	//     measurement). Refused, exactly as the merge base refused it.
+	//
+	// It is asked BESIDE `instanceRestsAnUnnameableSlot` and never instead of it: a nested view whose parameter
+	// no instantiation makes managed rests nothing at run time, retains nothing and releases nothing, and
+	// refusing it would reject a program both trees run at exit 0.
+	export function instanceRestsASlotUnderANestedView(id GenericInstanceId) returns bool
+		if not self.instanceCanRestASlotAtAParameter(id) 'nothingToWalk'
+			return false
+		end 'nothingToWalk'
+
+		return self.instanceOwnsASlotOfKind(id, kind: TypeArgInstantiationKind.nestedDeclarationViewArg, visited: ClonerSet.create())
+	end 'instanceRestsASlotUnderANestedView'
+
 	export function instanceRestsARetainedSlot(id GenericInstanceId) returns bool
 		if not self.instanceCanRestASlotAtAParameter(id) 'nothingToWalk'
 			return false
@@ -17215,23 +17281,6 @@ export type ProgramSignatures
 		return layoutBlockOffsetFor(self.opaqueTypeParamPosition(self.substituteInstanceFieldType(id, index: index)))
 	end 'genericInstanceFieldOpaqueBlockOffset'
 
-	// Does substituted instance field `index` hold a NESTED record that rests a retained slot of its own — the
-	// field whose release is the nested dictionary destructor rather than a one-argument callee?
-	export function genericInstanceFieldRestsARetainedSlot(id GenericInstanceId, index FieldIndex) returns bool
-		let slot = self.substituteInstanceFieldType(id, index: index)
-		if maxonTypeTag(slot) != ValueTypeTag.genericInstance 'namesNoInstance'
-			return false
-		end 'namesNoInstance'
-
-		return self.instanceRestsARetainedSlot(typeNameIdOf(slot))
-	end 'genericInstanceFieldRestsARetainedSlot'
-
-	// The nested dictionary destructor substituted instance field `index` is released through. Precondition:
-	// `genericInstanceFieldRestsARetainedSlot`.
-	export function genericInstanceFieldDictionaryDropCallee(id GenericInstanceId, index FieldIndex) returns ByteArray
-		return dictionaryDestructorSymbol(self.mangleGenericInstance(typeNameIdOf(self.substituteInstanceFieldType(id, index: index))))
-	end 'genericInstanceFieldDictionaryDropCallee'
-
 	// ⭐⭐ **THE WALK'S TWO ALLOCATION-FREE PRECONDITIONS, ASKED BEFORE ITS CYCLE SET EXISTS.** A fully
 	// CONCRETE instance resolves its own destructor at the create site — the whole point of the
 	// declaration-view/instance split — and a BUILTIN element-bearing record (`__ManagedMemory with Element`,
@@ -17303,7 +17352,7 @@ export type ProgramSignatures
 			return self.anyInstanceTypeArgHasKind(typeNameIdOf(slot), kind: kind)
 		end 'aBareParameterSlot'
 
-		if maxonTypeTag(slot) == ValueTypeTag.genericInstance 'aNestedInstance'
+		if maxonTypeTag(slot) == ValueTypeTag.genericInstance and kindWalksNestedInstances(kind) 'aNestedInstance'
 			return self.instanceOwnsASlotOfKind(typeNameIdOf(slot), kind: kind, visited: visited)
 		end 'aNestedInstance'
 
@@ -21621,6 +21670,7 @@ export type ProgramSignatures
 			uncopyableElement then return not self.typeSupportsDeepClone(t, asElement: true, visited: ClonerSet.create())
 			managedElement then return self.typeArgIsManagedElement(t)
 			retainedFeed then return self.typeIsManaged(t, from: self.typeNames)
+			nestedDeclarationViewArg then return maxonTypeTag(t) == ValueTypeTag.typeParameter
 		end 'kind'
 	end 'typeArgHasKind'
 
