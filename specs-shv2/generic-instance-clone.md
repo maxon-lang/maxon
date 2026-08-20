@@ -364,3 +364,158 @@ end 'main'
 ```stdout
 1
 ```
+
+<!-- test: error.member-call-on-an-unsubstituted-element-payload-is-diagnosed -->
+### A member call on a value still held at a type parameter is REFUSED, and the refusal names the parameter
+⭐ The half `clone-of-an-instance-over-the-enclosing-type-parameter` STEERS AROUND (W181): that case reads
+`e.tag` — a concretely-declared `Integer` field — precisely because reading `e.v` took the compiler down, and
+a check that declines to ask its own question pins nothing. `Bag.copy() returns EBoxArray` hands the caller
+the DECLARATION view (`Array with (Box with Element)`), so `e.v` is still `Bag`'s own opaque `Element` in
+`main` — and `main` encloses no declaration at all.
+
+⛔⛔ **THE REFUSAL WAS RIGHT AND THE COMPILER COULD NOT SAY IT.** The phrase builder asked
+`enclosingTypeParamName` which of the CALLER's parameters the token names, and at file scope
+`self.enclosingType` is empty: `panic at Parser.maxon: enclosingTypeParamName: type-parameter token …
+names no parameter of '', which declares 0`. A diagnostic the program had already earned, replaced by a
+stack trace — and the emptiness IS the tell, because a parameter's name is a property of the TOKEN (a W14
+digest of `(declaring type, parameter name)`) and never of whoever is looking at it. It is now read off
+`typeParamOwnerOf`, so the sentence below can be built from any scope.
+
+⚠ **THIS CASE PINS THE DIAGNOSTIC, NOT THE ANSWER.** The SUBSTITUTION is still missing — a correct compiler
+substitutes the receiver's `Integer` into that returned type and this program RUNS — and the case that pins
+that is `element-payload-through-a-shared-body-return-over-the-enclosing-parameter`, disabled directly below.
+When it lands, THIS case is the one that must be re-examined: the E2015 becomes wrong, not merely stale.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	export static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias EBoxArray = Array with EBox
+
+	var items as EBoxArray
+
+	export static function create() returns Self
+		return Self{items: EBoxArray.create()}
+	end 'create'
+
+	export function add(x Element, tag Integer)
+		self.items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	export function copy() returns EBoxArray
+		return self.items.clone()
+	end 'copy'
+end 'Bag'
+
+typealias IntBag = Bag with Integer
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	b.add(91, tag: 4)
+
+	let c = b.copy()
+	let e = try c.get(0) otherwise return 90
+	return 4 as ExitCode if e.v.equals(91) else 70 as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:40:30: Unsupported: no requirement named 'equals' is provided by the constraints on type parameter 'Element' — a method call on a value whose type is an interface, or on a constrained type parameter, dispatches through a witness table, so the method has to be one that interface declares
+```
+
+<!-- disabled-test: element-payload-through-a-shared-body-return-over-the-enclosing-parameter -->
+<!-- the rung that SUBSTITUTES a shared body's inner-GENERIC-alias return at the concrete caller -->
+The same program as the case above, as it must eventually RUN. `IntBag` binds `Element` to `Integer`, so
+`copy()`'s `Array with (Box with Element)` is an `Array with (Box with Integer)` at this receiver and `e.v`
+is an `Integer` — `.equals(91)` is then the ordinary builtin conformance the control case pins, and the
+program returns 4.
+
+⛔ **MEASURED at W181, and the reason it is shelved rather than fixed there**: the repair is NOT in the
+re-qualifying arm it looks like it should be in. `promoteBareGenericResultToCalleeScope` re-scopes a bare
+generic BASE and answers nothing for an alias; the arm below it re-qualifies an INNER (ranged) alias and a
+GENERIC alias lives in a different registry. Probing the actual value showed the result of `b.copy()`
+arriving tagged **`struct` and named `Box`** — the ELEMENT's base, two resolution steps off the array it
+declared — so the type is already wrong before any substitution door sees it, and the fix is in how a shared
+body's declared return crosses to a concrete caller. That is the same seam `W178` names.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	export static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+type Bag uses Element
+	typealias EBox = Box with Element
+	typealias EBoxArray = Array with EBox
+
+	var items as EBoxArray
+
+	export static function create() returns Self
+		return Self{items: EBoxArray.create()}
+	end 'create'
+
+	export function add(x Element, tag Integer)
+		self.items.push(EBox.create(x, tag: tag))
+	end 'add'
+
+	export function copy() returns EBoxArray
+		return self.items.clone()
+	end 'copy'
+end 'Bag'
+
+typealias IntBag = Bag with Integer
+
+function main() returns ExitCode
+	var b = IntBag.create()
+	b.add(91, tag: 4)
+
+	let c = b.copy()
+	let e = try c.get(0) otherwise return 90
+	return 4 as ExitCode if e.v.equals(91) else 70 as ExitCode
+end 'main'
+```
+```exitcode
+4
+```
+
+<!-- test: element-payload-through-a-concretely-instantiated-box -->
+The FALSE-REJECT CONTROL for the pair above, and the reason they are a set: the identical `.v.equals(…)`
+spelling on a box whose argument was concrete all along never crossed a shared body's return, so it compiled
+and ran throughout. It is what makes the refusal attributable to the SUBSTITUTION rather than to the
+spelling — a `.equals()` on a value of a ranged int alias is an ordinary builtin conformance dispatch, and
+this case is what says so. Returns 4.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Box uses T
+	export var v as T
+	export var tag as Integer
+
+	export static function create(x T, tag Integer) returns Self
+		return Self{v: x, tag: tag}
+	end 'create'
+end 'Box'
+
+typealias IntBox = Box with Integer
+
+function main() returns ExitCode
+	let b = IntBox.create(91, tag: 4)
+	return 4 as ExitCode if b.v.equals(91) else 70 as ExitCode
+end 'main'
+```
+```exitcode
+4
+```

@@ -2508,11 +2508,41 @@ export function installStructCloners(module StdModule, project Project, signatur
 		return
 	end 'noCloners'
 	for (_, layout) in project.structTypes 'each'
-		if needed.contains(clonerSymbol(layout.name)) 'referenced'
-			synthesizeStructCloner(module, layout: layout, project: project, signatures: signatures)
-		end 'referenced'
+		installOneStructCloner(module, layout: layout, project: project, signatures: signatures, needed: needed)
 	end 'each'
+
+	// ⭐⭐ **THE TUPLES, FROM THE INDEX — the exact twin of `installStructDestructors`' second walk, and it
+	// was MISSING (W180).** Everything that walk's header says holds here unchanged: `project.structTypes`
+	// carries every tuple the source SPELLS and no tuple minted by SUBSTITUTION, because
+	// `ProgramSignatures.substituteTupleThroughInstance` creates those at a CALL SITE straight into the
+	// whole-program index. The drop side gained this walk at W41 off a MEASURED backend panic; the clone side
+	// kept the one-registry walk, so the two installers' key spaces differed and a `copyFunc@32` stamp could
+	// name a cloner in neither. **MEASURED**: with the corpus `Map` live, `for e in ["a": "x"]` binds the
+	// substituted `__Tuple2.String.String`, `let arr = [e]` infers an `Array` of it and `arr.clone()` stamped
+	// `__clone___Tuple2.String.String` — `bakeFuncAbs64Relocs: … it was never installed`, on a program holding
+	// no `typealias` at all. A drop and a clone that disagree about which layouts exist is the same defect
+	// twice, so the two walks are now the same two walks.
+	for layout in signatures.tupleLayouts() 'eachInternedTuple'
+		if projectHasStructLayout(project, name: layout.name) 'committedAlready'
+			continue
+		end 'committedAlready'
+		installOneStructCloner(module, layout: layout, project: project, signatures: signatures, needed: needed)
+	end 'eachInternedTuple'
 end 'installStructCloners'
+
+// One layout's cloner, or nothing when it is unreferenced — `installOneStructDestructor`'s twin, and it exists
+// for that one's reason: the project walk and the substituted-tuple walk above share ONE admission test rather
+// than each spelling it, which is the shape where one of them comes to admit a layout the other would decline.
+//
+// ⚠ There is NO managed-field gate here and the drop twin has one, which is not an omission: a scalar-only box
+// still needs a fresh-box clone, because a clone must ALLOCATE where a trivial drop is just `__mm_decref`.
+function installOneStructCloner(module StdModule, layout StructLayout, project Project, signatures ProgramSignatures, needed ClonerSet)
+	if not needed.contains(clonerSymbol(layout.name)) 'notReferenced'
+		return
+	end 'notReferenced'
+
+	synthesizeStructCloner(module, layout: layout, project: project, signatures: signatures)
+end 'installOneStructCloner'
 
 // The union twin of `installStructCloners`.
 export function installUnionCloners(module StdModule, project Project, signatures ProgramSignatures, needed ClonerSet)

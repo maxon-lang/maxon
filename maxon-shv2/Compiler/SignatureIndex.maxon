@@ -16497,10 +16497,8 @@ export type ProgramSignatures
 	// `element_drop@24` stamp. A second `listElementType` would have been this whole header copied — and the
 	// copy that mattered is the one line of canonicalization, which is exactly the line a copy drops.
 	//
-	// ⭐⭐ **A TUPLE ARGUMENT IS CANONICALIZED ON THE WAY OUT (P1.10), and a generic instance's stored ARG is
-	// the SECOND door this index's types leave by.** `adoptType` performs the same rewrite for every type
-	// that crosses into a FILE's interner; an instance argument crosses no such door — it is read in place —
-	// so without the rewrite here the two doors answer differently about one type. MEASURED, not argued:
+	// ⭐⭐ **A TUPLE ARGUMENT IS CANONICALIZED ON THE WAY OUT (P1.10), and that rewrite is `canonicalInstanceArg`'s
+	// — this function is a CALLER of it, not a second home for it (W180).** MEASURED, not argued:
 	// `typealias Tagged = (Num, String)` is folded by the SWEEP, which spells its elements the way the source
 	// did, so `typealias TaggedArray = Array with Tagged` stored `structRef(__Tuple2.Num.String)` — while
 	// every VALUE the array holds carries the canonical `__Tuple2.int.String`, and only THAT layout reaches
@@ -16508,7 +16506,7 @@ export type ProgramSignatures
 	// stamp therefore named `__destruct___Tuple2.Num.String` and the x64 backend died on the unresolved
 	// symbol — `panic … resolveCallFixups: call to unknown function` (P1.10 review). Every semantic fact the
 	// array derives from its element — managed-ness, the drop callee, the clone strategy, the element size —
-	// now reads the layout the elements ACTUALLY carry.
+	// reads the layout the elements ACTUALLY carry.
 	//
 	// ⚠ **THE INSTANCE'S OWN COMPILED NAME IS DELIBERATELY NOT CANONICALIZED**: `mangleGenericInstance` reads
 	// `instanceArgs` directly. Rewriting it there would give a sweep-spelled instance and a canonically-spelled
@@ -16517,9 +16515,11 @@ export type ProgramSignatures
 	// `Array with Tagged` and an `Array` of the same tuple minted from a literal do not unify, reported as an
 	// honest argument-type mismatch naming both spellings. Unifying them means MERGING two gids in the
 	// registry, which is a change to instance identity itself and not something a read door may make.
+	// ⚠ The SOLE argument's position is spelled `0` here as it is at every other one-parameter-container door:
+	// the header above says "its sole type argument", so the number is the sentence rather than a magic value,
+	// and `substitutedInstanceArg`'s own bounds panic names the arity that makes it safe.
 	export function containerElementType(id GenericInstanceId) returns MaxonType
-		let args = self.genericInstances.instanceArgs(id)
-		return self.canonicalTupleStructRef(try args.get(0) otherwise panic("ProgramSignatures.containerElementType: `{String.from(self.genericInstanceBaseName(id))}` instance {id} has no type argument — arity (1) was checked at instantiation"))
+		return self.canonicalInstanceArg(id, position: 0)
 	end 'containerElementType'
 
 	// ⭐ **THE CANONICAL CONFORMER NAME OF A CONTAINER'S ELEMENT** — the key its conformance answer
@@ -21381,6 +21381,34 @@ export type ProgramSignatures
 		return try args.get(position) otherwise panic("ProgramSignatures.substitutedInstanceArg: type-parameter position {position} out of range for instance {id}'s {args.count()} argument(s) — arity was checked at instantiation (E2056)")
 	end 'substitutedInstanceArg'
 
+	// ⭐⭐ **THE ARGUMENT AS A TYPE, WHERE THE READER ABOVE ANSWERS IT AS A SPELLING — and this is THE DOOR, not
+	// one reader of it (W180).** A generic instance's stored argument is the SECOND door this index's types
+	// leave by (`adoptType` is the first), and a tuple is the one type whose SWEEP spelling and whose
+	// whole-program CANONICAL name differ: the sweep records `(String, Integer)` as `__Tuple2.String.Integer`
+	// because the alias registry that says what `Integer` means is still being built, while every VALUE the
+	// program builds carries `__Tuple2.String.int`. Anything that goes on to NAME A PER-TYPE RUNTIME ENTRY off
+	// the argument — a destructor, a retain, a cloner, a witness label — must read the canonical form, because
+	// the canonical layout is the only one `ParseStaging.commitStructTypes` commits and so the only one the
+	// installers' key space can contain.
+	//
+	// ⛔⛔ **THE REWRITE LIVED AT ONE READER AND THE CLASS PRODUCED A SECOND BUG (W180).** P1.10 put it in
+	// `containerElementType` after the drop stamp died on `__destruct___Tuple2.Num.String`; the descriptor's
+	// `copyFunc@32` reads the argument through `managedOpaqueArrayElementOf`, which never went through that
+	// reader, and MEASURED at W180 a four-line program — `typealias Pair = (String, Integer)`,
+	// `Array with Pair`, one push, one `.clone()` — died at
+	// `bakeFuncAbs64Relocs: … '__clone___Tuple2.String.Integer' … was never installed`. A rewrite installed at
+	// a reader is a rewrite the NEXT reader does not get, so it is installed at the door instead and
+	// `containerElementType` is now one of its callers rather than its home.
+	//
+	// ⚠ **IT IS NOT `substitutedInstanceArg`, AND MERGING THE TWO WOULD RENAME AN EMITTED SYMBOL.**
+	// `instanceArgCompiledName` → `mangleTypeArg` needs the argument's SOURCE spelling: canonicalizing there
+	// would give a sweep-spelled instance and a canonically-spelled one ONE symbol while they remain two gids,
+	// which is the `E3006 duplicate definition` shape `containerElementType`'s header records. Two questions,
+	// two names — and the caller says which one it is asking.
+	export function canonicalInstanceArg(id GenericInstanceId, position TypeParamPosition) returns MaxonType
+		return self.canonicalTupleStructRef(self.substitutedInstanceArg(id, position: position))
+	end 'canonicalInstanceArg'
+
 	// ⭐ **IS INSTANCE `id`'s ARGUMENT AT `position` A MANAGED TYPE?** — asked here rather than by the caller,
 	// for the reason T1 exists: `substitutedInstanceArg` returns a type in THIS INDEX's interner, so the only
 	// table that can resolve its `named` id is `self.typeNames`, and that table is private. A caller doing the
@@ -21398,7 +21426,7 @@ export type ProgramSignatures
 	// the arrangement the witness pair `destroyFunc@8`/`retainFunc@16` already has off
 	// `existentialOwnershipProtocol`, which is why it is spelled the same way here.
 	export function instanceArgIsManaged(id GenericInstanceId, position TypeParamPosition) returns bool
-		return match self.typeOwnershipProtocol(self.substitutedInstanceArg(id, position: position)) 'protocol'
+		return match self.typeOwnershipProtocol(self.canonicalInstanceArg(id, position: position)) 'protocol'
 			none gives false
 			byteRecord to aggregate gives true
 		end 'protocol'
@@ -22803,7 +22831,7 @@ export type ProgramSignatures
 			return ExistentialOwnershipProtocol.none
 		end 'noSharedBodyReadsThisBlock'
 
-		return self.typeOwnershipProtocol(self.substitutedInstanceArg(id, position: position))
+		return self.typeOwnershipProtocol(self.canonicalInstanceArg(id, position: position))
 	end 'typeParamOwnershipProtocol'
 
 	// ⭐⭐ **WHAT A LAYOUT DESCRIPTOR'S `destroyFunc@40` HOLDS FOR INSTANCE `id`'s TYPE ARGUMENT AT `position`**
@@ -22831,7 +22859,7 @@ export type ProgramSignatures
 	export function typeParamDropCallee(id GenericInstanceId, position TypeParamPosition) returns ByteArray
 		return match self.typeParamOwnershipProtocol(id, position: position) 'protocol'
 			none gives EmptySourceText
-			byteRecord to aggregate gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.substitutedInstanceArg(id, position: position))
+			byteRecord to aggregate gives managedFieldDropCallee(self, typeNames: self.typeNames, fieldType: self.canonicalInstanceArg(id, position: position))
 		end 'protocol'
 	end 'typeParamDropCallee'
 
@@ -23078,9 +23106,16 @@ export type ProgramSignatures
 		//
 		// ⚠ **POSITION 0 IS NOT AN ASSUMPTION**: an `Array` takes exactly one type parameter, so its element
 		// is its only argument, and a `position` past that finds nothing exactly as the field walk would.
+		//
+		// ⛔⛔ **AND THE ELEMENT IS THE ARGUMENT'S CANONICAL FORM, NOT ITS SWEEP SPELLING (W180).** Every arm
+		// below answers `canonicalInstanceArg`, because this walk's whole output is spent on NAMING A
+		// PER-TYPE RUNTIME ENTRY — the `copyFunc@32` cloner and the deep-clone gate in front of it — and only
+		// the canonical tuple layout is committed to the registry `installStructCloners` walks. Answering the
+		// raw spelling stamped `__clone___Tuple2.String.Integer` into the descriptor of an
+		// `Array with (String, Integer)` and the PE writer died with `it was never installed`.
 		if self.isArrayInstance(id) 'theArrayIsTheColumn'
 			if position == 0 and self.instanceArgIsManaged(id, position: position) 'managedElement'
-				return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: position))
+				return ManagedOpaqueArrayElement.present(self.canonicalInstanceArg(id, position: position))
 			end 'managedElement'
 			return ManagedOpaqueArrayElement.absent
 		end 'theArrayIsTheColumn'
@@ -23100,7 +23135,7 @@ export type ProgramSignatures
 				if maxonTypeTag(element) == ValueTypeTag.typeParameter 'opaqueElement'
 					let elementPosition = self.opaqueTypeParamPosition(element)
 					if elementPosition == position and self.instanceArgIsManaged(id, position: elementPosition) 'managedArrayElement'
-						return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: elementPosition))
+						return ManagedOpaqueArrayElement.present(self.canonicalInstanceArg(id, position: elementPosition))
 					end 'managedArrayElement'
 				end 'opaqueElement'
 				continue
@@ -23111,7 +23146,7 @@ export type ProgramSignatures
 			if maxonTypeTag(fieldType) == ValueTypeTag.typeParameter 'opaqueBareField'
 				let fieldPosition = self.opaqueTypeParamPosition(fieldType)
 				if fieldPosition == position and self.instanceArgIsManaged(id, position: fieldPosition) 'managedBareField'
-					return ManagedOpaqueArrayElement.present(self.substitutedInstanceArg(id, position: fieldPosition))
+					return ManagedOpaqueArrayElement.present(self.canonicalInstanceArg(id, position: fieldPosition))
 				end 'managedBareField'
 			end 'opaqueBareField'
 		end 'eachField'

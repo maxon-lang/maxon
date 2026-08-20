@@ -1478,3 +1478,169 @@ typealias TPair = (Integer, String)
 ```exitcode
 0
 ```
+
+<!-- test: array-of-managed-element-tuples-clones-each -->
+⭐ The CLONE half of `array-of-managed-element-tuples-drops-each`, and the half nobody reran (W180). The
+DECLARATION SWEEP spells a tuple's elements the way the source did (`__Tuple2.String.Integer`) because the
+alias registry that says what `Integer` means is still being built, so `Array with Pair` stores that spelling
+as its type ARGUMENT; every VALUE the array holds carries the canonical `__Tuple2.String.int`, and only THAT
+layout is committed to `project.structTypes`, which is the registry `installStructCloners` walks. Read raw,
+the descriptor's `copyFunc@32` named `__clone___Tuple2.String.Integer` — a cloner in nobody's key space — and
+the PE writer died at `bakeFuncAbs64Relocs: … which is in no debug symbol — it was never installed`. The
+descriptor's ownership words and its copy word now read ONE derivation of the argument, canonical at the door
+rather than at one of its readers. Oracle-verified against `maxon-sharp` (exit 6, same stdout). Returns 6
+(the cloned tuple's 5, plus the clone's count).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Pair = (String, Integer)
+typealias Pairs = Array with Pair
+
+function main() returns ExitCode
+	var xs = Pairs.create()
+	var sb = StringBuilder.create()
+	sb.append("a heap ")
+	sb.append("payload")
+	xs.push((sb.build(), 5))
+	let ys = xs.clone()
+	let cloned = try ys.get(0) otherwise panic("cloned")
+	print("{cloned.0}\n")
+	return cloned.1 + ys.count() as Integer
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+a heap payload
+```
+
+<!-- test: array-of-bare-primitive-element-tuples-clones-each -->
+The CONTROL for the case above, and the reason the two are a pair: with the element spelled `int` rather than
+through a ranged alias, the sweep's spelling and the canonical one are the SAME bytes, so this program
+compiled and ran throughout — a clone case written only this way would have passed for a reason that has
+nothing to do with the defect. The ALIAS is the discriminator, not the tuple and not the clone.
+Oracle-verified against `maxon-sharp` (exit 6, same stdout). Returns 6.
+```maxon
+typealias Pair = (String, int)
+typealias Pairs = Array with Pair
+
+function main() returns ExitCode
+	var xs = Pairs.create()
+	var sb = StringBuilder.create()
+	sb.append("a heap ")
+	sb.append("payload")
+	xs.push((sb.build(), 5))
+	let ys = xs.clone()
+	let cloned = try ys.get(0) otherwise panic("cloned")
+	print("{cloned.0}\n")
+	return cloned.1 + ys.count()
+end 'main'
+```
+```exitcode
+6
+```
+```stdout
+a heap payload
+```
+
+<!-- test: array-of-managed-element-tuples-clone-balances-both-copies -->
+The BALANCE twin: a naming fix that installs the WRONG cloner links, so both copies are read after the clone
+and both are dropped at scope exit. An under-retained element faults or prints poison on the second read
+(`__mm_free` poisons with `0x3F`); an over-retained one leaks the String record and the run exits **101**. The
+element cloner the `copyFunc@32` slot points at must be the same tuple's, so the clone owns an INDEPENDENT
+String record and the original keeps its own. Oracle-verified against `maxon-sharp` (exit 8, same stdout).
+Returns 8 (3 + 3, plus one count each).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias Pair = (String, Integer)
+typealias Pairs = Array with Pair
+
+function main() returns ExitCode
+	var xs = Pairs.create()
+	var sb = StringBuilder.create()
+	sb.append("shared ")
+	sb.append("record")
+	xs.push((sb.build(), 3))
+	let ys = xs.clone()
+
+	let original = try xs.get(0) otherwise panic("pushed")
+	let copied = try ys.get(0) otherwise panic("cloned")
+	print("{original.0}|{copied.0}\n")
+	return original.1 + copied.1 + xs.count() as Integer + ys.count() as Integer
+end 'main'
+```
+```exitcode
+8
+```
+```stdout
+shared record|shared record
+```
+
+<!-- test: array-of-substituted-entry-tuples-clones-each -->
+⭐ The SUBSTITUTED half of the case above, and the SECOND installer that could not see a tuple layout (W180).
+A tuple minted by SUBSTITUTION is in no file's artifact — `MapIterator.current()`'s declared
+`Entry = (Key, Value)` becomes `__Tuple2.String.String` at the call site, straight into the whole-program index
+— so it never reaches `project.structTypes`, and this program spells no tuple type anywhere for it to reach
+through. `installStructDestructors` has walked the index's own tuple layouts since W41 for exactly that reason;
+`installStructCloners` did not, so an `Array` of such entries stamped `__clone___Tuple2.String.String` and the
+PE writer died with `it was never installed` — the drop side's W41 bug, on the clone side, with no ranged alias
+and no `typealias` in the program at all. ⚠ `maxon-sharp` is NOT the oracle for this one: it prints two
+POINTERS for a positionally-accessed `for`-bound Map entry (`{e.0}{e.1}` ⇒ `1406951003914561406951003915…`),
+reported separately, so the expectation below is the language's rather than that compiler's. Returns 2 (one
+element in each of the two arrays), or 9 if the entry loop never ran.
+```maxon
+function main() returns ExitCode
+	let m = ["a": "x"]
+	for e in m 'each'
+		let arr = [e]
+		let cp = arr.clone()
+		let copied = try cp.get(0) otherwise panic("cloned")
+		print("{copied.0}{copied.1}\n")
+		return (cp.count() + arr.count()) as ExitCode
+	end 'each'
+	return 9 as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+ax
+```
+
+<!-- test: array-of-substituted-entry-tuples-with-a-struct-element-clones-each -->
+The case above with a MANAGED STRUCT in the substituted entry, so the missing cloner is one whose body has a
+NESTED cloner of its own (`__clone___Tuple2.String.Point` calling `__clone_Point`): the substituted tuple has
+to be visible to the installer AND its nesting has to be closed, and a fix that only made the symbol exist
+would emit a body calling a second symbol nobody built. Same walk, one level deeper. ⚠ `maxon-sharp` is not
+the oracle here either, for the reason the case above records. Returns 2, or 9 if the entry loop never ran.
+```maxon
+type Point
+	export var name as String
+
+	export static function create(name String) returns Self
+		return Self{name: name}
+	end 'create'
+end 'Point'
+
+typealias PointMap = Map with (String, Point)
+
+function main() returns ExitCode
+	var m = PointMap.create()
+	m.upsert("a", value: Point.create("alpha"))
+	for e in m 'each'
+		let arr = [e]
+		let cp = arr.clone()
+		let copied = try cp.get(0) otherwise panic("cloned")
+		print("{copied.0}{copied.1.name}\n")
+		return (cp.count() + arr.count()) as ExitCode
+	end 'each'
+	return 9 as ExitCode
+end 'main'
+```
+```exitcode
+2
+```
+```stdout
+aalpha
+```

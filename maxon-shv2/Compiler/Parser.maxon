@@ -17282,7 +17282,7 @@ export type Parser
 			return
 		end 'aConcreteSlot'
 
-		let paramName = String.from(self.enclosingTypeParamName(typeNameIdOf(fieldType)))
+		let paramName = String.from(self.typeParamDisplayName(typeNameIdOf(fieldType)))
 		let eqTok = self.current()
 		throw ParseError.unsupported("a default value on field '{String.from(nameTok.value)}' of `type {String.from(layout.name)}`, whose declared type is the type parameter '{paramName}' — a default is produced by a function compiled ONCE from this type's shared body, where '{paramName}' is an opaque word, so nothing written there can produce a value of it, and each instantiation may bind it to a different type. Declare the field at a concrete type, or give it a value at every struct literal of '{String.from(layout.name)}'", line: eqTok.line, column: eqTok.column)
 	end 'requireDefaultableFieldType'
@@ -43908,7 +43908,7 @@ export type Parser
 			// sentence: constrain the parameter with the protocol. (Constructed inline rather than through a
 			// shared factory — `throw self.helperReturningAParseError(…)` leaks the boxed union under the
 			// bootstrap's refcounting; see `floatPayloadMessage`.)
-			none then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.enclosingTypeParamName(self.valueNameId(receiver))), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
+			none then throw ParseError.operatorRequiresConformance(comparisonOpSpelling(op), typeParamName: String.from(self.typeParamDisplayName(self.valueNameId(receiver))), interfaceName: String.from(protocol.name), line: opTok.line, column: opTok.column)
 			// TWO constraints genuinely shaped like the protocol. They are two DISTINCT witness slots holding
 			// two DISTINCT conformers' impls, so "they are both `Equatable`" does not make them interchangeable
 			// — the operator would silently take whichever was written first. Same reject as the `.method()`
@@ -43997,7 +43997,7 @@ export type Parser
 
 			let actual = try args.get(j + 1) otherwise panic("requireGenuineSelfArgs: formal {j} of '{what}' has no actual — args holds {args.count()} entries (receiver + {args.count() - 1}) for {target.paramTypeNames.count()} formals, so the caller's arity check did not run")
 			if not self.isReceiverTypeParamValue(actual, receiverParam: receiverParam) 'notSelfArg'
-				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.enclosingTypeParamName(receiverParam)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
+				throw ParseError.witnessSelfArgNotTypeParam(what, typeParamName: String.from(self.typeParamDisplayName(receiverParam)), got: self.selfArgActualDescription(actual), line: errorTok.line, column: errorTok.column)
 			end 'notSelfArg'
 		end 'eachFormal'
 	end 'requireGenuineSelfArgs'
@@ -44060,17 +44060,35 @@ export type Parser
 			return "a concrete value"
 		end 'concrete'
 
-		return "a value of type parameter '{String.from(self.enclosingTypeParamName(self.valueNameId(actual)))}'"
+		return "a value of type parameter '{String.from(self.typeParamDisplayName(self.valueNameId(actual)))}'"
 	end 'selfArgActualDescription'
 
 	// The declared NAME the type-parameter token `param` was minted from (P1.7a slice 2b) — `T` in `type Box
-	// uses T`. `enclosingTypeParams` is name-by-position and is populated for every generic type body, so the
-	// token re-spells against it; every caller has already established through `isEnclosingTypeParam` that the
-	// token is one of THIS declaration's, which is what makes the miss a panic rather than a case.
-	function enclosingTypeParamName(param TypeParamId) returns ByteArray
-		let position = try typeParamPositionIn(param, declarationName: self.enclosingType, paramNames: self.enclosingTypeParams) otherwise panic("enclosingTypeParamName: type-parameter token {param} names no parameter of '{String.from(self.enclosingType)}', which declares {self.enclosingTypeParams.count()} — every caller reaches here past `isEnclosingTypeParam`, which asks exactly that question")
-		return try self.enclosingTypeParams.get(position) otherwise panic("enclosingTypeParamName: enclosingTypeParams.get OOB at {position}, a position `typeParamPositionIn` just read out of the same list")
-	end 'enclosingTypeParamName'
+	// uses T`.
+	//
+	// ⛔⛔ **IT USED TO RE-SPELL THE TOKEN AGAINST THE *READER'S* ENCLOSING DECLARATION, AND A READER THAT
+	// ENCLOSES NOTHING MADE THAT RENDERING EMPTY (W181).** It read `typeParamPositionIn(param,
+	// declarationName: self.enclosingType, …)` and panicked on the miss, on the argument that "every caller
+	// reaches here past `isEnclosingTypeParam`". Four callers do not — the three DIAGNOSTIC PHRASE builders
+	// below and `requireDefaultableFieldType` — and at FILE SCOPE `self.enclosingType` is
+	// `EmptySourceText`, so the panic read `names no parameter of '', which declares 0`. MEASURED: a value
+	// whose type a substitution gap left as a bare `Bag.Element` reached `main`, a member call on it found no
+	// witness, and the compiler died BUILDING THE SENTENCE THAT WOULD HAVE SAID SO — a diagnostic the program
+	// had already earned, replaced by a stack trace.
+	//
+	// ⭐⭐ **A PARAMETER'S NAME IS A PROPERTY OF THE TOKEN, NOT OF WHOEVER IS LOOKING AT IT.** Since W14 a
+	// token IS a digest of `(declaring type, parameter name)` and `typeParamOwnerOf` is the registry that
+	// inverts it, so the name is answerable wherever the token is — inside the declaring body, in a sibling
+	// generic, or in a `main` that declares nothing. That is the same reading `instanceArgDisplayName` already
+	// takes for the identical question one tier up, and it retires the second rendering rather than teaching
+	// each caller to gate against it. The gated callers get a byte-identical answer: they established the
+	// token is one of THIS declaration's, so its owner IS this declaration.
+	//
+	// Absence stays an invariant break — `recordStruct` and `recordInterfaceDeclaration` file every declared
+	// parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw.
+	function typeParamDisplayName(param TypeParamId) returns ByteArray
+		return (try self.signatures.typeParamOwnerOf(param) otherwise panic("typeParamDisplayName: type-parameter token {param} has no owner — `recordStruct` and `recordInterfaceDeclaration` file every declared parameter as the sweep folds, so a token with none was minted inside a declaration neither fold saw")).paramName
+	end 'typeParamDisplayName'
 
 	// ⭐ **WHAT PROVIDES THE REQUIREMENTS A WITNESS DISPATCH SEARCHED — for the diagnostics that have to name
 	// it (P1.7a-existentials slice 1).** One dispatch mechanism serves two receivers and only this differs:
@@ -44082,7 +44100,7 @@ export type Parser
 			return "interface '{String.from(self.internedName(self.valueNameId(receiver)))}'"
 		end 'existential'
 
-		return "the constraints on type parameter '{String.from(self.enclosingTypeParamName(self.valueNameId(receiver)))}'"
+		return "the constraints on type parameter '{String.from(self.typeParamDisplayName(self.valueNameId(receiver)))}'"
 	end 'witnessDispatchProviderPhrase'
 
 	// The same receiver in the other grammatical slot — "a value OF this cannot reach a `static` requirement".
@@ -44092,7 +44110,7 @@ export type Parser
 			return "interface '{String.from(self.internedName(self.valueNameId(receiver)))}'"
 		end 'existential'
 
-		return "type parameter '{String.from(self.enclosingTypeParamName(self.valueNameId(receiver)))}'"
+		return "type parameter '{String.from(self.typeParamDisplayName(self.valueNameId(receiver)))}'"
 	end 'witnessDispatchReceiverPhrase'
 
 	// Emit the `__str_eq(lhs, rhs)` runtime call, typed `boolean` (its i64 result is 0/1). The one
