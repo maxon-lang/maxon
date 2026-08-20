@@ -1232,11 +1232,10 @@ end 'GlobalInitValueAndType'
 export type ContainerCreateCall
 	export let callee as ByteArray
 	export let stamps as ContainerCreateStampArray
-	export let sizing as ContainerSizing
 	export let elementAdd as ContainerElementAdd
 
-	export static function create(callee ByteArray, stamps ContainerCreateStampArray, sizing ContainerSizing, elementAdd ContainerElementAdd) returns ContainerCreateCall
-		return Self{callee: callee, stamps: stamps, sizing: sizing, elementAdd: elementAdd}
+	export static function create(callee ByteArray, stamps ContainerCreateStampArray, elementAdd ContainerElementAdd) returns ContainerCreateCall
+		return Self{callee: callee, stamps: stamps, elementAdd: elementAdd}
 	end 'create'
 end 'ContainerCreateCall'
 
@@ -1303,14 +1302,12 @@ export union GlobalFactoryReturn
 	undeclared
 end 'GlobalFactoryReturn'
 
-// Is the record `create` hands back already the size it will always be? A `Vector with N T` is — its
-// elements are addressable from birth, so its create is followed by one `__managed_resize` — and every other
-// builtin container GROWS. Read off `ProgramSignatures.genericInstanceFixedSize`, so the count a global
-// vector is born with and the count `Vector.create()` gives one in a body are the same fact.
-export union ContainerSizing
-	grown
-	fixed(count FixedElementCount)
-end 'ContainerSizing'
+// ⚠ **`ContainerSizing` STOOD HERE AND WENT WITH THE SIZED CONTAINER'S `create` (W190).** It answered
+// *"is the record `create` hands back already the size it will always be?"*, which had exactly one `fixed`
+// producer — a `Vector`, whose global record `ModuleInit` sized with a second `__managed_resize` after the
+// runtime `__managed_create`. `stdlib/Vector.maxon`'s own `create()` publishes its slots now, so the sizing
+// travels inside the callee and the description has nothing left to say about it: every container this
+// union could still describe is `grown`, and a union with one variant is a fact nobody reads.
 
 // WHICH record a managed LITERAL global's bytes build — the `ManagedConstKind` → `ManagedGlobalRecord`
 // map, in one place so the kind a constant folded to and the construction its slot gets cannot drift apart.
@@ -18741,7 +18738,38 @@ export type ProgramSignatures
 	// self-maintaining: striking `Map` from `isBuiltinGenericBaseName` (W41 listed the module, W105 removed the
 	// name) makes this predicate answer true for every `Map with (K, V)` with nothing here edited. A container
 	// promoted or demoted moves both answers at once.
+	//
+	// ⭐⭐ **THE SIZED CONTAINER IS THE ONE NAME THE COMPLEMENT CANNOT ANSWER FOR, AND THE EXCEPTION IS THIS
+	// RUNG'S WHOLE POINT (W190).** `stdlib/Vector.maxon` declares `create()` and `Parser` no longer emits one,
+	// so the PROGRAM builds a vector's record — yet `Vector` is still on `isBuiltinGenericBaseName`, because
+	// that predicate also decides what `Vector with 3 Int` MEANS (`baseStoresArgumentsInline`,
+	// `readSizedBaseElementCount`, and the record shv2 still synthesizes). Those two facts came apart here
+	// first; taking the name off the roster outright is `W114`'s rung, and when it lands this arm evaporates
+	// and the complement below answers `Vector` correctly on its own.
+	//
+	// ⛔ **IT MUST NOT BE WIDENED TO "THE CORPUS DECLARES `<base>.create`", WHICH IS THE OBVIOUS SPELLING AND
+	// IS WRONG.** `stdlib/Array.maxon` is LISTED and declares `Array.create` too, so that reading would route
+	// every `IntArray.create()` — in a body and in `__module_init` alike — to a corpus body while
+	// `Parser.emitOwnedContainerCreate` still has an `Array` arm that emits `__managed_create`, which is the
+	// growable record's retirement (the `ARR` chain) and not this one. The question is whose CODE builds the
+	// record, and for `Array` that is still the compiler's.
+	//
+	// ⛔⛔ **AND THE ARM IS `declarationIsASizedContainerRecordNamed`, NOT `isVectorInstance`, WHICH WAS
+	// MEASURED WRONG.** `isVectorBaseName` is deliberately WIDE — it answers for the container's name AND for
+	// this compile's mint of it, because it decides what `Vector with 3 Int` MEANS — so under a USER
+	// `type Vector` it admits the user's declaration, whose base declares no `create` at all. **MEASURED, two
+	// suite cases, both a value of type `unknown` rather than a diagnostic**:
+	// `array-declared-record.error.a-conformer-named-for-a-container-that-constructs-nothing-…` read
+	// *"a member access 'push' on a 'unknown' value"* where it pins the roster refusal, and
+	// `generic-types.error.field-read-on-the-second-builtin-base-…` the same one field-side. That is the S2i
+	// failure `parseQualifiedCall`'s own container arm records — a container static falling through to a
+	// callee no file declares. This predicate is the CORPUS's declaration and no other, which is the question
+	// actually being asked: is the body that builds this record one this compile has.
 	export function instanceCreateIsDeclared(id GenericInstanceId) returns bool
+		if self.declarationIsASizedContainerRecordNamed(self.genericInstanceBaseName(id)) 'theSizedContainersCreateIsTheCorpuss'
+			return true
+		end 'theSizedContainersCreateIsTheCorpuss'
+
 		return not self.isBuiltinGenericBaseName(self.genericInstanceBaseName(id))
 	end 'instanceCreateIsDeclared'
 
@@ -18951,7 +18979,7 @@ export type ProgramSignatures
 		// is born EMPTY and carries no stamps; whether anything then FILLS it is `declaredContainerElementAdd`'s
 		// question, and it has an answer only for the one declared shape a top-level form hands elements to.
 		if self.instanceCreateIsDeclared(id) 'declaredGeneric'
-			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, sizing: ContainerSizing.grown, elementAdd: self.declaredContainerElementAdd(id))
+			return ContainerCreateCall.create(self.declaredInstanceCreateCallee(id), stamps: stamps, elementAdd: self.declaredContainerElementAdd(id))
 		end 'declaredGeneric'
 
 		// ⚠ **A `Set` ARM AND A `Map` ARM STOOD HERE AND WENT WITH THEIR RUNTIME (W105).** Each named a
@@ -18971,18 +18999,20 @@ export type ProgramSignatures
 		// body, which is where the element stamp is decided.
 		if self.isManagedListInstance(id) 'managedList'
 			stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
-			return ContainerCreateCall.create(ListCreateName, stamps: stamps, sizing: ContainerSizing.grown, elementAdd: ContainerElementAdd.unsupported)
+			return ContainerCreateCall.create(ListCreateName, stamps: stamps, elementAdd: ContainerElementAdd.unsupported)
 		end 'managedList'
 
 		if not self.instanceCreateBuildsTheManagedRecord(id) 'notACreatableContainer'
 			panic("ProgramSignatures.containerCreateCall: generic instance {id} is not a builtin container with a `create` — a DECLARED generic returned one arm above, and every builtin reaching here was admitted through `Parser.requireContainerIsCreatable`, which refuses everything this router has no arm for")
 		end 'notACreatableContainer'
 
-		// `Array` and `Vector` share `__managed_create` and its two stamps; a `Vector`'s elements are addressable
-		// from birth, so its record is then sized. That is the same pair of calls `emitVectorCreateOp` makes.
+		// ⚠ **A `Vector` ARM RODE THIS LINE UNTIL W190** — it shared `__managed_create` and its two stamps with
+		// the `Array` and asked for one `__managed_resize` on top (`ContainerSizing.fixed`). A vector's
+		// `create` is `stdlib/Vector.maxon`'s now, so it returns through the `declaredGeneric` arm above and
+		// the record it hands back is already published; only the growable record reaches here.
 		stamps.push(ContainerCreateStamp.inline(self.arrayElementSize(id)))
 		stamps.push(self.columnDestroyStamp(self.containerElementType(id)))
-		return ContainerCreateCall.create(ManagedCreateName, stamps: stamps, sizing: ContainerSizing.fixed(self.genericInstanceFixedSize(id)) if self.isVectorInstance(id) else ContainerSizing.grown, elementAdd: ContainerElementAdd.push(ManagedPushName))
+		return ContainerCreateCall.create(ManagedCreateName, stamps: stamps, elementAdd: ContainerElementAdd.push(ManagedPushName))
 	end 'containerCreateCall'
 
 	// ⭐⭐ **WHICH DECLARED GENERIC A TOP-LEVEL FORM CAN HAND ELEMENTS TO, AND WHAT THEY JOIN IT THROUGH

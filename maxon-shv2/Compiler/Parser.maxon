@@ -13962,6 +13962,16 @@ export type Parser
 			if kind == TokenKind.countof and self.countofOperandIsTheOwnInstanceAt(q) 'directCountof'
 				readsFixedElementCount = true
 			end 'directCountof'
+			// ⭐⭐ **AND SO DOES `Self{}` INSIDE THE SIZED CONTAINER, WHICH IS `stdlib/Vector.maxon`'s `create()`
+			// (W190).** That literal BUILDS the record, and a fixed-size container's record is born with its
+			// slots published — so the number of them is exactly what the shared body cannot state and its
+			// caller can. It is the same slot `countof(Self)` reads, seeded off a second token shape because
+			// the corpus body spells no `countof`: `stdlib/` is compiled by the BOOTSTRAP too, which has no
+			// such expression, so the count reaches this one body through the construction rather than
+			// through a keyword.
+			if self.ownRecordLiteralOfTheSizedContainerAt(q) 'sizedContainerLiteral'
+				readsFixedElementCount = true
+			end 'sizedContainerLiteral'
 			// A `return`/`throw`/`break`/`continue` is a NON-final exit (or, at the tail, harmless over-inclusion):
 			// with one of these OR a nested block below, a feed parameter can be left live at an exit and dropped,
 			// so the method needs the descriptor. A straight-line body has none and unconditionally consumes its
@@ -14644,6 +14654,34 @@ export type Parser
 
 		return self.signatures.containerElementIsOpaque(self.signatures.ownRecordSelfInstance(self.enclosingType))
 	end 'opaqueSelfArrayConstructionAt'
+
+	// ⭐⭐ **THE SAME LITERAL, ASKED FOR THE COUNT RATHER THAN FOR THE DESCRIPTOR (W190).** `Self{}` inside
+	// `type Vector uses Element` is the construction `stdlib/Vector.maxon`'s `create()` IS, and a fixed-size
+	// container's record is born with all of its slots published — so that literal owes a COUNT, which the
+	// declaration's own countless `Self` cannot state and every call site can.
+	//
+	// ⚠ **IT IS A SECOND QUESTION ABOUT ONE SHAPE, NOT A SECOND COPY OF ONE QUESTION.** The sibling above
+	// asks whether the construction reads the ELEMENT's layout descriptor and answers for `Array` as well;
+	// this one asks whether it needs the INSTANCE's element count and is the sized container's alone. The two
+	// slots are reserved by two independent columns of the same fixpoint, exactly as `W190`'s own header
+	// argues they must be — a body that reads only the count carries no descriptor, and vice versa.
+	//
+	// ⭐ **BOTH SPELLINGS, for `countofOperandIsTheOwnInstanceAt`'s reason** — `Self` and the container's own
+	// name denote the same countless instance, and a check filed against one of them would be narrower than
+	// the fact it is about. Emptiness is deliberately NOT tested, on the sibling's stated ground: a `{` may be
+	// followed by a newline before its fields, and over-reserving costs one ignored parameter where missing
+	// one aborts the compiler.
+	function ownRecordLiteralOfTheSizedContainerAt(headPos TokenIndex) returns bool
+		if not self.signatures.isVectorBaseName(self.enclosingType) 'notTheSizedContainersOwnBody'
+			return false
+		end 'notTheSizedContainersOwnBody'
+		if self.kindAt(headPos + 1) != TokenKind.leftBrace 'notALiteral'
+			return false
+		end 'notALiteral'
+
+		let head = self.tokenAt(headPos)
+		return head.kind == TokenKind.selfType or (head.kind == TokenKind.identifier and head.value.equals(self.enclosingType))
+	end 'ownRecordLiteralOfTheSizedContainerAt'
 
 	// The two TOKEN SHAPES that construct the container an alias at `aliasPos` names: the static call
 	// `X` `.` `create` `(` and the literal `X` `{` (S2i). Read by the descriptor-need pre-scan, which runs
@@ -45445,30 +45483,41 @@ export type Parser
 			throw ParseError.unsupported("countof of a type that states no element count — only a fixed-size container type has one (`Vector with 3 Int`, or `Self` inside the sized container's own body). A growable `Array`'s length is a runtime field of the record, not part of its type, so ask it for its `count()`", line: countofTok.line, column: countofTok.column)
 		end 'noElementCount'
 
-		let stated = self.signatures.genericInstanceFixedSize(typeNameIdOf(operand))
+		return try self.fixedElementCountValue(typeNameIdOf(operand), anchor: countofTok)
+	end 'parseCountof'
+
+	// ⭐⭐ **THE COUNT OF ONE SIZED INSTANCE, AT THE PARSE — a literal when the instance STATES one, this
+	// function's own hidden slot when it does not.** Two askers and one answer: the `countof(T)` expression a
+	// program writes, and the `Self{}` construction `stdlib/Vector.maxon`'s `create()` is (W190). They must
+	// agree exactly — a record built with one number and read back through another is a `count()` that
+	// disagrees with `get()`, which is the silent wrong answer `requireVectorElementType`'s header measures
+	// from the other direction.
+	//
+	// ⛔⛔ **A LIFTED CLOSURE IS A DIFFERENT FUNCTION, AND `functionCarriesFixedElementCountParam` DESCRIBES
+	// THE ENCLOSING ONE.** A closure body is parsed in place but emitted as its own top-level function with
+	// its own parameter space, so the slot the enclosing method reserved is not a value the closure has —
+	// returning its ValueId there names a value the lifted function never defines. **MEASURED:
+	// `panic at Parser.tagOf: value v1 has no recorded type`**, on a `function() gives countof(Self)`
+	// inside a `Vector` method. `parseSizeof` reaches the same conclusion through its own gate (a closure
+	// is receiverless, so `__self` is not in scope); a count has no `__self` to test, so the closure is
+	// named directly. Reading the count OUTSIDE the closure and capturing the integer is the cure, and it
+	// is the one the message gives.
+	function fixedElementCountValue(giid GenericInstanceId, anchor Token) returns ValueId throws ParseError
+		let stated = self.signatures.genericInstanceFixedSize(giid)
 		if stated != NoFixedSize 'aStatedCount'
-			return self.emitLiteral(stated, valueType: MaxonType.integer, range: SourceRange.ofToken(countofTok))
+			return self.emitLiteral(stated, valueType: MaxonType.integer, range: SourceRange.ofToken(anchor))
 		end 'aStatedCount'
 
-		// ⛔⛔ **A LIFTED CLOSURE IS A DIFFERENT FUNCTION, AND `functionCarriesFixedElementCountParam` DESCRIBES
-		// THE ENCLOSING ONE.** A closure body is parsed in place but emitted as its own top-level function with
-		// its own parameter space, so the slot the enclosing method reserved is not a value the closure has —
-		// returning its ValueId there names a value the lifted function never defines. **MEASURED:
-		// `panic at Parser.tagOf: value v1 has no recorded type`**, on a `function() gives countof(Self)`
-		// inside a `Vector` method. `parseSizeof` reaches the same conclusion through its own gate (a closure
-		// is receiverless, so `__self` is not in scope); a count has no `__self` to test, so the closure is
-		// named directly. Reading the count OUTSIDE the closure and capturing the integer is the cure, and it
-		// is the one the message gives.
 		if not self.closureCaptureScopes.isEmpty() 'insideALiftedClosure'
-			throw ParseError.unsupported("countof of the sized container's own `Self` inside a closure — a closure is lifted to its own function, which carries none of the enclosing method's hidden parameters, so the count is not in scope there. Read `countof(Self)` into a binding outside the closure and capture that", line: countofTok.line, column: countofTok.column)
+			throw ParseError.unsupported("countof of the sized container's own `Self` inside a closure — a closure is lifted to its own function, which carries none of the enclosing method's hidden parameters, so the count is not in scope there. Read `countof(Self)` into a binding outside the closure and capture that", line: anchor.line, column: anchor.column)
 		end 'insideALiftedClosure'
 
 		if not self.functionCarriesFixedElementCountParam 'noCountSlotToReadItFrom'
-			throw ParseError.unsupported("countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. The pre-scan that reserves that slot reads raw tokens, so spell the operand `Self` (or the container's own name) directly rather than through an alias", line: countofTok.line, column: countofTok.column)
+			throw ParseError.unsupported("countof of the sized container's own `Self`, in a function that carries no fixed-element-count parameter — the count of a countless `Self` is the RECEIVER's, and it reaches a shared body through a hidden argument every call site fills in from the instance it holds. The pre-scan that reserves that slot reads raw tokens, so spell the operand `Self` (or the container's own name) directly rather than through an alias", line: anchor.line, column: anchor.column)
 		end 'noCountSlotToReadItFrom'
 
 		return self.fixedElementCountParamValueId
-	end 'parseCountof'
+	end 'fixedElementCountValue'
 
 	// `( <expr> )` — grouping, which is what makes `(2 + 3) * 4` mean 20 rather than 14.
 	// The parentheses produce NO op: the group's value IS the inner expression's, so the
@@ -49551,7 +49600,17 @@ export type Parser
 		if self.signatures.isGenericAlias(aliasName) 'containerAliasStatic'
 			let aliasGiid = self.signatures.genericAliasInstanceFrom(aliasName, readerFilePath: self.filePath)
 
-			if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(aliasGiid)) 'containerStatic'
+			// ⭐⭐ **AND IT IS A BUILTIN CONTAINER WHOSE `create` THE COMPILER STILL EMITS (W190).** The
+			// interception exists because a mangled `Base.create` would name a callee no file declares; the
+			// day a listed module declares one, the mangle below IS the right answer and the interception
+			// becomes the wrong one. `instanceCreateIsDeclared` is that question's ONE home — the same
+			// derivation `ProgramSignatures.containerCreateCall` emits off and
+			// `requireGlobalContainerIsCreatable` routes on — so a body's `Vec3.create()` and a global's
+			// cannot come to disagree about whose code builds the record. `Map`(W41), `Set`(W105) and
+			// `List`(W153) left this door by leaving `isBuiltinGenericBaseName`; `Vector` cannot, because
+			// that predicate also decides what `Vector with 3 Int` MEANS, so it leaves through the
+			// derivation instead.
+			if self.signatures.isBuiltinGenericBaseName(self.signatures.genericInstanceBaseName(aliasGiid)) and not self.signatures.instanceCreateIsDeclared(aliasGiid) 'containerStatic'
 				return try self.parseContainerAliasStaticCall(func, aliasTok: typeTok, aliasName: aliasName, giid: aliasGiid)
 			end 'containerStatic'
 		end 'containerAliasStatic'
@@ -49658,6 +49717,7 @@ export type Parser
 		let staticCallee = self.signatures.memberRegistrationKey(declaredCallee, takesReceiver: false)
 
 		let constructed = self.constructorInstanceOf(aliasName)
+		try self.requireConstructedVectorElementType(constructed, aliasTok: typeTok)
 		let result = try self.parseCallNamed(func, callee: staticCallee, anchor: memberTok, receiver: ReceiverArg.none, resultUsed: resultUsed, constructorInstance: constructed, mint: CalleeMint.notMinted)
 		match constructed 'constructed'
 			none then break 'constructed'
@@ -53926,22 +53986,66 @@ export type Parser
 			return arr
 		end 'array'
 
+		// ⭐⭐ **THE SIZED CONTAINER'S RECORD IS BORN WITH ITS SLOTS PUBLISHED, AND THAT IS THE WHOLE OF WHAT
+		// STAYED THE COMPILER'S WHEN `Vector.create()` RETIRED (W190).** `Vec3.create()` is now an ordinary
+		// call to `stdlib/Vector.maxon`'s declared static, whose body is `return Self{}` — and this arm is
+		// what that literal MEANS. It is a fact about the TYPE, exactly as the element stride is: a
+		// `Vector with 3 Int` IS a three-slot record, so a literal of it publishes three slots however the
+		// program spelled the construction. The bootstrap answers identically from the identical corpus line
+		// — its monomorphized `Vec3.create` writes `length@8 = 3` off the same const argument.
+		//
+		// ⚠ **THE COUNT IS `fixedElementCountValue`'s, NOT `genericInstanceFixedSize`'s, AND THE DIFFERENCE IS
+		// THE RETIREMENT.** Inside `Vector.create` the instance is the declaration's own countless `Self`
+		// (`ownRecordSelfInstance`, interned at `NoFixedSize` so ONE body serves every size), so the size is a
+		// fact about the CALLER and arrives in the hidden count slot; at a concrete `Vec3{}` it folds to 3.
+		// Reading the registry directly here would publish ZERO slots in the one body that matters.
+		if self.signatures.isVectorInstance(giid) 'sizedContainer'
+			let sized = try self.emitSizedContainerRecord(giid, anchor: aliasTok, range: range)
+			self.trackOwnedTemp(sized, exclusivity: OwnedHeapExclusivity.sole)
+			return sized
+		end 'sizedContainer'
+
 		let container = try self.gateAndEmitContainerCreate(giid, aliasTok: aliasTok, range: range)
 		self.trackOwnedTemp(container, exclusivity: OwnedHeapExclusivity.sole)
 		return container
 	end 'emitOwnedContainerCreate'
 
+	// ⭐ **THE EMPTY RECORD, THEN ITS SLOTS PUBLISHED** — `__managed_create` yields a record with no slots
+	// (every index out of bounds) and `__managed_resize` grows it to the count and ZEROES the new range, which
+	// together are exactly *"zero-initialized, N elements"*. `element_destroy@40` stays 0, which
+	// `requireVectorElementType` is what makes correct.
+	//
+	// ⚠ **NOT `__managed_mem_create(N, elementSize)`, WHICH PUBLISHES `N` SLOTS IN ONE CALL AND WOULD
+	// OTHERWISE BE THE OBVIOUS FIT.** That entry is THROWING (`isManagedMemoryMemberCallee` — it reports
+	// `invalidAllocation` for a size the allocator cannot use), so a `create()` built on it is
+	// **E3057 throwing function requires try: 'create'** on every one of `/specs/vector.md`'s cases, which
+	// write a bare `create()`. Measured, on the first build of the vector port. The two-call form throws
+	// nothing: `__managed_resize` rejects only a NEGATIVE length, and an element count cannot be one.
+	//
+	// ⚠⚠ **IT REACHES `__managed_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS
+	// THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** `resize` grows a record by ZEROING the new
+	// range, so a published slot of a MANAGED element is a null pointer every accessor will dereference. The
+	// source-level rule cannot be reused here (its diagnostic is about a `resize` call the author wrote, and
+	// a vector's author wrote `create()`), so the guarantee is carried by `requireVectorElementType` instead,
+	// at `requireSizedContainerElementType` — the construction door, where the element is concrete. **The two
+	// are one invariant with two doors — do not relax either without the other.**
+	function emitSizedContainerRecord(giid GenericInstanceId, anchor Token, range SourceRange) returns ValueId throws ParseError
+		let record = try self.emitArrayCreateOp(giid, range: range)
+		let count = try self.fixedElementCountValue(giid, anchor: anchor)
+		_ = self.emitRuntimeCall(ManagedResizeName, args: pairArgs(record, second: count), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
+		return record
+	end 'emitSizedContainerRecord'
+
 	// What each container says when the author names a static it does not have. A per-container ROUTER rather
 	// than a name threaded into one template, because the tails are not the same sentence with a noun swapped —
-	// a `Vector` points the author at `Vector from […]`, which the chain has no equivalent of.
+	// a node handle and a cursor are constructible by NOTHING, where a chain is `create()`-only.
 	//
-	// ⚠ A `List` arm stood first until W153. `stdlib/List.maxon` declares the type, so a bad static on a `List`
-	// is now the ordinary `E3004 call to undefined function 'List.<method>'` every declared type answers with,
-	// and this router is never reached for one.
+	// ⚠ A `List` arm stood first until W153, and a `Vector` arm second until W190. Each declaring module
+	// carries the type now, so a bad static on either is the ordinary
+	// `E3004 call to undefined function '<Base>.<method>'` every declared type answers with, and this router
+	// is never reached for one — `parseQualifiedCall`'s container interception asks `instanceCreateIsDeclared`
+	// and lets both fall through to the declared-static road.
 	function containerStaticSurfaceSentence(giid GenericInstanceId, method ByteArray) returns String
-		if self.signatures.isVectorInstance(giid) 'vector'
-			return "`{String.from(VectorBuiltinBaseName)}` static method '{String.from(method)}' — shv2 provides `create()` only; a vector is otherwise built with `{String.from(VectorBuiltinBaseName)} from […]`"
-		end 'vector'
 		if self.signatures.isManagedListInstance(giid) 'managedList'
 			return "`{String.from(ManagedListBuiltinBaseName)}` static method '{String.from(method)}' — shv2 provides `{String.from(CreateMethod)}()` only"
 		end 'managedList'
@@ -53974,12 +54078,13 @@ export type Parser
 	function gateAndEmitContainerCreate(giid GenericInstanceId, aliasTok Token, range SourceRange) returns ValueId throws ParseError
 		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
 
+		// ⚠ **A `Vector` ARM STOOD HERE AND WENT WITH `emitVectorCreateOp` (W190)** — the create whose ANSWER
+		// IS THE SIZE, which `countof(Self)` is what let a shared corpus body name. `stdlib/Vector.maxon`
+		// declares `create()`, so `Vec3.create()` never reaches this router: `instanceCreateIsDeclared`
+		// answers TRUE for it and both create doors take the declared road instead.
 		if self.signatures.isManagedListInstance(giid) 'managedList'
 			return try self.emitListCreateOp(giid, range: range)
 		end 'managedList'
-		if self.signatures.isVectorInstance(giid) 'vector'
-			return try self.emitVectorCreateOp(giid, range: range)
-		end 'vector'
 		panic("Parser.gateAndEmitContainerCreate: generic instance {giid} is not a create-only builtin container — every caller opens with the builtin-base test `requireContainerIsCreatable` makes, and a container admitted there owes a gate and an emit here")
 	end 'gateAndEmitContainerCreate'
 
@@ -54020,12 +54125,45 @@ export type Parser
 	// (`ProgramSignatures.containerCreateCall`), so a gate can never approve a shape the emitter has no arm for.
 	function requireGlobalContainerIsCreatable(giid GenericInstanceId, aliasTok Token) throws ParseError
 		if self.signatures.instanceCreateIsDeclared(giid) 'declaredGeneric'
+			try self.requireSizedContainerElementType(giid, aliasTok: aliasTok)
 			try self.requireDeclaredGenericGlobalCreate(giid, aliasTok: aliasTok)
 			return
 		end 'declaredGeneric'
 
 		try self.requireContainerIsCreatable(giid, aliasTok: aliasTok)
 	end 'requireGlobalContainerIsCreatable'
+
+	// ⭐⭐ **THE SIZED CONTAINER'S ELEMENT RULE, ASKED AT A CONSTRUCTION THAT IS NOW A CALL TO A DECLARED
+	// `create()` (W190).** `requireVectorElementType` used to hang off `requireContainerColumnTypes`, i.e.
+	// off the compiler's own create; with `stdlib/Vector.maxon` owning that create the gate has no emit to
+	// ride on, and the rule it enforces is untouched by who writes the body — **a zeroed slot is an ELEMENT
+	// only for an element that lives inline in the buffer**, and the corpus `create()` publishes N of them
+	// through `setLength` exactly as `__managed_resize` did. Left behind, the two symptoms
+	// `requireVectorElementType`'s own header measured come straight back: `count()` answering N while every
+	// `get` reports an empty slot, and a `for … in` read dereferencing the nulls (0xC0000005).
+	//
+	// ⚠ **IT IS ASKED OF THE INSTANCE BEING CONSTRUCTED AND NOT OF THE STATIC BEING CALLED**, because
+	// `init(managed)` adopts a buffer into the same inadmissible record that `create()` would publish — the
+	// element is a fact about the TYPE, and the construction is where a type with no admissible element
+	// stops being an abstraction. Every other constructed generic returns immediately, so a `StrMap.create()`
+	// pays one instance-registry read.
+	function requireConstructedVectorElementType(constructed ConstructorInstance, aliasTok Token) throws ParseError
+		match constructed 'constructed'
+			none then return
+			instance(gid) then try self.requireSizedContainerElementType(gid, aliasTok: aliasTok)
+		end 'constructed'
+	end 'requireConstructedVectorElementType'
+
+	// The rule itself, given a resolved instance — written once because the BODY door holds a
+	// `ConstructorInstance` and the TOP-LEVEL door holds a bare id, and a second copy of "is this a vector,
+	// and is its element admissible" is how one position would come to admit what the other refuses.
+	function requireSizedContainerElementType(giid GenericInstanceId, aliasTok Token) throws ParseError
+		if not self.signatures.isVectorInstance(giid) 'notTheSizedContainer'
+			return
+		end 'notTheSizedContainer'
+
+		try self.requireVectorElementType(giid, tok: aliasTok)
+	end 'requireSizedContainerElementType'
 
 	// ⭐⭐ **WHAT A DECLARED GENERIC'S `create()` MUST BE FOR `__module_init` TO CALL IT (W41).** The whole of
 	// what replaced the blanket refusal. Three clauses, each a premise of the emitted call rather than a
@@ -54122,10 +54260,6 @@ export type Parser
 			try self.requireListElementType(giid, tok: aliasTok)
 			return
 		end 'managedList'
-		if self.signatures.isVectorInstance(giid) 'vector'
-			try self.requireVectorElementType(giid, tok: aliasTok)
-			return
-		end 'vector'
 		panic("Parser.requireContainerColumnTypes: generic instance {giid} is a builtin container with a `{String.from(CreateMethod)}` and no column rule — `requireContainerIsCreatable` admitted it, and a container admitted there owes an arm here even if that arm is `Array`'s bare return")
 	end 'requireContainerColumnTypes'
 
@@ -55748,32 +55882,22 @@ export type Parser
 		return "`{String.from(VectorBuiltinBaseName)}` holds its elements INLINE and publishes every slot at `{String.from(CreateMethod)}`, so it has no element destructor to stamp and a '{self.signatures.arrayElementDisplayName(giid)}' element would leak its storage and be read back as a null slot — a vector's element is an integer, a bool or a float"
 	end 'vectorElementRefusal'
 
-	// ⭐ **`Vec3.create()` — THE EMPTY RECORD, THEN ITS SLOTS PUBLISHED.** `__managed_create` yields a record with
-	// no slots (every index out of bounds), and `__managed_resize` grows it to `N` and ZEROES the new range — which
-	// together are exactly *"zero-initialized, N elements"*. `element_destroy@40` stays 0, which
-	// `requireVectorElementType` is what makes correct.
+	// ⚠⚠ **`emitVectorCreateOp` STOOD HERE AND IS `stdlib/Vector.maxon`'s `create()` NOW (W190).** It was
+	// `__managed_create` (an empty record, every index out of bounds) followed by `__managed_resize` to `N`,
+	// which together are *"zero-initialized, N elements"*; the corpus body spells the same pair as
+	// `Self{}` + `managed.grow(countof(Self))` + `managed.setLength(countof(Self))`, which is
+	// `stdlib/Array.maxon`'s own `resize` written against the buffer. `countof(Self)` is what made that
+	// possible: the answer IS the size, the size is at the CALL, and a `static … returns Self` reads it out
+	// of the hidden slot every call site fills in from the instance it builds.
 	//
-	// ⚠ **NOT `__managed_mem_create(N, elementSize)`, WHICH PUBLISHES `N` SLOTS IN ONE CALL AND WOULD OTHERWISE BE
-	// THE OBVIOUS FIT.** That entry is THROWING (`isManagedMemoryMemberCallee` — it reports
-	// `invalidAllocation` for a size the allocator cannot use), so a `Vec3.create()` built on it is
-	// **E3057 throwing function requires try: 'create'** on every one of `/specs/vector.md`'s cases, which
-	// write a bare `create()`. Measured, on the first build of this port. The two-call form throws nothing:
-	// `__managed_resize` rejects only a NEGATIVE length, and a `FixedElementCount` cannot be one.
-	//
-	// ⚠⚠ **IT REACHES `__managed_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`, WHOSE E3106 IS THE
-	// RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ.** `resize` grows a record by ZEROING the new
-	// range, so a published slot of a MANAGED element is a null pointer every accessor will dereference —
-	// which is why that door refuses a non-zero element for the source-level `resize`. The source-level rule
-	// cannot be reused here (its diagnostic is about a `resize` call the author wrote, and a vector's author
-	// wrote `create()`), so the guarantee is carried by `requireVectorElementType` instead: it refuses every
-	// managed element at the `create()` itself. **The two are one invariant with two doors — do not relax
-	// either without the other.** Review finding 1 is what happens when only this one exists.
-	function emitVectorCreateOp(giid GenericInstanceId, range SourceRange) returns ValueId throws ParseError
-		let vec = try self.emitArrayCreateOp(giid, range: range)
-		let countVal = self.emitLiteral(self.signatures.genericInstanceFixedSize(giid), valueType: MaxonType.integer, range: range)
-		_ = self.emitRuntimeCall(ManagedResizeName, args: pairArgs(vec, second: countVal), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-		return vec
-	end 'emitVectorCreateOp'
+	// ⚠⚠ **THE `create()` REACHED `__managed_resize` WITHOUT PASSING `requireArrayResizeHasZeroElement`,
+	// WHOSE E3106 IS THE RULE THAT NORMALLY MAKES A PUBLISHED SLOT SAFE TO READ, AND THE CORPUS BODY REACHES
+	// `setLength` the same way.** A published slot of a MANAGED element is a null pointer every accessor
+	// dereferences, so the guarantee is carried by `requireVectorElementType` instead — which is why that
+	// gate did NOT go with the emit and is now asked at `requireConstructedVectorElementType`, the
+	// construction door a declared `create()` arrives through. **The two are one invariant with two doors —
+	// do not relax either without the other.**
+
 
 	// Does this `Vector` method WRITE through its receiver — the `let`-rule and E3070 question, asked of the
 	// one mutator a fixed-size container has.

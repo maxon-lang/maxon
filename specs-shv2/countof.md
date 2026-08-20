@@ -467,18 +467,22 @@ end 'main'
 ```
 
 
-<!-- test: error.a-local-bound-to-a-Self-returning-call-is-refused -->
-⛔⛔ **THE TOKEN PRE-SCAN CANNOT SEE THAT `dup()` RETURNS `Self`, AND WITHOUT A DOOR THAT WAS A
-COMPILER ABORT** (found at review). `selfTypedLocalBoundAt` admits `= Self{…}` and
-`= Self.<static>(` because those two spellings NAME the type; `= self.dup()` names a METHOD, and
-no token shape says what it returns. So no edge reaches `twice`, it reserves no count slot, and
-the call to `capacity()` had nothing to forward: measured, *`panic at
-forwardCallerFixedElementCount: caller 'Vector.twice' has no fixed-element-count parameter to
-forward to 'Vector.cap'`*.
+<!-- test: a-local-bound-to-a-Self-returning-call-reaches-the-count -->
+⭐⭐ **THIS WAS A REFUSAL FOR ONE RUNG, AND `W190` RETIRED IT BY WIDENING THE SEED RATHER THAN BY
+ADDING A TOKEN SHAPE.** The pre-scan still cannot see that `dup()` returns `Self` —
+`selfTypedLocalBoundAt` admits `= Self{…}` and `= Self.<static>(` because those two spellings NAME
+the type, while `= self.dup()` names a METHOD — so nothing about `var other = self.dup()` changed.
+What changed is `dup`'s own body: `Self{}` inside the sized container BUILDS a record whose slots are
+published, so that literal now reserves the count slot itself
+(`Parser.ownRecordLiteralOfTheSizedContainerAt`). `dup` is therefore count-needing, `self.dup()` is an
+ordinary self-call edge, and the fixpoint gives `twice` the slot it had nothing to forward from.
 
-⚠ The one-expression spelling of the same call — `self.dup().capacity()`, the case below — is
-served, because a chained call has a token shape the pre-scan CAN see. That is what the refusal
-names as the cure, alongside the two bindings that do carry the type.
+⚠ **THE REFUSAL IT REPLACED WAS REAL AND IS STILL REACHABLE** — the two cases below pin it, and
+before the door existed this exact program was *`panic at forwardCallerFixedElementCount: caller
+'Vector.twice' has no fixed-element-count parameter to forward`*. A shape the fixpoint CAN reach is
+served; one it cannot is refused with a line. That difference is the whole design, and it is why the
+door was not narrowed to make this case pass: the seed reaches the caller because the callee genuinely
+needs the count, not because a spelling was whitelisted.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -503,8 +507,8 @@ function main() returns ExitCode
 	return v.twice()
 end 'main'
 ```
-```maxoncstderr
-error E2015: <fragment>:16:16: Unsupported: calling 'capacity' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self{…}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance; a lifted closure carries no hidden parameters at all, so read the count outside it and capture the integer
+```exitcode
+3
 ```
 
 <!-- test: error.an-alias-of-a-Self-typed-parameter-is-refused -->

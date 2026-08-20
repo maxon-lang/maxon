@@ -316,12 +316,11 @@ function builtContainerRecord(fn SynthesizedFunction, create ContainerCreateCall
 	end 'eachStamp'
 	let record = fn.emitPositionalCall(create.callee, args: args, resultTag: maxonTypeTag(valueType), resultNameId: typeNameIdOf(valueType), range: range)
 
-	// A fixed-size container's elements are addressable from birth, so the record is sized before anything
-	// reads it — the second call `Parser.emitVectorCreateOp` makes, for the same reason.
-	match create.sizing 'sizing'
-		grown then break 'sizing'
-		fixed(count) then _ = fn.emitPositionalCall(ManagedResizeName, args: pairArgs(record, second: fn.emitTypedLiteral(count as ParsedInt, valueType: MaxonType.integer, range: range)), resultTag: ValueTypeTag.void, resultNameId: UnnamedTypeId, range: range)
-	end 'sizing'
+	// ⚠ **A SECOND CALL STOOD HERE — `__managed_resize`, SIZING A FIXED-SIZE CONTAINER'S RECORD (W190).** A
+	// vector was the one container whose elements are addressable from birth, and its global record was born
+	// through the runtime `__managed_create` and then grown. `stdlib/Vector.maxon`'s own `create()` publishes
+	// those slots now, so the sizing rides inside the callee this function already emits and the description
+	// carries no `sizing` field at all.
 
 	// ⭐ **THE ADD CALLEE IS THE INSTANCE'S OWN** (spec-port `lazy-static`) — `__managed_push` for an `Array`,
 	// `Set.insert` for a declared `Set`. It used to be spelled here, which was true while an `Array` was the only
