@@ -21,9 +21,11 @@ Create a task list to perform these steps.
 1. Read `docs/WRITING_MAXON_CODE.md`.
 
 2. Format modified `.maxon` files with `mcp__maxon-dev__fmt` (the **file** form).
-   ⚠ **NEVER run `./bin/maxon.exe fmt` with arguments** — it ignores unknown args and reformats the
-   entire tree in place. Several agents have destroyed unrelated files this way. Check `git status`
-   immediately after formatting.
+   ⚠ **`fmt` with NO PATH formats the whole current directory** — that is its documented default,
+   so name the file you mean. `fmt <file>` formats only that file, and an unrecognized flag or a
+   second path is REJECTED (exit 1, nothing written) — MEASURED 2026-08-20, correcting this step,
+   which used to claim `fmt` "ignores unknown args and reformats the entire tree". It did once;
+   both holes are guarded now (`Program.RunFmt`). Check `git status` after formatting anyway.
 
 3. **⭐ ELIMINATE DUPLICATED CODE — this is the top priority** (user directive), and it applies to
    pre-existing duplication in the files you touched, not just new code.

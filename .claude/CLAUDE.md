@@ -204,20 +204,28 @@ driving these binaries:
   **Ordering cannot vary with pool size**, so the check re-derived a known answer at full suite cost.
   Reach for it when chasing a suspected nondeterminism or reading a failure serially; never as a gate.
   **The default pool is 12 and that is the only count these processes run the suite at.**
-- ⛔ **`./bin/maxon.exe fmt` with arguments IGNORES them and reformats the ENTIRE TREE in place.**
-  Multiple agents have destroyed unrelated files this way and had to revert. Use the
-  `mcp__maxon-dev__fmt` file form, and check `git status` immediately after.
-  ✅ **The COMMENT-DELETING bug is FIXED (2026-08-20) and `fmt` is safe to run again.** For two
-  weeks this bullet said *do not run it at all*: one run over a pristine
-  `maxon-shv2/Compiler/Runtime/GtRuntime.maxon` destroyed **338 comment lines**, silently, exit 0.
-  The cause was in the LEXER, not the formatter — `Advance()` did not count a newline consumed inside
-  a byte-string literal, so token line numbers drifted below true source lines and the formatter's
-  line-keyed comment map stopped finding them. **The same defect made EVERY DIAGNOSTIC after such a
-  literal name the wrong line** (measured: an undefined function on line 6 reported at line 4).
-  Counting now happens in `Advance` itself, so no scanner can forget it.
+- ⚠ **`fmt` WITH NO PATH FORMATS THE WHOLE CURRENT DIRECTORY — that is its documented default, not a
+  bug** (`maxon fmt [<file|directory>]`, default: current directory). Give it a path when you mean one
+  file. ⛔ **This bullet used to say "fmt with arguments IGNORES them and reformats the ENTIRE TREE",
+  and that is FALSE — MEASURED 2026-08-20, all five spellings:** `fmt <file>` formats **only that
+  file**; `fmt <dir>` formats that directory; `fmt --check` and `fmt a b` are **REJECTED, exit 1,
+  nothing written**. It was presumably true once — `RunFmt`'s own comment records the shape (an
+  unrecognized flag matched no path, fell back to the current directory and rewrote everything) and
+  `EnumerateFormattableFiles` records the incident it caused, *"one accidental whole-tree run rewrote
+  92 files across two agent worktrees"*. Both are now guarded: flags are refused, and the walk prunes
+  any directory holding `.git`, so it cannot descend into a nested checkout or an agent worktree.
+  ⇒ The claim outlived its defect by long enough that an agent (me, 2026-08-20) repeated it into a
+  commit message without measuring. **Check `RunFmt` before trusting this bullet again.**
+  ✅ **The COMMENT-DELETING bug is FIXED (2026-08-20) and `fmt` is safe to run.** One run over a
+  pristine `maxon-shv2/Compiler/Runtime/GtRuntime.maxon` used to destroy **338 comment lines**,
+  silently, exit 0. The cause was in the LEXER, not the formatter — `Advance()` did not count a
+  newline consumed inside a byte-string literal, so token line numbers drifted below true source lines
+  and the formatter's line-keyed comment map stopped finding them. **The same defect made EVERY
+  DIAGNOSTIC after such a literal name the wrong line** (measured: an undefined function on line 6
+  reported at line 4). Counting now happens in `Advance` itself, so no scanner can forget it.
   ⚠ **`maxon fmt-selftest` runs on every `dotnet build` and FAILS IT** if formatting loses a comment
-  or stops being idempotent. Sabotage-proved: with the original defect restored, its byte-string
-  cases go red and the build stops — while its no-multi-line-literal control still PASSES, which is
+  or stops being idempotent. Sabotage-proved: with the original defect restored, its byte-string cases
+  go red and the build stops — while its no-multi-line-literal control still PASSES, which is
   precisely why nothing caught this for two weeks.
 
 ### ⛔⛔ `git status specs-shv2/fragments/` CANNOT TELL YOU WHETHER CODEGEN MOVED. THE RUNNER CAN.
