@@ -684,13 +684,15 @@ function internIndirectCallTypeFor(op StdOp, map IndirectCallTypeIdxMap, builder
 		// The command line is x64-windows only (E3104 at the call site) and pulls in no wasm import.
 		osCommandLine then break 'k'
 		// W5: x64-windows only too, and neither pulls in a wasm import.
-		osStdinHandle then break 'k'
+		osStdHandle then break 'k'
 		osExecutablePath then break 'k'
 		// W35: a stream write makes no INDIRECT call — it calls two IMPORTS by index.
 		osWriteStderr then break 'k'
 		// A frame address makes no call of any kind.
 		stackRecordAddr then break 'k'
 		osOpenNamedSegment to osTickCountMs then break 'k'
+		// The four attached-subprocess host primitives make no wasm call either — they are x64-windows only.
+		osHandleSetInherit to osProcessTerminate then break 'k'
 	end 'k'
 end 'internIndirectCallTypeFor'
 
@@ -1249,7 +1251,7 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		// x64-windows only, so no wasm valtype is ever recorded for its def.
 		osCommandLine then break 'def'
 		// W5: x64-windows only too, so no wasm valtype is ever recorded for either def.
-		osStdinHandle then break 'def'
+		osStdHandle then break 'def'
 		osExecutablePath then break 'def'
 		// W35: the stderr write defines the byte count at the Std tier width, exactly as its stdout twin does.
 		osWriteStderr(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
@@ -1264,6 +1266,14 @@ function recordDefValtype(op StdOp, valtypes WasmValTypeArray, funcNames Functio
 		osOpenNamedSegment(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osMapNamedSegment(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
 		osTickCountMs(resultId) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		// The attached subprocess's two ANSWERING host primitives; the other two answer nothing, so they take
+		// a `break` arm exactly as every other value-less op here does (`StdLoweringShared`'s twin note says
+		// the same thing — and both said "absent rather than present with a `break`", one citing the other,
+		// each directly above the `break` arms that made it false).
+		osPipePeek(resultId, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osEnvRead(resultId, _, _, _) then setValtype(valtypes, v: resultId, vt: WasmValType.i64)
+		osHandleSetInherit then break 'def'
+		osProcessTerminate then break 'def'
 	end 'def'
 end 'recordDefValtype'
 
@@ -1476,11 +1486,12 @@ type WasmFuncEmitter
 			osFileOpenRead to osFileAttributes then panic("emitStraightLineTerminator: a file-IO op is a body op, never a terminator")
 			osPanicValue then panic("emitStraightLineTerminator: an `osPanicValue` is a body op, never a terminator")
 			osCommandLine then panic("emitStraightLineTerminator: an `osCommandLine` is a body op, never a terminator")
-			osStdinHandle then panic("emitStraightLineTerminator: an `osStdinHandle` is a body op, never a terminator")
+			osStdHandle then panic("emitStraightLineTerminator: an `osStdHandle` is a body op, never a terminator")
 			osExecutablePath then panic("emitStraightLineTerminator: an `osExecutablePath` is a body op, never a terminator")
 			osWriteStderr then panic("emitStraightLineTerminator: an `osWriteStderr` is a body op, never a terminator")
 			stackRecordAddr then panic("emitStraightLineTerminator: a `stackRecordAddr` is a body op, never a terminator")
 			osOpenNamedSegment to osTickCountMs then panic("emitStraightLineTerminator: a DebugStream host primitive is a body op, never a terminator")
+			osHandleSetInherit to osProcessTerminate then panic("emitStraightLineTerminator: an attached-subprocess host primitive is a body op, never a terminator")
 		end 'term'
 	end 'emitStraightLineTerminator'
 
@@ -1557,11 +1568,12 @@ type WasmFuncEmitter
 			osFileOpenRead to osFileAttributes then panic("emitDispatcherTerminator: a file-IO op is a body op, never a terminator")
 			osPanicValue then panic("emitDispatcherTerminator: an `osPanicValue` is a body op, never a terminator")
 			osCommandLine then panic("emitDispatcherTerminator: an `osCommandLine` is a body op, never a terminator")
-			osStdinHandle then panic("emitDispatcherTerminator: an `osStdinHandle` is a body op, never a terminator")
+			osStdHandle then panic("emitDispatcherTerminator: an `osStdHandle` is a body op, never a terminator")
 			osExecutablePath then panic("emitDispatcherTerminator: an `osExecutablePath` is a body op, never a terminator")
 			osWriteStderr then panic("emitDispatcherTerminator: an `osWriteStderr` is a body op, never a terminator")
 			stackRecordAddr then panic("emitDispatcherTerminator: a `stackRecordAddr` is a body op, never a terminator")
 			osOpenNamedSegment to osTickCountMs then panic("emitDispatcherTerminator: a DebugStream host primitive is a body op, never a terminator")
+			osHandleSetInherit to osProcessTerminate then panic("emitDispatcherTerminator: an attached-subprocess host primitive is a body op, never a terminator")
 		end 'term'
 	end 'emitDispatcherTerminator'
 
@@ -1643,14 +1655,14 @@ type WasmFuncEmitter
 			osCommandLine then panic("emitBodyOp: `osCommandLine` is x64-windows only — argv capture is x64-windows-gated, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			// ⚠ W5. THE TWO ARE REFUSED FOR DIFFERENT REASONS, and copying argv's sentence onto both would
 			// hide the one that is permanent.
-			//   • `osStdinHandle`: WASI DOES have a standard input — `wasi:cli/stdin` plus a `read` on the
+			//   • `osStdHandle`: WASI DOES have a standard input — `wasi:cli/stdin` plus a `read` on the
 			//     input stream — so this is argv's case exactly. There is no HANDLE to fetch (the stream
 			//     resource IS the handle), so the day the lane grows it, `__con_read_stdin` wants a different
 			//     Std graph rather than a lowering for this op. That is a rung.
 			//   • `osExecutablePath`: WASI has NO analogue AT ALL. A component has no image path to report,
 			//     and `args_get[0]` is whatever the host chose to pass, not a resolved path — answering it
 			//     would be a plausible wrong answer, which is the one thing worse than a refusal.
-			osStdinHandle then panic("emitBodyOp: `osStdinHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
+			osStdHandle then panic("emitBodyOp: `osStdHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			osExecutablePath then panic("emitBodyOp: `osExecutablePath` is x64-windows only — WASI has no executable-path primitive at all, and SemanticCheck refuses such a program on wasm at its own source span (E3104), so this panic is the backstop for a compiler bug that got one past that gate, not the user-facing rejection")
 			// W35: the same emitter as the stdout write, one `wasi:cli` accessor over. Unlike its two W5
 			// neighbours above this is NOT x64-windows-gated — Preview2 exports `get-stderr` beside
@@ -1666,6 +1678,11 @@ type WasmFuncEmitter
 			// thing and no route to one. `--debugstream` is refused at the command line for this target, so
 			// this is a backstop for a compiler bug that got one past that gate.
 			osOpenNamedSegment to osTickCountMs then panic("emitBodyOp: the DebugStream host primitives are x64-windows only — `--debugstream` is refused at the command line on every other target")
+			// ⛔ The four attached-subprocess host primitives join the spawn/wait/pipe band above: WASI has no
+			// process-spawn primitive at all, so there is nothing here to lower them to and nothing to fake.
+			// `SemanticCheck.calleeNeedsWin32Substrate` refuses a program that reaches one at its own source
+			// span (E3104), so this is the backstop for a compiler bug that got past that gate.
+			osHandleSetInherit to osProcessTerminate then panic("emitBodyOp: the attached-subprocess host primitives are x64-windows only — WASI has no process-spawn primitive, and SemanticCheck refuses such a program on wasm at its own source span (E3104)")
 		end 'body'
 	end 'emitBodyOp'
 
@@ -2890,11 +2907,12 @@ function decideDispatcher(module StdModule, func IrFunction) returns bool
 		osFileOpenRead to osFileAttributes then panic("decideDispatcher: a file-IO op is a body op, never a terminator")
 		osPanicValue then panic("decideDispatcher: an `osPanicValue` is a body op, never a terminator")
 		osCommandLine then panic("decideDispatcher: an `osCommandLine` is a body op, never a terminator")
-		osStdinHandle then panic("decideDispatcher: an `osStdinHandle` is a body op, never a terminator")
+		osStdHandle then panic("decideDispatcher: an `osStdHandle` is a body op, never a terminator")
 		osExecutablePath then panic("decideDispatcher: an `osExecutablePath` is a body op, never a terminator")
 		osWriteStderr then panic("decideDispatcher: an `osWriteStderr` is a body op, never a terminator")
 		stackRecordAddr then panic("decideDispatcher: a `stackRecordAddr` is a body op, never a terminator")
 		osOpenNamedSegment to osTickCountMs then panic("decideDispatcher: a DebugStream host primitive is a body op, never a terminator")
+		osHandleSetInherit to osProcessTerminate then panic("decideDispatcher: an attached-subprocess host primitive is a body op, never a terminator")
 	end 'k'
 	return false
 end 'decideDispatcher'

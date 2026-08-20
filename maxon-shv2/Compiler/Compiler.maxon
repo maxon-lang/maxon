@@ -673,6 +673,19 @@ export function compileToCodeResult(project Project) returns CodeResult throws C
 	// module claiming one it does not have is what would put a `globalAddr __ds_base` into a build whose
 	// `.data` never laid that slot out.
 	pipeline.stdModule.debugStream = buildCarriesDebugStream(project, usage: usage)
+	// ⭐ **AND THE SUBPROCESS BIT, AT THE SAME SEAM AND FOR THE SAME REASON.** The PE writer needs it for the
+	// optional trailing import band (`PeWriter.isOptionalTrailingImport`) — `PeekNamedPipe` and
+	// `TerminateProcess` are referenced by the attached-collect runtime and by nothing else, so a program
+	// that spawns no child must not import them.
+	//
+	// ⚠⚠ **IT MUST BE SET *AFTER* `pipeline.run()`, AND SETTING IT BEFORE WAS A MEASURED SEGFAULT.**
+	// `lowerMaxonToStd` REPLACES `pipeline.stdModule` with a fresh module (`PassPipeline.maxon:338`), so a
+	// flag written beside the `.data` declarations above lands on a module that is then thrown away — the
+	// backend then emitted `iatCall`s at slot indices past the end of an import table that had dropped the
+	// band, and the first `GetEnvironmentVariableA` jumped through garbage. `debugStream` sits here for
+	// exactly this reason and its header says so; the second flag needed the same seam, not the same
+	// paragraph one screen earlier.
+	pipeline.stdModule.usesSubprocess = usage.usesStreaming
 
 	let runtimeInstallProbe = PhaseProbe.beginPhase(project, phase: CompilePhase.installRuntime)
 

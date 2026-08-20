@@ -20,7 +20,7 @@
 // ⚠ **THE EXTRA REASON, because "nobody wrote the lowering yet" would be the wrong one to record.** Under
 // POSIX and under WASI there is no HANDLE to fetch at all: fd 0 *is* the handle on Linux/macOS, and a WASI
 // component reaches standard input through `wasi:cli/stdin`'s input-stream RESOURCE. Neither shape has a
-// `GetStdHandle` step, so serving them is not a lowering for `osStdinHandle` — it is a DIFFERENT Std graph
+// `GetStdHandle` step, so serving them is not a lowering for `osStdHandle` — it is a DIFFERENT Std graph
 // that never asks this op anything. That is a rung, and until it lands this file builds the Windows half and
 // REFUSES the rest LOUDLY, which is the one thing that must not be traded for a target that compiles and
 // answers a permanent EOF.
@@ -53,6 +53,19 @@ export let ConsoleReadStdinName = b"__con_read_stdin"
 // ⚠ **`maxBytes` IS NOT VALIDATED HERE.** A negative or absurd count is `__managed_reserve`'s to refuse — it is
 // the one allocator door and it already answers for every other reserve in the language — and duplicating
 // that judgement in a runtime builder would be a second allocation policy for one heap.
+// ⭐ **`GetStdHandle`'s THREE `nStdHandle` SELECTORS**, as the DWORD-negative values Win32 defines them to
+// be. They live here — with the standard-stream runtime — rather than in a backend, because since the
+// subprocess rung the selector is a VALUE OPERAND of `osStdHandle` rather than an immediate the isel
+// materializes: `__con_read_stdin` asks for input, and `SubprocessRuntime`'s `inherit` stdio kind asks for
+// the other two when a child is to write straight to the parent's own streams.
+//
+// ⚠ They are `(DWORD)-10/-11/-12` written as their unsigned 32-bit spelling, which is what a `movRegImm32`
+// into ECX zero-extends exactly. Named rather than left as three bare hex words for the reason the x64
+// backend's own copies were: `0xFFFFFFF6` at a `mov` says nothing about which stream is being asked for.
+export let StdInputHandleSelector = 0xFFFFFFF6 as ParsedInt
+export let StdOutputHandleSelector = 0xFFFFFFF5 as ParsedInt
+export let StdErrorHandleSelector = 0xFFFFFFF4 as ParsedInt
+
 function buildConsoleReadStdin(module StdModule)
 	var func = IrFunction.createFromStd(ConsoleReadStdinName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
 	var ids = ValueMinter.create(1)
@@ -66,7 +79,8 @@ function buildConsoleReadStdin(module StdModule)
 	let buffer = emitManagedByteBuffer(module, block: entry, record: record, byteCount: maxBytes, ids: ids)
 
 	let handle = ids.mint()
-	module.appendOp(entry, op: StdOp.osStdinHandle(handle))
+	let which = emitConst(module, block: entry, value: StdInputHandleSelector, ids: ids)
+	module.appendOp(entry, op: StdOp.osStdHandle(handle, whichId: which))
 	let out = emitWin32OutWord(module, block: entry, ids: ids)
 	// `osReadFile` defines its BOOL whether or not anyone wants it, so the id is minted and left unread —
 	// a dead def, which the allocator already handles (it is live at no point and colours trivially). It is

@@ -617,7 +617,7 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osCommandLine(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// W5: both answer in RAX with an integer — a kernel HANDLE and a character count — so both define a
 		// GPR result.
-		osStdinHandle(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osStdHandle(resultId, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osExecutablePath(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		// W35: both stream writes define the OS's byte COUNT — an integer, so a GPR. `osWriteStdout` used to
 		// sit in the defines-nothing group above; it moved here when it acquired that result.
@@ -629,6 +629,16 @@ function recordOpResultClass(op StdOp, column ValueClassColumn, funcNames Functi
 		osOpenNamedSegment(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osMapNamedSegment(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
 		osTickCountMs(resultId) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// The attached subprocess's two ANSWERING host primitives: a peeked byte count and an environment
+		// variable's character count are both machine words.
+		osPipePeek(resultId, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		osEnvRead(resultId, _, _, _) then setValueClass(column, valueId: resultId, class: RegClass.gpr)
+		// Its other two answer nothing at all — the `SetHandleInformation`/`TerminateProcess` BOOL is
+		// discarded, exactly as `osCloseHandle`'s is — so there is no result class to record. They take a
+		// `break` arm like every other value-less op in this match; this match is EXHAUSTIVE, so "absent" is
+		// not a state an op can be in. (It said they were absent, two lines above their own arms.)
+		osHandleSetInherit then break 'result'
+		osProcessTerminate then break 'result'
 	end 'result'
 end 'recordOpResultClass'
 

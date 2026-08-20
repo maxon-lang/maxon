@@ -132,7 +132,7 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		osCommandLine gives StdConstInfo.notConst
 		// W5: a kernel HANDLE and the character count `GetModuleFileNameA` wrote are OS answers, never
 		// compile-time constants.
-		osStdinHandle gives StdConstInfo.notConst
+		osStdHandle gives StdConstInfo.notConst
 		osExecutablePath gives StdConstInfo.notConst
 		// W35: the byte count the OS reports for a stderr write is an OS answer, exactly as its stdout
 		// twin's is.
@@ -143,6 +143,8 @@ function stdConstInfo(op StdOp) returns StdConstInfo
 		// O3: a section HANDLE, a mapped ADDRESS and a millisecond stopwatch reading are OS answers, never
 		// compile-time constants.
 		osOpenNamedSegment to osTickCountMs gives StdConstInfo.notConst
+		// And the four attached-subprocess host primitives are Win32 import calls too.
+		osHandleSetInherit to osProcessTerminate gives StdConstInfo.notConst
 	end 'c'
 end 'stdConstInfo'
 
@@ -237,7 +239,7 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		osCommandLine gives FoldResult.unchanged
 		// W5: the handle read has no operand at all, and the path fill's two are a buffer ADDRESS and a
 		// capacity the caller computed — neither has an immediate form to fold into.
-		osStdinHandle gives FoldResult.unchanged
+		osStdHandle gives FoldResult.unchanged
 		osExecutablePath gives FoldResult.unchanged
 		// W35: a buffer ADDRESS and a byte length reach the OS in registers on every lane — no immediate
 		// form to fold into, exactly as `osWriteStdout` has none.
@@ -247,6 +249,8 @@ function tryFold(op StdOp, constMap ConstValueMap) returns FoldResult
 		// O3: a name POINTER, a scratch BUFFER, a handle and a byte count the caller computed — none has an
 		// immediate form to fold into, and the tick read has no operand at all.
 		osOpenNamedSegment to osTickCountMs gives FoldResult.unchanged
+		// And the four attached-subprocess host primitives are Win32 import calls too.
+		osHandleSetInherit to osProcessTerminate gives FoldResult.unchanged
 	end 'f'
 end 'tryFold'
 

@@ -347,7 +347,7 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		// live — the file band's reason, and the reason each is named rather than folded into a range with
 		// `osCommandLine`: the next op appended past these must fail to compile here, which a range arm
 		// would silently swallow.
-		osStdinHandle then break 'op'
+		osStdHandle then break 'op'
 		osExecutablePath then break 'op'
 		// W35. The stderr write reaches the OS through an import or a syscall exactly as its stdout twin
 		// does, so it keeps no Maxon function live either.
@@ -356,6 +356,8 @@ function markCalleeOf(op StdOp, byName FuncIndexByName, reached BoolArray, workl
 		stackRecordAddr then break 'op'
 		// O3: the three DebugStream host primitives call Win32 IMPORTS, so none keeps a Maxon function live.
 		osOpenNamedSegment to osTickCountMs then break 'op'
+		// And the four attached-subprocess host primitives are Win32 import calls too.
+		osHandleSetInherit to osProcessTerminate then break 'op'
 	end 'op'
 end 'markCalleeOf'
 

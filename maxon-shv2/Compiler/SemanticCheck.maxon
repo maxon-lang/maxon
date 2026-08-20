@@ -3770,12 +3770,25 @@ end 'functionTypeDoorSite'
 //
 // ⚠ **STILL OUTSIDE IT: `async`/`await`.** Their `__gt_*` calls do not exist until lowering — the same
 // blind spot `scanRuntimeUsage` documents — so no callee-name test can reach them and gating them honestly
-// means gating the async OP KINDS, which is its own piece of work. `runProcess(cmd)` and the
-// streaming-subprocess builtins are outside it too: their runtime entries (`__gt_process_*`) are not named
-// here, so on another target they still die as a BACKEND PANIC rather than a diagnostic — MEASURED, and the
-// panic they die of is `osReadClock`/`osFreePages`, the green-thread SCHEDULER's substrate that a subprocess
-// drags in, not a subprocess-specific op. Bringing them in is the same piece of work as the async op kinds
-// and is not bolted on here; nothing this rung makes reachable calls them on another target.
+// means gating the async OP KINDS, which is its own piece of work.
+//
+// ⭐⭐ **THE SUBPROCESS FAMILY IS NOW IN IT, AND THIS PARAGRAPH RECORDED ITS ABSENCE AS A LIVE DEFECT.** It
+// used to read: *"`runProcess(cmd)` and the streaming-subprocess builtins are outside it too: their runtime
+// entries (`__gt_process_*`) are not named here, so on another target they still die as a BACKEND PANIC
+// rather than a diagnostic — MEASURED"*. All three doors a program can spawn a child through now name their
+// entry here — `runProcess` → `__gt_process_run`, `spawnReadLine` → `__gt_io_read`, and the whole
+// `__gt_subp_` band behind the seven streaming builtins and the nineteen `__Builtins.subprocess*`
+// intrinsics (a twentieth name, `managedIsNull`, is a heap predicate and lowers nowhere near this band) —
+// so a subprocess program on arm64/linux/wasm is refused at the call's own span instead of panicking three
+// tiers down. Each satisfies this set's rule: SOURCE names the builtin and the parser routes it to exactly
+// one entry.
+//
+// ⚠ The band test also admits FOUR entries no source line names — `__gt_subp_yield_read`,
+// `__gt_subp_spawn_core`, `__gt_subp_str_from_bytes` and `__gt_subp_argv_cmdline` (count them off the
+// `b"__gt_subp_` grep rather than off this sentence; an earlier draft said two). That is harmless HERE, where
+// `isGtRuntimeCallee` was measured wrong, and the argument covers all four identically: every one of them is
+// reachable only from another `__gt_subp_*` BODY. `checkCalls` walks Maxon-tier ops (user and stdlib source),
+// never a hand-built Std graph, so there is no call site for the gate to blame at.
 export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// R4.1's file-IO entries join the clock and sleep ones: `osFileOpenRead` lowers only on x64-windows
 	// (the ruling of 2026-07-30 scoped file IO host-only), and the three other backends panic rather than
@@ -3789,11 +3802,17 @@ export function calleeNeedsWin32Substrate(callee ByteArray) returns bool
 	// W5's two entries join on the same terms and by the same PREFIX test, and each has a reason of its own
 	// beyond "unimplemented elsewhere" — the shape argument again, twice over. STANDARD INPUT has no HANDLE
 	// to fetch under POSIX or WASI (fd 0 *is* the handle; a component holds an input-stream resource), so
-	// `osStdinHandle` has no work to do there and the graph above it would differ, not merely its lowering.
+	// `osStdHandle` has no work to do there and the graph above it would differ, not merely its lowering.
 	// The EXECUTABLE PATH is read by three different OS APIs with three different retry protocols
 	// (`stdlib/Process.maxon:26-27`), and WASI has no analogue at all. Both are rungs rather than lowerings;
 	// `ConsoleRuntime`'s and `ProcessRuntime`'s headers carry each in full.
-	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee)
+	// The SUBPROCESS band joins on the same terms and by the same PREFIX test, so an entry point added to it
+	// later is gated by construction rather than by memory. Its own reason is stronger than "unimplemented
+	// elsewhere": `CreateProcessA`, three named pipes and an IOCP completion port are a WINDOWS shape, and
+	// WASI has no process-spawn primitive at all — so serving another target is a rung rather than a
+	// lowering, and on wasm it is not even that. `runProcess` and `spawnReadLine` are named individually
+	// because their entries live in the SCHEDULER band rather than behind the subprocess prefix.
+	return callee.equals(GtNowNsName) or callee.equals(GtSleepName) or callee.equals(GtReschedName) or callee.equals(GtProcessRunName) or callee.equals(IoReadName) or isSubprocessRuntimeCallee(callee) or isClockRuntimeCallee(callee) or isManagedFileRuntimeCallee(callee) or isManagedDirectoryRuntimeCallee(callee) or isCommandLineRuntimeCallee(callee) or isConsoleRuntimeCallee(callee) or isProcessRuntimeCallee(callee)
 end 'calleeNeedsWin32Substrate'
 
 // The SUBJECT of an E3104 raised against a COMPILER-OWNED runtime entry. The user wrote

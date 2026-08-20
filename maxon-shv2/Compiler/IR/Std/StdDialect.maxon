@@ -1108,11 +1108,11 @@ export union StdOp
 	// (the netpoll re-scans after `osWaitHandles`), exactly as `osWriteStdout` ignores `WriteFile`'s `BOOL` — so
 	// they carry no result id and their x64 lowering emits no RAX capture.
 	//
-	// `osProcessSpawn(cmdlinePtr, startupPtr, procInfoPtr)` = `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, FALSE,
+	// `osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr)` = `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, FALSE,
 	// 0, NULL, NULL, startupPtr, procInfoPtr)`. Three VALUE operands (the mutable cmdline buffer + the two OUT
 	// structs); ten Win64 arguments, six of them on the stack (see `win64OutgoingArgDisp`). It is the only op here
 	// with outgoing stack-argument space (`stdOpOutgoingArgBytes`), which is why it is declared FIRST.
-	osProcessSpawn(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+	osProcessSpawn(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 	// `osProcessExitCode(handle, codePtr)` = `GetExitCodeProcess(handle, codePtr)` — writes the child's DWORD exit
 	// code to `[codePtr]` (an out-param buffer, like `osReadClock`'s). Two VALUE operands, no result.
 	osProcessExitCode(handleId ValueId, codePtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
@@ -1240,11 +1240,23 @@ export union StdOp
 	// `osLastError()` = `GetLastError()` — the thread's last-error, read IMMEDIATELY after a failing `osReadOverlapped` (no
 	// intervening call clobbers it — the shim's TIB writes do not touch the TEB's LastError word). No value operands; DEFINES the code.
 	osLastError(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
-	// `osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr)` = `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, TRUE, 0,
-	// NULL, NULL, startupPtr, procInfoPtr)` — the `osProcessSpawn` twin with bInheritHandles=TRUE, so a child inherits the
-	// pipe write end its STARTUPINFO names as hStdOutput. Three VALUE operands, no result — identical marshalling to
-	// `osProcessSpawn` save the one TRUE flag (shared lowering).
-	osProcessSpawnInherit(cmdlinePtrId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
+	// `osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr)` =
+	// `CreateProcessA(NULL, cmdlinePtr, NULL, NULL, TRUE, creationFlags, NULL, cwdPtr, startupPtr, procInfoPtr)` — the
+	// `osProcessSpawn` twin with bInheritHandles=TRUE, so a child inherits the pipe write end its STARTUPINFO names as
+	// hStdOutput. FIVE VALUE operands, no result.
+	//
+	// ⭐⭐ **`cwdPtr` AND `creationFlags` ARE REAL OPERANDS, AND THEY USED TO BE HARD ZEROS IN THE ISEL.** The
+	// lowering wrote a zeroed scratch register into the `lpEnvironment`, `lpCurrentDirectory` AND `dwCreationFlags`
+	// stack slots, which is exactly right for a spawn nobody can configure and exactly wrong for one that can:
+	// `stdlib/Subprocess.maxon`'s `Configuration.workingDirectory` and its `hideWindow`/`newProcessGroup`/`detach`
+	// flag bits are three of the fourteen arguments of the contract this op is the floor of. A NULL `lpCurrentDirectory`
+	// means "inherit the parent's", so 0 remains the value a caller with nothing to say passes — the widening adds a
+	// spelling, it does not change the old one's meaning.
+	// ⚠ `lpEnvironment` stays a hard NULL, and that is the CONTRACT rather than an omission: `stdlib/Subprocess.maxon`
+	// refuses `Environment.custom`/`inheritUpdating` in `requireInheritEnv` before any spawn call is made, so the only
+	// value the corpus can reach here is "inherit", which IS NULL. An operand nothing can supply would be a fourth
+	// zero wearing a parameter's name.
+	osProcessSpawnInherit(cmdlinePtrId ValueId, cwdPtrId ValueId, creationFlagsId ValueId, startupPtrId ValueId, procInfoPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false, isUnsupportedInInlineBody: true}
 	// `osCancelIo(handle, ovl)` = `CancelIoEx(handle, ovl)` — cancel a specific pending overlapped read (P1.5 slice
 	// 1a-ii, the in-flight-reader-promise DROP path). Two VALUE operands (the pipe read handle + the OVERLAPPED whose
 	// operation to cancel), no result: the cancellation posts an ERROR_OPERATION_ABORTED completion packet the
@@ -1511,8 +1523,8 @@ export union StdOp
 	// ⚠ APPENDED AT THE VERY END OF THE UNION, per the band-append invariant `osPanicValue` states above.
 	// `category: system` places both logically beside the file-IO band, independent of this tail position.
 	//
-	// `osStdinHandle(result)` = `GetStdHandle(STD_INPUT_HANDLE)` — the console/pipe handle the process was
-	// started with, owned by the OS. It is not a duplicate and must never be closed.
+	// `osStdHandle(result, which)` = `GetStdHandle(which)` — the console/pipe handle the process was started with
+	// for one of its three standard streams, owned by the OS. It is not a duplicate and must never be closed.
 	//
 	// ⭐⭐ **IT IS A HANDLE OP AND NOT A READ OP, WHICH IS WHY THERE IS NO `osReadStdin`.** The bootstrap
 	// hand-rolls one runtime function that does `GetStdHandle` AND `ReadFile` together
@@ -1522,10 +1534,12 @@ export union StdOp
 	// came from, and the two would be free to drift on the out-param slot. So this op supplies the ONE thing
 	// `osReadFile` cannot get for itself, and `__con_read_stdin` composes them at the Std tier.
 	//
-	// ⚠ It takes NO operands: the `STD_INPUT_HANDLE` selector is an IMMEDIATE the backend materializes, so
-	// there is nothing to pass and nothing that can differ between two calls in one process — `osCommandLine`
-	// exactly.
-	osStdinHandle(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
+	// ⚠ **THE SELECTOR IS AN OPERAND, AND IT WAS AN ISEL IMMEDIATE UNTIL THE SUBPROCESS RUNG.** While standard
+	// INPUT was the only stream anyone asked for, materializing `STD_INPUT_HANDLE` in the backend was right — there
+	// was nothing to pass. `OutputDestination.inherit` asks for the other two: a child spawned with inherited stdout
+	// takes the PARENT's `STD_OUTPUT_HANDLE` into its STARTUPINFO, and one op that reads a selector is the honest
+	// shape where three ops differing only in an immediate would be three copies of one marshalling.
+	osStdHandle(resultId ValueId, whichId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: false, isCall: true, clobbersFlags: true, isCmp: false}
 	// `osExecutablePath(result, bufLen, bufPtr)` = `GetModuleFileNameA(NULL, bufPtr, bufLen)` — the running
 	// image's absolute path, written into the caller's buffer. The result is the character count written,
 	// which is how the caller tells "fits" from "truncated"; `isStore: true` because it writes that buffer.
@@ -1644,6 +1658,65 @@ export union StdOp
 	// into the header's `start_timestamp`, and every entry carries `now - start` as a millisecond delta. Two
 	// different clocks either end would make that subtraction meaningless, and nothing would report it.
 	osTickCountMs(resultId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// ⭐⭐ **THE FOUR HOST PRIMITIVES THE ATTACHED SUBPROCESS NEEDS AND THE STREAMING ONE DID NOT.**
+	//
+	// ⭐ **APPENDED AT THE VERY END OF THE UNION, per the band-append invariant** `osOpenNamedSegment` states
+	// above: every stale full-tail range arm (`… to osTickCountMs`) fails to compile until it is consciously
+	// extended, which is the mechanism that finds every site obliged to classify or lower a new op. Their
+	// `category: system` places them logically in the OS band, independent of this tail position.
+	//
+	// Everything ABOVE these four is builder-built Std in `SubprocessRuntime.maxon` — the PATH walk, the drain
+	// loop, the deadline arithmetic — exactly as the FILETIME arithmetic stays out of `osReadWallClock`. These
+	// are the irreducible host calls underneath it, and each exists because nothing already in the band can
+	// answer its question.
+
+	// `osHandleSetInherit(handle)` = `SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT)`.
+	// One VALUE operand, no result — the BOOL is ignored for `osCloseHandle`'s reason.
+	//
+	// ⭐ **WHY IT EXISTS AT ALL: A HANDLE A CHILD MUST INHERIT AND `CreateFileA` DOES NOT MAKE ONE.** Three of
+	// the stdio kinds — `discard` (the NUL device), `file` in either direction — reach the child as a FILE
+	// handle, and `osFileOpenRead`/`osFileOpenWrite` pass a NULL `lpSecurityAttributes`, which yields a
+	// NON-inheritable handle. Put in a STARTUPINFO under `bInheritHandles=TRUE` such a handle is silently not
+	// inherited and the child's stream is closed. Marking it afterwards is one call; widening both open ops
+	// with a security-attributes operand would put a parameter every existing caller passes NULL to on the two
+	// hottest file entry points.
+	osHandleSetInherit(handleId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osPipePeek(result, handle, availPtr) -> BOOL` = `PeekNamedPipe(handle, NULL, 0, NULL, availPtr, NULL)`.
+	// Two VALUE operands (the read end, and the out-param word the byte count lands in); DEFINES the BOOL, which
+	// is FALSE with `GetLastError() == ERROR_BROKEN_PIPE` once the child's write end is closed and drained.
+	//
+	// ⭐⭐ **IT IS WHAT MAKES `waitCollect` DEADLOCK-FREE, AND NOTHING ALREADY IN THE BAND CAN STAND IN FOR IT.**
+	// Collecting a child's output means draining stdout AND stderr while the child runs: a child that fills the
+	// 64 KiB stderr pipe blocks for ever if the parent is committed to a read on stdout. shv2's yielding read
+	// (`__gt_subp_yield_read`) parks the calling green thread on the GT's own single OVERLAPPED, so it cannot
+	// hold two reads in flight — which leaves ASKING each pipe whether it has bytes before committing to read
+	// it. A peek that answers 0 costs one call and no wait; a peek that answers N makes the overlapped read
+	// complete SYNCHRONOUSLY, so the ordinary reader is reached with no park at all.
+	// ⚠ It is also what lets a TIMEOUT be honoured: a committed blocking read cannot observe a deadline.
+	osPipePeek(resultId ValueId, handleId ValueId, availPtrId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osEnvRead(result, namePtr, bufPtr, bufLen) -> characters written` = `GetEnvironmentVariableA(namePtr,
+	// bufPtr, bufLen)`. Three VALUE operands; DEFINES the count, which is 0 when the variable is unset and
+	// `> bufLen` when the buffer was too small (the size NEEDED, so one retry at exactly that size is provably
+	// enough — `__md_current_path`'s straight-line retry, not `__proc_exe_path`'s doubling loop).
+	//
+	// ⭐ **`osOpenNamedSegment` ALREADY CALLS `GetEnvironmentVariableA` AND IS DELIBERATELY NOT REUSED.** That op
+	// FUSES the env read with an `OpenFileMappingA` because the buffer between them is pure scratch no Std value
+	// reads. Here the VALUE is the whole point — `PATH` and `PATHEXT` are what `subprocessResolveOnPath` walks —
+	// so the two are the same Win32 entry point serving two different questions, which is one import and two ops.
+	osEnvRead(resultId ValueId, namePtrId ValueId, bufPtrId ValueId, bufLenId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
+
+	// `osProcessTerminate(handle, exitCode)` = `TerminateProcess(handle, exitCode)`. Two VALUE operands, no
+	// result — the BOOL is ignored for `osCloseHandle`'s reason (a child that has already exited answers FALSE,
+	// which is the same outcome as success for every caller here).
+	//
+	// ⭐ **IT IS THE TIMEOUT CONTRACT, not a convenience.** `stdlib/Subprocess.maxon`'s `waitWithTimeout` documents
+	// that the runtime *"forcibly terminates the child"* when the deadline fires, and `Configuration.timeoutMs`
+	// says the non-zero value IS the kill-after deadline. Without it a timed-out spawn leaves a live child and a
+	// pipe nobody drains.
+	osProcessTerminate(handleId ValueId, exitCodeId ValueId) = StdOpMeta{category: StdOpCategory.system, role: OpRole.plain, isPure: false, isUnsupportedInInlineBody: true, isMemory: true, isStore: true, isCall: true, clobbersFlags: true, isCmp: false}
 end 'StdOp'
 
 export typealias StdOpArray = Array with StdOp
@@ -1752,7 +1825,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osSleepMs(msId) then referenced.insert(msId)
 		// P1.5 subprocess: each reads its operands and (except `osWaitHandle`) defines nothing. `osWaitHandle`'s
 		// `resultId` is a DEF, so it is skipped here exactly as `osAllocPages`'s result id is.
-		osProcessSpawn(cmdlinePtr, startupPtr, procInfoPtr) then insertUseTriple(referenced, a: cmdlinePtr, b: startupPtr, c: procInfoPtr)
+		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr) then insertUseQuint(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr)
 		osProcessExitCode(handle, codePtr) then insertUsePair(referenced, a: handle, b: codePtr)
 		osWaitHandles(handleArrayPtr, count, timeoutMs) then insertUseTriple(referenced, a: handleArrayPtr, b: count, c: timeoutMs)
 		osCloseHandle(handle) then referenced.insert(handle)
@@ -1784,7 +1857,7 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osLockLeave(lockPtr) then referenced.insert(lockPtr)
 		osReadOverlapped(_, handle, buf, cap, bytesOutPtr, ovl) then insertUseQuint(referenced, a: handle, b: buf, c: cap, d: bytesOutPtr, e: ovl)
 		osLastError then break 'u'
-		osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr) then insertUseTriple(referenced, a: cmdlinePtr, b: startupPtr, c: procInfoPtr)
+		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr) then insertUseQuint(referenced, a: cmdlinePtr, b: cwdPtr, c: creationFlags, d: startupPtr, e: procInfoPtr)
 		osCancelIo(handle, ovl) then insertUsePair(referenced, a: handle, b: ovl)
 		osGetPid then break 'u'
 		// P1.5 dogfood slice 1b: the streaming stdin pipe reads four value operands (its two out-pointers are
@@ -1817,9 +1890,12 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osDirCreate(_, pathPtr) then referenced.insert(pathPtr)
 		osDirCurrentPath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
 		osFileAttributes(_, pathPtr) then referenced.insert(pathPtr)
-		// W5. No operands: the `STD_INPUT_HANDLE` selector is a backend immediate, so this reads nothing at
-		// all — `osCommandLine` exactly. Its `resultId` is a def and is skipped here.
-		osStdinHandle then break 'u'
+		// W5, widened at the subprocess rung. ⚠ **THIS ARM READ "No operands: the `STD_INPUT_HANDLE` selector
+		// is a backend immediate, so this reads nothing at all" — and the line beneath it already reported one.**
+		// The SELECTOR is a value operand now (`OutputDestination.inherit` asks for the other two streams), and
+		// reporting it is not optional: unreported, the allocator would free its register before `GetStdHandle`
+		// read it. Its `resultId` is a def and is skipped here.
+		osStdHandle(_, which) then referenced.insert(which)
 		// Both the buffer ADDRESS and the LENGTH are live value operands, for the reason `osDirCurrentPath`'s
 		// pair are: the allocator must not free either register before the OS writes through the first.
 		osExecutablePath(_, bufLen, bufPtr) then insertUsePair(referenced, a: bufLen, b: bufPtr)
@@ -1833,6 +1909,13 @@ export function collectStdOpUses(op StdOp, referenced StdValueUseSet)
 		osOpenNamedSegment(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
 		osMapNamedSegment(_, handle, size) then insertUsePair(referenced, a: handle, b: size)
 		osTickCountMs then break 'u'
+		// The four attached-subprocess host primitives, each reporting exactly its VALUE operands; the two that
+		// answer in RAX (`osPipePeek`, `osEnvRead`) have `resultId` as a DEF, skipped here exactly as
+		// `osWaitHandle`'s is.
+		osHandleSetInherit(handle) then referenced.insert(handle)
+		osPipePeek(_, handle, availPtr) then insertUsePair(referenced, a: handle, b: availPtr)
+		osEnvRead(_, namePtr, bufPtr, bufLen) then insertUseTriple(referenced, a: namePtr, b: bufPtr, c: bufLen)
+		osProcessTerminate(handle, exitCode) then insertUsePair(referenced, a: handle, b: exitCode)
 	end 'u'
 end 'collectStdOpUses'
 
@@ -1990,7 +2073,7 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		// W5. BOTH DEFINE — `GetStdHandle` a HANDLE, `GetModuleFileNameA` a character count. Neither has a
 		// void twin, so neither takes `none`, and answering `none` here would not fail to compile: it would
 		// under-count `nextFreeValueId` and let this pass mint a live id (see this function's header).
-		osStdinHandle(resultId) gives DefinedValueLookup.defines(resultId)
+		osStdHandle(resultId, _) gives DefinedValueLookup.defines(resultId)
 		osExecutablePath(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		// W35: the stderr write defines the OS's byte count, exactly as its stdout twin above does.
 		osWriteStderr(resultId, _, _) gives DefinedValueLookup.defines(resultId)
@@ -2000,6 +2083,12 @@ function stdOpDefinedValue(op StdOp) returns DefinedValueLookup
 		osOpenNamedSegment(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
 		osMapNamedSegment(resultId, _, _) gives DefinedValueLookup.defines(resultId)
 		osTickCountMs(resultId) gives DefinedValueLookup.defines(resultId)
+		// The four attached-subprocess host primitives: the two whose Win32 entry point answers in RAX capture
+		// it; the two whose BOOL is ignored define nothing, exactly as `osCloseHandle` does.
+		osHandleSetInherit gives DefinedValueLookup.none
+		osPipePeek(resultId, _, _) gives DefinedValueLookup.defines(resultId)
+		osEnvRead(resultId, _, _, _) gives DefinedValueLookup.defines(resultId)
+		osProcessTerminate gives DefinedValueLookup.none
 	end 'r'
 end 'stdOpDefinedValue'
 
@@ -2113,7 +2202,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osSleepMs(msId) gives StdOp.osSleepMs(remappedValue(msId, subst: subst))
 		// The exact mirror of `collectStdOpUses`'s subprocess arms: rewrite exactly the operands they read;
 		// `osWaitHandle`'s `resultId` is a def, so it passes through unmapped.
-		osProcessSpawn(cmdlinePtr, startupPtr, procInfoPtr) gives StdOp.osProcessSpawn(remappedValue(cmdlinePtr, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
+		osProcessSpawn(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr) gives StdOp.osProcessSpawn(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
 		osProcessExitCode(handle, codePtr) gives StdOp.osProcessExitCode(remappedValue(handle, subst: subst), codePtrId: remappedValue(codePtr, subst: subst))
 		osWaitHandles(handleArrayPtr, count, timeoutMs) gives StdOp.osWaitHandles(remappedValue(handleArrayPtr, subst: subst), countId: remappedValue(count, subst: subst), timeoutMsId: remappedValue(timeoutMs, subst: subst))
 		osCloseHandle(handle) gives StdOp.osCloseHandle(remappedValue(handle, subst: subst))
@@ -2141,7 +2230,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osLockLeave(lockPtr) gives StdOp.osLockLeave(remappedValue(lockPtr, subst: subst))
 		osReadOverlapped(resultId, handle, buf, cap, bytesOutPtr, ovl) gives StdOp.osReadOverlapped(resultId, handleId: remappedValue(handle, subst: subst), bufId: remappedValue(buf, subst: subst), capId: remappedValue(cap, subst: subst), bytesOutPtrId: remappedValue(bytesOutPtr, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osLastError gives op
-		osProcessSpawnInherit(cmdlinePtr, startupPtr, procInfoPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
+		osProcessSpawnInherit(cmdlinePtr, cwdPtr, creationFlags, startupPtr, procInfoPtr) gives StdOp.osProcessSpawnInherit(remappedValue(cmdlinePtr, subst: subst), cwdPtrId: remappedValue(cwdPtr, subst: subst), creationFlagsId: remappedValue(creationFlags, subst: subst), startupPtrId: remappedValue(startupPtr, subst: subst), procInfoPtrId: remappedValue(procInfoPtr, subst: subst))
 		osCancelIo(handle, ovl) gives StdOp.osCancelIo(remappedValue(handle, subst: subst), ovlId: remappedValue(ovl, subst: subst))
 		osGetPid gives op
 		// P1.5 dogfood slice 1b: the streaming stdin pipe + write, rewriting exactly the value operands they read.
@@ -2172,7 +2261,7 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osFileAttributes(resultId, pathPtr) gives StdOp.osFileAttributes(resultId, pathPtrId: remappedValue(pathPtr, subst: subst))
 		// W5. The exact mirrors of `collectStdOpUses`'s two arms: the handle read has no value operand to
 		// rewrite, and the path fill rewrites exactly the pair it reads.
-		osStdinHandle(resultId) gives StdOp.osStdinHandle(resultId)
+		osStdHandle(resultId, which) gives StdOp.osStdHandle(resultId, whichId: remappedValue(which, subst: subst))
 		osExecutablePath(resultId, bufLen, bufPtr) gives StdOp.osExecutablePath(resultId, bufLenId: remappedValue(bufLen, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst))
 		// W35: `osWriteStdout`'s arm one stream over.
 		osWriteStderr(resultId, bufId, lenId) gives StdOp.osWriteStderr(resultId, bufId: remappedValue(bufId, subst: subst), lenId: remappedValue(lenId, subst: subst))
@@ -2184,6 +2273,12 @@ module function remapStdOpUses(op StdOp, subst ValueIdArray) returns StdOp
 		osOpenNamedSegment(resultId, namePtr, bufPtr, bufLen) gives StdOp.osOpenNamedSegment(resultId, namePtrId: remappedValue(namePtr, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), bufLenId: remappedValue(bufLen, subst: subst))
 		osMapNamedSegment(resultId, handle, size) gives StdOp.osMapNamedSegment(resultId, handleId: remappedValue(handle, subst: subst), sizeId: remappedValue(size, subst: subst))
 		osTickCountMs gives op
+		// The exact mirror of `collectStdOpUses`'s four attached-subprocess arms: rewrite exactly the operands
+		// they read; both results are defs and pass through unmapped.
+		osHandleSetInherit(handle) gives StdOp.osHandleSetInherit(remappedValue(handle, subst: subst))
+		osPipePeek(resultId, handle, availPtr) gives StdOp.osPipePeek(resultId, handleId: remappedValue(handle, subst: subst), availPtrId: remappedValue(availPtr, subst: subst))
+		osEnvRead(resultId, namePtr, bufPtr, bufLen) gives StdOp.osEnvRead(resultId, namePtrId: remappedValue(namePtr, subst: subst), bufPtrId: remappedValue(bufPtr, subst: subst), bufLenId: remappedValue(bufLen, subst: subst))
+		osProcessTerminate(handle, exitCode) gives StdOp.osProcessTerminate(remappedValue(handle, subst: subst), exitCodeId: remappedValue(exitCode, subst: subst))
 	end 'r'
 end 'remapStdOpUses'
 

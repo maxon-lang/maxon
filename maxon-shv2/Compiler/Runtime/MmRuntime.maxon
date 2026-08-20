@@ -116,6 +116,13 @@ export let MmDecrefName = b"__mm_decref"
 export let MmFreeName = b"__mm_free"
 export let MmLeakCheckName = b"__mm_leak_check"
 
+// ⭐ **`__mm_is_null(ptr)` — IS THIS `__ManagedMemory` THE NULL SENTINEL?** The floor of
+// `__Builtins.managedIsNull(mm)`, whose only corpus caller is `stdlib/Subprocess.maxon:487` testing the
+// answer of a runtime lookup that may find nothing. It is an `__mm_` operation rather than a subprocess
+// one because the question it asks is about a HEAP RECORD and about nothing else — any producer that can
+// answer "no record" is a legitimate caller.
+export let MmIsNullName = b"__mm_is_null"
+
 // ⭐ **THE COPY-ON-WRITE DETACH, SHARED BY THE STRING AND ARRAY RECORDS** — `__managed_cow_detach` and
 // `__managed_append` both reach it rather than each spelling the detach itself. Its NAME lives here, with the
 // other `__mm_*` names, because this is the one list of them and `isRuntimeCallee`'s prefix rule is stated
@@ -420,6 +427,9 @@ export function installMmRuntime(module StdModule, usage RuntimeUsage)
 	if usage.usesRetain 'retain'
 		buildMmRetain(module)
 	end 'retain'
+	if usage.usesMmIsNull 'isNull'
+		buildMmIsNull(module)
+	end 'isNull'
 
 	// ⚠ `__mm_cow_detach` IS CONDITIONAL under its ONE remaining caller's bit — `__managed_cow_detach`, under
 	// `usesManagedMemory` — so that a program reaching no array does not carry it dead. It is still built HERE
@@ -506,6 +516,23 @@ export function sixI64Params() returns StdTypeArray
 	types.push(StdType.i64)
 	return types
 end 'sixI64Params'
+
+// ⭐ **FOURTEEN i64 PARAMETERS — `__gt_subp_attached_spawn`'s, and the contract's own arity.** It joins the
+// ladder rather than reviving the derived `i64Params(count)` the note below retired, because fourteen is a
+// SOURCE FACT here in exactly the sense that note requires: `stdlib/Subprocess.maxon`'s spawn call passes
+// fourteen arguments because the contract has fourteen slots, and both reference compilers declare the same
+// fourteen. The count and the list are one statement, made once.
+export function fourteenI64Params() returns StdTypeArray
+	var types = sixI64Params()
+	for _ in 0 upto SpawnContractExtraParams 'each'
+		types.push(StdType.i64)
+	end 'each'
+	return types
+end 'fourteenI64Params'
+
+// The fourteen-argument spawn contract's arity, and how many of them the six-parameter base is short.
+export let SubprocessSpawnParamCount = 14 as ParamCount
+let SpawnContractExtraParams = 8 as ParamCount
 
 // ⚠ **`i64Params(count)` STOOD HERE AND WENT AT W129's REVIEW, WITH ITS ONLY CALLER.** The named ladder
 // above is right for an entry whose arity IS a source fact — `__mm_alloc` takes two because it takes two.
@@ -1301,6 +1328,26 @@ export function emitRefcountCheckToLastOwner(module StdModule, func IrFunction, 
 	emitAdjustRefcount(module, block: lower, ptr: record, opcode: StdBinOpcode.sub, ids: ids)
 	module.setTerminator(lower, op: StdOp.retVoid)
 end 'emitRefcountCheckToLastOwner'
+
+// `__mm_is_null(ptr) -> 1 when the pointer is NULL, 0 otherwise` — the floor of
+// `__Builtins.managedIsNull(mm)`.
+//
+// It is a POINTER test and nothing more: it dereferences nothing, so it is safe on exactly the value every
+// other `__mm_*` entry would fault on. That is the whole of what it is for — a producer that can answer "no
+// record" hands its caller something no drop may touch, and this is how the caller finds out.
+function buildMmIsNull(module StdModule)
+	var func = IrFunction.createFromStd(MmIsNullName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	emitParams(module, block: entry, count: 1)
+	let ptr = 0 as ValueId
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let isNull = emitCmp(module, block: entry, a: ptr, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.ret(isNull))
+
+	module.functions.push(func)
+end 'buildMmIsNull'
 
 // `__mm_decref(ptr)` — one fewer owner; free at the last. The refcount read-modify-write is the
 // shared `emitRefcountCheckToLastOwner`; this function supplies only the LAST-OWNER path — reclaim

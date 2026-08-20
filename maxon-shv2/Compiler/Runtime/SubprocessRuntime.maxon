@@ -1,0 +1,1809 @@
+// Runtime/SubprocessRuntime.maxon — the ATTACHED child process, and the helpers around every child.
+//
+// ⭐ **WHAT IT SERVES.** `stdlib/Subprocess.maxon` — `Subprocess.run(...)`, `Configuration.run()`,
+// `runDetached()` and `StreamingSubprocess` — bottoms out in twenty `__Builtins.*` intrinsics and nothing
+// else — nineteen `subprocess*` names plus `managedIsNull`, which is a `__ManagedMemory` predicate rather
+// than a subprocess entry and lowers to `__mm_is_null`.
+// `Parser.BuiltinsSubprocessSpawnName` lists all twenty and says which entry each becomes; this file
+// builds the ones the STREAMING half (`GtRuntime.maxon`, P1.5 slice 1b) did not already have.
+//
+// ⭐⭐ **IT DOES NOT FORK A SECOND `CreateProcess` PATH, AND THAT IS THE WHOLE DESIGN.** `GtRuntime`'s
+// `__gt_subp_spawn_core` creates the pipes, fills a `STARTUPINFO`, calls `CreateProcessA` with
+// `bInheritHandles=TRUE` and claims a slot in the 64-entry handle table — with the register-pressure
+// discipline, the slot GENERATION and the buffer reuse that took a rung to get right. Every spelling a
+// program can spawn a child with fills a REQUEST RECORD (`SubpReqCmdline`) and calls that one core, so both
+// spawns claim a slot in the SAME table and `subprocessReleaseHandle` / `subprocessCloseStdin` serve either
+// without knowing which minted the handle. Two cores would have been two places for the pipe-inheritance
+// rules to drift apart.
+//
+// ⭐⭐ **WHAT v1 DOES DIFFERENTLY, AND WHY NONE OF IT COULD BE TAKEN.** `maxon-selfhosted` implements this
+// family as a TIER-4 hand-emitted MACHINE-CODE runtime — `runtime.std:4360-4500` declares the fourteen-argument
+// signatures as stubs and `Targets/X64/X64Backend.maxon:3457-3550` overrides each with raw x64 bytes. shv2 has
+// no such tier: its runtime is Std-IR graphs a backend then lowers, so every entry here is a graph. That is a
+// structural divergence, not a preference.
+//
+// ⭐ **WHERE IT CONVERGED WITHOUT BEING COPIED, THOUGH, IS WORTH KNOWING.** v1's per-handle record carries
+// `SubpOffPid`, `SubpOffStartTime`, `SubpOffStdinPayloadPtr`, `SubpOffStdoutLimit` and `SubpOffStderrLimit`
+// (`X64Backend.maxon:3481-3488`) — the same five facts the attached spawn had to add to shv2's slot, arrived at
+// from the contract rather than from the file. And it emits its scalar result readers from ONE parameterized
+// emitter (`emitX64SubpIntFieldAccessor`), which is `buildSubpResultWordReader` below.
+//
+// ⚠ **THE ONE THING v1 HAS THAT shv2 DELIBERATELY DOES NOT IS THREADS.** Its record holds
+// `SubpOffDrainCtxStdout`/`Stderr`/`FeedCtxStdin` and an `SubpOffHJob` — an OS thread per stream plus a Job
+// object — which is how a runtime with no scheduler drains two pipes at once. shv2 HAS a scheduler, and the
+// peek-then-read loop below drains both from ONE green thread with no thread, no job object and no
+// cross-thread state to get wrong. The bootstrap takes v1's route (`X86CodeEmitter.Runtime.cs:8121`: *"thread
+// spawned by `maxon_subprocess_wait_collect` blocks on ReadFile"*), so this is a divergence from BOTH
+// references, and the scheduler is the reason it is available at all.
+//
+// ⭐ **HOST-ONLY, on the same terms as every other Win32 substrate entry.** `x64-windows` is real; every
+// other target refuses at the call site with the EXISTING `E3104 targetUnsupportedConstruct` through
+// `SemanticCheck.calleeNeedsWin32Substrate`, which matches the `__gt_subp_` PREFIX — so an entry point added
+// here later is gated by construction rather than by memory. ⚠ Before this rung that gate did NOT name the
+// subprocess band at all, and `SemanticCheck`'s own header recorded the consequence verbatim: a subprocess
+// program on arm64/linux/wasm died as a BACKEND PANIC rather than a diagnostic. Closed here.
+//
+// ⭐⭐ **EVERY LOOP IN THIS FILE CARRIES ITS STATE IN MEMORY, NOT IN BLOCK ARGUMENTS.** A hand-built runtime
+// function's values are SPAN-LESS, so a register-pressure `E5001` has no user code to blame and PANICS
+// instead of diagnosing (`GtRuntime`'s spawn header states the rule). The walks here are the worst case for
+// that — the command-line builder carries six loop variables across two nested loops, the PATH walk carries
+// eight across three — so each keeps them in a slab scratch record and reloads what a block needs. It costs a
+// load per use on a path that is about to make a system call, and it makes the pressure question vacuous.
+
+// ⭐ **THE ENTRY POINTS.** All under `__gt_subp_`, which is `GtRuntime.SubpCalleePrefix` — the prefix
+// `scanRuntimeUsage` reads to turn the whole subprocess substrate on, and the one `SemanticCheck` reads for
+// E3104. Naming them into that family is what makes both facts true of the attached half for free.
+export let SubpAttachedSpawnName = b"__gt_subp_attached_spawn"
+export let SubpStreamSpawnName = b"__gt_subp_stream_spawn"
+export let SubpGetPidName = b"__gt_subp_get_pid"
+export let SubpWaitCollectName = b"__gt_subp_wait_collect"
+export let SubpWaitExitName = b"__gt_subp_wait_exit"
+export let SubpWriteAllName = b"__gt_subp_write_all"
+export let SubpReadOutBytesName = b"__gt_subp_read_out_bytes"
+export let SubpReadErrBytesName = b"__gt_subp_read_err_bytes"
+export let SubpResultKindName = b"__gt_subp_result_kind"
+export let SubpResultCodeName = b"__gt_subp_result_code"
+export let SubpResultStdoutName = b"__gt_subp_result_stdout"
+export let SubpResultStderrName = b"__gt_subp_result_stderr"
+export let SubpResultDurationName = b"__gt_subp_result_duration"
+export let SubpResultReleaseName = b"__gt_subp_result_release"
+export let SubpResolvePathName = b"__gt_subp_resolve_path"
+export let SubpLastErrorName = b"__gt_subp_last_error"
+let SubpArgvCmdlineName = b"__gt_subp_argv_cmdline"
+
+// The failure answer every one of these entries shares — `stdlib/Subprocess.maxon` tests `handle == -1`,
+// `result == -1` and `rc == -1` against exactly this, and the bootstrap's table documents the same.
+let SubpFailure = 0 - 1
+
+// `subprocessWaitExit`'s SECOND failure answer: the deadline fired. `waitWithTimeout` maps it to
+// `SubprocessError.timeout` and maps -1 to `ioFailed`, so the two must stay distinct.
+let SubpTimedOutRc = 0 - 2
+
+// The `ResultStatusKind` discriminator `stdlib/Subprocess.maxon` decodes. Its raw values are declared THERE
+// and travel across the builtin boundary unchanged, exactly as the stdio kinds do.
+let SubpStatusExited = 0 as ParsedInt
+let SubpStatusTimedOut = 2 as ParsedInt
+
+// The exit code a child is TERMINATED with when its deadline fires. Any non-zero value would do; 1 is what a
+// killed process conventionally reports and what the bootstrap uses.
+let SubpKilledExitCode = 1 as ParsedInt
+
+// `WaitForSingleObject`'s two answers this file distinguishes: the object became signalled, or the timeout
+// elapsed. Named because a bare `0`/`0x102` at a compare says nothing about which.
+let WaitObjectSignalled = 0 as ParsedInt
+let WaitTimedOut = 0x102 as ParsedInt
+
+// `GetFileAttributesA`'s "there is nothing at this path" answer, and the directory bit within a real one. A
+// candidate that names a DIRECTORY is not an executable, which is what makes the second test necessary.
+let InvalidFileAttributes = 0xFFFFFFFF as ParsedInt
+let FileAttributeDirectory = 0x10 as ParsedInt
+
+// The three `dwCreationFlags` bits `stdlib/Subprocess.maxon`'s `SpawnFlag` surface maps onto. The SURFACE
+// values (bit 0 hide window, bit 1 new process group, bit 2 detach) are the corpus's; these are Win32's, and
+// the translation between them lives in one place (`emitSubpCreationFlags`).
+let CreateNoWindow = 0x08000000 as ParsedInt
+let CreateNewProcessGroup = 0x00000200 as ParsedInt
+let DetachedProcess = 0x00000008 as ParsedInt
+
+// The surface bitfield's own three bits, as the shifts that extract them.
+let SpawnFlagHideWindowShift = 0 as ParsedInt
+let SpawnFlagNewGroupShift = 1 as ParsedInt
+let SpawnFlagDetachShift = 2 as ParsedInt
+
+// How long the collect loop sleeps when a pass moved no bytes and the child is still running. It is a GREEN
+// sleep (`__gt_sleep`), so the whole scheduler runs while it waits — the poll costs the OS nothing and other
+// green threads make progress. One millisecond is the smallest value a Win32 timer resolves at all.
+let SubpPollMs = 1 as ParsedInt
+
+// The initial size of each collected stream's buffer, and the growth policy. It doubles past what a pass
+// needs, exactly as the streaming line buffer does, so a child producing N bytes costs O(log N) reallocations.
+let SubpCollectInitialBytes = 4096 as ParsedInt
+let SubpGrowthFactor = 2 as ParsedInt
+
+// ⭐ **THE `waitCollect` LOOP'S STATE, IN MEMORY.** See this file's header for why none of it is a block
+// argument. `progress` counts the bytes a pass moved: a pass that moved none and found the child still
+// running is the ONE case that sleeps, which is what keeps a busy child from ever paying for the poll.
+// ⚠ There is no `slot` field: the slot ADDRESS is recomputed from the handle wherever it is needed
+// (`emitSubpSlotOf`) rather than cached, because a cached pointer is a live value across the drain loop and
+// this file's header is about not having those.
+let WcHandle = 0 as ByteOffset
+let WcDeadline = 16 as ByteOffset  // absolute tick-count deadline; 0 means "wait forever"
+let WcStartMs = 24 as ByteOffset
+let WcOutBuf = 32 as ByteOffset
+let WcOutLen = 40 as ByteOffset
+let WcOutCap = 48 as ByteOffset
+let WcOutDone = 56 as ByteOffset
+let WcErrBuf = 64 as ByteOffset
+let WcErrLen = 72 as ByteOffset
+let WcErrCap = 80 as ByteOffset
+let WcErrDone = 88 as ByteOffset
+let WcStatus = 96 as ByteOffset
+let WcProgress = 104 as ByteOffset
+let WcAvail = 112 as ByteOffset  // PeekNamedPipe's out-word
+let WcBytesOut = 120 as ByteOffset  // the yielding read's out-word
+let WcBytes = 128 as ParsedInt
+
+// ⭐ **THE RESULT STRUCT `subprocessWaitCollect` ANSWERS A POINTER TO**, and the six `subprocessResult*`
+// readers decode. It is `__mm_alloc`'d rather than slab, and so are the two captured buffers it owns, because
+// `subprocessResultRelease` must genuinely give the memory back: a program that runs a child in a loop would
+// otherwise grow the slab by the size of every child's output for ever, and the slab has no free.
+// ⚠ That also puts all three under the LEAK GATE — a spec that forgets `subprocessResultRelease` exits 101,
+// which is exactly the discipline this API's `release` contract asks for.
+let ResStatus = 0 as ByteOffset
+let ResCode = 8 as ByteOffset
+let ResDuration = 16 as ByteOffset
+let ResOutBuf = 24 as ByteOffset
+let ResOutLen = 32 as ByteOffset
+let ResErrBuf = 40 as ByteOffset
+let ResErrLen = 48 as ByteOffset
+let ResBytes = 56 as ParsedInt
+
+// ⭐ **THE COMMAND-LINE BUILDER'S STATE, IN MEMORY** — this file's header again. `needsQuote` and `scanStart`
+// are per-ARGUMENT and live across the inner scan, which is exactly what a block argument could not carry
+// without threading it through every block of both loops.
+let ClArgvBuf = 0 as ByteOffset
+let ClArgc = 8 as ByteOffset
+let ClOut = 16 as ByteOffset
+let ClOutLen = 24 as ByteOffset
+let ClPos = 32 as ByteOffset  // read cursor into the argv blob
+let ClArg = 40 as ByteOffset  // which argument is being emitted
+let ClScanStart = 48 as ByteOffset
+let ClNeedsQuote = 56 as ByteOffset
+let ClSawByte = 64 as ByteOffset
+let ClBytes = 72 as ParsedInt
+
+// The bytes the quoting rule reacts to, and the two it writes.
+let SpaceByte = 32 as ParsedInt
+let TabByte = 9 as ParsedInt
+let QuoteByte = 34 as ParsedInt
+let BackslashByte = 92 as ParsedInt
+
+// ⭐ **THE WORST-CASE COMMAND LINE, PER BYTE AND PER ARGUMENT.** Every source byte becomes at most TWO output
+// bytes (a `"` inside a quoted argument is written `\"`), and every argument costs at most three more: a
+// separating space and its two surrounding quotes. Plus one terminator for the whole line. Sizing the buffer
+// from that bound up front is what lets the builder be a SINGLE pass with no growth logic — and the bound is
+// tight enough that the over-allocation is a few bytes per argument.
+let ClBytesPerSourceByte = 2 as ParsedInt
+let ClBytesPerArg = 3 as ParsedInt
+
+// ⭐ **THE PATH WALK'S STATE, IN MEMORY.** Two nested lists — the directories of `PATH` and the extensions of
+// `PATHEXT` — plus a synthetic empty member at the head of each, which is what makes "the name exactly as
+// given" and "the name with no extension added" ordinary iterations rather than special cases before the loop.
+let RpName = 0 as ByteOffset
+let RpNameLen = 8 as ByteOffset
+let RpPath = 16 as ByteOffset  // the PATH value, NUL-terminated
+let RpExts = 24 as ByteOffset  // the PATHEXT value, NUL-terminated
+let RpDirStart = 32 as ByteOffset  // cursor into PATH; the head iteration uses the empty directory instead
+let RpDirLen = 40 as ByteOffset
+let RpDirIsHead = 48 as ByteOffset  // 1 while the synthetic "no directory" member is being tried
+let RpExtStart = 56 as ByteOffset
+let RpExtLen = 64 as ByteOffset
+let RpExtIsHead = 72 as ByteOffset  // 1 while the synthetic "no extension" member is being tried
+let RpCand = 80 as ByteOffset  // the candidate path buffer, reused across every combination
+let RpCandLen = 88 as ByteOffset
+let RpBytes = 96 as ParsedInt
+
+// The environment variables the PATH walk reads, the separator between their members, and the separator
+// between a directory and a file name.
+let PathVarName = b"PATH"
+let PathExtVarName = b"PATHEXT"
+let PathSeparatorByte = 59 as ParsedInt  // ';'
+let DirSeparatorByte = 92 as ParsedInt  // '\'
+
+// ⚠ **THE FALLBACK `PATHEXT`, USED ONLY WHEN THE VARIABLE IS UNSET.** Windows always sets it, so this is the
+// arm nothing normally takes; it is here because "the environment always has it" is exactly the kind of
+// premise this project keeps finding false, and a resolver that silently searched for extensionless files
+// only would fail to find `git` while reporting nothing.
+let PathExtDefault = b".COM;.EXE;.BAT;.CMD"
+
+// The first guess at an environment variable's size. `PATH` is routinely longer than this, and the read
+// RETRIES at exactly the size Win32 names — `GetEnvironmentVariableA` answers the size it NEEDS when the
+// buffer is too small, so one retry is provably enough (`__md_current_path`'s straight-line retry, not
+// `__proc_exe_path`'s doubling loop).
+let EnvFirstGuessBytes = 512 as ParsedInt
+
+// The prefix `subprocessLastErrorMessage()` puts in front of the Win32 error number.
+let SubpErrorPrefix = b"win32 error "
+
+// The widest decimal an i64 can render to, plus its terminator — the scratch `__int_to_string` writes into.
+let DecimalDigitsMax = 24 as ParsedInt
+
+// ⭐ **A NUL-TERMINATED LITERAL, STORED BYTE BY BYTE INTO A FRESH SLAB BUFFER.** The compiler knows the bytes
+// at BUILD time, so this is a loop in the BUILDER that emits one `storeIndirect` per byte — not a loop in the
+// emitted program. An `.rdata` blob would need a symbol and a relocation for what is a handful of immediates,
+// and the runtime has no way to name one anyway (`rdataAddr` carries a label the parser interns).
+function emitSubpLiteralCString(module StdModule, block IrBlock, ids ValueMinter, text ByteArray) returns ValueId
+	let sizeConst = emitConst(module, block: block, value: (text.count() + 1) as ParsedInt, ids: ids)
+	let buf = ids.mint()
+	module.appendOp(block, op: StdOp.call(buf, callee: SlabAllocName, args: argsOf(sizeConst)))
+	for k in 0 upto text.count() 'each'
+		let ch = try text.get(k) otherwise panic("emitSubpLiteralCString: text.get OOB at {k}")
+		let byteConst = emitConst(module, block: block, value: ch as ParsedInt, ids: ids)
+		module.appendOp(block, op: StdOp.storeIndirect(buf, offset: k as ByteOffset, valueId: byteConst, valueType: StdType.u8))
+	end 'each'
+	// The terminator is the slab's own zeroing — the size arithmetic above is what reserves the byte for it.
+	return buf
+end 'emitSubpLiteralCString'
+
+
+// `ERROR_NOT_SUPPORTED` — what `subprocessLastErrorMessage()` reports for a request the runtime declines on
+// its own account rather than one the OS refused. Today that is exactly one request: a caller-built
+// environment block (see `buildSubpAttachedSpawn`).
+let ErrorNotSupported = 50 as ParsedInt
+
+// Publish a specific code as the last subprocess error. `GtRuntime.emitSubpRecordLastError` is the twin that
+// captures the OS's own; this one is for a refusal shv2 makes itself, where there is no OS answer to capture.
+function emitSubpStoreLastError(module StdModule, block IrBlock, ids ValueMinter, code ParsedInt)
+	let value = emitConst(module, block: block, value: code, ids: ids)
+	let slotAddr = ids.mint()
+	module.appendOp(block, op: StdOp.globalAddr(slotAddr, label: SubpLastErrorLabel))
+	emitStoreField(module, block: block, record: slotAddr, offset: 0, value: value)
+end 'emitSubpStoreLastError'
+
+// A fresh slab scratch record of `size` bytes, zero-filled by the allocator's contract. The one place the
+// three walks in this file allocate their state.
+function emitSubpScratch(module StdModule, block IrBlock, ids ValueMinter, size ParsedInt) returns ValueId
+	let sizeConst = emitConst(module, block: block, value: size, ids: ids)
+	let rec = ids.mint()
+	module.appendOp(block, op: StdOp.call(rec, callee: SlabAllocName, args: argsOf(sizeConst)))
+	return rec
+end 'emitSubpScratch'
+
+// ⭐ `__gt_subp_argv_cmdline(argvRec, argc) -> cmdlineBuf` — join an argv blob into ONE mutable
+// NUL-terminated Windows command line.
+//
+// The blob is what `stdlib/Subprocess.maxon`'s `buildArgvBlob` packs: `argc` tokens back to back, each
+// NUL-terminated, in a `__ManagedMemory` record.
+//
+// ⭐⭐ **THE QUOTING RULE IS THE BOOTSTRAP'S, TO THE BYTE, AND MATCHING IT IS THE POINT.** A token is quoted
+// iff it is EMPTY or contains a space, a tab or a `"`; inside a quoted token a `"` is written `\"`; tokens are
+// joined by single spaces (`X86CodeEmitter.Runtime.cs:11710-11900`). ⚠ **Backslashes are NOT doubled, and the
+// bootstrap's own comment claims they are** — the code disagrees with its prose, and the CODE is the oracle
+// this rung is measured against. A `"` preceded by backslashes therefore round-trips differently from the CRT
+// rule on both compilers, identically; diverging here would make the same argv produce two different command
+// lines on the two compilers, which is worse than a shared, stated limitation.
+function buildSubpArgvCmdline(module StdModule)
+	var func = IrFunction.createFromStd(SubpArgvCmdlineName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var argHdr = module.addBlock(func, label: b"clarghdr")
+	var sepCheck = module.addBlock(func, label: b"clsep")
+	var writeSep = module.addBlock(func, label: b"clwsep")
+	var scanInit = module.addBlock(func, label: b"clscaninit")
+	var scanHdr = module.addBlock(func, label: b"clscanhdr")
+	var scanByte = module.addBlock(func, label: b"clscanbyte")
+	var scanMark = module.addBlock(func, label: b"clscanmark")
+	var scanNext = module.addBlock(func, label: b"clscannext")
+	var scanDone = module.addBlock(func, label: b"clscandone")
+	var emptyMark = module.addBlock(func, label: b"clempty")
+	var openQuote = module.addBlock(func, label: b"clopenq")
+	var copyInit = module.addBlock(func, label: b"clcopyinit")
+	var copyHdr = module.addBlock(func, label: b"clcopyhdr")
+	var copyEsc = module.addBlock(func, label: b"clcopyesc")
+	var copyByte = module.addBlock(func, label: b"clcopybyte")
+	var copyDone = module.addBlock(func, label: b"clcopydone")
+	var closeQuote = module.addBlock(func, label: b"clcloseq")
+	var argNext = module.addBlock(func, label: b"clargnext")
+	var finish = module.addBlock(func, label: b"clfinish")
+
+	emitParams(module, block: entry, count: 2)
+	let argvRec = 0 as ValueId
+	let argc = 1 as ValueId
+
+	let state = emitSubpScratch(module, block: entry, ids: ids, size: ClBytes)
+	let argvBuf = emitLoadField(module, block: entry, record: argvRec, offset: ManagedRecordBufferOffset, ids: ids)
+	let argvLen = emitLoadField(module, block: entry, record: argvRec, offset: ManagedRecordLengthOffset, ids: ids)
+	emitStoreField(module, block: entry, record: state, offset: ClArgvBuf, value: argvBuf)
+	emitStoreField(module, block: entry, record: state, offset: ClArgc, value: argc)
+	// The worst-case bound — see `ClBytesPerSourceByte`. One allocation, one pass, no growth logic.
+	let perByte = emitConst(module, block: entry, value: ClBytesPerSourceByte, ids: ids)
+	let byteRoom = emitBin(module, block: entry, a: argvLen, b: perByte, opcode: StdBinOpcode.mul, ids: ids)
+	let perArg = emitConst(module, block: entry, value: ClBytesPerArg, ids: ids)
+	let argRoom = emitBin(module, block: entry, a: argc, b: perArg, opcode: StdBinOpcode.mul, ids: ids)
+	let bodyRoom = emitBin(module, block: entry, a: byteRoom, b: argRoom, opcode: StdBinOpcode.add, ids: ids)
+	let oneMore = emitConst(module, block: entry, value: 1, ids: ids)
+	let outSize = emitBin(module, block: entry, a: bodyRoom, b: oneMore, opcode: StdBinOpcode.add, ids: ids)
+	let outBuf = ids.mint()
+	module.appendOp(entry, op: StdOp.call(outBuf, callee: SlabAllocName, args: argsOf(outSize)))
+	emitStoreField(module, block: entry, record: state, offset: ClOut, value: outBuf)
+	module.setTerminator(entry, op: StdOp.branch(argHdr.id))
+
+	// argHdr: every argument emitted? Then terminate the line and answer it.
+	let argIdx = emitLoadField(module, block: argHdr, record: state, offset: ClArg, ids: ids)
+	let argcH = emitLoadField(module, block: argHdr, record: state, offset: ClArgc, ids: ids)
+	let argsDone = emitCmp(module, block: argHdr, a: argIdx, b: argcH, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(argHdr, op: StdOp.condBranch(argsDone, thenBlockId: finish.id, elseBlockId: sepCheck.id))
+
+	let argIdxS = emitLoadField(module, block: sepCheck, record: state, offset: ClArg, ids: ids)
+	let zeroS = emitConst(module, block: sepCheck, value: 0, ids: ids)
+	let isFirst = emitCmp(module, block: sepCheck, a: argIdxS, b: zeroS, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(sepCheck, op: StdOp.condBranch(isFirst, thenBlockId: scanInit.id, elseBlockId: writeSep.id))
+
+	emitSubpAppendByte(module, block: writeSep, ids: ids, state: state, outOffset: ClOut, lenOffset: ClOutLen, value: SpaceByte)
+	module.setTerminator(writeSep, op: StdOp.branch(scanInit.id))
+
+	// scanInit: remember where this argument starts, and reset the two facts the scan establishes.
+	let posI = emitLoadField(module, block: scanInit, record: state, offset: ClPos, ids: ids)
+	emitStoreField(module, block: scanInit, record: state, offset: ClScanStart, value: posI)
+	let zeroI = emitConst(module, block: scanInit, value: 0, ids: ids)
+	emitStoreField(module, block: scanInit, record: state, offset: ClNeedsQuote, value: zeroI)
+	emitStoreField(module, block: scanInit, record: state, offset: ClSawByte, value: zeroI)
+	module.setTerminator(scanInit, op: StdOp.branch(scanHdr.id))
+
+	// scanHdr: walk to this argument's NUL, marking whether anything forces quoting.
+	let bufS = emitLoadField(module, block: scanHdr, record: state, offset: ClArgvBuf, ids: ids)
+	let posS = emitLoadField(module, block: scanHdr, record: state, offset: ClPos, ids: ids)
+	let byteS = emitLoadByte(module, block: scanHdr, base: bufS, index: posS, ids: ids)
+	let zeroB = emitConst(module, block: scanHdr, value: 0, ids: ids)
+	let atNul = emitCmp(module, block: scanHdr, a: byteS, b: zeroB, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atNul, thenBlockId: scanDone.id, elseBlockId: scanByte.id))
+
+	let oneB = emitConst(module, block: scanByte, value: 1, ids: ids)
+	emitStoreField(module, block: scanByte, record: state, offset: ClSawByte, value: oneB)
+	let bufB = emitLoadField(module, block: scanByte, record: state, offset: ClArgvBuf, ids: ids)
+	let posB = emitLoadField(module, block: scanByte, record: state, offset: ClPos, ids: ids)
+	let byteB = emitLoadByte(module, block: scanByte, base: bufB, index: posB, ids: ids)
+	emitSubpForcesQuoting(module, func: func, ids: ids, cur: scanByte, ch: byteB, whenForces: scanMark, otherwise: scanNext)
+
+	let oneQ = emitConst(module, block: scanMark, value: 1, ids: ids)
+	emitStoreField(module, block: scanMark, record: state, offset: ClNeedsQuote, value: oneQ)
+	module.setTerminator(scanMark, op: StdOp.branch(scanNext.id))
+
+	emitSubpBumpField(module, block: scanNext, ids: ids, record: state, offset: ClPos)
+	module.setTerminator(scanNext, op: StdOp.branch(scanHdr.id))
+
+	// scanDone: step past the NUL, and force quoting for an EMPTY argument so `""` reaches the child as a
+	// token rather than vanishing.
+	emitSubpBumpField(module, block: scanDone, ids: ids, record: state, offset: ClPos)
+	let sawByte = emitLoadField(module, block: scanDone, record: state, offset: ClSawByte, ids: ids)
+	let zeroD = emitConst(module, block: scanDone, value: 0, ids: ids)
+	let wasEmpty = emitCmp(module, block: scanDone, a: sawByte, b: zeroD, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanDone, op: StdOp.condBranch(wasEmpty, thenBlockId: emptyMark.id, elseBlockId: openQuote.id))
+
+	let oneE = emitConst(module, block: emptyMark, value: 1, ids: ids)
+	emitStoreField(module, block: emptyMark, record: state, offset: ClNeedsQuote, value: oneE)
+	module.setTerminator(emptyMark, op: StdOp.branch(openQuote.id))
+
+	emitSubpQuoteIfNeeded(module, func: func, ids: ids, cur: openQuote, state: state, cont: copyInit)
+
+	// copyInit: the copy walks from the argument's own start, which `ClScanStart` already holds — it is the
+	// second use of that field rather than a second cursor, and the copy consumes it as it goes.
+	module.setTerminator(copyInit, op: StdOp.branch(copyHdr.id))
+
+	let bufC = emitLoadField(module, block: copyHdr, record: state, offset: ClArgvBuf, ids: ids)
+	let cursorC = emitLoadField(module, block: copyHdr, record: state, offset: ClScanStart, ids: ids)
+	let byteC = emitLoadByte(module, block: copyHdr, base: bufC, index: cursorC, ids: ids)
+	let zeroC = emitConst(module, block: copyHdr, value: 0, ids: ids)
+	let atEndC = emitCmp(module, block: copyHdr, a: byteC, b: zeroC, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(copyHdr, op: StdOp.condBranch(atEndC, thenBlockId: copyDone.id, elseBlockId: copyEsc.id))
+
+	// copyEsc: a `"` inside a QUOTED argument is written `\"`; everywhere else the byte passes through.
+	let quoted = emitLoadField(module, block: copyEsc, record: state, offset: ClNeedsQuote, ids: ids)
+	let zeroQ = emitConst(module, block: copyEsc, value: 0, ids: ids)
+	let notQuoted = emitCmp(module, block: copyEsc, a: quoted, b: zeroQ, pred: StdCmpPred.eq, ids: ids)
+	var escTest = module.addBlock(func, label: b"clesctest")
+	var escWrite = module.addBlock(func, label: b"clescwrite")
+	module.setTerminator(copyEsc, op: StdOp.condBranch(notQuoted, thenBlockId: copyByte.id, elseBlockId: escTest.id))
+
+	let bufE = emitLoadField(module, block: escTest, record: state, offset: ClArgvBuf, ids: ids)
+	let cursorE = emitLoadField(module, block: escTest, record: state, offset: ClScanStart, ids: ids)
+	let byteE = emitLoadByte(module, block: escTest, base: bufE, index: cursorE, ids: ids)
+	let quoteConst = emitConst(module, block: escTest, value: QuoteByte, ids: ids)
+	let isQuote = emitCmp(module, block: escTest, a: byteE, b: quoteConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(escTest, op: StdOp.condBranch(isQuote, thenBlockId: escWrite.id, elseBlockId: copyByte.id))
+
+	emitSubpAppendByte(module, block: escWrite, ids: ids, state: state, outOffset: ClOut, lenOffset: ClOutLen, value: BackslashByte)
+	module.setTerminator(escWrite, op: StdOp.branch(copyByte.id))
+
+	let bufY = emitLoadField(module, block: copyByte, record: state, offset: ClArgvBuf, ids: ids)
+	let cursorY = emitLoadField(module, block: copyByte, record: state, offset: ClScanStart, ids: ids)
+	let byteY = emitLoadByte(module, block: copyByte, base: bufY, index: cursorY, ids: ids)
+	emitSubpAppendValue(module, block: copyByte, ids: ids, state: state, outOffset: ClOut, lenOffset: ClOutLen, value: byteY)
+	emitSubpBumpField(module, block: copyByte, ids: ids, record: state, offset: ClScanStart)
+	module.setTerminator(copyByte, op: StdOp.branch(copyHdr.id))
+
+	emitSubpQuoteIfNeeded(module, func: func, ids: ids, cur: copyDone, state: state, cont: closeQuote)
+	module.setTerminator(closeQuote, op: StdOp.branch(argNext.id))
+
+	emitSubpBumpField(module, block: argNext, ids: ids, record: state, offset: ClArg)
+	module.setTerminator(argNext, op: StdOp.branch(argHdr.id))
+
+	// finish: NUL-terminate and answer the buffer. The slab zeroed it, so the store is the statement rather
+	// than the mechanism — the reservation for this byte is in `outSize` above.
+	let outF = emitLoadField(module, block: finish, record: state, offset: ClOut, ids: ids)
+	let lenF = emitLoadField(module, block: finish, record: state, offset: ClOutLen, ids: ids)
+	let zeroF = emitConst(module, block: finish, value: 0, ids: ids)
+	emitStoreByte(module, block: finish, base: outF, index: lenF, value: zeroF, ids: ids)
+	module.setTerminator(finish, op: StdOp.ret(outF))
+
+	module.functions.push(func)
+end 'buildSubpArgvCmdline'
+
+// `out[len] = value ; len = len + 1` — the one append the command-line builder makes, spelled once for its
+// four call sites (the separator, the two quotes and the escape) and once more for the value form below.
+function emitSubpAppendByte(module StdModule, block IrBlock, ids ValueMinter, state ValueId, outOffset ByteOffset, lenOffset ByteOffset, value ParsedInt)
+	let byteConst = emitConst(module, block: block, value: value, ids: ids)
+	emitSubpAppendValue(module, block: block, ids: ids, state: state, outOffset: outOffset, lenOffset: lenOffset, value: byteConst)
+end 'emitSubpAppendByte'
+
+function emitSubpAppendValue(module StdModule, block IrBlock, ids ValueMinter, state ValueId, outOffset ByteOffset, lenOffset ByteOffset, value ValueId)
+	let out = emitLoadField(module, block: block, record: state, offset: outOffset, ids: ids)
+	let len = emitLoadField(module, block: block, record: state, offset: lenOffset, ids: ids)
+	emitStoreByte(module, block: block, base: out, index: len, value: value, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let next = emitBin(module, block: block, a: len, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: state, offset: lenOffset, value: next)
+end 'emitSubpAppendValue'
+
+// `record[offset] = record[offset] + 1` — the cursor advance three of this file's walks make.
+function emitSubpBumpField(module StdModule, block IrBlock, ids ValueMinter, record ValueId, offset ByteOffset)
+	let cur = emitLoadField(module, block: block, record: record, offset: offset, ids: ids)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+	let next = emitBin(module, block: block, a: cur, b: one, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: record, offset: offset, value: next)
+end 'emitSubpBumpField'
+
+// Does `ch` force this argument to be quoted? A space, a tab or a `"` — the bootstrap's exact set. Three
+// tests and two exits, written once because the scan asks it in a loop and reading it inline would bury the
+// rule inside the walk.
+function emitSubpForcesQuoting(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, ch ValueId, whenForces IrBlock, otherwise IrBlock)
+	var tabTest = module.addBlock(func, label: b"clqtab")
+	var quoteTest = module.addBlock(func, label: b"clqquote")
+
+	let spaceConst = emitConst(module, block: cur, value: SpaceByte, ids: ids)
+	let isSpace = emitCmp(module, block: cur, a: ch, b: spaceConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isSpace, thenBlockId: whenForces.id, elseBlockId: tabTest.id))
+
+	let tabConst = emitConst(module, block: tabTest, value: TabByte, ids: ids)
+	let isTab = emitCmp(module, block: tabTest, a: ch, b: tabConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(tabTest, op: StdOp.condBranch(isTab, thenBlockId: whenForces.id, elseBlockId: quoteTest.id))
+
+	let quoteConst = emitConst(module, block: quoteTest, value: QuoteByte, ids: ids)
+	let isQuote = emitCmp(module, block: quoteTest, a: ch, b: quoteConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(quoteTest, op: StdOp.condBranch(isQuote, thenBlockId: whenForces.id, elseBlockId: otherwise.id))
+end 'emitSubpForcesQuoting'
+
+// Emit a `"` iff this argument is being quoted, then continue at `cont`. The OPEN and the CLOSE are the same
+// two lines and the same condition, which is why they are one helper called twice rather than two.
+function emitSubpQuoteIfNeeded(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, cont IrBlock)
+	var writeQuote = module.addBlock(func, label: b"clwquote")
+
+	let quoted = emitLoadField(module, block: cur, record: state, offset: ClNeedsQuote, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let notQuoted = emitCmp(module, block: cur, a: quoted, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(notQuoted, thenBlockId: cont.id, elseBlockId: writeQuote.id))
+
+	emitSubpAppendByte(module, block: writeQuote, ids: ids, state: state, outOffset: ClOut, lenOffset: ClOutLen, value: QuoteByte)
+	module.setTerminator(writeQuote, op: StdOp.branch(cont.id))
+end 'emitSubpQuoteIfNeeded'
+
+// ⭐ **THE SURFACE FLAG BITFIELD → `dwCreationFlags`, IN ONE PLACE.** `stdlib/Subprocess.maxon`'s `SpawnFlag`
+// names three bits (hide window, new process group, detach) and both spawn entries pass the same word, so the
+// translation belongs to neither of them.
+//
+// It is BRANCH-FREE — each bit is extracted and MULTIPLIED by the Win32 constant it selects — because a
+// branch per bit would be three merges carrying one accumulator, which is exactly the loop-carried value this
+// file's header keeps out of registers. It also returns the DETACH bit, because the request needs it
+// separately: the flag word tells Windows how to create the child, and the bit tells the core what to answer.
+//
+// ⚠ **`CREATE_NO_WINDOW` IS SUPPRESSED WHEN DETACHING, AND THAT IS A WIN32 RULE RATHER THAN A PREFERENCE.**
+// `DETACHED_PROCESS` and `CREATE_NO_WINDOW` are documented as mutually exclusive — passing both makes
+// `CreateProcessA` fail with ERROR_INVALID_PARAMETER — and `stdlib/Subprocess.maxon`'s `runDetachedConfiguration`
+// ORs the detach bit onto whatever `attachedFlagsFor` produced, which for the default `PlatformOptions` on
+// Windows includes hide-window. Without this every `runDetached()` would answer -1.
+function emitSubpCreationFlags(module StdModule, block IrBlock, ids ValueMinter, surfaceFlags ValueId, req ValueId)
+	let one = emitConst(module, block: block, value: 1, ids: ids)
+
+	let detachShift = emitConst(module, block: block, value: SpawnFlagDetachShift, ids: ids)
+	let detachShifted = emitBin(module, block: block, a: surfaceFlags, b: detachShift, opcode: StdBinOpcode.shr, ids: ids)
+	let detachBit = emitBin(module, block: block, a: detachShifted, b: one, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let detachedConst = emitConst(module, block: block, value: DetachedProcess, ids: ids)
+	let detachPart = emitBin(module, block: block, a: detachBit, b: detachedConst, opcode: StdBinOpcode.mul, ids: ids)
+
+	let hideShift = emitConst(module, block: block, value: SpawnFlagHideWindowShift, ids: ids)
+	let hideShifted = emitBin(module, block: block, a: surfaceFlags, b: hideShift, opcode: StdBinOpcode.shr, ids: ids)
+	let hideBit = emitBin(module, block: block, a: hideShifted, b: one, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let notDetached = emitBin(module, block: block, a: one, b: detachBit, opcode: StdBinOpcode.sub, ids: ids)
+	let hideAllowed = emitBin(module, block: block, a: hideBit, b: notDetached, opcode: StdBinOpcode.mul, ids: ids)
+	let noWindowConst = emitConst(module, block: block, value: CreateNoWindow, ids: ids)
+	let hidePart = emitBin(module, block: block, a: hideAllowed, b: noWindowConst, opcode: StdBinOpcode.mul, ids: ids)
+
+	let groupShift = emitConst(module, block: block, value: SpawnFlagNewGroupShift, ids: ids)
+	let groupShifted = emitBin(module, block: block, a: surfaceFlags, b: groupShift, opcode: StdBinOpcode.shr, ids: ids)
+	let groupBit = emitBin(module, block: block, a: groupShifted, b: one, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let groupConst = emitConst(module, block: block, value: CreateNewProcessGroup, ids: ids)
+	let groupPart = emitBin(module, block: block, a: groupBit, b: groupConst, opcode: StdBinOpcode.mul, ids: ids)
+
+	let partial = emitBin(module, block: block, a: hidePart, b: groupPart, opcode: StdBinOpcode.add, ids: ids)
+	let creation = emitBin(module, block: block, a: partial, b: detachPart, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: req, offset: SubpReqFlags, value: creation)
+	emitStoreField(module, block: block, record: req, offset: SubpReqDetach, value: detachBit)
+end 'emitSubpCreationFlags'
+
+// ⭐ **AN EMPTY `cstring` MEANS "INHERIT", AND IT HAS TO BE TURNED INTO A NULL HERE.**
+// `stdlib/Subprocess.maxon` spells "inherit the parent's working directory" as an EMPTY `FilePath`
+// (`Configuration.create`: *"empty path is the sentinel for 'inherit cwd'"*), which reaches the boundary as a
+// `cstring` whose first byte is a NUL. `CreateProcessA` reads an empty `lpCurrentDirectory` as a real, and
+// invalid, directory name and fails; NULL is what means inherit. One test, at the one place the two
+// conventions meet.
+function emitSubpCwdOrNull(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, cwd ValueId, req ValueId) returns IrBlock
+	var setCwd = module.addBlock(func, label: b"subpcwd")
+	let cont = module.addBlock(func, label: b"subpcwdd")
+
+	let zeroIdx = emitConst(module, block: cur, value: 0, ids: ids)
+	let firstByte = emitLoadByte(module, block: cur, base: cwd, index: zeroIdx, ids: ids)
+	let zeroByte = emitConst(module, block: cur, value: 0, ids: ids)
+	let isEmpty = emitCmp(module, block: cur, a: firstByte, b: zeroByte, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isEmpty, thenBlockId: cont.id, elseBlockId: setCwd.id))
+
+	emitStoreField(module, block: setCwd, record: req, offset: SubpReqCwd, value: cwd)
+	module.setTerminator(setCwd, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpCwdOrNull'
+
+// ⭐ `__gt_subp_attached_spawn(argv, argc, cwd, env, envInherit, stdinKind, stdinData, outKind, outData,
+// outLimit, errKind, errData, errLimit, flags) -> handle | pid | -1` — the FOURTEEN-argument contract, which
+// `__Builtins.subprocessSpawn` and `__Builtins.subprocessDetach` both lower to. The two differ only in the
+// detach bit their caller has already put in `flags`, which is the bootstrap's own arrangement
+// (`2-Parser.cs:11964-11966`).
+//
+// ⚠⚠ **`envInherit == 0` ANSWERS A FAILURE, AND THAT IS THE CONTRACT RATHER THAN A GAP.** The two arguments
+// `env` and `envInherit` describe a caller-BUILT environment block, and there is no producer for one anywhere
+// in the corpus: `stdlib/Subprocess.maxon`'s `requireInheritEnv` refuses `Environment.custom` and
+// `Environment.inheritUpdating` with a `spawnFailed` BEFORE any spawn call is made, and the `env` argument it
+// then passes is a one-byte empty `__ManagedMemory`. So the only environment a program can ask for is the
+// parent's, `lpEnvironment` is NULL for it, and a request for anything else is refused HERE with a recorded
+// error rather than silently served the parent's environment under another name.
+function buildSubpAttachedSpawn(module StdModule)
+	var func = IrFunction.createFromStd(SubpAttachedSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: SubprocessSpawnParamCount, paramTypes: fourteenI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(SubprocessSpawnParamCount)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var noCustomEnv = module.addBlock(func, label: b"subpnoenv")
+	var build = module.addBlock(func, label: b"subpbuild")
+
+	emitParams(module, block: entry, count: SubprocessSpawnParamCount)
+	let argv = 0 as ValueId
+	let argc = 1 as ValueId
+	let cwd = 2 as ValueId
+	let envInherit = 4 as ValueId
+	let stdinKind = 5 as ValueId
+	let stdinData = 6 as ValueId
+	let outKind = 7 as ValueId
+	let outData = 8 as ValueId
+	let outLimit = 9 as ValueId
+	let errKind = 10 as ValueId
+	let errData = 11 as ValueId
+	let errLimit = 12 as ValueId
+	let surfaceFlags = 13 as ValueId
+
+	let one = emitConst(module, block: entry, value: 1, ids: ids)
+	let inherits = emitCmp(module, block: entry, a: envInherit, b: one, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(inherits, thenBlockId: build.id, elseBlockId: noCustomEnv.id))
+
+	// A caller-built environment block has no producer, so this refusal is shv2's own rather than the OS's —
+	// which is why it STORES a code instead of capturing `GetLastError()`. Capturing would publish whatever
+	// the thread's last-error word happened to hold from an unrelated call, and a message that names an
+	// arbitrary earlier failure is worse than none.
+	emitSubpStoreLastError(module, block: noCustomEnv, ids: ids, code: ErrorNotSupported)
+	let failure = emitConst(module, block: noCustomEnv, value: SubpFailure, ids: ids)
+	module.setTerminator(noCustomEnv, op: StdOp.ret(failure))
+
+	let cmdline = ids.mint()
+	module.appendOp(build, op: StdOp.call(cmdline, callee: SubpArgvCmdlineName, args: twoArgs(argv, second: argc)))
+	let req = emitSubpNewRequest(module, block: build, ids: ids, cmdline: cmdline)
+	emitStoreField(module, block: build, record: req, offset: SubpReqStdinKind, value: stdinKind)
+	emitStoreField(module, block: build, record: req, offset: SubpReqStdinData, value: stdinData)
+	emitStoreField(module, block: build, record: req, offset: SubpReqOutKind, value: outKind)
+	emitStoreField(module, block: build, record: req, offset: SubpReqOutData, value: outData)
+	emitStoreField(module, block: build, record: req, offset: SubpReqOutLimit, value: outLimit)
+	emitStoreField(module, block: build, record: req, offset: SubpReqErrKind, value: errKind)
+	emitStoreField(module, block: build, record: req, offset: SubpReqErrData, value: errData)
+	emitStoreField(module, block: build, record: req, offset: SubpReqErrLimit, value: errLimit)
+	emitSubpCreationFlags(module, block: build, ids: ids, surfaceFlags: surfaceFlags, req: req)
+	var afterCwd = emitSubpCwdOrNull(module, func: func, ids: ids, cur: build, cwd: cwd, req: req)
+	let handle = ids.mint()
+	module.appendOp(afterCwd, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
+	module.setTerminator(afterCwd, op: StdOp.ret(handle))
+
+	module.functions.push(func)
+end 'buildSubpAttachedSpawn'
+
+// ⭐ `__gt_subp_stream_spawn(argv, argc, cwd, flags) -> handle | -1` — `__Builtins.subprocessSpawnStreaming`.
+// The same core with all three streams wired to pipes, which is what "streaming" MEANS: there are no stdio
+// triples to pass because a `StreamingSubprocess` drives all three by hand.
+function buildSubpStreamSpawn(module StdModule)
+	var func = IrFunction.createFromStd(SubpStreamSpawnName, returnType: StdReturnType.value(StdType.i64), paramCount: 4, paramTypes: fourI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(4)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 4)
+	let argv = 0 as ValueId
+	let argc = 1 as ValueId
+	let cwd = 2 as ValueId
+	let surfaceFlags = 3 as ValueId
+
+	let cmdline = ids.mint()
+	module.appendOp(entry, op: StdOp.call(cmdline, callee: SubpArgvCmdlineName, args: twoArgs(argv, second: argc)))
+	let req = emitSubpNewRequest(module, block: entry, ids: ids, cmdline: cmdline)
+	let stdinPipe = emitConst(module, block: entry, value: SubpStdinPipe, ids: ids)
+	emitStoreField(module, block: entry, record: req, offset: SubpReqStdinKind, value: stdinPipe)
+	let collect = emitConst(module, block: entry, value: SubpOutCollect, ids: ids)
+	emitStoreField(module, block: entry, record: req, offset: SubpReqOutKind, value: collect)
+	emitStoreField(module, block: entry, record: req, offset: SubpReqErrKind, value: collect)
+	emitSubpCreationFlags(module, block: entry, ids: ids, surfaceFlags: surfaceFlags, req: req)
+	var afterCwd = emitSubpCwdOrNull(module, func: func, ids: ids, cur: entry, cwd: cwd, req: req)
+	let handle = ids.mint()
+	module.appendOp(afterCwd, op: StdOp.call(handle, callee: SubpSpawnCoreName, args: argsOf(req)))
+	module.setTerminator(afterCwd, op: StdOp.ret(handle))
+
+	module.functions.push(func)
+end 'buildSubpStreamSpawn'
+
+// `__gt_subp_get_pid(handle) -> pid | -1` — the OS process id the spawn recorded. A handle out of range, or
+// one whose slot has been released, answers -1 exactly as the bootstrap's entry does.
+function buildSubpGetPid(module StdModule)
+	var func = IrFunction.createFromStd(SubpGetPidName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var bad = module.addBlock(func, label: b"subpbad")
+
+	emitParams(module, block: entry, count: 1)
+	let handle = 0 as ValueId
+
+	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
+	module.setTerminator(bad, op: StdOp.ret(failure))
+
+	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	let slot = emitSubpSlotOf(module, block: good, ids: ids, handle: handle)
+	let pid = emitLoadField(module, block: good, record: slot, offset: SubpSlotPid, ids: ids)
+	module.setTerminator(good, op: StdOp.ret(pid))
+
+	module.functions.push(func)
+end 'buildSubpGetPid'
+
+// `__gt_subp_write_all(handle, data) -> 0 | -1` — `__Builtins.subprocessWriteStdinAll`. Writes the whole
+// `cstring` to the child's stdin, which is what `StreamingSubprocess.writeStdinLine` asks for (it appends the
+// newline itself, so this must NOT — the streaming `__gt_subp_write_line` is the entry that does).
+function buildSubpWriteAll(module StdModule)
+	var func = IrFunction.createFromStd(SubpWriteAllName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var bad = module.addBlock(func, label: b"subpbad")
+	var failed = module.addBlock(func, label: b"subpwfail")
+	var wrote = module.addBlock(func, label: b"subpwok")
+
+	emitParams(module, block: entry, count: 2)
+	let handle = 0 as ValueId
+	let data = 1 as ValueId
+
+	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
+	module.setTerminator(bad, op: StdOp.ret(failure))
+
+	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	let length = ids.mint()
+	var measured = emitCStringLength(module, func: func, cur: good, cstr: data, length: length, ids: ids)
+	let slot = emitSubpSlotOf(module, block: measured, ids: ids, handle: handle)
+	let stdinWrite = emitLoadField(module, block: measured, record: slot, offset: SubpSlotStdinWrite, ids: ids)
+	let bytesOutPtr = emitLoadField(module, block: measured, record: slot, offset: SubpSlotBytesOut, ids: ids)
+	let verdict = ids.mint()
+	module.appendOp(measured, op: StdOp.osWriteFile(verdict, handleId: stdinWrite, bufId: data, lenId: length, bytesOutPtrId: bytesOutPtr))
+	let zero = emitConst(module, block: measured, value: 0, ids: ids)
+	let writeFailed = emitCmp(module, block: measured, a: verdict, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(measured, op: StdOp.condBranch(writeFailed, thenBlockId: failed.id, elseBlockId: wrote.id))
+
+	emitSubpRecordLastError(module, block: failed, ids: ids)
+	let failure2 = emitConst(module, block: failed, value: SubpFailure, ids: ids)
+	module.setTerminator(failed, op: StdOp.ret(failure2))
+
+	let ok = emitConst(module, block: wrote, value: 0, ids: ids)
+	module.setTerminator(wrote, op: StdOp.ret(ok))
+
+	module.functions.push(func)
+end 'buildSubpWriteAll'
+
+// ⭐⭐ **`srcLen` BYTES AT `srcBuf` → A FRESH OWNED `__ManagedMemory`, IN ONE PLACE.** Three entry points in
+// this file answer a buffer the caller owns — the two line readers, the two result-stream readers and the
+// error message — and each of them was the same four steps written out again: make the byte-element record,
+// copy into it, **publish the length**, hand it back.
+//
+// ⚠ **THE THIRD STEP IS THE ONE THAT MADE THIS WORTH FACTORING.** `emitManagedByteBuffer` builds the record
+// through `__managed_create` + `__managed_reserve`, and reserve sets the CAPACITY while leaving the length 0
+// — that is its contract. A copy that forgets to publish the length therefore answers a record holding the
+// right bytes and reading as the EMPTY String, with nothing to catch it: no fault, no leak, no diagnostic.
+// One copy of the step is one place for that to be right. (`emitCStringToManaged` is the same shape for a
+// NUL-TERMINATED source and states the same reason; it stays separate because it must MEASURE its source.)
+//
+// Threads through `cur` and returns the continuation block — the copy loop adds blocks — with the record's
+// `ValueId` MINTED BY THE CALLER and handed in, the convention `emitCStringToManaged` states: a builder that
+// returned both a block and a value would have to return a pair, and a pair is a heap box.
+function emitSubpOwnedByteCopy(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, record ValueId, srcBuf ValueId, srcLen ValueId) returns IrBlock
+	let destBuf = emitManagedByteBuffer(module, block: cur, record: record, byteCount: srcLen, ids: ids)
+	var copied = emitForwardCopy(module, func: func, cur: cur, dest: destBuf, src: srcBuf, byteCount: srcLen, ids: ids)
+	emitStoreField(module, block: copied, record: record, offset: ManagedRecordLengthOffset, value: srcLen)
+	return copied
+end 'emitSubpOwnedByteCopy'
+
+// ⭐ `__gt_subp_read_out_bytes(handle, maxBytes)` / `__gt_subp_read_err_bytes(handle, maxBytes)` — the two
+// `__Builtins.subprocessRead*Line` readers, which want a `__ManagedMemory` where the bare-name streaming
+// builtins want a `String`.
+//
+// ⭐ **THEY ARE A CONVERSION OVER THE EXISTING READER, NOT A SECOND ONE.** `__gt_subp_read_line` already
+// yields the green thread on the IOCP read, scans the growable per-handle line buffer, compacts its tail and
+// latches EOF — the whole of slice 1b's debugged behaviour. Rewriting that to answer a different record shape
+// would be a second copy of it free to drift on the EOF latch. So this calls it, copies the bytes out of the
+// owned String it answers into a fresh byte-element record, and drops the String.
+//
+// ⚠ The line comes back INCLUDING its trailing `\n`, and `stdlib/Subprocess.maxon`'s `stripTrailingCR` — the
+// one consumer — strips an LF and a preceding CR whether or not they are there. Its doc-comment and its own
+// body disagree about which the runtime sends; the body is what runs, and it is correct for either.
+function buildSubpReadBytes(module StdModule, name ByteArray, readerName ByteArray)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+
+	emitParams(module, block: entry, count: 2)
+	let handle = 0 as ValueId
+	let maxBytes = 1 as ValueId
+
+	let line = ids.mint()
+	module.appendOp(entry, op: StdOp.call(line, callee: readerName, args: twoArgs(handle, second: maxBytes)))
+	let srcBuf = emitLoadField(module, block: entry, record: line, offset: StringBufferOffset, ids: ids)
+	let srcLen = emitLoadField(module, block: entry, record: line, offset: StringLengthOffset, ids: ids)
+	let record = ids.mint()
+	var copied = emitSubpOwnedByteCopy(module, func: func, ids: ids, cur: entry, record: record, srcBuf: srcBuf, srcLen: srcLen)
+	let dropped = ids.mint()
+	module.appendOp(copied, op: StdOp.call(dropped, callee: StrDecrefName, args: argsOf(line)))
+	module.setTerminator(copied, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildSubpReadBytes'
+
+// `__gt_subp_wait_exit(handle, timeoutMs) -> exitCode | -2 (timed out) | -1 (bad handle)` —
+// `__Builtins.subprocessWaitExit`. `timeoutMs == 0` means wait for ever, which is
+// `stdlib/Subprocess.maxon`'s documented convention for the whole family.
+//
+// ⚠ **A TIMEOUT TERMINATES THE CHILD**, which is what `waitWithTimeout`'s doc-comment promises: *"the runtime
+// forcibly terminates the child in that case"*. Without it a timed-out wait leaves a live child holding the
+// write ends of pipes nobody is draining.
+function buildSubpWaitExit(module StdModule)
+	var func = IrFunction.createFromStd(SubpWaitExitName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var bad = module.addBlock(func, label: b"subpbad")
+	var useTimeout = module.addBlock(func, label: b"subpwtimeout")
+	var doWait = module.addBlock(func, label: b"subpwwait")
+	var waitVerdict = module.addBlock(func, label: b"subpwverdict")
+	var waitFailed = module.addBlock(func, label: b"subpwfailed")
+	var timedOut = module.addBlock(func, label: b"subpwtmo")
+	var exited = module.addBlock(func, label: b"subpwexit")
+
+	emitParams(module, block: entry, count: 2)
+	let handle = 0 as ValueId
+	let timeoutMs = 1 as ValueId
+
+	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
+	module.setTerminator(bad, op: StdOp.ret(failure))
+
+	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	// The wait's DURATION, carried to `doWait` as its one block argument. This is the one place in the file
+	// where a block argument beats the scratch record the header argues for: it is a single value across a
+	// single merge with no loop anywhere near it, so it costs one register and nothing else — and the
+	// collect loop's `WcDeadline` is an ABSOLUTE tick-count, which this is not, so borrowing that field
+	// would have made its own comment false.
+	let zeroT = emitConst(module, block: good, value: 0, ids: ids)
+	let waitForever = emitCmp(module, block: good, a: timeoutMs, b: zeroT, pred: StdCmpPred.eq, ids: ids)
+	let infinite = emitConst(module, block: good, value: SubpWaitInfinite, ids: ids)
+	module.setTerminator(good, op: StdOp.condBranch(waitForever, thenBlockId: doWait.id, elseBlockId: useTimeout.id))
+	good.branchEdges.push(BranchEdge.create(doWait.id, argIds: argsOf(infinite)))
+
+	module.setTerminator(useTimeout, op: StdOp.branch(doWait.id))
+	useTimeout.branchEdges.push(BranchEdge.create(doWait.id, argIds: argsOf(timeoutMs)))
+
+	let waitMs = ids.mint()
+	doWait.blockArgs.push(IrBlockArg.create(waitMs, argType: StdType.i64))
+	let slot = emitSubpSlotOf(module, block: doWait, ids: ids, handle: handle)
+	let hProcess = emitLoadField(module, block: doWait, record: slot, offset: SubpSlotHProcess, ids: ids)
+	let waitResult = ids.mint()
+	module.appendOp(doWait, op: StdOp.osWaitHandle(waitResult, handleId: hProcess, timeoutMsId: waitMs))
+	let signalled = emitConst(module, block: doWait, value: WaitObjectSignalled, ids: ids)
+	let didExit = emitCmp(module, block: doWait, a: waitResult, b: signalled, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(doWait, op: StdOp.condBranch(didExit, thenBlockId: exited.id, elseBlockId: waitVerdict.id))
+
+	// ⚠ **`WAIT_TIMEOUT` AND `WAIT_FAILED` ARE DIFFERENT ANSWERS, AND THE CONTRACT DISTINGUISHES THEM.**
+	// `waitWithTimeout` maps `-2` to `SubprocessError.timeout` and `-1` to `ioFailed`, so a wait that
+	// FAILED — a closed handle, a handle the OS refuses — must not be reported as a deadline nobody set,
+	// and must not TERMINATE a child it knows nothing about.
+	let timedOutConst = emitConst(module, block: waitVerdict, value: WaitTimedOut, ids: ids)
+	let deadlineFired = emitCmp(module, block: waitVerdict, a: waitResult, b: timedOutConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(waitVerdict, op: StdOp.condBranch(deadlineFired, thenBlockId: timedOut.id, elseBlockId: waitFailed.id))
+
+	emitSubpRecordLastError(module, block: waitFailed, ids: ids)
+	let failure2 = emitConst(module, block: waitFailed, value: SubpFailure, ids: ids)
+	module.setTerminator(waitFailed, op: StdOp.ret(failure2))
+
+	let slotK = emitSubpSlotOf(module, block: timedOut, ids: ids, handle: handle)
+	let hProcessK = emitLoadField(module, block: timedOut, record: slotK, offset: SubpSlotHProcess, ids: ids)
+	let killCode = emitConst(module, block: timedOut, value: SubpKilledExitCode, ids: ids)
+	module.appendOp(timedOut, op: StdOp.osProcessTerminate(hProcessK, exitCodeId: killCode))
+	let timedOutRc = emitConst(module, block: timedOut, value: SubpTimedOutRc, ids: ids)
+	module.setTerminator(timedOut, op: StdOp.ret(timedOutRc))
+
+	let slotE = emitSubpSlotOf(module, block: exited, ids: ids, handle: handle)
+	let hProcessE = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotHProcess, ids: ids)
+	let codePtr = emitLoadField(module, block: exited, record: slotE, offset: SubpSlotBytesOut, ids: ids)
+	module.appendOp(exited, op: StdOp.osProcessExitCode(hProcessE, codePtrId: codePtr))
+	let exitCode = emitLoadField(module, block: exited, record: codePtr, offset: 0, ids: ids)
+	module.setTerminator(exited, op: StdOp.ret(exitCode))
+
+	module.functions.push(func)
+end 'buildSubpWaitExit'
+
+// ⭐⭐ `__gt_subp_wait_collect(handle, timeoutMs) -> resultPtr | -1` — wait for the child while DRAINING BOTH
+// of its output pipes, and answer a result struct holding what they produced.
+//
+// ⭐⭐ **DRAINING BOTH IS THE WHOLE DIFFICULTY, AND IT IS WHY `osPipePeek` EXISTS.** A child that fills the
+// 64 KiB stderr pipe blocks for ever if the parent is committed to a read on stdout, and shv2's yielding read
+// parks the calling green thread on the GT's own single OVERLAPPED — so it cannot hold two reads in flight.
+// The loop therefore ASKS each pipe whether it has bytes before committing to read it: a peek that answers 0
+// costs one call and no wait, and a peek that answers N makes the overlapped read complete SYNCHRONOUSLY.
+// A pass that moved nothing and found the child still running is the ONE case that sleeps, and it sleeps
+// GREEN (`__gt_sleep`), so the whole scheduler runs while it waits.
+//
+// ⚠ **THE SAME STRUCTURE IS WHAT LETS A DEADLINE BE HONOURED AT ALL**: a committed blocking read cannot
+// observe one. `timeoutMs == 0` means "wait for ever", the corpus's convention for the whole family.
+//
+// ⚠⚠ **THE STDIN PAYLOAD IS PUSHED FROM INSIDE THIS LOOP** (`StdinKind.bytes`), between drains, so a child
+// that reads its input while writing its output makes progress on both. The write is a synchronous
+// `WriteFile` on the outbound pipe — NOT the yielding read — so if it ever blocks it blocks **the OS THREAD,
+// and therefore the WHOLE SCHEDULER**: every other green thread stops too, and the deadline this function
+// exists to honour cannot fire either. It takes a payload larger than the pipe buffer (64 KiB) handed to a
+// child that never reads its stdin. That is the one bound this design cannot lift without an overlapped
+// write end, and it is stated rather than discovered.
+//
+// ⚠ **AND THE PAYLOAD CROSSES AS A `cstring`**, which is the CONTRACT's shape and not this runtime's choice
+// (`2-Parser.cs:11936-12022` declares `stdinData` a `cstring`, as it does `cwd` and both file paths). So an
+// `InputSource.bytes(s)` whose String contains a 0x00 is truncated at it, silently, on both compilers. Same
+// for a path or a working directory holding one.
+function buildSubpWaitCollect(module StdModule)
+	var func = IrFunction.createFromStd(SubpWaitCollectName, returnType: StdReturnType.value(StdType.i64), paramCount: 2, paramTypes: twoI64Params(), returnLine: 0)
+	var ids = ValueMinter.create(2)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var bad = module.addBlock(func, label: b"subpbad")
+	var setDeadline = module.addBlock(func, label: b"wcdeadline")
+	var loopHdr = module.addBlock(func, label: b"wchdr")
+	var exitCheck = module.addBlock(func, label: b"wcexit")
+	var deadlineCheck = module.addBlock(func, label: b"wcdl")
+	var killIt = module.addBlock(func, label: b"wckill")
+	var idleCheck = module.addBlock(func, label: b"wcidle")
+	var doSleep = module.addBlock(func, label: b"wcsleep")
+	var finish = module.addBlock(func, label: b"wcfinish")
+
+	emitParams(module, block: entry, count: 2)
+	let handle = 0 as ValueId
+	let timeoutMs = 1 as ValueId
+
+	let failure = emitConst(module, block: bad, value: SubpFailure, ids: ids)
+	module.setTerminator(bad, op: StdOp.ret(failure))
+
+	var good = emitSubpRequireHandle(module, func: func, ids: ids, cur: entry, handle: handle, whenBad: bad)
+	let state = emitSubpScratch(module, block: good, ids: ids, size: WcBytes)
+	emitStoreField(module, block: good, record: state, offset: WcHandle, value: handle)
+	let startMs = ids.mint()
+	module.appendOp(good, op: StdOp.osTickCountMs(startMs))
+	emitStoreField(module, block: good, record: state, offset: WcStartMs, value: startMs)
+	let slotS = emitSubpSlotOf(module, block: good, ids: ids, handle: handle)
+	emitStoreField(module, block: good, record: slotS, offset: SubpSlotWaitStartMs, value: startMs)
+	let initialCap = emitConst(module, block: good, value: SubpCollectInitialBytes, ids: ids)
+	let outBuf = emitRawAlloc(module, block: good, byteCount: initialCap, ids: ids)
+	emitStoreField(module, block: good, record: state, offset: WcOutBuf, value: outBuf)
+	emitStoreField(module, block: good, record: state, offset: WcOutCap, value: initialCap)
+	let errBuf = emitRawAlloc(module, block: good, byteCount: initialCap, ids: ids)
+	emitStoreField(module, block: good, record: state, offset: WcErrBuf, value: errBuf)
+	emitStoreField(module, block: good, record: state, offset: WcErrCap, value: initialCap)
+	let statusExited = emitConst(module, block: good, value: SubpStatusExited, ids: ids)
+	emitStoreField(module, block: good, record: state, offset: WcStatus, value: statusExited)
+	let zeroD = emitConst(module, block: good, value: 0, ids: ids)
+	let noDeadline = emitCmp(module, block: good, a: timeoutMs, b: zeroD, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(good, op: StdOp.condBranch(noDeadline, thenBlockId: loopHdr.id, elseBlockId: setDeadline.id))
+
+	let startD = emitLoadField(module, block: setDeadline, record: state, offset: WcStartMs, ids: ids)
+	let deadline = emitBin(module, block: setDeadline, a: startD, b: timeoutMs, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: setDeadline, record: state, offset: WcDeadline, value: deadline)
+	module.setTerminator(setDeadline, op: StdOp.branch(loopHdr.id))
+
+	// One pass: clear the progress counter, push any queued stdin, then drain each output stream.
+	let zeroP = emitConst(module, block: loopHdr, value: 0, ids: ids)
+	emitStoreField(module, block: loopHdr, record: state, offset: WcProgress, value: zeroP)
+	var afterStdin = emitSubpPushStdin(module, func: func, ids: ids, cur: loopHdr, state: state)
+	var afterOut = emitSubpDrainStream(module, func: func, ids: ids, cur: afterStdin, state: state, streamBase: SubpStdoutBase, bufOffset: WcOutBuf, lenOffset: WcOutLen, capOffset: WcOutCap, doneOffset: WcOutDone, slotLimitOffset: SubpSlotOutLimit)
+	var afterErr = emitSubpDrainStream(module, func: func, ids: ids, cur: afterOut, state: state, streamBase: SubpStderrBase, bufOffset: WcErrBuf, lenOffset: WcErrLen, capOffset: WcErrCap, doneOffset: WcErrDone, slotLimitOffset: SubpSlotErrLimit)
+	module.setTerminator(afterErr, op: StdOp.branch(exitCheck.id))
+
+	// exitCheck: the child is finished ONLY when both streams are drained AND the process object is
+	// signalled — a child can close its pipes and go on running, and a child can exit with bytes still
+	// sitting in a pipe.
+	var bothDone = module.addBlock(func, label: b"wcboth")
+	let outDone = emitLoadField(module, block: exitCheck, record: state, offset: WcOutDone, ids: ids)
+	let errDone = emitLoadField(module, block: exitCheck, record: state, offset: WcErrDone, ids: ids)
+	let bothFlags = emitBin(module, block: exitCheck, a: outDone, b: errDone, opcode: StdBinOpcode.mul, ids: ids)
+	let zeroX = emitConst(module, block: exitCheck, value: 0, ids: ids)
+	let notBoth = emitCmp(module, block: exitCheck, a: bothFlags, b: zeroX, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(exitCheck, op: StdOp.condBranch(notBoth, thenBlockId: deadlineCheck.id, elseBlockId: bothDone.id))
+
+	let handleB = emitLoadField(module, block: bothDone, record: state, offset: WcHandle, ids: ids)
+	let slotB = emitSubpSlotOf(module, block: bothDone, ids: ids, handle: handleB)
+	let hProcessB = emitLoadField(module, block: bothDone, record: slotB, offset: SubpSlotHProcess, ids: ids)
+	let pollZero = emitConst(module, block: bothDone, value: 0, ids: ids)
+	let waitResult = ids.mint()
+	module.appendOp(bothDone, op: StdOp.osWaitHandle(waitResult, handleId: hProcessB, timeoutMsId: pollZero))
+	let signalled = emitConst(module, block: bothDone, value: WaitObjectSignalled, ids: ids)
+	let hasExited = emitCmp(module, block: bothDone, a: waitResult, b: signalled, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(bothDone, op: StdOp.condBranch(hasExited, thenBlockId: finish.id, elseBlockId: deadlineCheck.id))
+
+	// deadlineCheck: a deadline of 0 is "wait for ever" and never fires.
+	var deadlineSet = module.addBlock(func, label: b"wcdlset")
+	let deadlineD = emitLoadField(module, block: deadlineCheck, record: state, offset: WcDeadline, ids: ids)
+	let zeroDl = emitConst(module, block: deadlineCheck, value: 0, ids: ids)
+	let forever = emitCmp(module, block: deadlineCheck, a: deadlineD, b: zeroDl, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(deadlineCheck, op: StdOp.condBranch(forever, thenBlockId: idleCheck.id, elseBlockId: deadlineSet.id))
+
+	let nowMs = ids.mint()
+	module.appendOp(deadlineSet, op: StdOp.osTickCountMs(nowMs))
+	let deadlineS = emitLoadField(module, block: deadlineSet, record: state, offset: WcDeadline, ids: ids)
+	let expired = emitCmp(module, block: deadlineSet, a: nowMs, b: deadlineS, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(deadlineSet, op: StdOp.condBranch(expired, thenBlockId: killIt.id, elseBlockId: idleCheck.id))
+
+	let handleK = emitLoadField(module, block: killIt, record: state, offset: WcHandle, ids: ids)
+	let slotK = emitSubpSlotOf(module, block: killIt, ids: ids, handle: handleK)
+	let hProcessK = emitLoadField(module, block: killIt, record: slotK, offset: SubpSlotHProcess, ids: ids)
+	let killCode = emitConst(module, block: killIt, value: SubpKilledExitCode, ids: ids)
+	module.appendOp(killIt, op: StdOp.osProcessTerminate(hProcessK, exitCodeId: killCode))
+	let timedOutStatus = emitConst(module, block: killIt, value: SubpStatusTimedOut, ids: ids)
+	emitStoreField(module, block: killIt, record: state, offset: WcStatus, value: timedOutStatus)
+	module.setTerminator(killIt, op: StdOp.branch(finish.id))
+
+	// idleCheck: a pass that moved bytes goes straight round again; one that moved none yields.
+	let progress = emitLoadField(module, block: idleCheck, record: state, offset: WcProgress, ids: ids)
+	let zeroI = emitConst(module, block: idleCheck, value: 0, ids: ids)
+	let idle = emitCmp(module, block: idleCheck, a: progress, b: zeroI, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(idleCheck, op: StdOp.condBranch(idle, thenBlockId: doSleep.id, elseBlockId: loopHdr.id))
+
+	let pollMs = emitConst(module, block: doSleep, value: SubpPollMs, ids: ids)
+	let slept = ids.mint()
+	module.appendOp(doSleep, op: StdOp.call(slept, callee: GtSleepName, args: argsOf(pollMs)))
+	module.setTerminator(doSleep, op: StdOp.branch(loopHdr.id))
+
+	// finish: read the child's exit code — after a TERMINATE too, where it is the code the kill supplied —
+	// and pack the result the six `subprocessResult*` readers decode.
+	let handleF = emitLoadField(module, block: finish, record: state, offset: WcHandle, ids: ids)
+	let slotF = emitSubpSlotOf(module, block: finish, ids: ids, handle: handleF)
+	let hProcessF = emitLoadField(module, block: finish, record: slotF, offset: SubpSlotHProcess, ids: ids)
+	let codePtr = emitLoadField(module, block: finish, record: slotF, offset: SubpSlotBytesOut, ids: ids)
+	module.appendOp(finish, op: StdOp.osProcessExitCode(hProcessF, codePtrId: codePtr))
+	let exitCode = emitLoadField(module, block: finish, record: codePtr, offset: 0, ids: ids)
+	let endMs = ids.mint()
+	module.appendOp(finish, op: StdOp.osTickCountMs(endMs))
+	let startF = emitLoadField(module, block: finish, record: state, offset: WcStartMs, ids: ids)
+	let duration = emitBin(module, block: finish, a: endMs, b: startF, opcode: StdBinOpcode.sub, ids: ids)
+	let resSize = emitConst(module, block: finish, value: ResBytes, ids: ids)
+	let result = emitRawAlloc(module, block: finish, byteCount: resSize, ids: ids)
+	let status = emitLoadField(module, block: finish, record: state, offset: WcStatus, ids: ids)
+	emitStoreField(module, block: finish, record: result, offset: ResStatus, value: status)
+	emitStoreField(module, block: finish, record: result, offset: ResCode, value: exitCode)
+	emitStoreField(module, block: finish, record: result, offset: ResDuration, value: duration)
+	let outBufF = emitLoadField(module, block: finish, record: state, offset: WcOutBuf, ids: ids)
+	let outLenF = emitLoadField(module, block: finish, record: state, offset: WcOutLen, ids: ids)
+	emitStoreField(module, block: finish, record: result, offset: ResOutBuf, value: outBufF)
+	emitStoreField(module, block: finish, record: result, offset: ResOutLen, value: outLenF)
+	let errBufF = emitLoadField(module, block: finish, record: state, offset: WcErrBuf, ids: ids)
+	let errLenF = emitLoadField(module, block: finish, record: state, offset: WcErrLen, ids: ids)
+	emitStoreField(module, block: finish, record: result, offset: ResErrBuf, value: errBufF)
+	emitStoreField(module, block: finish, record: result, offset: ResErrLen, value: errLenF)
+	module.setTerminator(finish, op: StdOp.ret(result))
+
+	module.functions.push(func)
+end 'buildSubpWaitCollect'
+
+// Push one chunk of a queued `StdinKind.bytes` payload into the child's stdin, and close the pipe once the
+// payload is spent. `stdinPend` is 0 for every other stdin kind, which is what makes this a pointer test
+// rather than a kind test repeated a pass later.
+function emitSubpPushStdin(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+	var haveWrite = module.addBlock(func, label: b"wcfeed")
+	var doWrite = module.addBlock(func, label: b"wcfwrite")
+	var spentTest = module.addBlock(func, label: b"wcfspent")
+	var closeStdin = module.addBlock(func, label: b"wcfclose")
+	let cont = module.addBlock(func, label: b"wcfdone")
+
+	let handle = emitLoadField(module, block: cur, record: state, offset: WcHandle, ids: ids)
+	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
+	let pend = emitLoadField(module, block: cur, record: slot, offset: SubpSlotStdinPend, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let nothingQueued = emitCmp(module, block: cur, a: pend, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(nothingQueued, thenBlockId: cont.id, elseBlockId: haveWrite.id))
+
+	// A payload with no pipe to push it into is a spawn that asked for `bytes` and got no write end; drop the
+	// queue rather than looping on it for ever.
+	let handleW = emitLoadField(module, block: haveWrite, record: state, offset: WcHandle, ids: ids)
+	let slotW = emitSubpSlotOf(module, block: haveWrite, ids: ids, handle: handleW)
+	let stdinWrite = emitLoadField(module, block: haveWrite, record: slotW, offset: SubpSlotStdinWrite, ids: ids)
+	let zeroW = emitConst(module, block: haveWrite, value: 0, ids: ids)
+	let noPipe = emitCmp(module, block: haveWrite, a: stdinWrite, b: zeroW, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(haveWrite, op: StdOp.condBranch(noPipe, thenBlockId: closeStdin.id, elseBlockId: doWrite.id))
+
+	// One chunk per pass, so a child that reads its input while writing its output makes progress on both.
+	let handleD = emitLoadField(module, block: doWrite, record: state, offset: WcHandle, ids: ids)
+	let slotD = emitSubpSlotOf(module, block: doWrite, ids: ids, handle: handleD)
+	let pendD = emitLoadField(module, block: doWrite, record: slotD, offset: SubpSlotStdinPend, ids: ids)
+	let remaining = ids.mint()
+	var measured = emitCStringLength(module, func: func, cur: doWrite, cstr: pendD, length: remaining, ids: ids)
+	var capped = emitSubpMinInto(module, func: func, ids: ids, cur: measured, state: state, outOffset: WcAvail, a: remaining, limit: SubpReadChunkBytes)
+	let chunk = emitLoadField(module, block: capped, record: state, offset: WcAvail, ids: ids)
+	let handleC = emitLoadField(module, block: capped, record: state, offset: WcHandle, ids: ids)
+	let slotC = emitSubpSlotOf(module, block: capped, ids: ids, handle: handleC)
+	let pendC = emitLoadField(module, block: capped, record: slotC, offset: SubpSlotStdinPend, ids: ids)
+	let writeEnd = emitLoadField(module, block: capped, record: slotC, offset: SubpSlotStdinWrite, ids: ids)
+	let bytesOutPtr = emitLoadField(module, block: capped, record: slotC, offset: SubpSlotBytesOut, ids: ids)
+	let verdict = ids.mint()
+	module.appendOp(capped, op: StdOp.osWriteFile(verdict, handleId: writeEnd, bufId: pendC, lenId: chunk, bytesOutPtrId: bytesOutPtr))
+	let written = emitLoadField(module, block: capped, record: bytesOutPtr, offset: 0, ids: ids)
+	let advanced = emitBin(module, block: capped, a: pendC, b: written, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: capped, record: slotC, offset: SubpSlotStdinPend, value: advanced)
+	emitSubpAddProgress(module, block: capped, ids: ids, state: state, amount: written)
+	// A FAILED write is a broken pipe — the child closed its stdin, or exited — and the queue must be
+	// abandoned rather than retried every pass. Without this the feed makes no progress for ever while the
+	// loop waits on the exit check to save it, which it does, one millisecond at a time.
+	let zeroV = emitConst(module, block: capped, value: 0, ids: ids)
+	let writeFailed = emitCmp(module, block: capped, a: verdict, b: zeroV, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(capped, op: StdOp.condBranch(writeFailed, thenBlockId: closeStdin.id, elseBlockId: spentTest.id))
+
+	// The payload is spent when the cursor stands on its terminator — the same test the length walk makes,
+	// one byte at a time.
+	let handleS = emitLoadField(module, block: spentTest, record: state, offset: WcHandle, ids: ids)
+	let slotS = emitSubpSlotOf(module, block: spentTest, ids: ids, handle: handleS)
+	let cursor = emitLoadField(module, block: spentTest, record: slotS, offset: SubpSlotStdinPend, ids: ids)
+	let zeroIdx = emitConst(module, block: spentTest, value: 0, ids: ids)
+	let nextByte = emitLoadByte(module, block: spentTest, base: cursor, index: zeroIdx, ids: ids)
+	let zeroN = emitConst(module, block: spentTest, value: 0, ids: ids)
+	let spent = emitCmp(module, block: spentTest, a: nextByte, b: zeroN, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(spentTest, op: StdOp.condBranch(spent, thenBlockId: closeStdin.id, elseBlockId: cont.id))
+
+	// The child sees EOF on its stdin exactly once: the write end is closed AND zeroed, so a later pass
+	// cannot close a handle the OS has already reused.
+	let handleX = emitLoadField(module, block: closeStdin, record: state, offset: WcHandle, ids: ids)
+	let slotX = emitSubpSlotOf(module, block: closeStdin, ids: ids, handle: handleX)
+	let writeEndX = emitLoadField(module, block: closeStdin, record: slotX, offset: SubpSlotStdinWrite, ids: ids)
+	module.appendOp(closeStdin, op: StdOp.osCloseHandle(writeEndX))
+	let zeroX = emitConst(module, block: closeStdin, value: 0, ids: ids)
+	emitStoreField(module, block: closeStdin, record: slotX, offset: SubpSlotStdinWrite, value: zeroX)
+	emitStoreField(module, block: closeStdin, record: slotX, offset: SubpSlotStdinPend, value: zeroX)
+	module.setTerminator(closeStdin, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpPushStdin'
+
+// `state[outOffset] = min(a, limit)`, through memory for this file's stated reason.
+function emitSubpMinInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, outOffset ByteOffset, a ValueId, limit ParsedInt) returns IrBlock
+	var takeLimit = module.addBlock(func, label: b"wcmincap")
+	let cont = module.addBlock(func, label: b"wcmindone")
+
+	let limitConst = emitConst(module, block: cur, value: limit, ids: ids)
+	emitStoreField(module, block: cur, record: state, offset: outOffset, value: a)
+	let over = emitCmp(module, block: cur, a: a, b: limitConst, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(over, thenBlockId: takeLimit.id, elseBlockId: cont.id))
+
+	let limitConst2 = emitConst(module, block: takeLimit, value: limit, ids: ids)
+	emitStoreField(module, block: takeLimit, record: state, offset: outOffset, value: limitConst2)
+	module.setTerminator(takeLimit, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpMinInto'
+
+// `progress += amount` — the one counter that decides whether a pass sleeps.
+function emitSubpAddProgress(module StdModule, block IrBlock, ids ValueMinter, state ValueId, amount ValueId)
+	let cur = emitLoadField(module, block: block, record: state, offset: WcProgress, ids: ids)
+	let next = emitBin(module, block: block, a: cur, b: amount, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: block, record: state, offset: WcProgress, value: next)
+end 'emitSubpAddProgress'
+
+// ⭐ Drain whatever ONE output pipe has ready into its collect buffer, and return the block execution
+// continues in. Called twice — stdout and stderr — with the stream's slot sub-block base and the four scratch
+// fields of its buffer as the only differences, because those ARE the only differences.
+//
+// A stream with no pipe (`inherit`, `discard`, `file`) has a 0 read end and is DONE from the first pass; a
+// stream whose peek fails is at EOF, which is what a broken pipe means once the child's write end is closed.
+//
+// ⚠ **THE CAPTURE LIMIT CAPS WHAT IS KEPT, NEVER WHAT IS READ.** `OutputDestination.collect(limit)` promises a
+// ceiling on the captured bytes; a runtime that stopped READING at the ceiling would leave the child blocked
+// on a full pipe for ever. So the read always happens and the excess is simply not counted — the next pass
+// overwrites it, because the length did not advance.
+function emitSubpDrainStream(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, streamBase ByteOffset, bufOffset ByteOffset, lenOffset ByteOffset, capOffset ByteOffset, doneOffset ByteOffset, slotLimitOffset ByteOffset) returns IrBlock
+	var notDone = module.addBlock(func, label: b"wcdlive")
+	var doPeek = module.addBlock(func, label: b"wcdpeek")
+	var peeked = module.addBlock(func, label: b"wcdpeeked")
+	var ensure = module.addBlock(func, label: b"wcdensure")
+	var grow = module.addBlock(func, label: b"wcdgrow")
+	var doRead = module.addBlock(func, label: b"wcdread")
+	var keep = module.addBlock(func, label: b"wcdkeep")
+	var markDone = module.addBlock(func, label: b"wcddone")
+	let cont = module.addBlock(func, label: b"wcdcont")
+
+	// A stream already finished, or one that never had a pipe, costs one load and one branch per pass.
+	let done = emitLoadField(module, block: cur, record: state, offset: doneOffset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let isDone = emitCmp(module, block: cur, a: done, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(isDone, thenBlockId: cont.id, elseBlockId: notDone.id))
+
+	let handleN = emitLoadField(module, block: notDone, record: state, offset: WcHandle, ids: ids)
+	let slotN = emitSubpSlotOf(module, block: notDone, ids: ids, handle: handleN)
+	let baseConstN = emitConst(module, block: notDone, value: streamBase as ParsedInt, ids: ids)
+	let streamN = emitBin(module, block: notDone, a: slotN, b: baseConstN, opcode: StdBinOpcode.add, ids: ids)
+	let readEnd = emitLoadField(module, block: notDone, record: streamN, offset: SubpStreamReadEnd, ids: ids)
+	let zeroR = emitConst(module, block: notDone, value: 0, ids: ids)
+	let noPipe = emitCmp(module, block: notDone, a: readEnd, b: zeroR, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(notDone, op: StdOp.condBranch(noPipe, thenBlockId: markDone.id, elseBlockId: doPeek.id))
+
+	let handleP = emitLoadField(module, block: doPeek, record: state, offset: WcHandle, ids: ids)
+	let slotP = emitSubpSlotOf(module, block: doPeek, ids: ids, handle: handleP)
+	let baseConstP = emitConst(module, block: doPeek, value: streamBase as ParsedInt, ids: ids)
+	let streamP = emitBin(module, block: doPeek, a: slotP, b: baseConstP, opcode: StdBinOpcode.add, ids: ids)
+	let readEndP = emitLoadField(module, block: doPeek, record: streamP, offset: SubpStreamReadEnd, ids: ids)
+	let availOffset = emitConst(module, block: doPeek, value: WcAvail as ParsedInt, ids: ids)
+	let availSlot = emitBin(module, block: doPeek, a: state, b: availOffset, opcode: StdBinOpcode.add, ids: ids)
+	let peekOk = ids.mint()
+	module.appendOp(doPeek, op: StdOp.osPipePeek(peekOk, handleId: readEndP, availPtrId: availSlot))
+	let zeroPk = emitConst(module, block: doPeek, value: 0, ids: ids)
+	let peekFailed = emitCmp(module, block: doPeek, a: peekOk, b: zeroPk, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(doPeek, op: StdOp.condBranch(peekFailed, thenBlockId: markDone.id, elseBlockId: peeked.id))
+
+	let avail = emitLoadField(module, block: peeked, record: state, offset: WcAvail, ids: ids)
+	let zeroA = emitConst(module, block: peeked, value: 0, ids: ids)
+	let nothingReady = emitCmp(module, block: peeked, a: avail, b: zeroA, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(peeked, op: StdOp.condBranch(nothingReady, thenBlockId: cont.id, elseBlockId: ensure.id))
+
+	// ensure: cap the pass at one chunk, then make room for it past what is already collected.
+	var capped = emitSubpMinInto(module, func: func, ids: ids, cur: ensure, state: state, outOffset: WcAvail, a: avail, limit: SubpReadChunkBytes)
+	let want = emitLoadField(module, block: capped, record: state, offset: WcAvail, ids: ids)
+	let len = emitLoadField(module, block: capped, record: state, offset: lenOffset, ids: ids)
+	let cap = emitLoadField(module, block: capped, record: state, offset: capOffset, ids: ids)
+	let needed = emitBin(module, block: capped, a: len, b: want, opcode: StdBinOpcode.add, ids: ids)
+	let tooSmall = emitCmp(module, block: capped, a: needed, b: cap, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(capped, op: StdOp.condBranch(tooSmall, thenBlockId: grow.id, elseBlockId: doRead.id))
+
+	let lenG = emitLoadField(module, block: grow, record: state, offset: lenOffset, ids: ids)
+	let wantG = emitLoadField(module, block: grow, record: state, offset: WcAvail, ids: ids)
+	let neededG = emitBin(module, block: grow, a: lenG, b: wantG, opcode: StdBinOpcode.add, ids: ids)
+	let factor = emitConst(module, block: grow, value: SubpGrowthFactor, ids: ids)
+	let newCap = emitBin(module, block: grow, a: neededG, b: factor, opcode: StdBinOpcode.mul, ids: ids)
+	let newBuf = emitRawAlloc(module, block: grow, byteCount: newCap, ids: ids)
+	let oldBuf = emitLoadField(module, block: grow, record: state, offset: bufOffset, ids: ids)
+	let copied = ids.mint()
+	module.appendOp(grow, op: StdOp.call(copied, callee: StrCopyName, args: threeArgs(newBuf, second: oldBuf, third: lenG)))
+	emitRawFree(module, block: grow, ptr: oldBuf, ids: ids)
+	emitStoreField(module, block: grow, record: state, offset: bufOffset, value: newBuf)
+	emitStoreField(module, block: grow, record: state, offset: capOffset, value: newCap)
+	module.setTerminator(grow, op: StdOp.branch(doRead.id))
+
+	// doRead: the peek said bytes are ready, so the overlapped read completes SYNCHRONOUSLY and the yielding
+	// reader returns without parking. `ownsPipe = 0` — the pipe is TABLE-owned and `subpRelease` is its sole
+	// closer, exactly as the streaming line reader passes.
+	let handleD = emitLoadField(module, block: doRead, record: state, offset: WcHandle, ids: ids)
+	let slotD = emitSubpSlotOf(module, block: doRead, ids: ids, handle: handleD)
+	let baseConstD = emitConst(module, block: doRead, value: streamBase as ParsedInt, ids: ids)
+	let streamD = emitBin(module, block: doRead, a: slotD, b: baseConstD, opcode: StdBinOpcode.add, ids: ids)
+	let readEndD = emitLoadField(module, block: doRead, record: streamD, offset: SubpStreamReadEnd, ids: ids)
+	let bufD = emitLoadField(module, block: doRead, record: state, offset: bufOffset, ids: ids)
+	let lenD = emitLoadField(module, block: doRead, record: state, offset: lenOffset, ids: ids)
+	let dst = emitBin(module, block: doRead, a: bufD, b: lenD, opcode: StdBinOpcode.add, ids: ids)
+	let wantD = emitLoadField(module, block: doRead, record: state, offset: WcAvail, ids: ids)
+	let bytesOutOffset = emitConst(module, block: doRead, value: WcBytesOut as ParsedInt, ids: ids)
+	let bytesOutSlot = emitBin(module, block: doRead, a: state, b: bytesOutOffset, opcode: StdBinOpcode.add, ids: ids)
+	let ownsPipe = emitConst(module, block: doRead, value: 0, ids: ids)
+	let got = ids.mint()
+	module.appendOp(doRead, op: StdOp.call(got, callee: SubpYieldReadName, args: fiveArgs(readEndD, second: dst, third: wantD, fourth: bytesOutSlot, fifth: ownsPipe)))
+	emitStoreField(module, block: doRead, record: state, offset: WcAvail, value: got)
+	let zeroG = emitConst(module, block: doRead, value: 0, ids: ids)
+	let readEof = emitCmp(module, block: doRead, a: got, b: zeroG, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(doRead, op: StdOp.condBranch(readEof, thenBlockId: markDone.id, elseBlockId: keep.id))
+
+	// keep: count the bytes, then advance the collected length by as much of them as the limit allows.
+	let gotK = emitLoadField(module, block: keep, record: state, offset: WcAvail, ids: ids)
+	emitSubpAddProgress(module, block: keep, ids: ids, state: state, amount: gotK)
+	var kept = emitSubpKeepWithinLimit(module, func: func, ids: ids, cur: keep, state: state, lenOffset: lenOffset, slotLimitOffset: slotLimitOffset)
+	module.setTerminator(kept, op: StdOp.branch(cont.id))
+
+	let oneDone = emitConst(module, block: markDone, value: 1, ids: ids)
+	emitStoreField(module, block: markDone, record: state, offset: doneOffset, value: oneDone)
+	module.setTerminator(markDone, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpDrainStream'
+
+// Advance the collected length by the bytes just read, clipped to the stream's capture ceiling. A ceiling of
+// 0 is "no ceiling", the corpus's convention (`OutputDestination.discard`/`inherit`/`file` set the limit to 0
+// and never reach here anyway, and `collect` carries a real one).
+function emitSubpKeepWithinLimit(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, lenOffset ByteOffset, slotLimitOffset ByteOffset) returns IrBlock
+	var bounded = module.addBlock(func, label: b"wcklim")
+	var roomLeft = module.addBlock(func, label: b"wckroom")
+	var clip = module.addBlock(func, label: b"wckclip")
+	var advance = module.addBlock(func, label: b"wckadv")
+	let cont = module.addBlock(func, label: b"wckdone")
+
+	let handle = emitLoadField(module, block: cur, record: state, offset: WcHandle, ids: ids)
+	let slot = emitSubpSlotOf(module, block: cur, ids: ids, handle: handle)
+	let limit = emitLoadField(module, block: cur, record: slot, offset: slotLimitOffset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let uncapped = emitCmp(module, block: cur, a: limit, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(uncapped, thenBlockId: advance.id, elseBlockId: bounded.id))
+
+	let handleB = emitLoadField(module, block: bounded, record: state, offset: WcHandle, ids: ids)
+	let slotB = emitSubpSlotOf(module, block: bounded, ids: ids, handle: handleB)
+	let limitB = emitLoadField(module, block: bounded, record: slotB, offset: slotLimitOffset, ids: ids)
+	let lenB = emitLoadField(module, block: bounded, record: state, offset: lenOffset, ids: ids)
+	let full = emitCmp(module, block: bounded, a: lenB, b: limitB, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(bounded, op: StdOp.condBranch(full, thenBlockId: cont.id, elseBlockId: roomLeft.id))
+
+	let handleR = emitLoadField(module, block: roomLeft, record: state, offset: WcHandle, ids: ids)
+	let slotR = emitSubpSlotOf(module, block: roomLeft, ids: ids, handle: handleR)
+	let limitR = emitLoadField(module, block: roomLeft, record: slotR, offset: slotLimitOffset, ids: ids)
+	let lenR = emitLoadField(module, block: roomLeft, record: state, offset: lenOffset, ids: ids)
+	let room = emitBin(module, block: roomLeft, a: limitR, b: lenR, opcode: StdBinOpcode.sub, ids: ids)
+	let gotR = emitLoadField(module, block: roomLeft, record: state, offset: WcAvail, ids: ids)
+	let overRoom = emitCmp(module, block: roomLeft, a: gotR, b: room, pred: StdCmpPred.gt, ids: ids)
+	module.setTerminator(roomLeft, op: StdOp.condBranch(overRoom, thenBlockId: clip.id, elseBlockId: advance.id))
+
+	let handleC = emitLoadField(module, block: clip, record: state, offset: WcHandle, ids: ids)
+	let slotC = emitSubpSlotOf(module, block: clip, ids: ids, handle: handleC)
+	let limitC = emitLoadField(module, block: clip, record: slotC, offset: slotLimitOffset, ids: ids)
+	let lenC = emitLoadField(module, block: clip, record: state, offset: lenOffset, ids: ids)
+	let roomC = emitBin(module, block: clip, a: limitC, b: lenC, opcode: StdBinOpcode.sub, ids: ids)
+	emitStoreField(module, block: clip, record: state, offset: WcAvail, value: roomC)
+	module.setTerminator(clip, op: StdOp.branch(advance.id))
+
+	let lenA = emitLoadField(module, block: advance, record: state, offset: lenOffset, ids: ids)
+	let keepA = emitLoadField(module, block: advance, record: state, offset: WcAvail, ids: ids)
+	let nextLen = emitBin(module, block: advance, a: lenA, b: keepA, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: advance, record: state, offset: lenOffset, value: nextLen)
+	module.setTerminator(advance, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpKeepWithinLimit'
+
+// ⭐⭐ **THE RESULT POINTER IS GUARDED TOO, AND v1 HAD ALREADY SAID SO.** `subprocessWaitCollect` answers
+// `-1` on failure and `stdlib/Subprocess.maxon` tests for it before reading the struct — but a caller need
+// not, and `__Builtins.subprocessResultStatusKind(-1)` is one line. Unguarded, all six readers dereferenced
+// it: MEASURED, ACCESS VIOLATION, in a program that compiled clean — the same defect as the handle band one
+// door over, and found by taking that band's RULE rather than its list.
+//
+// ⚠ **v1 CARRIES A `nullValue` PER ACCESSOR** (`Targets/X64/X64Backend.maxon:3530-3533`:
+// `emitX64SubpIntFieldAccessor(…, nullValue: 0)`), so the reference had solved this and I had not read that
+// far. The answers here are its answers: `0` for each scalar reader, an EMPTY buffer for each stream reader
+// (never a null — `__mm_decref` dereferences the record header), and nothing at all for the release.
+//
+// A live result is a heap address, so `<= 0` is the whole test: it catches the `-1` `waitCollect` answers on
+// failure and the `0` an uninitialized slot would hold.
+let SubpResultNullValue = 0 as ParsedInt
+
+// Terminate `cur` on a result pointer that names no struct, and return the block where it does. The three
+// builders below share it for the reason `emitSubpRequireHandle` is shared: one test, one place.
+function emitSubpRequireResult(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, result ValueId, whenBad IrBlock) returns IrBlock
+	let good = module.addBlock(func, label: b"resok")
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let noStruct = emitCmp(module, block: cur, a: result, b: zero, pred: StdCmpPred.le, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(noStruct, thenBlockId: whenBad.id, elseBlockId: good.id))
+	return good
+end 'emitSubpRequireResult'
+
+// The three scalar readers of the result struct, one builder because they differ only in which word they
+// load: the status kind, the status code and the wall-clock duration.
+function buildSubpResultWordReader(module StdModule, name ByteArray, offset ByteOffset)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var noStruct = module.addBlock(func, label: b"resnull")
+	emitParams(module, block: entry, count: 1)
+	let result = 0 as ValueId
+
+	let nullAnswer = emitConst(module, block: noStruct, value: SubpResultNullValue, ids: ids)
+	module.setTerminator(noStruct, op: StdOp.ret(nullAnswer))
+
+	var live = emitSubpRequireResult(module, func: func, ids: ids, cur: entry, result: result, whenBad: noStruct)
+	let word = emitLoadField(module, block: live, record: result, offset: offset, ids: ids)
+	module.setTerminator(live, op: StdOp.ret(word))
+
+	module.functions.push(func)
+end 'buildSubpResultWordReader'
+
+// The two BUFFER readers, one builder for the same reason. Each answers a FRESH owned `__ManagedMemory` — the
+// contract the bootstrap's table states and the one `String.init(managed)` consumes — so a caller may read
+// either stream twice and release the result independently of the struct.
+function buildSubpResultBufferReader(module StdModule, name ByteArray, bufOffset ByteOffset, lenOffset ByteOffset)
+	var func = IrFunction.createFromStd(name, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var noStruct = module.addBlock(func, label: b"resnull")
+	emitParams(module, block: entry, count: 1)
+	let result = 0 as ValueId
+
+	// An EMPTY owned buffer, never a null — `__mm_decref` dereferences the record header, so a null would
+	// move the fault to the caller's scope exit rather than remove it.
+	let emptyRecord = ids.mint()
+	let emptyLen = emitConst(module, block: noStruct, value: 0, ids: ids)
+	_ = emitManagedByteBuffer(module, block: noStruct, record: emptyRecord, byteCount: emptyLen, ids: ids)
+	module.setTerminator(noStruct, op: StdOp.ret(emptyRecord))
+
+	var live = emitSubpRequireResult(module, func: func, ids: ids, cur: entry, result: result, whenBad: noStruct)
+	let srcBuf = emitLoadField(module, block: live, record: result, offset: bufOffset, ids: ids)
+	let srcLen = emitLoadField(module, block: live, record: result, offset: lenOffset, ids: ids)
+	let record = ids.mint()
+	var copied = emitSubpOwnedByteCopy(module, func: func, ids: ids, cur: live, record: record, srcBuf: srcBuf, srcLen: srcLen)
+	module.setTerminator(copied, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildSubpResultBufferReader'
+
+// `__gt_subp_result_release(result)` — give back the struct and the two captured buffers. All three came from
+// `__mm_alloc`, so all three are freeable and all three are counted by the leak gate; see `ResStatus`.
+function buildSubpResultRelease(module StdModule)
+	var func = IrFunction.createFromStd(SubpResultReleaseName, returnType: StdReturnType.void, paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var noStruct = module.addBlock(func, label: b"resnull")
+	emitParams(module, block: entry, count: 1)
+	let result = 0 as ValueId
+
+	// Nothing to give back. ⚠ This is the arm where an unguarded pointer was worst: it would have handed
+	// three garbage words to `__mm_free`, which poisons the payload a header it does not own describes.
+	module.setTerminator(noStruct, op: StdOp.retVoid)
+
+	var live = emitSubpRequireResult(module, func: func, ids: ids, cur: entry, result: result, whenBad: noStruct)
+	let outBuf = emitLoadField(module, block: live, record: result, offset: ResOutBuf, ids: ids)
+	emitRawFree(module, block: live, ptr: outBuf, ids: ids)
+	let errBuf = emitLoadField(module, block: live, record: result, offset: ResErrBuf, ids: ids)
+	emitRawFree(module, block: live, ptr: errBuf, ids: ids)
+	emitRawFree(module, block: live, ptr: result, ids: ids)
+	module.setTerminator(live, op: StdOp.retVoid)
+
+	module.functions.push(func)
+end 'buildSubpResultRelease'
+
+// ⭐⭐ `__gt_subp_last_error() -> ownedManagedMemory` — `__Builtins.subprocessLastErrorMessage()`.
+//
+// ⚠⚠ **IT ANSWERS THE WIN32 ERROR NUMBER, WHERE THE BOOTSTRAP ANSWERS AN ENGLISH SENTENCE, AND THAT IS A
+// DELIBERATE DIVERGENCE.** The bootstrap defines a handful of fixed messages as `symdata` blobs and picks one
+// (`X86CodeEmitter.Runtime.cs:8286`), which tells a caller WHICH shv2 code path failed and nothing about WHY.
+// The number tells them why: `2` is "the executable is not there", `5` is "access denied", `267` is "the
+// working directory is not a directory". shv2 has no `.rdata` producer reachable from a runtime builder and
+// no `FormatMessageA` import, so the choice was a fixed English string or the OS's own code — and the code
+// carries strictly more information for the same bytes.
+//
+// A code of 0 means "nothing has failed", and answers the empty buffer rather than `win32 error 0`.
+function buildSubpLastError(module StdModule)
+	var func = IrFunction.createFromStd(SubpLastErrorName, returnType: StdReturnType.value(StdType.i64), paramCount: 0, paramTypes: StdTypeArray.create(), returnLine: 0)
+	var ids = ValueMinter.create(0)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var noError = module.addBlock(func, label: b"subpnoerr")
+	var render = module.addBlock(func, label: b"subprender")
+
+	let slotAddr = ids.mint()
+	module.appendOp(entry, op: StdOp.globalAddr(slotAddr, label: SubpLastErrorLabel))
+	let code = emitLoadField(module, block: entry, record: slotAddr, offset: 0, ids: ids)
+	let zero = emitConst(module, block: entry, value: 0, ids: ids)
+	let clean = emitCmp(module, block: entry, a: code, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(entry, op: StdOp.condBranch(clean, thenBlockId: noError.id, elseBlockId: render.id))
+
+	// The one place in this file that does NOT go through `emitSubpOwnedByteCopy`, and deliberately: there is
+	// nothing to copy. `__managed_reserve` leaves the length 0, which IS the answer — an empty message means
+	// "nothing has failed", and `stdlib/Subprocess.maxon`'s `lastErrorMessage()` renders it as the empty String.
+	let emptyRecord = ids.mint()
+	let emptyLen = emitConst(module, block: noError, value: 0, ids: ids)
+	_ = emitManagedByteBuffer(module, block: noError, record: emptyRecord, byteCount: emptyLen, ids: ids)
+	module.setTerminator(noError, op: StdOp.ret(emptyRecord))
+
+	// render: `win32 error <n>` — the prefix is stored byte by byte at build time, the digits by the shared
+	// `__int_to_string`, which writes into a caller buffer and answers the length it wrote.
+	let digitsSize = emitConst(module, block: render, value: DecimalDigitsMax, ids: ids)
+	let digitsBuf = ids.mint()
+	module.appendOp(render, op: StdOp.call(digitsBuf, callee: SlabAllocName, args: argsOf(digitsSize)))
+	let slotAddr2 = ids.mint()
+	module.appendOp(render, op: StdOp.globalAddr(slotAddr2, label: SubpLastErrorLabel))
+	let code2 = emitLoadField(module, block: render, record: slotAddr2, offset: 0, ids: ids)
+	let digitCount = ids.mint()
+	module.appendOp(render, op: StdOp.call(digitCount, callee: IntToStringName, args: twoArgs(code2, second: digitsBuf)))
+	let prefix = emitSubpLiteralCString(module, block: render, ids: ids, text: SubpErrorPrefix)
+	let prefixLen = emitConst(module, block: render, value: SubpErrorPrefix.count() as ParsedInt, ids: ids)
+	let total = emitBin(module, block: render, a: prefixLen, b: digitCount, opcode: StdBinOpcode.add, ids: ids)
+	// The shared copy-out lays the PREFIX down and publishes `total` as the length; the digits are then
+	// copied into the tail it reserved. Publishing before the second copy is safe because the length is a
+	// header word the copy never touches — and it is what keeps the "publish the length" step in exactly one
+	// place, which is the whole reason `emitSubpOwnedByteCopy` exists.
+	let record = ids.mint()
+	var afterPrefix = emitSubpOwnedByteCopy(module, func: func, ids: ids, cur: render, record: record, srcBuf: prefix, srcLen: total)
+	let destBuf = emitLoadField(module, block: afterPrefix, record: record, offset: ManagedRecordBufferOffset, ids: ids)
+	let prefixLen2 = emitConst(module, block: afterPrefix, value: SubpErrorPrefix.count() as ParsedInt, ids: ids)
+	let digitsDest = emitBin(module, block: afterPrefix, a: destBuf, b: prefixLen2, opcode: StdBinOpcode.add, ids: ids)
+	var afterDigits = emitForwardCopy(module, func: func, cur: afterPrefix, dest: digitsDest, src: digitsBuf, byteCount: digitCount, ids: ids)
+	module.setTerminator(afterDigits, op: StdOp.ret(record))
+
+	module.functions.push(func)
+end 'buildSubpLastError'
+
+// ⭐⭐ `__gt_subp_resolve_path(name) -> ownedManagedMemory` — `__Builtins.subprocessResolveOnPath()`: the
+// `PATH` + `PATHEXT` walk that turns a bare tool name into something `CreateProcessA` can launch.
+//
+// ⭐ **THE WALK IS ONE DOUBLE LOOP WITH A SYNTHETIC HEAD MEMBER ON EACH LIST**, which is what makes "the name
+// exactly as given" and "the name with no extension added" ordinary iterations rather than three special
+// cases in front of it: the directory list is `"" ; PATH…` and the extension list is `"" ; PATHEXT…`, so the
+// very first candidate tried IS the name verbatim.
+//
+// ⚠⚠ **IT NEVER ANSWERS NULL, WHERE THE BOOTSTRAP DOES, AND THAT IS FORCED BY STATIC OWNERSHIP.** The
+// bootstrap answers NULL when nothing matches and `stdlib/Subprocess.maxon`'s `resolveByName` tests for it
+// with `managedIsNull` and then returns the BARE NAME. shv2 cannot: the result is an OWNED
+// `__ManagedMemory`, so its `let` binding is dropped at scope exit through `__mm_decref`, which dereferences
+// the record header — a NULL would fault. Making `__mm_decref` null-tolerant would put a test on every drop
+// in every program to serve one corpus line, so this producer answers the BARE NAME instead, which is exactly
+// the String that corpus line returns on its miss branch. **The observable behaviour is identical**; only
+// which of `resolveByName`'s two branches runs differs.
+function buildSubpResolvePath(module StdModule)
+	var func = IrFunction.createFromStd(SubpResolvePathName, returnType: StdReturnType.value(StdType.i64), paramCount: 1, paramTypes: oneI64Param(), returnLine: 0)
+	var ids = ValueMinter.create(1)
+
+	var entry = module.addBlock(func, label: b"entry")
+	var dirHdr = module.addBlock(func, label: b"rpdirhdr")
+	var dirMeasure = module.addBlock(func, label: b"rpdirmeas")
+	var extInit = module.addBlock(func, label: b"rpextinit")
+	var extHdr = module.addBlock(func, label: b"rpexthdr")
+	var extMeasure = module.addBlock(func, label: b"rpextmeas")
+	var buildCand = module.addBlock(func, label: b"rpbuild")
+	var testCand = module.addBlock(func, label: b"rptest")
+	var extNext = module.addBlock(func, label: b"rpextnext")
+	var dirNext = module.addBlock(func, label: b"rpdirnext")
+	var hit = module.addBlock(func, label: b"rphit")
+	var miss = module.addBlock(func, label: b"rpmiss")
+
+	emitParams(module, block: entry, count: 1)
+	let name = 0 as ValueId
+
+	let state = emitSubpScratch(module, block: entry, ids: ids, size: RpBytes)
+	emitStoreField(module, block: entry, record: state, offset: RpName, value: name)
+	let nameLen = ids.mint()
+	var measuredName = emitCStringLength(module, func: func, cur: entry, cstr: name, length: nameLen, ids: ids)
+	emitStoreField(module, block: measuredName, record: state, offset: RpNameLen, value: nameLen)
+	var afterPath = emitSubpReadEnvInto(module, func: func, ids: ids, cur: measuredName, state: state, varName: PathVarName, outOffset: RpPath, fallback: EmptyPathFallback)
+	var afterExts = emitSubpReadEnvInto(module, func: func, ids: ids, cur: afterPath, state: state, varName: PathExtVarName, outOffset: RpExts, fallback: PathExtDefault)
+	// The candidate buffer is sized for the longest combination that can exist: any directory of PATH, a
+	// separator, the name and any extension of PATHEXT, plus a terminator. One allocation for the whole walk.
+	let pathV = emitLoadField(module, block: afterExts, record: state, offset: RpPath, ids: ids)
+	let pathLen = ids.mint()
+	var measuredPath = emitCStringLength(module, func: func, cur: afterExts, cstr: pathV, length: pathLen, ids: ids)
+	let extsV = emitLoadField(module, block: measuredPath, record: state, offset: RpExts, ids: ids)
+	let extsLen = ids.mint()
+	var measuredExts = emitCStringLength(module, func: func, cur: measuredPath, cstr: extsV, length: extsLen, ids: ids)
+	let nameLen2 = emitLoadField(module, block: measuredExts, record: state, offset: RpNameLen, ids: ids)
+	let sumA = emitBin(module, block: measuredExts, a: pathLen, b: extsLen, opcode: StdBinOpcode.add, ids: ids)
+	let sumB = emitBin(module, block: measuredExts, a: sumA, b: nameLen2, opcode: StdBinOpcode.add, ids: ids)
+	let slackConst = emitConst(module, block: measuredExts, value: CandidateSlackBytes, ids: ids)
+	let candSize = emitBin(module, block: measuredExts, a: sumB, b: slackConst, opcode: StdBinOpcode.add, ids: ids)
+	let candBuf = ids.mint()
+	module.appendOp(measuredExts, op: StdOp.call(candBuf, callee: SlabAllocName, args: argsOf(candSize)))
+	emitStoreField(module, block: measuredExts, record: state, offset: RpCand, value: candBuf)
+	let one = emitConst(module, block: measuredExts, value: 1, ids: ids)
+	emitStoreField(module, block: measuredExts, record: state, offset: RpDirIsHead, value: one)
+	module.setTerminator(measuredExts, op: StdOp.branch(dirHdr.id))
+
+	// dirHdr: the synthetic head member first (no directory), then each `;`-separated member of PATH.
+	var dirReal = module.addBlock(func, label: b"rpdirreal")
+	let isHead = emitLoadField(module, block: dirHdr, record: state, offset: RpDirIsHead, ids: ids)
+	let zeroH = emitConst(module, block: dirHdr, value: 0, ids: ids)
+	let atHead = emitCmp(module, block: dirHdr, a: isHead, b: zeroH, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(dirHdr, op: StdOp.condBranch(atHead, thenBlockId: extInit.id, elseBlockId: dirReal.id))
+
+	let pathD = emitLoadField(module, block: dirReal, record: state, offset: RpPath, ids: ids)
+	let startD = emitLoadField(module, block: dirReal, record: state, offset: RpDirStart, ids: ids)
+	let firstByteD = emitLoadByte(module, block: dirReal, base: pathD, index: startD, ids: ids)
+	let zeroD = emitConst(module, block: dirReal, value: 0, ids: ids)
+	let pathSpent = emitCmp(module, block: dirReal, a: firstByteD, b: zeroD, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(dirReal, op: StdOp.condBranch(pathSpent, thenBlockId: miss.id, elseBlockId: dirMeasure.id))
+
+	var measuredDir = emitSubpMemberLength(module, func: func, ids: ids, cur: dirMeasure, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen)
+	module.setTerminator(measuredDir, op: StdOp.branch(extInit.id))
+
+	// extInit: reset the extension list to its own synthetic head for this directory.
+	let zeroE = emitConst(module, block: extInit, value: 0, ids: ids)
+	emitStoreField(module, block: extInit, record: state, offset: RpExtStart, value: zeroE)
+	let oneE = emitConst(module, block: extInit, value: 1, ids: ids)
+	emitStoreField(module, block: extInit, record: state, offset: RpExtIsHead, value: oneE)
+	module.setTerminator(extInit, op: StdOp.branch(extHdr.id))
+
+	var extReal = module.addBlock(func, label: b"rpextreal")
+	let extHead = emitLoadField(module, block: extHdr, record: state, offset: RpExtIsHead, ids: ids)
+	let zeroEh = emitConst(module, block: extHdr, value: 0, ids: ids)
+	let atExtHead = emitCmp(module, block: extHdr, a: extHead, b: zeroEh, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(extHdr, op: StdOp.condBranch(atExtHead, thenBlockId: buildCand.id, elseBlockId: extReal.id))
+
+	let extsR = emitLoadField(module, block: extReal, record: state, offset: RpExts, ids: ids)
+	let startR = emitLoadField(module, block: extReal, record: state, offset: RpExtStart, ids: ids)
+	let firstByteR = emitLoadByte(module, block: extReal, base: extsR, index: startR, ids: ids)
+	let zeroR = emitConst(module, block: extReal, value: 0, ids: ids)
+	let extsSpent = emitCmp(module, block: extReal, a: firstByteR, b: zeroR, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(extReal, op: StdOp.condBranch(extsSpent, thenBlockId: dirNext.id, elseBlockId: extMeasure.id))
+
+	var measuredExt = emitSubpMemberLength(module, func: func, ids: ids, cur: extMeasure, state: state, listOffset: RpExts, startOffset: RpExtStart, lenOffset: RpExtLen)
+	module.setTerminator(measuredExt, op: StdOp.branch(buildCand.id))
+
+	var built = emitSubpBuildCandidate(module, func: func, ids: ids, cur: buildCand, state: state)
+	module.setTerminator(built, op: StdOp.branch(testCand.id))
+
+	var attrOk = module.addBlock(func, label: b"rpattr")
+	let candT = emitLoadField(module, block: testCand, record: state, offset: RpCand, ids: ids)
+	let attrs = ids.mint()
+	module.appendOp(testCand, op: StdOp.osFileAttributes(attrs, pathPtrId: candT))
+	let invalid = emitConst(module, block: testCand, value: InvalidFileAttributes, ids: ids)
+	let nothingThere = emitCmp(module, block: testCand, a: attrs, b: invalid, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(testCand, op: StdOp.condBranch(nothingThere, thenBlockId: extNext.id, elseBlockId: attrOk.id))
+
+	// A DIRECTORY of the right name is not an executable — the one attribute bit this walk reads.
+	let attrs2 = ids.mint()
+	let candT2 = emitLoadField(module, block: attrOk, record: state, offset: RpCand, ids: ids)
+	module.appendOp(attrOk, op: StdOp.osFileAttributes(attrs2, pathPtrId: candT2))
+	let dirBit = emitConst(module, block: attrOk, value: FileAttributeDirectory, ids: ids)
+	let masked = emitBin(module, block: attrOk, a: attrs2, b: dirBit, opcode: StdBinOpcode.bitAnd, ids: ids)
+	let zeroB = emitConst(module, block: attrOk, value: 0, ids: ids)
+	let isDirectory = emitCmp(module, block: attrOk, a: masked, b: zeroB, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(attrOk, op: StdOp.condBranch(isDirectory, thenBlockId: extNext.id, elseBlockId: hit.id))
+
+	var afterExtStep = emitSubpAdvanceMember(module, func: func, ids: ids, cur: extNext, state: state, listOffset: RpExts, startOffset: RpExtStart, lenOffset: RpExtLen, headOffset: RpExtIsHead)
+	module.setTerminator(afterExtStep, op: StdOp.branch(extHdr.id))
+
+	var afterDirStep = emitSubpAdvanceMember(module, func: func, ids: ids, cur: dirNext, state: state, listOffset: RpPath, startOffset: RpDirStart, lenOffset: RpDirLen, headOffset: RpDirIsHead)
+	module.setTerminator(afterDirStep, op: StdOp.branch(dirHdr.id))
+
+	let candH = emitLoadField(module, block: hit, record: state, offset: RpCand, ids: ids)
+	let hitRecord = ids.mint()
+	var hitBuilt = emitCStringToManaged(module, func: func, cur: hit, cstr: candH, record: hitRecord, ids: ids)
+	module.setTerminator(hitBuilt, op: StdOp.ret(hitRecord))
+
+	let nameM = emitLoadField(module, block: miss, record: state, offset: RpName, ids: ids)
+	let missRecord = ids.mint()
+	var missBuilt = emitCStringToManaged(module, func: func, cur: miss, cstr: nameM, record: missRecord, ids: ids)
+	module.setTerminator(missBuilt, op: StdOp.ret(missRecord))
+
+	module.functions.push(func)
+end 'buildSubpResolvePath'
+
+// The empty `PATH` fallback — a variable that is not set leaves nothing to walk, and the walk must still find
+// the synthetic head member. A one-byte NUL is what "no directories" looks like to `emitSubpMemberLength`.
+let EmptyPathFallback = b""
+
+// Room for the separator between a directory and the name, and for the candidate's terminator, on top of the
+// three lengths the buffer is sized from. Four rather than two so a future separator or suffix cannot make
+// the bound tight without anyone noticing.
+let CandidateSlackBytes = 4 as ParsedInt
+
+// Read an environment variable into a fresh NUL-terminated slab buffer, falling back to a literal when it is
+// unset. `GetEnvironmentVariableA` answers the size it NEEDS when the buffer is too small, so one retry at
+// exactly that size is provably enough and a second failure would be the OS contradicting itself
+// (`__md_current_path`'s straight-line retry, and not `__proc_exe_path`'s doubling loop).
+function emitSubpReadEnvInto(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, varName ByteArray, outOffset ByteOffset, fallback ByteArray) returns IrBlock
+	var retry = module.addBlock(func, label: b"rpenvretry")
+	var useFallback = module.addBlock(func, label: b"rpenvnone")
+	let cont = module.addBlock(func, label: b"rpenvdone")
+
+	let nameBuf = emitSubpLiteralCString(module, block: cur, ids: ids, text: varName)
+	let firstSize = emitConst(module, block: cur, value: EnvFirstGuessBytes, ids: ids)
+	let firstBuf = ids.mint()
+	module.appendOp(cur, op: StdOp.call(firstBuf, callee: SlabAllocName, args: argsOf(firstSize)))
+	let written = ids.mint()
+	module.appendOp(cur, op: StdOp.osEnvRead(written, namePtrId: nameBuf, bufPtrId: firstBuf, bufLenId: firstSize))
+	emitStoreField(module, block: cur, record: state, offset: outOffset, value: firstBuf)
+	// The three answers, classified in the order `emitFilledBufferVerdict` states: 0 is "unset", `< size` is
+	// "written and NUL-terminated", anything else is the size it needs.
+	var fits = module.addBlock(func, label: b"rpenvfits")
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let unset = emitCmp(module, block: cur, a: written, b: zero, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(unset, thenBlockId: useFallback.id, elseBlockId: fits.id))
+
+	let firstSize2 = emitConst(module, block: fits, value: EnvFirstGuessBytes, ids: ids)
+	let tooSmall = emitCmp(module, block: fits, a: written, b: firstSize2, pred: StdCmpPred.ge, ids: ids)
+	module.setTerminator(fits, op: StdOp.condBranch(tooSmall, thenBlockId: retry.id, elseBlockId: cont.id))
+
+	// The size Win32 named INCLUDES the terminator, so it is exactly what to allocate.
+	let nameBuf2 = emitSubpLiteralCString(module, block: retry, ids: ids, text: varName)
+	let bigBuf = ids.mint()
+	module.appendOp(retry, op: StdOp.call(bigBuf, callee: SlabAllocName, args: argsOf(written)))
+	let written2 = ids.mint()
+	module.appendOp(retry, op: StdOp.osEnvRead(written2, namePtrId: nameBuf2, bufPtrId: bigBuf, bufLenId: written))
+	emitStoreField(module, block: retry, record: state, offset: outOffset, value: bigBuf)
+	module.setTerminator(retry, op: StdOp.branch(cont.id))
+
+	let fallbackBuf = emitSubpLiteralCString(module, block: useFallback, ids: ids, text: fallback)
+	emitStoreField(module, block: useFallback, record: state, offset: outOffset, value: fallbackBuf)
+	module.setTerminator(useFallback, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpReadEnvInto'
+
+// The length of the `;`-separated member of `list` that starts at `start` — up to the next `;` or the
+// terminator, whichever comes first. Shared by the PATH walk and the PATHEXT walk, which are the same list
+// shape with different contents.
+function emitSubpMemberLength(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset) returns IrBlock
+	var scanHdr = module.addBlock(func, label: b"rpmemhdr")
+	var scanStep = module.addBlock(func, label: b"rpmemstep")
+	var sepTest = module.addBlock(func, label: b"rpmemsep")
+	let cont = module.addBlock(func, label: b"rpmemdone")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	emitStoreField(module, block: cur, record: state, offset: lenOffset, value: zero)
+	module.setTerminator(cur, op: StdOp.branch(scanHdr.id))
+
+	let list = emitLoadField(module, block: scanHdr, record: state, offset: listOffset, ids: ids)
+	let start = emitLoadField(module, block: scanHdr, record: state, offset: startOffset, ids: ids)
+	let len = emitLoadField(module, block: scanHdr, record: state, offset: lenOffset, ids: ids)
+	let at = emitBin(module, block: scanHdr, a: start, b: len, opcode: StdBinOpcode.add, ids: ids)
+	let ch = emitLoadByte(module, block: scanHdr, base: list, index: at, ids: ids)
+	let zeroB = emitConst(module, block: scanHdr, value: 0, ids: ids)
+	let atEnd = emitCmp(module, block: scanHdr, a: ch, b: zeroB, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(scanHdr, op: StdOp.condBranch(atEnd, thenBlockId: cont.id, elseBlockId: sepTest.id))
+
+	let list2 = emitLoadField(module, block: sepTest, record: state, offset: listOffset, ids: ids)
+	let start2 = emitLoadField(module, block: sepTest, record: state, offset: startOffset, ids: ids)
+	let len2 = emitLoadField(module, block: sepTest, record: state, offset: lenOffset, ids: ids)
+	let at2 = emitBin(module, block: sepTest, a: start2, b: len2, opcode: StdBinOpcode.add, ids: ids)
+	let ch2 = emitLoadByte(module, block: sepTest, base: list2, index: at2, ids: ids)
+	let sepConst = emitConst(module, block: sepTest, value: PathSeparatorByte, ids: ids)
+	let atSeparator = emitCmp(module, block: sepTest, a: ch2, b: sepConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(sepTest, op: StdOp.condBranch(atSeparator, thenBlockId: cont.id, elseBlockId: scanStep.id))
+
+	emitSubpBumpField(module, block: scanStep, ids: ids, record: state, offset: lenOffset)
+	module.setTerminator(scanStep, op: StdOp.branch(scanHdr.id))
+	return cont
+end 'emitSubpMemberLength'
+
+// Step one list on: leave the synthetic head member if that is where the walk stands, else advance past this
+// member and its separator. The two lists take exactly this step, which is why it is one helper.
+function emitSubpAdvanceMember(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId, listOffset ByteOffset, startOffset ByteOffset, lenOffset ByteOffset, headOffset ByteOffset) returns IrBlock
+	var leaveHead = module.addBlock(func, label: b"rpadvhead")
+	var pastMember = module.addBlock(func, label: b"rpadvsep")
+	let cont = module.addBlock(func, label: b"rpadvdone")
+
+	let head = emitLoadField(module, block: cur, record: state, offset: headOffset, ids: ids)
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	let atHead = emitCmp(module, block: cur, a: head, b: zero, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(atHead, thenBlockId: leaveHead.id, elseBlockId: pastMember.id))
+
+	// Leaving the synthetic head costs nothing but clearing the flag: the real list has not been entered yet.
+	// ⚠ These two blocks were named `realStep`/`pastSep` — `realStep` for the arm that takes NO step through
+	// the real list, and `pastSep` for the one that steps past a MEMBER and only then maybe a separator. Each
+	// was the other's job.
+	let zeroH = emitConst(module, block: leaveHead, value: 0, ids: ids)
+	emitStoreField(module, block: leaveHead, record: state, offset: headOffset, value: zeroH)
+	module.setTerminator(leaveHead, op: StdOp.branch(cont.id))
+
+	// Past this member; a `;` at the cursor is consumed too, and the terminator simply leaves the cursor on
+	// it, which is what the loop header reads as "the list is spent".
+	var skipSep = module.addBlock(func, label: b"rpadvskip")
+	let start = emitLoadField(module, block: pastMember, record: state, offset: startOffset, ids: ids)
+	let len = emitLoadField(module, block: pastMember, record: state, offset: lenOffset, ids: ids)
+	let next = emitBin(module, block: pastMember, a: start, b: len, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: pastMember, record: state, offset: startOffset, value: next)
+	let list = emitLoadField(module, block: pastMember, record: state, offset: listOffset, ids: ids)
+	let ch = emitLoadByte(module, block: pastMember, base: list, index: next, ids: ids)
+	let sepConst = emitConst(module, block: pastMember, value: PathSeparatorByte, ids: ids)
+	let onSeparator = emitCmp(module, block: pastMember, a: ch, b: sepConst, pred: StdCmpPred.eq, ids: ids)
+	module.setTerminator(pastMember, op: StdOp.condBranch(onSeparator, thenBlockId: skipSep.id, elseBlockId: cont.id))
+
+	emitSubpBumpField(module, block: skipSep, ids: ids, record: state, offset: startOffset)
+	module.setTerminator(skipSep, op: StdOp.branch(cont.id))
+	return cont
+end 'emitSubpAdvanceMember'
+
+// Assemble `<dir>\<name><ext>` into the reused candidate buffer, NUL-terminated. The head members contribute
+// nothing, so the first candidate is the name verbatim.
+function emitSubpBuildCandidate(module StdModule, func IrFunction, ids ValueMinter, cur IrBlock, state ValueId) returns IrBlock
+	var withDir = module.addBlock(func, label: b"rpcdir")
+	var afterDirJoin = module.addBlock(func, label: b"rpcdirj")
+	var withExt = module.addBlock(func, label: b"rpcext")
+	var cont = module.addBlock(func, label: b"rpcdone")
+
+	let zero = emitConst(module, block: cur, value: 0, ids: ids)
+	emitStoreField(module, block: cur, record: state, offset: RpCandLen, value: zero)
+	let head = emitLoadField(module, block: cur, record: state, offset: RpDirIsHead, ids: ids)
+	let zeroH = emitConst(module, block: cur, value: 0, ids: ids)
+	let noDir = emitCmp(module, block: cur, a: head, b: zeroH, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(cur, op: StdOp.condBranch(noDir, thenBlockId: afterDirJoin.id, elseBlockId: withDir.id))
+
+	let cand = emitLoadField(module, block: withDir, record: state, offset: RpCand, ids: ids)
+	let path = emitLoadField(module, block: withDir, record: state, offset: RpPath, ids: ids)
+	let dirStart = emitLoadField(module, block: withDir, record: state, offset: RpDirStart, ids: ids)
+	let dirSrc = emitBin(module, block: withDir, a: path, b: dirStart, opcode: StdBinOpcode.add, ids: ids)
+	let dirLen = emitLoadField(module, block: withDir, record: state, offset: RpDirLen, ids: ids)
+	var afterDir = emitForwardCopy(module, func: func, cur: withDir, dest: cand, src: dirSrc, byteCount: dirLen, ids: ids)
+	let dirLen2 = emitLoadField(module, block: afterDir, record: state, offset: RpDirLen, ids: ids)
+	emitStoreField(module, block: afterDir, record: state, offset: RpCandLen, value: dirLen2)
+	emitSubpAppendByte(module, block: afterDir, ids: ids, state: state, outOffset: RpCand, lenOffset: RpCandLen, value: DirSeparatorByte)
+	module.setTerminator(afterDir, op: StdOp.branch(afterDirJoin.id))
+
+	let candN = emitLoadField(module, block: afterDirJoin, record: state, offset: RpCand, ids: ids)
+	let candLenN = emitLoadField(module, block: afterDirJoin, record: state, offset: RpCandLen, ids: ids)
+	let nameDst = emitBin(module, block: afterDirJoin, a: candN, b: candLenN, opcode: StdBinOpcode.add, ids: ids)
+	let nameSrc = emitLoadField(module, block: afterDirJoin, record: state, offset: RpName, ids: ids)
+	let nameLen = emitLoadField(module, block: afterDirJoin, record: state, offset: RpNameLen, ids: ids)
+	var afterName = emitForwardCopy(module, func: func, cur: afterDirJoin, dest: nameDst, src: nameSrc, byteCount: nameLen, ids: ids)
+	let candLenA = emitLoadField(module, block: afterName, record: state, offset: RpCandLen, ids: ids)
+	let nameLenA = emitLoadField(module, block: afterName, record: state, offset: RpNameLen, ids: ids)
+	let withNameLen = emitBin(module, block: afterName, a: candLenA, b: nameLenA, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: afterName, record: state, offset: RpCandLen, value: withNameLen)
+	let extHead = emitLoadField(module, block: afterName, record: state, offset: RpExtIsHead, ids: ids)
+	let zeroX = emitConst(module, block: afterName, value: 0, ids: ids)
+	let noExt = emitCmp(module, block: afterName, a: extHead, b: zeroX, pred: StdCmpPred.ne, ids: ids)
+	module.setTerminator(afterName, op: StdOp.condBranch(noExt, thenBlockId: cont.id, elseBlockId: withExt.id))
+
+	let candE = emitLoadField(module, block: withExt, record: state, offset: RpCand, ids: ids)
+	let candLenE = emitLoadField(module, block: withExt, record: state, offset: RpCandLen, ids: ids)
+	let extDst = emitBin(module, block: withExt, a: candE, b: candLenE, opcode: StdBinOpcode.add, ids: ids)
+	let exts = emitLoadField(module, block: withExt, record: state, offset: RpExts, ids: ids)
+	let extStart = emitLoadField(module, block: withExt, record: state, offset: RpExtStart, ids: ids)
+	let extSrc = emitBin(module, block: withExt, a: exts, b: extStart, opcode: StdBinOpcode.add, ids: ids)
+	let extLen = emitLoadField(module, block: withExt, record: state, offset: RpExtLen, ids: ids)
+	var afterExt = emitForwardCopy(module, func: func, cur: withExt, dest: extDst, src: extSrc, byteCount: extLen, ids: ids)
+	let candLenB = emitLoadField(module, block: afterExt, record: state, offset: RpCandLen, ids: ids)
+	let extLenB = emitLoadField(module, block: afterExt, record: state, offset: RpExtLen, ids: ids)
+	let withExtLen = emitBin(module, block: afterExt, a: candLenB, b: extLenB, opcode: StdBinOpcode.add, ids: ids)
+	emitStoreField(module, block: afterExt, record: state, offset: RpCandLen, value: withExtLen)
+	module.setTerminator(afterExt, op: StdOp.branch(cont.id))
+
+	let candF = emitLoadField(module, block: cont, record: state, offset: RpCand, ids: ids)
+	let candLenF = emitLoadField(module, block: cont, record: state, offset: RpCandLen, ids: ids)
+	let zeroT = emitConst(module, block: cont, value: 0, ids: ids)
+	emitStoreByte(module, block: cont, base: candF, index: candLenF, value: zeroT, ids: ids)
+	return cont
+end 'emitSubpBuildCandidate'
+
+// Install the attached-subprocess runtime. Called from `installSubpRuntime` — the streaming half's installer —
+// because the two halves share one handle table, one spawn core and one release, and a program that reaches
+// either reaches both through the same `__gt_subp_` prefix scan.
+export function installSubprocessRuntime(module StdModule)
+	buildSubpArgvCmdline(module)
+	buildSubpAttachedSpawn(module)
+	buildSubpStreamSpawn(module)
+	buildSubpGetPid(module)
+	buildSubpWriteAll(module)
+	buildSubpReadBytes(module, name: SubpReadOutBytesName, readerName: SubpReadLineName)
+	buildSubpReadBytes(module, name: SubpReadErrBytesName, readerName: SubpReadErrLineName)
+	buildSubpWaitExit(module)
+	buildSubpWaitCollect(module)
+	buildSubpResultWordReader(module, name: SubpResultKindName, offset: ResStatus)
+	buildSubpResultWordReader(module, name: SubpResultCodeName, offset: ResCode)
+	buildSubpResultWordReader(module, name: SubpResultDurationName, offset: ResDuration)
+	buildSubpResultBufferReader(module, name: SubpResultStdoutName, bufOffset: ResOutBuf, lenOffset: ResOutLen)
+	buildSubpResultBufferReader(module, name: SubpResultStderrName, bufOffset: ResErrBuf, lenOffset: ResErrLen)
+	buildSubpResultRelease(module)
+	buildSubpLastError(module)
+	buildSubpResolvePath(module)
+end 'installSubprocessRuntime'

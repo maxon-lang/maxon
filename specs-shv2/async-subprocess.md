@@ -425,9 +425,15 @@ error E3005: <fragment>:3:2: 'runProcess' requires a String, but its argument is
 ```
 
 <!-- test: async-subprocess.error.bare-call-requires-try -->
+<!-- targets: x64-windows -->
 `runProcess` is a throwing builtin (P1.5 #93), so a bare call that drops its error flag is refused (E3057) —
 the exact mirror of the throwing-array-accessor rule. A bare `runProcess` would read only the exit code (R8) and
 silently drop the spawn-failure/store-overflow flag (R10), so the compiler forces a `try`.
+
+⚠ **THE RULE IS TARGET-NEUTRAL AND THE CASE IS NOT, WHICH IS A CONSEQUENCE OF THE SUBSTRATE GATE.** Since
+`runProcess` joined `SemanticCheck.calleeNeedsWin32Substrate`, this program is refused on every other target
+FIRST, with E3104 naming `__gt_process_run` — a correct refusal about a different property, and one no
+single pinned text can express alongside this one. The twin below pins that half.
 ```maxon
 function main() returns ExitCode
 	let code = runProcess("cmd /c exit 1")
@@ -436,4 +442,20 @@ end 'main'
 ```
 ```maxoncstderr
 error E3057: <fragment>:3:13: throwing subprocess call requires try: wrap `runProcess(…)` as `try runProcess(…) otherwise …` — a bare call drops the spawn-failure error
+```
+
+<!-- test: async-subprocess.error.rejected-on-wasm -->
+<!-- targets: wasm32-wasi -->
+The other half: `runProcess` spawns a Windows child through `__gt_process_run`, so a program that reaches it
+on any other target is refused at the call's own span with **E3104**. ⚠ It was OUTSIDE that gate until the
+subprocess rung, and `SemanticCheck.calleeNeedsWin32Substrate`'s header recorded what that cost: *"on another
+target they still die as a BACKEND PANIC rather than a diagnostic — MEASURED"*.
+```maxon
+function main() returns ExitCode
+	let code = try runProcess("cmd /c exit 1") otherwise return 9
+	return code as ExitCode
+end 'main'
+```
+```maxoncstderr
+error E3104: <fragment>:3:17: this construct is x64-windows only at this rung: it lowers to the runtime entry '__gt_process_run', which has no wasm32-wasi implementation
 ```

@@ -472,13 +472,16 @@ type StdToArm64Lowering
 			// x64-windows only, like the file-IO band above and for the same ruling.
 			osCommandLine gives 0
 			// W5: x64-windows only too — refused at the CALL SITE by E3104, so neither reaches this backend.
-			osStdinHandle gives 0
+			osStdHandle gives 0
 			osExecutablePath gives 0
 			// W35: an all-register `write` — no stack argument on either stream.
 			osWriteStderr gives 0
 			// A frame address computes an address; it calls nothing and so passes no outgoing argument.
 			stackRecordAddr gives 0
 			osOpenNamedSegment to osTickCountMs gives 0
+			// The four attached-subprocess host primitives are x64-windows only and never reach an arm64
+			// frame; they reserve nothing here for the same reason every other refused op does.
+			osHandleSetInherit to osProcessTerminate gives 0
 		end 'o'
 	end 'stdOpOutgoingArgBytes'
 
@@ -623,7 +626,7 @@ type StdToArm64Lowering
 			// SemanticCheck refuses such a program at its source span (E3104, `calleeNeedsWin32Substrate`'s
 			// `__con_`/`__proc_` prefixes), so these are backstops for a compiler bug rather than the
 			// user-facing rejection.
-			osStdinHandle then panic("lowerStdToArm64: `osStdinHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
+			osStdHandle then panic("lowerStdToArm64: `osStdHandle` is x64-windows only — standard input is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
 			osExecutablePath then panic("lowerStdToArm64: `osExecutablePath` is x64-windows only — the executable path is read through a different OS API on every platform, and SemanticCheck refuses such a program at its source span (E3104), so this is the backstop for a compiler bug rather than the user-facing rejection")
 			// W35: the same graph as the stdout write, one descriptor over. Unlike its W5 neighbours above this
 			// is NOT x64-windows-gated — a POSIX `write` serves both streams, so `printError` runs here.
@@ -636,6 +639,11 @@ type StdToArm64Lowering
 			// command line on every other target (`Main.debugStreamSupports`), so this is a backstop for a
 			// compiler bug that got one past that gate, never the user-facing rejection.
 			osOpenNamedSegment to osTickCountMs then panic("lowerStdToArm64: the DebugStream host primitives are x64-windows only — `--debugstream` is refused at the command line on every other target")
+			// ⛔ The four attached-subprocess host primitives are x64-windows only on the same terms as the
+			// spawn/wait/pipe band above, and `SemanticCheck.calleeNeedsWin32Substrate` refuses a program that
+			// reaches one at its own source span (E3104) — so this is the backstop for a compiler bug that got
+			// past that gate, never the user-facing rejection.
+			osHandleSetInherit to osProcessTerminate then panic("lowerStdToArm64: the attached-subprocess host primitives are x64-windows only — the subprocess substrate is x64-windows-gated, and SemanticCheck refuses such a program at its source span (E3104)")
 		end 'lower'
 	end 'lowerBodyOp'
 
@@ -680,11 +688,12 @@ type StdToArm64Lowering
 			osFileOpenRead to osFileAttributes then panic("lowerStdToArm64: a file-IO op appeared as a block terminator (lowering bug — every one is a body op; also x64-windows only)")
 			osPanicValue then panic("lowerStdToArm64: an `osPanicValue` op appeared as a block terminator (lowering bug — a rendered panic is a body op followed by a dead return, exactly like `osPanic`)")
 			osCommandLine then panic("lowerStdToArm64: an `osCommandLine` op appeared as a block terminator (lowering bug — a command-line read is a value-consuming body op; also x64-windows only)")
-			osStdinHandle then panic("lowerStdToArm64: an `osStdinHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op; also x64-windows only)")
+			osStdHandle then panic("lowerStdToArm64: an `osStdHandle` op appeared as a block terminator (lowering bug — a standard-handle read is a value-producing body op; also x64-windows only)")
 			osExecutablePath then panic("lowerStdToArm64: an `osExecutablePath` op appeared as a block terminator (lowering bug — an executable-path read is a value-producing body op; also x64-windows only)")
 			osWriteStderr then panic("lowerStdToArm64: an `osWriteStderr` op appeared as a block terminator (lowering bug — a stderr write is a body op, exactly like its stdout twin)")
 			stackRecordAddr then panic("lowerStdToArm64: a `stackRecordAddr` op appeared as a block terminator (lowering bug — a frame address is a value-producing body op)")
 			osOpenNamedSegment to osTickCountMs then panic("lowerStdToArm64: a DebugStream host primitive appeared as a block terminator (lowering bug — all three are value-producing body ops; they are also x64-windows only)")
+			osHandleSetInherit to osProcessTerminate then panic("lowerStdToArm64: an attached-subprocess host primitive appeared as a block terminator (lowering bug — the inherit mark, the pipe peek, the env read and the terminate are all body ops; they are also x64-windows only)")
 		end 'lower'
 	end 'lowerTerminatorOp'
 

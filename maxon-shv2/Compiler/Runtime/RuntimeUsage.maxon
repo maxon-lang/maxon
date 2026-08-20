@@ -163,6 +163,11 @@ export type RuntimeUsage
 	// __mm_incref` this scan DOES see. Drives `installMmRuntime` to build `__mm_incref`; a program that never
 	// increfs (the common one) keeps it out. Set alongside `usesHeap` (an incref is on a `__mm_alloc`'d box).
 	export var usesIncref as bool
+	// ⭐ **`__mm_is_null` — the `__ManagedMemory` NULL predicate** (`__Builtins.managedIsNull`). Its own bit,
+	// for `usesRetain`'s reason one family over: the one call site in the corpus is
+	// `stdlib/Subprocess.maxon`'s executable lookup, and a program that never asks the question must not carry
+	// the answer. The parser emits the call directly, so this scan sees it.
+	export var usesMmIsNull as bool
 	// The program co-owns a BORROWED managed-aggregate parameter into a `var` (`var q = p`, OPEN #40),
 	// which the parser makes a second owner of the caller's box via `__mm_retain`. Its OWN bit, not
 	// `usesIncref`: `__mm_retain` (returns the pointer) and `__mm_incref` (void) have independent callers,
@@ -336,7 +341,7 @@ export type RuntimeUsage
 	export var usesProcessIntrospection as bool
 
 	static function create() returns RuntimeUsage
-		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
+		return Self{usesHeap: false, usesGt: false, usesIocp: false, usesStreaming: false, usesWriteStdout: false, usesWriteStderr: false, usesStrEq: false, usesStrCopy: false, usesIntToString: false, usesUIntToString: false, usesBoolToString: false, usesStrDecref: false, usesManagedMemory: false, usesList: false, usesDropTypeParam: false, usesRetainTypeParam: false, usesDropExistential: false, usesRetainExistential: false, usesIncref: false, usesMmIsNull: false, usesRetain: false, usesManagedGlobals: false, neededDestructors: DestructorSet.create(), usesStrClone: false, usesStrRetain: false, usesStrFromBytes: false, usesStrOfBuffer: false, usesMmToCString: false, usesStrBytesView: false, usesManagedElementCopy: false, usesOpaqueElementCopy: false, neededCloners: ClonerSet.create(), neededEnumLookups: EnumLookupSet.create(), usesWallClock: false, usesCharAt: false, usesCharCmp: false, usesCharFromCodepoint: false, usesCharAsciiValue: false, usesStrToBytes: false, usesUcdCategory: false, usesManagedFile: false, usesManagedDirectory: false, usesCommandLine: false, usesConsoleStdin: false, usesProcessIntrospection: false}
 	end 'create'
 end 'RuntimeUsage'
 
@@ -465,15 +470,29 @@ export function recordCallUsage(callee ByteArray, usage RuntimeUsage)
 	if callee.equals(IoReadName) 'ioread'
 		usage.usesIocp = true
 	end 'ioread'
+	// `__mm_is_null` is a heap PREDICATE, not a subprocess entry — it reads a pointer and nothing else — so it
+	// carries only itself. See `usesMmIsNull`.
+	if callee.equals(MmIsNullName) 'mmIsNull'
+		usage.usesMmIsNull = true
+	end 'mmIsNull'
 	// A `__gt_subp_*` call (the P1.5 streaming subprocess API, slice 1b) carries the whole streaming runtime: the
 	// handle table + the `__gt_subp_*` functions, which ride the IOCP substrate (`usesIocp`) and build owned Strings
 	// from raw bytes (`__mm_alloc`/`__str_copy` inside their bodies — `usesHeap`/`usesStrCopy`, declared here because
 	// this Maxon-module scan cannot see those transitive calls). `usesGt`/`usesHeap` are already set by the `__gt_`
 	// prefix above; these bits install the streaming-only pieces.
-	if bytesStartWith(callee, prefix: SubpCalleePrefix) 'streaming'
+	if isSubprocessRuntimeCallee(callee) 'streaming'
 		usage.usesStreaming = true
 		usage.usesIocp = true
 		usage.usesStrCopy = true
+		// ⭐ **THE ATTACHED HALF ADDS THREE MORE TRANSITIVE BITS**, declared here for the reason the three
+		// above are: this Maxon-module scan sees only the callee the PARSER emitted, never what that entry's
+		// hand-built Std body calls one tier down. `__gt_subp_read_out_bytes` and the two result-buffer
+		// readers build byte-element `Array` records (`__managed_create`/`__managed_reserve`), the readers
+		// drop the String the line reader answers (`__str_decref`), and `__gt_subp_last_error` renders the
+		// Win32 error number with `__int_to_string`.
+		usage.usesManagedMemory = true
+		usage.usesStrDecref = true
+		usage.usesIntToString = true
 	end 'streaming'
 	// A `__clock_*` call carries the WALL clock and NOTHING ELSE — no scheduler, no heap, no leak gate. It is
 	// the ONE runtime family here that declares no transitive dependency, and that is a fact about the code

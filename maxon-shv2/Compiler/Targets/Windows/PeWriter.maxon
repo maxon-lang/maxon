@@ -254,8 +254,8 @@ export enum IatSlot
 	// kernel32 again, so `Kernel32DirEntries` stays 1.
 	//
 	// ⚠ **`GetStdHandle` IS NOT ADDED HERE — IT HAS BEEN A SLOT SINCE P1.2 wave A**, where `print` needed
-	// it, and `osStdinHandle` reaches the same slot with a different selector. That is the whole reason
-	// standard INPUT costs no import at all.
+	// it, and `osStdHandle` reaches the same slot with the selector it is handed. That is the whole reason
+	// standard INPUT — and, since the subprocess rung, an INHERITED child stream — costs no import at all.
 	//
 	// ⚠ The `A` variant, inheriting `CreateFileA`'s stated LIMITATION unchanged and inheriting it
 	// CONSISTENTLY: a path whose bytes are non-ASCII comes back in the system ANSI codepage — which is
@@ -284,6 +284,19 @@ export enum IatSlot
 	OpenFileMappingA
 	MapViewOfFile
 	GetTickCount64
+	// ⭐ **THE TWO ATTACHED-SUBPROCESS IMPORTS.** APPENDED AFTER `GetTickCount64` for the reason every entry
+	// above states: every existing slot INDEX, and hence every existing `iatCall` relocation, is unchanged.
+	// kernel32 again, so `Kernel32DirEntries` stays 1.
+	//
+	// `PeekNamedPipe` is what makes collecting a child's stdout AND stderr deadlock-free — see `osPipePeek`,
+	// which carries the argument in full. `TerminateProcess` is the kill a `timeoutMs` deadline owes.
+	//
+	// ⚠ They join the OPTIONAL TRAILING BAND rather than the always-emitted set, exactly as the DebugStream
+	// four do and for the identical reason: an import nothing references still costs its IAT thunk, its
+	// import-lookup entry and its Hint/Name record, and a program that spawns no child should not pay for
+	// two. See `isOptionalTrailingImport`.
+	PeekNamedPipe
+	TerminateProcess
 end 'IatSlot'
 
 // The IAT slot index of an import — the `slotIndex` an `iatCall` records and the PE writer
@@ -294,32 +307,40 @@ export function iatSlotIndex(slot IatSlot) returns RelocSlotIndex
 	return slot.ordinal as RelocSlotIndex
 end 'iatSlotIndex'
 
-// ⭐ **DOES THIS SLOT BELONG TO THE DEBUGSTREAM BAND?** The four O3 imports are emitted ONLY into a
-// `--debugstream` build — an import nothing references still costs its IAT thunk, its import-lookup entry
-// and its Hint/Name record, and four of those in EVERY binary in the language is not a price a debug
-// instrument may charge a program that is not being traced. That is the same rule the `.data` slots, the
-// box header and the event sites follow (`DebugStreamRuntime`'s header states it once).
+// ⭐ **DOES THIS SLOT BELONG TO THE OPTIONAL TRAILING BAND?** The four O3 DebugStream imports and the two
+// attached-subprocess ones are emitted ONLY into a build that has a producer for them — an import nothing
+// references still costs its IAT thunk, its import-lookup entry and its Hint/Name record, and six of those
+// in EVERY binary in the language is not a price a debug instrument or a child-process runtime may charge a
+// program that uses neither. That is the same rule the `.data` slots, the box header and the event sites
+// follow (`DebugStreamRuntime`'s header states it once).
 //
 // ⚠ **THEY ARE THE TRAILING BAND, AND THAT IS WHAT MAKES OMITTING THEM SAFE.** An `iatCall` records a
 // slot INDEX; dropping entries off the END leaves every earlier index exactly where it was, while dropping
 // one from the middle would silently repoint every import after it. This is a TOTAL match rather than an
 // `ordinal >=` test precisely so that a future import appended past this band fails to compile here
 // instead of quietly joining it.
-function isDebugStreamImport(slot IatSlot) returns bool
+//
+// ⚠⚠ **IT IS ONE BAND WITH TWO PRODUCERS, NOT TWO BANDS, AND THAT IS FORCED BY THE INDEXING ABOVE.** Two
+// independently-gated bands would leave a HOLE in the emitted table whenever the first was absent and the
+// second present, and every slot after the hole would resolve to the wrong import. So the whole band is
+// emitted whenever EITHER producer is present: a traced build pays for two subprocess imports it does not
+// call, and a spawning build pays for four DebugStream ones. Six unreferenced imports in the rare build
+// that wants one of the two, against a silently-repointed import table — the trade is not close.
+function isOptionalTrailingImport(slot IatSlot) returns bool
 	return match slot 'band'
-		GetEnvironmentVariableA to GetTickCount64 gives true
+		GetEnvironmentVariableA to TerminateProcess gives true
 		ExitProcess to GetModuleFileNameA gives false
 	end 'band'
-end 'isDebugStreamImport'
+end 'isOptionalTrailingImport'
 
-// kernel32 import names in slot (declaration) order, stopping before the DebugStream band on a build that
-// carries no producer — see `isDebugStreamImport`.
-function kernel32ImportNames(debugStream bool) returns StringArray
+// kernel32 import names in slot (declaration) order, stopping before the optional trailing band on a build
+// that carries no producer for it — see `isOptionalTrailingImport`.
+function kernel32ImportNames(optionalImports bool) returns StringArray
 	var names = StringArray.create()
 	for slot in IatSlot.allCases 'each'
-		if isDebugStreamImport(slot) and not debugStream 'untracedBuild'
+		if isOptionalTrailingImport(slot) and not optionalImports 'noProducer'
 			continue
-		end 'untracedBuild'
+		end 'noProducer'
 
 		names.push(slot.name)
 	end 'each'
@@ -385,11 +406,11 @@ end 'dllNameField'
 // Build the `.idata` import section: a single kernel32 DLL run importing the
 // IatSlot names. Layout: IAT [thunks + null], ILT [identical], import directory
 // [kernel32 + null], Hint/Name table, DLL-name string.
-function buildImportSection(idataRva Rva, debugStream bool) returns ImportSection
+function buildImportSection(idataRva Rva, optionalImports bool) returns ImportSection
 	var data = ByteArray.create()
 	data.reserve(256)
 
-	let names = kernel32ImportNames(debugStream)
+	let names = kernel32ImportNames(optionalImports)
 	let count = names.count()
 
 	let thunkTableBytes = (count + 1) * PointerSize
@@ -753,7 +774,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	// .idata
 	let idataRva = dataRva + dataSizeVirtual
-	let idata = buildImportSection(idataRva, debugStream: codeResult.stdModule.debugStream)
+	let idata = buildImportSection(idataRva, optionalImports: codeResult.stdModule.debugStream or codeResult.stdModule.usesSubprocess)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize, alignment: FileAlignment)
 	let idataSizeVirtual = alignUp(idataSize, alignment: SectionAlignment)

@@ -61,6 +61,16 @@ export type IrModule uses Op
 	// generic container, and it is a bool.
 	export var debugStream as bool = false
 
+	// ⭐ **DOES THIS MODULE SPAWN A CHILD PROCESS?** Set once by the driver from `RuntimeUsage.usesStreaming`
+	// — the bit the `__gt_subp_*` prefix scan already computes — and read in exactly one place, the PE
+	// writer's OPTIONAL TRAILING IMPORT BAND. It is `debugStream`'s twin one producer over: both answer
+	// "does this image reference the imports at the end of `IatSlot`", and the band is emitted when EITHER
+	// says yes (`isOptionalTrailingImport` carries why the two cannot be gated apart).
+	//
+	// ⚠ It defaults to FALSE, so every `IrModule.create()` site is unchanged and a program that spawns
+	// nothing has a byte-identical import table.
+	export var usesSubprocess as bool = false
+
 	export static function create() returns Self
 		return Self{}
 	end 'create'

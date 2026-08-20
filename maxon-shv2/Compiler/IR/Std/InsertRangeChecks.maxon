@@ -1234,13 +1234,15 @@ type RangeCheckEmitter
 				osPanicValue then break 'c'
 				osCommandLine then break 'c'
 				// W5: a raw OS handle and a character count are not ranged-typealias values.
-				osStdinHandle then break 'c'
+				osStdHandle then break 'c'
 				osExecutablePath then break 'c'
 				// W35: the byte count the OS reports for a stream write is not a ranged-typealias value.
 				osWriteStderr then break 'c'
 				// A frame address is not a ranged-typealias value.
 				stackRecordAddr then break 'c'
 				osOpenNamedSegment to osTickCountMs then break 'c'
+				// And the four attached-subprocess host primitives are Win32 import calls too.
+				osHandleSetInherit to osProcessTerminate then break 'c'
 			end 'c'
 		end 'eachOp'
 	end 'collectConsts'
@@ -1374,13 +1376,15 @@ function retMatchesValue(term StdOp, target ValueId) returns bool
 		osPanicValue gives false
 		osCommandLine gives false
 		// W5: both are body ops, never a `ret`.
-		osStdinHandle gives false
+		osStdHandle gives false
 		osExecutablePath gives false
 		// W35: a stream write is a body op, never a `ret`.
 		osWriteStderr gives false
 		// A promoted record's address is a body op, never a `ret`.
 		stackRecordAddr gives false
 		osOpenNamedSegment to osTickCountMs gives false
+		// And the four attached-subprocess host primitives are Win32 import calls too.
+		osHandleSetInherit to osProcessTerminate gives false
 	end 'term'
 end 'retMatchesValue'
 
