@@ -204,22 +204,21 @@ driving these binaries:
   **Ordering cannot vary with pool size**, so the check re-derived a known answer at full suite cost.
   Reach for it when chasing a suspected nondeterminism or reading a failure serially; never as a gate.
   **The default pool is 12 and that is the only count these processes run the suite at.**
-- ⛔⛔ **DO NOT RUN `fmt` AT ALL RIGHT NOW — IT DELETES COMMENTS. MEASURED 2026-08-20, TWICE,
-  INDEPENDENTLY.** On a pristine copy of committed source
-  (`git show HEAD:maxon-shv2/Compiler/Runtime/GtRuntime.maxon`), one `fmt` run takes it from
-  **5073 lines to 4791** and its comment lines from **1719 to 1381** — **338 comment lines
-  destroyed**, silently, exit 0, `changed: true` and nothing else said. Among the casualties:
-  `// The \`.rdata\` label prefix every async-trace tag is interned under.` **This file's own
-  load-bearing prose is exactly what it eats**, and until 2026-08-20 this bullet told you to
-  *prefer* the tool that does it. It is a data-destroying bug in `maxon-sharp`'s formatter and
-  it is not yet fixed.
-  ⇒ **Do not format. If a hook or a habit runs it anyway, `git diff --stat` the result before
-  you stage: a formatter that REMOVES lines from a file you did not shrink is eating your
-  comments.** Restore with `git checkout -- <file>`.
-- ⛔ **AND WHEN IT IS FIXED, THE OLD TRAP IS STILL THERE: `./bin/maxon.exe fmt` with arguments
-  IGNORES them and reformats the ENTIRE TREE in place.** Multiple agents have destroyed
-  unrelated files that way and had to revert. Use the `mcp__maxon-dev__fmt` file form, and
-  check `git status` immediately after.
+- ⛔ **`./bin/maxon.exe fmt` with arguments IGNORES them and reformats the ENTIRE TREE in place.**
+  Multiple agents have destroyed unrelated files this way and had to revert. Use the
+  `mcp__maxon-dev__fmt` file form, and check `git status` immediately after.
+  ✅ **The COMMENT-DELETING bug is FIXED (2026-08-20) and `fmt` is safe to run again.** For two
+  weeks this bullet said *do not run it at all*: one run over a pristine
+  `maxon-shv2/Compiler/Runtime/GtRuntime.maxon` destroyed **338 comment lines**, silently, exit 0.
+  The cause was in the LEXER, not the formatter — `Advance()` did not count a newline consumed inside
+  a byte-string literal, so token line numbers drifted below true source lines and the formatter's
+  line-keyed comment map stopped finding them. **The same defect made EVERY DIAGNOSTIC after such a
+  literal name the wrong line** (measured: an undefined function on line 6 reported at line 4).
+  Counting now happens in `Advance` itself, so no scanner can forget it.
+  ⚠ **`maxon fmt-selftest` runs on every `dotnet build` and FAILS IT** if formatting loses a comment
+  or stops being idempotent. Sabotage-proved: with the original defect restored, its byte-string
+  cases go red and the build stops — while its no-multi-line-literal control still PASSES, which is
+  precisely why nothing caught this for two weeks.
 
 ### ⛔⛔ `git status specs-shv2/fragments/` CANNOT TELL YOU WHETHER CODEGEN MOVED. THE RUNNER CAN.
 

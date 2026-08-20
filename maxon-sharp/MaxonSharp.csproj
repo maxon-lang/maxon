@@ -174,4 +174,24 @@
     <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; spec-run-selftest" />
   </Target>
 
+  <!-- THE SIXTH GUARD, and the only one here that protects the USER'S SOURCE rather than this
+       compiler's own behaviour. `maxon fmt` rewrites files IN PLACE, and for an unknown length of time
+       it silently DELETED COMMENTS: measured 2026-08-20, one run over a pristine copy of
+       `maxon-shv2/Compiler/Runtime/GtRuntime.maxon` destroyed 338 comment lines, exit 0, reporting only
+       `changed: true`. Nothing in the tree could have caught it, because the formatter had no test of
+       any kind - and `.claude/CLAUDE.md` recommended the tool by name.
+
+       It pins CONTENT, not layout: every comment survives, and formatting is idempotent. Layout is the
+       formatter's job to change, and a guard that froze it would fail on every legitimate improvement
+       and train the next reader to re-bless it.
+
+       No spec case can reach this. A spec case is Maxon source that the runner COMPILES; the formatter
+       is never invoked by the compile path, so the corpus is structurally blind to it - the same reason
+       the four guards above exist. It compiles nothing and launches nothing (it formats six short
+       strings in memory), so it costs one process. Chained AFTER the spec-run guard, keeping the six a
+       defined sequence rather than two sharing an anchor. -->
+  <Target Name="CheckFormatterPreservesComments" AfterTargets="CheckSpecRunVerdict">
+    <Exec Command="&quot;$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)&quot; fmt-selftest" />
+  </Target>
+
 </Project>

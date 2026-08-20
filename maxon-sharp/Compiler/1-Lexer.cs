@@ -300,9 +300,7 @@ public class Lexer(string source) {
 
     // Newline
     if (c == '\n') {
-      Advance();
-      _line++;
-      _column = 1;
+      Advance(); // counts the line itself — see Advance's header
       return new Token(TokenType.Newline, "\n", startLine, startColumn);
     }
 
@@ -409,13 +407,7 @@ public class Lexer(string source) {
             Advance(); Advance(); // Skip */
             return NextToken();
           }
-          if (Current() == '\n') {
-            Advance();
-            _line++;
-            _column = 1;
-          } else {
-            Advance();
-          }
+          Advance(); // counts a '\n' itself — see Advance's header
         }
         // Reached EOF without finding `*/` — emit a real error token so
         // the lexer-error reporter can map it to LexerUnterminatedBlockComment.
@@ -677,9 +669,33 @@ public class Lexer(string source) {
     return pos < _source.Length ? _source[pos] : '\0';
   }
 
+  // ⭐⭐ THE ONE PLACE LINE/COLUMN ARE KEPT, and it is here because every scanner already
+  // funnels through it. It used to be the callers' job, and only TWO of them remembered
+  // (the Newline token and the block-comment body) — so any scanner that consumed a '\n'
+  // as ordinary text silently desynchronized `_line` from the file for the whole rest of
+  // the compile.
+  //
+  // ⚠ MEASURED, and it was not merely a formatter bug. `ScanByteStringLiteral` consumes
+  // newlines by design — a multi-line `b"…"` is a real construct that this compiler's OWN
+  // source uses (`maxon-shv2/Compiler/Runtime/GtRuntime.maxon:551`) — and it counted none
+  // of them. A file whose byte-string spans two lines reported an undefined function on
+  // line 4 that was written on line 6: EVERY diagnostic after such a literal named a line
+  // that was too low by the number of newlines inside it, and pointed the reader at
+  // somebody else's code. `maxon fmt` deleting comments was the same defect wearing a
+  // different face — it keys comments by true source line and emits them against token
+  // lines, so the two drifted apart and the comments that fell off the end were dropped.
+  //
+  // Counting here rather than at each scanner is the point: `ScanCharacterLiteral` also
+  // walks past newlines (on an unterminated literal), and the next scanner someone adds
+  // would have had to remember too. There is nothing left to remember.
   private void Advance() {
+    if (_source[_pos] == '\n') {
+      _line++;
+      _column = 1;
+    } else {
+      _column++;
+    }
     _pos++;
-    _column++;
   }
 
   private bool IsAtEnd(int offset = 0) => _pos + offset >= _source.Length;
