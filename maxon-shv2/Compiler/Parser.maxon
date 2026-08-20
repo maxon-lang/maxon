@@ -6475,14 +6475,28 @@ end 'stringIndexSurfaceMemberNames'
 // through a member call, so a `create` on this roster would have no arm to reach — the `Array` roster's own
 // header records the identical trap, and the drift panic below is what now catches it.
 //
-// ⛔⛔ **AND NO LINE HERE CAN BE STRUCK TODAY, WHICH IS `W86`'s MEASURED RESULT RATHER THAN AN OMISSION.**
-// Striking a name is how a `String`/`Array` member retires to the corpus (`memberBelongsToTheCorpus`), and
-// with `stdlib/Vector.maxon` listed each strike is **E3005 argument type mismatch for 'self': expected
-// 'Vector_Int', got 'Vec3'** on every case that touches the member. `Self` inside `type Vector uses Element`
-// is a vector with NO count — a size is the second coordinate of an INSTANCE
-// (`SignatureIndex.VectorBuiltinBaseName`) and a declaration's own `Self` states none — so a corpus `Vector`
-// method's `self` parameter cannot match a receiver, every value of which has one. See that header for the
-// full map and for the two candidate cures.
+// ⭐⭐⭐ **EVERY LINE HERE CAN NOW BE STRUCK, AND THESE THREE ARE KEPT BY CHOICE (W189). THE PARAGRAPH THAT
+// STOOD HERE SAID THE OPPOSITE, AND IT WAS TRUE UNTIL THE `Self` GATE WAS CURED.** It read: *"no line here
+// can be struck today … with `stdlib/Vector.maxon` listed each strike is `E3005 argument type mismatch for
+// 'self': expected 'Vector_Int', got 'Vec3'` on every case that touches the member"* — `W86` measured
+// **8 passed, 39 failed** doing exactly that. `ProgramSignatures.substitutedFixedSize` makes a declaration's
+// own countless `Self` adopt the receiver's count, so one corpus body serves every size, and **the same
+// experiment re-run at `W189` is 54/55 — the one failure being this roster's own sentence, which is rendered
+// from this list and therefore changes when the list does.**
+//
+// ⇒ **So the residue is now a DECISION, and each of the three has its own reason — none of them `self`:**
+//   • **`count` folds to a CONSTANT off the instance's size** (the arm below, and its own ⭐⭐ paragraph):
+//     the corpus body is `managed.length()`, a load, and a fixed size that is read at runtime is a fixed
+//     size the type no longer decides.
+//   • **`get` / `set` carry the CONSTANT-INDEX BOUNDS-CHECK ELISION** — `emitContainerElementAccessor` picks
+//     `__managed_get_in_bounds` when the index and the size are both known here, which is a fact about the
+//     CALL SITE that a body taking a runtime `index` parameter cannot see. `specs-shv2/vector-static-index.md`
+//     pins it with `RequiredRuntime`, so retiring these two deletes a spec's subject rather than a line.
+//
+// ⚠ **`createIterator` IS NOT ON THIS LIST AND IS SERVED BY THE CORPUS — that is what makes the whitelist
+// entry live rather than inert** (`StdlibLoader`'s entry carries the control). `create` is not here either,
+// for the reason the array roster's header gives: a vector is BORN through `gateAndEmitContainerCreate`, and
+// its body could not name the size anyway.
 function vectorSurfaceMemberNames() returns ByteArrayArray
 	var names = ByteArrayArray.create()
 	names.push(CountMethod)
@@ -14422,7 +14436,7 @@ export type Parser
 		if self.kindAt(selfPos + 1) != TokenKind.leftBrace 'notALiteral'
 			return false
 		end 'notALiteral'
-		if not self.signatures.declarationIsTheManagedRecord(self.enclosingType) 'notTheOwnRecordArray'
+		if not self.signatures.declarationsValueIsTheManagedRecord(self.enclosingType) 'notTheOwnRecordArray'
 			return false
 		end 'notTheOwnRecordArray'
 
@@ -24635,7 +24649,14 @@ export type Parser
 		// and `Array` is that same fact with a type parameter on it. The base `structRef` below is right only
 		// for a declaration that HAS a base box; `Array with T` is its `__ManagedMemory with T`, so a
 		// `structRef(Array)` would give `clone()`'s result a struct cascade over the buffer record.
-		if self.signatures.declarationIsTheManagedRecord(name) 'theCompilersOwnGenericRecord'
+		// ⚠ **AND THE SIZED CONTAINER IS THE SAME FACT WITH A SECOND COORDINATE ON IT (W189).** `Self` inside
+		// `stdlib/Vector.maxon` is the declaration's own instance for exactly the reason above — a `Vector`'s
+		// value IS the compiler's fused record — and answering `structRef(Vector)` gave `init`'s
+		// `return Self{managed: managed}` **`E3005 Cannot return 'Vector_T…' from function declared to return
+		// 'Vector'`**: the literal produced the instance, the declared return produced the base box, and the two
+		// are the same type under two spellings. The countless instance it answers with is what
+		// `substitutedFixedSize` then gives the receiver's SIZE at a call.
+		if self.signatures.declarationsValueIsTheManagedRecord(name) 'theCompilersOwnGenericRecord'
 			return MaxonType.genericInstance(self.signatures.ownRecordSelfInstance(name))
 		end 'theCompilersOwnGenericRecord'
 
@@ -34190,15 +34211,27 @@ export type Parser
 	// `Parser.maxon:10137-10139`, bootstrap `2-Parser.cs:13150-13153`), and so did shv2's own
 	// `LoopContext` before this rung existed.
 	//
-	// ⭐ **THE COUNTER FORM IS WHAT A SOURCE WITH NO `createIterator` GETS — AND THE CORPUS `Array` HAS
-	// ONE, SO IT IS NOT AN ARRAY FORM ANY MORE.** `stdlib/Array.maxon` is listed
+	// ⭐ **THE COUNTER FORM IS WHAT A SOURCE WITH NO `createIterator` GETS — AND NEITHER CORPUS CONTAINER
+	// IS ONE ANY MORE.** `stdlib/Array.maxon` is listed
 	// (`StdlibLoader.whitelistedStdlibModules`), so `materializeIterableIterationSource` rewrites an
 	// array source to the `ArrayIterator` its `createIterator()` returns BEFORE the fork below is
 	// reached, and `for x in [10, 20, 30]` emits `Array.createIterator` / `ArrayIterator.current` /
-	// `ArrayIterator.advance` — MEASURED in the emitted IR, not inferred. What still arrives here as a
-	// counter is every source that supplies no cursor of its own: a `Vector`, whose record IS an
-	// array's and which is compiler-served with no `createIterator`, and a program's OWN
-	// `type Array … implements BuiltinArrayLiteral` that declares none (see `requireIterableSource`'s
+	// `ArrayIterator.advance` — MEASURED in the emitted IR, not inferred.
+	//
+	// ⚠⚠ **AND `stdlib/Vector.maxon` JOINED IT AT `W189`, WHICH THIS PARAGRAPH USED TO DENY IN SO MANY
+	// WORDS.** It named *"a `Vector`, whose record IS an array's and which is compiler-served with no
+	// `createIterator`"* as the standing example of a counter source — a present-tense fact that `W86`
+	// predicted would flip **on VISIBILITY alone**, and it did: the corpus declares `createIterator`, so a
+	// vector source takes the rewrite exactly as an array does. **MEASURED, both directions: a
+	// `for x in v` summing a `Vector with 3 Int` answers 9 either way, and with the corpus
+	// `createIterator` sabotaged to `throw IterationError.exhausted` it answers 0** — i.e. the loop runs
+	// the declaration's cursor. **The trade was taken deliberately and it is not free: that program grows
+	// 13,552 -> 14,974 bytes (+10.5%)**, trading a counted read against a per-loop iterator struct and a
+	// call per step. It is taken for UNIFORMITY — one rule for both corpus containers, the one `Array`
+	// already follows — and because the alternative is a second loop form kept alive by a name.
+	//
+	// What still arrives here as a counter is every source that supplies no cursor of its own: a program's
+	// OWN `type Array … implements BuiltinArrayLiteral` that declares none (see `requireIterableSource`'s
 	// array arm, which is the door that admits exactly those). The counted ranges share the shape.
 	//
 	// ⭐ **WHAT THE COUNTER IS STILL THE RIGHT SHAPE FOR, AND WHY THE COMPILER NEVER SYNTHESIZES A
@@ -46036,7 +46069,14 @@ export type Parser
 		// retain on a record the default had just built. The NON-empty spelling (`Self{managed: m}`) keeps the
 		// ordinary path and reaches `emitFusedWrapperLiteral`'s identity arm, so the two forms stay the two
 		// statics they mirror — `create()` and `init(managed)`.
-		if self.signatures.declarationIsTheManagedRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `declarationIsTheManagedRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
+		// ⚠ **AND `Self{}` INSIDE `stdlib/Vector.maxon` IS THE SAME FORM ON THE SIZED CONTAINER (W189)** —
+		// `create()`'s body. **What it BUILDS is a countless container, i.e. ZERO slots, and that is why
+		// `create` is the one member of that surface which cannot retire**: `Self` is the declaration's own
+		// instance, one body serves every size (`substitutedFixedSize`), and the count a `Vec3.create()` needs
+		// is at the CALL. The body is compiled so the module can be LISTED; every `<alias>.create()` is
+		// intercepted by `gateAndEmitContainerCreate` and never reaches it, which is what
+		// `requireSizedContainerStaticIsTheCompilers` makes structural instead of lucky.
+		if self.signatures.declarationsValueIsTheManagedRecord(layout.name) and not (try filled.get(0) otherwise panic("parseStructLiteral: filled.get OOB at 0 — `declarationIsTheManagedRecord` established a sole field and the column is sized to the layout's field count")) 'theEmptyContainer'
 			return try self.emitOwnedContainerCreate(self.signatures.ownRecordSelfInstance(layout.name), aliasTok: typeTok, aliasName: layout.name, range: SourceRange.between(typeTok, last: rbraceTok))
 		end 'theEmptyContainer'
 
@@ -46842,6 +46882,29 @@ export type Parser
 			let buffer = try fieldValues.get(0) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at 0 — `requireBufferIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")
 			return self.coOwnAggregateAsTemp(buffer, range: range)
 		end 'theBufferRecord'
+
+		// ⭐⭐ **THE SIZED CONTAINER'S OWN RECORD IS THE SAME IDENTITY, RETYPED (W189).** `stdlib/Vector.maxon`'s
+		// `init(managed ElementMemory)` writes `return Self{managed: managed}`, and a `Vector`'s runtime
+		// representation IS an `Array`'s — the same 48-byte fused record, dropped by the same
+		// `__managed_decref` — so there is nothing to construct here either. What the array arm above cannot do
+		// is hand the value back with the RIGHT identity: the buffer is an `Array with Element` and `Self` is a
+		// `Vector`, whose gid carries the SIZE as a second coordinate. So the identity is taken and the value is
+		// retyped to the declaration's own instance, exactly as `parseVectorFromConstruction` retypes the array
+		// literal it is handed.
+		//
+		// ⚠ **STDLIB SOURCE ONLY, AND THE GATE IS PROVENANCE RATHER THAN SHAPE.** A USER `type Vector uses
+		// Element implements BuiltinArrayLiteral` is shaped identically and must go on meeting
+		// `requireNameIsNotABuiltinContainerBase` below — `W112` measured what admitting it does: a fixed-size
+		// three-element vector grown to nine through `push`/`resize`, compiling clean and printing the wrong
+		// answer. The corpus declaration is not a second conformer competing with the compiler's container; it
+		// is the DECLARATION OF that container, which is what listing the module means.
+		if self.isStdlibSource and self.signatures.declarationIsASizedContainerRecord(layout) 'theSizedContainersOwnRecord'
+			try self.requireBufferIsItsOwnRecord(layout, anchor: anchor)
+			let sizedBuffer = try fieldValues.get(0) otherwise panic("emitFusedWrapperLiteral: fieldValues.get OOB at 0 — `requireBufferIsItsOwnRecord` established a sole field and the column is sized to the layout's field count")
+			let record = self.coOwnAggregateAsTemp(sizedBuffer, range: range)
+			self.retypeValue(record, valueType: MaxonType.genericInstance(self.signatures.ownRecordSelfInstance(layout.name)))
+			return record
+		end 'theSizedContainersOwnRecord'
 
 		try self.requireNameIsNotABuiltinContainerBase(layout, anchor: anchor)
 		try self.requireArrayMarkerDeclaresTheBuffer(layout, anchor: anchor)
@@ -56399,6 +56462,27 @@ export type Parser
 			return self.corpusServesMemberOffRoster(MemberSurface.array, typeName: declaration)
 		end 'anArraySurface'
 
+		// ⭐⭐ **THE SIZED CONTAINER'S ARM, AND LISTING `stdlib/Vector.maxon` DOES NOT WORK WITHOUT IT (W189).**
+		// The roster is what the COMPILER serves (`count`/`get`/`set`, each for a compile-time fact the corpus
+		// body cannot see — the size, and the constant index the bounds-check elision reads); everything else
+		// the declaration carries is the declaration's, exactly as it is for `Array` and `String`.
+		//
+		// ⛔ **MEASURED, and it is the whole difference between a filtered run and the suite: `--filter=vector`
+		// was 55/55 without this arm and the full suite was 5941/400.** 375 of those are one sentence —
+		// `E2015 stdlib/Interfaces.maxon:229: `Vector` member 'createIterator' — shv2 provides count/get/set` —
+		// because a listed `Vector` DECLARES `implements Iterable`, so `extension Iterable`'s `map`, `filter`
+		// and `contains` specialize for it, and their `for item in self` asks the receiver for the very member
+		// the roster does not carry. The conformance is not decoration: it is what publishes those extension
+		// methods onto the type, and they are compiled.
+		if self.signatures.isVectorInstanceAt(recv.tag, nameId: recv.nameId) 'aSizedContainerSurface'
+			let sizedDeclaration = self.signatures.genericInstanceBaseName(recv.nameId)
+			if not self.signatures.declarationIsASizedContainerRecordNamed(sizedDeclaration) 'notTheCorpusVector'
+				return false
+			end 'notTheCorpusVector'
+
+			return self.corpusServesMemberOffRoster(MemberSurface.vector, typeName: sizedDeclaration)
+		end 'aSizedContainerSurface'
+
 		return false
 	end 'memberBelongsToTheCorpus'
 
@@ -56492,6 +56576,28 @@ export type Parser
 	// IDENTITY.** `let m = a.managed` is three tokens, so `rhsWasBareLocalReference` reads it as a CONSUME and
 	// does NOT poison `a` — yet `declareInitializedBinding` enrols `m` in `ownedBindings` all the same, because
 	// the value's provenance says owned-heap. `a` and `m` would be one box with two scope-exit drops.
+	// ⭐⭐ **THE SURFACE FLIP, PLUS THE ONE RETYPE THE SIZED CONTAINER NEEDS (W189).** For the ARRAY record the
+	// flip is the whole of it: `Array with T` and `__ManagedMemory with T` are ONE `GenericInstanceId`, so the
+	// buffer surface of an array IS the array, and only the MARK changes. A `Vector with N T`'s record is the
+	// same 48 bytes but a DIFFERENT id — the size is the second coordinate of its identity — so the value
+	// handed to a buffer position has to say so, or the corpus's own `VectorIter.create(managed)` is refused
+	// **`E3005 … expected 'Vector.ElementMemory', got 'Vector_T…'`**: one record, two ids, which is exactly the
+	// disagreement `canonicalGenericBaseNameInThisFile`'s fold exists to prevent one genericity up.
+	//
+	// ⚠ The buffer instance is built from the RECEIVER's element rather than from the declaration's parameter,
+	// so it is concrete wherever the receiver is (`Vec3`'s buffer is `Array with Int`) and opaque inside the
+	// declaration's own body — which is the same instance the field's declared type resolves to.
+	function bufferSurfaceOfDeclaredRecord(box ValueId, layout StructLayout, range SourceRange) returns ValueId
+		let surface = self.bufferSurfaceOf(box, range: range)
+		if not self.signatures.declarationIsASizedContainerRecordNamed(layout.name) 'theBufferIsItsOwnInstance'
+			return surface
+		end 'theBufferIsItsOwnInstance'
+
+		let element = self.signatures.containerElementType(self.valueNameId(box))
+		self.retypeValue(surface, valueType: MaxonType.genericInstance(self.signatures.builtinInstanceForElement(self.signatures.arrayRecordBaseName(), element: element)))
+		return surface
+	end 'bufferSurfaceOfDeclaredRecord'
+
 	function bufferSurfaceOf(arr ValueId, range SourceRange) returns ValueId
 		if self.pendingTempsContain(arr) 'statementAlreadyOwnsIt'
 			self.markBufferSurface(arr)
@@ -60503,7 +60609,13 @@ export type Parser
 		// WRITE path and the field-chain walk. The two are the preconditions of two different queries — a
 		// layout to NAME a member, and a layout to ENUMERATE fields — exactly as that gate's own header says of
 		// its neighbour, so the admission is spent at the one door that needs it and nowhere else.
-		if tag == ValueTypeTag.genericInstance and not (self.signatures.genericInstanceHasBaseLayout(nameId) or self.signatures.declarationIsTheManagedRecord(typeName)) 'noBaseLayout'
+		// ⚠ **THE SIZED CONTAINER IS ADMITTED BY THE SAME ARGUMENT AS THE ARRAY RECORD (W189)** — with
+		// `stdlib/Vector.maxon` listed, a `Vector`'s ONE declared field IS the record, so `structOf` and the
+		// value agree about it exactly as they do for `Array`. **MEASURED without this: 375 cases refused at
+		// `stdlib/Interfaces.maxon:229`'s `self.createIterator()` inside `extension Iterable`, with
+		// `missingBaseLayout`'s *"shv2 reads no stdlib"* sentence — a refusal whose every clause had stopped
+		// being true for this type the moment the module was listed.**
+		if tag == ValueTypeTag.genericInstance and not (self.signatures.genericInstanceHasBaseLayout(nameId) or self.signatures.declarationsValueIsTheManagedRecord(typeName)) 'noBaseLayout'
 			throw self.missingBaseLayout(typeName, baseTok: baseTok)
 		end 'noBaseLayout'
 
@@ -60800,8 +60912,13 @@ export type Parser
 			//     `managed.slice(0, len)`.
 			// One record with two surfaces is the whole of this wrapper, so the read is the surface flip and
 			// nothing else — which also means it allocates nothing where the String path allocates a record.
-			if self.signatures.declarationIsTheManagedRecord(layout.name) 'theRecordISTheBuffer'
-				return self.bufferSurfaceOf(box, range: range)
+			// ⚠ **AND THE SIZED CONTAINER TAKES THIS ARM TOO (W189)** — a `Vector`'s value IS the same fused
+			// record, so `stdlib/Vector.maxon`'s `managed` is the surface flip and not a `__str_bytes_view`.
+			// Both silent wrongs the paragraph above enumerates apply to it word for word: the byte view's
+			// stride is 1 and a vector's slots are its element's, and the element read back as a concrete byte
+			// leaves `opaqueTypeParamPosition` with no `uses` name to answer.
+			if self.signatures.declarationsValueIsTheManagedRecord(layout.name) 'theRecordISTheBuffer'
+				return self.bufferSurfaceOfDeclaredRecord(box, layout: layout, range: range)
 			end 'theRecordISTheBuffer'
 
 			let view = self.emitOwnedRuntimeResult(StrBytesViewName, args: singletonArgs(box), resultTag: ValueTypeTag.genericInstance, resultNameId: self.signatures.internSynthesizedByteInstance(), range: range)

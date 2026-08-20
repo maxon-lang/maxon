@@ -1852,6 +1852,53 @@ function whitelistedStdlibModules(stdlibDir FilePath) returns MaxonSourcePathSet
 	// BROKE, and only byte-identity says nothing was LIVE.
 	try listWhitelistedModule(stdlibDir, relative: "List.maxon", into: listed)
 
+	// ⭐⭐⭐ **`stdlib/Vector.maxon` — THE SIZED CONTAINER, AND THE ENTRY THIS FILE WITHDREW TWICE (W189,
+	// after `W63`'s rule, `W86` and `W112`).** 50 lines, six members, and a record that IS an `Array`'s: the
+	// same 48-byte fused `ManagedRecordBytes`, the same `__managed_decref`. What is `Vector`'s alone is the
+	// SIZE, which lives in the instance's identity (`GenericInstanceRegistry.fixedSizes`) rather than as a
+	// type argument.
+	//
+	// ⛔⛔ **IT WAS WITHDRAWN TWICE FOR ONE GATE, AND THAT GATE IS NOW CURED.** `Self` inside
+	// `type Vector uses Element` states NO count while every value a program holds states one, so a corpus
+	// method's `self` could never match its receiver: **`E3005 argument type mismatch for 'self': expected
+	// 'Vector_Int', got 'Vec3'`**, measured by `W86` at **8 passed, 39 failed** on a roster strike and
+	// re-measured by `W112` at the door with no strike at all. `ProgramSignatures.substitutedFixedSize` makes
+	// a countless `Self` adopt the receiver's count — one body per element, every size — and the same strike
+	// re-runs at **54 passed, 1 failed**, the one being the roster's own rendered sentence.
+	//
+	// ⭐⭐ **THE ENTRY IS LIVE, AND THE CONTROL SAYS SO IN THE ONE WAY THAT COUNTS.** With
+	// `createIterator()`'s corpus body sabotaged to `throw IterationError.exhausted`, a program summing a
+	// `Vector with 3 Int` through `for x in v` answers **0 where it answers 9** with the corpus body intact,
+	// at a DIFFERENT image size (14,974 -> 14,321). The declaration is what that loop runs.
+	//
+	// ⭐ **AND IT BUYS A CAPABILITY, MEASURED BOTH WAYS.** `Vector` DECLARES `implements Iterable with
+	// (Element, VectorIter)`, so `stdlib/Interfaces.maxon`'s `extension Iterable` publishes `map`, `filter`,
+	// `contains` and `withIterator` onto every vector. `v.contains(function(x Int) gives x == 5)` answers
+	// **true** here and is **`E2015 … `Vector` member 'contains' — shv2 provides count/get/set`** at the merge
+	// base. ⚠ **That surface is also what makes the entry impossible to add by halves: without the corpus
+	// route for an off-roster member, `--filter=vector` is 55/55 while the SUITE is 5941/400**, 375 of them
+	// one sentence — `extension Iterable`'s own bodies asking a vector for `createIterator`.
+	//
+	// ⚠⚠ **THE COST IS THE `for … in` FORM, AND IT WAS TAKEN DELIBERATELY** (`W86` asked for exactly that
+	// decision): a vector source now takes `materializeIterableIterationSource`'s rewrite, trading a counted
+	// read against a per-loop iterator struct and a call per step. **MEASURED at +1,422 bytes (+10.5%) on a
+	// three-element loop program.** Taken for UNIFORMITY — one rule for both corpus containers, the one
+	// `stdlib/Array.maxon` already follows since it was listed — and `Parser.parseForIn`'s header, which
+	// named a `Vector` as the standing example of a counter source, is corrected in the same edit.
+	//
+	// ⛔ **THE RESIDUE IS THREE MEMBERS AND EVERY ONE IS A CHOICE**, which is `ARR4`'s rule reached from the
+	// other side: `count` folds to a constant off the instance's size, and `get`/`set` carry the
+	// constant-index bounds-check elision `specs-shv2/vector-static-index.md` pins with `RequiredRuntime`.
+	// `create` is the one that is still a FACT rather than a choice — its answer IS the size, the size is at
+	// the call, and one shared body cannot name it.
+	//
+	// ⚠ **A USER `type Vector` STILL LOSES TO THE BUILTIN, AND THAT HALF IS `W114`'s, NOT THIS ENTRY'S.**
+	// Listing the module made the contest REACHABLE — the corpus declaration is renamed into the reserved
+	// space and `stdlib/Sha256.maxon`'s own `Vector with 8 Word32` broke on it (**`E2010 … Expected 'a type'
+	// but got '8'`**, four suite cases) until `isVectorBaseName` learned this compile's mint. What did NOT
+	// change is which declaration WINS: a user's is still silently out-voted, exactly as at the merge base.
+	try listWhitelistedModule(stdlibDir, relative: "Vector.maxon", into: listed)
+
 	//     (n) `stdlib/Range.maxon` — W62 (BATCH36). Its ONLY blocker was `W60`: `RangeIterator implements
 	//     Iterator with RangeBound, BidirectionalIterator`, where `BidirectionalIterator extends Iterator`,
 	//     had `Iterator`'s inherited `current()` checked with NO binding, so a conformance that supplied

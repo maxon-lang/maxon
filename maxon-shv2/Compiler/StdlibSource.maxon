@@ -478,40 +478,28 @@ function reachableMaxonFunctionNames(module MaxonModule, project Project, signat
 	// other's whole list: a newly NAMED interface must be crossed with every conformer already reached, and a
 	// newly REACHED conformer with every interface already named. Both sets only grow and both are bounded by
 	// what the program declares, so it terminates.
+	// ⚠ **BUILT ONCE PER WALK, NOT ONCE PER REACHED FUNCTION.** `markEveryDeclaredWitnessImplOf` asks whether
+	// a conformer is the seed's, and it is asked of EVERY qualified function the drain reaches — so a roster
+	// rebuilt at the ask is a seven-push array plus its doubling reallocations per reached stdlib function.
+	// That is `Parser.arraySurfaceMemberNames`' measured lesson (**+1,023 allocations at rung 0 rising to
+	// +26,009 at rung 5** when its roster was per-call), and the same shape is refused here in advance.
+	let seedConformers = conformersMintedWithoutTheirOwnMethods(signatures)
 	var witnessInterfaces = InterfaceNameSet.create()
 	var witnessInterfaceOrder = ByteArrayArray.create()
-	var witnessConformers = InterfaceNameSet.create()
-	var witnessConformerOrder = ByteArrayArray.create()
-	for seedConformer in conformersMintedWithoutTheirOwnMethods(signatures) 'eachRosterConformer'
-		noteInterfaceName(seedConformer, into: witnessConformers, order: witnessConformerOrder)
-	end 'eachRosterConformer'
-
 	var interfacesSeeded = 0 as FieldIndex
-	var conformersSeeded = 0 as FieldIndex
 	while true 'seedRounds'
-		drainReachableWorklist(module, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder, witnessConformers: witnessConformers, witnessConformerOrder: witnessConformerOrder)
-		if interfacesSeeded == witnessInterfaceOrder.count() and conformersSeeded == witnessConformerOrder.count() 'nothingNewToCross'
+		drainReachableWorklist(module, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names, witnessInterfaces: witnessInterfaces, witnessInterfaceOrder: witnessInterfaceOrder)
+		if interfacesSeeded == witnessInterfaceOrder.count() 'noInterfaceLeftToSeed'
 			break
-		end 'nothingNewToCross'
+		end 'noInterfaceLeftToSeed'
 
-		// The NEW interfaces against every conformer, then the NEW conformers against the interfaces that
-		// were already named — which covers each new pair exactly once.
-		let interfacesBefore = interfacesSeeded
 		while interfacesSeeded < witnessInterfaceOrder.count() 'eachNewlyNamedInterface'
 			let interfaceName = try witnessInterfaceOrder.get(interfacesSeeded) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfacesSeeded} despite the loop guard")
 			interfacesSeeded = interfacesSeeded + 1
-			for conformerIndex in 0 upto witnessConformerOrder.count() 'eachKnownConformer'
-				markWitnessImplsOfConformer(try witnessConformerOrder.get(conformerIndex) otherwise panic("reachableMaxonFunctionNames: witnessConformerOrder.get OOB at {conformerIndex} despite the loop guard"), interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			end 'eachKnownConformer'
+			for conformerName in seedConformers 'eachSeededConformer'
+				markWitnessImplsOfConformer(conformerName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+			end 'eachSeededConformer'
 		end 'eachNewlyNamedInterface'
-
-		while conformersSeeded < witnessConformerOrder.count() 'eachNewlyReachedConformer'
-			let conformerName = try witnessConformerOrder.get(conformersSeeded) otherwise panic("reachableMaxonFunctionNames: witnessConformerOrder.get OOB at {conformersSeeded} despite the loop guard")
-			conformersSeeded = conformersSeeded + 1
-			for interfaceIndex in 0 upto interfacesBefore 'eachAlreadyNamedInterface'
-				markWitnessImplsOfConformer(conformerName, interfaceName: try witnessInterfaceOrder.get(interfaceIndex) otherwise panic("reachableMaxonFunctionNames: witnessInterfaceOrder.get OOB at {interfaceIndex} despite the loop guard"), project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
-			end 'eachAlreadyNamedInterface'
-		end 'eachNewlyReachedConformer'
 	end 'seedRounds'
 
 	return names
@@ -552,7 +540,20 @@ end 'reachableMaxonFunctionNames'
 // this function IS. **The omission is loud by construction, which is the whole reason a roster is tolerable
 // here**, and the previous two entries were each found by exactly this panic naming the missing name.
 //
-// ⚠ **THE THREE ENTRIES ARE THE BARE NAMES AND NEED NO `arrayRecordBaseName` TREATMENT**, because a
+// ⭐⭐ **AND `Vector` JOINED AT `W189`, WHICH IS THE CLAUSE ABOVE IN ITS PUREST FORM.** It satisfies the first
+// clause more completely than anything else on this list: **NOT ONE of its members is ever reached**, because
+// every one of them is compiler-served (`Parser.vectorSurfaceMemberNames`, `gateAndEmitContainerCreate`), so
+// the conformer key has nothing whatever to fire on. The second clause arrived when `stdlib/Vector.maxon` was
+// listed: its `implements Iterable with (Element, VectorIter)` is a CORPUS conformance, and a
+// `where S is Iterable` instantiated at a `Vector with 3 Int` builds a table whose slots name
+// `Vector.createIterator` — a stdlib body nothing calls.
+//
+// ⚠ **MEASURED, on the first program that tried it: `requireUnreachableStdlibStayedDead` panicking on
+// `ArrayIterator.current`** — the cascade one step past the slot, since the corpus `createIterator` returns an
+// `ArrayIterator` whose own `Iterator` table is reached from there. It is the panic-by-name this roster's
+// header promises, a fourth time.
+//
+// ⚠ **THE THREE PRIMITIVE ENTRIES ARE THE BARE NAMES AND NEED NO `arrayRecordBaseName` TREATMENT**, because a
 // primitive's spelling cannot be contested: `int`/`float`/`bool` are KEYWORDS, so no user `type int` exists
 // to shadow the corpus declaration into `__int`. That is the same uncontestability `String` and `Character`
 // rest on (`TypeResolution.isCompilerOwnedTypeName`); only the array name moves.
@@ -580,6 +581,7 @@ function conformersMintedWithoutTheirOwnMethods(signatures ProgramSignatures) re
 	names.push(IntConformerName)
 	names.push(FloatConformerName)
 	names.push(BoolConformerName)
+	names.push(VectorBuiltinBaseName)
 	return names
 end 'conformersMintedWithoutTheirOwnMethods'
 
@@ -593,11 +595,11 @@ end 'conformersMintedWithoutTheirOwnMethods'
 // later function names is one the seed still owes — so every reached function is asked. The ask is a
 // qualified-name split and a handful of map lookups, and it is now the only thing standing between a
 // `Hashable` program and 9 KB of `.rdata` it cannot reach.
-function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray, witnessConformers InterfaceNameSet, witnessConformerOrder ByteArrayArray)
+function drainReachableWorklist(module MaxonModule, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet, witnessInterfaces InterfaceNameSet, witnessInterfaceOrder ByteArrayArray)
 	while worklist.count() > 0 'walk'
 		let idx = try worklist.pop() otherwise panic("drainReachableWorklist: pop from a non-empty worklist")
 		let func = module.getFunc(idx)
-		noteReachedConformer(func, into: witnessConformers, order: witnessConformerOrder)
+		markConformerWitnessImpls(func, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names)
 		markMaxonCallees(module, project: project, signatures: signatures, func: func, byName: byName, reached: reached, worklist: worklist, names: names)
 		collectWitnessPositionInterfaces(func, project: project, signatures: signatures, funcSignatures: project.funcSignatures, into: witnessInterfaces, order: witnessInterfaceOrder)
 	end 'walk'
@@ -1067,18 +1069,45 @@ end 'markMaxonCalleeEdge'
 // behavioural assertions in those same fragments still pass (`--filter=filepath` 40/0, `directory` 61/0,
 // `url` 47/0), so no `lea` came to name a different string. The narrower gate that would remove this cost
 // is named in this walk's header; it was weighed and not taken.
-// ⚠ **IT NOTES THE CONFORMER RATHER THAN MARKING THROUGH IT (W188), and that is what makes the pair rule
-// possible.** It used to credit, then and there, every requirement impl of every conformance the reached
-// type declares — an answer that cannot wait, and therefore an answer that cannot be crossed with an
-// interface the walk has not yet met. Recorded instead, the fixpoint in `reachableMaxonFunctionNames` does
-// the crediting once both coordinates are known.
-function noteReachedConformer(func IrFunction, into InterfaceNameSet, order ByteArrayArray)
+// ⚠⚠ **IT CREDITS EVERY CONFORMANCE A REACHED TYPE DECLARES — EXCEPT FOR THE SEED'S OWN CONFORMERS, WHICH
+// ARE CREDITED PER NAMED INTERFACE INSTEAD (W188/W189).** The two routes answer from different evidence and
+// the split is exactly where that evidence runs out:
+//
+//   • **A type the walk REACHED A FUNCTION OF** is evidence about the TYPE and none about which interface a
+//     table will be built for, so every conformance it declares is credited. That total credit is what covers
+//     the shape the interface key CANNOT see: an interface implied by a construct rather than named by a
+//     declaration. **MEASURED (W189): a `where S is Iterable` at a `Vector with 3 Int` names `Iterable` and
+//     NOTHING ELSE, while the loop it lowers to calls `Iterator`'s methods on the `ArrayIterator` the corpus
+//     `createIterator` returns** — so keying `ArrayIterator` on the named set alone left `ArrayIterator.current`
+//     unmarked and `requireUnreachableStdlibStayedDead` panicked on it.
+//   • **A SEED conformer is one no reached function can ever belong to** (that is its membership rule), so
+//     the total credit has nothing to fire on and the seed supplies the crediting instead — keyed on the
+//     interfaces the reached code names, which is what keeps `float.toString` and its decimal bignum cone out
+//     of a program whose only constraint is `Hashable` (the +76% image this pair of rules exists to prevent).
+//     Crediting them HERE as well would undo exactly that: the seed marks `int.hash`, the drain reaches it,
+//     and a total credit on `int` pulls in every other impl the type declares.
+function markConformerWitnessImpls(func IrFunction, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
 	match splitQualifiedName(func.name) 'owner'
 		// A FREE function belongs to no type, so reaching it produces no conformer and implies no table.
 		notQualified then break 'owner'
-		parts(typeName, _) then noteInterfaceName(typeName, into: into, order: order)
+		parts(typeName, _) then markEveryDeclaredWitnessImplOf(typeName, project: project, signatures: signatures, seedConformers: seedConformers, byName: byName, reached: reached, worklist: worklist, names: names)
 	end 'owner'
-end 'noteReachedConformer'
+end 'markConformerWitnessImpls'
+
+// The total credit above, for a type the seed does not own.
+function markEveryDeclaredWitnessImplOf(typeName ByteArray, project Project, signatures ProgramSignatures, seedConformers ByteArrayArray, byName FuncIndexByName, reached BoolArray, worklist FuncIndexArray, names FunctionNameSet)
+	if namesInclude(seedConformers, name: typeName) 'theSeedOwnsThisConformer'
+		return
+	end 'theSeedOwnsThisConformer'
+
+	let conformedTo = try declaredConformanceIndex(project).get(typeName) otherwise 'declaresNoConformance'
+		return
+	end 'declaresNoConformance'
+
+	for interfaceName in conformedTo 'eachInterface'
+		markWitnessImplsOfConformer(typeName, interfaceName: interfaceName, project: project, signatures: signatures, byName: byName, reached: reached, worklist: worklist, names: names)
+	end 'eachInterface'
+end 'markEveryDeclaredWitnessImplOf'
 
 // Credit every requirement implementation `typeName`'s witness tables can name. A type that declares no
 // conformance has no table and nothing to credit, which is almost every type in almost every program.

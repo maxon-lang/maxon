@@ -4659,7 +4659,20 @@ export let ManagedMemoryCursorTypeParamCount = 1 as FieldIndex
 //     identity arm to RETYPE its countless `Self{managed: managed}` to the receiver's sized instance,
 //     which is the `firstFieldIsItsOwnBuffer` mechanism listed below and not this bullet's fact.
 //
-// ⭐ **TWO CANDIDATE CURES, NAMED SO THE NEXT RUNG DOES NOT RE-DERIVE THEM, NEITHER BUILT HERE.**
+// ✅✅ **CURE 1 IS BUILT (W189), AND THE WALL ABOVE IS GONE.** `substitutedFixedSize` gives a declaration's
+// own countless `Self` the SIZE of the receiver it is viewed through, so one corpus body serves every size —
+// and the roster strike this header measured at **8 passed, 39 failed** re-runs at **54 passed, 1 failed**,
+// the one being the roster's own rendered sentence. `stdlib/Vector.maxon` is LISTED, its `createIterator` is
+// the corpus's, and `count`/`get`/`set` stay compiler-served by CHOICE rather than by the wall — see
+// `Parser.vectorSurfaceMemberNames` for the reason each keeps (the constant fold, and the constant-index
+// bounds-check elision `specs-shv2/vector-static-index.md` pins with `RequiredRuntime`).
+//
+// ⚠ **AND `create` IS STILL RESIDUE, FOR THE FACT THIS HEADER ALREADY ISOLATED**: its answer IS the size,
+// the size is at the CALL, and one body cannot name it. Cure 2 — monomorphizing per (element, size) — is what
+// would close that one, and it is still not built: shv2 compiles a corpus generic ONCE and passes the
+// instance in the arguments (`W96`), so per-size copies are a different ABI and not a rung's edit.
+//
+// ⭐ **THE TWO CANDIDATE CURES AS THEY WERE NAMED, KEPT FOR THE REASONING TRAIL.**
 //   1. **Size-polymorphic `Self`** — let a sized instance satisfy the declaration's countless `Self` at a
 //      parameter position. One body per element serves every size; `count()` would stop folding to a
 //      constant and become a `length@8` load; `error.wrong-size-vector-argument` must go on failing, so the
@@ -16606,6 +16619,72 @@ export type ProgramSignatures
 	// REFUSAL with a poor noun, not a miscompile: the value's bytes and its type agree, they simply are not
 	// the element the declaration promised. Separating it needs the alias's ARGUMENT, which is recorded on
 	// `GenericAliasEntry` and has no by-name reader today.
+	// ⭐⭐ **IS THIS DECLARATION THE RECORD OF A SIZED CONTAINER THE COMPILER SERVES — i.e. is it
+	// `stdlib/Vector.maxon`'s own (W189)?** The predicate above answers for the ARRAY record, whose name is the
+	// fold target of `__ManagedMemory`; this one answers for the container whose record IS an array's and whose
+	// identity carries a second coordinate the array has no column for — the SIZE
+	// (`GenericInstanceRegistry.fixedSizes`, see `VectorBuiltinBaseName`).
+	//
+	// ⚠ **IT IS THE SAME SHAPE TEST AND A DIFFERENT NAME TEST, WHICH IS WHY IT IS NOT A WIDENING OF ITS
+	// SIBLING.** `firstFieldIsItsOwnBuffer` gates the identity that hands the buffer back AS the array, and
+	// widening it would make `isArrayBaseName` answer for `Vector` — which is exactly the wrong answer
+	// `ProgramSignatures.noteArrayLiteralConformer`'s skip and `Parser.requireNameIsNotABuiltinContainerBase`
+	// exist to prevent: a fixed-size container on the growable surface (`push`, `resize`) under its own name.
+	// The value this admits is RETYPED to the declaration's own `Self` by its caller, so it never leaves that
+	// door wearing the array's identity.
+	// ⭐⭐⭐ **IS A *VALUE* OF THIS DECLARATION THE COMPILER'S OWN MANAGED RECORD (W189)?** — the question every
+	// value-side door asks, and it is NOT `declarationIsTheManagedRecord`, which bundles a second one.
+	//
+	// That predicate answers *"is this the declaration `__ManagedMemory` FOLDS ONTO"* as well as *"is a value
+	// of it the record"*, and for `stdlib/Vector.maxon` those two come apart: a `Vector`'s value IS the fused
+	// 48-byte record — same bytes, same `__managed_decref` — while the fold target stays `Array`, because a
+	// `__ManagedMemory with T` written anywhere is an array and not a vector (a vector's identity carries a
+	// SIZE the buffer has no column for). Four doors want the FIRST question, and answering them with the
+	// bundled one is what made `stdlib/Vector.maxon:48`'s `managed` read take the `String` path and come back
+	// as a synthesized BYTE buffer: **`E3005 … expected 'Vector.ElementMemory', got 'Array___ManagedByte'`**,
+	// which is `emitFieldLoad`'s own header's two silent wrongs (the element and the type parameter) arriving
+	// as a diagnostic only by luck.
+	export function declarationsValueIsTheManagedRecord(name ByteArray) returns bool
+		return self.declarationIsTheManagedRecord(name) or self.declarationIsASizedContainerRecordNamed(name)
+	end 'declarationsValueIsTheManagedRecord'
+
+	// The BY-NAME form of the predicate below — `Parser.enclosingSelfType` holds a name and not a layout, and a
+	// second reading of "is this the sized container's record?" is how the construction door and the `Self`
+	// resolver would come to disagree about one declaration (`declarationIsTheManagedRecord`'s own reason for
+	// living in this index rather than in the parser).
+	export function declarationIsASizedContainerRecordNamed(name ByteArray) returns bool
+		return match self.structOf(name) 'declaration'
+			declared(layout) gives layout.fieldCount() == 1 and self.declarationIsASizedContainerRecord(layout)
+			undeclared gives false
+		end 'declaration'
+	end 'declarationIsASizedContainerRecordNamed'
+
+	// ⛔⛔ **IT IS THE CORPUS'S DECLARATION AND NOT ANY DECLARATION OF THAT NAME, WHICH IS THE WHOLE
+	// DIFFERENCE BETWEEN THIS AND `isVectorBaseName` (W189).** That predicate is deliberately WIDE — it
+	// answers for the container's own name AND for this compile's mint of it — because it decides what a
+	// `Vector with N T` MEANS. This one decides who owns the RECORD, and a user's `type Vector uses Element
+	// implements BuiltinArrayLiteral` is shaped identically to the corpus's to the field: same sole `managed`,
+	// same `__ManagedMemory with Element`. Admitting it is the wrong answer `Parser.requireNameIsNotABuiltin`
+	// `ContainerBase` exists to refuse — `W112` measured a user vector grown from three elements to nine
+	// through `push`/`resize`, compiling clean.
+	//
+	// ⚠ **MEASURED when this read `isVectorBaseName`**: the delegating user conformer in
+	// `array-declared-record.error.a-conformer-named-for-a-container-that-constructs-nothing-…` had its
+	// `returns Self` answered with the RECORD instance, so its own `return Vector.init(managed)` was refused
+	// **`E3005 Cannot return 'Vector' from function declared to return 'Vector_T…'`** — a sentence about the
+	// user's own two lines, where the case pins the roster refusal three lines further down.
+	//
+	// ⭐ **THE CORPUS'S SPELLING IS `stdlibShadowRenameOf`'s ANSWER, WHICH IS THE CONTEST WRITTEN DOWN ONCE**:
+	// bare `Vector` when nothing contests it, and this compile's `__Vector` mint when a user program declares
+	// the name — at which point the bare name is the USER's type and must not reach here.
+	export function declarationIsASizedContainerRecord(layout StructLayout) returns bool
+		if not layout.name.equals(self.stdlibShadowRenameOf(VectorBuiltinBaseName)) or self.structTypeParamsOf(layout.name).count() != VectorTypeParamCount 'notTheSizedContainersDeclaration'
+			return false
+		end 'notTheSizedContainersDeclaration'
+
+		return self.declaredFieldsBeginWithABuffer(layout)
+	end 'declarationIsASizedContainerRecord'
+
 	export function firstFieldIsItsOwnBuffer(layout StructLayout) returns bool
 		if not self.isArrayBaseName(layout.name) or self.structTypeParamsOf(layout.name).count() != ArrayTypeParamCount 'notTheRecordDeclaration'
 			return false
@@ -17245,8 +17324,30 @@ export type ProgramSignatures
 	// predicates and the SIZE below.
 
 	// Is `name` the builtin `Vector` type — the base of every vector instance.
+	// ⚠⚠ **IT ANSWERS FOR THE CONTEST'S MINT TOO, AND LISTING `stdlib/Vector.maxon` IS WHAT MADE THAT
+	// NECESSARY (W189).** A listed module's declaration is renamed into the reserved space when a USER program
+	// declares the same type name (`contestStdlibTypeName`), and `Parser.shadowRenamedTokens` rewrites the
+	// stdlib file's own identifier tokens with it — so inside `stdlib/Sha256.maxon` the base of
+	// `typealias Sha256State = Vector with 8 Word32` becomes `__Vector`. Read by the pre-contest spelling
+	// alone, `Parser.readSizedBaseElementCount` then declined to read the COUNT and the `8` was parsed as a
+	// type: **`E2010 stdlib/Sha256.maxon:13:37: Expected 'a type' but got '8'`, MEASURED on four suite cases**
+	// whose only offence was declaring a `type Vector` of their own — a library line no user wrote, refused
+	// because of one.
+	//
+	// ⭐ It is `isArrayBaseName`'s shape, minus that predicate's discovered-conformer clause: the sized
+	// container has no second declaration to find, only the corpus's and this compile's mint of it. The
+	// reserved-prefix test comes first for the same measured reason — no ordinary name can reach the mint, so
+	// the shape rules the map lookup out before it is made.
 	export function isVectorBaseName(name ByteArray) returns bool
-		return name.equals(VectorBuiltinBaseName)
+		if name.equals(VectorBuiltinBaseName) 'theContainersOwnName'
+			return true
+		end 'theContainersOwnName'
+
+		if not bytesStartWith(name, prefix: ReservedTypeNamePrefix) 'notAMintedName'
+			return false
+		end 'notAMintedName'
+
+		return name.equals(self.stdlibShadowRenameOf(VectorBuiltinBaseName))
 	end 'isVectorBaseName'
 
 	// Is generic instance `id` a `Vector with N T`? (Reads the base NAME, which needs no base struct.)
