@@ -155,6 +155,20 @@ export function remapMaxonType(t MaxonType, remap TypeNameRemap) returns MaxonTy
 	end 'r'
 end 'remapMaxonType'
 
+// `remapMaxonType` folded over a LIST of types — a function's parameter column, a struct's field column, a
+// swept declaration's parameter types. TWO callers had written this loop out by hand (`remapArtifact` and
+// `remapStructLayoutFieldTypes`) and the swept parameter column would have been a third; the rule all three
+// rest on is stated at `remapStructLayoutFieldTypes` (every arm is TAG-PRESERVING), and it is worth exactly
+// once. ⚠ THE COUNT IS THE CALLER COUNT AND NOTHING ELSE CHECKS IT — the `PayloadField` walk below is a
+// LOOK-ALIKE, not a fourth caller: it rebuilds a different element type and cannot come through here.
+export function remapMaxonTypes(types MaxonTypeArray, remap TypeNameRemap) returns MaxonTypeArray
+	var remapped = MaxonTypeArray.create()
+	for t in types 'each'
+		remapped.push(remapMaxonType(t, remap: remap))
+	end 'each'
+	return remapped
+end 'remapMaxonTypes'
+
 // Rewrite the name id of ONE entry of a dense per-value type column (`IrFunction.valueNameIds`)
 // through a remap, TAG-AWARE — the column half of a `MaxonType` that `remapMaxonType` cannot reach,
 // because the value's type is carried as the parallel (tag, nameId) columns the parser keeps rather
@@ -203,11 +217,7 @@ end 'remapMaxonReturnType'
 // count and every later field in that struct would read one slot short, silently. Handing the column back
 // through the type that owns it is what makes the rebuild unmissable rather than remembered.
 export function remapStructLayoutFieldTypes(layout StructLayout, remap TypeNameRemap)
-	var remapped = MaxonTypeArray.create()
-	for fieldType in layout.fieldTypes 'each'
-		remapped.push(remapMaxonType(fieldType, remap: remap))
-	end 'each'
-	layout.replaceFieldTypes(remapped)
+	layout.replaceFieldTypes(remapMaxonTypes(layout.fieldTypes, remap: remap))
 end 'remapStructLayoutFieldTypes'
 
 // Rewrite a declared union/enum's PAYLOAD field types through a remap, IN PLACE — the enum twin of

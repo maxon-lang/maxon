@@ -229,17 +229,25 @@ end 'main'
 error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.test:13:9: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
 ```
 
-<!-- test: error.overloads-disagree-on-returning-a-value-at-all -->
-<!-- W49 wave 4. THE ONE QUADRANT OF THE RETURN-TYPE DISAGREEMENT NOTHING GUARDED, AND IT REACHED THE
-MACHINE. The declaration sweep records ONE return type per NAME and is LAST-WINS, so here it records the
-`String` of the second declaration; `mintCallResult` then types EVERY call to `emit` as a String and
-`enrolOwnedCallTemp` enrols the scope-exit drop that a managed result owes. This call resolves to the VOID
-member a whole pass later, so the drop is spent on a register the callee never wrote. MEASURED before the
-refusal existed: this exact program compiled clean and died with an access violation (0xC0000005). The
-mirror direction — void recorded, a value member called — was already refused, which is the case below. -->
+<!-- test: a-void-overload-beside-a-value-one-resolves-by-argument -->
+<!-- W49 wave 4 REFUSED THIS PROGRAM AND IT IS NOW THE RIGHT ANSWER. What the refusal was about is worth
+keeping: the declaration sweep recorded ONE return type per NAME, LAST-WINS, so it recorded the `String` of
+the second declaration; `mintCallResult` typed EVERY call to `emit` as a String and `enrolOwnedCallTemp`
+enrolled the scope-exit drop a managed result owes. This call resolves to the VOID member a whole pass later,
+so the drop was spent on a register the callee never wrote. MEASURED before the refusal existed: this exact
+program compiled clean and died with an ACCESS VIOLATION (0xC0000005).
+
+WHAT MAKES THAT HAZARD STRUCTURALLY IMPOSSIBLE IS NOT A REFUSAL BUT THE SWEEP: it now publishes each
+declaration's PARAMETER TYPES beside its return type (`ProgramSignatures.OverloadedDecl`), so `emit(true)` is
+typed from the member a `bool` argument means -- the void one -- and there is no managed result for a drop to
+be enrolled against at all. The bug was never "these overloads disagree"; it was one return type per NAME.
+
+Both `exitcode` AND `stdout` are pinned: an unpinned exit code is never checked, so a stdout-only case would
+pass while leaking. MEASURED against the bootstrap on the ranged-alias spelling of this program
+(`emit(tag Integer)`, which is what its bare `int` has to become there): `flag true`, exit 0. -->
 ```maxon
 function emit(flag bool)
-	print("flag {flag}")
+	print("flag {flag}\n")
 end 'emit'
 
 function emit(tag int) returns String
@@ -251,31 +259,44 @@ function main() returns ExitCode
 	return 0 as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/function-overloads/error.overloads-disagree-on-returning-a-value-at-all.test:11:2: the overloads of 'emit' do not agree on their return type ('String' and 'void'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type
+```exitcode
+0
+```
+```stdout
+flag true
 ```
 
-<!-- test: error.overloads-disagree-with-the-void-member-recorded -->
-<!-- The MIRROR of the case above, and the NEGATIVE CONTROL for it: the sweep records the void member (it
-is declared last), so the call to the value member is typed `void`, no drop is enrolled, and the `+1` the
-`String` member returns would LEAK. This direction was already refused; it is pinned so that the pair is
-one guarded fact rather than one guarded half. -->
+<!-- test: a-value-overload-beside-a-void-one-declared-last-resolves-by-argument -->
+<!-- The MIRROR of the case above, and the NEGATIVE CONTROL for it -- the direction whose failure was a LEAK
+rather than a crash. The sweep recorded the void member (it is declared last), so the call to the VALUE member
+was typed `void`, no drop was enrolled, and the `+1` the `String` member returns would have leaked. Pinned so
+that the pair is one guarded fact rather than one guarded half, and the `exitcode` block is what catches it:
+a leaked record makes the process exit 101.
+
+THE CALL USES ITS RESULT, AND THAT IS THE ORACLE'S REQUIREMENT RATHER THAN THIS RULE'S. shv2 compiles the
+bare `emit(1)` statement and exits 0 with no leak; the bootstrap refuses it as `E3064: result of pure
+function 'emit$tag' must be used`, and it refuses the same program with `emit` declared ONCE -- so that
+divergence is about discarded pure results and not about overloads. Reading the result keeps both compilers
+on one program. MEASURED against the bootstrap on the ranged-alias spelling: `tag1`, exit 0. -->
 ```maxon
 function emit(tag int) returns String
 	return "tag{tag}"
 end 'emit'
 
 function emit(flag bool)
-	print("flag {flag}")
+	print("flag {flag}\n")
 end 'emit'
 
 function main() returns ExitCode
-	emit(1)
+	print("{emit(1)}\n")
 	return 0 as ExitCode
 end 'main'
 ```
-```maxoncstderr
-error E2015: specs/fragments/function-overloads/error.overloads-disagree-with-the-void-member-recorded.test:11:2: the overloads of 'emit' do not agree on their return type ('void' and 'String'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type
+```exitcode
+0
+```
+```stdout
+tag1
 ```
 
 <!-- test: error.overload-redeclared-with-the-same-parameters -->

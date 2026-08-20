@@ -379,6 +379,15 @@ end 'main'
 The boundary of the relaxation above, from the inside: two files in ONE directory share one
 namespace, so their `pick` declarations are one name declared twice and stay a hard duplicate. The
 reader qualifies with `dir.` and there is still only one thing that could mean.
+
+⚠ **THE REFUSAL IS UNCHANGED AND THE SENTENCE IS NOT.** Two files of one directory declaring one
+free-function name are now an OVERLOAD SET (`cross-file-overload-set.md`), so every one of these
+declarations is registered under its parameter-type spelling — and these two spell the same
+parameters (none), claim the same `pick#`, and collide there. The name E3006 quotes is therefore one
+NEITHER declaration wrote, which is the property `ParseStaging.duplicateFunctionMessage` sorts on: a
+minted name earns the sentence that explains where it came from, because told only
+`Duplicate function 'pick#'` an author would search for a string that appears nowhere in their
+source.
 ```maxon
 // --- file: dir/a.maxon
 typealias Integer = int(0 to 125)
@@ -400,7 +409,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: dir/specs/fragments/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.test:12:17: Duplicate function 'pick'
+error E3006: dir/specs/fragments/namespace-qualified-resolution/error.free-function-pair-in-one-directory-still-collides.test:12:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 
@@ -410,6 +419,9 @@ this suite stands on: ROOT is a directory — the global namespace — so two ro
 `pick` share a namespace and collide exactly as they always did. A relaxation that keyed the contest
 on "different FILE" rather than "different DIRECTORY" would un-collide the whole of
 `type-name-collision.md` and `stdlib-user-shadows.md`, whose fixtures are all flat and root-level.
+
+⚠ The sentence changed for the case above's reason and the verdict did not: two declarations that
+spell one parameter list claim one registration name whichever directory they sit in.
 ```maxon
 // --- file: a.maxon
 typealias Integer = int(0 to 125)
@@ -431,7 +443,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.test:12:17: Duplicate function 'pick'
+error E3006: specs/fragments/namespace-qualified-resolution/error.flat-root-level-free-function-pair-still-collides.test:12:17: duplicate definition of function 'pick#' — 'pick' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 

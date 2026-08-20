@@ -260,7 +260,14 @@ function resolveOneOverloadedCall(project Project, module MaxonModule, func IrFu
 
 	match selectOverload(project, func: func, op: op, candidates: candidates) 'pick'
 		chosen(member) then bindOverloadChoice(project, module: module, func: func, opIndex: opIndex, op: op, callee: callee, member: member, defaultArgOrigins: defaultArgOrigins)
-		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied)
+		// ⛔⛔ **AN AMBIGUOUS CALL IS *ALSO* LEFT ON A DECLARED MEMBER, AND UNTIL THIS RUNG IT WAS NOT —
+		// WHICH EARNED THE AUTHOR A SECOND, WRONG DIAGNOSTIC.** A CONTESTED set has no member under the bare
+		// name (`Parser.overloadRegistrationNameFor`), so an op left naming it reaches `validateCall` and is
+		// reported **`E3004: call to undefined function 'f'`** — about a name declared twice over — under the
+		// E3007 that has just explained the real fault. MEASURED on two root-level files each declaring
+		// `f(a Integer = 1)` / `f(a Count = 1)`, two spellings of one underlying type: E3007 then E3004.
+		// It is the same premise `noMatch` needed made true, so it takes the same repair.
+		ambiguous(tied) then reportAmbiguousOverload(project, func: func, opIndex: opIndex, callee: callee, tied: tied, module: module, candidates: candidates, op: op)
 		// Nothing the call could mean. Left on a DECLARED member deliberately — see this pass's header,
 		// step 5, and `leaveUnmatchedCallOnFirstCandidate` for the one set where "left alone" is not that.
 		noMatch then leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, op: op, callee: callee, candidates: candidates)
@@ -286,6 +293,12 @@ end 'resolveOneOverloadedCall'
 // ONLY the callee is rewritten: no result-type reconcile and no range-site retarget, because neither
 // happens on the same-file path either and this is a program that is being rejected — the sole job left is
 // to let `checkCalls` say which argument.
+//
+// ⚠ **TWO CALLERS, AND THE SECOND ONE HAS THE SAME NEED FOR A DIFFERENT REASON.** `noMatch` needs it so
+// `checkCalls` can name the offending ARGUMENT; `ambiguous` needs it so `validateCall` does not report the
+// bare name as UNDEFINED under the E3007 that has already said what is wrong. Both are programs being
+// rejected, and in both the only remaining job of the callee field is to not name something that is not
+// there.
 //
 // A set with NO live candidate is left alone, and there the bare name is the honest answer: nothing the
 // call could name survived to the registry.
@@ -383,11 +396,18 @@ end 'OverloadPick'
 // A candidate scores `ExactArgScore` per argument whose tag matches its parameter's exactly and
 // `WideningArgScore` per argument that merely coerces legally (an int at a `float`, an int at an `ExitCode`).
 // The numbers only have to ORDER the candidates, and these are the oracle's own.
-let ExactArgScore = 2 as OverloadArgScore
-let WideningArgScore = 1 as OverloadArgScore
+//
+// ⭐⭐ **EXPORTED BECAUSE A SECOND DECIDER RANKS BY THEM, AND MUST RANK THE SAME WAY.**
+// `Parser.overloadedCallResultType` picks a member at PARSE time, for its return type alone, from what the
+// token sweep publishes — and the member it picks has to be the one this pass will pick a whole pass later,
+// or the program earns `reportOverloadReturnDisagreement` for a call it got right. The two cannot share a
+// scoring FUNCTION (one reads swept types, the other the merged registry), so they share the ORDER: the same
+// two numbers, the same "unique highest total wins", the same "nothing fits" floor.
+export let ExactArgScore = 2 as OverloadArgScore
+export let WideningArgScore = 1 as OverloadArgScore
 
 // Wide enough for `ExactArgScore` at every parameter of the widest signature the ABI admits.
-typealias OverloadArgScore = int(0 to 128)
+export typealias OverloadArgScore = int(0 to 128)
 
 typealias OverloadArgScoreArray = Array with OverloadArgScore
 
@@ -437,7 +457,7 @@ end 'selectOverload'
 
 // A score no candidate can reach, so "did anything fit?" needs no second flag. It is not a sentinel RETURN:
 // nothing outside `selectOverload` sees it, and the answer it produces is a union arm.
-let NoCompatibleOverloadScore = 0 as OverloadArgScore
+export let NoCompatibleOverloadScore = 0 as OverloadArgScore
 
 function overloadBetterScore(best OverloadArgScore, candidate OverloadArgScore) returns OverloadArgScore
 	return candidate if candidate > best else best
@@ -708,14 +728,18 @@ end 'OverloadDisagreementSubject'
 // `commitOverloadChoice` runs at every resolved overloaded call in the program.
 let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
 
-// ⭐⭐ **THE ONE THING SELECTING LATE COSTS: the parser has ALREADY TYPED the call's result, and it typed it
-// from a registry that cannot tell overloads apart.**
+// ⭐⭐ **THE ONE THING SELECTING LATE COSTS: the parser has ALREADY TYPED the call's result, and it may have
+// typed it from a registry that cannot tell overloads apart.**
 //
-// A call's result value is minted during the parse (`Parser.mintCallResult`) from
-// `ProgramSignatures.returnTypeOf`, whose table is keyed by the name the SOURCE wrote and is LAST-WINS over
-// duplicate declarations — so for an overloaded name every call in the program was typed from ONE member's
-// return type, whichever declaration the sweep read last. When the member this call actually resolves to
-// returns something else, that tag is wrong, and it is wrong in a way that reaches the machine: the tag is
+// A call's result value is minted during the parse (`Parser.mintCallResult`). Its FIRST question is
+// `Parser.overloadedCallResultType`, which asks the sweep's per-declaration parameter types which member the
+// call means and answers that member's return type — so for a set whose members disagree, and whose
+// arguments settle which one is meant, the tag the parser minted is already the right one and this pass finds
+// nothing to do. Where that decider DECLINES (it does not read a compound parameter type, and it will not
+// choose between two members that fit equally) the answer falls back to `ProgramSignatures.returnTypeOf`,
+// whose table is keyed by the name the SOURCE wrote and is LAST-WINS over duplicate declarations — so the
+// call was typed from whichever declaration the sweep read last. When the member this call actually resolves
+// to returns something else, that tag is wrong, and it is wrong in a way that reaches the machine: the tag is
 // what `lowerMaxonToStd` reads to pick the Std type of the call's result, so a `bool`-tagged result of an
 // i64-returning callee is read one byte wide.
 //
@@ -736,8 +760,9 @@ let sharedCallResultSubject = OverloadDisagreementSubject.theCallsResult
 // ⚠ **The narrow residual, stated where it lives:** if the divergence IS scalar-to-scalar, the parser may
 // already have rejected or reshaped an expression using the stale tag (`if <int-tagged>`, `<bool> + 1`). That
 // is a false diagnostic, not a wrong answer, and it cannot arise for a set whose members agree on their
-// return type — which no `/specs` case violates except through labels, where the resolver is exact. The real
-// cure is per-member return types in the declaration sweep.
+// return type, nor for one the parse-time decider settled — which is now the common case, and which is what
+// the "real cure is per-member return types in the declaration sweep" this note used to end on turned into.
+// What is left is the decider's own boundary: a compound parameter type it does not read, and a tie.
 function reconcileOverloadResultType(project Project, func IrFunction, opIndex OpIndex, op MaxonOp, member ByteArray, disagreement OverloadDisagreementSubject)
 	match overloadResultValue(op) 'result'
 		defines(result) then reconcileOverloadResultTag(project, func: func, opIndex: opIndex, result: result, member: member, disagreement: disagreement)
@@ -758,16 +783,23 @@ end 'reconcileOverloadResultTag'
 // This arm used to `break` on the stated grounds that *"a VOID member cannot have been chosen for a call
 // whose result is read: the parser refuses a void call in value position, and in statement position the
 // result tag is `void` already"*. **Both halves assume the SWEEP recorded the void member**, and the sweep
-// is LAST-WINS over one entry per NAME — so when the VALUE member is the one it recorded, every call to the
-// name was typed from it: the result carries that member's tag, and `enrolOwnedCallTemp` has already
-// enrolled the scope-exit drop a managed return owes. A call that then resolves HERE, to the void member,
+// is LAST-WINS over one entry per NAME wherever the parse-time decider declines — so when the VALUE member
+// is the one it recorded, such a call was typed from it: the result carries that member's tag, and
+// `enrolOwnedCallTemp` has already enrolled the scope-exit drop a managed return owes. A call that then resolves HERE, to the void member,
 // spends that drop on a register the callee never wrote.
 //
 // MEASURED, `emit(flag bool)` declared ahead of `emit(tag int) returns String`, called `emit(true)` in
 // statement position: compiled clean, no diagnostic at any stage, and died with an ACCESS VIOLATION
 // (0xC0000005). The mirror — void recorded, a value member called — was already refused by the sibling
 // below, which is why this read as guarded for as long as it did: the family fired, just not in this
-// quadrant. Pinned both ways by `function-overloads.md`'s two `overloads-disagree-*` cases.
+// quadrant.
+//
+// ⭐⭐ **BOTH OF THOSE PROGRAMS NOW COMPILE AND ARE RIGHT, and this arm is what would catch it if they
+// stopped being.** `Parser.overloadedCallResultType` types each of them from the member its ARGUMENT means,
+// so the void call has no managed result to enrol a drop for and the value call has one to drop — pinned as
+// `function-overloads.md`'s two `*-overload-beside-a-*-one-*-resolves-by-argument` cases, which assert the
+// answer and the exit code rather than a refusal. What still reaches here is a set that decider declines:
+// `cross-file-overload-set.md`'s `error.a-set-the-parse-time-decider-cannot-settle`.
 //
 // A `void`-tagged result is the agreement, and it is the only one: no repair is possible in either
 // direction, because the divergence is over whether there is a value AT ALL.
@@ -802,7 +834,7 @@ end 'requireOverloadResultTagAgrees'
 function reportOverloadReturnDisagreement(project Project, func IrFunction, opIndex OpIndex, member ByteArray, current ValueTypeTag, declared ValueTypeTag, disagreement OverloadDisagreementSubject)
 	let range = project.opRanges.get(opIndex)
 	let message = match disagreement 'about'
-		theCallsResult gives "the overloads of '{String.from(member)}' do not agree on their return type ('{typeTagName(current)}' and '{typeTagName(declared)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from a whole-program index that records one return type per NAME, so only a difference between plain scalars can be corrected once the overload is known. Make the overloads return the same type"
+		theCallsResult gives "the overloads of '{String.from(member)}' do not agree on their return type ('{typeTagName(current)}' and '{typeTagName(declared)}'), and this call needed the one they disagree about. A call's result type is fixed while its file is parsed, from the parameter types the whole-program declaration sweep publishes — and they did not settle which overload this call means, so the result was typed from the single return type that index keeps per NAME. Only a difference between plain scalars can be corrected once the overload is known, a whole pass later. Make the overloads return the same type, or spell every overload's parameters as type NAMES that this call's arguments match in exactly one of them"
 		// The op being reconciled is the synthesized helper behind an omitted argument, so `member` is a
 		// symbol no source wrote. The sentence names the PARAMETER POSITION and the overloaded name the
 		// author did write, and asks for the one thing that repairs it.
@@ -810,21 +842,6 @@ function reportOverloadReturnDisagreement(project Project, func IrFunction, opIn
 	end 'about'
 	reportPositioned(project, code: ErrorCode.parserUnsupportedFeature, message: message, line: range.line, column: range.column, filePath: func.sourceFilePath)
 end 'reportOverloadReturnDisagreement'
-
-// ⭐ **IS THE PARSER'S TAG STILL RIGHT FOR THIS MEMBER'S DECLARED RETURN? — asked so that RESOLUTION cannot
-// be mistaken for disagreement.** The value's tag was minted PRE-resolution and the member's return type is
-// read POST-resolution, so the two spell one type two ways all the time: a `returns ExitCode` call is tagged
-// `named`/`exitCode` at the parse and `exitCode` in the registry, and a ranged alias is `named` against
-// `integer`. Comparing them literally — or by storage width, which was the first attempt — reports every
-// alias-returning overload as a disagreement (measured: `closure-capture.block-local-overload-arg`, whose two
-// overloads BOTH return `ExitCode`, was refused with "'int' and 'int'").
-//
-// So agreement is the language's own coercion rule, plus the one thing that rule cannot see: a float and an
-// int AGREE under it (they must, or `5 + 2.0` would not compile) while living in DIFFERENT REGISTER FILES, so
-// a value tagged `integer` standing for a `float` return is a cross-file read whatever the rule says.
-function overloadResultTagAgrees(current ValueTypeTag, declared ValueTypeTag) returns bool
-	return checkDeclaredType(current, declared: declared) == DeclaredTypeMatch.ok and tagIsFloat(current) == tagIsFloat(declared)
-end 'overloadResultTagAgrees'
 
 // Is this tag one of the three the retype above may cross between — unmanaged, un-named, non-float, GPR? See
 // `reconcileOverloadResultType` for why each exclusion is load-bearing.
@@ -853,9 +870,12 @@ end 'overloadResultValue'
 // where the author must add a label), naming the callee as WRITTEN with its type qualifier stripped, and
 // listing the tied candidates' parameter lists in declaration order. The wording is the oracle's, verbatim,
 // because `specs-shv2/function-overloads.md` compares it byte for byte.
-function reportAmbiguousOverload(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, tied ByteArrayArray)
+function reportAmbiguousOverload(project Project, func IrFunction, opIndex OpIndex, callee ByteArray, tied ByteArrayArray, module MaxonModule, candidates ByteArrayArray, op MaxonOp)
 	let range = project.opRanges.get(opIndex)
 	reportPositioned(project, code: ErrorCode.semanticAmbiguousOverload, message: "Ambiguous overload for '{bareMethodName(callee)}': multiple overloads match. Candidates: {renderOverloadCandidates(project, tied: tied)}", line: range.line, column: range.column, filePath: func.sourceFilePath)
+	// The op still names a callee, and for a CONTESTED set that name belongs to no declaration — see the
+	// `ambiguous` arm above for the second diagnostic that earns.
+	leaveUnmatchedCallOnFirstCandidate(project, module: module, opIndex: opIndex, op: op, callee: callee, candidates: candidates)
 end 'reportAmbiguousOverload'
 
 // `(name String), (label String)` — each tied candidate's parameter list, receiver excluded. Post-resolution

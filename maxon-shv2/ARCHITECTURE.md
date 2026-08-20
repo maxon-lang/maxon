@@ -248,6 +248,41 @@ cannot postpone — a bool `and`/`or` is short-circuit **control flow**, and `no
 its operand's type — and the callee may be in another file. It reads tokens and never parses, so the
 chain stays acyclic.
 
+#### ⭐⭐ IT PUBLISHES PARAMETER-TYPE SPELLINGS, SO A CALL READS THE RETURN TYPE OF THE OVERLOAD IT *MEANS*
+
+The index keeps ONE return type per registration key, LAST-WINS over the declarations wearing it — which is
+exact for every name whose declarations agree, and is a **wrong answer** for one whose declarations do not.
+A call's result type is fixed while its own file is parsed (it decides the machine type of the result, its
+register file, and whether a scope-exit drop is enrolled for it) while the member is chosen a whole pass
+later by `SemanticCheck.resolveOverloadedCalls`. **MEASURED, both directions:** a void overload beside a
+value one compiled clean and died with an ACCESS VIOLATION where the drop was spent on a register the callee
+never wrote; the mirror LEAKED.
+
+So the sweep also publishes, per DECLARATION, its own return type and its **parameter-type spellings**
+(`ProgramSignatures.overloadedDeclsOf`), and `Parser.overloadedCallResultType` asks which member a call means
+before it types the result. Three properties make that safe to have:
+
+- **It is asked only where the members DISAGREE** about what they return, so every call to a name whose
+  declarations agree — which is every call in every program the corpus compiles — is typed by the by-name
+  answer exactly as before, and emits the same bytes. ⚠ **That is a claim about AGREEING sets and not about
+  every program that compiled.** A set that disagrees and compiled anyway did so because
+  `reconcileOverloadResultType` RETYPED the stale scalar tag after the fact; such a call is now typed
+  correctly at the parse instead, so its path — and possibly its emitted code — moves. It is a small
+  population (a disagreement between two plain scalars) and it is the population this door exists to fix.
+- **It is CHECKED, not trusted.** `SemanticCheck.reconcileOverloadResultType` re-asks against the member
+  resolution actually chose and refuses the program if the two types diverge irreparably — so a wrong pick is
+  a diagnostic, never a wrong answer.
+- **It DECLINES loudly** where it cannot settle the question: it reads a parameter type only when the source
+  spells it as a single type NAME (reading a compound one REGISTERS it whole-program, and every registration
+  the sweep makes moves the `GenericInstanceId` of every later one — which decides mangled instance names;
+  the sweep already does this for a RETURN clause, so this is a blast-radius argument and not a rule), and it
+  will not choose between two members that fit equally. Both fall back to the by-name answer and to the refusal that has
+  always guarded it.
+
+It also makes a name declared by **two files of one directory** an overload set rather than a duplicate
+(`Parser.overloadRegistrationNameFor`'s contest, the free-function twin of `contestedExtensionMethods`), so
+two modules of one library may each carry a private helper of the same name. `specs-shv2/cross-file-overload-set.md`.
+
 **A PARSE THEREFORE READS TWO INPUTS, AND ITS MEMO IS KEYED ON BOTH:**
 `ParseMemo.keyHash = mix(fileContentHash, ProgramSignatures.hash)`. Keying on the file's own bytes
 alone — which is what shipped — serves a **stale parse** when another file's return type changes: the

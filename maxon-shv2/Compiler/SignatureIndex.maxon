@@ -553,6 +553,14 @@ let DeclShapeNamespaceQualifiedFunction = 66 as ContentHash
 // bare name rides through `record`; only this can carry the contest.
 let DeclShapeContestedExtensionMethod = 78 as ContentHash
 
+// ⭐ A FREE FUNCTION whose registration base a SECOND FILE OF ITS OWN DIRECTORY declares — the entry above's
+// property one declaration kind over, and load-bearing for the same reason. The contest decides the
+// REGISTRATION NAME every one of those declarations takes (`Parser.overloadRegistrationNameFor`), and it
+// turns on WHICH FILES declare the base rather than on what any one of them SAYS: moving a `function` from
+// one file of a directory to another can start or end the contest with every `record` call byte-identical.
+// The base rides through `record`; only this can carry the contest.
+let DeclShapeCrossFileOverloadedFreeFunction = 105 as ContentHash
+
 // ⭐ **THE WHOLE-PROGRAM RE-READ OF ONE `implements` CLAUSE (W95)** — its own discriminator, and not
 // `DeclShapeDeclaredConformance`, because the two are mixed at DIFFERENT MOMENTS over the same declaration:
 // `recordStruct` mixes what the sweep could prove, and `refoldConformanceClause` mixes what the complete
@@ -7811,6 +7819,56 @@ end 'FunctionDeclSite'
 
 typealias FunctionDeclSiteMap = Map with (ByteArray, FunctionDeclSite)
 
+// ⭐⭐⭐ **ONE DECLARATION OF AN OVERLOADED NAME, AS THE CALL SIDE HAS TO SEE IT — the parameter-type
+// SPELLINGS the whole-program sweep publishes so that a call can read the return type of the overload IT
+// MEANS rather than of whichever declaration was swept last.**
+//
+// ⛔⛔ **THE LAST-WINS `returnTypes` ENTRY IS WHY THIS EXISTS, AND WHAT IT COST WAS A WRONG ANSWER AND A
+// CRASH.** A call's result type is fixed while its own file is parsed (`Parser.mintCallResult`) and the
+// overload is chosen a whole pass later (`SemanticCheck.resolveOverloadedCalls`), so with ONE return type
+// per NAME every call to an overloaded name was typed from one member's declaration. MEASURED, both
+// directions: `emit(flag bool)` beside `emit(tag int) returns String`, called `emit(true)`, compiled clean
+// and died with an ACCESS VIOLATION (a scope-exit drop spent on a register the void member never wrote);
+// the mirror LEAKED. And a `pick(s String)` in one file beside a `pick(n Cnt)` in another — the shape two
+// `stdlib/` modules each need for a private helper — was **`E3005: Cannot return 'int' from function
+// declared to return 'String'`**, raised inside the file that is CORRECT.
+//
+// ⚠ **`paramNames`/`paramTypes` ARE SOURCE-ALIGNED, RECEIVER EXCLUDED** — `takesReceiver` says whether a
+// call's argument list carries one ahead of them. That is the alignment `overloadTypeSuffix` and every
+// overload key already use, and for their reason: within one registration base every member agrees about
+// receiver-presence, so the receiver distinguishes nothing and carrying it would only be a slot to
+// mis-index.
+//
+// ⚠ **A PARAMETER THE SWEEP COULD NOT READ IS `MaxonType.unresolved`** (`Parser.sweptParamTypeAt`), and a
+// declaration carrying one is UNSCOREABLE rather than matching. See `overloadReturnTypeFor`.
+export type OverloadedDecl
+	export let paramNames as ByteArrayArray
+	export let paramTypes as MaxonTypeArray
+	export let takesReceiver as bool
+	export let returnType as MaxonReturnType
+	export let visibility as Visibility
+	export let declFilePath as FilePath
+
+	export static function create(paramNames ByteArrayArray, paramTypes MaxonTypeArray, takesReceiver bool, returnType MaxonReturnType, visibility Visibility, declFilePath FilePath) returns OverloadedDecl
+		return Self{paramNames: paramNames, paramTypes: paramTypes, takesReceiver: takesReceiver, returnType: returnType, visibility: visibility, declFilePath: declFilePath}
+	end 'create'
+
+	// This declaration with a re-decided return type — the one edit the three whole-program rewrites make
+	// (`ProgramSignatures.rewriteOverloadedDeclReturnTypes`). A fresh record rather than a field write,
+	// because every column here is a `let`: what a declaration SAID does not change, only what the index has
+	// since worked out that it MEANS.
+	export function withReturnType(rewritten MaxonReturnType) returns OverloadedDecl
+		return Self{paramNames: self.paramNames, paramTypes: self.paramTypes, takesReceiver: self.takesReceiver, returnType: rewritten, visibility: self.visibility, declFilePath: self.declFilePath}
+	end 'withReturnType'
+end 'OverloadedDecl'
+
+export typealias OverloadedDeclArray = Array with OverloadedDecl
+typealias OverloadedDeclArrayArray = Array with OverloadedDeclArray
+typealias OverloadedDeclMap = Map with (ByteArray, OverloadedDeclArray)
+
+// ⭐ THE ONE empty candidate list a name with no swept declaration answers with. NEVER mutated.
+let sharedNoOverloadedDecls = OverloadedDeclArray.create()
+
 // The verdict `ProgramSignatures.calleeVisibilityFrom` hands back. A union rather than a bool because the
 // refusing arm owes the caller the TIER — it is what picks the diagnostic's code and sentence — and a bool
 // would send every caller back for a second lookup to find out.
@@ -7846,6 +7904,12 @@ typealias ContestedFreeFunctionMap = Map with (ByteArray, ByteArrayArray)
 // `ContestedFreeFunctionMap`'s values hold, indexed the way the CALL DOOR asks for them. See
 // `ProgramSignatures.contestedRegistrationNames`.
 typealias ContestedRegistrationNameSet = Set with ByteArray
+
+// Free-function registration base (`freeFunctionRegistrationName`) ⇒ the file that FIRST declared it, and
+// the bases a SECOND file of the same directory went on to declare. See
+// `ProgramSignatures.freeFunctionDeclFiles` / `crossFileOverloadedFreeFunctions`.
+typealias FreeFunctionDeclFileMap = Map with (ByteArray, FilePath)
+typealias CrossFileOverloadedFreeFunctionSet = Set with ByteArray
 
 // ⭐ **WHAT ONE FREE-FUNCTION DECLARATION DID TO ITS BARE NAME (N1c)** — the answer
 // `ProgramSignatures.noteFreeFunctionDeclaration` gives the fold, and the reason the fold has anything to do
@@ -7905,7 +7969,8 @@ end 'DisplayNameRound'
 
 export enum RecordedReturnTypeRule
 	// ⭐ **N3 — the contested generic ALIAS a `returns` clause names, rescoped against the file that
-	// DECLARED the function.** See `contestScopedReturnTypeOf`.
+	// DECLARED the function.** See `rewrittenReturnTypeUnder`'s `contestScopedAlias` arm and the two walks
+	// that supply it a file (`recordedReturnDeclFileOf`, and an `OverloadedDecl`'s own).
 	contestScopedAlias
 	// ⭐⭐ **S2j — SETTLE WHAT A RECORDED RETURN TYPE NAMING A STRUCT BOX IS SPELLED AS: the ONE repair
 	// that makes a `returns Inner` and a `returns Self` be the same recorded declaration.**
@@ -8525,6 +8590,14 @@ export type ProgramSignatures
 	// be exact. It is moved by the same three refiles that move a `returnTypes` entry, so it can never lag
 	// the declaration it describes.
 	var funcDeclSites as FunctionDeclSiteMap
+	// ⭐⭐ **EVERY DECLARATION OF EVERY NAME, AS A CALL SITE HAS TO SEE IT** — one array per registration key,
+	// in declaration order, so a call to an overloaded name can read the return type of the member it means.
+	// See `OverloadedDecl` for what it holds and what its absence cost.
+	//
+	// ⚠ It is one array per NAME rather than per declaration, and it is written for every name rather than
+	// only for overloaded ones, because the SECOND declaration of a name may be in a file the sweep has not
+	// reached — so the first one's parameter list has to have been kept.
+	var overloadedDecls as OverloadedDeclMap
 	// ⭐ **EVERY GENERIC-INSTANCE ALIAS WHOSE ELEMENT WAS SPELLED `__ManagedMemory` (A2m)** — written by
 	// `recordGenericAlias`, read by `aliasElementIsBufferSurface`. See `BufferElementAliasNameSet` for why the
 	// key is the alias NAME and can never be the instance.
@@ -8836,6 +8909,22 @@ export type ProgramSignatures
 	// EMPTY for every program that does not name a directory after a type that declares the same member.
 	var contestedKeysAnotherDeclarationHolds as ContestedRegistrationNameSet
 
+	// ⭐⭐ **THE FILE THAT FIRST DECLARED EACH FREE-FUNCTION REGISTRATION BASE** — keyed by
+	// `freeFunctionRegistrationName`, so `alpha/`'s `pick` and `beta/`'s are two entries and the two files of
+	// `alpha/` are one. It exists for the set below and for nothing else: only "which FILE" separates a
+	// same-directory OVERLOAD PAIR, which the parser can register, from a same-FILE one, which it already can.
+	var freeFunctionDeclFiles as FreeFunctionDeclFileMap
+	// ⭐⭐ **THE REGISTRATION BASES MORE THAN ONE FILE OF ONE DIRECTORY DECLARES** — the free-function twin of
+	// `contestedExtensionMethods`, asked by `Parser.overloadRegistrationNameFor` for the identical reason: a
+	// parser is a pure function of its own file, so a later overload of a name ANOTHER file claimed cannot
+	// know it is later. Every declaration of a base in here registers under its parameter-type spelling, so
+	// two whose parameters differ are two live overloads and two whose parameters agree claim one name and
+	// collide (E3006).
+	//
+	// EMPTY for every program in the corpus and for the compiler's own source, which is what makes the rule
+	// byte-neutral: no name anything already compiles moves.
+	var crossFileOverloadedFreeFunctions as CrossFileOverloadedFreeFunctionSet
+
 	// ⚠ **THE SEEDED ALIASES' DECLARING FILES ARE STAMPED HERE, AND NOTHING ELSE CAN DO IT (N1c).**
 	// `RangedAliasRegistry.create` supplies two declarations of files the sweep never visits, so
 	// `moduleDirectoryOf` — whose miss is deliberately a panic — has a hole exactly where a seed is.
@@ -8857,7 +8946,7 @@ export type ProgramSignatures
 	// Every index, empty. Split out of `create` only so the seed stamping above reads as the two steps it
 	// is; this is its one caller.
 	static function freshIndexes(os Os) returns ProgramSignatures
-		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create()}
+		return Self{returnTypes: FuncReturnTypeMap.create(), typeAliases: RangedAliasRegistry.create(os), functionTypeAliases: FunctionTypeAliasMap.create(), structTypes: StructLayoutMap.create(), structNamesInDeclOrder: ByteArrayArray.create(), enumTypes: createEnumRegistry(), genericAliasDecls: GenericAliasEntryArray.create(), genericInstances: GenericInstanceRegistry.create(), compiledInstanceNames: CompiledInstanceNameMap.create(), canonicalInstanceNames: CanonicalInstanceNameMap.create(), instanceDisplayNames: InstanceDisplayNameMap.create(), substitutedInstanceOrigins: SubstitutedInstanceOriginMap.create(), canonicalInstanceNameIndex: CanonicalInstanceNameIndex.create(), canonicalNamesIndexedThrough: 0, tupleCanonicalNames: TupleCanonicalNameMap.create(), tupleElementTokens: TupleElementTokenMap.create(), tupleElementTokenOwners: TupleElementTokenOwnerMap.create(), typeParamOwners: TypeParamOwnerMap.create(), tupleAliases: TupleCanonicalNameMap.create(), sawAggregateArrayLiteral: false, sawListFromConstruction: false, sawEnumAllCasesAccess: false, sawIntArrayLiteral: false, sawByteStringLiteral: false, sawStringArrayLiteral: false, sawSetFromConstruction: false, sawManagedFileProducer: false, sawManagedDirectoryProducer: false, vectorFromSizes: FixedSizeArray.create(), genericAliases: GenericAliasMap.create(), interfaceAliases: GenericAliasMap.create(), interfaceAliasOwners: InterfaceNameSet.create(), contestedGenericAliases: sharedEmptyGenericAliasContests, multiplyDeclaredGenericAliases: sharedEmptyDisagreeingAliasNames, divergedGenericAliasDecl: AliasCycleResult.none, nameableGenericAliases: sharedEmptyNameableGenericAliases, genericAliasSites: GenericInstantiationSiteArray.create(), innerAliases: RangedTypeAliasMap.create(), extensionInnerAliasMembers: ExtensionInnerAliasNameSet.create(), methodInnerAliasParams: InnerAliasParamInfoMap.create(), interfaces: IrInterfaceMap.create(), interfaceNamesInDeclOrder: builtinInterfaceNames(), interfaceDeclIndexByName: builtinInterfaceDeclIndices(), interfaceDeclSites: InterfaceDeclSiteArray.create(), extensionDeclSites: ExtensionDeclSiteArray.create(), conformanceClauseSites: ConformanceClauseDeclSiteArray.create(), descriptorScanSites: DescriptorScanSiteArray.create(), descriptorNeeds: sharedEmptyDescriptorNeeds, conditionalExtensionSkips: ConditionalExtensionSkipMap.create(), associatedTypeHoldings: AssociatedTypeHoldingMap.create(), sweptConformances: DeclaredConformanceMap.create(), sweptConformancesBuilt: false, extensionDeclaredConformances: DeclaredConformanceMap.create(), extensionMethodConstraints: ExtensionMethodConstraintMap.create(), unconstrainedExtensionMethods: ExtensionMethodNameSet.create(), typeNames: TypeNameInterner.create(), decls: TopLevelDeclArray.create(), declIndex: TopLevelDeclIndexMap.create(), funcParamConsumes: ParamConsumeMap.create(), funcParamReassigns: ParamReassignMap.create(), sawParamReassignment: false, byRefForwardingLive: ByRefForwardingMap.create(), byRefForwardingClosed: false, byRefBareNames: ByRefBareNameSet.create(), funcGlobalAliasReturns: GlobalAliasReturnMap.create(), sawGlobalNameReturn: false, globalAliasReturnKeys: GlobalAliasReturnKeySet.create(), globalAliasReturnsClosed: false, funcThrows: FuncThrowsMap.create(), disagreeingThrows: DisagreeingThrowsNameSet.create(), funcThrowingDeclarationCounts: FunctionDeclarationCountMap.create(), funcParamDefaults: ParamDefaultMap.create(), funcOpaqueParams: OpaqueParamMap.create(), contestedOpaqueParams: ContestedOpaqueParamNameSet.create(), disagreeingParamDefaults: DisagreeingParamDefaultNameSet.create(), funcDeclarationCounts: FunctionDeclarationCountMap.create(), funcDefaultingDeclarationCounts: FunctionDeclarationCountMap.create(), declaredReturnSurfaces: DeclaredReturnSurfaceMap.create(), funcReturnDeclFiles: FuncReturnDeclFileMap.create(), funcDeclSites: FunctionDeclSiteMap.create(), overloadedDecls: OverloadedDeclMap.create(), bufferElementAliases: BufferElementAliasNameSet.create(), bufferSurfaceAliases: BufferElementAliasNameSet.create(), extensionPublishedMethods: ExtensionMethodNameSet.create(), extensionShadowedMethods: ExtensionMethodNameSet.create(), extensionMethodDeclFiles: ExtensionMethodDeclFileMap.create(), contestedExtensionMethods: ExtensionMethodNameSet.create(), staticInstanceContests: StaticInstanceContestNameSet.create(), hash: fnvOffsetBasis(), managedTopLevelNames: ManagedTopLevelNameSet.create(), storedGlobalCount: 0, lazyStaticSlots: LazyStaticSlotSet.create(), lazyStaticInitCallees: LazyStaticInitCalleeMap.create(), allFilesFolded: false, rootIsUnderStdlibDirectory: false, constInitializerTypeNames: ConstInitializerTypeNameSet.create(), arrayByteInstance: 0, arrayByteInstanceComputed: false, bareTypeParamReturnerNames: MethodNameSet.create(), bareTypeParamReturnerNamesComputed: false, typeParamFeederNames: MethodNameSet.create(), typeParamFeederNamesComputed: false, userDeclaredTypeNames: DeclaredTypeNameSet.create(), stdlibDeclaredTypeNames: DeclaredTypeNameSet.create(), arrayLiteralConformers: ByteArrayArray.create(), hasNonCorpusArrayConformer: false, corpusArrayRecordName: SynthesizedArrayRecordSeed, stdlibShadowRenames: StdlibShadowRenameMap.create(), fileModuleDirectories: FileModuleDirectoryMap.create(), namespaceQualifiedFunctions: NamespaceQualifiedFunctionSet.create(), freeFunctionDirectories: FreeFunctionDirectoryMap.create(), contestedFreeFunctions: ContestedFreeFunctionMap.create(), contestedRegistrationNames: ContestedRegistrationNameSet.create(), contestedKeysAnotherDeclarationHolds: ContestedRegistrationNameSet.create(), freeFunctionDeclFiles: FreeFunctionDeclFileMap.create(), crossFileOverloadedFreeFunctions: CrossFileOverloadedFreeFunctionSet.create()}
 	end 'freshIndexes'
 
 	// --- MODULE DIRECTORIES and the ONE visibility decision (N1a) ---
@@ -9396,7 +9485,7 @@ export type ProgramSignatures
 				self.recordNamespaceQualifiedFunction(namespaceQualifiedName(namespace, name: bareName))
 			end 'namespacedFile'
 
-			match self.noteFreeFunctionDeclaration(bareName, moduleDirectory: moduleDirectory) 'contest'
+			match self.noteFreeFunctionDeclaration(bareName, moduleDirectory: moduleDirectory, declFilePath: filePath) 'contest'
 				// Nothing to claim and nothing to move: one directory declares this name, so the bare key is
 				// its own and every recorder below files there without asking.
 				uncontested then continue
@@ -9536,11 +9625,11 @@ export type ProgramSignatures
 		// `MM leak: 7 allocation(s) remain` on every build, exit 101). Recorded in OPEN.md.
 		if remap.isIdentity 'idsUnchanged'
 			for entry in scanned 'eachUnmapped'
-				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams)
+				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: entry.returnType, declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: entry.paramTypes)
 			end 'eachUnmapped'
 		end 'idsUnchanged' else 'idsMoved'
 			for entry in scanned 'eachRemapped'
-				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams)
+				self.record(entry.name, moduleDirectory: moduleDirectory, returnType: remapMaxonReturnType(entry.returnType, remap: remap), declaredSurface: entry.declaredSurface, visibility: entry.visibility, declFilePath: filePath, takesReceiver: entry.takesReceiver, opaqueParams: entry.opaqueParams, paramNames: entry.paramNames, paramTypes: remapMaxonTypes(entry.paramTypes, remap: remap))
 			end 'eachRemapped'
 		end 'idsMoved'
 
@@ -9646,7 +9735,7 @@ export type ProgramSignatures
 	// ⭐⭐ **THE KEY IS NOT ALWAYS `name`: A `static` MEMBER WHOSE NAME AN INSTANCE MEMBER ALSO WEARS IS FILED
 	// UNDER ITS OWN** — see `noteStaticInstanceDeclaration`, which is asked first because every write below has
 	// to land on one key.
-	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo)
+	function record(name ByteArray, moduleDirectory String, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility, declFilePath FilePath, takesReceiver bool, opaqueParams OpaqueParamInfo, paramNames ByteArrayArray, paramTypes MaxonTypeArray)
 		let contested = self.isContestedFreeFunction(name)
 		self.noteStaticInstanceDeclaration(name, takesReceiver: takesReceiver)
 		let key = self.sweepRegistrationKey(name, moduleDirectory: moduleDirectory, takesReceiver: takesReceiver)
@@ -9677,6 +9766,9 @@ export type ProgramSignatures
 			self.funcReturnDeclFiles.upsert(key, value: declFilePath)
 		end 'aNameThisFileMustBeAbleToResolveLaterOn'
 		self.funcDeclSites.upsert(key, value: FunctionDeclSite.create(visibility, declFilePath: declFilePath, takesReceiver: takesReceiver))
+		// ⭐ **APPENDED, NEVER UPSERTED — this is the one registry here that keeps EVERY declaration of a key
+		// rather than the last.** Being able to tell two members of a set apart is the whole of what it is for.
+		self.recordOverloadedDecl(key, decl: OverloadedDecl.create(paramNames, paramTypes: paramTypes, takesReceiver: takesReceiver, returnType: returnType, visibility: visibility, declFilePath: declFilePath))
 		// ⭐ **THE OPAQUE-PARAMETER POSITIONS ARE WRITTEN HERE, WITH THE DECLARATION THEY DESCRIBE (ARRR)** —
 		// the same one-act discipline `declaredSurface`, `visibility` and `takesReceiver` ride on, and for
 		// their reason: they are facts about ONE declaration, and a second writer is a second chance for them
@@ -11695,7 +11787,9 @@ export type ProgramSignatures
 	// refusals while leaving every uncontested function — that is, every function in the corpus, in `stdlib/`
 	// and in this compiler — registered under exactly the bytes it had before. Adopting v1's blanket
 	// qualification would rename every symbol in every namespaced file to buy nothing this does not.
-	export function noteFreeFunctionDeclaration(bareName ByteArray, moduleDirectory String) returns FreeFunctionContest
+	export function noteFreeFunctionDeclaration(bareName ByteArray, moduleDirectory String, declFilePath FilePath) returns FreeFunctionContest
+		self.noteFreeFunctionDeclaringFile(bareName, moduleDirectory: moduleDirectory, declFilePath: declFilePath)
+
 		if self.contestedFreeFunctions.contains(bareName) 'alreadyContested'
 			self.addContestedSpelling(bareName, moduleDirectory: moduleDirectory)
 			return FreeFunctionContest.alreadyContested
@@ -11721,6 +11815,84 @@ export type ProgramSignatures
 
 		return FreeFunctionContest.newlyContested(freeFunctionRegistrationName(bareName, moduleDirectory: incumbentDirectory))
 	end 'noteFreeFunctionDeclaration'
+
+	// ⭐⭐ **IS THIS THE SECOND *FILE* OF ONE DIRECTORY TO DECLARE THIS BASE?** — the write side of
+	// `crossFileOverloadedFreeFunctions`, and the only question the directory contest above cannot answer: it
+	// asks which NAMESPACE a name is declared in, and two files of one namespace are the case it calls "an
+	// ordinary duplicate".
+	//
+	// ⚠ **THE KEY IS THE REGISTRATION BASE, NOT THE BARE NAME**, so `alpha/`'s `pick` and `beta/`'s are two
+	// independent contests. Keyed bare, one declaration in each of two directories would read as a cross-file
+	// pair and every one of those declarations would take a parameter-type suffix it does not need — which
+	// would move the symbol of every program N1c already compiles.
+	//
+	// ⚠ **THE HASH MUST MOVE, for `noteExtensionPublishedMethod`'s reason**: the contest decides a SYMBOL
+	// NAME, and it turns on which file a declaration sits in rather than on anything a `record` call carries,
+	// so a reader's parse memo would otherwise survive an edit that changes what the reader compiles to.
+	function noteFreeFunctionDeclaringFile(bareName ByteArray, moduleDirectory String, declFilePath FilePath)
+		let base = freeFunctionRegistrationName(bareName, moduleDirectory: moduleDirectory)
+		if let firstDeclFile = try self.freeFunctionDeclFiles.get(base) 'thisDirectoryAlreadyDeclaresIt'
+			if firstDeclFile.equals(declFilePath) or self.crossFileOverloadedFreeFunctions.contains(base) 'sameFileOrAlreadyKnown'
+				return
+			end 'sameFileOrAlreadyKnown'
+
+			self.crossFileOverloadedFreeFunctions.insert(base)
+			self.hash = mixBytes(mix(self.hash, value: DeclShapeCrossFileOverloadedFreeFunction), bytes: base)
+			return
+		end 'thisDirectoryAlreadyDeclaresIt'
+
+		self.freeFunctionDeclFiles.upsert(base, value: declFilePath)
+	end 'noteFreeFunctionDeclaringFile'
+
+	// ⭐⭐ **IS THIS FREE-FUNCTION BASE DECLARED BY MORE THAN ONE FILE OF ITS DIRECTORY?** — the flag
+	// `Parser.overloadRegistrationNameFor` asks beside `isContestedExtensionMethod`, and the two are one rule
+	// reached by two declaration kinds. See `crossFileOverloadedFreeFunctions`.
+	//
+	// ⚠ It is asked once per free-function DECLARATION in the program, and the JOIN it keys by allocates — so
+	// the empty case is answered before the join is built rather than by `Set.contains` alone. The set is
+	// empty for every program in this tree.
+	export function isCrossFileOverloadedFreeFunction(bareName ByteArray, moduleDirectory String) returns bool
+		if self.crossFileOverloadedFreeFunctions.count() == 0 'noProgramInThisTreeDoesThis'
+			return false
+		end 'noProgramInThisTreeDoesThis'
+
+		return self.isCrossFileOverloadedFreeFunctionBase(freeFunctionRegistrationName(bareName, moduleDirectory: moduleDirectory))
+	end 'isCrossFileOverloadedFreeFunction'
+
+	// ⭐⭐ **THE SAME QUESTION ASKED FROM A COLLISION RATHER THAN FROM A DECLARATION.**
+	// `ParseStaging.duplicateFunctionMessage` holds the REGISTRATION BASE two declarations collided on and
+	// the FILE it is reporting against — and whether that base is already this set's key depends on a second
+	// contest: `Parser.declaredMethodName` qualifies a free function by its directory only when the name is
+	// contested across DIRECTORIES, so the base arrives qualified in that case and bare in every other.
+	//
+	// ⛔⛔ **BOTH SPELLINGS ARE REACHABLE AND EACH SINGLE-SPELLING DOOR MISSES THE OTHER — MEASURED, ONE EACH
+	// WAY (rung review, and then its own fix).** Qualifying unconditionally re-qualified an already-qualified
+	// base to `alpha.alpha.pick` when `alpha/a.maxon` and `alpha/b.maxon` both declare `pick(s String)` with
+	// a `beta/` contestant; asking the base alone missed `dir.pick` when `dir/` is the ONLY directory
+	// declaring the name, which is `namespace-qualified-resolution.md`'s own
+	// `error.free-function-pair-in-one-directory-still-collides`. So both are asked, and they cannot
+	// double-qualify each other: the two strings are the same only when the declaring file is at the root.
+	//
+	// ⚠ **A HIT ON THE BARE SPELLING FROM A SUBDIRECTORY COLLISION IS NOT A FALSE POSITIVE**, merely a less
+	// precise true one: it means some ROOT file-pair wears the name too, and the sentence this decides
+	// describes the SHAPE ("declared by more than one file of its directory"), which is true of the collision
+	// being reported either way.
+	//
+	// ⚠ Message quality only — the verdict, the code and the span are E3006's however this answers.
+	export function isCrossFileOverloadedFreeFunctionAt(base ByteArray, declFilePath FilePath) returns bool
+		if self.crossFileOverloadedFreeFunctions.count() == 0 'noProgramInThisTreeDoesThis'
+			return false
+		end 'noProgramInThisTreeDoesThis'
+
+		return self.isCrossFileOverloadedFreeFunctionBase(base) or self.isCrossFileOverloadedFreeFunctionBase(freeFunctionRegistrationName(base, moduleDirectory: self.moduleDirectoryOf(declFilePath)))
+	end 'isCrossFileOverloadedFreeFunctionAt'
+
+	// The membership test itself. Two doors above compose a KEY for it from what their own caller holds — a
+	// declaration's bare name and directory, a collision's base and file — and this is the one place the set
+	// is actually read, so there is one predicate and two ways of naming its key.
+	function isCrossFileOverloadedFreeFunctionBase(base ByteArray) returns bool
+		return self.crossFileOverloadedFreeFunctions.contains(base)
+	end 'isCrossFileOverloadedFreeFunctionBase'
 
 	// File one contested declaration's qualified spelling.
 	//
@@ -11834,7 +12006,7 @@ export type ProgramSignatures
 	// key holds this declaration's facts and nothing else's — the free-function contest fires at the SECOND
 	// directory, and the pair contest at the second member.
 	//
-	// ⚠ **THE FOUR BY-NAME FACTS ARE STRUCK FROM THE SOURCE KEY, and that is not tidiness.** A conditional
+	// ⚠ **THE BY-NAME FACTS ARE STRUCK FROM THE SOURCE KEY, and that is not tidiness.** A conditional
 	// fact left behind is answered for a declaration that never stated it (A5l): MEASURED, `beta.pick()`
 	// compiled by borrowing `alpha.pick`'s parameter default, and `try beta.pick()` was accepted by borrowing
 	// its `throws` clause. What the two callers do with the four `record` writes differs, and each says why.
@@ -12004,11 +12176,23 @@ export type ProgramSignatures
 		if let clause = try self.funcThrows.get(from) 'throws'
 			self.funcThrows.upsert(to, value: clause)
 		end 'throws'
+		// ⭐⭐ **THE ONE `record`-OWNED FACT THAT *MOVES* RATHER THAN LEAVING A RESIDUE, and the reason is that
+		// it APPENDS.** Every other write above is an upsert, so a residue left on the source key is
+		// overwritten by whatever declares that key next; this one keeps EVERY declaration, so a residue
+		// would still be standing there when a later declaration of the bare key — a ROOT contestant, whose
+		// registration name IS that key — files beside it, and the call door would then be choosing between
+		// this declaration and one that was re-keyed away from it. That is A5l's shape exactly
+		// (`refileContestedFreeFunction`'s ⚠), one table over.
+		//
+		// ⚠ The source key is left holding a FRESH empty array and not the shared one: `recordOverloadedDecl`
+		// pushes into whatever it reads back, so handing it `sharedNoOverloadedDecls` would mutate the value
+		// every key with no declaration answers with.
+		self.moveOverloadedDecls(from, to: to)
 	end 'copyDeclarationSweepEntries'
 
-	// Drop the FOUR facts the by-name scans publish, leaving the four `record` writes behind — the residue a
+	// Drop the FIVE facts the by-name scans publish, leaving the four `record` writes behind — the residue a
 	// contested bare name keeps so a bare call to it reaches E3095 rather than an undeclared callee. The
-	// booleans are discarded because a key with no entry is the ordinary case here, not an error: all four
+	// booleans are discarded because a key with no entry is the ordinary case here, not an error: all five
 	// are written only by a declaration that has the fact to state. It is the exact complement of the split
 	// `copyDeclarationSweepEntries` copies on, and the two must move together or one of them is lying about
 	// which facts a re-keyed declaration takes with it.
@@ -12020,9 +12204,14 @@ export type ProgramSignatures
 		_ = self.funcThrows.remove(name)
 	end 'clearByNameSweepEntries'
 
-	// The other four — the ones `record` writes for every declaration. Split from the by-name four rather
+	// The other four — the ones `record` writes for every declaration. Split from the by-name five rather
 	// than folded into one eight-way clear because exactly one caller wants both, and the split is the same
 	// one `copyDeclarationSweepEntries`' header draws: which PASS wrote the fact.
+	//
+	// ⚠ **`record` WRITES A FIFTH, AND IT IS DELIBERATELY NOT HERE.** `overloadedDecls` APPENDS rather than
+	// upserting, so it is emptied by the MOVE itself (`copyDeclarationSweepEntries`, which states why) — and
+	// this routine's one caller reaches it immediately after that move. Clearing it again would be a second
+	// writer of one rule; what must not happen is it being left out of BOTH, which is why the count is stated.
 	function clearRecordOwnedSweepEntries(name ByteArray)
 		_ = self.returnTypes.remove(name)
 		_ = self.funcDeclSites.remove(name)
@@ -12086,6 +12275,13 @@ export type ProgramSignatures
 			if let site = try self.funcDeclSites.get(swept) 'theSweepFiledItsSite'
 				self.funcDeclSites.upsert(renamed, value: site)
 			end 'theSweepFiledItsSite'
+			// ⭐ **THE FIFTH `record`-OWNED FACT MOVES HERE TOO — the THIRD re-key site, and the one this
+			// rung's "the count is stated" discipline did not reach (rung review).** A synthesized helper is
+			// never overloaded, so both the stale entry and the missing one answer `count() < 2` and today
+			// nothing observes the difference; that argument is exactly the one `refileContestedFreeFunction`
+			// declined to rest on for the tally it materializes, and it is declined here for the same reason.
+			// A table left out of ONE of three re-keys is the shape that bites when a fourth is added.
+			self.moveOverloadedDecls(swept, to: renamed)
 
 			info.renameHelper(slot, renamedTo: renamed)
 		end 'eachCallAlignedSlot'
@@ -12330,7 +12526,7 @@ export type ProgramSignatures
 
 	// ⭐ **THE DECLARED RETURN, WITH A STILL-BARE `named` SETTLED AS ITS OWN DECLARING FILE MEANS IT (W116).**
 	//
-	// ⚠ It is the SECOND reader of `funcReturnDeclFiles` and not the first: N3's `contestScopedReturnTypeOf`
+	// ⚠ It is the SECOND reader of `funcReturnDeclFiles` and not the first: N3's `recordedReturnDeclFileOf`
 	// spends the same column, through `resolveRecordedGenericAliasTypes`, BEFORE this evaluator runs. The two
 	// are not one rule written twice — that one rescopes a CONTESTED generic alias and declines every other
 	// name, this one asks the whole slot cascade — but they read one column, so a name that pass has already
@@ -18191,6 +18387,43 @@ export type ProgramSignatures
 	// The refusing TIER rides back with the verdict because the diagnostic's CODE is chosen by it (E3008 vs
 	// E3088), and asking for it separately would be a second lookup of the same key that could answer about
 	// a different declaration if anything refiled the name in between.
+	// ⭐⭐ **EVERY DECLARATION FILED UNDER `key`, IN DECLARATION ORDER** — what a call site scores an overload
+	// set against while its own file is being parsed. A key with one declaration (which is nearly every key in
+	// every program) answers a one-entry list and a key with none answers the shared empty one, so the caller
+	// needs no presence test.
+	export function overloadedDeclsOf(key ByteArray) returns OverloadedDeclArray
+		return try self.overloadedDecls.get(key) otherwise sharedNoOverloadedDecls
+	end 'overloadedDeclsOf'
+
+	// The append `record` makes. Its own routine because the first declaration of a key has to CREATE the
+	// array, and because this is the one registry here that keeps every declaration rather than the last.
+	// ⛔⛔ **THE MOVE IS BUILT ON A FRESH ARRAY, AND A DIRECT `upsert(to, <the value at from>)` IS A
+	// USE-AFTER-FREE.** Replacing the value at `from` RELEASES the array that was there, and the binding read
+	// out of the map is a BORROW — so a move written as the obvious two upserts hands `to` a pointer that the
+	// second one frees. MEASURED: 36 spec tests died
+	// `panic: nil pointer or invalid memory access ... in Compiler.ProgramSignatures.evaluateInitializers`,
+	// a stack away from anything about overloads. Copying the elements first ends the aliasing before either
+	// write happens.
+	function moveOverloadedDecls(from ByteArray, to ByteArray)
+		if not self.overloadedDecls.contains(from) 'declaresNothingUnderTheSourceKey'
+			return
+		end 'declaresNothingUnderTheSourceKey'
+
+		var moved = OverloadedDeclArray.create()
+		for decl in try self.overloadedDecls.get(from) otherwise panic("moveOverloadedDecls: '{String.from(from)}' is in `overloadedDecls` by the `contains` on the line above") 'eachDeclaration'
+			moved.push(decl)
+		end 'eachDeclaration'
+
+		self.overloadedDecls.upsert(from, value: OverloadedDeclArray.create())
+		self.overloadedDecls.upsert(to, value: moved)
+	end 'moveOverloadedDecls'
+
+	function recordOverloadedDecl(key ByteArray, decl OverloadedDecl)
+		var wearingThisKey = try self.overloadedDecls.get(key) otherwise OverloadedDeclArray.create()
+		wearingThisKey.push(decl)
+		self.overloadedDecls.upsert(key, value: wearingThisKey)
+	end 'recordOverloadedDecl'
+
 	export function calleeVisibilityFrom(callee ByteArray, readerFilePath FilePath) returns CalleeVisibility
 		let site = try self.funcDeclSites.get(callee) otherwise return CalleeVisibility.visible
 		if self.isVisibleFrom(site.visibility, declFilePath: site.declFilePath, readerFilePath: readerFilePath) 'nameableHere'
@@ -18923,7 +19156,7 @@ export type ProgramSignatures
 		var rewrittenCallees = ByteArrayArray.create()
 		var rewrittenReturns = MaxonTypeArray.create()
 		for (callee, declared) in self.returnTypes 'eachReturnType'
-			if let rewritten = try self.rewrittenReturnTypeUnder(rule, callee: callee, declared: declared) 'theRuleClaimsIt'
+			if let rewritten = try self.rewrittenReturnTypeUnder(rule, declFilePath: self.recordedReturnDeclFileOf(callee), declared: declared) 'theRuleClaimsIt'
 				rewrittenCallees.push(callee)
 				rewrittenReturns.push(rewritten)
 			end 'theRuleClaimsIt'
@@ -18934,27 +19167,94 @@ export type ProgramSignatures
 			let rewritten = try rewrittenReturns.get(i) otherwise panic("ProgramSignatures.rewriteRecordedReturnTypes: rewrittenReturns.get OOB at {i} — the two columns are pushed in lockstep")
 			self.returnTypes.upsert(callee, value: MaxonReturnType.value(rewritten))
 		end 'applyEach'
+
+		self.rewriteOverloadedDeclReturnTypes(rule)
 	end 'rewriteRecordedReturnTypes'
+
+	// ⭐⭐ **THE PER-DECLARATION RETURN TYPES ARE THE SAME FACT AS `returnTypes`, SO THEY ARE REWRITTEN BY THE
+	// SAME THREE RULES IN THE SAME ACT (rung review).** `overloadedDecls` keeps every declaration's own return
+	// type — the whole reason a call can read the overload it MEANS — which makes it a SECOND COPY of a fact
+	// three whole-program passes re-decide after the sweep and before any file is parsed. A copy no rewrite
+	// reaches is this project's signature bug across a pass boundary, and here its divergence is a WRONG TYPE
+	// at a parsed call rather than a diagnostic: `Parser.overloadedCallResultType` hands its answer straight
+	// to `mintDeclaredCallResult`.
+	//
+	// ⚠ **THE DECLARING FILE IS THE DECLARATION'S OWN, WHICH IS STRICTLY BETTER THAN THE ONE THE KEY KEEPS.**
+	// `funcReturnDeclFiles` is last-wins per key, so an overload set split across two files records ONE file
+	// for both — and N3's rule (a contested generic alias resolved in the file that declared the FUNCTION) is
+	// exactly the rule that answer gets wrong for the other member. `OverloadedDecl.declFilePath` is per
+	// declaration, so each member is rescoped in its own file's scope.
+	//
+	// ⚠ COLLECT-THEN-APPLY, and REBUILD-THEN-ASSIGN, for the two reasons this file already states: a map may
+	// not be rewritten mid-walk, and an `OverloadedDecl`'s fields are `let`, so a rewritten member is a fresh
+	// record in a fresh array. A key none of whose members the rule claims keeps the array it already had.
+	function rewriteOverloadedDeclReturnTypes(rule RecordedReturnTypeRule)
+		var rewrittenKeys = ByteArrayArray.create()
+		var rewrittenDecls = OverloadedDeclArrayArray.create()
+		for (key, wearingThisKey) in self.overloadedDecls 'eachKey'
+			if let rebuilt = try self.rewrittenOverloadedDeclsUnder(rule, wearingThisKey: wearingThisKey) 'theRuleClaimsAMember'
+				rewrittenKeys.push(key)
+				rewrittenDecls.push(rebuilt)
+			end 'theRuleClaimsAMember'
+		end 'eachKey'
+
+		for i in 0 upto rewrittenKeys.count() 'applyEach'
+			let key = try rewrittenKeys.get(i) otherwise panic("ProgramSignatures.rewriteOverloadedDeclReturnTypes: rewrittenKeys.get OOB at {i} below count {rewrittenKeys.count()}")
+			let rebuilt = try rewrittenDecls.get(i) otherwise panic("ProgramSignatures.rewriteOverloadedDeclReturnTypes: rewrittenDecls.get OOB at {i} — the two columns are pushed in lockstep")
+			self.overloadedDecls.upsert(key, value: rebuilt)
+		end 'applyEach'
+	end 'rewriteOverloadedDeclReturnTypes'
+
+	// One key's declarations with `rule` applied to each, or `MapError.keyNotFound` when the rule claims NONE
+	// of them — the same "absence is a throw" convention the rule bodies themselves use, so a key nothing
+	// changed keeps the array it already had rather than an identical copy of it.
+	function rewrittenOverloadedDeclsUnder(rule RecordedReturnTypeRule, wearingThisKey OverloadedDeclArray) returns OverloadedDeclArray throws MapError
+		var rebuilt = OverloadedDeclArray.create()
+		var claimed = false
+		for decl in wearingThisKey 'eachDeclaration'
+			if let rewritten = try self.rewrittenReturnTypeUnder(rule, declFilePath: decl.declFilePath, declared: decl.returnType) 'theRuleClaimsIt'
+				rebuilt.push(decl.withReturnType(MaxonReturnType.value(rewritten)))
+				claimed = true
+			end 'theRuleClaimsIt' else 'unchanged'
+				rebuilt.push(decl)
+			end 'unchanged'
+		end 'eachDeclaration'
+
+		if not claimed 'theRuleClaimsNoneOfThem'
+			throw MapError.keyNotFound
+		end 'theRuleClaimsNoneOfThem'
+
+		return rebuilt
+	end 'rewrittenOverloadedDeclsUnder'
+
+	// ⭐ **THE FILE A RECORDED RETURN TYPE IS RESCOPED IN, or the STRANGER's when none is recorded.** A return
+	// type with no recorded declaring file names nothing still to be resolved — `record` writes that column
+	// iff `returnTypeNamesAType`, which is exactly the bare-`named` case — so the fallback is reached only by
+	// an entry `contestScopedDeclaredType`'s own tag guard declines. It is the honest answer to "no file to
+	// prefer" rather than a stand-in for one, and it is the spelling `aggregatesConflict` already uses for
+	// that idea.
+	function recordedReturnDeclFileOf(callee ByteArray) returns FilePath
+		return try self.funcReturnDeclFiles.get(callee) otherwise CompilerOwnedDeclFilePath
+	end 'recordedReturnDeclFileOf'
 
 	// The ONE line each rule contributes: the type this entry should now carry, or `MapError.keyNotFound`
 	// when the rule does not claim it — the "absence is a throw" convention all three re-tags already
 	// shared. A `match` rather than a chain, so a fourth rule cannot be added without being given a line.
-	function rewrittenReturnTypeUnder(rule RecordedReturnTypeRule, callee ByteArray, declared MaxonReturnType) returns MaxonType throws MapError
+	function rewrittenReturnTypeUnder(rule RecordedReturnTypeRule, declFilePath FilePath, declared MaxonReturnType) returns MaxonType throws MapError
 		match rule 'rule'
-			contestScopedAlias then return try self.contestScopedReturnTypeOf(callee, declared: declared)
+			contestScopedAlias then return try self.contestScopedReturnType(declared, declFilePath: declFilePath)
 			declaredStruct then return try self.sweptStructReturnOf(declared)
 			declaredInterface then return try self.sweptInterfaceReturnOf(declared)
 		end 'rule'
 	end 'rewrittenReturnTypeUnder'
 
-	// N3's rule: a function's RETURN type resolved against the file that declared the FUNCTION.
-	// `funcReturnDeclFiles` carries the measurement of what its absence cost — a `returns Bytes` crossing a
-	// file boundary took the CALLER's `Bytes`, and two element widths compared equal. A callee with no file
-	// recorded names nothing still to be resolved, which is the rule declining the entry.
-	function contestScopedReturnTypeOf(callee ByteArray, declared MaxonReturnType) returns MaxonType throws MapError
-		let declFilePath = try self.funcReturnDeclFiles.get(callee)
-		return try self.contestScopedReturnType(declared, declFilePath: declFilePath)
-	end 'contestScopedReturnTypeOf'
+	// ⚠ **N3's rule — a function's RETURN type resolved against the file that declared the FUNCTION —
+	// USED TO LOOK THAT FILE UP HERE, and the lookup moved OUT to the two walks because they know it from
+	// different places.** `funcReturnDeclFiles` is last-wins per KEY and an `OverloadedDecl` carries its OWN;
+	// a lookup inside the rule would have forced both walks through the key's answer, which is the wrong one
+	// for every member of a cross-file overload set but the last. `funcReturnDeclFiles` still carries the
+	// measurement of what the rule's absence cost — a `returns Bytes` crossing a file boundary took the
+	// CALLER's `Bytes`, and two element widths compared equal.
 
 	// The `structRef` a swept `named` denotes; `MapError.keyNotFound` when the name denotes no struct BOX.
 	// It follows `sweptInterfaceTypeOf`'s shape — the other recorded-return-type re-tag on this index —
@@ -24001,7 +24301,7 @@ export type ProgramSignatures
 		return self.namespaceQualifiedFunctions.contains(written)
 	end 'resolvesAsNamespaceQualifiedFunction'
 
-	function adoptReturnType(rt MaxonReturnType, into TypeNameInterner) returns MaxonReturnType
+	export function adoptReturnType(rt MaxonReturnType, into TypeNameInterner) returns MaxonReturnType
 		return match rt 'r'
 			void gives rt
 			value(inner) gives self.adoptValueReturn(rt, inner: inner, into: into)

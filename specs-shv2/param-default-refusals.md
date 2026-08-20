@@ -362,6 +362,13 @@ ONE OF IT.** A default is compiled as a synthesized function named after the dec
 the duplicate `f` drags a duplicate `__paramDefault#f#0` behind it; reported, that second E3006 explains a
 symbol absent from the source in a sentence about parameter-type spellings the author never used. MEASURED
 before `FuncSignatureEntry.synthesized` existed, and again with the flag forced false: both E3006s printed.
+
+⚠ **BOTH FILES SPELL THE PARAMETER `Integer`, AND THAT IS LOAD-BEARING NOW THAT TWO FILES OF ONE
+DIRECTORY ARE AN OVERLOAD SET** (`cross-file-overload-set.md`). Written with two SPELLINGS of one underlying
+type — `Integer` here and `Count` there, which is how this case read until then — the two declarations mint
+two registration names, are two live overloads, and the program is `E3007` at the CALL instead: a real
+verdict, and one that tests nothing about a synthesized helper's duplicate. It is pinned in its own right by
+`cross-file-overload-set.md`'s `error.two-spellings-of-one-type-are-ambiguous-at-the-call`.
 ```maxon
 // --- file: a.maxon
 typealias Integer = int(i64.min to i64.max)
@@ -371,9 +378,9 @@ export function f(a Integer = 1) returns Integer
 end 'f'
 
 // --- file: b.maxon
-typealias Count = int(i64.min to i64.max)
+typealias Integer = int(i64.min to i64.max)
 
-export function f(a Count = 1) returns Count
+export function f(a Integer = 1) returns Integer
 	return a + 1
 end 'f'
 
@@ -383,7 +390,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: <fragment>:12:17: Duplicate function 'f'
+error E3006: <fragment>:12:17: duplicate definition of function 'f#Integer' — 'f' is declared as a free function in more than one FILE of its directory, so every one of those declarations is registered under its parameter-type spelling, and two of them spell the same parameters. Give the overloads distinct parameter types, or distinct names
 ```
 
 <!-- test: error-param-default-trailing-tokens -->

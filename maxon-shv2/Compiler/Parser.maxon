@@ -1535,14 +1535,20 @@ function foundCalleeIfEqual(result ValueId, callee ByteArray, promise ValueId) r
 end 'foundCalleeIfEqual'
 
 // A `MaxonReturnType` as a value tag, VOID included — the void-tolerant twin of `maxonReturnTypeTag` (which
-// panics on void), because an async result may legitimately be void (P1.5-B2b: a void throwing async carries
-// only an error flag). Delegates the value case rather than re-matching it.
-function asyncReturnTypeTag(returnType MaxonReturnType) returns ValueTypeTag
+// PANICS on void). Delegates the value case rather than re-matching it.
+//
+// ⚠ **IT WAS `asyncReturnTypeTag`, NAMED FOR ITS ONE CALLER, AND A SECOND CALLER IS WHY IT IS NOT ANY MORE.**
+// An async result may legitimately be void (P1.5-B2b: a void throwing async carries only an error flag) and so
+// may an overload member (`returnAnswersAreInterchangeable`); a name that describes the CALLER rather than the
+// fact is what invites the second caller to write its own copy — which is exactly what this rung's first
+// draft did, and the copy it wrote SHADOWED the panicking `maxonReturnTypeTag` for every other reader in this
+// file.
+function returnTypeTagOrVoid(returnType MaxonReturnType) returns ValueTypeTag
 	if maxonReturnTypeIsVoid(returnType) 'void'
 		return ValueTypeTag.void
 	end 'void'
 	return maxonReturnTypeTag(returnType)
-end 'asyncReturnTypeTag'
+end 'returnTypeTagOrVoid'
 
 // **THE NAME OF THE RECEIVER PARAMETER.** An instance method's parameter 0, pushed by
 // `parseFunction` and bound by `bindParameters` exactly like every other parameter — so the
@@ -1982,6 +1988,65 @@ let sharedEmptyTypeParamFeeds = TypeParamFeedArray.create()
 // one shared array is what makes that single call site able to serve every declaration shape. Never mutated;
 // ONE allocation for the whole compile, the discipline every `sharedEmpty*` here states.
 let sharedEmptyScannedParamNames = ByteArrayArray.create()
+
+// ⭐ THE ONE "the sweep did not read this parameter's type" value, shared — see `Parser.sweptParamTypeAt`.
+// A payload-free `MaxonType` case is still a heap object in Maxon, and this is pushed once per parameter of
+// every compound-typed declaration in the program. NEVER mutated (a `MaxonType` has no mutable state).
+let sharedUnreadParamType = MaxonType.unresolved
+
+// ⭐⭐ **WHAT `Parser.overloadedCallResultType` DECIDED.** `undecided` is not "no such name" and not an
+// error: it means the by-name answer (`ProgramSignatures.returnTypeOf`) is either already exact or is the
+// best anything can do here, and it is the answer for every call in every program that does not overload a
+// name across two return types.
+// How many candidates of one set hold the best score — a count of OVERLOADS, not of parameters, which is why
+// it is not `ParamCount`. Wide because nothing bounds how many declarations may wear one name: the
+// registration mint counts up an ordinal rather than refusing (`unclaimedRegistrationName`).
+typealias OverloadCandidateCount = int(0 to u64.max)
+
+// ⭐⭐ **THE TAG A *RESOLVED* SIGNATURE WOULD CARRY IN THIS PARAMETER SLOT — for RANKING only.**
+// `SemanticCheck.overloadArgTypeFit` ranks against `project.funcSignatures`, which `resolveTypes` has already
+// erased: a ranged alias, an enum and a boxed union all read `integer` there, while a SWEPT type still spells
+// the name. Ranked without this, an `int` argument scores WIDENING at an `Integer` parameter and WIDENING at a
+// `float` one, the two tie, and the parse-time decider declines a call the resolver settles — MEASURED, on
+// `pick(a Integer) returns String` beside `pick(a Real)` called `pick(1)`, which the bootstrap answers `i1`.
+//
+// ⚠ **THE ARGUMENT SIDE IS NOT NORMALIZED, AND THAT IS WHAT MAKES THIS AGREE RATHER THAN MERELY LOOK
+// SIMILAR.** A value declared at an alias keeps its `named` tag in `IrFunction.valueTags` through both passes,
+// so that pass compares a `named` argument against an ERASED parameter — which is exactly the comparison this
+// reproduces by erasing the parameter alone.
+//
+// ⚠ It is asked ONLY for exact-vs-widening. The COMPATIBILITY verdict is taken on the unerased tag, where
+// `named` is what carries the alias's own identity and `checkDeclaredType` is the rule.
+function overloadRankTagOf(paramTag ValueTypeTag) returns ValueTypeTag
+	return ValueTypeTag.integer if paramTag == ValueTypeTag.named else paramTag
+end 'overloadRankTagOf'
+
+union SweptOverloadPick
+	resolved(returnType MaxonReturnType)
+	undecided
+end 'SweptOverloadPick'
+
+// The one `undecided`, shared: a payload-free union case is still a heap object in Maxon, and this is the
+// answer at EVERY call in the program.
+let sharedUndecidedOverloadPick = SweptOverloadPick.undecided
+
+// One candidate's verdict. `unscoreable` is its own arm and not a second spelling of `incompatible`: a
+// candidate whose parameter types the sweep could not read cannot be refused, so counting it out would make
+// "exactly one member fits" a claim about the members that happened to be readable.
+union SweptOverloadFit
+	fits(score OverloadArgScore)
+	incompatible
+	unscoreable
+end 'SweptOverloadFit'
+
+let sharedOverloadIncompatible = SweptOverloadFit.incompatible
+let sharedOverloadUnscoreable = SweptOverloadFit.unscoreable
+
+// ⭐⭐ **DO THE DECLARATIONS OF ONE NAME DISAGREE ABOUT WHAT THEY RETURN?** — the gate that keeps the
+// parse-time overload decider off every call in every program that does not need it. It is asked of ALL the
+// declarations rather than of the visible ones, because what a disagreement spoils is
+// `ProgramSignatures.returnTypeOf`, whose one entry per key is written by whichever declaration was swept
+// last — visible from the reader or not.
 
 // The module-level shared EMPTY working columns `scanBodyFacts` starts from — the `sharedEmptyTypeParamFeeds`
 // discipline, one column each, for the three shapes that walk a body and write none of them: a declaration
@@ -11144,6 +11209,10 @@ export type Parser
 	// `paramIsTypeParamTyped`/`paramTypeParamPositionAt` only read it, OOB-safe), so one allocation per parser
 	// serves every non-generic function's consume scan, keeping that hot path allocation-free.
 	var emptyTypeParamPositions as TypeParamPositionArray
+	// ⚡ The shared, NEVER-WRITTEN sink the two walks that want NAMES but no types hand `paramNamesIn`, so a
+	// declaration whose types nobody reads allocates no array for them. `collectTypes: false` is what keeps it
+	// unwritten; it is `emptyTypeParamPositions`' twin, one fact over.
+	var emptySweptParamTypes as MaxonTypeArray
 	// The SHARED empty type-parameter-name list (P1.6-A) that `enclosingTypeParams` holds outside a
 	// generic type — which is every type on the generics-free corpus. `openTypeParamScope` points at it
 	// (rather than allocating an empty `uses` list) for a type with no `uses`, and `closeTypeParamScope`
@@ -11611,6 +11680,7 @@ export type Parser
 			extensionAssociatedTypeBindings: sharedEmptyExtensionAssociatedTypes,
 			genericAliasScratch: GenericAliasEntryArray.create(),
 			emptyTypeParamPositions: TypeParamPositionArray.create(),
+			emptySweptParamTypes: MaxonTypeArray.create(),
 			emptyTypeParams: ByteArrayArray.create(),
 			ownedBindings: VarInfoArray.create(),
 			unusedCandidates: UnusedBindingCandidateArray.create(),
@@ -12452,25 +12522,40 @@ export type Parser
 		// type-parameter positions. Walking twice would be one declaration read two ways, with nothing
 		// holding the two readings in agreement about where `self` sits — which is the alignment
 		// `callAlignedInstanceParams` exists to state once.
-		var scannedParamNames = sharedEmptyScannedParamNames
+		// ⭐⭐ **ONE WALK OF THE PARAMETER LIST FOR EVERY DECLARATION SHAPE, and it used to be up to two.** The
+		// three shapes below want three different things out of it — a receiver-less declaration's SOURCE names
+		// ARE its call-aligned ones, a generic type's instance method needs `__self` prepended, and a
+		// NON-generic instance method wanted no names at all — and each used to reach the walk (or not) by its
+		// own route, with `byRefScanParamNames` walking a second time for the shape the first route skipped.
+		// The overload surface needs the source list for ALL THREE (a call site scores an overload set on its
+		// declared parameter types), so the walk happens once and every consumer is derived from it.
+		//
+		// A parameter can be type-parameter-typed ONLY inside a generic type's body (a non-empty `uses` list);
+		// a top-level function and a non-generic type's method have none. Off the generic path the flags stay
+		// the SHARED empty array (⚡ no per-function `TypeParamPositionArray`) and `paramNamesIn` skips the flag
+		// work — `paramIsTypeParamTyped` reads every missing index as `false`.
+		let inGenericScope = not self.enclosingTypeParams.isEmpty()
 		var scannedTypeParamPositions = self.emptyTypeParamPositions
+		if inGenericScope 'genericScope'
+			scannedTypeParamPositions = TypeParamPositionArray.create()
+			if takesReceiver 'theReceiverOccupiesCallAlignedSlotZero'
+				self.pushReceiverTypeParamSlot(scannedTypeParamPositions)
+			end 'theReceiverOccupiesCallAlignedSlotZero'
+		end 'genericScope'
+		var sweptParamTypes = MaxonTypeArray.create()
+		let sourceParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: inGenericScope, typesOut: sweptParamTypes, collectTypes: true)
+		// ⚠ **A NON-GENERIC INSTANCE METHOD IS LEFT WITH THE SHARED EMPTY LIST ON PURPOSE** — the consume scan
+		// declines to read it (a direct `Self{f: p}` store there is left to the callee-side borrowed-value
+		// refusal; see `scanBodyFacts`' call below), and this empty list is how it declines.
+		var scannedParamNames = sharedEmptyScannedParamNames
 		if not takesReceiver 'receiverless'
-			// A parameter can be type-parameter-typed ONLY inside a generic type's body (a non-empty `uses`
-			// list); a top-level function and a non-generic type's method have none. Off the generic path the
-			// flags stay the SHARED empty array (⚡ no per-function `TypeParamPositionArray`) and `paramNamesIn`
-			// skips the flag work — `paramIsTypeParamTyped` reads every missing index as `false`.
-			let collectTypeParamFlags = not self.enclosingTypeParams.isEmpty()
-			if collectTypeParamFlags 'genericScope'
-				scannedTypeParamPositions = TypeParamPositionArray.create()
-			end 'genericScope'
-			scannedParamNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: scannedTypeParamPositions, collectTypeParamFlags: collectTypeParamFlags)
+			scannedParamNames = sourceParamNames
 		end 'receiverless' else 'instanceMethod'
-			if not self.enclosingTypeParams.isEmpty() 'genericInstanceMethod'
-				scannedTypeParamPositions = TypeParamPositionArray.create()
-				scannedParamNames = self.callAlignedInstanceParams(paramsStart, typeParamPositionsOut: scannedTypeParamPositions)
+			if inGenericScope 'genericInstanceMethod'
+				scannedParamNames = callAlignedFrom(sourceParamNames)
 			end 'genericInstanceMethod'
 		end 'instanceMethod'
-		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions)))
+		entries.push(FuncReturnTypeEntry.create(funcName, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: self.opaqueParamsDeclaredBy(scannedParamNames, positions: scannedTypeParamPositions), paramNames: sourceParamNames, paramTypes: sweptParamTypes))
 		// ⭐⭐ **EVERY FREE FUNCTION'S BARE NAME (N1b's qualified-spelling record, re-cut by N1c)** — recorded
 		// here, from the SAME token walk that records its return type, because it answers two questions only
 		// the whole-program index can: is `utils.helper(…)` a directory-qualified free call or a static on a
@@ -12569,28 +12654,28 @@ export type Parser
 		// much a forwarder as a free function is, and three of `specs/pass-by-reference.md`'s transitive cases
 		// are exactly that program — whereas the consume half deliberately declines to read one. Hence two
 		// lists into one walk rather than a second walk of the same tokens.
-		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, paramsStart: paramsStart, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
+		self.scanBodyFacts(funcName, funcBareName: nameTok.value, paramNames: scannedParamNames, byRefParamNames: self.byRefScanParamNames(scannedParamNames, sourceParamNames: sourceParamNames, takesReceiver: takesReceiver), typeParamPositions: scannedTypeParamPositions, bodyStart: self.pos, paramConsumes: paramConsumes, paramReassigns: paramReassigns, globalAliasReturns: globalAliasReturns, detectFieldStores: not takesReceiver, takesReceiver: takesReceiver)
 	end 'recordScannedSignature'
 
 	// ⭐ **THE CALL-ALIGNED PARAMETER NAMES PBR-2's SCAN IS INDEXED BY.** For everything the consume scan
 	// already reads names for — a receiver-less declaration, a generic type's method — that list IS the
 	// call-aligned one and is handed straight back, so the common declaration costs nothing extra.
 	//
-	// The one shape it has to read for itself is a NON-GENERIC INSTANCE METHOD, which the consume scan skips
-	// (see there). Only the PARAMETER LIST is walked for it, never the body — the body walk is the one both
-	// facts share — and a method with no user parameters is left with an empty list, which ends the walk at
+	// The one shape that needs aligning here is a NON-GENERIC INSTANCE METHOD, which the consume scan skips
+	// (see there) and which therefore arrives with the shared EMPTY list. Its SOURCE names come from the one
+	// parameter-list walk `recordScannedSignature` makes for every shape — this used to re-walk the list for
+	// itself — and a method with no user parameters is left with an empty list, which ends the walk at
 	// `scanBodyFacts`' own guard rather than pushing `__self` alone through it.
-	function byRefScanParamNames(scannedParamNames ByteArrayArray, paramsStart TokenIndex, takesReceiver bool) returns ByteArrayArray
+	function byRefScanParamNames(scannedParamNames ByteArrayArray, sourceParamNames ByteArrayArray, takesReceiver bool) returns ByteArrayArray
 		if not takesReceiver or scannedParamNames.count() != 0 'alreadyCallAligned'
 			return scannedParamNames
 		end 'alreadyCallAligned'
 
-		let sourceNames = self.paramNamesIn(paramsStart, typeParamPositionsOut: self.emptyTypeParamPositions, collectTypeParamFlags: false)
-		if sourceNames.count() == 0 'nothingToForward'
-			return sourceNames
+		if sourceParamNames.count() == 0 'nothingToForward'
+			return sourceParamNames
 		end 'nothingToForward'
 
-		return callAlignedFrom(sourceNames)
+		return callAlignedFrom(sourceParamNames)
 	end 'byRefScanParamNames'
 
 	// ⭐ **THE DECLARATION'S OPAQUE-PARAMETER RECORD, OR THE SHARED "NONE" (ARRR)** — see `OpaqueParamInfo`
@@ -12735,14 +12820,31 @@ export type Parser
 	// (its sentinel type-parameter position), then the source parameters, in the SAME order the receiver-prepending
 	// call site pushes them (`parseCallNamed`), so a per-position consume/feed fact lands at the argument's own
 	// call-site position. `typeParamPositionsOut` is filled in lockstep (self's sentinel, then each source
-	// parameter's declared position from `paramNamesIn`). The ONE place this alignment is spelled — shared by the
-	// consume-bit scan (`recordScannedSignature`) and the transitive array-feed scan (`scanTypeMethodFeeds`) — so
-	// the two cannot drift on where `self` sits, which would land a feed on the wrong parameter (a wrong-consume
-	// double-free at the concrete call site).
+	// parameter's declared position from `paramNamesIn`).
+	//
+	// ⚠ **THE ALIGNMENT IS SPELLED IN TWO SHARED PIECES, NOT IN THIS ONE PLACE, AND THE HEADER SAID OTHERWISE.**
+	// `pushReceiverTypeParamSlot` is the POSITION half and `callAlignedFrom` the NAME half, and they must
+	// straddle the parameter-list walk — so a caller that needs the walk's own SOURCE names back
+	// (`recordScannedSignature`, for the overload surface it publishes) cannot go through this wrapper and
+	// calls the two halves itself. Neither half is written out at a call site, which is what keeps the two
+	// scans from drifting on where `self` sits — a drift that would land a feed on the wrong parameter (a
+	// wrong-consume double-free at the concrete call site). This wrapper is the transitive array-feed scan's
+	// (`scanTypeMethodFeeds`) door onto them.
 	function callAlignedInstanceParams(paramsStart TokenIndex, typeParamPositionsOut TypeParamPositionArray) returns ByteArrayArray
-		typeParamPositionsOut.push(self.enclosingTypeParams.count())
-		return callAlignedFrom(self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true))
+		self.pushReceiverTypeParamSlot(typeParamPositionsOut)
+		return callAlignedFrom(self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true, typesOut: self.emptySweptParamTypes, collectTypes: false))
 	end 'callAlignedInstanceParams'
+
+	// The POSITION half of the alignment above — the receiver's slot-0 entry, which names no `uses` parameter
+	// and so takes the "not a type parameter" sentinel. It is its own routine because the two halves cannot
+	// be spelled together: this one has to be pushed BEFORE `paramNamesIn` appends the source parameters'
+	// positions, while `callAlignedFrom` prepends to the NAMES the same walk returns. Two callers stand
+	// between those two moments — this file's declaration sweep (`recordScannedSignature`, which needs the
+	// SOURCE names back for the overload surface) and `callAlignedInstanceParams` — so the sentinel is named
+	// once rather than written out at each.
+	function pushReceiverTypeParamSlot(typeParamPositionsOut TypeParamPositionArray)
+		typeParamPositionsOut.push(self.enclosingTypeParams.count())
+	end 'pushReceiverTypeParamSlot'
 
 	// ⭐ **THE CONSUME SCAN (P1.4a wave 2)** — one entry per function whose body MOVES a parameter into
 	// durable storage (a struct-literal field value). A peek-only walk of the body from `bodyStart` to its
@@ -14768,7 +14870,7 @@ export type Parser
 	// same list — this is the one place that says which is which.
 	function feedScanParams(paramsStart TokenIndex, takesReceiver bool, typeParamPositionsOut TypeParamPositionArray) returns ByteArrayArray
 		if not takesReceiver 'receiverless'
-			return self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true)
+			return self.paramNamesIn(paramsStart, typeParamPositionsOut: typeParamPositionsOut, collectTypeParamFlags: true, typesOut: self.emptySweptParamTypes, collectTypes: false)
 		end 'receiverless'
 		return self.callAlignedInstanceParams(paramsStart, typeParamPositionsOut: typeParamPositionsOut)
 	end 'feedScanParams'
@@ -15014,6 +15116,11 @@ export type Parser
 	// closing `)`; `skipParamType` finds that end (paren depth tracked, because a type may itself contain
 	// parens — `int(0 to 100)`, `function(X) returns Y`).
 	//
+	// ⭐ **AND, ON THE SAME WALK, THE DECLARED TYPE ITSELF** (`typesOut`, gated by `collectTypes` exactly as the
+	// positions are by their own flag) — the CALL-side half of an overload set, read through `sweptParamTypeAt`.
+	// It rides this walk rather than one of its own for the reason the positions do: `names[i]` and `types[i]`
+	// describe the same parameter by construction, and a call scores an overload on both together.
+	//
 	// ⚠ **NAME AND TYPE-PARAM POSITION ARE PRODUCED TOGETHER, SO `names[i]` AND `positions[i]` ALWAYS
 	// DESCRIBE THE SAME PARAMETER.** The consume scan reads the position to decide whether parameter `i` was
 	// moved into a plain field (`Self{f: p}` — consumed), fed a type parameter (a concrete-site managed
@@ -15027,7 +15134,7 @@ export type Parser
 	// — see there: it needs a strictly COARSER answer that this grammar cannot give more cheaply, and a shared
 	// walk that returned index COLUMNS measured **+7,794 allocations at rung 0 of the scale ladder, doubling
 	// per rung**, because it put three heap objects on a once-per-function path.
-	function paramNamesIn(parenPos TokenIndex, typeParamPositionsOut TypeParamPositionArray, collectTypeParamFlags bool) returns ByteArrayArray
+	function paramNamesIn(parenPos TokenIndex, typeParamPositionsOut TypeParamPositionArray, collectTypeParamFlags bool, typesOut MaxonTypeArray, collectTypes bool) returns ByteArrayArray
 		var names = ByteArrayArray.create()
 		var q = parenPos
 		if self.kindAt(q) != TokenKind.leftParen 'noParens'
@@ -15048,6 +15155,9 @@ export type Parser
 			if collectTypeParamFlags 'flag'
 				typeParamPositionsOut.push(self.paramTypeParamPosition(typeStart, typeEnd: typeEnd))
 			end 'flag'
+			if collectTypes 'overloadSurface'
+				typesOut.push(self.sweptParamTypeAt(typeStart, typeEnd: typeEnd))
+			end 'overloadSurface'
 			// The TYPE ends at `typeEnd` and the PARAMETER may not — see `paramItemEndFrom`.
 			let itemEnd = self.paramItemEndFrom(typeEnd)
 			if self.kindAt(itemEnd) != TokenKind.comma 'endList'
@@ -15070,6 +15180,51 @@ export type Parser
 		end 'singleIdent'
 		return self.enclosingTypeParams.count()
 	end 'paramTypeParamPosition'
+
+	// ⭐⭐ **WHAT THE SWEEP PUBLISHES ABOUT ONE PARAMETER'S DECLARED TYPE — the CALL-side half of an overload
+	// set** (`ProgramSignatures.overloadedDeclsOf`). It is read through `parseTypeReference`, the ONE type
+	// reader this sweep already reads a `returns` clause with, so a parameter's swept type and its parsed one
+	// cannot become two opinions of what a spelling means.
+	//
+	// ⚠⚠ **ONLY A SINGLE-TOKEN TYPE IS READ, AND THAT BOUNDARY IS DELIBERATE ON BOTH SIDES.**
+	//   • **COST** — this runs at every parameter of every declaration in the program, and a compound type is
+	//     where the reader allocates.
+	//   ⚠ **THE COMMONEST COMPOUND TYPE IS A RANGED INT, NOT A GENERIC INSTANTIATION.** `n int(0 to 100)`
+	//     spans six tokens, so a set with one such parameter is UNSCOREABLE — far more of the corpus than
+	//     `Array with T`, `(A, B)` and `function(X) returns Y` suggest. It is the fallback's commonest
+	//     customer, and the reason that fallback has to stay exactly as good as it was.
+	//   • **REGISTRATION ORDER** — reading a compound type REGISTERS it whole-program: `parseTupleTypeReference`
+	//     interns the tuple through `ProgramSignatures.internTupleType`, which mints a canonical name and a
+	//     layout on the index.
+	//     ⛔ **THIS BULLET USED TO SAY "A PARAMETER LIST IS NOT A PLACE THE SWEEP MAY MINT INSTANCES FROM",
+	//     AND THAT IS FALSE — the sweep already mints them from a RETURN clause two lines from here.**
+	//     `recordScannedSignature` reads `returns (A, B)` through `parseOptionalReturnType` →
+	//     `parseTypeReference` → that same tuple arm, which is deliberately OUTSIDE the `allFilesFolded` gate
+	//     its neighbours sit behind (`sweptStructReturnOf`'s header records what that costs and why it stays).
+	//     So there is no rule being kept here. What is true is narrower and still worth the line: every
+	//     registration the sweep makes moves the `GenericInstanceId` of every later one, and those ids decide
+	//     mangled instance names and which claimant `checkTypeSymbolNamespace` calls the newcomer. Reading
+	//     every parameter list too would add registrations across the whole corpus to buy this decider
+	//     something its fallback already covers.
+	//
+	// A type it does not read is recorded as `MaxonType.unresolved` — the tag's own "no type is known here"
+	// arm, never a stand-in for one — and the overload picker treats a declaration carrying one as
+	// UNSCOREABLE rather than as matching anything.
+	//
+	// The cursor is saved and restored, so the peek-only contract of the walk that calls this holds.
+	function sweptParamTypeAt(typeStart TokenIndex, typeEnd TokenIndex) returns MaxonType
+		if typeEnd != typeStart + 1 'aCompoundTypeIsNotReadHere'
+			return sharedUnreadParamType
+		end 'aCompoundTypeIsNotReadHere'
+
+		let saved = self.pos
+		self.pos = typeStart
+		// TOLERANT for `foldDeclaredSignaturesInto`'s reason: a type this reader cannot make sense of is the
+		// REAL parse's to report, with a position, and a sweep that vetoed would reject a correct program.
+		let swept = try self.parseTypeReference() otherwise sharedUnreadParamType
+		self.pos = saved
+		return swept
+	end 'sweptParamTypeAt'
 
 	// ⭐ The inner-alias PARAMETER shape of the parameter list at `parenPos` (P1.6-C) — its SOURCE parameter
 	// names and, per position, the bare inner-alias MEMBER (`Idx`) or `EmptySourceText`. It walks the list the
@@ -15325,17 +15480,24 @@ export type Parser
 	// simply asks whether the file has already registered the name and counts up until it has not. The
 	// ordinal is unreachable for any program a human writes and costs one `Set.contains` when it is.
 	//
-	// ⚠ **THE CONTEST IS SEEN WITHIN ONE FILE ONLY — WITH ONE EXCEPTION THE WHOLE-PROGRAM FOLD SUPPLIES.**
-	// Two FILES declaring one name still collide at the merge (E3006), because the parser is a pure function
-	// of its own file and the whole-program declaration sweep publishes no parameter types to contest
-	// against. That is a boundary, not a silent one.
+	// ⭐⭐ **THE CONTEST IS WHOLE-PROGRAM, AND IT IS READ BACK RATHER THAN RE-DERIVED.** A parser is a pure
+	// function of its own file, so a later overload of a name ANOTHER file claimed cannot know it is later —
+	// this function's own registry (`declaredFuncNames`) sees one file. What supplies the missing fact is a
+	// walk that completes before any file is parsed, and there are two of them, one per declaration kind:
 	//
-	// ⭐⭐ **THE EXCEPTION IS AN `extension` METHOD (X-contains), AND IT IS AN EXCEPTION BECAUSE SOMETHING
-	// ELSE ALREADY DOES THE WHOLE-PROGRAM WALK.** `Parser.foldExtensionDeclarationInto` visits every
-	// `extension` in the program before any file is parsed, so it can say — and does say, in
-	// `ProgramSignatures.contestedExtensionMethods` — that a given `<Conformer>.<method>` is declared by
-	// extensions in more than one file. That is exactly the fact this function is otherwise missing, and it
-	// is READ BACK here rather than re-derived, which is the same shape the W43 shadow decision takes.
+	//   • **an `extension` METHOD** — `Parser.foldExtensionDeclarationInto` visits every `extension` in the
+	//     program, so `ProgramSignatures.contestedExtensionMethods` can say that a `<Conformer>.<method>` is
+	//     declared by extensions in more than one FILE (X-contains).
+	//   • **a FREE FUNCTION** — the declaration sweep visits every `function` in the program, so
+	//     `ProgramSignatures.isCrossFileOverloadedFreeFunction` can say that a registration base is declared
+	//     by more than one FILE OF ONE DIRECTORY. (More than one DIRECTORY is a different rule and a
+	//     different name: each such declaration is registered under its directory-qualified spelling, N1c.)
+	//
+	// ⚠ **BOTH ANSWER ABOUT FILES AND NEITHER ABOUT PARAMETERS**, which is what keeps the mint below the one
+	// place a signature decides a name: a contested base sends EVERY declaration of it down the suffix
+	// ladder, and two that spell one parameter list then collide there exactly as a same-file redeclaration
+	// does. The sweep publishes each declaration's parameter-type SPELLINGS for the CALL side of the same
+	// question (`ProgramSignatures.overloadedDeclsOf`), never for this one.
 	//
 	// ⚠⚠ **WHEN THE NAME IS CONTESTED, NOBODY KEEPS THE BARE SPELLING — INCLUDING THE FIRST DECLARATION.**
 	// That is the whole of why the refusal below still works. Two declarations whose parameters differ mint
@@ -15383,7 +15545,7 @@ export type Parser
 		// declaration's facts under that key and the static call door asks for the same one; three spellings of
 		// "contest ⇒ the static name" would be three chances to disagree about a symbol.
 		let registrationBase = self.signatures.memberRegistrationKey(base, takesReceiver: takesReceiver)
-		let contested = self.signatures.isContestedExtensionMethod(base)
+		let contested = self.signatures.isContestedExtensionMethod(base) or self.namesACrossFileOverloadedFreeFunction(nameTok)
 		if not contested and not self.declaredFuncNames.contains(registrationBase) 'firstOfThisName'
 			// ✅ **A PAIR MEMBER USED TO BE PUT THROUGH THE OVERLOAD REFUSALS HERE, AND W75 RETIRED THAT.** The
 			// four facts those refusals are about — a consume set, a by-reference column, a parameter default
@@ -15413,6 +15575,23 @@ export type Parser
 		self.artifact.recordOverloadSet(registrationBase, members: overloadMemberNames(members))
 		return registered
 	end 'overloadRegistrationNameFor'
+
+	// ⭐ **THE FREE-FUNCTION HALF OF THE CONTEST ABOVE** — is this declaration a free function whose
+	// registration base a SECOND FILE OF ITS OWN DIRECTORY also declares? The `extension` half
+	// (`isContestedExtensionMethod`) is keyed by the qualified method name; this one is keyed by the base a
+	// DIRECTORY qualifies, so it is asked with the SOURCE token rather than with `base` — which for a free
+	// function contested across directories already carries that qualifier.
+	//
+	// A METHOD is excluded by `enclosingType`, not by inspecting the name: a method is keyed `Type.method`
+	// and can never be in the free-function contest, so asking would answer for an unrelated free function
+	// that happens to share the bare spelling.
+	function namesACrossFileOverloadedFreeFunction(nameTok Token) returns bool
+		if not self.enclosingType.isEmpty() 'aMethodIsKeyedByItsEnclosingType'
+			return false
+		end 'aMethodIsKeyedByItsEnclosingType'
+
+		return self.signatures.isCrossFileOverloadedFreeFunction(nameTok.value, moduleDirectory: self.signatures.moduleDirectoryOf(self.filePath))
+	end 'namesACrossFileOverloadedFreeFunction'
 
 	// ⭐⭐ **THE TWO FACTS THE PRE-PARSE DECLARATION SWEEP PUBLISHES PER BARE NAME, WHICH IS WHY THEY CANNOT
 	// BE OVERLOADED** (D7). `ProgramSignatures` is built from a TOKEN sweep before any file is parsed and is
@@ -15450,8 +15629,17 @@ export type Parser
 	// the set is refused the moment the managed one joins it, whichever order they are written in.
 	//
 	// ⚠ **THE FIX IS NOT A BETTER TEST HERE, IT IS PER-MEMBER FACTS IN THE SWEEP** — which needs the sweep to
-	// key its tables by something finer than the bare name, and that is a whole-program-query change with a
-	// parse-memo hash behind it. Until then this is the boundary, stated where a reader meets it.
+	// key these tables by something finer than the bare name. Until then this is the boundary, stated where a
+	// reader meets it.
+	//
+	// ⚠ **"AND THAT IS A WHOLE-PROGRAM-QUERY CHANGE WITH A PARSE-MEMO HASH BEHIND IT" WAS THE REST OF THAT
+	// SENTENCE, AND THE CHANGE HAS SINCE HAPPENED — FOR A DIFFERENT FACT.** The sweep now publishes each
+	// declaration's PARAMETER TYPES and its own RETURN TYPE (`ProgramSignatures.overloadedDeclsOf`, hash and
+	// all), which is what lets a call read the return type of the overload it means. It did NOT re-key the
+	// four tables above, and doing so is a strictly larger change than that one: a consume bit, a by-reference
+	// column, a default and a `throws` clause are each read at a call by NAME, before any member is known, so
+	// per-member versions of them need the call site to pick a member for something other than a type — which
+	// is the pass boundary each of these four refusals exists because of.
 	//
 	// ✅ **IT WAS ASKED OF A `static`/INSTANCE PAIR TOO, AND W75 RETIRED THAT.** Such a pair is not an
 	// overload set at all: the two take two registration names and are told apart at the call by SYNTAX
@@ -21571,8 +21759,15 @@ export type Parser
 		// declaration sweep records the signature under, so the key an `IrFunction` carries and the
 		// key `mintCallResult` types a call from are one name — for the FIRST declaration of it. A later
 		// OVERLOAD of the same name registers under a mangled variant of this one (`overloadRegistrationName`
-		// below), and the sweep — which cannot see parameter types — keeps publishing the BARE name; the
-		// two are reconciled at the call site by `SemanticCheck.resolveOverloadedCalls`.
+		// below), while the sweep keeps publishing the BARE name; the two are reconciled at the call site by
+		// `SemanticCheck.resolveOverloadedCalls`.
+		//
+		// ⚠ **"THE SWEEP CANNOT SEE PARAMETER TYPES" WAS THE SENTENCE HERE AND IT IS NO LONGER TRUE.** It
+		// publishes each declaration's parameter types beside its return type
+		// (`ProgramSignatures.overloadedDeclsOf`), which is what lets a call read the return type of the
+		// overload it MEANS. What it still keys by the bare name is the return type ITSELF and the four
+		// ownership/ABI facts `requireOverloadableName` refuses on — so the registration name a declaration
+		// takes is still the parser's, and the sweep's tables are still one entry per key.
 		let sourceName = self.declaredMethodName(nameTok)
 
 		// Parameters are parsed into parallel name/type lists BEFORE the scope reset:
@@ -24432,7 +24627,8 @@ export type Parser
 	// ⭐⭐ **A CALL RESULT NAMING A BARE GENERIC TYPE IS READ IN THE CALLEE'S OWN SCOPE** — the READ-DOOR
 	// repair of a swept return type, and the reason the type-reference arm alone is not enough.
 	//
-	// ⚠ **`mintCallResult` TYPES A CALL FROM THE TOKEN SWEEP'S `returnTypeOf`, NOT FROM THE REAL PARSE**, and
+	// ⚠ **`mintCallResult` TYPES A CALL FROM THE TOKEN SWEEP — `overloadedDeclsOf` where the name is overloaded
+	// and its declarations disagree, `returnTypeOf` otherwise — NEVER FROM THE REAL PARSE**, and
 	// the sweep answers every bare generic name as a plain `named` — deliberately, on the `allFilesFolded`
 	// gate `parseTypeReference` argues for at length, because a registry answer during the sweep is a
 	// property of the loader's walk order. So `MyMap.createIterator() returns MyMapIterator` reaches its CALL
@@ -65926,7 +66122,7 @@ export type Parser
 		// is what makes the consume transfer, the drop enrollment and `slotCallArgs`' arity gate correct for
 		// it with no change to any of them.
 		let argDefaultSlots = try self.fillOmittedArgDefaults(callee, anchor: anchor, args: args, argLabels: argLabels, argRanges: argRanges)
-		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed)
+		let result = try self.mintCallResult(callee, anchor: anchor, resultUsed: resultUsed, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots)
 		let opaqueWordReading = self.retypeOpaqueMethodResult(result, callee: callee, args: args)
 		// ⭐⭐ **THE DROP ENROLMENT COMES AFTER THE RETYPE, AND THAT ORDER IS THE WHOLE OF A5o.** It used to sit
 		// in the mint's own tail, where the tag was still the opaque `T` — and an opaque tag ALWAYS answers "owns
@@ -66719,7 +66915,7 @@ export type Parser
 	// The declared return type of `callee` as a value tag, VOID included. The tag that TYPES the awaited
 	// value, so a ranged alias deliberately stays `named` here — see `asyncCarriedResultTag`.
 	function calleeReturnTag(callee ByteArray) returns ValueTypeTag
-		return asyncReturnTypeTag(self.calleeReturnType(callee))
+		return returnTypeTagOrVoid(self.calleeReturnType(callee))
 	end 'calleeReturnTag'
 
 	// ⭐ **WHAT THE SPAWN'S RESULT CHANNEL ACTUALLY CARRIES** — `calleeReturnTag`'s answer with a ranged
@@ -67171,6 +67367,76 @@ export type Parser
 		return self.storeOwnedValueIntoDurableSink(argValue, isString: tagIsByteRecord(self.tagOf(argValue)), range: SourceRange.ofToken(anchor))
 	end 'transferConsumedArg'
 
+	// ⭐⭐ **ARE THESE TWO DECLARED ANSWERS INTERCHANGEABLE AT A CALL?** — the question a whole-program index
+	// that keeps ONE return type per key silently answers YES to for every declaration wearing that key.
+	//
+	// The TAG half is `overloadResultTagAgrees` asked in BOTH directions — the same rule
+	// `SemanticCheck.requireOverloadResultTagAgrees` refuses on — so a set the tags call agreeing is exactly
+	// a set that pass can never report. Two ranged aliases therefore agree (they are both numbers), which is
+	// what keeps `stdlib`'s own overload sets on the untouched path.
+	//
+	// ⛔⛔ **THE TAG HALF WAS THE WHOLE TEST, AND THAT WAS A MEASURED SILENT WRONG ANSWER (rung review).**
+	// Two struct returns are both `structRef` and two generic-instance returns are both `genericInstance`, so
+	// a set returning two DIFFERENT aggregates read as agreeing: the decider declined, `returnTypeOf`'s
+	// last-wins answer typed the call from the OTHER member — and the sentence above is exactly why nothing
+	// reported it, the two being consistently blind together. **MEASURED:** `pick(n Integer) returns Box`
+	// beside `pick(s String) returns Bag`, two two-field structs whose fields are declared in OPPOSITE
+	// orders, called `pick(1)` — `b.first` printed **22** where the bootstrap prints **11**. The value was a
+	// `Box` read at `Bag`'s offsets, compiled clean, with no diagnostic at any stage.
+	//
+	// ⇒ once the tags agree, only a nominal IDENTITY can still part them, and it is read through the ONE
+	// routine that answers it (`aggregateNameOf`) — the same refinement `sweptOverloadArgFit` applies to a
+	// PARAMETER at the same pair, and the same "a ranged alias names no aggregate" rule that keeps two
+	// spellings of one number interchangeable.
+	function returnAnswersAreInterchangeable(left MaxonReturnType, right MaxonReturnType) returns bool
+		let leftTag = returnTypeTagOrVoid(left)
+		let rightTag = returnTypeTagOrVoid(right)
+		// `void` is not a `MaxonType`, so the void/value split is settled before any tag is compared — and a
+		// value answer meeting a void one is the quadrant no retype can repair
+		// (`SemanticCheck.requireOverloadVoidResult`).
+		if leftTag == ValueTypeTag.void or rightTag == ValueTypeTag.void 'oneOfThemReturnsNothing'
+			return leftTag == rightTag
+		end 'oneOfThemReturnsNothing'
+
+		if not (overloadResultTagAgrees(leftTag, declared: rightTag) and overloadResultTagAgrees(rightTag, declared: leftTag)) 'theTagsAlreadyPartThem'
+			return false
+		end 'theTagsAlreadyPartThem'
+
+		return not namedAggregatesConflict(self.adoptedReturnAggregateName(left), got: self.adoptedReturnAggregateName(right))
+	end 'returnAnswersAreInterchangeable'
+
+	// The aggregate identity of a SWEPT return type, read in this file's own interner. ADOPTED first because
+	// `aggregateNameOf` resolves ids against `self.artifact.typeNames` and a swept id is the INDEX's — the
+	// same crossing `overloadedCallResultType` makes for the type it finally hands back. Reached only once
+	// the tags have already agreed, so no set the tag test parts pays for it.
+	function adoptedReturnAggregateName(swept MaxonReturnType) returns ByteArray
+		return match self.signatures.adoptReturnType(swept, into: self.artifact.typeNames) 'adopted'
+			void gives EmptySourceText
+			value(inner) gives self.aggregateNameOf(maxonTypeTag(inner), nameId: typeNameIdOf(inner))
+		end 'adopted'
+	end 'adoptedReturnAggregateName'
+
+	// ⭐⭐ **DO THE DECLARATIONS OF ONE NAME DISAGREE ABOUT WHAT THEY RETURN?** — the gate that keeps the
+	// parse-time overload decider off every call in every program that does not need it. It is asked of ALL
+	// the declarations rather than of the visible ones, because what a disagreement spoils is
+	// `ProgramSignatures.returnTypeOf`, whose one entry per key is written by whichever declaration was swept
+	// last — visible from the reader or not.
+	//
+	// ⚠ **EVERY CANDIDATE IS COMPARED AGAINST THE FIRST, AND THAT IS COMPLETE BECAUSE THE RELATION IS AN
+	// EQUIVALENCE.** Its tag half is class equality (`typeClassesAgree`) refined by floatness — the one
+	// non-equality it admits, int-to-float widening, is exactly what the floatness test removes — and its
+	// name half is byte equality. A pairwise sweep would find nothing this fold does not.
+	function sweptOverloadsDisagreeOnReturnType(candidates OverloadedDeclArray) returns bool
+		let first = try candidates.get(0) otherwise panic("sweptOverloadsDisagreeOnReturnType: an empty candidate list — the caller returns on `count() < 2` before asking")
+		for i in 1 upto candidates.count() 'eachLater'
+			let later = try candidates.get(i) otherwise panic("sweptOverloadsDisagreeOnReturnType: candidates.get OOB at {i} inside its own count()")
+			if not self.returnAnswersAreInterchangeable(first.returnType, right: later.returnType) 'twoAnswers'
+				return true
+			end 'twoAnswers'
+		end 'eachLater'
+		return false
+	end 'sweptOverloadsDisagreeOnReturnType'
+
 	// Mint the SSA value a call to `calleeTok` defines, typed from the WHOLE-PROGRAM signature index
 	// (SignatureIndex.maxon) — so the type is exact whether the callee is declared above this call,
 	// below it, or in another file entirely.
@@ -67181,7 +67447,185 @@ export type Parser
 	// sentinel with two meanings, and TypeRules' `unknown` (which agrees with everything) is what it
 	// became. That is how `isReady()` from another file added to 41 and made 42, and how
 	// `let x = noop()` then `x + 4` compiled at all.
-	function mintCallResult(callee ByteArray, anchor Token, resultUsed bool) returns ValueId throws ParseError
+	// ⭐⭐⭐ **WHICH OVERLOAD'S RETURN TYPE THIS CALL READS — the CALL half of a cross-file overload set, and
+	// the only decision the parser has to take about a set it does not resolve.**
+	//
+	// A call's result type is fixed while its own file is parsed: the tag decides the Std type of the result
+	// (`lowerMaxonToStd`), whether a scope-exit drop is enrolled for it (`enrolOwnedCallTemp`) and which
+	// register file it travels in. The MEMBER is chosen a whole pass later
+	// (`SemanticCheck.resolveOverloadedCalls`), so with one return type per NAME every call to a disagreeing
+	// set was typed from whichever declaration the sweep read last. See `ProgramSignatures.OverloadedDecl`
+	// for the two measured failures that produced — an access violation and a leak.
+	//
+	// ⭐ **IT ANSWERS `undecided` WHENEVER THE SET AGREES, AND THAT IS WHAT MAKES THIS DOOR INERT FOR EVERY
+	// PROGRAM THAT ALREADY COMPILED.** An agreeing set has one return type however the call resolves, so the
+	// by-name answer is already exact and is taken unchanged — no corpus program and no `stdlib` call takes a
+	// different path or emits a different byte because of this door.
+	//
+	// ⚠⚠ **IT IS A NARROW DECIDER, AND IT IS *CHECKED* RATHER THAN TRUSTED.** It answers `undecided` -
+	// falling back to the by-name type and to the refusal that has always guarded it
+	// (`SemanticCheck.reportOverloadReturnDisagreement`) — for anything it cannot settle: a member the sweep
+	// could not read a parameter type for, a call that fits several visible members, a call that fits none.
+	// And when it DOES answer, `SemanticCheck.reconcileOverloadResultType` re-asks the same question against
+	// the member resolution actually chose and refuses the program if the two types disagree irreconcilably.
+	// So a pick this door gets wrong is a DIAGNOSTIC, never a wrong answer — which is what lets the two
+	// deciders stay honest about the different things they know: this one sees only what a TOKEN SWEEP could
+	// publish, and that one sees the real signatures a pass later.
+	//
+	// ⚠⚠ **THE TWO DECIDERS DIFFER IN THEIR CANDIDATE SET, NOT ONLY IN SCORING AND SOURCE — say so before
+	// reading the paragraph below as a claim that they agree.** This door filters by `isVisibleFrom`;
+	// `SemanticCheck.overloadCandidates` filters only on "did the member survive to `funcSignatures`" and
+	// applies no visibility rule at all, so that pass may select a member the calling file cannot NAME — which
+	// is caught afterwards by `calleeVisibilityFrom` (E3008/E3088), a refusal rather than a privacy hole. What
+	// the two share is the ORDER; where their candidate sets part, this door's answer is the narrower one and
+	// the wider one is refused a pass later.
+	//
+	// ⚠ **VISIBILITY IS APPLIED HERE AND NOT IN THE SCORER, because for the shape this rung is about it is
+	// the WHOLE answer.** Two files of one module each declaring a file-private helper of one name -
+	// `stdlib/Console.maxon` and `stdlib/Subprocess.maxon` each carrying a `stripTrailingCR` — leave exactly
+	// one member nameable from either file, so no type has to be compared to know which one a call means. The
+	// DISAGREEMENT is still read across ALL declarations, because it is `returnTypeOf`'s answer that the
+	// member this file cannot name is what spoils.
+	function overloadedCallResultType(callee ByteArray, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns SweptOverloadPick
+		// ⚡ **THE COST GATE, and it is the first thing this function does because it runs at EVERY call in the
+		// program.** A name with one declaration — which is nearly every callee, every builtin and every
+		// runtime symbol — leaves here on a count, having allocated nothing: `overloadedDeclsOf` answers a
+		// MISS with the shared empty list rather than building one.
+		//
+		// ⚠ It has a DEFENSIVE property nobody set out to give it, worth knowing before anyone tightens it: a
+		// double-fold of one file would push that file's declarations twice and flip this test — and the
+		// duplicates then compare as agreeing (they are the same declaration), so the set still lands on
+		// `undecided` and the by-name answer still serves. The gate is a cost gate; it is not what makes a
+		// double-fold safe.
+		let candidates = self.signatures.overloadedDeclsOf(callee)
+		if candidates.count() < 2 'oneDeclarationWearsThisName'
+			return sharedUndecidedOverloadPick
+		end 'oneDeclarationWearsThisName'
+
+		if not self.sweptOverloadsDisagreeOnReturnType(candidates) 'oneAnswerHoweverItResolves'
+			return sharedUndecidedOverloadPick
+		end 'oneAnswerHoweverItResolves'
+
+		var picked = sharedUndecidedOverloadPick
+		var best = NoCompatibleOverloadScore
+		var holdingBest = 0 as OverloadCandidateCount
+		for candidate in candidates 'eachCandidate'
+			if not self.signatures.isVisibleFrom(candidate.visibility, declFilePath: candidate.declFilePath, readerFilePath: self.filePath) 'notNameableFromHere'
+				continue
+			end 'notNameableFromHere'
+
+			var score = NoCompatibleOverloadScore
+			match self.sweptOverloadFit(candidate, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'fit'
+				// A parameter the sweep did not read leaves this whole set unjudgeable: a candidate that cannot
+				// be refused cannot be outranked either, so a winner here would be a claim about the members this
+				// door happened to be able to read.
+				unscoreable then return sharedUndecidedOverloadPick
+				incompatible then continue
+				fits(fitScore) then score = fitScore
+			end 'fit'
+			if score < best 'outranked'
+				continue
+			end 'outranked'
+
+			if score > best 'aNewBest'
+				best = score
+				holdingBest = 0
+			end 'aNewBest'
+
+			holdingBest = holdingBest + 1
+			// ADOPTED into this file's interner, exactly as `returnTypeOf` adopts the by-name answer: the
+			// index's ids are its own, and a `named`/`structRef` return read raw would name whatever this
+			// file's table happens to hold at that id.
+			picked = SweptOverloadPick.resolved(self.signatures.adoptReturnType(candidate.returnType, into: self.artifact.typeNames))
+		end 'eachCandidate'
+
+		// A TIE is `undecided` and never a choice: `SemanticCheck.selectOverload` calls the same tie E3007, so
+		// the program is refused at the call rather than typed from one of the members it cannot mean.
+		return picked if holdingBest == 1 else sharedUndecidedOverloadPick
+	end 'overloadedCallResultType'
+
+	// One candidate's fit, scored on the SWEEP's parameter types. Arity and labels are asked through the
+	// shared `slotCallArgs` — simultaneously the label test and the arity test, and the one label-to-position
+	// mapping in the compiler — and each slotted argument is then measured by `checkDeclaredType`, the same
+	// coercion rule `SemanticCheck.overloadArgTypeFit` scores with a pass later and `checkOneArgType` reports
+	// against after that.
+	//
+	// ⚠ **THE SCORE IS THAT PASS'S OWN — `ExactArgScore`/`WideningArgScore`, exported from it for this door.**
+	// The two cannot share a scoring FUNCTION (one reads the SWEEP's tolerant types, the other the merged
+	// registry), so what they share is the ORDER, which is the part that has to agree: a member this door
+	// picks and that pass does not is a call typed from a return type it never gets, and the program earns
+	// `reportOverloadReturnDisagreement` for something the author got right.
+	function sweptOverloadFit(candidate OverloadedDecl, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns SweptOverloadFit
+		// The receiver is excluded from a swept parameter list (`OverloadedDecl`) and present in the call's
+		// argument list, so the two are aligned here — the same prepend `parseCallNamed` makes.
+		let slotNames = callAlignedFrom(candidate.paramNames) if candidate.takesReceiver else candidate.paramNames
+		match slotCallArgs(slotNames, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'slot'
+			ordered(slotted) then return self.sweptOverloadArgFit(candidate, slotted: slotted)
+			// An arity mismatch, a label naming no parameter, or two arguments at one parameter: this call was
+			// not written against this candidate.
+			arityMismatch to duplicateArg then return sharedOverloadIncompatible
+		end 'slot'
+	end 'sweptOverloadFit'
+
+	function sweptOverloadArgFit(candidate OverloadedDecl, slotted ValueIdArray) returns SweptOverloadFit
+		let firstUser = firstUserParamIndex(candidate.takesReceiver)
+		var score = NoCompatibleOverloadScore
+		for i in 0 upto candidate.paramTypes.count() 'eachUserParam'
+			let swept = try candidate.paramTypes.get(i) otherwise panic("sweptOverloadArgFit: paramTypes.get OOB at {i} inside its own count()")
+			if maxonTypeTag(swept) == ValueTypeTag.unresolved 'theSweepDidNotReadThisParameterType'
+				return sharedOverloadUnscoreable
+			end 'theSweepDidNotReadThisParameterType'
+
+			// ⭐⭐ **ADOPTED AND THEN REPAIRED, and BOTH steps are the reason this scores what the argument
+			// check will score.** The sweep's ids live in the index's own interner, and the type it recorded is
+			// the TOLERANT one — a struct, a float alias and a generic alias all arrive as a bare `named`
+			// (`parseTypeReference`'s `allFilesFolded` argument). Compared raw, a `ByteArray` parameter is a
+			// `named` while its argument is a generic instance, and every candidate scores incompatible.
+			let paramType = self.repairSweptType(self.signatures.adoptType(swept, into: self.artifact.typeNames))
+			let paramTag = maxonTypeTag(paramType)
+			let argValue = try slotted.get(firstUser + i) otherwise panic("sweptOverloadArgFit: slotted.get OOB at {firstUser + i} — `slotCallArgs` answered `ordered`, so the counts agree, and `paramNames`/`paramTypes` are pushed in lockstep by the one walk that fills them")
+			let argTag = self.tagOf(argValue)
+			if checkDeclaredType(argTag, declared: paramTag) != DeclaredTypeMatch.ok 'theCoercionRuleRefusesIt'
+				return sharedOverloadIncompatible
+			end 'theCoercionRuleRefusesIt'
+
+			// ⭐ TWO DIFFERENT AGGREGATES SHARE ONE TAG, so the tag verdict alone accepts a `Bag` at a `Box`
+			// parameter. The identity is the aggregate NAME, read on both sides through the ONE routine that
+			// answers it (`aggregateNameOf`) — the parser's own half of the refinement
+			// `SemanticCheck.overloadArgTypeFit` applies at the same pair, and the same "a ranged alias names no
+			// aggregate" rule that lets an `int` literal stand at a `Cnt` parameter.
+			//
+			// ⚠ **IT IS THE BARE RULE AND THAT PASS USES A WIDER DOOR, SO THE TWO ARE NOT THE SAME PREDICATE.**
+			// `overloadArgTypeFit` asks `ProgramSignatures.aggregatesConflict` (which carries the byte-element
+			// boundary) and falls back to `sig.paramAggregateNames` for an ERASED union parameter; neither is
+			// reachable from here, where the parameter type is the SWEEP's and no signature exists yet. The gap
+			// is one-directional — this door can call INCOMPATIBLE a candidate that pass accepts, never the
+			// reverse — so its cost is a DECLINE (`undecided`, or at worst a wrong single pick that
+			// `reconcileOverloadResultType` refuses), never a candidate selected here and rejected downstream.
+			if namedAggregatesConflict(self.aggregateNameOf(paramTag, nameId: typeNameIdOf(paramType)), got: self.aggregateNameOf(argTag, nameId: self.valueNameId(argValue))) 'twoAggregatesThatDoNotDenoteOneRecord'
+				return sharedOverloadIncompatible
+			end 'twoAggregatesThatDoNotDenoteOneRecord'
+
+			score = score + (ExactArgScore if argTag == overloadRankTagOf(paramTag) else WideningArgScore)
+		end 'eachUserParam'
+
+		// A ZERO-PARAMETER candidate scored nothing and still fits — the arity test that separated it from its
+		// siblings already ran. It is floored at `WideningArgScore` so the answer stays a score the caller can
+		// compare, exactly as `SemanticCheck.overloadArgTypeFit` floors its own.
+		return SweptOverloadFit.fits(score if score > NoCompatibleOverloadScore else WideningArgScore)
+	end 'sweptOverloadArgFit'
+
+	function mintCallResult(callee ByteArray, anchor Token, resultUsed bool, args ValueIdArray, argLabels ByteArrayArray, argDefaultSlots ParamCountArray) returns ValueId throws ParseError
+		// ⭐⭐ **AN OVERLOAD SET WHOSE MEMBERS DISAGREE ABOUT WHAT THEY RETURN IS ASKED FIRST, AND ONLY THEN.**
+		// `returnTypeOf` records ONE return type per registration key and is LAST-WINS over the declarations
+		// wearing it, which is exactly right for every name whose declarations agree — every name in every
+		// program the corpus compiles — and is a wrong answer for one whose declarations do not. See
+		// `overloadedCallResultType` for what it will and will not decide.
+		match self.overloadedCallResultType(callee, args: args, argLabels: argLabels, argDefaultSlots: argDefaultSlots) 'overloaded'
+			resolved(returnType) then return try self.mintDeclaredCallResult(callee, anchor: anchor, returnType: returnType, resultUsed: resultUsed)
+			undecided then break 'overloaded'
+		end 'overloaded'
+
 		match self.signatures.returnTypeOf(callee, into: self.artifact.typeNames) 'callee'
 			declared(returnType) then return try self.mintDeclaredCallResult(callee, anchor: anchor, returnType: returnType, resultUsed: resultUsed)
 			// NO file declares this callee. DEFER, and keep deferring: `SemanticCheck.validateCall` owns
@@ -67262,13 +67706,23 @@ export type Parser
 	// this function's tail until A5o, which put it one step too early for the one caller that RETYPES the
 	// result afterwards. The name still says `Owned` because that is what the returned value is; what moved
 	// is only WHEN the obligation is written down.
+	// ⭐⭐ **THE READ-DOOR REPAIR OF A TYPE THE TOLERANT SWEEP RECORDED — one composition, two askers.**
+	// `resolveNamedStruct` re-tags a struct-`named` to `structRef`; `resolveFloatAliasType` then resolves a
+	// float-alias `named` (`Float`) to `float` (F2a); `resolveNamedAlias` resolves a function, generic or
+	// tuple alias to what it denotes. All three are needed and they compose cleanly — a type is a struct, a
+	// float alias, a function alias, a generic alias, a tuple alias or a ranged int, never two — so the result
+	// of a `returns Float` callee binds a `float` (XMM) value that `trunc` truncates and `return` moves
+	// cleanly, rather than a `named` value the tag says is an int while the backend files it in XMM.
+	//
+	// ⚠ **TWO READERS OF SWEPT TYPES, AND THEY MUST REPAIR THEM ALIKE**: a call's RESULT (below) and an
+	// overload candidate's PARAMETER (`sweptOverloadArgFit`). Repairing one and not the other is exactly how a
+	// candidate gets scored against a tag its own argument check one pass later never sees.
+	function repairSweptType(swept MaxonType) returns MaxonType
+		return self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(swept)))
+	end 'repairSweptType'
+
 	function mintOwnedCallResult(inner MaxonType) returns ValueId
-		// `resolveNamedStruct` re-tags a struct-`named` return to `structRef`; `resolveFloatAliasType` then
-		// resolves a float-alias `named` return (`returns Float`) to `float` (F2a). Both are needed and
-		// compose cleanly — a type is a struct, a float alias, an int alias or a scalar, never two — so the
-		// result of a `returns Float` callee binds a `float` (XMM) value that `trunc` truncates and `return`
-		// moves cleanly, rather than a `named` value the tag says is an int while the backend files it in XMM.
-		let result = self.mintValueOfType(self.resolveNamedAlias(self.resolveFloatAliasType(self.resolveNamedStruct(inner))))
+		let result = self.mintValueOfType(self.repairSweptType(inner))
 
 		// ⭐ **THE FLOAT LIFT DROPS THE ALIAS NAME, so the alias is recorded beside the value.**
 		// `MaxonType.float` has no id slot, so a `returns Float` result lands with tag `float` and no name —

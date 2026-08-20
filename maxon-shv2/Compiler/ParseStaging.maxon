@@ -49,6 +49,7 @@ let sharedEmptyInferredInstantiationSites = GenericInstantiationSiteArray.create
 let sharedEmptyTypeNameDecls = TypeNameDeclArray.create()
 let sharedEmptyFunctionTypeDoors = PendingFunctionTypeDoorArray.create()
 let sharedEmptyTransformArities = PendingTransformArityArray.create()
+
 // A statement that uses NONE of a call's result is rarer than either — one spelling opens the door
 // (`(_, _) = f()`) and almost no file writes it — so the empty column is shared for the reason above it.
 let sharedEmptyDiscardedResults = PendingDiscardedResultArray.create()
@@ -96,6 +97,13 @@ let sharedEmptyOverloadSets = OverloadSetMap.create()
 // may be declared in another file, and `resolveTypes` has erased the parameter's alias long before any
 // caller asks. It DEFAULTS to `sharedNoOpaqueParams` for the three `Project.funcReturnTypes` producers named
 // below and for every declaration outside a generic type, which is the overwhelming majority.
+// ⭐⭐ **`paramNames`/`paramTypes` ARE THE DECLARATION'S OWN SOURCE PARAMETER LIST — THE RECEIVER EXCLUDED —
+// AND THEY RIDE HERE FOR `opaqueParams`' REASON: a fifth fact about the SAME declaration, applied by
+// `ProgramSignatures.record` in the same act.** They are what lets a CALL SITE tell one member of an overload
+// set from another while its own file is being parsed, which is the one moment a call's result type is
+// decided and a whole pass before `SemanticCheck.resolveOverloadedCalls` picks a member. See
+// `ProgramSignatures.overloadedDeclsOf`. Both default EMPTY for the three `Project.funcReturnTypes` producers
+// named below — a synthesized helper is never overloaded, so there is nothing to tell apart.
 export type FuncReturnTypeEntry
 	export var name as ByteArray
 	export var returnType as MaxonReturnType
@@ -103,11 +111,18 @@ export type FuncReturnTypeEntry
 	export var visibility as Visibility
 	export var takesReceiver as bool
 	export var opaqueParams as OpaqueParamInfo
+	export var paramNames as ByteArrayArray
+	export var paramTypes as MaxonTypeArray
 
-	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams) returns FuncReturnTypeEntry
-		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams}
+	export static function create(name ByteArray, returnType MaxonReturnType, declaredSurface DeclaredSurface, visibility Visibility = Visibility.file, takesReceiver bool = false, opaqueParams OpaqueParamInfo = sharedNoOpaqueParams, paramNames ByteArrayArray = sharedNoDeclaredParamNames, paramTypes MaxonTypeArray = sharedNoDeclaredParamTypes) returns FuncReturnTypeEntry
+		return Self{name: name, returnType: returnType, declaredSurface: declaredSurface, visibility: visibility, takesReceiver: takesReceiver, opaqueParams: opaqueParams, paramNames: paramNames, paramTypes: paramTypes}
 	end 'create'
 end 'FuncReturnTypeEntry'
+
+// ⭐ The ONE "this record states no parameter list" pair, shared by every producer that has none to state.
+// NEVER mutated.
+export let sharedNoDeclaredParamNames = ByteArrayArray.create()
+export let sharedNoDeclaredParamTypes = MaxonTypeArray.create()
 
 export typealias FuncReturnTypeEntryArray = Array with FuncReturnTypeEntry
 
@@ -1179,11 +1194,7 @@ function remapArtifact(artifact FileParseArtifact, remap TypeNameRemap)
 	for i in 0 upto artifact.module.functions.count() 'eachFunc'
 		var func = try artifact.module.functions.get(i) otherwise panic("remapArtifact: functions.get OOB at {i}")
 		func.maxonReturnType = remapMaxonReturnType(func.maxonReturnType, remap: remap)
-		var remappedParams = MaxonTypeArray.create()
-		for pt in func.maxonParamTypes 'eachParam'
-			remappedParams.push(remapMaxonType(pt, remap: remap))
-		end 'eachParam'
-		func.maxonParamTypes = remappedParams
+		func.maxonParamTypes = remapMaxonTypes(func.maxonParamTypes, remap: remap)
 
 		// The per-value NAME column moves with the signature: a body value typed `structRef(SomeStruct)`
 		// for a struct declared in ANOTHER file carries a file-local id this merge is moving, and
@@ -1255,7 +1266,7 @@ function commitFuncSignatures(project Project, artifact FileParseArtifact)
 			// about a mechanism the author never used. The first entry is still kept, exactly as for a
 			// reported duplicate: the two paths differ in what they SAY, never in what the registry holds.
 			if not entry.synthesized 'theAuthorWroteThisName'
-				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: entry.name), line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
+				reportPositioned(project, code: ErrorCode.duplicateDefinition, message: duplicateFunctionMessage(project, name: entry.name, declFilePath: entry.sourceFilePath), line: entry.nameLine, column: entry.nameColumn, filePath: entry.sourceFilePath)
 			end 'theAuthorWroteThisName'
 			continue
 		end 'duplicate'
@@ -1321,7 +1332,7 @@ end 'commitFuncSignatures'
 // ⇒ A new mint nobody classifies now lands on a mangled sentence and says what the author WROTE, which is
 // imprecise rather than wrong. The enumeration failed OPEN, onto the one sentence that promises the name it
 // quotes is greppable — the worst of the four places it could have landed.
-function duplicateFunctionMessage(project Project, name ByteArray) returns String
+function duplicateFunctionMessage(project Project, name ByteArray, declFilePath FilePath) returns String
 	let signatures = try queryProgramSignatures(project) otherwise panic("duplicateFunctionMessage: queryProgramSignatures failed during merge — the whole-program index is computed and memoized before the pipeline runs, so a merge-time ask cannot fail fresh")
 	if signatures.isContestedRegistrationName(name) 'aFreeFunctionContestedAcrossDirectories'
 		return mangledDuplicateFunctionMessage(name, why: "a free function of that bare name is declared in more than one DIRECTORY, so each is registered under its directory-qualified spelling, and that spelling is already the mangled name of a method. Rename the directory, or rename the function")
@@ -1331,6 +1342,15 @@ function duplicateFunctionMessage(project Project, name ByteArray) returns Strin
 	if signatures.isContestedExtensionMethod(base) 'anExtensionMethodContestedAcrossFiles'
 		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "is declared by an `extension` in more than one FILE")
 	end 'anExtensionMethodContestedAcrossFiles'
+
+	// ⭐⭐ **THE FOURTH SYNTHESIZED-NAME KIND: A FREE FUNCTION MORE THAN ONE FILE OF ITS DIRECTORY DECLARES**,
+	// and it is the `extension` kind above one declaration kind over — same construction, same reason for a
+	// sentence of its own. Its own `whyThereAreSeveral` rather than the fall-through's "has more than one
+	// declaration in this program", because a file boundary is the fact the author has to see: the two
+	// declarations are in two files, and nothing in either one of them looks like a duplicate.
+	if signatures.isCrossFileOverloadedFreeFunctionAt(base, declFilePath: declFilePath) 'aFreeFunctionDeclaredByTwoFilesOfOneDirectory'
+		return parameterSpellingCollisionMessage(name, base: base, whyThereAreSeveral: "is declared as a free function in more than one FILE of its directory")
+	end 'aFreeFunctionDeclaredByTwoFilesOfOneDirectory'
 
 	// ⛔⛔ **THE MINTED-NAME SENTENCES ARE GATED ON THE PROPERTY — `name` IS NOT WHAT A DECLARATION WROTE — AND
 	// NOT ON WHICH CONTEST EXISTS. A CONTEST FLAG READ OUTSIDE THIS BAND IS A WRONG SENTENCE, MEASURED.** The
