@@ -31258,13 +31258,19 @@ export type Parser
 	// `generic-type-nested-array-typealias`), every one of which is CORRECT as it stands, because the record
 	// is co-owned by the `Self{…}` it was stored into and this decref provably cannot be the last.
 	//
-	// ⚠ **WHAT THE GATE LEAVES IS A REAL SHAPE, AND IT IS EXACTLY TODAY'S BEHAVIOUR ON IT**: a body carrying
-	// NO descriptor that is nevertheless the LAST owner of such a record — a consumed `Cell` parameter that is
-	// never stored — falls through to `genericInstanceBoxDropCallee`, which frees the box and leaves the slot.
-	// That is a LEAK the leak gate reports, not a use-after-free, it is what the merge base does on the same
-	// program, and closing it is a descriptor-RESERVATION question (which method shapes get a descriptor) and
-	// not a drop-routing one. Widening the reservation to reach it was measured against
-	// `staticLayoutNeedsSelfReturn` and refuses programs of its own, so it is a rung and is reported as one.
+	// ⚠ **WHAT THE GATE LEAVES IS EXACTLY TODAY'S BEHAVIOUR, AND IT IS NARROWER THAN IT SOUNDS.** A body
+	// carrying NO descriptor that is nevertheless the LAST owner of such a record falls through to
+	// `genericInstanceBoxDropCallee`, which frees the box and leaves the slot — a LEAK the gate reports, not a
+	// use-after-free. ⚠ **The one spelling of it that could be written down does not COMPILE, on this tree or
+	// on the merge base**: `static discard(cell Cell) returns Integer` — a consumed declaration-view parameter
+	// never stored — is refused by `E3005: expected 'Cell_T<digest>', got 'StrCell'`, because a static that
+	// does not return `Self` never has its parameters substituted through the receiver instance. So the
+	// residue is stated as a BOUND on this routing rather than as a measured defect; the shapes that DO reach
+	// a descriptor-less body all store what they take.
+	//
+	// Closing it properly is a descriptor-RESERVATION question (which method shapes get one) and not a
+	// drop-routing one — and widening the reservation was MEASURED to refuse programs of its own against
+	// `staticLayoutNeedsSelfReturn`, so it is a rung and is reported as one.
 	//
 	// ⭐ It is ALSO the guarantee `emitDecref` does not restate: because the dictionary callee is chosen only
 	// where the descriptor exists, no drop site can emit one without a descriptor to prepend — which is why
