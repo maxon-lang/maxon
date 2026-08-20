@@ -463,6 +463,31 @@ export function countParamsWithTag(paramTypes MaxonTypeArray, tag ValueTypeTag) 
 	return n
 end 'countParamsWithTag'
 
+// ⭐⭐ **WHERE THE TWO OPTIONAL HIDDEN SLOTS SIT, WRITTEN ONCE (found at review of W190).** The ABI is
+// `[user][env][existentialWitness][layout][count][witness_0..k]`, and both optional blocks are addressed
+// FROM THE END — so each slot's ValueId is arithmetic on `paramCount` and the counts trailing it. That
+// arithmetic was spelled out twice per slot: once where the parser RESERVES it (`Parser.parseFunction`,
+// `Parser.parseFieldDefaultHelper`) and once where the lowering BINDS it
+// (`LowerMaxonToStd.bindImplicitParams`).
+//
+// ⚠ **IT IS `countParamsWithTag`'S HAZARD ONE AXIS OVER, AND IT HAS THE SAME CONSEQUENCE.** That header
+// records what a drifted reserve/supply COUNT costs; a drifted reserve/bind OFFSET costs the same thing by a
+// shorter road — the callee reads the register the caller filled with the OTHER hidden slot, with no compile
+// error anywhere. Adding a third optional block now means editing one expression per slot instead of two.
+export function fixedElementCountSlotValueId(paramCount ParamCount, witnessParamCount ParamCount) returns ValueId
+	return (paramCount - witnessParamCount - 1) as ValueId
+end 'fixedElementCountSlotValueId'
+
+// The layout descriptor sits one block FURTHER IN than the count, so it steps over however many count slots
+// there are (0 or 1) as well as the witness block. Same order, same single home.
+//
+// ⚠ It carries NO `as ValueId` where its sibling above does, and that asymmetry is the range checker's and
+// not a choice: a third subtraction narrows the inferred range far enough that the cast is E3010
+// (*"'ValueId' already fits in 'ValueId'"*). Adding one back does not compile.
+export function layoutDescriptorSlotValueId(paramCount ParamCount, witnessParamCount ParamCount, fixedElementCountSlots ParamCount) returns ValueId
+	return paramCount - witnessParamCount - fixedElementCountSlots - 1
+end 'layoutDescriptorSlotValueId'
+
 // Rebuild a `MaxonType` from the two columns — the inverse of `maxonTypeTag` +
 // `typeNameIdOf`. THIS ALLOCATES (it constructs a union), which is why it is called only
 // where a `MaxonType` is genuinely stored: a binding's declared type, a `literal` op's type.

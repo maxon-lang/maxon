@@ -1438,12 +1438,14 @@ type MaxonToStdLowering
 		self.witnessParamBase = func.paramCount - self.currentWitnessCount
 
 		// ⭐ `[user][env][existentialWitness][layout][count][witness_0..k]` — read back from the END, so the
-		// count slot is found first and the descriptor sits one further in (W190).
+		// count slot is found first and the descriptor sits one further in (W190). BOTH offsets come from
+		// `MaxonDialect`'s two slot functions, which is where `Parser.parseFunction` RESERVED them: the order
+		// is one fact and a second spelling of it is a wrong register, never a compile error.
 		let countSlots = self.fixedElementCountParamCountFor(func.name)
 		self.hasImplicitFixedElementCount = countSlots != 0
 		self.implicitCountValueId = 0
 		if self.hasImplicitFixedElementCount 'countSlot'
-			self.implicitCountValueId = (self.witnessParamBase - 1) as ValueId
+			self.implicitCountValueId = fixedElementCountSlotValueId(func.paramCount, witnessParamCount: self.currentWitnessCount)
 		end 'countSlot'
 
 		self.hasImplicitLayout = self.functionHasDescriptorParam(func)
@@ -1452,7 +1454,7 @@ type MaxonToStdLowering
 			return
 		end 'noLayout'
 
-		self.implicitLayoutValueId = (self.witnessParamBase - countSlots - 1) as ValueId
+		self.implicitLayoutValueId = layoutDescriptorSlotValueId(func.paramCount, witnessParamCount: self.currentWitnessCount, fixedElementCountSlots: countSlots)
 	end 'bindImplicitParams'
 
 	// The number of hidden witness parameters `func` carries (P1.7a slice 2a) — the witness twin of
@@ -1478,9 +1480,11 @@ type MaxonToStdLowering
 	end 'witnessParamCountForCallee'
 
 	// `finalizeCallArgs` (float widening + companion env args) PLUS the hidden IMPLICIT arguments a
-	// dictionary-passing call carries: the layout descriptor (P1.6-B1) THEN one witness pointer per `where`
-	// constraint (P1.7a slice 2a), in the `[user][env][layout][witness_0..k]` order the parser reserved them
-	// at — so the caller's argument registers and the callee's `param` ops meet.
+	// dictionary-passing call carries: the layout descriptor (P1.6-B1), THEN the fixed element count (W190),
+	// THEN one witness pointer per `where` constraint (P1.7a slice 2a) — in the
+	// `[user][env][existentialWitness][layout][count][witness_0..k]` order the parser reserved them at, so the
+	// caller's argument registers and the callee's `param` ops meet. That ORDER's arithmetic has one home,
+	// `MaxonDialect`'s two slot functions; this list is the same order expressed as push order.
 	function finalizeCallArgsWithLayout(argIds ValueIdArray, sig FuncSignature, callee ByteArray, result ValueId, dstBlock IrBlock) returns ValueIdArray
 		let baseArgs = self.finalizeCallArgs(argIds, sig: sig, callee: callee, dstBlock: dstBlock)
 		let needsLayout = self.layoutNeedingFuncs.contains(callee)
@@ -1497,9 +1501,10 @@ type MaxonToStdLowering
 		// dictionary-passing call pays this copy; the common path already returned `baseArgs` above.
 		var out = ValueIdArray.create()
 		out.append(baseArgs)
-		// ⭐ **THE EXISTENTIAL WITNESSES COME FIRST — the ABI is `[user][env][existentialWitness][layout][witness]`
-		// and this list is built in that order** (the env companions are already inside `baseArgs`, appended by
-		// `finalizeCallArgs`). See `Parser.bindExistentialWitnessParams` for why the block sits where it does.
+		// ⭐ **THE EXISTENTIAL WITNESSES COME FIRST — the ABI is
+		// `[user][env][existentialWitness][layout][count][witness]` and this list is built in that order** (the
+		// env companions are already inside `baseArgs`, appended by `finalizeCallArgs`). See
+		// `Parser.bindExistentialWitnessParams` for why the block sits where it does.
 		if existentialCount > 0 'existentialWitnesses'
 			self.appendExistentialWitnessArgs(out, argIds: argIds, sig: sig, callee: callee, dstBlock: dstBlock)
 		end 'existentialWitnesses'
@@ -1967,8 +1972,16 @@ type MaxonToStdLowering
 	// orphans of every earlier pass.
 	//
 	// The hidden block is the tail `[slotArity, paramCount)`: the ABI is `[user][env][existential][layout]
-	// [witness]`, and `appendWitnessAdapterDictionary` has already refused the two middle blocks, so what
-	// remains past the slot's own arguments is exactly the descriptor and the witnesses.
+	// [count][witness]`, and `appendWitnessAdapterDictionary` has already refused the two middle blocks, so what
+	// remains past the slot's own arguments is exactly the descriptor, the fixed-element count and the
+	// witnesses.
+	//
+	// ⭐ **IT IS WIDTH-AGNOSTIC, WHICH IS WHY W190's NEW SLOT NEEDED NOTHING HERE — verified at review by
+	// MEASUREMENT, not by reading.** An `extension Vector implements Sizer` whose `capacity()` reads
+	// `countof(Self)` is refused with this diagnostic, and so is one that merely CALLS a sibling that does
+	// (the forward is a USE of the slot like any other). So a `countof`-reading body cannot be reached
+	// through a witness table at all, which is the right answer: one table serves every instantiation and
+	// there is no instantiation to take the count from.
 	function requireWitnessSlotImplIgnoresDictionary(request WitnessAdapterRequest, impl IrFunction, project Project)
 		var referenced = StdValueUseSet.create()
 		for opIdx in self.stdModule.liveOpIndices(impl) 'eachOp'
@@ -2290,11 +2303,16 @@ type MaxonToStdLowering
 	// serves every size — so a `Vector` method calling a sibling on `self` holds an instance that states no
 	// count, and the answer it must pass on is the one its own caller handed it.
 	function emitFixedElementCountOf(instanceValue ValueId, callee ByteArray, dstBlock IrBlock) returns ValueId
-		if self.valueTagOf(instanceValue) == ValueTypeTag.genericInstance 'anInstance'
-			let stated = self.signatures.genericInstanceFixedSize(try self.valueNameIds.get(instanceValue) otherwise panic("emitFixedElementCountOf: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep"))
-			if stated != NoFixedSize 'statesItsOwnCount'
+		let tag = self.valueTagOf(instanceValue)
+		if tag == ValueTypeTag.genericInstance 'anInstance'
+			let gid = try self.valueNameIds.get(instanceValue) otherwise panic("emitFixedElementCountOf: genericInstance value v{instanceValue} has no name-id (its GenericInstanceId) — the two type columns are dense and in lockstep")
+
+			// ⚠ The BRANCH is `valueStatesItsOwnElementCount`'s, not a second reading of the same two clauses:
+			// `Parser.requireFixedElementCountSourceForForwarding` refuses on that predicate, and a refusal that
+			// disagrees with this branch is either a rejected legal program or this routine's own abort.
+			if self.signatures.valueStatesItsOwnElementCount(tag, nameId: gid) 'statesItsOwnCount'
 				let countId = self.mintStdValueId()
-				self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: stated, valueType: StdType.i64))
+				self.stdModule.appendOp(dstBlock, op: StdOp.const(countId, value: self.signatures.genericInstanceFixedSize(gid), valueType: StdType.i64))
 				return countId
 			end 'statesItsOwnCount'
 		end 'anInstance'

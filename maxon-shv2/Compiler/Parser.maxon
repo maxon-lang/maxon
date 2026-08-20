@@ -1899,10 +1899,14 @@ export function appendDeferredNameDiagnostic(list DeferredNameDiagnosticArray, e
 	return list
 end 'appendDeferredNameDiagnostic'
 
-// A generic method's QUALIFIED name -> "does it directly need a layout-descriptor param?" (P1.6-B1) — the
-// SEED column `scanDescriptorNeedsInto` fills and `solveDescriptorNeeds` closes over. Keyed qualified since
-// W23c: the fixpoint spans a type's own body AND every extension body over it, so a bare name would merge
-// two types' same-named methods into one node.
+// A generic method's QUALIFIED name -> "does it directly need this hidden slot?" — the SEED column
+// `scanDescriptorNeedsInto` fills and `solveDescriptorNeeds` closes over. Keyed qualified since W23c: the
+// fixpoint spans a type's own body AND every extension body over it, so a bare name would merge two types'
+// same-named methods into one node.
+//
+// ⚠ **TWO columns wear this type**, not one: the layout descriptor's (P1.6-B1) and the fixed element
+// count's (W190). They are seeded independently and solved independently over ONE edge set — see
+// `Queries.foldDescriptorNeeds` — so the alias names the SHAPE of a seed column rather than either slot.
 typealias DescriptorNeedMap = Map with (ByteArray, bool)
 
 // The enclosing type's bare-method-name -> "does it take a receiver?" map (#65 implicit-self resolution).
@@ -22546,7 +22550,7 @@ export type Parser
 		// here keeps every value column dense through the parameter block.
 		if needsLayoutParam 'seedLayoutParam'
 			self.recordValueType(MaxonType.integer)
-			self.artifact.recordParamOrigin((paramCount - witnessParamCount - countParamCount - 1) as ValueId, range: SourceRange.ofToken(nameTok))
+			self.artifact.recordParamOrigin(layoutDescriptorSlotValueId(paramCount, witnessParamCount: witnessParamCount, fixedElementCountSlots: countParamCount), range: SourceRange.ofToken(nameTok))
 		end 'seedLayoutParam'
 
 		// Seed the hidden fixed-element-count parameter's value columns (W190) — AFTER the layout slot and
@@ -22556,7 +22560,7 @@ export type Parser
 		// to say what the expression machinery will find there.
 		self.fixedElementCountParamValueId = 0
 		if needsCountParam 'seedCountParam'
-			self.fixedElementCountParamValueId = (paramCount - witnessParamCount - 1) as ValueId
+			self.fixedElementCountParamValueId = fixedElementCountSlotValueId(paramCount, witnessParamCount: witnessParamCount)
 			self.recordValueType(MaxonType.integer)
 			self.artifact.recordParamOrigin(self.fixedElementCountParamValueId, range: SourceRange.ofToken(nameTok))
 		end 'seedCountParam'
@@ -23839,12 +23843,17 @@ export type Parser
 		self.functionCarriesFixedElementCountParam = needsCountParam
 		self.functionDroppedOpaqueWithoutDescriptor = false
 		self.functionStoredOpaqueWithoutDescriptor = false
-		let helperParamCount = (1 if needsLayoutParam else 0) + (1 if needsCountParam else 0)
-		// A helper takes no receiver and no user parameter, so the layout slot is ValueId 0 and the count slot
-		// follows it — the same `[layout][count]` order `parseFunction` reserves in.
+		// Named apart from the total, because it is the total MINUS this that places the layout slot — the
+		// `[layout][count]` step `layoutDescriptorSlotValueId` takes, spelled here the way `parseFunction`
+		// spells it.
+		let countParamCount = 1 if needsCountParam else 0
+		let helperParamCount = (1 if needsLayoutParam else 0) + countParamCount
+		// A helper takes no receiver, no user parameter and no constraint witness, so the two optional slots are
+		// the whole list — but WHICH ValueId each lands on is still the ABI's order, and it is read here through
+		// the one home `parseFunction` reserves through (`fixedElementCountSlotValueId`), not restated.
 		self.fixedElementCountParamValueId = 0
 		if needsCountParam 'countSlot'
-			self.fixedElementCountParamValueId = (helperParamCount - 1) as ValueId
+			self.fixedElementCountParamValueId = fixedElementCountSlotValueId(helperParamCount, witnessParamCount: 0)
 		end 'countSlot'
 
 		self.scope = Scope.create()
@@ -23931,7 +23940,7 @@ export type Parser
 		// declares it. A helper has no user parameter, so this IS ValueId 0 and the column stays dense.
 		if needsLayoutParam 'seedLayoutParam'
 			self.recordValueType(MaxonType.integer)
-			self.artifact.recordParamOrigin(0 as ValueId, range: SourceRange.ofToken(anchor))
+			self.artifact.recordParamOrigin(layoutDescriptorSlotValueId(helperParamCount, witnessParamCount: 0, fixedElementCountSlots: countParamCount), range: SourceRange.ofToken(anchor))
 		end 'seedLayoutParam'
 
 		// The hidden count slot's columns, seeded on the same terms one line up and in the same ABI order
@@ -50720,6 +50729,7 @@ export type Parser
 		self.markNameMutabilityExercised(base.subjectName)
 
 		try self.requireSelfForDescriptorForwarding(base, memberTok: memberTok)
+		try self.requireFixedElementCountSourceForForwarding(base, memberTok: memberTok)
 
 		// Built ONCE and threaded into both readers — the withholding guard keys its store by it, and the call
 		// below dispatches on it. Derived twice, it was two string joins and an allocation on EVERY struct
@@ -51198,6 +51208,55 @@ export type Parser
 			throw ParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads sizeof of the type parameter) on a value of the enclosing type, from a function that carries no layout descriptor of its own to forward — reach it through `self`, through a local bound to a `Self\{…}`, or through a concrete instance instead", line: memberTok.line, column: memberTok.column)
 		end 'reject'
 	end 'requireSelfForDescriptorForwarding'
+
+	// ⛔⛔ **THE COUNT COLUMN'S TWIN OF THE GUARD ABOVE, AND IT REPLACES THREE MEASURED COMPILER ABORTS
+	// (found at review of W190).** A callee that reads `countof` of the sized container's own `Self` takes the
+	// answer from a hidden argument the CALL SITE fills in, and a call site has exactly TWO sources: the
+	// RECEIVER's instance when it states a count, and the EMITTING function's own slot when it does not. A
+	// frame with neither reached `LowerMaxonToStd.forwardCallerFixedElementCount`'s panic — an abort thousands
+	// of lines from the spelling that caused it, which is what a missing edge in the reservation fixpoint has
+	// always cost.
+	//
+	// ⛔ **THE FIXPOINT CANNOT BE MADE COMPLETE BY ADDING TOKEN SHAPES, WHICH IS WHY THIS IS A DOOR AND NOT A
+	// FOURTH COLUMN.** It reads RAW TOKENS: `selfTypedLocalBoundAt` admits `= Self{…}` and `= Self.<static>(`
+	// because those two spellings NAME the type, and no token shape tells it that `self.dup()` returns `Self`.
+	// **MEASURED, three programs the compiler accepted all the way to lowering:**
+	//   • `var other = self.dup()` then `other.capacity()` — *"caller 'Vector.twice' has no
+	//     fixed-element-count parameter to forward to 'Vector.cap'"*.
+	//   • `var x = other` where `other` is a `Self` PARAMETER — the same, one alias further out.
+	//   • `function(v Self) gives v.capacity()` — *"caller 'Vector.viaClosure$closure_0' has no
+	//     fixed-element-count parameter to forward"*. A LIFTED CLOSURE carries none of the enclosing method's
+	//     hidden parameters however completely the fixpoint reserved them, so no edge could have saved it.
+	//
+	// ⚠ **IT ASKS WHAT THE FUNCTION BEING EMITTED CARRIES, NOT WHAT ITS DECLARATION RESERVED** —
+	// `requireWitnessSourceForForwarding`'s W58 distinction, and the third case above is exactly it:
+	// `functionCarriesFixedElementCountParam` describes the enclosing METHOD, and a closure body is parsed
+	// inside that method while being emitted as its own function. `parseCountof` holds the same precondition
+	// the same way.
+	//
+	// ⚠ The receiver test is `ProgramSignatures.valueStatesItsOwnElementCount` — the SAME predicate
+	// `LowerMaxonToStd.emitFixedElementCountOf` branches on, so this refusal cannot come to disagree with the
+	// emit about which receivers need a forward. Wider, it would refuse a legal program; narrower, it would
+	// let the abort back through.
+	//
+	// The clauses are ordered by what they cost: the whole-program bool leaves every program that writes no
+	// `countof` at all before anything is looked up, and the qualified-name JOIN is last, for
+	// `requireSelfForDescriptorForwarding`'s stated reason.
+	function requireFixedElementCountSourceForForwarding(base StructBase, memberTok Token) throws ParseError
+		if not self.signatures.anyFunctionReadsFixedElementCount() 'noCountInThisProgram'
+			return
+		end 'noCountInThisProgram'
+		if self.signatures.valueStatesItsOwnElementCount(self.tagOf(base.box), nameId: self.valueNameId(base.box)) 'theReceiverStatesIt'
+			return
+		end 'theReceiverStatesIt'
+		if self.functionCarriesFixedElementCountParam and self.closureCaptureScopes.isEmpty() 'hasOneToForward'
+			return
+		end 'hasOneToForward'
+
+		if self.signatures.functionReadsFixedElementCount(qualifiedMethodName(base.layout.name, methodName: memberTok.value)) 'reject'
+			throw ParseError.unsupported("calling '{String.from(memberTok.value)}' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self\{…\}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance; a lifted closure carries no hidden parameters at all, so read the count outside it and capture the integer", line: memberTok.line, column: memberTok.column)
+		end 'reject'
+	end 'requireFixedElementCountSourceForForwarding'
 
 	// ⚠ **THE WITNESS TWIN OF `requireSelfForDescriptorForwarding`, AND IT REPLACES A COMPILER ABORT (W43b).**
 	// A dictionary-passing call on a value of the enclosing generic type FORWARDS the caller's own witness
@@ -56416,7 +56475,8 @@ export type Parser
 	end 'emittingFunctionCarriesWitnessParams'
 
 	// ⭐ **THE HIDDEN WITNESS PARAMETER THAT CARRIES CONSTRAINT `constraintIndex`'s TABLE (P1.7a slice 2a).**
-	// The parser RESERVED these slots (`parseFunction`, `[user][env][existentialWitness][layout][witness_0..k]`),
+	// The parser RESERVED these slots (`parseFunction`,
+	// `[user][env][existentialWitness][layout][count][witness_0..k]`),
 	// so resolving one is arithmetic on the reservation this same pass made, not a whole-program re-derivation.
 	// It PANICS on a function that reserved none, which is what the lowering's cross-check used to catch: a
 	// dispatch through a constraint can only be emitted inside an instance method of the constrained type, and

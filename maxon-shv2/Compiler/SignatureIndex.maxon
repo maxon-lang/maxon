@@ -7292,6 +7292,11 @@ export typealias DescriptorScanSiteArray = Array with DescriptorScanSite
 // The qualified names of the methods that carry the hidden layout-descriptor parameter (P1.6-B1), solved
 // whole-program. A Set rather than a name->bool map for the reason the answer is one bit: membership IS the
 // need, so there is no `false` entry to disagree with an absence.
+//
+// ⚠ **IT NAMES A SOLVED COLUMN, NOT SPECIFICALLY THE DESCRIPTOR ONE.** W190 solves a SECOND column of the
+// same shape over the same graph — `ProgramSignatures.fixedElementCountNeeds`, the hidden fixed-element-count
+// slot — and it is this type. The name is the one the first column had; what the alias means is *"qualified
+// names that carry one particular hidden dictionary slot"*, and a third slot would be a third value of it.
 export typealias DescriptorNeedNameSet = Set with ByteArray
 
 // The descriptor-need set a program with no generic type carries — none, shared, for
@@ -17574,6 +17579,24 @@ export type ProgramSignatures
 	export function genericInstanceFixedSize(id GenericInstanceId) returns FixedElementCount
 		return self.genericInstances.instanceFixedSize(id)
 	end 'genericInstanceFixedSize'
+
+	// ⭐⭐ **DOES A VALUE TYPED AT `(tag, nameId)` STATE ITS OWN ELEMENT COUNT — i.e. can a call site read
+	// the hidden fixed-element-count argument off the RECEIVER, or must it forward its own slot (W190)?** The
+	// ONE predicate both halves of that decision ask: `LowerMaxonToStd.emitFixedElementCountOf` branches on it
+	// to choose between a `const` and a forward, and `Parser.requireFixedElementCountSourceForForwarding`
+	// refuses on it when the forward has no source.
+	//
+	// ⚠ **THE TWO MAY NOT RESTATE IT, BECAUSE THEY DISAGREE IN BOTH DIRECTIONS AND NEITHER IS A COMPILE
+	// ERROR.** A refusal that is WIDER than the emit rejects a legal program; one that is NARROWER lets the
+	// call through to `forwardCallerFixedElementCount`'s abort, which is the defect the refusal exists to
+	// replace (found at review of W190, three MEASURED aborts).
+	//
+	// ⛔ Asked as the (tag, id) PAIR for `isVectorInstanceAt`'s measured reason — a `TypeNameId` and a
+	// `GenericInstanceId` share one numeric space, so the id half alone can answer about an instance the
+	// caller never had.
+	export function valueStatesItsOwnElementCount(tag ValueTypeTag, nameId TypeNameId) returns bool
+		return tag == ValueTypeTag.genericInstance and self.genericInstanceFixedSize(nameId) != NoFixedSize
+	end 'valueStatesItsOwnElementCount'
 
 	// The `Vector with <size> <element>` instance — the SIZED twin of `builtinInstanceForElement`, and the one
 	// door that mints one. Its two callers are the alias fold (`recordGenericAlias`, off a declaration) and the

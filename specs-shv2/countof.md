@@ -430,10 +430,15 @@ error E2015: <fragment>:11:28: Unsupported: countof of the sized container's own
 ⭐ **AN UNNAMED RECEIVER.** `self.dup()` hands back a value of the enclosing type with no
 binding to hold it, so neither of the fixpoint's precise self-call columns can see the
 `.capacity()` that chains onto it — one keys on `self`, the other on a local bound to a
-`Self{…}`. Inside the sized container's own body every `.<member>(` is therefore recorded as a
-possible self-call, receiver-blind and gated by the enclosing declaration, because a missing
-edge in that fixpoint is not a wrong answer but a COMPILER ABORT: measured, `caller
-'Vector.chained' has no fixed-element-count parameter to forward to 'Vector.capacity'`.
+`Self{…}`. A missing edge in that fixpoint is not a wrong answer but a COMPILER ABORT: measured,
+`caller 'Vector.chained' has no fixed-element-count parameter to forward to 'Vector.capacity'`.
+
+⛔ **THE RECORDED SHAPE IS `) . <member> (`, NOT EVERY `.<member>(`, and that difference is
+MEASURED rather than stylistic.** A receiver-blind arm read `VectorIter.create(managed)` inside
+`createIterator` as a call to `Vector.create`, whose `Self{}` seeds a DESCRIPTOR need, and every
+`for … in` over a vector grew a `lea` of its `__layout_*` blob — four drifting goldens. A
+receiver spelled as a NAME is already covered by a precise column; the only receiver they cannot
+see is a call's RESULT, and a call's result is what the `)` identifies.
 ```maxon
 typealias Int = int(i64.min to i64.max)
 typealias Vec3 = Vector with 3 Int
@@ -459,4 +464,108 @@ end 'main'
 ```
 ```exitcode
 3
+```
+
+
+<!-- test: error.a-local-bound-to-a-Self-returning-call-is-refused -->
+⛔⛔ **THE TOKEN PRE-SCAN CANNOT SEE THAT `dup()` RETURNS `Self`, AND WITHOUT A DOOR THAT WAS A
+COMPILER ABORT** (found at review). `selfTypedLocalBoundAt` admits `= Self{…}` and
+`= Self.<static>(` because those two spellings NAME the type; `= self.dup()` names a METHOD, and
+no token shape says what it returns. So no edge reaches `twice`, it reserves no count slot, and
+the call to `capacity()` had nothing to forward: measured, *`panic at
+forwardCallerFixedElementCount: caller 'Vector.twice' has no fixed-element-count parameter to
+forward to 'Vector.cap'`*.
+
+⚠ The one-expression spelling of the same call — `self.dup().capacity()`, the case below — is
+served, because a chained call has a token shape the pre-scan CAN see. That is what the refusal
+names as the cure, alongside the two bindings that do carry the type.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function capacity() returns Int
+		return countof(Self)
+	end 'capacity'
+
+	export function dup() returns Self
+		return Self{}
+	end 'dup'
+
+	export function twice() returns Int
+		var other = self.dup()
+		return other.capacity()
+	end 'twice'
+end 'Vector'
+
+function main() returns ExitCode
+	var v = Vec3.create()
+	return v.twice()
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:16:16: Unsupported: calling 'capacity' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self{…}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance; a lifted closure carries no hidden parameters at all, so read the count outside it and capture the integer
+```
+
+<!-- test: error.an-alias-of-a-Self-typed-parameter-is-refused -->
+The same gap one alias further out. `other Self` IS a shape the pre-scan reads
+(`selfTypedParamDeclaredAt`), so `other.capacity()` is served — but a plain `var same = other`
+re-binds the value under a name nothing recorded, and the edge stops there. Measured as the same
+abort before this door existed; a positioned refusal now, naming the reach that works.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function capacity() returns Int
+		return countof(Self)
+	end 'capacity'
+
+	export function pairWith(other Self) returns Int
+		var same = other
+		return same.capacity()
+	end 'pairWith'
+end 'Vector'
+
+function main() returns ExitCode
+	var a = Vec3.create()
+	var b = Vec3.create()
+	return a.pairWith(b)
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:12:15: Unsupported: calling 'capacity' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self{…}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance; a lifted closure carries no hidden parameters at all, so read the count outside it and capture the integer
+```
+
+<!-- test: error.a-count-reading-call-from-inside-a-closure-is-refused -->
+⛔⛔ **THE CLOSURE REFUSAL ABOVE COVERS `countof(Self)` WRITTEN IN A CLOSURE; IT DOES NOT COVER
+CALLING SOMETHING THAT READS ONE**, and that second spelling ABORTED the compiler (found at
+review): *`caller 'Vector.viaClosure$closure_0' has no fixed-element-count parameter to
+forward`*. No edge could have prevented it — a lifted closure is emitted as its own function and
+carries NONE of the enclosing method's hidden parameters, however completely the fixpoint
+reserved them. So the question the door asks is what the function being EMITTED carries, which
+is `requireWitnessSourceForForwarding`'s W58 distinction under a second column.
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias Vec3 = Vector with 3 Int
+
+extension Vector
+	export function capacity() returns Int
+		return countof(Self)
+	end 'capacity'
+
+	export function viaClosure(other Self) returns Int
+		let f = function(v Self) gives v.capacity()
+		return f(other)
+	end 'viaClosure'
+end 'Vector'
+
+function main() returns ExitCode
+	var a = Vec3.create()
+	var b = Vec3.create()
+	return a.viaClosure(b)
+end 'main'
+```
+```maxoncstderr
+error E2015: <fragment>:11:36: Unsupported: calling 'capacity' (which reads `countof` of the sized container's own `Self`) on a receiver whose type states no element count, from a function that carries no fixed-element-count parameter of its own to forward — the count reaches a shared body through a hidden argument every call site fills in from the instance it holds. Reach it through `self`, through a local bound to a `Self{…}` or a `Self.<static>()`, by chaining the call directly onto the expression that produced the receiver, or through a concrete sized instance; a lifted closure carries no hidden parameters at all, so read the count outside it and capture the integer
 ```
