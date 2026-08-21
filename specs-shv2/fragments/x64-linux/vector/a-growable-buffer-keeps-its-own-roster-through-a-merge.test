@@ -1,0 +1,103 @@
+// Test: a-growable-buffer-keeps-its-own-roster-through-a-merge
+typealias Int = int(i64.min to i64.max)
+typealias Ints = Array with Int
+
+function main() returns ExitCode
+	var a = Ints.create()
+	a.push(1)
+	a.push(2)
+	let flag = a.count() > 0
+	var m = a.managed if flag else a.managed
+	try m.setLength(1) otherwise ignore
+	return ((m.length() as Int) * 10 + (a.count() as Int)) as ExitCode
+end 'main'
+---
+ExitCode: 11
+---
+data {
+  __slab_cursor@0 = i64 0
+  __slab_end@8 = i64 0
+  __mm_alloc_count@16 = i64 0
+}
+
+func @main {
+  entry:
+    x64.pushReg rbp
+    x64.movRegReg rbp, rsp
+    x64.pushReg rbx
+    x64.pushReg r12
+    x64.pushReg r13
+    x64.prologue 40
+    x64.movRegImm32 rcx, 8
+    x64.movRegImm32 rdx, 0
+    x64.callDirect __managed_create
+    x64.movRegReg rbx, r8
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegImm32 rdx, 2
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_push
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_count
+    x64.cmpRegImm32 r8, 0
+    x64.jcc greater, ternarytrue
+    x64.jmp ternaryfalse
+  ternarytrue:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.jmp matchcont
+  ternaryfalse:
+    x64.movRegReg rcx, rbx
+    x64.callDirect __mm_retain
+    x64.movRegReg r12, r8
+    x64.jmp matchcont
+  matchcont:
+    x64.movRegImm32 rdx, 1
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_set_length
+    x64.cmpRegImm32 r10, 0
+    x64.jcc notEqual, tryerr
+    x64.jmp tryok
+  tryerr:
+    x64.jmp trycont
+  tryok:
+    x64.jmp trycont
+  trycont:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_count
+    x64.imulRegRegImm32 r13, r8, 10
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_count
+    x64.leaRegRegReg r13, r13, r8
+    x64.cmpRegImm32 r13, 0
+    x64.jcc less, __rc_panic
+    x64.jmp __rc_chk
+  __rc_chk:
+    x64.cmpRegImm32 r13, 255
+    x64.jcc greater, __rc_panic
+    x64.jmp __rc_ok
+  __rc_panic:
+    x64.leaRegRdata rcx, [rip + __str_blob_0]
+    x64.callDirect mrt_panic
+    x64.movRegImm32 r8, 0
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+  __rc_ok:
+    x64.movRegReg rcx, r12
+    x64.callDirect __managed_decref
+    x64.movRegReg rcx, rbx
+    x64.callDirect __managed_decref
+    x64.movRegReg r8, r13
+    x64.epilogue 40
+    x64.popReg r13
+    x64.popReg r12
+    x64.popReg rbx
+    x64.popReg rbp
+    x64.ret
+}
