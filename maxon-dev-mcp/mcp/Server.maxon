@@ -344,10 +344,13 @@ function schemaFieldsForSpecTestOutcome(doc JsonDoc) returns SchemaFieldArray
 	let compilerSchema = schemaStringEnum(doc, choices: compilerTokens(), description: "Which compiler. Default csharp.")
 	let targetSchema = schemaString(doc, description: "Optional cross-compile target passed to --target=<value>. Examples: \"wasm32-wasi\", \"x64-windows\", \"arm64-macos\", \"all\". Both compilers accept it; shv2's \"wasm32-wasi\" cross-compiles and runs the emitted component under the vendored wasmtime. A cross-target the host cannot execute natively (e.g. x64-windows on arm64) compiles but its run-tests fail.")
 
+	let networkSchema = schemaBoolean(doc, description: "Pass --network to ALSO run the fragments marked `<!-- network: live -->`, which the default gate excludes because they reach the public internet (tcpbin.com / httpbin.org). shv2 only — the bootstrap has no such gate and REJECTS this rather than dropping it.")
+
 	var fields = SchemaFieldArray.create()
 	fields.push(SchemaField.create("filter", schemaId: filterSchema, required: true))
 	fields.push(SchemaField.create("compiler", schemaId: compilerSchema, required: false))
 	fields.push(SchemaField.create("target", schemaId: targetSchema, required: false))
+	fields.push(SchemaField.create("network", schemaId: networkSchema, required: false))
 	return fields
 end 'schemaFieldsForSpecTestOutcome'
 
